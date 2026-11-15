@@ -1565,6 +1565,51 @@ async def test_a_reconnect_sees_the_same_saved_state(monkeypatch):
     assert "Count: 2" in json.dumps(after)
 
 
+async def _deferred_reconnect_run() -> Any:
+    """``_reconnect_run`` with a save interval set: with ``deferred_save`` on
+    the events are not saved before their frames and the socket's close
+    writes them (design: save frequency); off, each event saves first."""
+    from django.test import override_settings
+
+    with override_settings(DJUST_STATE_SAVE_INTERVAL=60):
+        return await _reconnect_run()
+
+
+async def test_deferral_changes_no_frame_and_the_close_saves(monkeypatch):
+    before, after = await both(_deferred_reconnect_run, monkeypatch, "deferred_save")
+    assert as_bytes(before) == as_bytes(after)
+    assert "Count: 2" in json.dumps(after)
+
+
+@pytest.mark.parametrize("label,view_class,script", WS_CASES, ids=[case[0] for case in WS_CASES])
+async def test_websocket_frames_are_identical_with_saves_deferred(
+    monkeypatch, label, view_class, script
+):
+    """Every case again with an interval set: deferring the saves (on) and
+    saving before each frame (off) send the same bytes."""
+    from django.test import override_settings
+
+    with override_settings(DJUST_STATE_SAVE_INTERVAL=60):
+        before, after = await both(lambda: run_ws(view_class, script), monkeypatch, "deferred_save")
+    # The frames are compared byte for byte. The log is not: a value that
+    # cannot be saved is reported when a save meets it, and a deferred view is
+    # saved less often, so a value held only between two flushes (the form's
+    # ErrorList after a refused submit) is never met. What the deferred run
+    # reports is a subset of what saving every turn reports.
+    assert as_bytes(after[:-1]) == as_bytes(before[:-1]), f"{label} differs with saves deferred"
+    assert set(after[-1]["warnings"]) <= set(before[-1]["warnings"])
+
+
+def _break_deferred_save(patch: Any) -> None:
+    from djust import runtime
+
+    # As if the close never wrote what the deferred turns left unsaved.
+    async def no_flush(self: Any, *, reason: str = "interval") -> bool:
+        return True
+
+    patch.setattr(runtime.ViewRuntime, "flush_state", no_flush)
+
+
 def _break_unchanged_save_skip(patch: Any) -> None:
     from djust import _automatic_state
 
@@ -1622,6 +1667,7 @@ SABOTAGE = {
         lambda: run_ws(ScalarTypes, SCALAR_SCRIPT),
     ),
     "shared_fingerprints": (_break_shared_fingerprints, lambda: run_ws(Derived, DERIVED_SCRIPT)),
+    "deferred_save": (_break_deferred_save, _deferred_reconnect_run),
 }
 
 

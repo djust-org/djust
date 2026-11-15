@@ -265,6 +265,20 @@ class TrackedSessionData(dict):
         with self._lock:
             self._fences[key] = (epoch, claim)
 
+    def has_foreign_changes(self) -> bool:
+        """Whether a key that is not djust's own was written, removed or
+        changed in place since the last save: a handler's or a middleware's
+        ``request.session[...]`` (design: save frequency, such a turn is
+        saved before its reply)."""
+        with self._lock:
+            for key in self.written | self.removed:
+                if not (isinstance(key, str) and key.startswith(_OWN_PREFIXES)):
+                    return True
+            for key, before in self._seen.items():
+                if key in self and _differs(before, dict.__getitem__(self, key)):
+                    return True
+            return False
+
     def put_back(self, key: Any, value: Any) -> None:
         """Undo a removal made through this object, without recording a write.
 

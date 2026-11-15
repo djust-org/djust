@@ -29,6 +29,12 @@ setting, and there is no supported way to do it.
                             session when its encoding equals what the store
                             already holds (or, with nothing stored, what
                             ``mount()`` produced).
+``deferred_save``           With ``DJUST_STATE_SAVE_INTERVAL`` set, a socket
+                            turn ``_save_policy`` finds deferrable sends its
+                            frame without waiting for storage, and a flush
+                            writes the view later (design: save frequency).
+                            Off: every turn saves before its frame, as with
+                            the interval at 0 (the default).
 ``compact_fingerprints``    A structural fingerprint keeps a ``str`` / ``int``
                             / ``bytes`` / ``None`` leaf as the value itself and
                             a dict's items as one flat tuple, in place of a
@@ -59,6 +65,7 @@ ALL: FrozenSet[str] = frozenset(
         "unchanged_save_skip",
         "compact_fingerprints",
         "shared_fingerprints",
+        "deferred_save",
     }
 )
 

@@ -2,13 +2,13 @@
 
 Every explicit turn over WebSocket and SSE saves through
 ``ViewRuntime.commit_explicit_turn``, which asks ``_save_policy.save_mode``
-how. Nothing changes yet: the answer is always ``immediate``. These tests pin
+how. By default (no interval set) the answer is ``immediate``. These tests pin
 
-* the set of call sites of ``commit_explicit_turn`` and that only it calls
-  ``_save_explicit_root`` (derived from the source, so a new save path that
+* the set of call sites of ``commit_explicit_turn`` and that only it (and the
+  flush) calls ``_save_explicit_root`` (derived from the source, so a new save path that
   bypasses the decision fails here);
 * that both socket transports say they hold the view, and a transport that
-  does not say is taken to hold nothing;
+  does not say is taken to hold nothing (its turns are never deferred);
 * that an event turn asks the decision once, with its transport, over
   WebSocket and over SSE alike.
 """
@@ -83,8 +83,13 @@ def test_the_commit_call_sites_are_the_pinned_set():
     assert set(sites) == COMMIT_CALL_SITES
 
 
-def test_only_the_commit_calls_the_root_save():
-    assert _callers("_save_explicit_root") == [("runtime.py", "ViewRuntime.commit_explicit_turn")]
+def test_only_the_commit_and_the_flush_call_the_root_save():
+    """The commit (an immediate turn) and the flush (a deferred one's write,
+    step 3) are the only writers of a socket view's state."""
+    assert sorted(_callers("_save_explicit_root")) == [
+        ("runtime.py", "ViewRuntime._flush_locked"),
+        ("runtime.py", "ViewRuntime.commit_explicit_turn"),
+    ]
 
 
 def test_both_socket_transports_hold_the_view():
@@ -105,7 +110,8 @@ def test_a_transport_that_does_not_say_holds_nothing():
     assert Transport.holds_view.fget(object()) is False  # type: ignore[attr-defined]
 
 
-def test_every_answer_is_immediate_in_this_release():
+def test_every_answer_is_immediate_by_default():
+    """With ``DJUST_STATE_SAVE_INTERVAL`` unset, whatever the view and turn."""
     for transport in (WSConsumerTransport(object()), object()):
         for source in ("event", "url_change", "async"):
             assert _save_policy.save_mode(object(), transport, source=source) == "immediate"

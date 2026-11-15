@@ -2149,6 +2149,26 @@ def _still_fresh(basis: _Basis, now: int) -> bool:
     return bool(now - basis.created < max_age // 2)
 
 
+def turn_changed_state(view: Any) -> bool:
+    """For a turn whose save is deferred (design: save frequency): whether
+    the view now holds something its next save must write. Consumes the
+    turn's change hint, as :func:`stage` would have.
+
+    True when the turn changed a saved attribute, when that is not known (no
+    hint: pushes, background results, ticks), and when the stored state is
+    past half its lifetime (:func:`_still_fresh`), so a live page's state
+    does not expire under it. No walk, no encode: the flush projects once.
+    """
+    if _not_saved(view):
+        return False
+    hint = view.__dict__.get("_djust_auto_changed")
+    view.__dict__["_djust_auto_changed"] = None
+    if hint is None or hint:
+        return True
+    basis = _basis(view)
+    return basis is None or not _still_fresh(basis, int(time.time()))
+
+
 def stage(
     view: Any, request: Any, *, create: bool = True, page_load: bool = False
 ) -> Optional[Callable[[], None]]:

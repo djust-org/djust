@@ -387,6 +387,19 @@ def _save_running_for(pending: "Optional[asyncio.Future[None]]") -> float:
     return asyncio.get_running_loop().time() - started
 
 
+#: How long the interval flush waits for a connection's turn locks before it
+#: tries again a moment later (a turn in progress holds them).
+_STATE_FLUSH_LOCK_WAIT_S = 0.1
+_STATE_FLUSH_RETRY_S = 0.5
+
+
+def _state_jitter() -> float:
+    """The share of the interval a flush timer waits: 0.75 to 1.0, so a
+    broadcast that dirties many connections at once does not flush them at
+    once, and the interval stays an upper bound."""
+    return 0.75 + 0.25 * (int.from_bytes(os.urandom(2), "big") / 65535.0)
+
+
 #: Consecutive deferred saves after which a deferral is reported as the terminal
 #: reload error, as before #3200: storage is not recovering (review I-a).
 _EXPLICIT_MAX_DEFERRALS = 3
@@ -1561,6 +1574,12 @@ class WSConsumerTransport:
     def _client_ip(self) -> Optional[str]:
         return self.client_ip
 
+    def turn_lock(self) -> Optional[asyncio.Lock]:
+        """The lock every turn of this connection holds while it renders: the
+        consumer's render lock (also taken by its ticks and pushes, #560). A
+        save-only flush takes it too (``ViewRuntime.flush_state``)."""
+        return getattr(self._consumer, "_render_lock", None)
+
     async def send(self, data: Dict[str, Any]) -> None:
         capture = getattr(self._consumer, "_capture_recovery_contracts", None)
         if callable(capture):
@@ -2408,6 +2427,11 @@ class SSESessionTransport:
         """The runtime this transport carries (the page's, or a slot's)."""
         return self._session.runtime
 
+    def turn_lock(self) -> Optional[asyncio.Lock]:
+        """The SSE session's render lock, held by every turn and by a page
+        replacement (``event_context``); a save-only flush takes it too."""
+        return getattr(self._session, "_render_lock", None)
+
     @property
     def origin_token(self) -> Optional[str]:
         """What a push sent from one of this view's handlers is tagged with (#1677).
@@ -3192,6 +3216,13 @@ class ViewRuntime(RuntimeTurnPort):
         self._explicit_deferrals = 0
         self._explicit_catch_up: Optional["asyncio.Task[None]"] = None
         self._in_explicit_catch_up = False
+        # Deferred saves (``_save_policy``, design: save frequency): the view
+        # whose state a turn changed and no save has written yet, the one-shot
+        # timer that flushes it, the flush it started, and consecutive failures.
+        self._state_dirty_view: Any = None
+        self._state_timer: Optional[asyncio.TimerHandle] = None
+        self._state_flush_task: Optional["asyncio.Future[Any]"] = None
+        self._state_flush_failures = 0
         # #3201: vanished session key -> the replacement session this
         # connection created, so repeated mounts reuse one replacement.
         self._replacement_sessions: Dict[str, str] = {}
@@ -6361,16 +6392,26 @@ class ViewRuntime(RuntimeTurnPort):
         from ._exposure_sessions import StateLimitExceeded
         from .state_store import StateStoreError
 
-        from ._save_policy import save_mode
+        from ._save_policy import DEFERRED, save_mode
+        from .state_store import StateSuperseded
 
         if uses_legacy_exposure(view):
             return True
-        # The one place a socket turn's save is decided (``_save_policy``).
-        # Only the immediate mode exists yet: whatever it answers, the state
-        # is saved before the frame below.
-        save_mode(view, self.transport, source=source)
+        # The one place a socket turn's save is decided (``_save_policy``):
+        # immediate (below) unless the project set an interval and nothing
+        # about this turn needs it in storage before its frame.
+        mode = save_mode(view, self.transport, source=source)
         self._explicit_binding_verified = None
         extra = self._explicit_error_fields(view, source=source, async_batch=async_batch)
+        if mode == DEFERRED:
+            return await self._defer_explicit_turn(
+                view, extra, children=children, async_batch=async_batch
+            )
+        if self._state_dirty_view is view:
+            # Earlier turns' changes are in memory only: this turn's "nothing
+            # changed" hint does not cover them, so the save compares the
+            # whole view with what is stored.
+            view.__dict__["_djust_auto_changed"] = None
         try:
             request = getattr(view, "_djust_event_request", None)
             if request is None:
@@ -6399,7 +6440,11 @@ class ViewRuntime(RuntimeTurnPort):
             return False
         except StateLimitExceeded as refused:
             return await self._refuse_over_limit_turn(view, refused, extra)
-        except StateStoreError:
+        except StateStoreError as refused_by_store:
+            if isinstance(refused_by_store, StateSuperseded):
+                # The holder fence: another connection or request restored
+                # this tab since; nothing it saved may be replaced from here.
+                self._forget_state_flush()
             # ``DJUST_STATE_STORE_STRICT`` (#4132): the state store could not
             # take this turn's state and the project asked for the event to be
             # refused. Nothing was written; the store's failure was logged
@@ -6427,9 +6472,259 @@ class ViewRuntime(RuntimeTurnPort):
             )
             return False
         self._explicit_save_succeeded()
+        self._state_saved(view)
         if children:
             return await self._persist_explicit_children_after_event(view, async_batch=async_batch)
         return True
+
+    # ------------------------------------------------------------------ #
+    # Deferred saves (``_save_policy``, design: save frequency)
+    # ------------------------------------------------------------------ #
+
+    async def _defer_explicit_turn(
+        self,
+        view: Any,
+        extra: Dict[str, Any],
+        *,
+        children: bool,
+        async_batch: Optional[str],
+    ) -> bool:
+        """A turn whose save is left to the flush: it writes nothing and
+        holds no storage wait before its frame.
+
+        What stays on every turn: the refusal of a turn whose identity no
+        longer matches the mount (the check the save made, one thread hop),
+        and the child tree's own save, which is declared state. The view is
+        marked changed when the turn changed it (or cannot tell), and the
+        first such turn arms the one-shot timer.
+        """
+        from ._automatic_state import turn_changed_state
+        from ._exposure import ExposureError
+        from ._exposure_sessions import request_binding
+
+        request = getattr(view, "_djust_event_request", None)
+
+        def check() -> None:
+            if request is None or request_binding(request) != self._explicit_mount_binding:
+                raise ExposureError("Explicit persistence requires current authorization")
+
+        try:
+            await sync_to_async(check)()
+        except Exception:  # noqa: BLE001 — identity errors may carry values; never logged
+            view._force_full_html = True
+            logger.warning(
+                "Explicit turn refused: its identity no longer matches the mount; nothing saved"
+            )
+            await self.transport.send_error(
+                "State unavailable. Please reload the page.", code="state_error", **extra
+            )
+            return False
+        self._explicit_binding_verified = request
+        if turn_changed_state(view):
+            self._mark_state_dirty(view)
+        if children:
+            return await self._persist_explicit_children_after_event(view, async_batch=async_batch)
+        return True
+
+    def _mark_state_dirty(self, view: Any) -> None:
+        """``view`` holds a change no save has written: arm the timer once."""
+        if self._state_dirty_view is not view:
+            self._state_dirty_view = view
+            self._state_flush_failures = 0
+        if self._state_timer is None:
+            self._arm_state_timer(view)
+
+    def _arm_state_timer(self, view: Any, delay: Optional[float] = None) -> None:
+        """One ``call_later`` per connection, armed by the first unsaved change
+        and never pushed back by later ones, so the state is saved no later
+        than the interval after it. The jitter only shortens the delay."""
+        from ._save_policy import interval_for
+
+        if self._state_timer is not None:
+            self._state_timer.cancel()
+        if delay is None:
+            delay = interval_for(view) * _state_jitter()
+        loop = asyncio.get_running_loop()
+        self._state_timer = loop.call_later(delay, self._state_timer_fired)
+
+    def _state_timer_fired(self) -> None:
+        """The timer's callback: it only schedules the flush, never locks."""
+        self._state_timer = None
+        self._state_flush_task = asyncio.ensure_future(self._timed_flush())
+
+    async def _timed_flush(self) -> None:
+        # The turn that armed the timer may have been an SSE POST's: its
+        # request's executors are gone by now (#3200).
+        _detach_from_finished_request()
+        await self.flush_state(reason="interval")
+
+    def _cancel_state_timer(self) -> None:
+        if self._state_timer is not None:
+            self._state_timer.cancel()
+            self._state_timer = None
+
+    def _state_saved(self, view: Any) -> None:
+        """A save wrote ``view``'s whole current state: nothing is owed."""
+        if self._state_dirty_view is view:
+            self._state_dirty_view = None
+            self._state_flush_failures = 0
+            self._cancel_state_timer()
+
+    def _forget_state_flush(self) -> None:
+        """Nothing is to be flushed any more (the view went, or another
+        holder owns its state)."""
+        self._state_dirty_view = None
+        self._state_flush_failures = 0
+        self._cancel_state_timer()
+
+    @property
+    def state_unsaved(self) -> bool:
+        """Whether this connection's view holds a change storage does not have."""
+        return self._state_dirty_view is not None and self._state_dirty_view is self.view_instance
+
+    @contextlib.asynccontextmanager
+    async def _flush_locks(self, wait: float) -> AsyncIterator[None]:
+        """The locks every turn holds (the explicit turn lock, then the
+        transport's render lock), each waited for at most ``wait`` seconds;
+        :class:`_TurnLockBusy` when one is still held then."""
+        from .websocket import _acquire_render_lock
+
+        explicit = self._explicit_event_lock
+        try:
+            await _acquire_render_lock(explicit, wait)
+        except asyncio.TimeoutError:
+            raise _TurnLockBusy() from None
+        try:
+            lock_of = getattr(self.transport, "turn_lock", None)
+            render = lock_of() if callable(lock_of) else None
+            if render is not None:
+                try:
+                    await _acquire_render_lock(render, wait)
+                except asyncio.TimeoutError:
+                    raise _TurnLockBusy() from None
+            try:
+                yield
+            finally:
+                if render is not None:
+                    render.release()
+        finally:
+            explicit.release()
+
+    async def flush_state(self, *, reason: str = "interval") -> bool:
+        """Write the view's current state if a deferred turn left it unsaved.
+
+        A save-only server turn, modelled on the catch-up turn: under the turn
+        locks, with fresh authorization (a session logged out meanwhile is not
+        written), through :func:`_run_explicit_save` (ordered with every other
+        save of this runtime). ``reason``: ``"interval"`` (the timer; a busy
+        connection is retried shortly, a failure with backoff),
+        ``"disconnect"`` / ``"navigation"`` / ``"shutdown"`` (nobody waits on
+        them interactively: the 10 s cap for the locks and the save, no
+        retry). Never raises; True when nothing is owed afterwards.
+        """
+        from ._exposure_sessions import MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
+
+        view = self._state_dirty_view
+        if view is None:
+            self._cancel_state_timer()
+            return True
+        if view is not self.view_instance:
+            self._forget_state_flush()  # the view it was owed for is gone
+            return True
+        interactive = reason == "interval"
+        wait = _STATE_FLUSH_LOCK_WAIT_S if interactive else MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
+        try:
+            async with self._flush_locks(wait):
+                if self._state_dirty_view is not view or self.view_instance is not view:
+                    return True
+                return await self._flush_locked(
+                    view,
+                    reason,
+                    deadline=None if interactive else MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S,
+                )
+        except _TurnLockBusy:
+            if interactive:
+                self._arm_state_timer(view, delay=_STATE_FLUSH_RETRY_S)
+            else:
+                logger.warning(
+                    "djust: view state not saved at %s: the connection stayed busy", reason
+                )
+            return False
+        except Exception as exc:  # noqa: BLE001 — never raises; values stay out of the log
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(logger, (view,), exc, "View state flush failed: %s", exc)
+            self._state_flush_failed(view, interactive)
+            return False
+
+    async def _flush_locked(self, view: Any, reason: str, *, deadline: Optional[float]) -> bool:
+        from ._exposure_sessions import StateLimitExceeded
+        from .state_store import StateSuperseded
+
+        self._cancel_state_timer()
+        interactive = reason == "interval"
+        try:
+            await self.authorize_explicit_turn(view)
+        except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
+            # Logged out, or no longer permitted: nothing is written into a
+            # session that is no longer this user's.
+            logger.info("djust: view state not saved at %s: the turn is not authorized", reason)
+            self._forget_state_flush()
+            return False
+        request = view.__dict__.get("_djust_event_request")
+        try:
+            # The flush compares the whole view with what is stored.
+            view.__dict__["_djust_auto_changed"] = None
+            await _run_explicit_save(
+                self, lambda: self._save_explicit_root(view, request), deadline=deadline
+            )
+        except StateSuperseded:
+            self._forget_state_flush()
+            return False
+        except LateSaveDropped:
+            self._forget_state_flush()  # the session was logged out meanwhile
+            return False
+        except StateLimitExceeded as refused:
+            logger.warning(
+                "djust: view state not saved: field %s over its %s limit; the last state "
+                "that fit stays stored and the view keeps its values",
+                sanitize_for_log(refused.field),
+                refused.limit,
+            )
+            self._state_flush_failed(view, interactive)
+            return False
+        except ExplicitSaveDeferred:
+            # Still running: it lands in order; the next flush writes after it.
+            self._state_flush_failed(view, interactive)
+            return False
+        except Exception as exc:  # noqa: BLE001 — storage errors can carry values
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger, (view,), exc, "View state flush failed: %s", exc, level="warning"
+            )
+            self._state_flush_failed(view, interactive)
+            return False
+        finally:
+            view.__dict__.pop("_djust_event_request", None)
+        self._explicit_save_succeeded()
+        self._state_saved(view)
+        return True
+
+    def _state_flush_failed(self, view: Any, interactive: bool) -> None:
+        """Keep the change owed; retry with backoff while the connection is up."""
+        from ._save_policy import MAX_INTERVAL_S, interval_for
+
+        self._state_flush_failures += 1
+        count = self._state_flush_failures
+        if count == 3 or (count > 3 and count & (count - 1) == 0):
+            logger.warning(
+                "djust: view state could not be saved %d times in a row; the view keeps "
+                "working and its changes stay unsaved until a save succeeds",
+                count,
+            )
+        if interactive and self._state_dirty_view is view:
+            self._arm_state_timer(view, delay=min(interval_for(view) * count, MAX_INTERVAL_S))
 
     async def _refuse_over_limit_turn(self, view: Any, refused: Any, extra: Dict[str, Any]) -> bool:
         """A turn whose declared server state is over its limits (#4095).
@@ -6550,6 +6845,8 @@ class ViewRuntime(RuntimeTurnPort):
         those values are in memory only, and the catch-up turn would save
         them. A deferred save that landed carried every value up to it.
         """
+        if self.state_unsaved:
+            return True  # a deferred turn's change is in memory only
         unlanded = self._explicit_unlanded
         if unlanded is None:
             return False
