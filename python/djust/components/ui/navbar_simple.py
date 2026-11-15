@@ -6,12 +6,15 @@ This is a stateless Component optimized for performance.
 For interactive navbars with event handlers, use them in LiveView event handlers.
 """
 
+import logging
 from typing import Any, Dict, List, Optional, Union
 from ..base import Component
 
 from django.utils.html import conditional_escape
 
 from djust.components.utils import attr_text, csp_strict, data_url_attr
+
+logger = logging.getLogger(__name__)
 
 # Characters rewritten when a value is placed inside a single-quoted JS string
 # in an inline handler attribute. Letters, digits, "-" and "_" are unchanged.
@@ -40,21 +43,39 @@ def _js_str(value: Any) -> str:
 #: ``script-src`` without ``'unsafe-inline'`` refuses an inline handler) the button carries
 #: ``data-navbar-toggle`` (the menu's id) and ``data-navbar-toggle-class`` (the class to toggle)
 #: and this module does the same ``classList.toggle`` from a listener on ``document``. The navbar
-#: renders a ``<script src defer>`` for it (with the request's nonce when it has one), and a
+#: renders a ``<script src defer>`` for it (with ``NavBar(nonce=...)``'s nonce), and a
 #: LiveView page in strict mode loads it with the client (``mixins/post_processing.py``), so a
 #: navbar a later patch inserts is covered too.
 NAVBAR_TOGGLE_SCRIPT = "djust_components/navbar-toggle.js"
 
 
+#: The strict-mode marker of the navbar root: ``navbar-toggle.js`` acts only on a menu inside it.
+_ROOT_MARKER = " data-djust-navbar"
+
+_STATIC_WARNED: list[bool] = []
+
+
 def _toggle_script_tag(nonce: str) -> str:
-    """The ``<script>`` that loads :data:`NAVBAR_TOGGLE_SCRIPT` (``defer``; it runs once per page)."""
+    """The ``<script>`` that loads :data:`NAVBAR_TOGGLE_SCRIPT` (``defer``; it runs once per page).
+
+    ``""`` when the static storage cannot name the file (a manifest storage it was not collected
+    into): the render does not fail, and a strict LiveView page loads the file with the client.
+    """
     from django.templatetags.static import static
 
+    try:
+        url = static(NAVBAR_TOGGLE_SCRIPT)
+    except ValueError:
+        if not _STATIC_WARNED:
+            _STATIC_WARNED.append(True)
+            logger.warning(
+                "NavBar: %s is not in the static files manifest; the strict-mode menu toggle "
+                "needs it (run collectstatic).",
+                NAVBAR_TOGGLE_SCRIPT,
+            )
+        return ""
     nonce_attr = ' nonce="%s"' % attr_text(nonce) if nonce else ""
-    return '<script src="%s" defer%s></script>' % (
-        attr_text(static(NAVBAR_TOGGLE_SCRIPT)),
-        nonce_attr,
-    )
+    return '<script src="%s" defer%s></script>' % (attr_text(url), nonce_attr)
 
 
 def _toggle_attrs(target_id: str, css_class: str) -> str:
@@ -185,8 +206,10 @@ class NavBar(Component):
             expand: Breakpoint for expansion (sm, md, lg, xl, xxl)
             id: Navbar ID (auto-generated if not provided)
             nonce: CSP nonce for the menu toggle's ``<script>`` under
-                ``LIVEVIEW_CONFIG["csp_strict"]`` (pass ``request.csp_nonce``
-                for a nonce-only policy); unused by default (#4146)
+                ``LIVEVIEW_CONFIG["csp_strict"]``: pass ``request.csp_nonce``
+                for a nonce-only policy (a strict LiveView page also loads the
+                file with the client, with the request's nonce). Unused by
+                default (#4146).
         """
         super().__init__(
             items=items,
@@ -361,7 +384,8 @@ class NavBar(Component):
             "max-w-full px-4" if self.container == "fluid" else "container mx-auto px-4"
         )
 
-        parts = [f'<nav class="{bg_class}{sticky_class}">']
+        root_marker = _ROOT_MARKER if strict else ""
+        parts = [f'<nav class="{bg_class}{sticky_class}"{root_marker}>']
         parts.append(f'    <div class="{container_class}">')
         parts.append('        <div class="flex justify-between items-center h-16">')
 
@@ -513,9 +537,10 @@ class NavBar(Component):
         parts.append("        </div>")
 
         parts.append("    </div>")
-        if strict:
+        tag = _toggle_script_tag(self.nonce) if strict else ""
+        if tag:
             # Inside the <nav>, so the component keeps one root element.
-            parts.append(_toggle_script_tag(self._csp_nonce()))
+            parts.append(tag)
         parts.append("</nav>")
 
         return "\n".join(parts)
@@ -525,7 +550,10 @@ class NavBar(Component):
         strict = csp_strict()
         sticky_class = f" navbar-sticky-{attr_text(self.sticky)}" if self.sticky else ""
 
-        parts = [f'<nav class="navbar navbar-{attr_text(self.variant)}{sticky_class}">']
+        root_marker = _ROOT_MARKER if strict else ""
+        parts = [
+            f'<nav class="navbar navbar-{attr_text(self.variant)}{sticky_class}"{root_marker}>'
+        ]
         parts.append(f'    <div class="navbar-container-{attr_text(self.container)}">')
 
         # Brand
@@ -597,14 +625,9 @@ class NavBar(Component):
         parts.append("            </ul>")
         parts.append("        </div>")
         parts.append("    </div>")
-        if strict:
-            parts.append(_toggle_script_tag(self._csp_nonce()))
+        tag = _toggle_script_tag(self.nonce) if strict else ""
+        if tag:
+            parts.append(tag)
         parts.append("</nav>")
 
         return "\n".join(parts)
-
-    def _csp_nonce(self) -> str:
-        """The nonce for the strict-mode toggle script: ``nonce=`` if given, else the request's."""
-        from djust.utils import get_csp_nonce
-
-        return self.nonce or get_csp_nonce(getattr(self, "request", None))

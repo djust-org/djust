@@ -133,6 +133,28 @@ class TestTheSwitch:
         _check_csp_strict_alias(errors)
         assert [e.id for e in errors] == (["djust.C039"] if error else [])
 
+    @pytest.mark.parametrize(
+        "live,djust_cfg,error",
+        [
+            ({"csp_strict": False}, {"csp_strict_styles": True}, True),
+            ({"csp_strict_styles": True}, {"csp_strict": False}, True),
+            ({}, {"csp_strict": True, "csp_strict_styles": False}, True),
+            ({"csp_strict": True}, {"csp_strict_styles": True}, False),
+            # LIVEVIEW_CONFIG wins a key, as the loader reads it: no disagreement left.
+            ({"csp_strict": True, "csp_strict_styles": True}, {"csp_strict_styles": False}, False),
+        ],
+    )
+    def test_c039_reads_both_sources_as_the_loader_does(self, settings, live, djust_cfg, error):
+        from djust.checks.configuration import _check_csp_strict_alias
+
+        settings.LIVEVIEW_CONFIG = live
+        settings.DJUST_CONFIG = djust_cfg
+        errors: list = []
+        _check_csp_strict_alias(errors)
+        assert [e.id for e in errors] == (["djust.C039"] if error else [])
+        if error:
+            assert "DJUST_CONFIG" in errors[0].msg
+
 
 # ---------------------------------------------------------------------------
 # NavBar
@@ -194,8 +216,13 @@ class TestNavBar:
         assert _handlers(strict) == []
         script = re.search(r"\n<script src=[^\n]*></script>(?=\n</nav>$)", strict)
         assert script, strict
-        back = strict.replace(script.group(0), "").replace(
-            _STRICT_TOGGLES[framework], _DEFAULT_TOGGLES[framework]
+        # The root carries the marker the listener requires, on the opening <nav> only.
+        assert strict.count(" data-djust-navbar") == 1
+        assert strict[: strict.index(">") + 1].endswith(" data-djust-navbar>")
+        back = (
+            strict.replace(script.group(0), "")
+            .replace(_STRICT_TOGGLES[framework], _DEFAULT_TOGGLES[framework])
+            .replace(" data-djust-navbar>", ">", 1)
         )
         assert back == default
 
@@ -226,6 +253,25 @@ class TestNavBar:
         html = self._navbar("bootstrap5", strict=strict)
         assert _handlers(html) == []
         assert "data-navbar-toggle" not in html and "<script" not in html
+
+    def test_an_uncollected_module_omits_the_tag_and_does_not_raise(self, monkeypatch, caplog):
+        """With a manifest storage that has no entry for the file ``static()`` raises
+        ``ValueError``; the render must not, and a strict LiveView page loads the file anyway."""
+        import django.templatetags.static as static_module
+
+        from djust.components.ui import navbar_simple
+
+        def missing(path: str) -> str:
+            raise ValueError("Missing staticfiles manifest entry for '%s'" % path)
+
+        monkeypatch.setattr(static_module, "static", missing)
+        monkeypatch.setattr(navbar_simple, "_STATIC_WARNED", [])
+        html = self._navbar("plain", strict=True)
+        assert "<script" not in html and "data-navbar-toggle=" in html
+        assert html.endswith("</div>\n</nav>")
+        self._navbar("tailwind", strict=True)
+        warned = [r for r in caplog.records if "navbar-toggle.js" in r.getMessage()]
+        assert len(warned) == 1
 
     def test_the_module_follows_static_url(self):
         with override_settings(STATIC_URL="/assets/"):
@@ -309,8 +355,11 @@ class TestDismiss:
         finally:
             config.set("csp_strict", before)
         assert _handlers(strict) == []
+        assert strict.count(" data-theme-dismiss-root") == 1
         assert (
-            strict.replace(" data-theme-dismiss ", ' onclick="this.parentElement.remove()" ')
+            strict.replace(
+                " data-theme-dismiss ", ' onclick="this.parentElement.remove()" '
+            ).replace('" data-theme-dismiss-root\n', '"\n', 1)
             == default
         )
 
@@ -325,8 +374,11 @@ class TestDismiss:
         button = _DISMISS.search(html)
         assert button, html
         assert 'aria-label="Dismiss"' in button.group(0)
-        # ``this.parentElement.remove()`` removed the root: the button is its direct child.
-        assert re.match(r'\s*<div class="%s\b' % root_class, html), html
+        # ``this.parentElement.remove()`` removed the root: the button is its direct child, and
+        # that root carries the marker the listener requires.
+        assert re.match(
+            r'\s*<div class="%s\b[^"]*" data-theme-dismiss-root\n' % root_class, html
+        ), html
         depth = 0
         for tag in re.finditer(r"<(/?)(div|button)\b", html[: button.start()]):
             depth += -1 if tag.group(1) else 1
@@ -335,6 +387,25 @@ class TestDismiss:
     def test_an_alert_that_is_not_dismissible_has_no_button(self, mode, engine):
         html = _render(engine, '{% load theme_components %}{% theme_alert "Hi" %}')
         assert "data-theme-dismiss" not in html and _handlers(html) == []
+
+    @pytest.mark.parametrize("nonce", ["", "hd4146"])
+    def test_theme_head_scripts_carry_the_nonce(self, engine, nonce):
+        """The strict close button needs ``components.js``: under a nonce-only policy its tag must
+        carry the nonce. Without one the tags are what they were."""
+        req = RequestFactory().get("/")
+        if nonce:
+            req.csp_nonce = nonce
+        html = str(
+            engine.from_string("{% load theme_tags %}{% theme_head %}").render(
+                {"request": req}, req
+            )
+        )
+        tags = re.findall(
+            r'<script src="[^"]*djust_theming/js/(?:theme|components)\.js[^"]*"[^>]*>', html
+        )
+        assert len(tags) == 2, html
+        for tag in tags:
+            assert tag.endswith(' defer nonce="%s">' % nonce if nonce else '" defer>'), tag
 
     def test_components_js_handles_the_marker_and_theme_head_loads_it(self):
         js = (PKG / "theming" / "static" / "djust_theming" / "js" / "components.js").read_text()
@@ -376,45 +447,87 @@ class TestW005:
             config.set("csp_strict", before)
 
     BASE_NO_JS = "{% load theme_tags %}<head>{% theme_head include_js=False %}</head>"
+    EXTENDS = '{% extends "base.html" %}'
 
     @pytest.mark.parametrize(
-        "page",
+        "button",
         [
             '{% theme_alert "x" dismissible=True %}',
             "{% theme_alert msg dismissible=can_close %}",
             '{% theme_toast "Saved" %}',
         ],
     )
-    def test_reports_a_dismiss_button_on_a_page_without_components_js(
-        self, tmp_path, monkeypatch, page
+    def test_reports_a_dismiss_button_on_a_page_that_extends_the_head(
+        self, tmp_path, monkeypatch, button
     ):
-        found = self._check(
-            tmp_path, monkeypatch, {"base.html": self.BASE_NO_JS, "page.html": page}
-        )
+        files = {"base.html": self.BASE_NO_JS, "page.html": self.EXTENDS + button}
+        found = self._check(tmp_path, monkeypatch, files)
         assert [m.id for m in found] == ["djust_theming.W005"]
         assert "components.js" in found[0].hint
+        assert "base.html renders" in found[0].msg and "page.html, on the same page" in found[0].msg
         # Default mode: the button is the inline handler, which needs no script.
-        files = {"base.html": self.BASE_NO_JS, "page.html": page}
         assert self._check(tmp_path, monkeypatch, files, strict=False) == []
 
     @pytest.mark.parametrize(
         "files",
         [
+            # The page includes the head.
+            {
+                "head.html": BASE_NO_JS,
+                "page.html": '{% include "head.html" %}{% theme_toast "x" %}',
+            },
+            # A partial with the button, included by a page that extends the head.
+            {
+                "base.html": BASE_NO_JS,
+                "toasts.html": '{% theme_toast "x" %}',
+                "page.html": EXTENDS + '{% include "toasts.html" %}',
+            },
+            # Through two levels of extends.
+            {
+                "base.html": BASE_NO_JS,
+                "mid.html": EXTENDS,
+                "page.html": '{% extends "mid.html" %}{% theme_toast "x" %}',
+            },
+        ],
+    )
+    def test_reports_it_through_include_and_extends(self, tmp_path, monkeypatch, files):
+        assert [m.id for m in self._check(tmp_path, monkeypatch, files)] == ["djust_theming.W005"]
+
+    def test_both_in_one_template_says_so(self, tmp_path, monkeypatch):
+        files = {"page.html": self.BASE_NO_JS + '{% theme_toast "x" %}'}
+        (found,) = self._check(tmp_path, monkeypatch, files)
+        assert "page.html renders {% theme_head include_js=False %} and a dismissible" in found.msg
+        assert "same page" not in found.msg
+
+    @pytest.mark.parametrize(
+        "files",
+        [
             # theme_head loads it (the default).
-            {"base.html": "{% theme_head %}", "page.html": '{% theme_toast "x" %}'},
+            {"base.html": "{% theme_head %}", "page.html": EXTENDS + '{% theme_toast "x" %}'},
             # No dismiss button.
-            {"base.html": BASE_NO_JS, "page.html": '{% theme_alert "x" dismissible=False %}'},
-            {"base.html": BASE_NO_JS, "page.html": '{% theme_alert "x" %}'},
-            # The project loads the script itself.
+            {
+                "base.html": BASE_NO_JS,
+                "page.html": EXTENDS + '{% theme_alert "x" dismissible=False %}',
+            },
+            {"base.html": BASE_NO_JS, "page.html": EXTENDS + '{% theme_alert "x" %}'},
+            # The page loads the script itself.
             {
                 "base.html": BASE_NO_JS
                 + "<script src=\"{% static 'djust_theming/js/components.js' %}\" defer></script>",
-                "page.html": '{% theme_toast "x" %}',
+                "page.html": EXTENDS + '{% theme_toast "x" %}',
             },
             # Only in a comment.
             {
                 "base.html": "{# {% theme_head include_js=False %} #}",
-                "page.html": "{% theme_toast 'x' %}",
+                "page.html": EXTENDS + "{% theme_toast 'x' %}",
+            },
+            # Two templates that never share a page.
+            {"admin_base.html": BASE_NO_JS, "page.html": '{% theme_toast "x" %}'},
+            # Two pages extending one base: the head is on one page, the button on the other.
+            {
+                "base.html": "<head>{% block head %}{% endblock %}</head>",
+                "a.html": EXTENDS + "{% block head %}" + BASE_NO_JS + "{% endblock %}",
+                "b.html": EXTENDS + '{% theme_toast "x" %}',
             },
         ],
     )

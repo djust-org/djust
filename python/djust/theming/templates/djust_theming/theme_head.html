@@ -56,6 +56,6 @@ for. The token is derived from the assets' newest mtime (see
 {% if include_components_app_link %}<link rel="stylesheet" href="{% static 'djust_components/components.css' %}?v={{ asset_version }}">{% endif %}
 {{ component_css_block }}
 <link rel="stylesheet" href="{% static 'djust_theming/css/print.css' %}?v={{ asset_version }}" media="print">
-{% if include_js %}<script src="{% static 'djust_theming/js/theme.js' %}?v={{ asset_version }}" defer></script>
-<script src="{% static 'djust_theming/js/components.js' %}?v={{ asset_version }}" defer></script>{% endif %}
+{% if include_js %}<script src="{% static 'djust_theming/js/theme.js' %}?v={{ asset_version }}" defer{{ nonce_attr }}></script>
+<script src="{% static 'djust_theming/js/components.js' %}?v={{ asset_version }}" defer{{ nonce_attr }}></script>{% endif %}
 {% endautoescape %}

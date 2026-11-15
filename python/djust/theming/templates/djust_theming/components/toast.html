@@ -1,4 +1,4 @@
-<div class="{{ css_prefix }}toast {{ css_prefix }}toast-{{ variant }} {{ css_prefix }}toast-{{ position }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
+<div class="{{ css_prefix }}toast {{ css_prefix }}toast-{{ variant }} {{ css_prefix }}toast-{{ position }} {% if attrs.class %}{{ attrs.class }}{% endif %}"{% if csp_strict %} data-theme-dismiss-root{% endif %}
      role="status"
      aria-live="polite"
      data-theme-toast

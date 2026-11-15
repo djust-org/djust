@@ -616,17 +616,25 @@ also works for markup a LiveView patch inserts later (#4146):
 
 What strict mode needs loaded:
 
-- `components.js`, which `{% theme_head %}` loads. A strict page rendered with
+- `components.js`, which `{% theme_head %}` loads (its `<script src>` carries
+  the request's nonce when there is one). A strict page rendered with
   `{% theme_head include_js=False %}` has to load
-  `{% static 'djust_theming/js/components.js' %}` itself for the close button
-  to work; the system check `djust_theming.W005` reports a strict project that
-  seems not to.
+  `{% static 'djust_theming/js/components.js' %}` itself, with the nonce under
+  a nonce-only policy, for the close button to work; the system check
+  `djust_theming.W005` reports a strict page that seems not to.
 - `navbar-toggle.js` needs no setup. A strict LiveView page loads it with the
   client (with the request's nonce), so a navbar that first arrives in a later
   patch works too; and the navbar renders a `<script src defer>` for it inside
   its own `<nav>` for a page without the client. That tag has a nonce only when
   you pass one (`NavBar(..., nonce=request.csp_nonce)`); under a nonce-only
   policy (`'strict-dynamic'`) a plain Django page needs it.
+
+The listeners act only on djust's own markup, so HTML a page did not write that
+carries the attributes cannot use them to change the rest of the page: the
+close button removes only its direct parent, and only when that parent is a
+marked alert or toast root (`data-theme-dismiss-root`); the toggle toggles only
+`hidden` or `show`, and only on a menu inside the button's own navbar
+(`nav[data-djust-navbar]`).
 
 In both modes djust also writes the handler you give it: the `onclick=`
 argument of `{% theme_button %}` and of the `Button` component. It is the caller's

@@ -1,5 +1,6 @@
 """Django system checks for djust-theming configuration validation."""
 
+import os
 import re
 from typing import Any, Iterator
 
@@ -321,6 +322,8 @@ def check_component_catalog_css(app_configs: Any, **kwargs: Any) -> list[CheckMe
 
 #: ``{% theme_head ... include_js=False %}``: the page leaves out ``theme.js`` and ``components.js``.
 _THEME_HEAD_WITHOUT_JS = re.compile(r"\{%-?\s*theme_head\b[^%]*\binclude_js\s*=\s*False\b")
+#: ``{% extends "x" %}`` / ``{% include "x" %}`` with a literal name.
+_TEMPLATE_REFS = re.compile(r"""\{%-?\s*(extends|include)\s+["']([^"']+)["']""")
 #: A dismiss button the theming templates draw: every toast, and an alert with ``dismissible``
 #: set to anything but a literal ``False``.
 _DISMISS_BUTTON_TAG = re.compile(
@@ -336,9 +339,10 @@ def check_dismiss_needs_components_js(app_configs: Any, **kwargs: Any) -> list[C
     is an inline ``onclick``, which needs no script. Under ``LIVEVIEW_CONFIG["csp_strict"]`` (a
     ``script-src`` without ``'unsafe-inline'`` refuses it) it is a ``data-theme-dismiss`` marker
     handled by ``djust_theming/js/components.js``, which ``{% theme_head %}`` loads unless it is
-    given ``include_js=False``. A strict project that does that, renders one of the two tags and
-    loads ``components.js`` nowhere itself has a close button that does nothing. Only project
-    templates are read (``djust.checks``' template directories).
+    given ``include_js=False``. A strict page that does that, renders one of the two tags and
+    does not load ``components.js`` itself has a close button that does nothing. A page here is a
+    template with what it extends and includes, and what includes it, by literal name; only
+    project templates are read (``djust.checks``' template directories).
     """
     from djust.components.utils import csp_strict
 
@@ -350,35 +354,87 @@ def check_dismiss_needs_components_js(app_configs: Any, **kwargs: Any) -> list[C
         _iter_template_files,
     )
 
-    without_js: list[str] = []
-    dismissing: list[str] = []
-    for path in _iter_template_files(_get_template_dirs()):
-        try:
-            with open(path, encoding="utf-8") as handle:
-                source = _blank_template_comments(handle.read())
-        except (OSError, UnicodeDecodeError):
+    # Per template (by its name under a template directory): its source facts and the names it
+    # extends and includes. A page is a template plus what it extends and includes, and what
+    # includes it, so a head without the script and a dismiss button on two templates that never
+    # share a page do not count. A template name built at render time is not followed.
+    facts: dict[str, tuple[str, bool, bool, bool, set[tuple[str, str]]]] = {}
+    for directory in _get_template_dirs():
+        for path in _iter_template_files([directory]):
+            name = os.path.relpath(path, directory).replace(os.sep, "/")
+            if name in facts:
+                continue
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    source = _blank_template_comments(handle.read())
+            except (OSError, UnicodeDecodeError):
+                continue
+            facts[name] = (
+                path,
+                bool(_THEME_HEAD_WITHOUT_JS.search(source)),
+                bool(_DISMISS_BUTTON_TAG.search(source)),
+                "djust_theming/js/components.js" in source,
+                set(_TEMPLATE_REFS.findall(source)),
+            )
+    # Who includes a template (not who extends it: two pages extending one base are two pages).
+    included_by: dict[str, set[str]] = {}
+    for name, (_p, _n, _d, _l, refs) in facts.items():
+        for kind, ref in refs:
+            if kind == "include":
+                included_by.setdefault(ref, set()).add(name)
+
+    def page_of(start: str) -> set[str]:
+        """The templates a page showing ``start`` is made of: up through what includes or is
+        extended by it, then down through what each of those includes."""
+
+        def refs(name: str, kind: str) -> list[str]:
+            return [r for k, r in facts[name][4] if k == kind] if name in facts else []
+
+        up, queue = set(), [start]
+        while queue:
+            name = queue.pop()
+            if name in up or name not in facts:
+                continue
+            up.add(name)
+            queue.extend(included_by.get(name, ()))
+            queue.extend(refs(name, "extends"))
+        page, queue = set(), list(up)
+        while queue:
+            name = queue.pop()
+            if name in page or name not in facts:
+                continue
+            page.add(name)
+            queue.extend(refs(name, "include"))
+            queue.extend(refs(name, "extends"))
+        return page
+
+    for name, (path, _no_js, dismisses, _loads, _refs) in sorted(facts.items()):
+        if not dismisses:
             continue
-        if "djust_theming/js/components.js" in source:
-            return []
-        if _THEME_HEAD_WITHOUT_JS.search(source):
-            without_js.append(path)
-        if _DISMISS_BUTTON_TAG.search(source):
-            dismissing.append(path)
-    if not (without_js and dismissing):
-        return []
-    return [
-        Warning(
-            "A template renders {%% theme_head include_js=False %%} (%s) and another renders a "
-            "dismissible {%% theme_alert %%} or a {%% theme_toast %%} (%s). Their close button "
-            "is handled by djust_theming/js/components.js, which that page does not load, so it "
-            'does nothing there under LIVEVIEW_CONFIG["csp_strict"].'
-            % (without_js[0], dismissing[0]),
-            hint=(
-                "Load {% static 'djust_theming/js/components.js' %} on those pages (a <script "
-                "src> with defer), or drop include_js=False. In strict mode the button is a "
-                "marker, because a strict Content-Security-Policy refuses its default inline "
-                "onclick (#4146)."
-            ),
-            id="djust_theming.W005",
+        page = page_of(name)
+        heads = sorted(facts[n][0] for n in page if facts[n][1])
+        if not heads or any(facts[n][3] for n in page):
+            continue
+        where = (
+            "%s renders {%% theme_head include_js=False %%} and a dismissible "
+            "{%% theme_alert %%} or a {%% theme_toast %%}" % path
+            if heads == [path]
+            else "%s renders {%% theme_head include_js=False %%} and %s, on the same page "
+            "(extends or include), renders a dismissible {%% theme_alert %%} or a "
+            "{%% theme_toast %%}" % (heads[0], path)
         )
-    ]
+        return [
+            Warning(
+                "%s. Their close button is handled by djust_theming/js/components.js, which "
+                'that page does not load, so it does nothing there under LIVEVIEW_CONFIG["csp_strict"].'
+                % where,
+                hint=(
+                    "Load {% static 'djust_theming/js/components.js' %} on that page (a <script "
+                    "src> with defer), or drop include_js=False. In strict mode the button is a "
+                    "marker, because a strict Content-Security-Policy refuses its default inline "
+                    "onclick (#4146)."
+                ),
+                id="djust_theming.W005",
+            )
+        ]
+    return []

@@ -373,8 +373,8 @@ console.log("debug info"); // noqa: Q003
 
 ### C039 — csp_strict and csp_strict_styles disagree
 - **Severity**: Error
-- **Method**: Settings inspection (`LIVEVIEW_CONFIG`)
-- **What it detects**: `LIVEVIEW_CONFIG` sets both `csp_strict` and `csp_strict_styles`, one on and the other off. `csp_strict_styles` is the earlier name of `csp_strict`, the one switch for output a strict Content-Security-Policy accepts (#4146); either one on turns it on, so the project has said two different things.
+- **Method**: Settings inspection (`LIVEVIEW_CONFIG`, then `DJUST_CONFIG`, as the config loader reads them)
+- **What it detects**: `csp_strict` and `csp_strict_styles` are both set, one on and the other off, each read from `LIVEVIEW_CONFIG` or, when it does not have the key, `DJUST_CONFIG`. `csp_strict_styles` is the earlier name of `csp_strict`, the one switch for output a strict Content-Security-Policy accepts (#4146); either one on turns it on, so the project has said two different things.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C039"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C039"]`
 - **False positives**: None.
 

@@ -45,14 +45,14 @@ function click(window, el) {
 }
 
 const TAILWIND = `
-<nav><div class="md:hidden">
+<nav class="bg-white" data-djust-navbar><div class="md:hidden">
   <button type="button" class="p-2" data-navbar-toggle="nav1-mobile" data-navbar-toggle-class="hidden">
     <svg><path d="M4 6h16"></path></svg>
   </button></div>
   <div class="hidden md:hidden" id="nav1-mobile">menu</div></nav>`;
 
 const PLAIN = `
-<nav class="navbar navbar-light">
+<nav class="navbar navbar-light" data-djust-navbar>
   <button class="navbar-toggler" data-navbar-toggle="nav2-menu" data-navbar-toggle-class="show">&#9776;</button>
   <div class="navbar-menu" id="nav2-menu">menu</div></nav>`;
 
@@ -90,21 +90,73 @@ describe('navbar-toggle.js', () => {
         expect(window.document.getElementById('nav2-menu').classList.contains('show')).toBe(true);
     });
 
-    it('does nothing for a missing menu, an unmarked button, or a class that is not one token', () => {
+    it('does nothing for a missing menu or an unmarked button', () => {
         const window = page(
-            `<button id="a" data-navbar-toggle="nope" data-navbar-toggle-class="show">a</button>
-             <button id="b">b</button>
-             <button id="c" data-navbar-toggle="m" data-navbar-toggle-class="a b">c</button>
-             <div id="m" class="x"></div>`,
+            `<nav data-djust-navbar>
+               <button id="a" data-navbar-toggle="nope" data-navbar-toggle-class="show">a</button>
+               <button id="b">b</button>
+               <div id="m" class="x"></div></nav>`,
             [NAVBAR_JS],
         );
-        for (const id of ['a', 'b', 'c']) click(window, window.document.getElementById(id));
+        for (const id of ['a', 'b']) click(window, window.document.getElementById(id));
         expect(window.document.getElementById('m').className).toBe('x');
+    });
+
+    it('refuses a target outside the button\'s own navbar', () => {
+        const window = page(
+            `<nav data-djust-navbar><button id="t" data-navbar-toggle="victim" data-navbar-toggle-class="hidden">t</button></nav>
+             <div id="victim" class="v"></div>`,
+            [NAVBAR_JS],
+        );
+        click(window, window.document.getElementById('t'));
+        expect(window.document.getElementById('victim').className).toBe('v');
+    });
+
+    it('refuses a target in another navbar', () => {
+        const window = page(
+            `<nav data-djust-navbar><button id="t" data-navbar-toggle="other-menu" data-navbar-toggle-class="show">t</button></nav>
+             <nav data-djust-navbar><div id="other-menu" class="navbar-menu"></div></nav>`,
+            [NAVBAR_JS],
+        );
+        click(window, window.document.getElementById('t'));
+        expect(window.document.getElementById('other-menu').classList.contains('show')).toBe(false);
+    });
+
+    it.each(['pwned', 'hidden show', 'Hidden', '', 'constructor'])(
+        'refuses the class token %j',
+        (token) => {
+            const window = page(
+                `<nav data-djust-navbar><button id="t" data-navbar-toggle="m" data-navbar-toggle-class="${token}">t</button>
+                 <div id="m" class="x"></div></nav>`,
+                [NAVBAR_JS],
+            );
+            click(window, window.document.getElementById('t'));
+            expect(window.document.getElementById('m').className).toBe('x');
+        },
+    );
+
+    it('refuses a button whose nav is not a djust navbar root', () => {
+        const window = page(
+            `<nav><button id="t" data-navbar-toggle="m" data-navbar-toggle-class="show">t</button>
+             <div id="m" class="x"></div></nav>`,
+            [NAVBAR_JS],
+        );
+        click(window, window.document.getElementById('t'));
+        expect(window.document.getElementById('m').className).toBe('x');
+    });
+
+    it('refuses toggling the navbar root itself', () => {
+        const window = page(
+            `<nav id="n" class="x" data-djust-navbar><button id="t" data-navbar-toggle="n" data-navbar-toggle-class="show">t</button></nav>`,
+            [NAVBAR_JS],
+        );
+        click(window, window.document.getElementById('t'));
+        expect(window.document.getElementById('n').className).toBe('x');
     });
 });
 
 const ALERT = `
-<div class="alert alert-info" role="alert" id="al">
+<div class="alert alert-info" data-theme-dismiss-root role="alert" id="al">
   <div class="alert-content"><div class="alert-message">Hi</div></div>
   <button class="alert-dismiss" data-theme-dismiss aria-label="Dismiss">
     <svg width="16" height="16"><line x1="18" y1="6" x2="6" y2="18"></line></svg>
@@ -112,7 +164,7 @@ const ALERT = `
 </div>`;
 
 const TOAST = `
-<div class="toast toast-info toast-top-right" role="status" aria-live="polite" data-theme-toast data-duration="5000" id="to">
+<div class="toast toast-info toast-top-right" data-theme-dismiss-root role="status" aria-live="polite" data-theme-toast data-duration="5000" id="to">
   <div class="toast-content"><div class="toast-message">Saved</div></div>
   <button class="toast-close" data-theme-dismiss aria-label="Dismiss"><svg><line></line></svg></button>
 </div>`;
@@ -139,6 +191,34 @@ describe('theming components.js: data-theme-dismiss', () => {
         const window = page(`<div dj-view="app.V" dj-root>${ALERT}</div>`, [THEMING_JS]);
         click(window, window.document.querySelector('[data-theme-dismiss]'));
         expect(window.document.getElementById('al')).toBe(null);
+    });
+
+    it('a marked button without a marked root removes nothing', () => {
+        const window = page(
+            '<main id="c"><section id="box"><button id="b" data-theme-dismiss>x</button></section></main>',
+            [THEMING_JS],
+        );
+        click(window, window.document.getElementById('b'));
+        expect(window.document.getElementById('box')).not.toBe(null);
+        expect(window.document.getElementById('c')).not.toBe(null);
+    });
+
+    it('a button nested deeper than the root removes nothing', () => {
+        const window = page(
+            '<div id="r" data-theme-dismiss-root><span><button id="b" data-theme-dismiss>x</button></span></div>',
+            [THEMING_JS],
+        );
+        click(window, window.document.getElementById('b'));
+        expect(window.document.getElementById('r')).not.toBe(null);
+    });
+
+    it('is inert for default-mode markup (no markers)', () => {
+        const window = page(
+            '<div class="alert" id="al" role="alert"><button class="alert-dismiss" aria-label="Dismiss">x</button></div>',
+            [THEMING_JS],
+        );
+        click(window, window.document.querySelector('.alert-dismiss'));
+        expect(window.document.getElementById('al')).not.toBe(null);
     });
 
     it('a click elsewhere removes nothing', () => {
@@ -173,7 +253,7 @@ function livePage(scripts) {
 const NAVBAR_PATCH = [
     {
         type: 'InsertChild', path: [0], d: 'P', index: 0, ref_d: null,
-        node: vnode('nav', 'n0', { class: 'navbar navbar-light' }, [
+        node: vnode('nav', 'n0', { class: 'navbar navbar-light', 'data-djust-navbar': '' }, [
             vnode('button', 'b1', {
                 class: 'navbar-toggler',
                 'data-navbar-toggle': 'm1',
@@ -213,7 +293,7 @@ describe('a button the client inserts with applyPatches', () => {
         const ok = await window.djust.applyPatches([
             {
                 type: 'InsertChild', path: [0], d: 'P', index: 0, ref_d: null,
-                node: vnode('div', 'a1', { id: 'al', class: 'alert', role: 'alert' }, [
+                node: vnode('div', 'a1', { id: 'al', class: 'alert', role: 'alert', 'data-theme-dismiss-root': '' }, [
                     vnode('button', 'a2', { class: 'alert-dismiss', 'data-theme-dismiss': '' }, [text('x')]),
                 ]),
             },

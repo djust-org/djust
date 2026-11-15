@@ -931,26 +931,42 @@ def _check_automatic_state_switch(errors: list[CheckMessage]) -> None:
 
 
 def _check_csp_strict_alias(errors: list[CheckMessage]) -> None:
-    """C039: ``LIVEVIEW_CONFIG`` sets ``csp_strict`` and ``csp_strict_styles`` differently.
+    """C039: ``csp_strict`` and ``csp_strict_styles`` resolve to different values.
 
     ``csp_strict_styles`` is the name the strict-CSP switch shipped with (#3979);
     ``csp_strict`` is its name now that it also covers inline handlers (#4146). Either on
     means strict, so ``{"csp_strict": False, "csp_strict_styles": True}`` is strict: a
-    project that sets both differently has said two things, and this refuses to guess.
+    project that sets both differently has said two things, and this refuses to guess. Each
+    key is resolved as the config loader resolves it: ``LIVEVIEW_CONFIG`` first, then
+    ``DJUST_CONFIG`` (#1993).
     """
     from django.conf import settings
 
-    live = getattr(settings, "LIVEVIEW_CONFIG", None) or {}
-    if not isinstance(live, dict) or "csp_strict" not in live or "csp_strict_styles" not in live:
+    sources = []
+    for setting in ("LIVEVIEW_CONFIG", "DJUST_CONFIG"):
+        value = getattr(settings, setting, None)
+        sources.append((setting, value if isinstance(value, dict) else {}))
+
+    resolved = {}
+    for key in ("csp_strict", "csp_strict_styles"):
+        for setting, values in sources:
+            if key in values:
+                resolved[key] = (setting, values[key])
+                break
+    if len(resolved) < 2:
         return
-    if bool(live["csp_strict"]) == bool(live["csp_strict_styles"]):
+    (strict_from, strict), (styles_from, styles) = (
+        resolved["csp_strict"],
+        resolved["csp_strict_styles"],
+    )
+    if bool(strict) == bool(styles):
         return
     if _is_check_suppressed("djust.C039"):
         return
     errors.append(
         DjustError(
-            'LIVEVIEW_CONFIG sets "csp_strict" to %r and "csp_strict_styles" to %r.'
-            % (live["csp_strict"], live["csp_strict_styles"]),
+            '%s sets "csp_strict" to %r and %s sets "csp_strict_styles" to %r.'
+            % (strict_from, strict, styles_from, styles),
             hint=(
                 '"csp_strict_styles" is the earlier name of "csp_strict", the one switch for '
                 "output a strict Content-Security-Policy accepts. Either one on turns it on."
