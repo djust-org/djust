@@ -58,8 +58,8 @@
     {
       "label": "ProgressHandler reads the tag's value without saying it is an int",
       "file": "python/djust/components/rust_handlers.py",
-      "old": "value = int(_progress(value=kw.get(\"value\", 0))[\"value\"])",
-      "new": "value = _progress(value=kw.get(\"value\", 0))[\"value\"]"
+      "old": "value = int(_progress(value=_number(kw.get(\"value\", 0), \"progress\", \"value\"))[\"value\"])",
+      "new": "value = _progress(value=_number(kw.get(\"value\", 0), \"progress\", \"value\"))[\"value\"]"
     }
   ]
 }
