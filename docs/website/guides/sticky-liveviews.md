@@ -146,15 +146,27 @@ left:
 
 - the child class and its `state()` declarations, and the `sticky_id`;
 - the `{% live_render %}` keyword arguments (its mount inputs);
+- the nesting depth: a child the destination renders at a different depth
+  (inside another embedded view instead of directly in the page, or the
+  other way round) is not carried;
 - the session, the user and the tenant.
 
 Anything else mounts a fresh child: different inputs, a session that
 expired or was replaced, another user or tenant. A child mounted on a
 page without a session, or under a legacy-exposure parent, is never
-carried to another page. The destination re-runs the child's
-authorization, as for any preserved child (see "Auth re-check semantics"
-below). The child's `state(..., persist="server")` fields are then
-stored under the destination page.
+carried to another page.
+
+The destination re-runs the child's authorization, as for any preserved
+child (see "Auth re-check semantics" below). The views the child embeds
+move with it, each re-authorized against the destination request as a
+fresh embed would be; if any of them is refused, or is a legacy-exposure
+view, the child is not carried and the destination renders a fresh one.
+Then the `state(..., persist="server")` fields of the child and of the
+views it embeds are stored under the destination page.
+
+A child the destination refuses, or whose state cannot be stored there,
+is discarded with its `_on_sticky_unmount()` hook; a later page or mount
+on the same connection never picks it up.
 
 ## The `sticky` class attribute
 
