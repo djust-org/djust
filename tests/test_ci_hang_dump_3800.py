@@ -52,12 +52,14 @@ def test_the_shard_step_arms_the_dump():
     assert _timeout() > 0
 
 
-#: A ``@pytest.mark.sweep`` unit runs in full only on pushes to ``main`` and the nightly (a PR
-#: runs a seeded sample, #4074), so its recorded time is a full-mode figure; it still has to fit
-#: twice over in the same timeout, which then still catches a hung sweep. Today's margin is thin:
-#: the safe-markup guard fuzz (``test_safe_markup_guard_3820.py::TestTheDifferentialFuzz::
-#: test_other_seeds_agree[3]``) records 846 s, 2 x 846 = 1692 < 1800, because the fuzz became
-#: about 15x slower in #4135 (#4145). Fixing #4145 restores the room.
+#: The standing rule for a ``@pytest.mark.sweep`` unit. It runs in full only on pushes to
+#: ``main`` and the nightly (a PR runs a seeded sample, #4074), so its recorded time is a
+#: full-mode figure, and full-mode sweeps legitimately run for 10–14 minutes: the 3898
+#: marked-safe sweep (``test_marked_safe_attribute_sweep_3898.py::TestEveryClass::
+#: test_no_class_lets_a_marked_safe_item_value_out_of_an_attribute[companions]``) records
+#: 723–762 s on main's runs. It still has to fit twice over in the same timeout, which then still
+#: catches a hung sweep. (The guard fuzz's 846 s that first needed this rule came from #4145,
+#: fixed separately; the rule does not depend on it.)
 SWEEP_HEADROOM = 2
 
 
