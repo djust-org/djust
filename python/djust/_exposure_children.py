@@ -102,6 +102,28 @@ def record_child_mount_inputs(child: Any, mount_inputs: dict[str, Any]) -> None:
     child._explicit_child_schema = ExposureContract.from_view_class(type(child)).schema
 
 
+def rebind_child_state(
+    child: Any, parent: Any, request: Any, slot: str, mount_inputs: dict[str, Any]
+) -> None:
+    """Move a reattached sticky child's server-state scope to its new parent (#4149).
+
+    A child carried across ``live_redirect`` keeps its live values, but its
+    storage scope includes the route and ancestry, so later saves and events
+    would be checked against the page it left. Called after the child passed
+    the destination's authorization and was registered there: when the scope
+    changed, the child's current declared server state is written under the
+    new scope and recorded as its binding. No-op for a child without
+    server-persisted state, or one whose scope is unchanged.
+    """
+    adapter = child_state_adapter(child, parent, request, slot, mount_inputs, create=True)
+    if adapter is None:
+        return
+    if adapter.binding == getattr(child, "_explicit_child_mount_binding", None):
+        return
+    adapter.save(adapter.contract.project_view(child, "server"))
+    child._explicit_child_mount_binding = adapter.binding
+
+
 def child_event_adapter(
     child: Any, root: Any, request: Any, *, require_delivered: bool = False
 ) -> "ChildStateSession | None":

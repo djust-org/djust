@@ -1688,9 +1688,14 @@ def _match_sticky_child(
     *,
     preserved: bool = False,
 ) -> bool:
-    """Keep legacy reuse; remount explicit children whose mount identity changed."""
+    """Keep legacy reuse; remount explicit children whose mount identity changed.
+
+    A child ``preserved`` across a ``live_redirect`` may also be carried to a
+    destination on another route or under another parent class when its carry
+    identity (class, slot, mount inputs, session, user, tenant) matches (#4149).
+    """
     from .._exposure import uses_legacy_exposure
-    from .._exposure_child_identity import child_can_reuse
+    from .._exposure_child_identity import carry_preserved_child, child_can_reuse
 
     legacy_target = uses_legacy_exposure(child_cls)
     if (
@@ -1700,6 +1705,12 @@ def _match_sticky_child(
     ):
         return True
     if not legacy_target and child_can_reuse(child, child_cls, parent, request, slot, mount_inputs):
+        return True
+    if (
+        preserved
+        and not legacy_target
+        and carry_preserved_child(child, child_cls, parent, request, slot, mount_inputs)
+    ):
         return True
 
     # Remove every server-owned reference BEFORE mounting a replacement. In
@@ -2260,6 +2271,12 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 # may have populated attributes (auth, session, etc.)
                 # the survivor's handlers will read.
                 survivor.request = request
+                if not _legacy_policy(survivor):
+                    # A child carried to another route stores its declared
+                    # server state under the destination's scope (#4149).
+                    from .._exposure_children import rebind_child_state
+
+                    rebind_child_state(survivor, parent, request, sticky_id_value, kwargs)
                 _warn_if_sticky_kwargs_changed(
                     survivor,
                     {k: v for k, v in kwargs.items() if k != "lazy"},
@@ -2760,6 +2777,12 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         ):
             raise ExposureError("Child reuse identity changed during mount")
         child._explicit_child_reuse_identity = explicit_identity
+        if sticky_kwarg:
+            # What a live_redirect may carry it by (#4149); covered by the
+            # mount-time check above, which compares a superset of its fields.
+            child._explicit_child_carry_identity = child_reuse_identity(
+                type(child), parent, request, explicit_slot, explicit_mount_inputs, carry=True
+            )
 
     # Whether this child's declared state was put back on top of its mount() (#3989).
     explicit_child_restored = False

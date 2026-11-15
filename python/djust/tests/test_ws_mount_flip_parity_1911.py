@@ -299,7 +299,7 @@ class PlainNoExtrasView(LiveView):
 class StickyChild(LiveView):
     """Sticky child embedded via ``{% live_render sticky=True %}``."""
 
-    exposure_policy = "legacy"  # gap #4149: an explicit sticky child cannot survive live_redirect
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "sticky-widget"
     template = "<div>track={{ track }}</div>"
@@ -308,13 +308,13 @@ class StickyChild(LiveView):
         self.track = "one"
 
     def get_context_data(self, **kwargs):
-        return {"track": self.track, "view": self}
+        return super().get_context_data(track=self.track, **kwargs)
 
 
 class StickyParentView(LiveView):
     """Parent embedding the sticky child (the live_redirect SOURCE)."""
 
-    exposure_policy = "legacy"  # gap #4149: an explicit sticky child cannot survive live_redirect
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         f'<div dj-root dj-view="{_ALLOWED}.StickyParentView" dj-id="0">'
@@ -327,24 +327,31 @@ class StickyParentView(LiveView):
         pass
 
     def get_context_data(self, **kwargs):
-        return {"view": self}
+        return super().get_context_data(**kwargs)
 
 
 class DestinationWithSlotView(LiveView):
-    """live_redirect DESTINATION carrying a matching ``[dj-sticky-slot]`` so the
-    survivor reattaches and appears in the sticky_hold ``views`` list."""
+    """live_redirect DESTINATION rendering the same sticky child, so the
+    survivor reattaches and appears in the sticky_hold ``views`` list.
 
-    exposure_policy = "legacy"  # gap #4149: an explicit sticky child cannot survive live_redirect
+    An explicit child is reattached by the destination's ``{% live_render %}``
+    (which emits the ``[dj-sticky-slot]`` placeholder); bare slot markup does
+    not authorize it (#4149)."""
+
+    exposure_policy = "explicit"
     template = (
+        "{% load live_tags %}"
         f'<div dj-root dj-view="{_ALLOWED}.DestinationWithSlotView" dj-id="0">'
-        '<h1>Dest B</h1><div dj-sticky-slot="sticky-widget"></div></div>'
+        "<h1>Dest B</h1>"
+        f'{{% live_render "{_ALLOWED}.StickyChild" sticky=True %}}'
+        "</div>"
     )
 
     def mount(self, request, **kwargs):
         pass
 
     def get_context_data(self, **kwargs):
-        return {"view": self}
+        return super().get_context_data(**kwargs)
 
 
 class RedirectViewA(LiveView):

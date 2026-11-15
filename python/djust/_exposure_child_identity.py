@@ -34,13 +34,26 @@ class ChildReuseIdentity:
 
 
 def child_reuse_identity(
-    child_cls: type, parent: Any, request: Any, slot: str, mount_inputs: dict[str, Any]
+    child_cls: type,
+    parent: Any,
+    request: Any,
+    slot: str,
+    mount_inputs: dict[str, Any],
+    *,
+    carry: bool = False,
 ) -> ChildReuseIdentity:
     """Compile identity from trusted render inputs without evaluating state.
 
     Authentication/tenant rules are shared with server persistence. No session
     is created, saved or decoded here. A cookie session can identify transient
     reuse, but cannot acquire server-state storage through this helper.
+
+    ``carry=True`` compiles the identity a sticky child keeps across a
+    ``live_redirect`` (#4149): the same child schema and class, slot, mount
+    inputs, session, user, tenant and nesting depth, but neither the route nor
+    the ancestors' classes and inputs. The ancestry is still validated, and an
+    owner-bound subtree (no session, or a legacy ancestor) still matches only
+    under the same root instance, so it never carries to another page.
     """
     try:
         policy = getattr(child_cls, "exposure_policy", None)
@@ -67,6 +80,7 @@ def child_reuse_identity(
         classes = [child_cls]
         if session is not None:
             classes.append(type(session))
+        carried_classes = tuple(classes)
         seen: set[int] = set()
         current = parent
         root = None
@@ -104,10 +118,13 @@ def child_reuse_identity(
             current = ancestor
         if root is None:
             raise ExposureError("Missing child reuse owner")
-        identity = clone_json_state(
-            [contract.schema, slot, inputs, user, tenant, route, session_digest, lineage],
-            limits=contract.limits,
-        )
+        if carry:
+            classes = list(carried_classes)
+            parts = ["carry", contract.schema, slot, inputs, user, tenant, session_digest]
+            parts.append(len(lineage))
+        else:
+            parts = [contract.schema, slot, inputs, user, tenant, route, session_digest, lineage]
+        identity = clone_json_state(parts, limits=contract.limits)
         digest = hashlib.sha256(
             json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
@@ -131,3 +148,31 @@ def child_can_reuse(
     ):
         return False
     return recorded.matches(current)
+
+
+def carry_preserved_child(
+    child: Any, child_cls: type, parent: Any, request: Any, slot: str, mount_inputs: dict[str, Any]
+) -> bool:
+    """Whether a preserved sticky child may move under ``parent`` (#4149).
+
+    Compares the carry identity recorded at the child's mount with the one the
+    destination's ``{% live_render %}`` compiles now. On a match the child's
+    reuse identity is re-recorded for its new route and parent, so the event,
+    persistence and re-render paths that check it accept the child there. The
+    caller still re-runs the authorization a fresh mount runs.
+    """
+    current = child_reuse_identity(child_cls, parent, request, slot, mount_inputs, carry=True)
+    recorded = getattr(child, "_explicit_child_carry_identity", None)
+    policy = getattr(child, "exposure_policy", None)
+    if (
+        type(child) is not child_cls
+        or type(recorded) is not ChildReuseIdentity
+        or type(policy) is not str
+        or policy != "explicit"
+        or not recorded.matches(current)
+    ):
+        return False
+    child._explicit_child_reuse_identity = child_reuse_identity(
+        child_cls, parent, request, slot, mount_inputs
+    )
+    return True
