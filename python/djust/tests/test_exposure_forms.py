@@ -16,6 +16,7 @@ the real HTTP POST fallback. The Rust renderer has no handler for the
 """
 
 import json
+import re
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -455,3 +456,35 @@ def test_raw_model_pk_is_re_resolved_only_for_legacy_views(staged, policy):
         assert view._model_instance == user  # control: the unscoped lookup ran
     else:
         assert view._model_instance is None
+
+
+# ---------------------------------------------------------------------------
+# 6. LiveView.render() (the test client's render) resolves ``view`` for form
+#    tags under both policies, as render_with_diff() does (#4151).
+# ---------------------------------------------------------------------------
+
+FIELD_TEMPLATE = '{% load live_tags %}<div dj-root>{% live_field view "name" %}</div>'
+
+
+class ExplicitFieldView(ExplicitFormView):
+    template = FIELD_TEMPLATE
+
+
+class LegacyFieldView(LegacyFormView):
+    template = FIELD_TEMPLATE
+
+
+FIELD_VIEWS = {"explicit": ExplicitFieldView, "legacy": LegacyFieldView}
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_test_client_render_resolves_view_for_form_tags(staged, policy):
+    from djust.testing import LiveViewTestClient
+
+    client = LiveViewTestClient(FIELD_VIEWS[policy])
+    client.mount()
+    client.send_event("validate_field", field="name", value="toolong")
+    html = client.render()
+    assert "does not have as_live_field" not in html
+    assert re.search(r'<input[^>]*name="name"[^>]*value="toolong"', html), html
+    assert NAME_ERROR in html
