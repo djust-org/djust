@@ -43,18 +43,19 @@ import json
 import sys
 import types
 import uuid
-from unittest.mock import MagicMock
 
 import pytest
 
 pytest.importorskip("channels")
 
+from asgiref.sync import sync_to_async  # noqa: E402
 from django.contrib.admin.views.decorators import staff_member_required  # noqa: E402
 from django.contrib.auth.decorators import (  # noqa: E402
     login_required,
     permission_required,
     user_passes_test,
 )
+from django.contrib.auth.models import AnonymousUser  # noqa: E402
 from django.contrib.auth.mixins import (  # noqa: E402
     AccessMixin,
     LoginRequiredMixin,
@@ -134,7 +135,7 @@ def _template(name, body):
 
 
 class _Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     abstract = True
 
     def mount(self, request, **kwargs):
@@ -168,7 +169,7 @@ class StaffRequiredMixin(AccessMixin):
 
 
 class StaffOnlyView(StaffRequiredMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _template("StaffOnlyView", "STAFF-ONLY-MARKER {{ state }}")
 
     def mount(self, request, **kwargs):
@@ -185,7 +186,7 @@ class StaffOnlyView(StaffRequiredMixin, LiveView):
 
 @method_decorator(login_required, name="get")
 class GatedGetView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _template("GatedGetView", "GATED-GET-MARKER")
 
     def mount(self, request, **kwargs):
@@ -429,7 +430,7 @@ _djust_shop = _third_party_module(
     "        return super().dispatch(request, *args, **kwargs)\n"
     "from djust import LiveView\n"
     "class ShopView(StaffMixin, LiveView):\n"
-    "    exposure_policy = 'legacy'\n"
+    "    exposure_policy = 'explicit'\n"
     "    template = '<div>shop</div>'\n",
 )
 DjustAuthPackageView = _view("DjustAuthPackageView", [_djust_auth.LoginRequiredLiveViewMixin])
@@ -449,14 +450,28 @@ def _clear_ran():
     RAN.clear()
 
 
-def _with_user(app, user_cls):
-    async def mw(scope, receive, send):
-        scope = dict(scope)
-        scope["user"] = user_cls()
-        scope.setdefault("session", {})
-        return await app(scope, receive, send)
+def _login(user_cls):
+    """A saved user, logged into a live session, standing in for ``user_cls``.
 
-    return mw
+    An explicit view binds to the session it was mounted on and re-reads its
+    user there, so the stub users (which no session can name) become real ones
+    with the same flags: anonymous, a member, staff, and a member holding every
+    permission (a superuser that is not staff).
+    """
+    from django.contrib.auth import get_user_model
+
+    from djust.tests._live_session import live_session
+
+    if user_cls is _AnonUser:
+        return AnonymousUser(), live_session(None)
+    name = "auth" + uuid.uuid4().hex[:10]
+    user = get_user_model().objects.create_user(
+        name,
+        password="pw-auth-x",
+        is_staff=user_cls is _StaffUser,
+        is_superuser=user_cls is _PermittedUser,
+    )
+    return user, live_session(user)
 
 
 def _mount_or_close(frames):
@@ -484,7 +499,9 @@ async def _ws(user_cls, view_name, event=None):
 
     from djust.websocket import LiveViewConsumer
 
-    communicator = WebsocketCommunicator(_with_user(LiveViewConsumer.as_asgi(), user_cls), "/ws/")
+    user, session = await sync_to_async(_login)(user_cls)
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    communicator.scope.update(user=user, session=session)
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from()  # connect ack
@@ -553,7 +570,7 @@ ws = pytest.mark.usefixtures("_allow_this_module")
 # --------------------------------------------------------------------------- #
 # WebSocket mount: the reported shapes
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestReportedShapes:
@@ -592,7 +609,7 @@ class TestReportedShapes:
 # --------------------------------------------------------------------------- #
 # WebSocket mount: Django auth decorators replayed
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestReplayedDecorators:
@@ -650,7 +667,7 @@ class TestReplayedDecorators:
 # --------------------------------------------------------------------------- #
 # WebSocket mount: mixins, overrides, unknown decorators, djust_* modules
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestOtherShapes:
@@ -718,10 +735,9 @@ async def _sse_mount(user, view_name):
     from djust.sse import SSESession
 
     request = RequestFactory().get("/x/")
-    request.user = user
-    request.session = MagicMock()
+    request.user, request.session = await sync_to_async(_login)(type(user))
     session = SSESession(str(uuid.uuid4()))
-    session._owner_user_pk = user.pk
+    session._owner_user_pk = request.user.pk
     session._request = request
     await session.runtime.dispatch_mount(
         {"type": "mount", "view": f"{_MOD}.{view_name}", "url": "/x/", "params": {}}
@@ -732,7 +748,7 @@ async def _sse_mount(user, view_name):
     return session.runtime.view_instance is not None, messages
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestSSEMount:

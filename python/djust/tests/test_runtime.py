@@ -192,7 +192,7 @@ class _FakeView:
     """A bare-minimum stand-in for LiveView used by tests where we only
     care about parameter plumbing, not actual rendering."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def __init__(self):
         self.kwargs_received: Optional[Dict[str, Any]] = None
@@ -225,6 +225,18 @@ class _FakeView:
         self.handle_params_calls.append((params, uri))
 
 
+def _live_mount_request(transport, url):
+    """Hand ``transport`` the mount request a live transport would: one with a
+    saved server session, which an explicit view's mount binds to."""
+    from django.test import RequestFactory
+
+    from djust.tests._live_session import with_live_session
+
+    request = with_live_session(RequestFactory().get(url))
+    transport.build_request = lambda: request
+
+
+@pytest.mark.django_db(transaction=True)
 class TestDispatchMountURLPlumbing:
     @pytest.mark.asyncio
     async def test_mount_uses_url_field_not_endpoint_path(self):
@@ -257,6 +269,7 @@ class TestDispatchMountURLPlumbing:
             return original(page_url)
 
         runtime._resolve_url_kwargs = spy_resolve
+        _live_mount_request(transport, "/items/42/")
 
         # Bypass the module allowlist (set by demo_project settings) by
         # using a view path inside an explicitly allowed prefix. The
@@ -291,6 +304,7 @@ class TestDispatchMountURLPlumbing:
         runtime._instantiate_view = MagicMock(return_value=view)
         runtime._check_auth = AsyncMock(return_value=None)
         runtime._resolve_url_kwargs = MagicMock(return_value={})
+        _live_mount_request(transport, "/list/?category=books")
 
         with _patch_allowed_modules(["djust."]):
             await runtime.dispatch_mount(

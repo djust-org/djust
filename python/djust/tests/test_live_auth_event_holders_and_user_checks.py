@@ -39,8 +39,10 @@ import pytest
 
 pytest.importorskip("channels")
 
+from asgiref.sync import sync_to_async  # noqa: E402
 from django.contrib.admin.views.decorators import staff_member_required  # noqa: E402
 from django.contrib.auth.decorators import login_required, user_passes_test  # noqa: E402
+from django.contrib.auth.models import AnonymousUser, Group  # noqa: E402
 from django.contrib.sessions.middleware import SessionMiddleware  # noqa: E402
 from django.core.exceptions import PermissionDenied  # noqa: E402
 from django.db import transaction  # noqa: E402
@@ -54,7 +56,7 @@ from django.views.decorators.debug import sensitive_variables  # noqa: E402
 from djust import LiveView  # noqa: E402
 from djust.auth import core  # noqa: E402
 from djust.auth.core import check_view_auth, live_auth_refusals  # noqa: E402
-from djust.components.base import LiveComponent  # noqa: E402
+from djust.components.descriptors.base import LiveComponent, TypedState  # noqa: E402
 from djust.decorators import event_handler  # noqa: E402
 from djust.tests._ws_frames import drain_extra, receive_until  # noqa: E402
 
@@ -125,7 +127,7 @@ def _template(name, body):
 
 
 class _Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     abstract = True
 
     def mount(self, request, **kwargs):
@@ -157,32 +159,34 @@ _superuser_only = method_decorator(user_passes_test(lambda u: u.is_superuser), n
 # F1: the page view's post()-only rule on component, embedded and upload paths
 # --------------------------------------------------------------------------- #
 class Switch(LiveComponent):
-    template = "<span>switch</span>"
+    """A component declared on the view class: an explicit view renders and
+    routes only those (an instance-assigned one is refused at render)."""
 
-    def mount(self, **kwargs):
-        self.on = False
+    class State(TypedState):
+        on: bool = False
 
-    def get_context_data(self):
-        return {"on": self.on}
+    template = "<span>switch {{ on }}</span>"
 
     @event_handler()
     def flip(self, **kwargs):
         RAN.append("component-flip")
-        self.on = not self.on
-
-
-def _mount_with_switch(self, request, **kwargs):
-    self.switch = Switch(component_id="switch")
-    self._register_component(self.switch)
+        self.state.on = not self.state.on
 
 
 PostGatedWithComponent = _view(
-    "PostGatedWithComponent", {"mount": _mount_with_switch}, decorators=[_superuser_only]
+    "PostGatedWithComponent",
+    {
+        "switch": Switch(),
+        "template": _template(
+            "PostGatedWithComponent", "POSTGATEDWITHCOMPONENT-MARKER {{ switch }}"
+        ),
+    },
+    decorators=[_superuser_only],
 )
 
 
 class _ChildView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>child {{ count }}</div>"
 
     def mount(self, request, **kwargs):
@@ -194,19 +198,30 @@ class _ChildView(LiveView):
         self.count += 1
 
     def get_context_data(self, **kwargs):
-        return {"count": self.count, "view": self}
+        return {"count": self.count}
 
 
 @_superuser_only
 class _PostGatedParent(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">parent</div>'
 
     def mount(self, request, **kwargs):
         self.n = 0
 
     def get_context_data(self, **kwargs):
-        return {"n": self.n, "view": self}
+        return {"n": self.n}
+
+
+class _PostGatedPage(_PostGatedParent):
+    """The post-gated page embedding ``_ChildView`` as ``child-1``, mounted by
+    ``{% live_render %}`` as a browser's page mounts it: an explicit embedded
+    view's events need the child mount the tag performs."""
+
+    template = (
+        '<div dj-root dj-id="0">{% load live_tags %}parent '
+        f'{{% live_render "{_MOD}._ChildView" view_id="child-1" %}}</div>'
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -416,7 +431,11 @@ sys.modules[_urls.__name__] = _urls
 # --------------------------------------------------------------------------- #
 @pytest.fixture
 def _live():
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[_MOD], ROOT_URLCONF=_urls.__name__):
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=[_MOD],
+        DJUST_LIVE_RENDER_ALLOWED_MODULES=[_MOD],
+        ROOT_URLCONF=_urls.__name__,
+    ):
         clear_url_caches()
         yield
     clear_url_caches()
@@ -432,14 +451,35 @@ def _clear_ran():
 ws = pytest.mark.usefixtures("_live")
 
 
-def _with_user(app, user_cls):
-    async def mw(scope, receive, send):
-        scope = dict(scope)
-        scope["user"] = user_cls()
-        scope.setdefault("session", {})
-        return await app(scope, receive, send)
+def _login(user_cls):
+    """A saved user, logged into a live session, standing in for ``user_cls``.
 
-    return mw
+    An explicit view binds to the session it was mounted on and re-reads its
+    user there, so the stub users (which no session can name) become real ones
+    with the same flags: anonymous, a member, a member of the ``editors``
+    group, staff, a superuser. Group membership is a real ``Group`` row, so it
+    reads the same at the mount and on every event. ``role`` is set on the
+    user object, as a project's middleware or user model would provide it;
+    the views that read it judge it at the mount.
+    """
+    from django.contrib.auth import get_user_model
+
+    from djust.tests._live_session import live_session
+
+    if user_cls is _AnonUser:
+        user = AnonymousUser()
+        user.role = None
+        return user, live_session(None)
+    name = "auth" + uuid.uuid4().hex[:10]
+    users = get_user_model().objects
+    if user_cls is _SuperUser:
+        user = users.create_superuser(name, password="pw-auth-x")
+    else:
+        user = users.create_user(name, password="pw-auth-x", is_staff=user_cls is _StaffUser)
+    if user_cls in (_GroupUser, _SuperUser):
+        user.groups.add(Group.objects.get_or_create(name="editors")[0])
+    user.role = user_cls.role
+    return user, live_session(user)
 
 
 def _mount_or_close(frames):
@@ -476,7 +516,9 @@ async def _ws(user_cls, view_name, events=()):
 
     from djust.websocket import LiveViewConsumer
 
-    communicator = WebsocketCommunicator(_with_user(LiveViewConsumer.as_asgi(), user_cls), "/ws/")
+    user, session = await sync_to_async(_login)(user_cls)
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    communicator.scope.update(user=user, session=session)
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from()  # connect ack
@@ -517,7 +559,13 @@ def _mounted(outputs):
 
 
 def _denied(frames):
-    return any(f.get("type") == "error" and "Permission denied" in json.dumps(f) for f in frames)
+    """An ``error`` frame refusing the event for permission.
+
+    A legacy view answers "Permission denied" and stays mounted; an explicit
+    view applies the same rule while authorizing the turn and ends the view
+    ("Event authorization failed", then close 4403). Both carry the code.
+    """
+    return any(f.get("type") == "error" and f.get("code") == "permission_denied" for f in frames)
 
 
 async def _assert_refused(view_name, user_cls):
@@ -532,24 +580,42 @@ async def _assert_mounts(view_name, user_cls):
     assert f"{view_name.upper()}-MARKER" in repr(outputs)
 
 
+def _event_post(mount_request):
+    """The ``/message/`` POST of the mount's browser: the same session, its user
+    read from it as ``AuthenticationMiddleware`` reads it."""
+    from django.contrib.auth import get_user
+
+    post = RequestFactory().post("/x/")
+    post.session = type(mount_request.session)(mount_request.session.session_key)
+    post.user = get_user(post)
+    return post
+
+
 async def _sse(user, view_name, event=None, params=None):
+    """Mount ``view_name`` over SSE, then send ``event``.
+
+    Returns whether the MOUNT succeeded (an explicit view whose event is
+    refused ends there, so the view is gone after a refused event) and the
+    messages queued.
+    """
     from djust.sse import SSESession
 
     request = RequestFactory().get("/x/")
-    request.user = user
-    request.session = MagicMock()
+    request.user, request.session = await sync_to_async(_login)(type(user))
     session = SSESession(str(uuid.uuid4()))
-    session._owner_user_pk = user.pk
+    session._owner_user_pk = request.user.pk
     session._request = request
     await session.runtime.dispatch_mount(
         {"type": "mount", "view": f"{_MOD}.{view_name}", "url": "/x/", "params": {}}
     )
-    if event is not None and session.runtime.view_instance is not None:
+    mounted = session.runtime.view_instance is not None
+    if event is not None and mounted:
+        session._event_request = await sync_to_async(_event_post)(request)
         await session.runtime.dispatch_event({"event": event, "params": dict(params or {})})
     messages = []
     while not session.queue.empty():
         messages.append(session.queue.get_nowait())
-    return session.runtime.view_instance is not None, messages
+    return mounted, messages
 
 
 def _post(view_cls, user, event="touch", params=None):
@@ -604,13 +670,15 @@ def _request(user):
     return request
 
 
-def _runtime_with(parent, user):
+async def _runtime_with(parent, user_cls):
+    """``parent`` mounted for real on a runtime, by a saved ``user_cls`` user."""
     from djust.runtime import ViewRuntime
+    from djust.tests._live_session import amount_on_runtime
 
-    parent.request = _request(user)
+    user, _session = await sync_to_async(_login)(user_cls)
     transport = _MockTransport()
     runtime = ViewRuntime(transport)
-    runtime.view_instance = parent
+    await amount_on_runtime(runtime, parent, user=user, url="/x/")
     return runtime, transport
 
 
@@ -644,7 +712,7 @@ class TestPostOnlyRuleOnComponentEvents:
         )
         assert mounted is True
         assert RAN == []
-        assert "Permission denied" in repr(messages)
+        assert "permission_denied" in repr(messages)
         await _sse(_SuperUser(), "PostGatedWithComponent", "flip", {"component_id": "switch"})
         assert RAN == ["component-flip"]
 
@@ -659,31 +727,22 @@ class TestPostOnlyRuleOnThePostFallback:
         assert RAN == []
 
 
-def _sticky_parent(user):
-    parent = _PostGatedParent()
-    parent.mount(None)
-    child = _ChildView()
-    child.mount(None)
-    child.request = _request(user)
-    parent._register_child("child-1", child)
-    return parent, child
+async def _sticky_parent(user_cls):
+    """The post-gated page, mounted by ``user_cls``, holding an embedded view."""
+    parent = _PostGatedPage()
+    runtime, transport = await _runtime_with(parent, user_cls)
+    child = parent._get_all_child_views()["child-1"]
+    assert isinstance(child, _ChildView) and child.count == 0
+    return runtime, transport, child
 
 
-def _registered_component_parent():
-    parent = _PostGatedParent()
-    parent.mount(None)
-    component = Switch(component_id="switch")
-    parent._register_component(component)
-    return parent
-
-
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@ws
 class TestPostOnlyRuleOnTheRuntime:
     @pytest.mark.parametrize("user_cls", [_AnonUser, _MemberUser, _StaffUser])
     async def test_embedded_child_event_is_refused(self, user_cls):
-        parent, child = _sticky_parent(user_cls())
-        runtime, transport = _runtime_with(parent, user_cls())
+        runtime, transport, child = await _sticky_parent(user_cls)
         await runtime.dispatch_event(
             {"type": "event", "event": "bump", "params": {"view_id": "child-1"}, "ref": 1}
         )
@@ -691,8 +750,7 @@ class TestPostOnlyRuleOnTheRuntime:
         assert _denied(transport.sent), transport.sent
 
     async def test_embedded_child_event_runs_for_the_permitted_user(self):
-        parent, child = _sticky_parent(_SuperUser())
-        runtime, _transport = _runtime_with(parent, _SuperUser())
+        runtime, _transport, _child = await _sticky_parent(_SuperUser)
         await runtime.dispatch_event(
             {"type": "event", "event": "bump", "params": {"view_id": "child-1"}, "ref": 1}
         )
@@ -700,7 +758,7 @@ class TestPostOnlyRuleOnTheRuntime:
 
     @pytest.mark.parametrize("user_cls", [_AnonUser, _MemberUser])
     async def test_component_event_is_refused(self, user_cls):
-        runtime, transport = _runtime_with(_registered_component_parent(), user_cls())
+        runtime, transport = await _runtime_with(PostGatedWithComponent(), user_cls)
         await runtime.dispatch_event(
             {"type": "event", "event": "flip", "params": {"component_id": "switch"}, "ref": 1}
         )
@@ -708,7 +766,7 @@ class TestPostOnlyRuleOnTheRuntime:
         assert _denied(transport.sent), transport.sent
 
     async def test_component_event_runs_for_the_permitted_user(self):
-        runtime, _transport = _runtime_with(_registered_component_parent(), _SuperUser())
+        runtime, _transport = await _runtime_with(PostGatedWithComponent(), _SuperUser)
         await runtime.dispatch_event(
             {"type": "event", "event": "flip", "params": {"component_id": "switch"}, "ref": 1}
         )
@@ -723,15 +781,39 @@ class TestPostOnlyRuleOnTheRuntime:
         assert await _post_only_rules_deny(child) is True
 
 
-def _upload_consumer(user):
+async def _upload_consumer(user_cls):
+    """The post-gated page mounted for real on a consumer by ``user_cls``, with uploads."""
+    from djust.tests._live_session import amount_on_consumer
+    from djust.uploads import UploadManager
+    from djust.websocket import LiveViewConsumer
+
+    consumer = LiveViewConsumer()
+    consumer.send_json = AsyncMock()
+    consumer.send_error = AsyncMock()
+    user, _session = await sync_to_async(_login)(user_cls)
+    view = await amount_on_consumer(
+        consumer, f"{_MOD}._PostGatedParent", user=user, url="/x/", view=_PostGatedParent()
+    )
+    consumer.send_json.reset_mock()
+    consumer.send_error.reset_mock()
+    manager = UploadManager()
+    manager.configure("doc", accept=".pdf", max_entries=2)
+    view._upload_manager = manager
+    return consumer, manager
+
+
+class _LegacyPostGatedParent(_PostGatedParent):
+    exposure_policy = "legacy"  # legacy subject: only a legacy view resumes an upload across a reconnect (ADR-038 D-g)
+
+
+def _legacy_upload_consumer(user):
     from djust.uploads import UploadManager
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer.__new__(LiveViewConsumer)
     consumer.send_json = AsyncMock()
     consumer.send_error = AsyncMock()
-    view = _PostGatedParent()
-    view.exposure_policy = "legacy"
+    view = _LegacyPostGatedParent()
     view.request = _request(user)
     manager = UploadManager()
     manager.configure("doc", accept=".pdf", max_entries=2)
@@ -751,19 +833,20 @@ _REGISTER = {
 }
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+@ws
 class TestPostOnlyRuleOnUploads:
     @pytest.mark.parametrize("user_cls", [_AnonUser, _MemberUser])
     async def test_upload_register_is_refused(self, user_cls):
-        consumer, manager = _upload_consumer(user_cls())
+        consumer, manager = await _upload_consumer(user_cls)
         await consumer._handle_upload_register(dict(_REGISTER))
         assert "ref-1" not in manager._entries
         consumer.send_json.assert_not_awaited()
         assert "Permission denied" in repr(consumer.send_error.await_args)
 
     async def test_upload_register_for_the_permitted_user(self):
-        consumer, manager = _upload_consumer(_SuperUser())
+        consumer, manager = await _upload_consumer(_SuperUser)
         await consumer._handle_upload_register(dict(_REGISTER))
         assert "ref-1" in manager._entries
         assert consumer.send_json.await_args.args[0]["type"] == "upload_registered"
@@ -772,7 +855,7 @@ class TestPostOnlyRuleOnUploads:
         "user_cls, status", [(_MemberUser, "not_found"), (_SuperUser, "resumed")]
     )
     async def test_upload_resume(self, monkeypatch, user_cls, status):
-        consumer, manager = _upload_consumer(user_cls())
+        consumer, manager = _legacy_upload_consumer(user_cls())
         manager.resume_entry = lambda upload_id, session_key: object()
         monkeypatch.setattr(
             "djust.uploads.resumable.resolve_resume_request",
@@ -791,7 +874,7 @@ class TestPostOnlyRuleOnUploads:
 # --------------------------------------------------------------------------- #
 # F2
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestDecoratorOverMethodDecorator:
@@ -824,7 +907,7 @@ def test_inner_decorators_are_found():
 F3_REFUSED = ["GroupsRedirectView", "RoleNotFoundView", "GetattrStaffRedirectView"]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestUserAttributeGates:
@@ -862,7 +945,7 @@ class TestUserAttributeGatesOnThePostFallback:
         assert RAN == []
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 async def test_user_attribute_gate_over_sse():
@@ -921,7 +1004,7 @@ def test_loads_user_recognises_every_local_load(opname, argval, expected):
 # --------------------------------------------------------------------------- #
 # F4
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestDelegatingDecorator:
@@ -1046,7 +1129,7 @@ def test_hot_view_replacement_forgets_the_url_map(tmp_path):
             from djust import LiveView
 
             class Reloaded(LiveView):
-                exposure_policy = "legacy"
+                exposure_policy = "explicit"
                 template = "<div>x</div>"
             """
         )
@@ -1097,7 +1180,6 @@ class TestAsyncTestOnTheLoopThread:
 # --------------------------------------------------------------------------- #
 # A response the override builds itself, import aliases, get_object_or_404
 # --------------------------------------------------------------------------- #
-from django.contrib.auth.models import Group  # noqa: E402
 from django.http import HttpResponse  # noqa: E402
 from django.http import HttpResponseRedirect as _Moved  # noqa: E402
 from django.shortcuts import get_object_or_404, render  # noqa: E402
@@ -1183,7 +1265,7 @@ RendersWithoutUserView = _view(
 )
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestOwnResponseGates:

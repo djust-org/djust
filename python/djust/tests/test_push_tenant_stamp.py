@@ -57,6 +57,9 @@ WIDE = f"{__name__}._WideView"
 
 
 class _WideView(_RoomView):
+    exposure_policy = (
+        "explicit"  # as test_push_scope_tenant_isolation._RoomView, which it subclasses
+    )
     template = (
         '<div dj-root dj-view="djust.tests.test_push_tenant_stamp._WideView">'
         "{{ room }}|{% for m in messages %}[{{ m }}]{% endfor %}</div>"

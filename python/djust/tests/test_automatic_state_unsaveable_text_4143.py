@@ -51,6 +51,8 @@ def _one_tab(monkeypatch):
 class SurrogateOnEvent(_Base):
     """A handler stores a lone surrogate; the count beside it is saved as usual."""
 
+    exposure_policy = "explicit"  # as test_automatic_state_4107._Base, which it subclasses
+
     shown = ("count",)
 
     def mount(self, request, **kwargs):
@@ -66,6 +68,8 @@ class SurrogateOnEvent(_Base):
 
 class SurrogateInMount(_Base):
     """The page GET saves it (``mount()`` set it); nested and private shapes too."""
+
+    exposure_policy = "explicit"  # as test_automatic_state_4107._Base, which it subclasses
 
     shown = ("count",)
 
@@ -85,6 +89,8 @@ class SurrogateInMount(_Base):
 class NonStringKey(_Base):
     """``__dict__`` holds keys that are not strings: not attribute names, so skipped."""
 
+    exposure_policy = "explicit"  # as test_automatic_state_4107._Base, which it subclasses
+
     shown = ("count",)
 
     def mount(self, request, **kwargs):
@@ -101,6 +107,8 @@ class NonStringKey(_Base):
 
 class Plain(_Base):
     """The control: NonStringKey without its non-string keys."""
+
+    exposure_policy = "explicit"  # as test_automatic_state_4107._Base, which it subclasses
 
     shown = ("count",)
 

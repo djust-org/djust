@@ -111,7 +111,7 @@ def pool(request, monkeypatch):
 
 
 class ProbeView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{MOD}.ProbeView"><b>{{{{ count }}}}</b> {{{{ note }}}}</div>'
     tick_interval = 30
 
@@ -344,21 +344,21 @@ def test_http_result_sync_callable_returning_awaitable_is_completed(probe, monke
 # ---------------------------------------------------------------------------
 
 
-def _consumer_with_view():
+async def _consumer_with_view():
+    """A consumer that mounted ProbeView through ``handle_mount`` (whose render
+    is the diff baseline): an explicit view's background work is authorized by
+    the runtime that mounted it."""
+    from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer()
-    consumer.scope = {"session": None, "user": None}
     consumer.sent = []
 
     async def _capture(payload):
         consumer.sent.append(payload)
 
     consumer.send_json = _capture
-    view = ProbeView()
-    view.mount(None)
-    view.render_with_diff()
-    consumer.view_instance = view
+    view = await amount_on_consumer(consumer, f"{__name__}.ProbeView")
     return consumer, view
 
 
@@ -366,7 +366,7 @@ def _consumer_with_view():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True], ids=["success", "error"])
 async def test_the_consumers_async_work_enters_the_wrapper_for_the_result(probe, fails):
-    consumer, view = _consumer_with_view()
+    consumer, view = await _consumer_with_view()
     ENTERED.clear()
     SEEN.clear()
     callback = view._fail if fails else view._work
@@ -582,7 +582,7 @@ def test_client_without_a_wrapper_behaves_as_before():
 
 
 class AsyncHookView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{MOD}.AsyncHookView">{{{{ n }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -602,7 +602,7 @@ class AsyncHookView(LiveView):
 
 
 class AsyncResultView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{MOD}.AsyncResultView">x</div>'
     tick_interval = 30
 

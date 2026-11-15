@@ -34,8 +34,10 @@ import asyncio
 
 import pytest
 
+from djust import LiveView
 
-class _SpyView:
+
+class _SpyView(LiveView):
     """Minimal view stand-in recording post-callback writes + the lock probe.
 
     Lifted from ``test_run_async_work_teardown_1940._SpyView``; adds a
@@ -44,14 +46,19 @@ class _SpyView:
     handler time.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    template = "<div dj-root>x</div>"
 
-    def __init__(self, name, lock_probe=None):
+    def __init__(self, name="spy", lock_probe=None, **kwargs):
+        super().__init__(**kwargs)
         self.name = name
         self.writes = []
         self.handler_calls = 0
         self._lock_probe = lock_probe if lock_probe is not None else []
         self._probe_lock = None  # set by the harness to the consumer's lock
+
+    def _initialize_rust_view(self, request=None):
+        pass
 
     def handle_async_result(self, task_name, result=None, error=None):
         self.handler_calls += 1
@@ -77,12 +84,14 @@ class _SpyView:
         return h
 
 
-def _make_consumer(view):
-    """A real ``LiveViewConsumer`` with sends captured (lifted from #1940)."""
+async def _make_consumer(view):
+    """A real ``LiveViewConsumer`` that mounted ``view`` (an explicit view's
+    background work is authorized by the runtime that mounted it), sends
+    captured (lifted from #1940). The mount's own writes are cleared."""
+    from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer()
-    consumer.view_instance = view
     consumer.sent_frames = []
 
     async def _capture(data):
@@ -90,6 +99,9 @@ def _make_consumer(view):
 
     # ``_send_update`` calls ``send_json``; capture every outbound frame.
     consumer.send_json = _capture  # type: ignore[assignment]
+    await amount_on_consumer(consumer, f"{__name__}._SpyView", view=view)
+    consumer.sent_frames.clear()
+    view.writes.clear()
 
     async def _noop():
         return None
@@ -104,29 +116,32 @@ def _make_consumer(view):
     return consumer
 
 
-def _make_runtime_with_consumer(view):
+async def _make_runtime_with_consumer(view):
     """A ``ViewRuntime`` over a REAL consumer via ``WSConsumerTransport``.
 
     The transport's ``event_context`` borrows the consumer's ``_render_lock``
     (runtime.py:1055), so the runtime-twin probe observes the same lock the
     consumer-path probe does. Sends are captured on the consumer.
     """
-    from djust.runtime import ViewRuntime, WSConsumerTransport
+    from djust.runtime import WSConsumerTransport
 
-    consumer = _make_consumer(view)
-    runtime = ViewRuntime(WSConsumerTransport(consumer))
-    runtime.view_instance = view
+    consumer = await _make_consumer(view)
+    # The consumer's own runtime mounted the view: the twin under test is that
+    # runtime's ``_execute_async_task`` over the same WSConsumerTransport.
+    runtime = consumer._get_runtime()
+    assert isinstance(runtime.transport, WSConsumerTransport) and runtime.view_instance is view
     return runtime, consumer
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 class TestConsumerAsyncWorkHandlerUnderLock:
     """``LiveViewConsumer._run_async_work`` (#2840, the cited path)."""
 
     async def test_success_arm_handler_runs_under_render_lock(self):
         probe = []
         view = _SpyView("live", lock_probe=probe)
-        consumer = _make_consumer(view)
+        consumer = await _make_consumer(view)
 
         async def cb():
             return "done"
@@ -145,7 +160,7 @@ class TestConsumerAsyncWorkHandlerUnderLock:
     async def test_error_arm_handler_runs_under_render_lock(self):
         probe = []
         view = _SpyView("live", lock_probe=probe)
-        consumer = _make_consumer(view)
+        consumer = await _make_consumer(view)
 
         async def failing_cb():
             raise ValueError("boom")
@@ -166,7 +181,7 @@ class TestConsumerAsyncWorkHandlerUnderLock:
         WAIT for the lock instead of mutating state mid-render."""
         probe = []
         view = _SpyView("live", lock_probe=probe)
-        consumer = _make_consumer(view)
+        consumer = await _make_consumer(view)
 
         started = asyncio.Event()
         release = asyncio.Event()
@@ -176,10 +191,12 @@ class TestConsumerAsyncWorkHandlerUnderLock:
             await release.wait()  # the await window where a render can be mid-flight
             return "done"
 
-        # Foreign holder emulates the concurrent lock-holding render of #2840.
-        await consumer._render_lock.acquire()
         task = asyncio.ensure_future(consumer._run_async_work("work", slow_cb, (), {}))
         await asyncio.wait_for(started.wait(), timeout=1.0)
+        # Foreign holder emulates the concurrent lock-holding render of #2840,
+        # taken while the callback runs: an explicit view's async turn is
+        # authorized under this lock before its callback starts.
+        await consumer._render_lock.acquire()
 
         release.set()
         # Give the task ample loop ticks to (wrongly) run its handler out of
@@ -204,6 +221,7 @@ class TestConsumerAsyncWorkHandlerUnderLock:
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 class TestRuntimeAsyncTaskHandlerUnderLock:
     """``ViewRuntime._execute_async_task`` (#1646 twin, found by the sweep).
 
@@ -215,7 +233,7 @@ class TestRuntimeAsyncTaskHandlerUnderLock:
     async def test_success_arm_handler_runs_under_render_lock(self):
         probe = []
         view = _SpyView("live", lock_probe=probe)
-        runtime, consumer = _make_runtime_with_consumer(view)
+        runtime, consumer = await _make_runtime_with_consumer(view)
 
         async def cb():
             return "done"
@@ -236,7 +254,7 @@ class TestRuntimeAsyncTaskHandlerUnderLock:
     async def test_error_arm_handler_runs_under_render_lock(self):
         probe = []
         view = _SpyView("live", lock_probe=probe)
-        runtime, consumer = _make_runtime_with_consumer(view)
+        runtime, consumer = await _make_runtime_with_consumer(view)
 
         async def failing_cb():
             raise ValueError("boom")
@@ -259,7 +277,7 @@ class TestRuntimeAsyncTaskHandlerUnderLock:
         render re-read ``view_instance`` live, contaminating a replacement)."""
         old_view = _SpyView("old")
         new_view = _SpyView("new")
-        runtime, consumer = _make_runtime_with_consumer(old_view)
+        runtime, consumer = await _make_runtime_with_consumer(old_view)
 
         started = asyncio.Event()
         release = asyncio.Event()

@@ -475,8 +475,8 @@ async def test_a_scoped_component_render_runs_component_render_inside_the_wrappe
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(BoundComponent, "render", render)
-    view, runtime, transport = harness._mounted(harness.OpaquePage)
-    SEEN.clear()  # the mount baseline above renders outside any turn
+    view, runtime, transport = await harness._mounted(harness.OpaquePage)
+    SEEN.clear()  # the mount above (and its baseline render) is not the turn under test
 
     await runtime.dispatch_event(
         {"type": "event", "event": "select", "params": {"component_id": "nav", "value": "billing"}}

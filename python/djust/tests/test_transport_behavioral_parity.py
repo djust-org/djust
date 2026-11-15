@@ -57,6 +57,10 @@ from djust.decorators import event_handler
 from djust.live_view import LiveView
 
 _PKG_DIR = pathlib.Path(__file__).resolve().parents[1]
+
+# Explicit views mount on a saved server session (``_live_session``).
+pytestmark = pytest.mark.django_db(transaction=True)
+
 _WEBSOCKET = _PKG_DIR / "websocket.py"
 _RUNTIME = _PKG_DIR / "runtime.py"
 
@@ -236,7 +240,7 @@ class _RuntimeRenderMixin:
 class _ObjectDeniedView(_RuntimeRenderMixin, LiveView):
     """Opts into the object-permission lifecycle and DENIES access."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def get_object(self):
         return object()
@@ -254,7 +258,7 @@ class _ObjectDeniedView(_RuntimeRenderMixin, LiveView):
 class _ObjectAllowedView(_RuntimeRenderMixin, LiveView):
     """Opts in and ALLOWS access — the positive half (non-vacuous deny test)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def get_object(self):
         return object()
@@ -269,7 +273,7 @@ class _ObjectAllowedView(_RuntimeRenderMixin, LiveView):
         self.handle_params_ran = True
 
 
-def _runtime_with_view(view):
+def _runtime_with_view(view, url="/"):
     """Build a ViewRuntime driving the REAL dispatch_mount against *view*.
 
     Short-circuits only view-loading + the pre-mount auth seam (the two seams
@@ -277,7 +281,15 @@ def _runtime_with_view(view):
     handle_params, and render all run for real."""
     from djust.runtime import ViewRuntime
 
+    from django.test import RequestFactory
+
+    from djust.tests._live_session import with_live_session
+
     transport = MockTransport()
+    # The mount request a live transport supplies: a saved server session, which
+    # an explicit view's mount binds to (the SSE ``build_request`` shape).
+    request = with_live_session(RequestFactory().get(url))
+    transport.build_request = lambda: request
     runtime = ViewRuntime(transport)
     runtime._instantiate_view = MagicMock(return_value=view)
     runtime._check_auth = AsyncMock(return_value=None)
@@ -369,7 +381,7 @@ class TestDispatchMountObjectPermission:
 # Net 3 — wire-version parity on dispatch_url_change (#1858 pin).
 # --------------------------------------------------------------------------- #
 class _UrlChangeView(_RuntimeRenderMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         pass
@@ -391,10 +403,15 @@ class TestWireVersionParity:
         """
         from djust.runtime import ViewRuntime
 
+        from djust.tests._live_session import amount_on_runtime
+
         view = _UrlChangeView()
         transport = MockTransport()
         runtime = ViewRuntime(transport)
-        runtime.view_instance = view
+        # Mounted on a live session: an explicit url_change is authorized
+        # against the mount binding. The mount's own version stamp is dropped.
+        await amount_on_runtime(runtime, view)
+        transport.version_calls.clear()
 
         await runtime.dispatch_url_change({"type": "url_change", "params": {}, "uri": "/p/"})
 
@@ -577,7 +594,7 @@ async def _mounted_event_runtime(view, *, user=None):
 class _BumpView(_EventSpineMixin, LiveView):
     """A handler that changes public state (forces a render)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     @event_handler()
     def bump(self, **kwargs):
@@ -587,7 +604,7 @@ class _BumpView(_EventSpineMixin, LiveView):
 class _NoChangeView(_EventSpineMixin, LiveView):
     """A handler that does NOT change state (auto-skip → noop)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     @event_handler()
     def touch_nothing(self, **kwargs):
@@ -597,7 +614,7 @@ class _NoChangeView(_EventSpineMixin, LiveView):
 class _PushOnlyView(_EventSpineMixin, LiveView):
     """A handler that only pushes an event — #700 identity push-only skip → noop."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     @event_handler()
     def ping(self, **kwargs):
@@ -615,7 +632,7 @@ class _ForceHtmlView(_EventSpineMixin, LiveView):
     assigns snapshot and the auto-skip would never fire regardless of the guard.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self.count = 0
@@ -639,7 +656,7 @@ class TestEventSpineRefEcho:
         event_ref`` from the no-diff html_update branch in ``_render_and_send``
         → ``ref`` drops from the frame → this FAILS.
         """
-        runtime, transport = _event_runtime_with_view(_BumpView())
+        runtime, transport = await _mounted_event_runtime(_BumpView())
         runtime.view_instance.count = 0
 
         await runtime.dispatch_event({"type": "event", "event": "bump", "params": {}, "ref": 42})
@@ -660,7 +677,7 @@ class TestEventSpineRefEcho:
         event_ref`` (or the ``source``/``event_name`` keys) from the noop branch
         in ``_dispatch_event_inner`` → this FAILS.
         """
-        runtime, transport = _event_runtime_with_view(_NoChangeView())
+        runtime, transport = await _mounted_event_runtime(_NoChangeView())
         runtime.view_instance.count = 0
 
         await runtime.dispatch_event(
@@ -678,7 +695,7 @@ class TestEventSpineRefEcho:
     async def test_missing_ref_is_omitted_not_null(self):
         """When the client sends no ``ref``, neither the noop nor the update frame
         carries a ``ref`` key (matches WS, which only sets it when present)."""
-        runtime, transport = _event_runtime_with_view(_NoChangeView())
+        runtime, transport = await _mounted_event_runtime(_NoChangeView())
         runtime.view_instance.count = 0
 
         await runtime.dispatch_event({"type": "event", "event": "touch_nothing", "params": {}})
@@ -692,7 +709,7 @@ class TestEventSpineRefEcho:
         """A non-numeric ``ref`` is dropped (type-confusion guard, matches WS
         ``int(raw_ref) if isinstance(raw_ref, (int, float))`` at
         websocket.py:3120)."""
-        runtime, transport = _event_runtime_with_view(_NoChangeView())
+        runtime, transport = await _mounted_event_runtime(_NoChangeView())
         runtime.view_instance.count = 0
 
         await runtime.dispatch_event(
@@ -725,7 +742,7 @@ class TestEventSpineForceFullHtml:
         # Pre-existing flag (as _ForceHtmlView.mount sets it) — stable identity,
         # not a detected change.
         view._force_full_html = True
-        runtime, transport = _event_runtime_with_view(view)
+        runtime, transport = await _mounted_event_runtime(view)
 
         await runtime.dispatch_event({"type": "event", "event": "force", "params": {}, "ref": 5})
 
@@ -751,7 +768,7 @@ class TestEventSpineForceFullHtml:
         from djust.runtime import ViewRuntime
 
         class _PatchForceView(_EventSpineMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def render_with_diff(self):
                 # A real patch list is available this render.
@@ -762,11 +779,14 @@ class TestEventSpineForceFullHtml:
                 self.count += 1  # also change state so the assigns-skip doesn't fire
                 self._force_full_html = True
 
+        from djust.tests._live_session import amount_on_runtime
+
         view = _PatchForceView()
-        view.count = 0
         transport = MockTransport()
         runtime = ViewRuntime(transport)
-        runtime.view_instance = view
+        # Mounted on a live session: an explicit view's events are authorized
+        # against the mount binding.
+        await amount_on_runtime(runtime, view)
 
         await runtime.dispatch_event({"type": "event", "event": "force", "params": {}})
 
@@ -793,7 +813,7 @@ class TestEventSpineNotifyWaiters:
         view.count = 0
         spy = MagicMock()
         view._notify_waiters = spy  # instance override; runtime hasattr-guards it
-        runtime, _ = _event_runtime_with_view(view)
+        runtime, _ = await _mounted_event_runtime(view)
 
         await runtime.dispatch_event(
             {"type": "event", "event": "bump", "params": {"a": 1}, "ref": 1}
@@ -815,7 +835,7 @@ class TestEventSpineNotifyWaiters:
 
         view = _BumpView()
         view.count = 0
-        runtime, _ = _event_runtime_with_view(view)
+        runtime, _ = await _mounted_event_runtime(view)
 
         waiter_future = asyncio.ensure_future(view.wait_for_event("bump", timeout=2))
         await asyncio.sleep(0)  # let the waiter register
@@ -845,7 +865,7 @@ class TestEventSpineIdentityPushSkip:
 
         view = _PushOnlyView()
         view.count = 0
-        runtime, transport = _event_runtime_with_view(view)
+        runtime, transport = await _mounted_event_runtime(view)
 
         await runtime.dispatch_event({"type": "event", "event": "ping", "params": {}, "ref": 3})
         # ``_flush_push_events`` schedules the send fire-and-forget
@@ -891,7 +911,7 @@ class TestEventSpineIdentityPushSkip:
         """
 
         class _InPlacePushView(_EventSpineMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def mount(self, request, **kwargs):
                 self.count = 0
@@ -913,7 +933,7 @@ class TestEventSpineIdentityPushSkip:
         # assigns-else writes _changed_keys; on a live mounted view that key is a
         # framework slot and is excluded from the identity snapshot.
         view._framework_attrs = view._framework_attrs | {"_changed_keys"}
-        runtime, transport = _event_runtime_with_view(view)
+        runtime, transport = await _mounted_event_runtime(view)
 
         await runtime.dispatch_event({"type": "event", "event": "ping", "params": {}})
 
@@ -1011,7 +1031,7 @@ class TestEventSpineEnumeration:
 class _MountStashView(_RuntimeRenderMixin, LiveView):
     """Mounts cleanly; used to assert the post-mount stash + baselines."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self.mounted = True
@@ -1021,7 +1041,7 @@ class _MountPushAsyncView(_RuntimeRenderMixin, LiveView):
     """``mount()`` queues a push event AND schedules background work — the two
     queues the mount-time drain must flush (#1283 / #1280)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self.value = 0
@@ -1048,7 +1068,7 @@ class TestMountStashAndBaselines:
         stash from ``dispatch_mount`` → this FAILS.
         """
         view = _MountStashView()
-        runtime, transport = _runtime_with_view(view)
+        runtime, transport = _runtime_with_view(view, url="/items/7/")
 
         await runtime.dispatch_mount(
             {
@@ -1251,7 +1271,7 @@ class TestMountFrameOptimisticAndUpload:
                 optimistic_rule = {"action": "toggle_class", "class": "open"}
 
         class _OptView(_RuntimeRenderMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             _component_descriptors = {"acc": _OptDescriptor()}
 
             def mount(self, request, **kwargs):
@@ -1292,7 +1312,7 @@ class TestMountFrameOptimisticAndUpload:
                 return {"avatar": {"config": {"max_size": 1024, "accept": "image/*"}}}
 
         class _UploadView(_RuntimeRenderMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def mount(self, request, **kwargs):
                 self._upload_manager = _FakeUploadManager()

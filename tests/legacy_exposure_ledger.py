@@ -9,7 +9,7 @@ fails it until it is removed, so the list shrinks on purpose and cannot grow
 silently.
 
 A file whose views are only partly legacy marks each remaining statement with
-a ``# legacy subject:`` or ``# gap #4082:`` comment on the same line.
+a ``# legacy subject:`` or ``# gap #<issue>:`` comment on the same line.
 """
 
 from __future__ import annotations
@@ -17,88 +17,82 @@ from __future__ import annotations
 #: The #4082 files the second migration pass ran as explicit: they state no
 #: legacy policy any more.
 MIGRATED_4082: tuple[str, ...] = (
+    "python/djust/tests/test_async_result_render_lock_2840.py",
     "python/djust/tests/test_async_work_render_lock_2830.py",
     "python/djust/tests/test_auth_refusal_codes_3319.py",
     "python/djust/tests/test_background_html_fallback.py",
     "python/djust/tests/test_bound_component_render_adr031.py",
     "python/djust/tests/test_bound_component_skip_gate_2900.py",
+    "python/djust/tests/test_component_scoped_render_2917.py",
     "python/djust/tests/test_component_state_adr033.py",
+    "python/djust/tests/test_csrf_socket_render_2998.py",
+    "python/djust/tests/test_failed_mount_leaves_no_view.py",
+    "python/djust/tests/test_live_auth_outside_declarations.py",
     "python/djust/tests/test_live_redirect_skip_render_1643.py",
+    "python/djust/tests/test_login_required_middleware_live.py",
     "python/djust/tests/test_metadata_decorators_async.py",
+    "python/djust/tests/test_mount_group_membership.py",
+    "python/djust/tests/test_mount_object_permission_after_params.py",
+    "python/djust/tests/test_multi_view_render_locks_3252.py",
+    "python/djust/tests/test_object_perm_api_sse_paths.py",
     "python/djust/tests/test_object_perm_render_paths.py",
     "python/djust/tests/test_pool_shared_session_view.py",
     "python/djust/tests/test_ratelimit_per_caller_f27_f28.py",
+    "python/djust/tests/test_recovery_handler_policy.py",
+    "python/djust/tests/test_run_async_work_teardown_1940.py",
+    "python/djust/tests/test_runtime.py",
+    "python/djust/tests/test_runtime_dj_activity_1903.py",
     "python/djust/tests/test_server_push_transport_neutral_3809.py",
     "python/djust/tests/test_set_changed_keys_1981.py",
     "python/djust/tests/test_set_changed_keys_zero_arg_1992.py",
     "python/djust/tests/test_skip_render_force_parity_2834.py",
+    "python/djust/tests/test_sse_runtime_convergence_1887.py",
+    "python/djust/tests/test_stream_only_parity_3639.py",
+    "python/djust/tests/test_strict_transport_parity.py",
     "python/djust/tests/test_sync_turn_wrapper.py",
+    "python/djust/tests/test_sync_turn_wrapper_tick_async_3625.py",
     "python/djust/tests/test_tick_skip_render_2822.py",
+    "python/djust/tests/test_transport_behavioral_parity.py",
+    "python/djust/tests/test_transport_parity_harness.py",
+    "python/djust/tests/test_trusted_dispatch_context.py",
+    "python/djust/tests/test_turn_middleware_transports.py",
+    "python/djust/tests/test_ws_transport_hardening_f21_f17.py",
+    "python/tests/test_form_as_liveview_state_3767.py",
+    "python/tests/test_remaining_builtin_tags_2556.py",
+    "python/tests/test_sse.py",
     "python/tests/test_sse_ws_symmetry.py",
+    "python/tests/test_waiter_component_propagation.py",
+    "tests/integration/test_sw_advanced_flow.py",
 )
 
 #: The #4082 files that still state the legacy policy, each with its reason.
 REMAINING_4082: dict[str, str] = {
     "python/djust/tests/test_async_check_permissions.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
+        "migrated; the reauth_on_event tests stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
     ),
     "python/djust/tests/test_async_pending_flag_2963.py": (
-        "not migrated yet (#4082): failure under explicit not yet diagnosed"
-    ),
-    "python/djust/tests/test_async_result_render_lock_2840.py": (
-        "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount"
-    ),
-    "python/djust/tests/test_background_parameter_contracts.py": (
-        "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount; it "
-        "inherited legacy from test_background_html_fallback's view, which pass 2 made explicit"
-    ),
-    "python/djust/tests/test_component_scoped_render_2917.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
-    ),
-    "python/djust/tests/test_csrf_socket_render_2998.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
+        "migrated; one case stays legacy: an unhandled async failure ends loading with a named source=async frame on legacy views only"
     ),
     "python/djust/tests/test_event_loop_offload_3074.py": (
-        "not migrated yet (#4082): failure under explicit not yet diagnosed"
+        "migrated; the one-hop offloaded push case stays legacy: product gap #4152, the offloaded push turn runs for legacy views only"
     ),
     "python/djust/tests/test_event_reauth_1777.py": (
         "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
     ),
-    "python/djust/tests/test_failed_mount_leaves_no_view.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
-    ),
     "python/djust/tests/test_live_auth_denials_and_wrappers.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
+        "migrated; the post()-only event refusal cases stay legacy: a legacy view refuses the event and stays mounted"
     ),
     "python/djust/tests/test_live_auth_event_holders_and_user_checks.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
-    ),
-    "python/djust/tests/test_live_auth_outside_declarations.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
-    ),
-    "python/djust/tests/test_login_required_middleware_live.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
+        "migrated; the upload-resume case stays legacy: an explicit view does not resume an upload across a reconnect (ADR-038 D-g)"
     ),
     "python/djust/tests/test_model_form_object_recheck_3967.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
-    ),
-    "python/djust/tests/test_mount_group_membership.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
-    ),
-    "python/djust/tests/test_mount_object_permission_after_params.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
+        "migrated; the record-reuse cases stay legacy: product gap #4153, the explicit render leaves _djust_prop_cache on the record and ModelFormMixin._fingerprint never matches"
     ),
     "python/djust/tests/test_multi_view_refusal_3252.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
-    ),
-    "python/djust/tests/test_multi_view_render_locks_3252.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
-    ),
-    "python/djust/tests/test_object_perm_api_sse_paths.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
+        "migrated; the revocation cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
     ),
     "python/djust/tests/test_push_handler_marker_3002.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
+        "migrated; the debug eval and time-travel replay cases stay legacy: both refuse explicit views by design"
     ),
     "python/djust/tests/test_push_skip_render_no_noop_3034.py": (
         "migrated; one case stays legacy: push turns are offloaded for legacy views only"
@@ -106,80 +100,26 @@ REMAINING_4082: dict[str, str] = {
     "python/djust/tests/test_reauth_reads_stored_session.py": (
         "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
     ),
-    "python/djust/tests/test_recovery_handler_policy.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
-    ),
-    "python/djust/tests/test_run_async_work_teardown_1940.py": (
-        "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount"
-    ),
-    "python/djust/tests/test_runtime.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
-    ),
-    "python/djust/tests/test_runtime_dj_activity_1903.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
-    ),
     "python/djust/tests/test_runtime_reauth_async_1905.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
+        "migrated; the reauth_on_event cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
     ),
     "python/djust/tests/test_server_turn_reauth.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
+        "legacy subject: reauth_on_event on server-originated turns runs for legacy views only (turns.reauth)"
     ),
     "python/djust/tests/test_server_turn_reauth_slots.py": (
-        "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount"
-    ),
-    "python/djust/tests/test_sse_runtime_convergence_1887.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
-    ),
-    "python/djust/tests/test_stream_only_parity_3639.py": (
-        "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount"
-    ),
-    "python/djust/tests/test_strict_transport_parity.py": (
-        "not migrated yet (#4082): failure under explicit not yet diagnosed"
-    ),
-    "python/djust/tests/test_sync_turn_wrapper_tick_async_3625.py": (
-        "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount"
-    ),
-    "python/djust/tests/test_transport_behavioral_parity.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
-    ),
-    "python/djust/tests/test_transport_parity_harness.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
-    ),
-    "python/djust/tests/test_trusted_dispatch_context.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
+        "legacy subject: reauth_on_event on server-originated turns runs for legacy views only (turns.reauth)"
     ),
     "python/djust/tests/test_turn_middleware_core.py": (
-        "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount"
-    ),
-    "python/djust/tests/test_turn_middleware_transports.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
+        "legacy subject: its legacy view drives the reauth built-in, which re-checks legacy views only (turns.reauth)"
     ),
     "python/djust/tests/test_ws_mount_flip_parity_1911.py": (
-        "migrated; the sticky_hold cases stay legacy: product gap, an explicit sticky child cannot survive live_redirect to another page"
-    ),
-    "python/djust/tests/test_ws_transport_hardening_f21_f17.py": (
-        "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount"
+        "migrated; the sticky_hold cases stay legacy: product gap #4149, an explicit sticky child cannot survive live_redirect to another page"
     ),
     "python/tests/test_form_adapter_a11y.py": (
-        "not migrated yet (#4082): failure under explicit not yet diagnosed"
-    ),
-    "python/tests/test_form_as_liveview_state_3767.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
-    ),
-    "python/tests/test_remaining_builtin_tags_2556.py": (
-        "not migrated yet (#4082): failure under explicit not yet diagnosed"
+        "migrated; the test-client case stays legacy: product gap #4151, LiveView.render() cannot resolve view for form tags under explicit"
     ),
     "python/tests/test_render_call_guard_3815.py": (
-        "not migrated yet (#4082): failure under explicit not yet diagnosed"
-    ),
-    "python/tests/test_sse.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
-    ),
-    "python/tests/test_waiter_component_propagation.py": (
-        "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount"
-    ),
-    "tests/integration/test_sw_advanced_flow.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
+        "migrated; the lazy live_render children stay legacy: product gap #4154, {% live_render lazy %} refuses explicit children (ADR-038 D-m)"
     ),
     "tests/unit/test_layout_switching.py": (
         "migrated; one case stays legacy: a production failure log names the error for legacy views only (D-a)"
@@ -199,6 +139,7 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_automatic_state_4107.py",
         "python/djust/tests/test_automatic_state_switch_4128.py",
         "python/djust/tests/test_automatic_state_unsaveable_text_4143.py",
+        "python/djust/tests/test_background_parameter_contracts.py",
         "python/djust/tests/test_bound_component_adr031.py",
         "python/djust/tests/test_bug_capture.py",
         "python/djust/tests/test_bug_capture_pii_scrub.py",
@@ -292,7 +233,12 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_interactive_public_api_c1.py",
         "python/djust/tests/test_large_state_refresh_warning_3632.py",
         "python/djust/tests/test_large_state_warning_3626.py",
+        "python/djust/tests/test_lazy_context_state_3442.py",
+        "python/djust/tests/test_lazy_dynamic_include_compatibility.py",
+        "python/djust/tests/test_lazy_expression_literals_3430.py",
+        "python/djust/tests/test_lazy_provenance_followups_3428.py",
         "python/djust/tests/test_lazy_provenance_http_3252.py",
+        "python/djust/tests/test_lazy_provenance_round2_3427.py",
         "python/djust/tests/test_legacy_async_cancel_on_disconnect.py",
         "python/djust/tests/test_legacy_component_alias_3078.py",
         "python/djust/tests/test_legacy_context_framework_config_2960.py",
@@ -482,5 +428,19 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_reauth_reads_stored_session.py",
     "python/djust/tests/test_push_skip_render_no_noop_3034.py",
     "python/djust/tests/test_ws_mount_flip_parity_1911.py",
+    "python/djust/tests/test_runtime_reauth_async_1905.py",
+    "python/djust/tests/test_server_turn_reauth.py",
+    "python/djust/tests/test_server_turn_reauth_slots.py",
+    "python/tests/test_form_adapter_a11y.py",
+    "python/djust/tests/test_async_pending_flag_2963.py",
+    "python/djust/tests/test_multi_view_refusal_3252.py",
+    "python/djust/tests/test_turn_middleware_core.py",
+    "python/djust/tests/test_push_handler_marker_3002.py",
+    "python/djust/tests/test_event_loop_offload_3074.py",
+    "python/tests/test_render_call_guard_3815.py",
+    "python/djust/tests/test_async_check_permissions.py",
+    "python/djust/tests/test_live_auth_denials_and_wrappers.py",
+    "python/djust/tests/test_model_form_object_recheck_3967.py",
     "tests/unit/test_layout_switching.py",
+    "python/djust/tests/test_live_auth_event_holders_and_user_checks.py",
 )

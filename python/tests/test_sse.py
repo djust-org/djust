@@ -39,6 +39,7 @@ if not settings.configured:
     )
     django.setup()
 
+from asgiref.sync import sync_to_async  # noqa: E402
 from django.test import RequestFactory
 
 from djust.sse import (
@@ -74,6 +75,34 @@ def make_session(session_id=None) -> SSESession:
     session._owner_user_pk = _OWNER_PK
     _sse_sessions[sid] = session
     return session
+
+
+def give_live_request(session: SSESession, path: str = "/") -> None:
+    """Stash a stream request with a saved server session on ``session``, as
+    the GET stream does: an explicit view's mount binds to that session."""
+    from django.contrib.auth.models import AnonymousUser
+
+    from djust.tests._live_session import with_live_session
+
+    session._request = with_live_session(RequestFactory().get(path), AnonymousUser())
+
+
+async def mount_dummy(session: SSESession, view_class, url: str = "/list/") -> None:
+    """Mount ``view_class`` on ``session``'s runtime for real (on a live
+    session); explicit url_change turns are authorized against that mount."""
+    import sys
+
+    from asgiref.sync import sync_to_async
+
+    mod = sys.modules[__name__]
+    mod._DummyLV = view_class  # type: ignore[attr-defined]
+    await sync_to_async(give_live_request)(session, url)
+    with patch.object(settings, "LIVEVIEW_ALLOWED_MODULES", [mod.__name__.split(".")[0]]):
+        await session.runtime.dispatch_mount(
+            {"type": "mount", "view": f"{mod.__name__}._DummyLV", "params": {}, "url": url}
+        )
+    assert session.runtime.view_instance is not None, drain_queue(session)
+    drain_queue(session)
 
 
 def drain_queue(session: SSESession) -> list:
@@ -348,7 +377,7 @@ def _make_dummy_view_class():
     captured = {"mount_kwargs": None, "handle_params": []}
 
     class _DummyLV(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         # Skip Rust VDOM init for these unit tests — render_with_diff is
         # short-circuited.
@@ -377,6 +406,7 @@ def _make_dummy_view_class():
     return _DummyLV, captured
 
 
+@pytest.mark.django_db(transaction=True)
 class TestSSEMountFrameURLKwargs:
     def setup_method(self):
         _sse_sessions.clear()
@@ -405,6 +435,7 @@ class TestSSEMountFrameURLKwargs:
 
         session = make_session()
         session.runtime = ViewRuntime(SSESessionTransport(session))
+        await sync_to_async(give_live_request)(session, "/items/42/")
 
         # Patch the URL resolver to simulate Django matching pk=42.
         with patch("djust.runtime.resolve" if False else "django.urls.resolve") as mock_resolve:
@@ -449,6 +480,7 @@ class TestSSEMountFrameURLKwargs:
 
         session = make_session()
         session.runtime = ViewRuntime(SSESessionTransport(session))
+        await sync_to_async(give_live_request)(session, "/list/")
 
         with patch.object(settings, "LIVEVIEW_ALLOWED_MODULES", [mod.__name__.split(".")[0]]):
             await session.runtime.dispatch_mount(
@@ -471,6 +503,7 @@ class TestSSEMountFrameURLKwargs:
 # ------------------------------------------------------------------ #
 
 
+@pytest.mark.django_db(transaction=True)
 class TestSSEUrlChangeFlow:
     def setup_method(self):
         _sse_sessions.clear()
@@ -497,11 +530,11 @@ class TestSSEUrlChangeFlow:
         session = make_session()
         session.runtime = ViewRuntime(SSESessionTransport(session))
 
-        # Pre-mount a view by injecting an instance directly.
-        view = DummyLV()
+        # Mount a view first (an explicit url_change is authorized against it).
+        await mount_dummy(session, DummyLV)
+        view = session.runtime.view_instance
         view.count = 5
-        session.view_instance = view
-        session.runtime.view_instance = view
+        captured["handle_params"].clear()  # the mount's own call
 
         await session.runtime.dispatch_url_change(
             {"params": {"sort": "name"}, "uri": "/list/?sort=name"}
@@ -563,6 +596,7 @@ class TestSSEMessageEndpoint:
 # ------------------------------------------------------------------ #
 
 
+@pytest.mark.django_db(transaction=True)
 class TestSSEDoubleMountGuard:
     def setup_method(self):
         _sse_sessions.clear()
@@ -585,6 +619,7 @@ class TestSSEDoubleMountGuard:
 
         session = make_session()
         session.runtime = ViewRuntime(SSESessionTransport(session))
+        await sync_to_async(give_live_request)(session, "/list/")
 
         with patch.object(settings, "LIVEVIEW_ALLOWED_MODULES", [mod.__name__.split(".")[0]]):
             await session.runtime.dispatch_mount(
@@ -619,6 +654,7 @@ class TestSSEDoubleMountGuard:
 # ------------------------------------------------------------------ #
 
 
+@pytest.mark.django_db(transaction=True)
 class TestSSERuntimeUrlChangeSharedWithWs:
     def setup_method(self):
         _sse_sessions.clear()
@@ -638,10 +674,8 @@ class TestSSERuntimeUrlChangeSharedWithWs:
 
         session = make_session()
         session.runtime = ViewRuntime(SSESessionTransport(session))
-        view = DummyLV()
-        view.count = 0
-        session.view_instance = view
-        session.runtime.view_instance = view
+        await mount_dummy(session, DummyLV, "/")
+        captured["handle_params"].clear()  # the mount's own call
 
         await session.runtime.dispatch_url_change({"params": {"page": "1"}, "uri": "/?page=1"})
 

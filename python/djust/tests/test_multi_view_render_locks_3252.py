@@ -50,7 +50,7 @@ PATIENCE = 20.0
 
 
 class _View(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self.tag = getattr(self, "_djust_slot_target", None) or "page"
@@ -728,8 +728,13 @@ async def test_over_sse_each_view_has_its_own_locks_and_request(sse_setup):
         slow = asyncio.ensure_future(_sse_event(session, key, "hold", "w", ref=1))
         await _wait_started()
         assert slot.dispatch_lock.locked() and not session._dispatch_lock.locked()
-        # Each turn sees its own POST: the page's is not the widget's.
-        assert slot.session._event_request is not None and session._event_request is None
+        # Each turn sees its own POST: the page's is not the widget's. An
+        # explicit turn takes its POST off the session as it starts and holds it
+        # on the view it authorized (``_djust_event_request``).
+        widget, page = slot.runtime.view_instance, session.runtime.view_instance
+        assert widget.__dict__.get("_djust_event_request") is not None
+        assert page.__dict__.get("_djust_event_request") is None
+        assert slot.session._event_request is None and session._event_request is None
         RELEASE.set()
         await asyncio.wait_for(slow, PATIENCE)
         assert slot.session._event_request is None

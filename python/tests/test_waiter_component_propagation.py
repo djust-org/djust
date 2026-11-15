@@ -30,9 +30,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from djust import LiveView
 from djust.components.base import LiveComponent
 from djust.decorators import event_handler
-from djust.mixins.waiters import WaiterMixin
 from djust.rate_limit import ConnectionRateLimiter
 from djust.websocket import LiveViewConsumer
 
@@ -46,7 +46,17 @@ class _RenderStubMixin:
     html_update. These tests assert handler-run + waiter resolution (not the frame),
     so a trivial render stub is enough to exercise the real runtime path."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    template = "<div dj-root>stub</div>"
+
+    def _initialize_temporary_assigns(self) -> None:
+        pass
+
+    def _initialize_rust_view(self, request: Any = None) -> None:
+        pass
+
+    def _sync_state_to_rust(self) -> None:
+        pass
 
     def render_with_diff(self, *args: Any, **kwargs: Any):
         # (html, patches, version) — patches=None drives the full-HTML branch.
@@ -59,7 +69,7 @@ class _RenderStubMixin:
         return html
 
 
-class _WaitingView(_RenderStubMixin, WaiterMixin):
+class _WaitingView(_RenderStubMixin, LiveView):
     """Minimal LiveView-like object that hosts a waiter registry and
     the component map the consumer's component branch reads."""
 
@@ -86,36 +96,21 @@ class _ClickComponent(LiveComponent):
         self.last_click = {"item_id": item_id, **kwargs}
 
 
-def _make_consumer(view: _WaitingView) -> LiveViewConsumer:
-    """Build a LiveViewConsumer instance with just enough state to
-    exercise ``handle_event`` for the component branch. Avoids the
-    real ``connect`` path which needs channels + an actual socket.
+async def _make_consumer(view: _WaitingView) -> LiveViewConsumer:
+    """A LiveViewConsumer that mounted ``view`` through the real
+    ``handle_mount`` (an explicit view's events are authorized against the
+    session it was mounted on). Only ``send_json`` / ``send_error`` /
+    ``_send_update`` are stubbed, so a failure shows the real assertion."""
+    from djust.tests._live_session import amount_on_consumer
 
-    #1907 THE FLIP: ``handle_event`` now routes through
-    ``ViewRuntime.dispatch_event`` (the bespoke ``_handle_event_inner`` was
-    deleted), so the consumer needs the attrs ``_get_runtime`` /
-    ``WSConsumerTransport`` read — ``scope`` (to construct the runtime) and
-    ``_client_ip`` (the transport observability/rate-limit field). The
-    component-event waiter propagation behavior these tests assert is unchanged;
-    it now lives in ``ViewRuntime._dispatch_component_event`` (verbatim port)."""
-    consumer = LiveViewConsumer.__new__(LiveViewConsumer)
-    consumer.view_instance = view
-    consumer._render_lock = asyncio.Lock()
-    consumer._processing_user_event = False
-    consumer._current_event_name = None
-    consumer._current_event_ref = None
-    consumer._rate_limiter = ConnectionRateLimiter(rate=10000, burst=10000)
-    # #1907: minimal state the runtime path reads.
-    consumer.scope = {"session": None, "headers": [], "client": ("127.0.0.1", 0)}
-    consumer._client_ip = "127.0.0.1"
-    consumer.channel_name = "test-channel"
-    consumer._last_sent_version = 0
-    # Methods the dispatch path can invoke — stubbed out so a test
-    # failure shows the real assertion, not a ``send_json is missing``
-    # AttributeError.
+    consumer = LiveViewConsumer()
     consumer.send_json = AsyncMock()
     consumer.send_error = AsyncMock()
+    consumer._rate_limiter = ConnectionRateLimiter(rate=10000, burst=10000)
+    # The path only has to pass the allowlist: the view lookup is stubbed.
+    await amount_on_consumer(consumer, "djust.tests.waiters.WaitingView", view=view)
     consumer._send_update = AsyncMock()
+    consumer.send_json.reset_mock()
     return consumer
 
 
@@ -130,12 +125,13 @@ class TestComponentEventPropagation:
     ``wait_for_event`` on the parent resolves."""
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_component_event_resolves_parent_waiter(self):
         view = _WaitingView()
         component = _ClickComponent(component_id="click-42")
         view._components[component.component_id] = component
 
-        consumer = _make_consumer(view)
+        consumer = await _make_consumer(view)
 
         async def wait_for_click():
             return await view.wait_for_event("item_clicked", timeout=2.0)
@@ -158,6 +154,7 @@ class TestComponentEventPropagation:
         assert resolved["component_id"] == "click-42"
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_component_id_injected_into_notify_kwargs(self):
         """The notify kwargs always include ``component_id`` so
         predicates can filter by which component fired the event."""
@@ -165,7 +162,7 @@ class TestComponentEventPropagation:
         view._components["c-a"] = _ClickComponent("c-a")
         view._components["c-b"] = _ClickComponent("c-b")
 
-        consumer = _make_consumer(view)
+        consumer = await _make_consumer(view)
 
         # Wait for a click specifically from component "c-b"
         async def wait_for_b():
@@ -201,13 +198,14 @@ class TestComponentEventPropagation:
         assert resolved["item_id"] == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_multiple_parent_waiters_all_resolve(self):
         """Fan-out: multiple pending waiters for the same component
         event name should all resolve when the event fires. Matches
         the main LiveView branch's behavior."""
         view = _WaitingView()
         view._components["c1"] = _ClickComponent("c1")
-        consumer = _make_consumer(view)
+        consumer = await _make_consumer(view)
 
         async def waiter():
             return await view.wait_for_event("item_clicked", timeout=2.0)
@@ -236,13 +234,14 @@ class TestComponentEventPropagation:
             assert r["component_id"] == "c1"
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_parent_branch_still_works_for_non_component_events(self):
         """Regression guard: the original main-LiveView branch
         notification must still fire when ``component_id`` is absent.
         This is the pre-existing Phase 1b behavior — we didn't touch
         it, but a sloppy refactor could break it."""
 
-        class _ViewWithHandler(_RenderStubMixin, WaiterMixin):
+        class _ViewWithHandler(_RenderStubMixin, LiveView):
             def __init__(self) -> None:
                 super().__init__()
                 self._components: Dict[str, LiveComponent] = {}
@@ -257,7 +256,7 @@ class TestComponentEventPropagation:
                 self.saved = name
 
         view = _ViewWithHandler()
-        consumer = _make_consumer(view)  # type: ignore[arg-type]
+        consumer = await _make_consumer(view)  # type: ignore[arg-type]
 
         async def wait_for_save():
             return await view.wait_for_event("save", timeout=2.0)
@@ -279,11 +278,15 @@ class TestComponentEventPropagation:
         assert "component_id" not in resolved
 
     @pytest.mark.asyncio
-    async def test_waiter_notification_failure_does_not_break_handler(self, caplog):
+    @pytest.mark.django_db(transaction=True)
+    async def test_waiter_notification_failure_does_not_break_handler(self, caplog, settings):
         """If ``_notify_waiters`` raises for any reason, the
         exception is logged but the component handler's side effects
         are preserved. The consumer shouldn't pretend the event
         failed just because a waiter was buggy."""
+        # An explicit view's failures are logged with their message under DEBUG
+        # only (production logs a value-free line, decision D-a).
+        settings.DEBUG = True
         view = _WaitingView()
         view._components["c1"] = _ClickComponent("c1")
 
@@ -293,7 +296,7 @@ class TestComponentEventPropagation:
 
         view._notify_waiters = boom  # type: ignore[method-assign]
 
-        consumer = _make_consumer(view)
+        consumer = await _make_consumer(view)
 
         # #1907 THE FLIP: the component-event waiter notification (with its
         # best-effort warning on failure) moved to ViewRuntime._dispatch_component_event,

@@ -54,7 +54,7 @@ class _Principal:
 
 
 class _Guarded:
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
     login_required = True
 
     def mount(self, request, **kwargs):
