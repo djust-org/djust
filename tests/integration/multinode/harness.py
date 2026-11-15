@@ -7,7 +7,8 @@ same port. ``Browser`` is one user agent with one cookie jar; every request
 and every socket names the node it goes to, as a load balancer without session
 affinity may choose any.
 
-Nothing here waits on the wall clock: a node is ready when it says so on stdout,
+Nothing here waits on the wall clock: a node is ready when it says so on stdout
+(redis-server when it answers PING, whatever its log says),
 a request to a node that is still starting waits in the socket's backlog, and
 every receive has a generous hang guard that only ends a broken run.
 """
@@ -27,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
@@ -78,41 +80,158 @@ class _Lines:
 # ---------------------------------------------------------------------------
 
 
+#: How long redis-server may take to answer PING. It is ready in milliseconds; a
+#: server that has not answered in this long is broken, and a process that has
+#: already exited is reported at once, not after this guard.
+REDIS_READY_GUARD_S = 20
+#: Longest Unix socket path the kernel accepts, with room to spare (sun_path is
+#: 108 bytes on Linux and 104 on macOS, including the terminating NUL).
+MAX_UNIX_SOCKET_PATH = 100
+
+
+class RedisStartError(AssertionError):
+    """redis-server did not become ready; the message carries everything it said."""
+
+
+def _redis_socket_dir(prefix: str = "mnr") -> str:
+    """A directory whose ``r.sock`` fits a Unix socket path, under ``/tmp`` if needed."""
+    directory = _short_tempdir(prefix)
+    if len(os.path.join(directory, "r.sock").encode()) <= MAX_UNIX_SOCKET_PATH:
+        return directory
+    shutil.rmtree(directory, ignore_errors=True)
+    return tempfile.mkdtemp(prefix=prefix, dir="/tmp")
+
+
+def _free_tcp_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _redis_pong(family: int, address: Any) -> bool:
+    """One PING; ``True`` when the server answered ``+PONG``."""
+    try:
+        with socket.socket(family, socket.SOCK_STREAM) as conn:
+            conn.settimeout(1.0)
+            conn.connect(address)
+            conn.sendall(b"PING\r\n")
+            return conn.recv(64).startswith(b"+PONG")
+    except OSError:
+        return False
+
+
+class _RedisProcess:
+    """One redis-server child: its argv, its output files, and readiness by PING."""
+
+    def __init__(self, argv: List[str], directory: str) -> None:
+        self.argv = argv
+        self.stdout_path = os.path.join(directory, "stdout.txt")
+        self.stderr_path = os.path.join(directory, "stderr.txt")
+        with open(self.stdout_path, "wb") as out, open(self.stderr_path, "wb") as err:
+            # stdin is /dev/null: an inherited, never-closed stdin is one thing a
+            # server can block on without saying a word. The output goes to files,
+            # not pipes, so a full pipe can never stall it either.
+            self.process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=err)
+
+    def _read(self, path: str) -> str:
+        try:
+            with open(path, "rb") as handle:
+                return handle.read().decode("utf-8", "replace")
+        except OSError as exc:
+            return "<unreadable: %s>" % exc
+
+    def report(self, why: str) -> str:
+        return "redis-server %s\n  argv: %r\n  returncode: %r\n  stdout:\n%s\n  stderr:\n%s" % (
+            why,
+            self.argv,
+            self.process.poll(),
+            self._read(self.stdout_path) or "    <empty>",
+            self._read(self.stderr_path) or "    <empty>",
+        )
+
+    def wait_ready(self, family: int, address: Any, guard_s: float) -> None:
+        """Until PING answers; raises at once if the process exits, else after ``guard_s``."""
+        deadline = time.monotonic() + guard_s
+        while True:
+            if self.process.poll() is not None:
+                raise RedisStartError(self.report("exited before it answered PING"))
+            if _redis_pong(family, address):
+                return
+            if time.monotonic() >= deadline:
+                raise RedisStartError(self.report("did not answer PING within %ss" % guard_s))
+            time.sleep(0.05)
+
+    def stop(self) -> None:
+        if self.process.poll() is None:
+            self.process.kill()
+        self.process.wait()
+
+
+def _redis_argv(executable: str, directory: str) -> List[str]:
+    # --logfile "" logs to stdout and --daemonize no keeps it in the foreground,
+    # whatever a packaged default would say; nothing persists to disk.
+    return [
+        executable,
+        "--save",
+        "",
+        "--appendonly",
+        "no",
+        "--dir",
+        directory,
+        "--logfile",
+        "",
+        "--daemonize",
+        "no",
+    ]
+
+
 @contextmanager
-def redis_server() -> Iterator[str]:
-    """A private redis-server on a Unix socket; yields its URL."""
-    executable = shutil.which("redis-server")
+def redis_server(
+    executable: Optional[str] = None, guard_s: float = REDIS_READY_GUARD_S
+) -> Iterator[str]:
+    """A private redis-server; yields its URL.
+
+    A Unix socket first (``unix://...``); if that server never answers, a TCP
+    port on 127.0.0.1 (``redis://...``), so a runner that confines Unix sockets
+    still runs the rows. The URL's scheme says which transport was used.
+    Readiness is a PING that answers, never a log line, so it does not depend on
+    the wording of a Redis version's startup log.
+    """
+    executable = executable or shutil.which("redis-server")
     if executable is None:
         raise RuntimeError("redis-server is not installed")
-    directory = _short_tempdir("mnr")
+    directory = _redis_socket_dir()
     path = os.path.join(directory, "r.sock")
-    process = subprocess.Popen(
-        [
-            executable,
-            "--port",
-            "0",
-            "--unixsocket",
-            path,
-            "--save",
-            "",
-            "--appendonly",
-            "no",
-            "--dir",
-            directory,
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
+    attempts: List[str] = []
+    server: Optional[_RedisProcess] = None
     try:
-        lines = _Lines(process.stdout)
-        # Readiness is redis-server's own line, not a probe in a loop.
-        while "Ready to accept connections" not in lines.wait_for("", "redis-server"):
-            pass
-        yield "unix://" + path
+        server = _RedisProcess(
+            _redis_argv(executable, directory) + ["--port", "0", "--unixsocket", path], directory
+        )
+        try:
+            server.wait_ready(socket.AF_UNIX, path, guard_s)
+            url = "unix://" + path
+        except RedisStartError as unix_failure:
+            server.stop()
+            attempts.append(str(unix_failure))
+            port = _free_tcp_port()
+            server = _RedisProcess(
+                _redis_argv(executable, directory) + ["--port", str(port), "--bind", "127.0.0.1"],
+                directory,
+            )
+            try:
+                server.wait_ready(socket.AF_INET, ("127.0.0.1", port), guard_s)
+            except RedisStartError as tcp_failure:
+                attempts.append(str(tcp_failure))
+                raise RedisStartError(
+                    "redis-server answered PING on neither a Unix socket nor TCP:\n\n"
+                    + "\n\n".join(attempts)
+                ) from None
+            url = "redis://127.0.0.1:%d/0" % port
+        yield url
     finally:
-        process.kill()
-        process.wait()
+        if server is not None:
+            server.stop()
         shutil.rmtree(directory, ignore_errors=True)
 
 
