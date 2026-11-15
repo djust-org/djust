@@ -22,8 +22,10 @@ import asyncio
 
 import pytest
 
+from djust import LiveView
 
-class _SpyView:
+
+class _SpyView(LiveView):
     """Minimal view stand-in that records every post-callback write.
 
     Implements just the surface ``_run_async_work`` touches after the callback
@@ -33,11 +35,16 @@ class _SpyView:
     stale view was never written to once teardown happened.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    template = "<div dj-root>x</div>"
 
-    def __init__(self, name):
+    def __init__(self, name="spy", **kwargs):
+        super().__init__(**kwargs)
         self.name = name
         self.writes = []
+
+    def _initialize_rust_view(self, request=None):
+        pass
 
     def handle_async_result(self, task_name, result=None, error=None):
         self.writes.append(("handle_async_result", task_name, result, error))
@@ -60,12 +67,14 @@ class _SpyView:
         return h
 
 
-def _make_consumer(view):
-    """Build a real ``LiveViewConsumer`` with sends captured, not transmitted."""
+async def _make_consumer(view):
+    """A real ``LiveViewConsumer`` that mounted ``view`` (an explicit view's
+    background work is authorized by the runtime that mounted it), sends
+    captured, not transmitted. The mount's own writes are cleared."""
+    from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer()
-    consumer.view_instance = view
     consumer.sent_frames = []
 
     async def _capture(data):
@@ -73,6 +82,9 @@ def _make_consumer(view):
 
     # ``_send_update`` calls ``send_json``; capture every outbound frame.
     consumer.send_json = _capture  # type: ignore[assignment]
+    await amount_on_consumer(consumer, f"{__name__}._SpyView", view=view)
+    consumer.sent_frames.clear()
+    view.writes.clear()
 
     async def _noop():
         return None
@@ -85,13 +97,14 @@ def _make_consumer(view):
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 class TestRunAsyncWorkTeardown:
     """The detached async task must not write against a stale/replaced view."""
 
     async def test_disconnect_during_await_drops_stale_render(self):
         """disconnect (view_instance -> None) mid-callback -> no stale write."""
         view = _SpyView("old")
-        consumer = _make_consumer(view)
+        consumer = await _make_consumer(view)
 
         started = asyncio.Event()
         release = asyncio.Event()
@@ -128,7 +141,7 @@ class TestRunAsyncWorkTeardown:
         new view untouched by the old task."""
         old_view = _SpyView("old")
         new_view = _SpyView("new")
-        consumer = _make_consumer(old_view)
+        consumer = await _make_consumer(old_view)
 
         started = asyncio.Event()
         release = asyncio.Event()
@@ -166,7 +179,7 @@ class TestRunAsyncWorkTeardown:
         teardown cases above are what flip.
         """
         view = _SpyView("live")
-        consumer = _make_consumer(view)
+        consumer = await _make_consumer(view)
 
         async def fast_callback():
             return "done"
@@ -186,7 +199,7 @@ class TestRunAsyncWorkTeardown:
         """A callback that RAISES during the await window after a disconnect must
         not run the error-state re-render against the stale view."""
         view = _SpyView("old")
-        consumer = _make_consumer(view)
+        consumer = await _make_consumer(view)
 
         started = asyncio.Event()
         release = asyncio.Event()
