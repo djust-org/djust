@@ -453,6 +453,7 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         # leaves for the commit (a framework signal, not state).
         "state_save_interval",
         "_djust_save_requested",
+        "_djust_save_requested_async",
         # View options of the page-status / declared-URL-params work (#3688,
         # #3689). Class attributes like ``query_budget``; an instance that
         # assigns one (``self.state_attribute = ...``) must not publish it as

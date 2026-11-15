@@ -68,11 +68,15 @@ def _saving_before_reply(func: Callable[..., Any]) -> Callable[..., Any]:
 
     from ._save_policy import request_save
 
+    # Over @background the handler's body runs later, as background work:
+    # its result's commit is saved before its frame too.
+    background = bool(getattr(func, "_djust_decorators", {}).get("background"))
+
     if inspect.iscoroutinefunction(func):
 
         @functools.wraps(func)
         async def saving_async(self: Any, *args: Any, **kwargs: Any) -> Any:
-            request_save(self)
+            request_save(self, background_result=background)
             return await func(self, *args, **kwargs)
 
         saving_async._djust_saves_before_reply = True  # type: ignore[attr-defined]
@@ -80,7 +84,7 @@ def _saving_before_reply(func: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(func)
     def saving(self: Any, *args: Any, **kwargs: Any) -> Any:
-        request_save(self)
+        request_save(self, background_result=background)
         return func(self, *args, **kwargs)
 
     # Not in the handler's metadata: that is rendered into every page (the

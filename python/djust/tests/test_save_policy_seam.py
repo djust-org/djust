@@ -141,8 +141,8 @@ def asked(monkeypatch):
     calls = []
     real = _save_policy.save_mode
 
-    def recording(view, transport, *, source):
-        answer = real(view, transport, source=source)
+    def recording(view, transport, *, source, **kw):
+        answer = real(view, transport, source=source, **kw)
         calls.append((type(view).__name__, type(transport).__name__, source, answer))
         return answer
 

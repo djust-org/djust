@@ -293,6 +293,10 @@ async def test_an_immediate_turn_that_changes_nothing_still_writes_the_unsaved_o
             await harness.event(comm, "note")  # immediate (session write)
             assert await _stored(key) == 1
             assert not rt.state_unsaved and rt._state_timer is None
+            # The session value rides on that save: it is stored too.
+            from django.contrib.sessions.backends.db import SessionStore
+
+            assert await sync_to_async(lambda: SessionStore(key).get("seen"))() is True
         finally:
             await comm.disconnect()
 
@@ -380,7 +384,9 @@ async def test_a_flush_that_is_not_authorized_writes_nothing(runtimes, monkeypat
         try:
 
             async def refused(view):
-                raise PermissionError("logged out")
+                from djust._exposure import ExposureError
+
+                raise ExposureError("Explicit event session is no longer valid")
 
             monkeypatch.setattr(rt, "authorize_explicit_turn", refused)
             assert not await rt.flush_state()
@@ -450,12 +456,111 @@ async def test_a_stale_holder_cannot_overwrite(runtimes):
     assert await _stored(key) == 2
 
 
+async def test_a_socket_superseded_at_a_flush_is_told_at_once(runtimes):
+    """The page gets the reload error when its flush is refused, and its next
+    deferred turn is refused too, rather than answering changes nothing will
+    ever save."""
+    from djust.tests._ws_frames import has_frame, receive_until
+
+    with _settings(DJUST_STATE_SAVE_INTERVAL=60):
+        key, comm, rt = await _dirty_counter(runtimes)
+        try:
+            await sync_to_async(sf.fallback_post)(Deferred, key, "inc")
+            await _fire(rt)
+            told = await receive_until(
+                comm, has_frame("error", code="state_error"), what="the reload error"
+            )
+            assert told[-1]["source"] == "async", told[-1]
+            await comm.send_json_to({"type": "event", "event": "inc", "params": {}, "ref": 41})
+            again = await receive_until(
+                comm, has_frame("error", code="state_error"), what="the next turn's refusal"
+            )
+            assert not [f for f in again if f.get("ref") == 41 and f["type"] != "error"]
+            assert rt._state_timer is None and not rt.state_unsaved
+        finally:
+            await comm.disconnect()
+    assert await _stored(key) == 1
+
+
+async def test_a_storage_error_while_authorizing_keeps_the_change(runtimes, monkeypatch):
+    """Only a refusal (logged out, identity changed, permission revoked) drops
+    the unsaved change. A database that does not answer for a moment is a
+    failure like any other: retried, and written by the close once it is back."""
+    from django.db import OperationalError
+
+    from djust import _exposure_auth
+
+    real = _exposure_auth.fresh_socket_request
+    down = {"on": False}
+
+    def fresh(view):
+        if down["on"]:
+            raise OperationalError("could not connect to server")
+        return real(view)
+
+    monkeypatch.setattr(_exposure_auth, "fresh_socket_request", fresh)
+    with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL):
+        key, comm, rt = await _dirty_counter(runtimes)
+        try:
+            down["on"] = True
+            assert not await _fire(rt)
+            assert rt.state_unsaved and rt._state_timer is not None
+            assert rt._state_flush_failures == 1
+            down["on"] = False
+        finally:
+            await comm.disconnect()
+    assert await _stored(key) == 1
+
+
+async def test_the_render_lock_alone_keeps_a_flush_out(runtimes):
+    """A path holding only the transport's render lock (a tick, a push, an
+    SSE page replacement) is not interrupted by a flush: it waits its turn."""
+    with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL):
+        key, comm, rt = await _dirty_counter(runtimes)
+        try:
+            lock = rt.transport.turn_lock()
+            assert lock is not None
+            await lock.acquire()
+            try:
+                assert not await rt.flush_state()
+                assert rt._state_timer_delay == runtime._STATE_FLUSH_RETRY_S
+                assert await _stored(key) == 0
+            finally:
+                lock.release()
+            assert await _fire(rt)
+            assert await _stored(key) == 1
+        finally:
+            await comm.disconnect()
+
+
+async def test_the_sse_render_lock_alone_keeps_a_flush_out(monkeypatch):
+    from djust import sse
+
+    monkeypatch.setattr(sse, "_SESSION_LINGER_S", 0)
+    with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL):
+        key = await _page()
+        sid = await sf.sse_run(Deferred, key, [("inc", None)], MODULE, keep=True)
+        try:
+            rt = sse._sse_sessions[sid].runtime
+            assert rt.state_unsaved
+            lock = rt.transport.turn_lock()
+            await lock.acquire()
+            try:
+                assert not await rt.flush_state()
+            finally:
+                lock.release()
+            assert await rt.flush_state()
+        finally:
+            sse._sse_sessions.pop(sid, None)
+    assert await _stored(key) == 1
+
+
 async def test_sse_turns_defer_the_same_way(monkeypatch):
     seen = []
     real = _save_policy.save_mode
 
-    def recording(view, transport, *, source):
-        answer = real(view, transport, source=source)
+    def recording(view, transport, *, source, **kw):
+        answer = real(view, transport, source=source, **kw)
         seen.append((type(transport).__name__, answer))
         return answer
 

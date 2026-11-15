@@ -310,3 +310,47 @@ async def test_a_websocket_view_beside_the_page_is_written_before_its_unmount():
             assert 1 in await _slot_counts(key)
         finally:
             await comm.disconnect()
+
+
+async def test_the_shutdown_flush_is_bounded_as_a_whole(runtimes_registry, monkeypatch, caplog):
+    """A stalled store does not hold the shutdown: every flush runs at once,
+    the whole under one deadline, and what did not finish is counted in one
+    WARNING. Shown by order: the call returns while the saves are still held."""
+    import threading
+
+    stall = threading.Event()
+    real = SessionStore.save
+    held = {"on": False}
+
+    def save(self, *args, **kwargs):
+        if held["on"]:
+            stall.wait(20)
+        return real(self, *args, **kwargs)
+
+    with _settings():
+        comms = []
+        try:
+            for _ in range(3):
+                key = await sync_to_async(sf.page_get)(SseCounter)
+                comm, _ = await harness.mount_view(SseCounter, key)
+                await harness.event(comm, "inc")
+                comms.append(comm)
+            assert len(runtime._UNSAVED_RUNTIMES) == 3
+            # Each flush's own cap is longer than the stall: without the one
+            # deadline the stalled saves would end, and all three be written.
+            from djust import _exposure_sessions
+
+            monkeypatch.setattr(_exposure_sessions, "MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S", 60.0)
+            monkeypatch.setattr(SessionStore, "save", save)
+            held["on"] = True
+            written = await runtime.flush_unsaved_states("shutdown", deadline=0.2)
+            assert not stall.is_set()  # returned with the saves still stalled
+            assert written == 0
+            assert any(
+                "of 3 connection(s) not saved at shutdown" in r.getMessage() for r in caplog.records
+            )
+        finally:
+            held["on"] = False
+            stall.set()
+            for comm in comms:
+                await comm.disconnect()

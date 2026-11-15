@@ -399,22 +399,59 @@ _STATE_FLUSH_RETRY_S = 0.5
 _UNSAVED_RUNTIMES: "weakref.WeakSet[Any]" = weakref.WeakSet()
 
 
-async def flush_unsaved_states(reason: str = "shutdown") -> int:
+#: The whole shutdown flush, every runtime together, gets this long: a
+#: server's graceful timeout is short, and a stalled store must not hold it.
+SHUTDOWN_FLUSH_DEADLINE_S = 5.0
+
+
+async def flush_unsaved_states(reason: str = "shutdown", deadline: Optional[float] = None) -> int:
     """Flush every runtime of this process that holds an unsaved change.
 
     For a server that stops without closing its sockets first (the close
     flushes them): ``djust.lifespan`` runs it before the application's own
-    shutdown hooks. One at a time, each bounded by the save cap. Returns how
-    many were written. Never raises.
+    shutdown hooks. All at once, the whole of it (authorization included)
+    bounded by ``deadline`` (:data:`SHUTDOWN_FLUSH_DEADLINE_S`); what has not
+    finished then is abandoned and counted in one WARNING, without values.
+    Returns how many were written. Never raises.
     """
+    runtimes = list(_UNSAVED_RUNTIMES)
+    if not runtimes:
+        return 0
+    limit = SHUTDOWN_FLUSH_DEADLINE_S if deadline is None else deadline
+    tasks = [asyncio.ensure_future(runtime.flush_state(reason=reason)) for runtime in runtimes]
+    done, pending = await asyncio.wait(tasks, timeout=limit)
+    for task in pending:
+        task.cancel()
     written = 0
-    for runtime in list(_UNSAVED_RUNTIMES):
-        try:
-            if await runtime.flush_state(reason=reason):
-                written += 1
-        except Exception:  # noqa: BLE001 — every runtime gets its turn
-            logger.warning("djust: view state flush at %s failed", reason)
+    failed = 0
+    for task in done:
+        if task.cancelled() or task.exception() is not None or not task.result():
+            failed += 1
+        else:
+            written += 1
+    if pending or failed:
+        logger.warning(
+            "djust: view state of %d connection(s) not saved at %s (%d did not finish within "
+            "%s s, %d failed); they restore their last save",
+            len(pending) + failed,
+            reason,
+            len(pending),
+            limit,
+            failed,
+        )
     return written
+
+
+def _is_refusal(exc: BaseException) -> bool:
+    """Whether a flush's authorization failed because the turn is refused (the
+    session logged out or rotated, the identity changed, permission revoked),
+    not because storage did not answer: only a refusal drops the unsaved
+    change."""
+    from django.core.exceptions import PermissionDenied
+
+    from ._exposure import ExposureError
+
+    return isinstance(exc, (ExposureError, PermissionDenied, LateSaveDropped))
 
 
 def _state_jitter() -> float:
@@ -6387,6 +6424,7 @@ class ViewRuntime(RuntimeTurnPort):
         source: str,
         children: bool = True,
         async_batch: Optional[str] = None,
+        async_result: bool = False,
     ) -> bool:
         """Persist an authorized explicit turn before any success frame.
 
@@ -6420,7 +6458,7 @@ class ViewRuntime(RuntimeTurnPort):
         from ._exposure_sessions import StateLimitExceeded
         from .state_store import StateStoreError
 
-        from ._save_policy import DEFERRED, save_mode
+        from ._save_policy import DEFERRED, deferrable, save_mode
         from .state_store import StateSuperseded
 
         if uses_legacy_exposure(view):
@@ -6428,7 +6466,7 @@ class ViewRuntime(RuntimeTurnPort):
         # The one place a socket turn's save is decided (``_save_policy``):
         # immediate (below) unless the project set an interval and nothing
         # about this turn needs it in storage before its frame.
-        mode = save_mode(view, self.transport, source=source)
+        mode = save_mode(view, self.transport, source=source, async_result=async_result)
         self._explicit_binding_verified = None
         extra = self._explicit_error_fields(view, source=source, async_batch=async_batch)
         if mode == DEFERRED:
@@ -6467,6 +6505,18 @@ class ViewRuntime(RuntimeTurnPort):
             )
             return False
         except StateLimitExceeded as refused:
+            if deferrable(view):
+                # Option A (design: save frequency): with saves deferred the
+                # page may already show changes the store does not have, so
+                # going back to the store would undo them; the turn is served,
+                # the last state that fit stays stored, the page is told once.
+                await self._note_over_limit(view, refused, interactive=True)
+                self._mark_state_dirty(view)
+                if children:
+                    return await self._persist_explicit_children_after_event(
+                        view, async_batch=async_batch
+                    )
+                return True
             return await self._refuse_over_limit_turn(view, refused, extra)
         except StateStoreError as refused_by_store:
             if isinstance(refused_by_store, StateSuperseded):
@@ -6530,6 +6580,11 @@ class ViewRuntime(RuntimeTurnPort):
         from ._exposure import ExposureError
         from ._exposure_sessions import request_binding
 
+        if view.__dict__.get("_djust_auto_superseded"):
+            # Another connection or request holds this tab now: nothing this
+            # view shows can be saved (design: save frequency).
+            await self._send_superseded(view, extra)
+            return False
         request = getattr(view, "_djust_event_request", None)
 
         def check() -> None:
@@ -6698,11 +6753,27 @@ class ViewRuntime(RuntimeTurnPort):
         interactive = reason == "interval"
         try:
             await self.authorize_explicit_turn(view)
-        except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
-            # Logged out, or no longer permitted: nothing is written into a
-            # session that is no longer this user's.
-            logger.info("djust: view state not saved at %s: the turn is not authorized", reason)
-            self._forget_state_flush()
+        except Exception as exc:  # noqa: BLE001 — no auth provider values on the wire/log
+            if _is_refusal(exc):
+                # Logged out, or no longer permitted: nothing is written into
+                # a session that is no longer this user's.
+                logger.info("djust: view state not saved at %s: the turn is not authorized", reason)
+                self._forget_state_flush()
+                return False
+            # Anything else (the session store or database failing to answer)
+            # is not a refusal: the change stays owed and is tried again, and
+            # the close's flush still writes it once storage is back.
+            from ._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (view,),
+                exc,
+                "View state flush could not authorize (storage?): %s",
+                exc,
+                level="warning",
+            )
+            self._state_flush_failed(view, interactive)
             return False
         request = view.__dict__.get("_djust_event_request")
         try:
@@ -6713,6 +6784,12 @@ class ViewRuntime(RuntimeTurnPort):
             )
         except StateSuperseded:
             self._forget_state_flush()
+            if interactive:
+                # The connection is still up: the page is told at once, not at
+                # its next immediate turn (its deferred turns would otherwise
+                # go on answering with changes nothing will save).
+                extra = self._explicit_error_fields(view, source="async")
+                await self._send_superseded(view, extra)
             return False
         except LateSaveDropped:
             self._forget_state_flush()  # the session was logged out meanwhile
@@ -6722,19 +6799,7 @@ class ViewRuntime(RuntimeTurnPort):
             # the view keeps its values (the page already shows them), and the
             # page is told once per field and limit until a save succeeds.
             # Later flushes try again, so a state that shrinks is saved.
-            notice = (refused.field, refused.limit)
-            if notice != self._state_too_large_noticed:
-                self._state_too_large_noticed = notice
-                logger.warning(
-                    "djust: view state not saved: field %s over its %s limit; the last "
-                    "state that fit stays stored and the view keeps its values",
-                    sanitize_for_log(refused.field),
-                    refused.limit,
-                )
-                if interactive:
-                    await self.transport.send_error(
-                        refused.user_message, code="state_too_large", source="async"
-                    )
+            await self._note_over_limit(view, refused, interactive=interactive)
             self._state_flush_failed(view, interactive, counted=False)
             return False
         except ExplicitSaveDeferred:
@@ -6754,6 +6819,32 @@ class ViewRuntime(RuntimeTurnPort):
         self._explicit_save_succeeded()
         self._state_saved(view)
         return True
+
+    async def _note_over_limit(self, view: Any, refused: Any, *, interactive: bool) -> None:
+        """Option A: one WARNING and one non-terminal ``state_too_large`` frame
+        per field and limit, until a save lands. ``interactive``: the frame
+        goes to a page that is still connected (not at a close)."""
+        notice = (refused.field, refused.limit)
+        if notice == self._state_too_large_noticed:
+            return
+        self._state_too_large_noticed = notice
+        logger.warning(
+            "djust: view state not saved: field %s over its %s limit; the last "
+            "state that fit stays stored and the view keeps its values",
+            sanitize_for_log(refused.field),
+            refused.limit,
+        )
+        if interactive:
+            await self.transport.send_error(
+                refused.user_message, code="state_too_large", source="async"
+            )
+
+    async def _send_superseded(self, view: Any, extra: Dict[str, Any]) -> None:
+        """The reload error of a view whose tab another holder took."""
+        view._force_full_html = True
+        await self.transport.send_error(
+            "State unavailable. Please reload the page.", code="state_error", **extra
+        )
 
     def _state_flush_failed(self, view: Any, interactive: bool, *, counted: bool = True) -> None:
         """Keep the change owed; retry with backoff while the connection is up.
@@ -8237,7 +8328,7 @@ class ViewRuntime(RuntimeTurnPort):
                         return
                     if self.view_instance is not view:
                         return
-                    if not await self.commit_explicit_turn(view, source="async"):
+                    if not await self.commit_explicit_turn(view, source="async", async_result=True):
                         return
                     snapshot_fields = await self._explicit_event_snapshot(view)
                     await self._render_async_result(event_name, snapshot_fields=snapshot_fields)

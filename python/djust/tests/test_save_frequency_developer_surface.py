@@ -22,7 +22,7 @@ from django.test import override_settings
 from django.urls import path as _path
 
 from djust import LiveView, _automatic_state, _save_policy, runtime
-from djust.decorators import event_handler
+from djust.decorators import background, event_handler
 from djust.tests import _per_turn_harness as harness
 from djust.tests import _save_frequency as sf
 
@@ -59,6 +59,11 @@ class Surface(LiveView):
     @event_handler()
     def shrink(self, **kwargs):
         self.blob = ""
+
+    @event_handler(save=True)
+    @background
+    def bg_keep(self, **kwargs):
+        self.count += 10
 
     def get_context_data(self, **kwargs):
         return {"count": self.count}
@@ -329,5 +334,48 @@ async def test_a_flush_over_the_limit_keeps_the_last_fit_and_tells_the_page_once
             await harness.event(comm, "shrink")
             assert await rt.flush_state()
             assert (await _values(key))["count"] == 2
+        finally:
+            await comm.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_over_the_limit_a_later_immediate_turn_is_served_too(runtimes):
+    """Option A whatever the turn: an immediate turn (here ``save=True``) over
+    the limit with saves deferred keeps serving, keeps the last state that
+    fit, and tells the page no second time."""
+    from djust.tests._ws_frames import drain_extra
+
+    with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL):
+        key, comm = await _socket(Small)
+        rt = runtimes[-1]
+        try:
+            await harness.event(comm, "inc")
+            assert await rt.flush_state()
+            await harness.event(comm, "grow")
+            assert not await rt.flush_state()
+            told = await drain_extra(comm)
+            assert [f.get("code") for f in told].count("state_too_large") == 1
+            reply = await harness.event(comm, "inc_and_keep")
+            assert reply["type"] in ("patch", "html_update"), reply
+            assert rt.view_instance.count == 3 and rt.state_unsaved
+            assert (await _values(key))["count"] == 1
+            extra = await drain_extra(comm)
+            assert not any(f.get("code") == "state_too_large" for f in extra), extra
+        finally:
+            await comm.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_save_true_over_background_saves_the_result_before_its_frame(runtimes):
+    from djust.tests._ws_frames import has_frame, receive_until
+
+    with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL):
+        key, comm = await _socket(Surface)
+        rt = runtimes[-1]
+        try:
+            await comm.send_json_to({"type": "event", "event": "bg_keep", "params": {}, "ref": 3})
+            await receive_until(comm, has_frame("patch", source="async"), what="the result")
+            assert (await _values(key))["count"] == 10
+            assert not rt.state_unsaved
         finally:
             await comm.disconnect()

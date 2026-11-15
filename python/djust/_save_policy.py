@@ -49,6 +49,9 @@ SETTING = "DJUST_STATE_SAVE_INTERVAL"
 VIEW_ATTRIBUTE = "state_save_interval"
 #: Where a turn's request for an immediate save waits for the commit.
 SAVE_FLAG = "_djust_save_requested"
+#: The same, kept for the result of the background work the turn started
+#: (``@event_handler(save=True)`` over ``@background``).
+SAVE_ASYNC_FLAG = "_djust_save_requested_async"
 #: What the setting may be, besides 0.
 MIN_INTERVAL_S = 0.5
 MAX_INTERVAL_S = 60.0
@@ -121,12 +124,13 @@ def interval_for(view: Any) -> float:
     return _usable(value, "%s.%s.%s" % (owner.__module__, owner.__qualname__, VIEW_ATTRIBUTE))
 
 
-def request_save(owner: Any) -> None:
+def request_save(owner: Any, *, background_result: bool = False) -> None:
     """Have the current turn of ``owner``'s view saved before its reply.
 
     ``owner`` is the view, or a component (its view is found through the
     component's parents). Read once, by the turn's commit
-    (:func:`take_save_request`)."""
+    (:func:`take_save_request`). ``background_result``: also the commit of
+    the background work this turn starts."""
     target = owner
     for _ in range(32):
         parent = vars(target).get("_parent") if hasattr(target, "__dict__") else None
@@ -134,12 +138,21 @@ def request_save(owner: Any) -> None:
             break
         target = parent
     vars(target)[SAVE_FLAG] = True
+    if background_result:
+        vars(target)[SAVE_ASYNC_FLAG] = True
 
 
-def take_save_request(view: Any) -> bool:
-    """Whether something asked for this turn to be saved now; forgets it."""
+def take_save_request(view: Any, *, async_result: bool = False) -> bool:
+    """Whether something asked for this turn to be saved now; forgets it.
+    ``async_result``: the turn is a background result's, which also takes
+    the request its starting turn left for it."""
     storage = getattr(view, "__dict__", None)
-    return bool(storage.pop(SAVE_FLAG, False)) if storage is not None else False
+    if storage is None:
+        return False
+    asked = bool(storage.pop(SAVE_FLAG, False))
+    if async_result:
+        asked = bool(storage.pop(SAVE_ASYNC_FLAG, False)) or asked
+    return asked
 
 
 def transport_holds_view(transport: Any) -> bool:
@@ -195,14 +208,15 @@ def _navigates(view: Any) -> bool:
     return bool(pending) if isinstance(pending, list) else False
 
 
-def save_mode(view: Any, transport: Any, *, source: str) -> str:
+def save_mode(view: Any, transport: Any, *, source: str, async_result: bool = False) -> str:
     """How the turn ``source`` of ``view`` over ``transport`` is saved.
 
     ``source`` is the commit's own label (``"event"``, ``"url_change"``,
     ``"async"``). :data:`IMMEDIATE` unless every condition of the module
     docstring holds.
     """
-    asked = take_save_request(view)  # one turn's request, read once whatever the answer
+    # One turn's request, read once whatever the answer.
+    asked = take_save_request(view, async_result=async_result)
     if asked or not transport_holds_view(transport) or not deferrable(view):
         return IMMEDIATE
     if source == "url_change" or _navigates(view) or _wrote_the_session(view):
@@ -229,6 +243,7 @@ __all__ = [
     "MAX_INTERVAL_S",
     "MIN_INTERVAL_S",
     "MODES",
+    "SAVE_ASYNC_FLAG",
     "SAVE_FLAG",
     "SETTING",
     "VIEW_ATTRIBUTE",
