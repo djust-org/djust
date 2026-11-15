@@ -435,16 +435,15 @@ def test_a_number_is_written_unlocalised(settings) -> None:
     assert cells(html) == [["N", "1234567"]], html
 
 
-def test_a_marked_safe_cell_is_kept_by_the_python_tag_and_escaped_natively() -> None:
-    """The escaping policy of every native handler (the ``escaping`` aspect of the parity
-    baseline): the Python tag honours ``mark_safe``, the native handler is handed text. Pinned so
-    the template's behaviour for the cells that DO render is on record (#3870)."""
+def test_a_marked_safe_cell_is_kept_by_both_engines() -> None:
+    """A developer's ``mark_safe`` cell is markup on both engines (#3895 item 3; it was escaped
+    natively, the native handler being handed the rows as JSON text)."""
     from django.utils.safestring import mark_safe
 
     ctx = {"rows": [{"id": 1, "name": mark_safe("<i>a</i>"), "age": 1}], "cols": COLS}
     src = "{% data_table rows=rows columns=cols %}"
     assert "<i>a</i>" in _django(src, ctx)
-    assert "<i>a</i>" not in _rust(src, ctx)
+    assert "<i>a</i>" in _rust(src, ctx)
 
 
 @pytest.mark.parametrize("value", ['"', "'", '""x', "x'"], ids=repr)

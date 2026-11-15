@@ -1,6 +1,6 @@
-# Phase 5: Complete State Management API
+# Phase 5: @cache, DraftModeMixin & Loading States
 
-> **Inert.** `@client_state` is INERT — it stamps metadata nothing in the shipped client reads (#2680), so a decorated handler behaves exactly like an undecorated one. The `StateBus` it named was deleted in #2680.
+> **Dated record.** This plan also covered `@client_state` and listed `@optimistic` as done; both were removed in djust 2.0 (#4006) because nothing in the shipped client read them, and they have been taken out of this record. The `@cache` and `DraftModeMixin` work below still stands. The `@loading` / `@loading-text` HTML attributes this plan describes (Task 3) were never implemented by the client: loading states are the `dj-loading.*` attributes (see [Loading States](../website/guides/loading-states.md)). See the [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 
 **Status**: 🚧 In Progress
 **Start Date**: 2025-11-13
@@ -15,11 +15,10 @@ Phase 5 completes the state management vision by implementing the remaining deco
 ### Goals
 
 1. **@cache Decorator** - Client-side result caching with TTL
-2. **@client_state Decorator** - Multi-component state coordination via StateBus
-3. **DraftModeMixin** - Draft mode for forms and text editors
-4. **@loading Attributes** - Loading states for buttons and forms
-5. **Comprehensive Testing** - Unit tests + E2E tests for all features
-6. **Demo Applications** - Real-world examples showcasing all features
+2. **DraftModeMixin** - Draft mode for forms and text editors
+3. **@loading Attributes** - Loading states for buttons and forms
+4. **Comprehensive Testing** - Unit tests + E2E tests for all features
+5. **Demo Applications** - Real-world examples showcasing all features
 
 ---
 
@@ -30,26 +29,21 @@ Phase 5 completes the state management vision by implementing the remaining deco
 **Python Decorators** (`python/djust/decorators.py`)
 - ✅ `@debounce(wait)` - Delay handler until user stops interacting
 - ✅ `@throttle(interval)` - Limit handler execution frequency
-- ✅ `@optimistic` - Optimistic UI updates
 - ✅ `@cache(ttl, key_params)` - Python decorator defined (needs JS client)
-- ✅ `@client_state(keys)` - Python decorator defined (needs JS client)
 
-**JavaScript Client** (`python/djust/static/djust/src/` — `04-cache.js`, `05-state-bus.js`, `06-draft-manager.js`, `09-event-binding.js`; the former `decorators.js` copy was removed in #2659)
+**JavaScript Client** (`python/djust/static/djust/src/` — `04-cache.js`, `06-draft-manager.js`, `09-event-binding.js`; the former `decorators.js` copy was removed in #2659)
 - ✅ `debounceEvent()` - Debouncing logic
 - ✅ `throttleEvent()` - Throttling logic
-- ✅ `optimisticEvent()` - Optimistic update logic
 
 **JavaScript Tests** (`tests/js/`)
 - ✅ debounce.test.js (21 tests passing)
 - ✅ throttle.test.js (28 tests passing)
-- ✅ optimistic.test.js (48 tests passing)
-- **Total: 97 tests passing**
+- **Total: 49 tests passing**
 
 ### ❌ Not Yet Implemented
 
 **JavaScript Client Support**
 - [ ] `cacheEvent()` - Client-side caching with TTL
-- [ ] `clientStateEvent()` - StateBus integration for multi-component state
 - [ ] `loadingAttributes()` - @loading and @loading-text support
 - [x] `initDraftMode()` - Draft mode JavaScript logic (DraftManager + field monitoring) ✅
 
@@ -58,14 +52,13 @@ Phase 5 completes the state management vision by implementing the remaining deco
 
 **Testing**
 - [ ] cache.test.js - Unit tests for caching
-- [ ] client-state.test.js - Unit tests for StateBus
 - [ ] loading.test.js - Unit tests for loading attributes
 - [ ] draft-mode.test.js - Unit tests for draft mode
 - [ ] E2E tests (Playwright/Cypress) - Integration tests
 
 **Documentation & Demos**
 - [ ] Update STATE_MANAGEMENT_API.md status to "Implemented"
-- [ ] Demo applications showing cache, client_state, draft mode
+- [ ] Demo applications showing cache, draft mode
 - [ ] Performance benchmarks for each feature
 
 ---
@@ -102,36 +95,6 @@ Phase 5 completes the state management vision by implementing the remaining deco
 │  4. Client receives response                    │
 │     cache.set(cacheKey, result, ttl)           │
 │     Update UI with result                       │
-└─────────────────────────────────────────────────┘
-```
-
-### @client_state Decorator Flow
-
-```
-┌─────────────────────────────────────────────────┐
-│  Multiple components share state                │
-│  Example: Filter + List + Summary               │
-└────────────┬────────────────────────────────────┘
-             │
-┌────────────▼────────────────────────────────────┐
-│  StateBus (client-side)                         │
-│  - Stores shared state keys                     │
-│  - Notifies all subscribed components           │
-│  - Optimistically updates all views             │
-└────────────┬────────────────────────────────────┘
-             │
-┌────────────▼────────────────────────────────────┐
-│  Component A updates state                      │
-│  @client_state(keys=["filter"])                │
-│  def change_filter(value):                     │
-│      stateBus.set("filter", value)             │
-└────────────┬────────────────────────────────────┘
-             │
-┌────────────▼────────────────────────────────────┐
-│  Component B reacts to state change             │
-│  @client_state(keys=["filter"])                │
-│  Automatically receives new filter value        │
-│  Re-renders with updated data                   │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -224,80 +187,7 @@ export function cacheEvent(eventName, eventData, config, sendEvent) {
 
 ---
 
-### Task 2: Implement @client_state JavaScript Client (4 hours)
-
-**Location**: `python/djust/static/djust/src/` (bundle modules; `decorators.js` was removed in #2659)
-
-**Subtasks**:
-- [ ] Add `StateBus` class for shared state
-- [ ] Implement `clientStateEvent(eventName, eventData, config, sendEvent)`
-- [ ] State subscription/notification system
-- [ ] Multi-component coordination
-- [ ] Integration with event pipeline
-- [ ] Add to embedded version in `live_view.py`
-
-**Success Criteria**:
-- Multiple components share state
-- State updates propagate to all subscribers
-- Optimistic updates work
-- Server sync maintains consistency
-
-**Example**:
-```javascript
-export class StateBus {
-    constructor() {
-        this.state = new Map(); // Map<key, value>
-        this.subscribers = new Map(); // Map<key, Set<callback>>
-    }
-
-    set(key, value) {
-        this.state.set(key, value);
-        this.notify(key, value);
-    }
-
-    get(key) {
-        return this.state.get(key);
-    }
-
-    subscribe(key, callback) {
-        if (!this.subscribers.has(key)) {
-            this.subscribers.set(key, new Set());
-        }
-        this.subscribers.get(key).add(callback);
-    }
-
-    notify(key, value) {
-        const callbacks = this.subscribers.get(key) || new Set();
-        callbacks.forEach(cb => cb(value));
-    }
-}
-
-export const stateBus = new StateBus();
-
-export function clientStateEvent(eventName, eventData, config, sendEvent) {
-    const {keys = []} = config;
-
-    // Update StateBus with new state
-    keys.forEach(key => {
-        if (eventData[key] !== undefined) {
-            stateBus.set(key, eventData[key]);
-        }
-    });
-
-    // Send to server for persistence
-    return sendEvent(eventName, eventData);
-}
-```
-
-**Testing**:
-- [ ] Unit tests for StateBus set/get/subscribe
-- [ ] Multi-component coordination tests
-- [ ] State propagation tests
-- [ ] Server sync tests
-
----
-
-### Task 3: Implement DraftModeMixin (Python + JavaScript) (5 hours)
+### Task 2: Implement DraftModeMixin (Python + JavaScript) (5 hours)
 
 **Location**: `python/djust/mixins.py` (new file)
 
@@ -425,7 +315,7 @@ export class DraftMode {
 
 ---
 
-### Task 4: Implement @loading HTML Attributes (2 hours)
+### Task 3: Implement @loading HTML Attributes (2 hours)
 
 **Location**: `python/djust/static/djust/src/` (bundle modules; `decorators.js` was removed in #2659)
 
@@ -492,13 +382,12 @@ export function handleLoadingAttributes(element, eventName, isLoading) {
 
 ---
 
-### Task 5: JavaScript Unit Tests (4 hours)
+### Task 4: JavaScript Unit Tests (4 hours)
 
 **Location**: `tests/js/`
 
 **Subtasks**:
 - [ ] `cache.test.js` - Cache decorator tests (~20 tests)
-- [ ] `client-state.test.js` - StateBus tests (~15 tests)
 - [ ] `loading.test.js` - Loading attributes tests (~10 tests)
 - [ ] `draft-mode.test.js` - Draft mode tests (~15 tests)
 - [ ] Update vitest.config.js if needed
@@ -533,7 +422,7 @@ describe('Cache Decorator', () => {
 
 ---
 
-### Task 6: E2E Integration Tests (4 hours)
+### Task 5: E2E Integration Tests (4 hours)
 
 **Tool**: Playwright or Cypress
 
@@ -542,7 +431,6 @@ describe('Cache Decorator', () => {
 **Subtasks**:
 - [ ] Setup Playwright/Cypress
 - [ ] Test @cache with autocomplete
-- [ ] Test @client_state with multi-component coordination
 - [ ] Test DraftModeMixin with form editor
 - [ ] Test @loading with button clicks
 - [ ] Test all decorators combined
@@ -575,13 +463,12 @@ test('autocomplete uses cache on second search', async ({ page }) => {
 
 ---
 
-### Task 7: Demo Applications (3 hours)
+### Task 6: Demo Applications (3 hours)
 
 **Location**: `examples/demo_project/demo_app/demos/`
 
 **Subtasks**:
 - [ ] Autocomplete with @cache
-- [ ] Multi-component dashboard with @client_state
 - [ ] Blog editor with DraftModeMixin
 - [ ] Form with @loading attributes
 - [ ] Combined example showing all features
@@ -621,13 +508,12 @@ class AutocompleteView(LiveView):
 | Task | Estimated Time | Status |
 |------|---------------|--------|
 | 1. @cache JavaScript | 3 hours | ⏳ Not Started |
-| 2. @client_state JavaScript | 4 hours | ⏳ Not Started |
-| 3. DraftModeMixin | 5 hours | ✅ Complete |
-| 4. @loading Attributes | 2 hours | ⏳ Not Started |
-| 5. JavaScript Unit Tests | 4 hours | ⏳ Not Started |
-| 6. E2E Integration Tests | 4 hours | ⏳ Not Started |
-| 7. Demo Applications | 3 hours | ⏳ Not Started |
-| **Total** | **25 hours** | **~3-4 days** |
+| 2. DraftModeMixin | 5 hours | ✅ Complete |
+| 3. @loading Attributes | 2 hours | ⏳ Not Started |
+| 4. JavaScript Unit Tests | 4 hours | ⏳ Not Started |
+| 5. E2E Integration Tests | 4 hours | ⏳ Not Started |
+| 6. Demo Applications | 3 hours | ⏳ Not Started |
+| **Total** | **21 hours** | **~3 days** |
 
 ---
 
@@ -641,13 +527,11 @@ class AutocompleteView(LiveView):
 
 ### Functional Metrics
 - [ ] @cache reduces server calls by >80% for repeated queries
-- [ ] @client_state enables <100ms cross-component updates
 - [x] DraftModeMixin prevents data loss on accidental navigation ✅
 - [ ] @loading provides instant user feedback
 
 ### Performance Benchmarks
 - [ ] Cache lookup < 1ms
-- [ ] StateBus propagation < 10ms
 - [ ] Draft save (debounced) < 50ms
 - [ ] Loading state update < 5ms
 
@@ -658,12 +542,12 @@ class AutocompleteView(LiveView):
 ### Technical Risks
 
 1. **JavaScript Bundle Size**
-   - **Risk**: Adding cache, client_state, draft mode increases bundle
+   - **Risk**: Adding cache, draft mode increases bundle
    - **Mitigation**: Code splitting, tree shaking, minification
    - **Target**: Keep total <10KB
 
 2. **Memory Leaks**
-   - **Risk**: Cache/StateBus accumulate data indefinitely
+   - **Risk**: Cache accumulates data indefinitely
    - **Mitigation**: LRU eviction, TTL expiration, cleanup on unmount
    - **Monitoring**: Add memory usage tracking
 
@@ -678,11 +562,6 @@ class AutocompleteView(LiveView):
    - **Risk**: Multiple decorators on same handler interfere
    - **Mitigation**: Defined decorator order, pipeline architecture
    - **Documentation**: Clear examples of decorator combinations
-
-2. **StateBus Race Conditions**
-   - **Risk**: Multiple components update same state simultaneously
-   - **Mitigation**: Queueing, last-write-wins strategy
-   - **Testing**: Concurrent update tests
 
 ---
 
@@ -717,5 +596,4 @@ class AutocompleteView(LiveView):
 - [STATE_MANAGEMENT_EXAMPLES.md](STATE_MANAGEMENT_EXAMPLES.md) - Code examples
 - [IMPLEMENTATION_PHASE1.md](IMPLEMENTATION_PHASE1.md) - Template foundation
 - [IMPLEMENTATION_PHASE2.md](IMPLEMENTATION_PHASE2.md) - Debounce/throttle
-- [IMPLEMENTATION_PHASE3.md](IMPLEMENTATION_PHASE3.md) - Optimistic updates
 - [IMPLEMENTATION_PHASE4.md](IMPLEMENTATION_PHASE4.md) - Component system

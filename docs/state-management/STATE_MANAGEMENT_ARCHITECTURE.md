@@ -1,10 +1,11 @@
 # State Management Architecture
 
-> **`@optimistic` is INERT.** It records handler metadata that nothing in the
-> shipped client reads, so applying it changes nothing at runtime — a bare
-> `@optimistic` declares no DOM change for a client to apply. Examples below
-> that use it still work, but without the optimistic-update behaviour they
-> describe. Tracked in issue #2699.
+> **`@optimistic` and `@client_state` were removed in djust 2.0 (#4006).**
+> This specification originally designed both; neither was implemented in the
+> shipped client, and they no longer appear below. For instant feedback djust
+> uses `dj-loading.*` attributes and JS Commands; to keep two values in step,
+> set both in one handler. See the
+> [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 >
 > `@debounce` and `@throttle` ARE implemented (#2656) — the client gate is
 > `static/djust/src/05-handler-rate-limit.js`, configured from the mount
@@ -66,8 +67,8 @@ class SearchView(LiveView):
 
 1. **Zero JavaScript**: Developers write only Python
 2. **Automatic Optimization**: Debouncing, throttling, caching happen automatically
-3. **Instant Feedback**: Optimistic updates before server validation
-4. **Coordinated State**: Components share state via StateBus
+3. **Instant Feedback**: `dj-loading.*` attributes and JS Commands before the server answers
+4. **Coordinated State**: One handler updates every value that must agree
 5. **Persistent Drafts**: Forms auto-save to localStorage
 6. **Bundle Size**: Keep client.js under 10KB (currently 5KB → 7.1KB)
 
@@ -106,7 +107,6 @@ def search(self, query: str = "", **kwargs):
 ```python
 # ✅ Good: Decorators compose cleanly
 @debounce(wait=0.5)
-@optimistic
 @cache(ttl=60)
 def search(self, query: str = "", **kwargs):
     pass
@@ -124,9 +124,9 @@ def search(self, query: str = "", **kwargs):
 def search(self, query: str = "", **kwargs):
     self.results = Product.objects.filter(name__icontains=query)
 
-# ✅ Best: Add optimistic updates
+# ✅ Best: Add caching for repeated queries
 @debounce(wait=0.5)
-@optimistic
+@cache(ttl=60, key_params=["query"])
 def search(self, query: str = "", **kwargs):
     self.results = Product.objects.filter(name__icontains=query)
 ```
@@ -156,15 +156,10 @@ def search(self, query: str = "", **kwargs):
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │ Decorator Interceptors                               │  │
 │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐     │  │
-│  │  │ @optimistic│  │ @debounce  │  │ @cache     │     │  │
-│  │  │ Update DOM │  │ Delay send │  │ Return     │     │  │
-│  │  │ instantly  │  │ 500ms      │  │ cached     │     │  │
+│  │  │ @throttle  │  │ @debounce  │  │ @cache     │     │  │
+│  │  │ Limit rate │  │ Delay send │  │ Return     │     │  │
+│  │  │ 1/sec      │  │ 500ms      │  │ cached     │     │  │
 │  │  └────────────┘  └────────────┘  └────────────┘     │  │
-│  │  ┌────────────┐  ┌────────────┐                      │  │
-│  │  │ @throttle  │  │ @client_   │                      │  │
-│  │  │ Limit rate │  │  state     │                      │  │
-│  │  │ 1/sec      │  │ StateBus   │                      │  │
-│  │  └────────────┘  └────────────┘                      │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                          ↓                                  │
 │  ┌──────────────────────────────────────────────────────┐  │
@@ -187,14 +182,12 @@ def search(self, query: str = "", **kwargs):
 │  │ LiveView Event Handler                               │  │
 │  │                                                       │  │
 │  │  @debounce(wait=0.5)                                 │  │
-│  │  @optimistic                                          │  │
 │  │  def search(self, query: str = "", **kwargs):        │  │
 │  │      self.results = Product.objects.filter(...)      │  │
 │  │                                                       │  │
 │  │  Decorator metadata:                                 │  │
 │  │  {                                                    │  │
-│  │    "debounce": {"wait": 0.5, "max_wait": null},      │  │
-│  │    "optimistic": true                                 │  │
+│  │    "debounce": {"wait": 0.5, "max_wait": null}       │  │
 │  │  }                                                    │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                          ↓                                  │
@@ -244,8 +237,7 @@ def search(self, query: str = "", **kwargs):
 │  │    "patches": [...],                                  │  │
 │  │    "handlers": {                                      │  │
 │  │      "search": {                                      │  │
-│  │        "debounce": {"wait": 0.5},                     │  │
-│  │        "optimistic": true                             │  │
+│  │        "debounce": {"wait": 0.5}                      │  │
 │  │      }                                                 │  │
 │  │    }                                                   │  │
 │  │  }                                                     │  │
@@ -265,8 +257,7 @@ def search(self, query: str = "", **kwargs):
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │ Update Handler Metadata                              │  │
 │  │  window.handlerMetadata["search"] = {                │  │
-│  │    debounce: { wait: 500, maxWait: null },           │  │
-│  │    optimistic: true                                   │  │
+│  │    debounce: { wait: 500, maxWait: null }            │  │
 │  │  };                                                   │  │
 │  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
@@ -288,7 +279,6 @@ def search(self, query: str = "", **kwargs):
 2. Client intercepts `dj-input="search"` event
 3. Client checks `window.handlerMetadata["search"]`
 4. Client applies decorators:
-   - `@optimistic`: Update DOM instantly (no server round-trip)
    - `@debounce(500ms)`: Delay WebSocket send by 500ms
 5. After 500ms silence, send WebSocket message
 6. Server processes search, renders template, diffs VDOM
@@ -352,36 +342,6 @@ def throttle(interval: float = 0.3, leading: bool = True, trailing: bool = True)
         return wrapper
     return decorator
 
-def optimistic(func: Callable) -> Callable:
-    """Apply optimistic updates before server validation."""
-    @wraps(func)
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
-
-    if not hasattr(wrapper, '_djust_decorators'):
-        wrapper._djust_decorators = {}
-
-    wrapper._djust_decorators['optimistic'] = True
-
-    return wrapper
-
-def client_state(keys: List[str]):
-    """Share state via client-side StateBus."""
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            return func(*args, **kwargs)
-
-        if not hasattr(wrapper, '_djust_decorators'):
-            wrapper._djust_decorators = {}
-
-        wrapper._djust_decorators['client_state'] = {
-            'keys': keys
-        }
-
-        return wrapper
-    return decorator
-
 def cache(ttl: int = 60, key_params: Optional[List[str]] = None):
     """Cache handler responses client-side."""
     def decorator(func: Callable) -> Callable:
@@ -414,8 +374,7 @@ class LiveView:
         Returns:
             {
                 "search": {
-                    "debounce": {"wait": 0.5, "max_wait": null},
-                    "optimistic": true
+                    "debounce": {"wait": 0.5, "max_wait": null}
                 },
                 "update_slider": {
                     "throttle": {"interval": 0.1, "leading": true, "trailing": true}
@@ -562,10 +521,6 @@ const debounceTimers = new Map(); // Map<handlerName, timerId>
 // Throttle state
 const throttleState = new Map(); // Map<handlerName, {lastCall, timeoutId}>
 
-// StateBus for @client_state
-const stateBus = new Map(); // Map<key, value>
-const stateBusSubscribers = new Map(); // Map<key, Set<handlerName>>
-
 // Cache for @cache
 const responseCache = new Map(); // Map<cacheKey, {response, expires}>
 
@@ -588,11 +543,6 @@ function handleEvent(eventName, eventData = {}) {
     }
   }
 
-  // Apply optimistic updates
-  if (metadata?.optimistic) {
-    applyOptimisticUpdate(eventName, eventData);
-  }
-
   // Apply debounce
   if (metadata?.debounce) {
     debounceEvent(eventName, eventData, metadata.debounce);
@@ -610,12 +560,6 @@ function handleEvent(eventName, eventData = {}) {
 }
 
 function sendEvent(eventName, eventData) {
-  // Update StateBus if @client_state
-  const metadata = window.handlerMetadata[eventName];
-  if (metadata?.client_state) {
-    updateStateBus(metadata.client_state.keys, eventData);
-  }
-
   // Send WebSocket message
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(JSON.stringify({
@@ -697,60 +641,6 @@ function throttleEvent(eventName, eventData, config) {
       throttleState.delete(eventName);
     }, (interval * 1000) - elapsed);
   }
-}
-
-// ============================================================================
-// Optimistic Updates
-// ============================================================================
-
-function applyOptimisticUpdate(eventName, eventData) {
-  // Apply instant DOM updates based on event data
-  // This is heuristic-based - may not always be accurate
-
-  // Example: Update input value immediately
-  if (eventData.value !== undefined) {
-    const input = document.querySelector(`[data-event="${eventName}"]`);
-    if (input && input.tagName === 'INPUT') {
-      input.value = eventData.value;
-    }
-  }
-
-  // Example: Update checkbox state
-  if (eventData.checked !== undefined) {
-    const checkbox = document.querySelector(`[data-event="${eventName}"]`);
-    if (checkbox && checkbox.type === 'checkbox') {
-      checkbox.checked = eventData.checked;
-    }
-  }
-
-  // Server will send corrective patches if needed
-}
-
-// ============================================================================
-// Client State (StateBus)
-// ============================================================================
-
-function updateStateBus(keys, eventData) {
-  keys.forEach(key => {
-    if (eventData[key] !== undefined) {
-      stateBus.set(key, eventData[key]);
-
-      // Notify subscribers
-      if (stateBusSubscribers.has(key)) {
-        stateBusSubscribers.get(key).forEach(handlerName => {
-          // Trigger subscribed handler
-          handleEvent(handlerName, { [key]: eventData[key] });
-        });
-      }
-    }
-  });
-}
-
-function subscribeStateBus(key, handlerName) {
-  if (!stateBusSubscribers.has(key)) {
-    stateBusSubscribers.set(key, new Set());
-  }
-  stateBusSubscribers.get(key).add(handlerName);
 }
 
 // ============================================================================
@@ -954,8 +844,6 @@ Current client.js: 5.0 KB (gzipped)
 After state management features:
 ├── Core (existing):              3.0 KB
 ├── Debounce/Throttle:           +0.8 KB
-├── Optimistic updates:          +0.5 KB
-├── StateBus:                    +0.6 KB
 ├── Response caching:            +0.7 KB
 ├── DraftMode:                   +0.9 KB
 └── Loading states:              +0.3 KB
@@ -1006,7 +894,6 @@ Still smaller than:
         "wait": 0.5,
         "max_wait": null
       },
-      "optimistic": true,
       "cache": {
         "ttl": 60,
         "key_params": ["query"]
@@ -1071,10 +958,6 @@ User Event → handleEvent() → Interceptors → sendEvent() → WebSocket
                           └────────────┘
                                ↓
                           ┌────────────┐
-                          │ @optimistic│ → Update DOM
-                          └────────────┘
-                               ↓
-                          ┌────────────┐
                           │ @debounce? │ → Delay send
                           └────────────┘
                                ↓
@@ -1127,37 +1010,7 @@ const throttleState = new Map();
 - `trailing=false`: Skip last call
 - Both false: No calls (invalid)
 
-#### 3. StateBus
-
-**File**: `client.js` (updateStateBus, subscribeStateBus)
-**Responsibility**: Client-side pub/sub for component coordination
-
-**State:**
-```javascript
-const stateBus = new Map(); // Map<key, value>
-const stateBusSubscribers = new Map(); // Map<key, Set<handlerName>>
-```
-
-**Algorithm:**
-1. Handler publishes: `@client_state(keys=["filter"])`
-2. On event: Update stateBus with new values
-3. Notify all subscribers with key changes
-4. Subscribers trigger their handlers
-
-**Example:**
-```python
-# ComponentA publishes filter
-@client_state(keys=["filter"])
-def update_filter(self, filter: str = "", **kwargs):
-    self.filter = filter
-
-# ComponentB subscribes to filter
-@client_state(keys=["filter"])  # Auto-subscribes
-def on_filter_change(self, filter: str = "", **kwargs):
-    self.filtered_items = [i for i in self.items if filter in i['name']]
-```
-
-#### 4. Response Cache
+#### 3. Response Cache
 
 **File**: `client.js` (checkCache, cacheResponse)
 **Responsibility**: Cache handler responses to avoid redundant server requests
@@ -1328,7 +1181,7 @@ async function handleEvent(eventName, eventData) {
 # tests/test_decorators.py
 import pytest
 from djust import LiveView
-from djust.decorators import debounce, throttle, optimistic
+from djust.decorators import cache, debounce, throttle
 
 def test_debounce_metadata():
     class TestView(LiveView):
@@ -1345,7 +1198,7 @@ def test_debounce_metadata():
 def test_multiple_decorators():
     class TestView(LiveView):
         @debounce(wait=0.5)
-        @optimistic
+        @cache(ttl=60)
         def search(self, query: str = "", **kwargs):
             pass
 
@@ -1353,7 +1206,7 @@ def test_multiple_decorators():
     metadata = view._extract_handler_metadata()
 
     assert metadata['search']['debounce'] == {'wait': 0.5, 'max_wait': None}
-    assert metadata['search']['optimistic'] is True
+    assert metadata['search']['cache']['ttl'] == 60
 ```
 
 #### 2. Metadata Rendering
@@ -1521,7 +1374,7 @@ async def test_debounced_search():
 **Goal**: Metadata extraction and transmission
 
 **Tasks**:
-1. Implement decorator functions (debounce, throttle, optimistic, etc.)
+1. Implement decorator functions (debounce, throttle, cache, etc.)
 2. Implement `_extract_handler_metadata()` in LiveView
 3. Modify `render()` to inject metadata script
 4. Update WebSocket response to include metadata
@@ -1552,41 +1405,22 @@ async def test_debounced_search():
 
 **Risk**: Low (well-understood patterns)
 
-### Phase 3: Optimistic Updates (Week 5-6)
+### Phase 3: Caching (Week 5-6)
 
-**Goal**: Instant UI updates before server validation
-
-**Tasks**:
-1. Implement `applyOptimisticUpdate()` heuristics
-2. Handle server corrections (revert on error)
-3. Add conflict resolution
-4. Write tests
-
-**Deliverables**:
-- ✅ @optimistic applies instant updates
-- ✅ Server corrections work
-- ✅ Tests pass
-
-**Risk**: Medium (heuristics may not cover all cases)
-
-### Phase 4: Client State & Caching (Week 7-8)
-
-**Goal**: StateBus and response caching
+**Goal**: Response caching
 
 **Tasks**:
-1. Implement StateBus (pub/sub)
-2. Implement response cache
-3. Add cache invalidation
-4. Write tests
+1. Implement response cache
+2. Add cache invalidation
+3. Write tests
 
 **Deliverables**:
-- ✅ @client_state coordinates components
 - ✅ @cache reduces server requests
 - ✅ Tests pass
 
 **Risk**: Medium (cache invalidation is hard)
 
-### Phase 5: DraftMode & Loading States (Week 9-10)
+### Phase 4: DraftMode & Loading States (Week 7-8)
 
 **Goal**: Form drafts and loading indicators
 
@@ -1603,7 +1437,7 @@ async def test_debounced_search():
 
 **Risk**: Low
 
-### Phase 6: Integration & Documentation (Week 11-12)
+### Phase 5: Integration & Documentation (Week 9-10)
 
 **Goal**: End-to-end testing and docs
 
@@ -1637,8 +1471,6 @@ async def test_debounced_search():
 | Pattern | Before (JS) | After (Python) | Reduction |
 |---------|-------------|----------------|-----------|
 | Debounced search | 35 lines | 0 lines | 100% |
-| Optimistic updates | 45 lines | 0 lines | 100% |
-| StateBus | 85 lines | ~10 lines | 88% |
 | Form drafts | 65 lines | 0 lines | 100% |
 | Response caching | 55 lines | 0 lines | 100% |
 
@@ -1659,7 +1491,7 @@ This architecture delivers Python-only state management that:
 1. **Eliminates JavaScript**: 87% code reduction
 2. **Maintains Performance**: 5KB → 7.1KB bundle (still smallest)
 3. **Stays Pythonic**: Declarative decorators, not imperative JS
-4. **Enables Patterns**: Debounce, throttle, optimistic, state sharing, caching, drafts
+4. **Enables Patterns**: Debounce, throttle, caching, drafts
 5. **Competes with Phoenix**: Matches LiveView/Livewire DX
 
 **Next Steps**:

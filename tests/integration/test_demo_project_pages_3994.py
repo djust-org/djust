@@ -24,7 +24,10 @@ no-data paths) and with one row in each rentals table. A page answers below
   ``request.property.pk`` was empty; the update page also rendered its form
   for a request that does not exist;
 * the rentals edit/delete pages for a pk that does not exist: the not-found
-  return skipped attributes ``get_context_data`` reads.
+  return skipped attributes ``get_context_data`` reads;
+* ``/demos/markdown-stream/``: ``{% djust_markdown %}`` was registered for
+  djust's own engine only, and the page renders through Django's backend
+  (``live_tags`` registers it too now).
 
 ``test_first_paint_handlers_exist`` reads each page's first paint and checks
 that every event name a root-view element names is an ``@event_handler`` on
@@ -50,12 +53,7 @@ from django.urls import URLResolver, get_resolver
 
 pytestmark = pytest.mark.django_db
 
-KNOWN_FAILURES: dict[str, str] = {
-    "/demos/markdown-stream/": (
-        "owner decision: {% djust_markdown %} is a Rust-engine tag and the demo project "
-        "runs Django's own template backend, which cannot parse it (#3994)"
-    ),
-}
+KNOWN_FAILURES: dict[str, str] = {}
 
 # Routes that are not demo pages: framework endpoints mounted by the demo urlconf.
 _NOT_PAGES = (

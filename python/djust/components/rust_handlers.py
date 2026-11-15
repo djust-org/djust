@@ -32,12 +32,13 @@ import decimal
 import json as _json
 import math
 import re as _re_filters
+from collections.abc import Mapping
 from html.parser import HTMLParser
 from typing import Any, cast
 
 from django.utils.functional import Promise
 from django.utils.html import conditional_escape, escape
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeData, mark_safe
 
 
 def _safe(html: str) -> str:
@@ -61,7 +62,13 @@ from djust.components.utils import (
     url_attr,
     data_url_attr,
 )
-from djust.components.utils import attr_text, component_id_attr
+from djust.components.utils import (
+    attr_text,
+    component_id_attr,
+    table_column,
+    table_rows,
+    table_value_is_url,
+)
 from djust.template_tags import TYPED_ARGS_KEY
 from djust.components._operands import STANDIN_TYPES, plain_operand
 
@@ -566,17 +573,35 @@ _ROW_CLICK_SCRIPT = '<script src="/static/djust_components/data-table-row-click.
 _ROW_NAV_A11Y = 'role="button" tabindex="0" style="cursor:pointer"'
 
 
-def _row_text(row: dict[str, object], key: object) -> str:
+_ABSENT = object()
+
+
+def _row_get(row: Mapping[Any, object], key: object, default: object = "") -> object:
+    """``row[key]`` the way the Python tag reads it (``table_cell``: the key as it is, #3895).
+
+    A key that cannot be one (a list, a dict: unhashable in Python) reads ``default``. A row whose
+    keys are not all text reaches the handler as itself (``_with_typed``), so ``{1: "a", "1": "b"}``
+    reads ``a`` for ``1`` and ``b`` for ``"1"``, as in Django. Only when that lookup misses, a
+    key that is not text is tried as its text: a row that crossed as JSON has text keys only, and
+    the text channel re-types a key it is handed (``"5"`` arrives as ``5``, #3882).
+    """
+    try:
+        value = row.get(key, _ABSENT)
+    except TypeError:  # an unhashable key
+        return default
+    if value is _ABSENT and not isinstance(key, str):
+        value = row.get(str(key), _ABSENT)
+    return default if value is _ABSENT else value
+
+
+def _row_text(row: Mapping[Any, object], key: object) -> str:
     """``row[key]`` as text, the way the Python tag reads it (``table_cell``, #3870).
 
-    A key the row lacks, and a key that cannot be one (a list, a dict: unhashable in Python), are
-    ``""``. A value that is not text is written with ``str()``: ``None`` is ``"None"``, a number is
-    not localised. The Python tag reads a row it is given; this one is handed the row after a JSON
-    round trip, so a non-text key is looked up as the text its row key became (``5`` is ``"5"``).
+    A key the row lacks, and a key that cannot be one, are ``""``. A value that is not text is
+    written with ``str()``: ``None`` is ``"None"``, a number is not localised. The key is read as
+    :func:`_row_get` reads it.
     """
-    if isinstance(key, (list, dict, set)):
-        return ""
-    value = row.get(key if isinstance(key, str) else str(key), "")
+    value = _row_get(row, key)
     return value if isinstance(value, str) else str(value)
 
 
@@ -594,12 +619,60 @@ def _row_href(row: dict[str, object], key: object) -> str:
 
 def _has_row_href(row: dict[str, object], key: object) -> bool:
     """Whether ``row[key]`` is a URL at all (#3895): not for a key the row lacks (or cannot
-    have), ``None`` or blank text. The Python tag's ``table_has_href``: a link column draws plain
-    text and a ``row_url`` row is not clickable, instead of ``href="None"`` / ``href=""``."""
-    if isinstance(key, (list, dict, set)):
-        return False
-    value = row.get(key if isinstance(key, str) else str(key))
-    return value is not None and str(value).strip() != ""
+    have), ``None``, blank text or ``NaN`` / an infinity. The Python tag's ``table_has_href``
+    (both ask ``table_value_is_url``): a link column draws plain text and a ``row_url`` row is not
+    clickable, instead of ``href="None"`` / ``href=""`` / ``href="nan"``."""
+    return table_value_is_url(_row_get(row, key, None))
+
+
+#: The types whose ``str()`` never holds a character HTML escaping changes (#3895 performance).
+_NO_MARKUP_TYPES = frozenset({int, float, bool, type(None)})
+
+
+def _text_lost(value: object) -> bool:
+    """A cell value its row's JSON text cannot carry (#3895): a developer's ``mark_safe`` string
+    (the text is plain) and ``NaN`` / an infinity (the text is ``null``)."""
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    return isinstance(value, str) and isinstance(value, SafeData)
+
+
+def _with_typed(text_value: object, typed_value: object) -> object:
+    """``text_value`` (what the handler parsed from its string argument) with what its JSON text
+    lost put back from ``typed_value``, the same operand as the engine resolved it (#3895).
+
+    The engine hands that typed value over only for a list or dict holding such a member
+    (``text_loses_a_member``, ``crates/djust_templates/src/renderer.rs``). Item by item:
+
+    * a dict item keeps its text, plus each value of the typed one that is :func:`_text_lost`;
+    * an item the text could not hold at all (a namedtuple became a list, an object its
+      ``str()``) is the typed item itself, which ``table_row`` / ``table_column`` then read.
+    """
+    if not isinstance(text_value, list) or not isinstance(typed_value, (list, tuple)):
+        return text_value
+    if len(typed_value) != len(text_value):
+        return text_value
+    merged: list[object] = []
+    for text_item, typed_item in zip(text_value, typed_value):
+        if isinstance(text_item, dict) and isinstance(typed_item, Mapping):
+            if any(not isinstance(k, str) for k in typed_item):
+                # A key that is not text was made text by JSON (``1`` and ``"1"`` are one key
+                # there): the row is read with its own keys, as Django reads it.
+                merged.append(dict(typed_item))
+                continue
+            lost = {
+                (k if isinstance(k, str) else str(k)): v
+                for k, v in typed_item.items()
+                if isinstance(k, (str, int)) and not isinstance(k, bool) and _text_lost(v)
+            }
+            merged.append({**text_item, **lost} if lost else text_item)
+        elif not isinstance(text_item, dict) and not isinstance(
+            typed_item, (str, int, float, type(None))
+        ):
+            merged.append(typed_item)
+        else:
+            merged.append(text_item)
+    return merged
 
 
 class DataTableHandler:
@@ -746,6 +819,23 @@ class DataTableHandler:
             rows = []
         if not isinstance(columns, (list, tuple)):
             columns = []
+        # What the JSON text of ``rows`` / ``columns`` lost, from the typed channel (#3895): a
+        # ``mark_safe`` cell, ``NaN``, a namedtuple or object column, an object row. Then both
+        # read the way the Python tag reads them (``table_column`` / ``table_rows``).
+        typed = _typed_args(context)
+        typed_columns = typed.get("columns") if "columns" in kw else None
+        if isinstance(typed_columns, (list, tuple)) and len(typed_columns) == len(columns):
+            # A column list is short: when its text lost anything (a function, a namedtuple, an
+            # object, a ``mark_safe`` label), the typed columns are read whole, as Django does.
+            columns = list(typed_columns)
+        columns = [table_column(col) for col in columns]
+        if "rows" in kw:
+            rows = _with_typed(rows, typed.get("rows"))
+        row_keys: list[object] = ["id", row_key, row_url, row_click_value_key]
+        for col in columns:
+            if isinstance(col, dict):
+                row_keys += [col.get("key"), col.get("link")]
+        rows = table_rows(rows, row_keys)
         if not isinstance(selected_rows, (list, tuple)):
             selected_rows = []
         if not isinstance(filters, dict):
@@ -854,10 +944,10 @@ class DataTableHandler:
             vis_items = ""
             for col in columns:
                 if isinstance(col, dict):
-                    ckey = conditional_escape(str(col.get("key", "")))
-                    clabel = conditional_escape(str(col.get("label", ckey)))
+                    ckey = escape(str(col.get("key", "")))
+                    clabel = escape(str(col.get("label", col.get("key", ""))))
                 else:
-                    ckey = clabel = conditional_escape(str(col))
+                    ckey = clabel = escape(str(col))
                 vis_items += (
                     f'<label class="data-table-visibility-item">'
                     f'<input type="checkbox" checked data-col-key="{ckey}"> {clabel}'
@@ -892,7 +982,7 @@ class DataTableHandler:
         if exportable:
             export_btns = ""
             for fmt in export_formats:
-                fmt_esc = conditional_escape(str(fmt))
+                fmt_esc = escape(str(fmt))
                 label = fmt_esc.upper()
                 export_btns += (
                     f'<button type="button" class="data-table-export-btn"'
@@ -913,7 +1003,7 @@ class DataTableHandler:
         if importable:
             import_btns = ""
             for ifmt in import_formats:
-                ifmt_esc = conditional_escape(str(ifmt))
+                ifmt_esc = escape(str(ifmt))
                 label = ifmt_esc.upper()
                 import_btns += (
                     f'<button type="button" class="data-table-import-btn"'
@@ -934,10 +1024,10 @@ class DataTableHandler:
             ba_btns = ""
             for ba in bulk_actions:
                 if isinstance(ba, dict):
-                    ba_key = conditional_escape(str(ba.get("key", "")))
-                    ba_label = conditional_escape(str(ba.get("label", ba_key)))
+                    ba_key = escape(str(ba.get("key", "")))
+                    ba_label = escape(str(ba.get("label", ba.get("key", ""))))
                 else:
-                    ba_key = ba_label = conditional_escape(str(ba))
+                    ba_key = ba_label = escape(str(ba))
                 ba_btns += (
                     f'<button type="button" class="data-table-bulk-btn"'
                     f' dj-click="{bulk_action_event}" data-value="{ba_key}">'
@@ -989,8 +1079,13 @@ class DataTableHandler:
         filter_cells = []
         for col_idx, col in enumerate(columns):
             if isinstance(col, dict):
-                key = conditional_escape(str(col.get("key", "")))
-                col_label = conditional_escape(str(col.get("label", key)))
+                # The key is only ever an attribute value: escaped whatever it is marked. The label
+                # is the header's text, where a ``mark_safe`` label is kept as ``table.html``
+                # keeps it (``{{ col.label }}``), and escaped again where it is an attribute.
+                raw_label = col.get("label", str(col.get("key", "")))
+                key = escape(str(col.get("key", "")))
+                col_label = conditional_escape(str(raw_label))
+                col_label_attr = escape(str(raw_label))
                 # ``None`` is "not given", as in the Python template (``default_if_none``): only
                 # an explicit ``False`` (or any other falsy value) makes a column unsortable.
                 sortable = col.get("sortable")
@@ -1001,7 +1096,7 @@ class DataTableHandler:
                 filter_options = col.get("filter_options", [])
                 width = col.get("width", "")
             else:
-                key = col_label = conditional_escape(str(col))
+                key = col_label = col_label_attr = escape(str(col))
                 sortable = True
                 filterable = False
                 filter_type = "text"
@@ -1058,20 +1153,20 @@ class DataTableHandler:
             if has_filters:
                 frozen_f = f' class="{frozen_cls.strip()}"' if frozen_cls else ""
                 if filterable:
-                    filter_val = conditional_escape(str(filters.get(key, "")))
+                    filter_val = escape(str(filters.get(key, "")))
                     if filter_type == "select":
                         opts_html = '<option value="">All</option>'
                         for opt in filter_options:
                             if isinstance(opt, dict):
-                                opt_val = conditional_escape(str(opt.get("value", "")))
-                                opt_label = conditional_escape(str(opt.get("label", opt_val)))
+                                opt_val = escape(str(opt.get("value", "")))
+                                opt_label = escape(str(opt.get("label", opt.get("value", ""))))
                             else:
-                                opt_val = opt_label = conditional_escape(str(opt))
+                                opt_val = opt_label = escape(str(opt))
                             selected = " selected" if opt_val == filter_val else ""
                             opts_html += f'<option value="{opt_val}"{selected}>{opt_label}</option>'
                         filter_cells.append(
                             f'<th{frozen_f}><select class="data-table-filter"'
-                            f' aria-label="Filter {col_label}"'
+                            f' aria-label="Filter {col_label_attr}"'
                             f' dj-input="{filter_event}" data-column="{key}">'
                             f"{opts_html}"
                             f"</select></th>"
@@ -1079,7 +1174,7 @@ class DataTableHandler:
                     else:
                         filter_cells.append(
                             f'<th{frozen_f}><input type="text" class="data-table-filter"'
-                            f' aria-label="Filter {col_label}"'
+                            f' aria-label="Filter {col_label_attr}"'
                             f' placeholder="Filter..."'
                             f' value="{filter_val}"'
                             f' dj-input="{filter_event}" data-column="{key}">'
@@ -1093,8 +1188,8 @@ class DataTableHandler:
             for cc in computed_columns:
                 if not isinstance(cc, dict):
                     continue
-                cc_key = conditional_escape(str(cc.get("key", "")))
-                cc_label = conditional_escape(str(cc.get("label", cc_key)))
+                cc_key = escape(str(cc.get("key", "")))
+                cc_label = escape(str(cc.get("label", cc.get("key", ""))))
                 header_cells.append(
                     f'<th class="data-table-computed-header" role="columnheader"'
                     f' data-col-key="{cc_key}">{cc_label}</th>'
@@ -1110,12 +1205,10 @@ class DataTableHandler:
                     key = col.get("key", "")
                 else:
                     key = str(col)
-                key_esc = conditional_escape(str(key))
+                key_esc = escape(str(key))
                 if key in column_expressions:
-                    expr_val = conditional_escape(str(active_expressions.get(key, "")))
-                    placeholder = conditional_escape(
-                        str(column_expressions.get(key, "Expression..."))
-                    )
+                    expr_val = escape(str(active_expressions.get(key, "")))
+                    placeholder = escape(str(column_expressions.get(key, "Expression...")))
                     expression_cells.append(
                         f'<th><input type="text" class="data-table-expression"'
                         f' aria-label="Expression filter {key_esc}"'
@@ -1239,6 +1332,18 @@ class DataTableHandler:
             + (1 if row_drag else 0)
         )
 
+        # Phase 5: every renderable column (base + computed), and what each cell reads off its
+        # column, worked out once per table rather than once per row.
+        all_columns = list(columns)
+        if computed_columns:
+            all_columns = list(columns) + [cc for cc in computed_columns if isinstance(cc, dict)]
+        column_keys: list[tuple[object, str, object]] = []
+        for col in all_columns:
+            col_k = col.get("key", col) if isinstance(col, dict) else col
+            column_keys.append(
+                (col_k, str(col_k), col.get("type", "") if isinstance(col, dict) else "")
+            )
+
         # --- Helper: render a single row ---
         def _render_row(row: object) -> str:
             if not isinstance(row, dict):
@@ -1260,13 +1365,13 @@ class DataTableHandler:
                     if isinstance(rcm_map, dict):
                         rcm_val = str(row.get(rcm_col, ""))
                         if rcm_val in rcm_map:
-                            row_classes.append(conditional_escape(str(rcm_map[rcm_val])))
-            row_attrs += f' data-row-key="{conditional_escape(row_id)}"'
+                            row_classes.append(escape(str(rcm_map[rcm_val])))
+            row_attrs += f' data-row-key="{escape(row_id)}"'
             if row_click_event:
                 row_classes.append("data-table-row-clickable")
                 row_attrs += (
                     f' dj-click="{row_click_event}"'
-                    f' data-value="{conditional_escape(str(row.get(row_click_value_key, "")))}"'
+                    f' data-value="{escape(str(row.get(row_click_value_key, "")))}"'
                     f" {_ROW_NAV_A11Y}"
                 )
             elif row_url and _has_row_href(row, row_url):
@@ -1293,7 +1398,7 @@ class DataTableHandler:
                     f'<button type="button" class="data-table-expand-btn"'
                     f' aria-label="Expand row" aria-expanded="{"true" if is_expanded else "false"}"'
                     f' dj-click="{expand_event}"'
-                    f' data-value="{conditional_escape(row_id)}">{exp_icon}</button>'
+                    f' data-value="{escape(row_id)}">{exp_icon}</button>'
                     f"</td>"
                 )
 
@@ -1304,15 +1409,8 @@ class DataTableHandler:
                     f' aria-label="Select row"'
                     f"{checked}"
                     f' dj-click="{select_event}"'
-                    f' data-value="{conditional_escape(row_id)}"></td>'
+                    f' data-value="{escape(row_id)}"></td>'
                 )
-
-            # Phase 5: build list of all renderable columns (base + computed)
-            all_columns = list(columns)
-            if computed_columns:
-                all_columns = list(columns) + [
-                    cc for cc in computed_columns if isinstance(cc, dict)
-                ]
 
             # Phase 5: cell merge data for this row
             merge_data = row.get(cell_merge_key, {}) if isinstance(row, dict) else {}
@@ -1321,30 +1419,38 @@ class DataTableHandler:
             skip_cols = set()  # column indices to skip (merged into previous cell)
 
             # Pre-compute which columns are merged away
-            for col_idx, col in enumerate(all_columns):
-                col_k = col.get("key", col) if isinstance(col, dict) else col
-                col_k_str = str(col_k)
-                colspan = merge_data.get(col_k_str, 1)
-                if isinstance(colspan, int) and colspan > 1:
-                    for offset in range(1, colspan):
-                        if col_idx + offset < len(all_columns):
-                            skip_cols.add(col_idx + offset)
+            if merge_data:
+                for col_idx, (_k, col_k_str, _t) in enumerate(column_keys):
+                    colspan = merge_data.get(col_k_str, 1)
+                    if isinstance(colspan, int) and colspan > 1:
+                        for offset in range(1, colspan):
+                            if col_idx + offset < len(all_columns):
+                                skip_cols.add(col_idx + offset)
 
             for col_idx, col in enumerate(all_columns):
                 if col_idx in skip_cols:
                     continue  # This cell is merged into a previous colspan
-                col_k = col.get("key", col) if isinstance(col, dict) else col
-                col_k_str = str(col_k)
-                raw_val = row.get(col_k_str, "")
-                # Phase 4: column type formatting
-                col_type = col.get("type", "") if isinstance(col, dict) else ""
+                col_k, col_k_str, col_type = column_keys[col_idx]
+                try:  # the common case, a key the row has, without a call
+                    raw_val = row[col_k]
+                except (KeyError, TypeError):
+                    raw_val = _row_get(row, col_k)
+                # Phase 4: column type formatting (``col_type``, read once per column)
                 if col_type and raw_val is not None and raw_val != "":
-                    cell_val = conditional_escape(_format_cell(raw_val, col))
+                    cell_text = _format_cell(raw_val, col)
                 else:
-                    cell_val = conditional_escape(str(raw_val))
+                    cell_text = str(raw_val)
+                # The cell's text keeps a developer's ``mark_safe`` (``table.html`` writes
+                # ``{{ row|table_cell:col.key }}``, #3895); as an attribute value (only a
+                # ``cell_template`` writes one) it is escaped. The text of a number, a bool or
+                # ``None`` has no character to escape: it is written as it is (most cells).
+                if not col_type and type(raw_val) in _NO_MARKUP_TYPES:
+                    cell_val = cell_text
+                else:
+                    cell_val = conditional_escape(cell_text)
                 col_label_for_card = ""
                 if responsive_cards and isinstance(col, dict):
-                    col_label_for_card = conditional_escape(str(col.get("label", col_k_str)))
+                    col_label_for_card = escape(str(col.get("label", col_k_str)))
 
                 # Frozen / pinned class for td
                 td_classes = []
@@ -1361,7 +1467,7 @@ class DataTableHandler:
                     td_classes.append("data-table-frozen-right")
                 # Phase 4: column type class
                 if col_type:
-                    td_classes.append(f"data-table-type-{conditional_escape(col_type)}")
+                    td_classes.append(f"data-table-type-{escape(col_type)}")
                 # Phase 4: cell_class from column config
                 cell_class = col.get("cell_class", "") if isinstance(col, dict) else ""
                 if cell_class:
@@ -1369,13 +1475,18 @@ class DataTableHandler:
                     if isinstance(cell_class, dict):
                         cc_val = str(raw_val)
                         if cc_val in cell_class:
-                            td_classes.append(conditional_escape(str(cell_class[cc_val])))
+                            td_classes.append(escape(str(cell_class[cc_val])))
                     elif isinstance(cell_class, str):
-                        td_classes.append(conditional_escape(cell_class))
+                        td_classes.append(escape(cell_class))
 
                 # Phase 5: conditional formatting
                 cf_html = ""
-                if conditional_formatting and raw_val is not None and raw_val != "":
+                if (
+                    conditional_formatting
+                    and raw_val is not None
+                    and raw_val != ""
+                    and not (isinstance(raw_val, float) and not math.isfinite(raw_val))
+                ):
                     for cf_preset in conditional_formatting:
                         if not isinstance(cf_preset, dict):
                             continue
@@ -1440,10 +1551,10 @@ class DataTableHandler:
                 # Cell renderer
                 cell_template = col.get("cell_template", "") if isinstance(col, dict) else ""
                 if cell_template:
-                    cell_tpl_esc = conditional_escape(str(cell_template))
+                    cell_tpl_esc = escape(str(cell_template))
                     cell_val = (
                         f'<span class="cell-renderer cell-renderer-{cell_tpl_esc}"'
-                        f' data-value="{cell_val}">{cell_val}</span>'
+                        f' data-value="{escape(cell_text)}">{cell_val}</span>'
                     )
 
                 # Link column (#3887, #1110): ``col.link`` names the row key holding the href,
@@ -1473,18 +1584,18 @@ class DataTableHandler:
 
                 # Editable row mode: all cells become inputs when row is editing
                 if editable_rows and is_editing:
-                    raw_val = conditional_escape(str(row.get(col_k_str, "")))
+                    raw_val = escape(str(_row_get(row, col_k)))
                     cells += (
                         f"<td{td_cls_str}{label_attr}{colspan_attr}>"
                         f'<input type="text" value="{raw_val}"'
-                        f' name="{conditional_escape(col_k_str)}"'
-                        f' aria-label="Edit {conditional_escape(col_k_str)}">'
+                        f' name="{escape(col_k_str)}"'
+                        f' aria-label="Edit {escape(col_k_str)}">'
                         f"</td>"
                     )
                 elif is_col_editable:
                     cells += (
                         f'<td data-editable="true"'
-                        f' data-col-key="{conditional_escape(col_k_str)}"'
+                        f' data-col-key="{escape(col_k_str)}"'
                         f"{td_cls_str}{label_attr}{colspan_attr}>"
                         f"{cell_val}</td>"
                     )
@@ -1500,17 +1611,17 @@ class DataTableHandler:
                         f'<td class="data-table-row-actions">'
                         f'<button class="save-btn"'
                         f' dj-click="{save_row_event}"'
-                        f' data-value="{conditional_escape(row_id)}">Save</button>'
+                        f' data-value="{escape(row_id)}">Save</button>'
                         f' <button class="cancel-btn"'
                         f' dj-click="{cancel_row_event}"'
-                        f' data-value="{conditional_escape(row_id)}">Cancel</button>'
+                        f' data-value="{escape(row_id)}">Cancel</button>'
                         f"</td>"
                     )
                 else:
                     cells += (
                         f'<td class="data-table-row-actions">'
                         f'<button dj-click="{edit_row_event}"'
-                        f' data-value="{conditional_escape(row_id)}">Edit</button>'
+                        f' data-value="{escape(row_id)}">Edit</button>'
                         f"</td>"
                     )
 
@@ -1530,7 +1641,7 @@ class DataTableHandler:
                     f'<tr class="data-table-detail-row">'
                     f'<td colspan="{total_cols}" class="data-table-detail-cell">'
                     f'<div class="data-table-detail-content"'
-                    f' data-row-key="{conditional_escape(row_id)}"></div>'
+                    f' data-row-key="{escape(row_id)}"></div>'
                     f"</td></tr>"
                 )
 
@@ -1553,7 +1664,7 @@ class DataTableHandler:
                     groups[val].append(row)
 
                 for gval in group_order:
-                    g_esc = conditional_escape(gval)
+                    g_esc = escape(gval)
                     is_collapsed = gval in collapsed_group_set
                     toggle_attr = ""
                     if collapsible_groups:
@@ -1649,7 +1760,11 @@ class DataTableHandler:
                     for r in rows:
                         if isinstance(r, dict):
                             v = r.get(col_k_str)
-                            if v is not None:
+                            # ``NaN`` / an infinity was ``None`` before #3895 handed it over: still
+                            # left out of the aggregate, as then.
+                            if v is not None and not (
+                                isinstance(v, float) and not math.isfinite(v)
+                            ):
                                 try:
                                     vals.append(float(v))
                                 except (ValueError, TypeError):
@@ -1669,7 +1784,7 @@ class DataTableHandler:
                             agg_val = max(vals)
                     agg_label = conditional_escape(str(agg_type).capitalize())
                     agg_cells.append(
-                        f'<td class="data-table-footer-agg" data-agg-type="{conditional_escape(str(agg_type))}">'
+                        f'<td class="data-table-footer-agg" data-agg-type="{escape(str(agg_type))}">'
                         f'<span class="data-table-agg-label">{agg_label}:</span> '
                         f'<span class="data-table-agg-value">{agg_val}</span>'
                         f"</td>"
@@ -2477,7 +2592,9 @@ class FormArrayHandler:
 
         rows_html = []
         for i, row in enumerate(rows):
-            val = conditional_escape(str(row.get("value", "") if isinstance(row, dict) else row))
+            # ``value="..."`` is an attribute: escaped whatever the member is marked (a tuple
+            # ``rows=`` hands the handler its members as they are).
+            val = escape(str(row.get("value", "") if isinstance(row, dict) else row))
             remove_html = ""
             if can_remove:
                 remove_html = (
