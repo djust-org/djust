@@ -393,14 +393,18 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
     It collects the whole suite, which the local load guard refuses outside GitHub
     Actions, so a local run skips here instead of failing with the guard's refusal
     (#4089). Since #4111 only ``GITHUB_ACTIONS=true`` lifts the guard; a bare ``CI`` or
-    ``DJUST_FULL_LOCAL`` no longer does, so the pin runs on every PR's CI.
+    ``DJUST_FULL_LOCAL`` no longer does. Its explicit ``slow`` marker (#2790) keeps it out of
+    the PR and merge-queue tier (``-m "not slow"``; ``pr_tier`` does not override an explicit
+    ``slow``), so in CI it runs on pushes to ``main``, the nightly, and a PR labelled
+    ``full-tests``.
     """
     from tests import local_load_guard
 
     if local_load_guard.active():
         pytest.skip(
             "collects the whole suite, which the local load guard refuses outside GitHub "
-            "Actions: it runs in CI (GITHUB_ACTIONS=true) on every pull request (#4111)"
+            "Actions: it runs in CI (GITHUB_ACTIONS=true) on pushes to main and the nightly "
+            "(#4111)"
         )
     output = tmp_path / "shards.json"
     assert DURATIONS_TEXT is not None, ".test_durations is missing"
