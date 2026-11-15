@@ -290,7 +290,7 @@ view with persisted state (after its first event).
 |  | Session loads | Session saves | `SELECT`s on `django_session` | `UPDATE`s on `django_session` |
 |---|---|---|---|---|
 | WebSocket event on a mounted view | 1<br><sub>`test_session_cost_per_event`</sub> | 1<br><sub>`test_session_cost_per_event`</sub> | 2<br><sub>`test_session_cost_per_event`</sub> | 1<br><sub>`test_session_cost_per_event`</sub> |
-| HTTP fallback event (page POST) | 1<br><sub>`test_session_cost_per_event`</sub> | 2<br><sub>`test_session_cost_per_event`</sub> | 1<br><sub>`test_session_cost_per_event`</sub> | 2<br><sub>`test_session_cost_per_event`</sub> |
+| HTTP fallback event (page POST) | 1<br><sub>`test_session_cost_per_event`</sub> | 2<br><sub>`test_session_cost_per_event`</sub> | 2<br><sub>`test_session_cost_per_event`</sub> | 2<br><sub>`test_session_cost_per_event`</sub> |
 <!-- END GENERATED survival-cost -->
 
 ## Not covered here

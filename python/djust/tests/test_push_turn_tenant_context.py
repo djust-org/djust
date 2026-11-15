@@ -14,7 +14,6 @@ from channels.layers import get_channel_layer
 from django.test import override_settings
 
 from djust import LiveView
-from djust.config import config as djust_config
 from djust.push import apush_to_view, push_to_view
 from djust.tenants.mixin import TenantMixin
 from djust import state
@@ -77,14 +76,43 @@ class _RelayView(TenantMixin, LiveView):
         _bound("async-from-push")
 
 
+class _Paths:
+    """The push-turn path a test runs on, and how many one-hop pool turns ran."""
+
+    def __init__(self, size):
+        self.size = size
+        self.offloaded = 0
+
+    def assert_ran(self):
+        # A "pool" case that silently ran stock would prove nothing.
+        if self.size:
+            assert self.offloaded > 0, "the pool case ran no one-hop push turn"
+        else:
+            assert self.offloaded == 0, self.offloaded
+
+
 @pytest.fixture(params=[None, 2], ids=["stock", "pool"])
 def pool(request, monkeypatch):
+    """Both push-turn paths. ``worker_threads`` goes inside the overridden
+    ``DJUST_CONFIG``: overriding that setting reloads djust's config, which
+    drops a value patched into the loaded one."""
     from djust import worker_pool
+    from djust.websocket import LiveViewConsumer
 
-    monkeypatch.setitem(djust_config._config, "worker_threads", request.param)
     monkeypatch.setattr(worker_pool, "_pool", [])
+    paths = _Paths(request.param)
+    real = LiveViewConsumer._run_server_push_turn_offloaded
+
+    async def offloaded(self, *args, **kwargs):
+        paths.offloaded += 1
+        return await real(self, *args, **kwargs)
+
+    monkeypatch.setattr(LiveViewConsumer, "_run_server_push_turn_offloaded", offloaded)
     SEEN.clear()
-    yield request.param
+    with override_settings(
+        **dict(SETTINGS, DJUST_CONFIG={**CONFIG, "worker_threads": request.param})
+    ):
+        yield paths
     SEEN.clear()
 
 
@@ -93,7 +121,6 @@ SETTINGS = dict(ALLOWED_HOSTS=HOSTS, DJUST_CONFIG=CONFIG, LIVEVIEW_ALLOWED_MODUL
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@override_settings(**SETTINGS)
 async def test_a_push_hook_and_its_async_work_run_with_the_views_tenant(pool):
     a = await _connect(VIEW, ACME, "general")
     try:
@@ -108,13 +135,13 @@ async def test_a_push_hook_and_its_async_work_run_with_the_views_tenant(pool):
             await __import__("asyncio").sleep(0.05)
         assert ("push-hook", "acme") in SEEN
         assert ("async-from-push", "acme") in SEEN
+        pool.assert_ran()
     finally:
         await a.disconnect()
 
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@override_settings(**SETTINGS)
 async def test_a_hook_that_relays_reaches_its_own_tenants_sessions_only(pool):
     a1 = await _connect(VIEW, ACME, "general")
     a2 = await _connect(VIEW, ACME, "general")
@@ -142,6 +169,7 @@ async def test_a_hook_that_relays_reaches_its_own_tenants_sessions_only(pool):
         frames = await _frames_until(b1, "BARRIER")
         assert not _saw(frames, "RELAYED")
         assert not _saw(await drain_extra(b1), "RELAYED")
+        pool.assert_ran()
     finally:
         for comm in (a1, a2, b1):
             await comm.disconnect()
@@ -149,7 +177,6 @@ async def test_a_hook_that_relays_reaches_its_own_tenants_sessions_only(pool):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@override_settings(**SETTINGS)
 async def test_handle_info_runs_with_the_views_tenant_and_can_relay(pool):
     a1 = await _connect(VIEW, ACME, "general")
     b1 = await _connect(VIEW, GLOBEX, "general")
@@ -168,6 +195,7 @@ async def test_handle_info_runs_with_the_views_tenant_and_can_relay(pool):
             frames = frames + await drain_extra(comm)
             assert _saw(frames, "[FROM-NOTIFY]")
             assert not _saw(frames, "[FROM-NOTIFY][FROM-NOTIFY]")
+        pool.assert_ran()
     finally:
         for comm in (a1, b1):
             await comm.disconnect()

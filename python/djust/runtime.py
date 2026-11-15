@@ -451,15 +451,10 @@ def _save_session_writes(view: Any) -> None:
     """Store what the turn's handler wrote to ``request.session`` when the
     view's own state could not be saved (over its limit, option A): the
     refusal left the session dict untouched apart from those writes."""
-    from ._session_merge import is_tracked, save_merged
+    from ._session_merge import save_session_writes
 
     request = getattr(view, "_djust_event_request", None)
-    session = getattr(request, "session", None)
-    if session is None or not is_tracked(session):
-        return
-    data = session._session_cache
-    if data.has_foreign_changes():
-        save_merged(session, session.session_key)
+    save_session_writes(getattr(request, "session", None))
 
 
 def _is_refusal(exc: BaseException) -> bool:
@@ -6365,26 +6360,44 @@ class ViewRuntime(RuntimeTurnPort):
         deny with :meth:`deny_explicit_turn` and never stringify the exception.
         """
         from ._exposure import ExposureError
-        from ._exposure_auth import aauthorize_event, authorize_event, fresh_socket_request
+        from ._exposure_auth import aauthorize_event, fresh_socket_request
         from .auth.core import enforce_object_permission, has_async_check_permissions
+
+        if not has_async_check_permissions(view):
+            return await sync_to_async(self.authorize_explicit_turn_sync)(view)
+        binding = self._explicit_mount_binding
+        if view is None or view is not self.view_instance or binding is None:
+            raise ExposureError("Explicit turn has no mounted owner")
+        # ``async def check_permissions``: awaited on the loop, not the sync thread.
+        request = await aauthorize_event(
+            view, await sync_to_async(fresh_socket_request)(view), binding
+        )
+        await sync_to_async(enforce_object_permission)(view, request)
+        # Authorization hooks are application code; their success does not
+        # prove the owner was left in place.
+        if view is not self.view_instance:
+            raise ExposureError("Explicit turn owner replaced during authorization")
+        view._djust_event_request = request
+        return request
+
+    def authorize_explicit_turn_sync(self, view: Any) -> Any:
+        """The synchronous body of :meth:`authorize_explicit_turn`.
+
+        For a view whose ``check_permissions`` is not ``async def``: the whole
+        check (owner, fresh session and Django auth, object permission, owner
+        again, stash) in one call on a Django thread. The worker-pool push turn
+        (#4152) runs it inside the same hop as the push hooks, before them.
+        Raises on any failure, like the async form.
+        """
+        from ._exposure import ExposureError
+        from ._exposure_auth import authorize_event, fresh_socket_request
+        from .auth.core import enforce_object_permission
 
         binding = self._explicit_mount_binding
         if view is None or view is not self.view_instance or binding is None:
             raise ExposureError("Explicit turn has no mounted owner")
-
-        def _authorize() -> Any:
-            request = authorize_event(view, fresh_socket_request(view), binding)
-            enforce_object_permission(view, request)
-            return request
-
-        if has_async_check_permissions(view):
-            # ``async def check_permissions``: awaited on the loop, not the sync thread.
-            request = await aauthorize_event(
-                view, await sync_to_async(fresh_socket_request)(view), binding
-            )
-            await sync_to_async(enforce_object_permission)(view, request)
-        else:
-            request = await sync_to_async(_authorize)()
+        request = authorize_event(view, fresh_socket_request(view), binding)
+        enforce_object_permission(view, request)
         # Authorization hooks are application code; their success does not
         # prove the owner was left in place.
         if view is not self.view_instance:
@@ -8309,6 +8322,9 @@ class ViewRuntime(RuntimeTurnPort):
                 return
             finally:
                 view.__dict__.pop("_djust_event_request", None)
+        # The request the callback runs with: what it writes to its session is
+        # committed with the result, under the result's own authorization (#4162).
+        callback_request = view.request
 
         result = error = None
         try:
@@ -8345,6 +8361,35 @@ class ViewRuntime(RuntimeTurnPort):
                         if self.view_instance is view:
                             await self.deny_explicit_turn()
                         return
+                    from ._session_merge import carry_session_writes
+
+                    carry_session_writes(
+                        getattr(callback_request, "session", None),
+                        getattr(view.request, "session", None),
+                    )
+
+                    async def keep_session_writes() -> None:
+                        # A failure renders and saves nothing of the view, but
+                        # what the work wrote to the session before it is kept,
+                        # with or without ``handle_async_result``: the work's
+                        # other effects stand too, and the fallback, which runs
+                        # the work inside its request, keeps them (#4162).
+                        try:
+                            await sync_to_async(_save_session_writes)(view)
+                        except Exception as exc:  # noqa: BLE001 — storage errors carry values
+                            from ._exposure_diagnostics import log_failure_for
+
+                            log_failure_for(
+                                logger,
+                                (view,),
+                                exc,
+                                "Runtime: session writes of task '%s' not stored: %s",
+                                task_name,
+                                exc,
+                                level="warning",
+                                traceback=True,
+                            )
+
                     handler = getattr(view, "handle_async_result", None)
                     if callable(handler):
                         try:
@@ -8363,9 +8408,11 @@ class ViewRuntime(RuntimeTurnPort):
                                 level="warning",
                                 traceback=True,
                             )
+                            await keep_session_writes()
                             return
                     elif error is not None:
                         # Legacy parity: an unhandled failure renders nothing.
+                        await keep_session_writes()
                         return
                     if self.view_instance is not view:
                         return

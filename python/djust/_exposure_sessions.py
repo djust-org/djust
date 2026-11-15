@@ -431,6 +431,13 @@ def save_server_state(view: Any, request: Any, *, page_load: bool = False) -> No
             if modified_before is not None:
                 session.modified = modified_before
             raise
+    else:
+        # Nothing of the view's own to write: what the turn's handler wrote to
+        # ``request.session`` itself (an assignment, a removal, an in-place
+        # change to a value it read) is still stored before the reply (#4162).
+        from ._session_merge import save_session_writes
+
+        save_session_writes(getattr(request, "session", None))
 
 
 def reapply_saved_state(view: Any) -> None:

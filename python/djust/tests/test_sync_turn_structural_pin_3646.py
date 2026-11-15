@@ -634,9 +634,11 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "self.view_instance.render_with_diff",
     ): plumbing(_RENDER, _GET_TEMPLATE),
     ("runtime.py", "ViewRuntime.authorize_explicit_turn", "enforce_object_permission"): leaf(),
-    ("runtime.py", "ViewRuntime.authorize_explicit_turn", "_authorize"): plumbing(
-        _AUTH_OF_CHILD, _TENANT
-    ),
+    (
+        "runtime.py",
+        "ViewRuntime.authorize_explicit_turn",
+        "self.authorize_explicit_turn_sync",
+    ): plumbing(_AUTH_OF_CHILD, _TENANT),
     ("runtime.py", "ViewRuntime._flush_pending_layout", "render_pending_layout"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_async_result", "view._sync_state_to_rust"): plumbing(
         _RENDER, _GET_TEMPLATE
@@ -706,6 +708,13 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     # Over the size limit with saves deferred, the session writes of a turn
     # whose own state could not be saved (option A): a session write only.
     ("runtime.py", "ViewRuntime.commit_explicit_turn", "_save_session_writes"): plumbing(_SESSION),
+    # Background work that failed: its session writes, under the result's
+    # authorization, without saving the view (#4162).
+    (
+        "runtime.py",
+        "ViewRuntime._execute_explicit_async_task.complete.keep_session_writes",
+        "_save_session_writes",
+    ): plumbing(_SESSION),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "codec.capture"): plumbing(_RENDER),
     # The same three calls in one hop (#3997): the session binding read, then
     # the codec and the signature (render plumbing, as the entries above).
