@@ -5,7 +5,8 @@ but ``table.html`` reads ``col.key``, and a filter argument that does not resolv
 ``VariableDoesNotExist``: the page's first render, the one under Django's engine, failed. The
 Python tag now reads any column that is not a dict as the column whose key and label are its text
 (an ``int`` keeps its value as the key), and that text is plain even when it is marked safe. Only
-scalars: an object column (a class, a namedtuple) keeps its attribute reading (#3894).
+scalars: an object column (a class, a namedtuple) keeps its attribute reading (#3894), on both
+engines since #3895 item 7.
 
 The comparison is the body rows and the header labels. The header's other attributes and the
 native ``data-row-key`` differ for every column shape, dicts included (#3663, #3869), so they are
@@ -144,15 +145,13 @@ def test_an_object_column_is_read_through_its_attributes_in_python(name: str) ->
 
 
 @pytest.mark.parametrize("name", sorted(OBJECT_COLUMNS))
-def test_an_object_column_natively_is_its_serialised_text(name: str) -> None:
-    """Pinned for a decision (#3895): the native handler is handed the column after the context's
-    JSON round trip, an object as its ``repr`` and a namedtuple as a list, so it draws that text
-    as the header and reads no cell. It is not the bare-name rule: the Python tag reads the
-    attributes (above)."""
+def test_an_object_column_natively_is_read_through_its_attributes(name: str) -> None:
+    """The native handler reads ``key`` / ``label`` / ``width`` of an object or a namedtuple column
+    as the Python tag does (#3895 item 7: the engine hands it the column, not its JSON text)."""
     col = OBJECT_COLUMNS[name]
     html = _rust(
         "{% data_table rows=rows columns=cols %}", {"rows": [{"id": 1, "name": "v"}], "cols": [col]}
     )
-    (label,) = _labels(html)
-    assert label != "N" and ("_Col object at 0x" in label or "&#x27;name&#x27;" in label), html
-    assert _body(html) == "<tr><td></td></tr>", html
+    assert _labels(html) == ["N"], html
+    assert 'data-value="name"' in html and 'style="width:10px"' in html, html
+    assert ">v<" in _body(html), html

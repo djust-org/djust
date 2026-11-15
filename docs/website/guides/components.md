@@ -1113,9 +1113,21 @@ the text it is handed (#3882, #3883).
 
 A column given as a bare name is the column with that key and label: `columns=["claim_number",
 "status"]` draws the same table as `[{"key": "claim_number", "label": "claim_number"}, {"key":
-"status", "label": "status"}]`, on both engines (#3895). Any column that is not a dict is read
-the same way, as its text; that text is plain even when marked safe, so a header with markup uses
-the dict form's `label`.
+"status", "label": "status"}]`, on both engines (#3895). Any scalar column (text, a number,
+`None`) is read the same way, as its text; that text is plain even when marked safe, so a header
+with markup uses the dict form's `label`. A column given as an object or a namedtuple is read for
+its `key`, `label`, `width` (and the other column keys) on both engines. A function inside a column
+is not supported: both engines ignore it, as if that key were absent, and log one warning naming
+the column; compute the value into the row instead.
+
+Rows are dicts, model instances or other objects, the same on both engines (#3895). A model
+instance is read as djust serialises it, so the exposure floor applies: a field the model excludes
+(`password`, `djust_exclude_fields`, a field outside `djust_serializable_fields`) is an empty
+cell. Another object is read for the column keys as attributes; a method is called as a template
+calls it, one marked `alters_data` is not, and a name starting with `_` is never read. A cell value
+you marked safe (`mark_safe`, `format_html`) keeps its markup in the cell, before and after an
+event; a plain or lazy string is escaped, and a URL (`row_url`, `link`) is checked and escaped
+whatever it is marked. `NaN` and the infinities are written as `nan` / `inf` and are never a link.
 
 **Accessibility**: row-clickable `<tr>`s are focusable (`tabindex="0"`),
 announce as buttons (`role="button"`), and activate on Enter or Space.

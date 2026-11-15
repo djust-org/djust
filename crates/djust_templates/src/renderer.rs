@@ -1579,11 +1579,14 @@ fn typed_operands(
             // objects for nothing: the handler has it, as JSON or text, in its string argument.
             // A namedtuple is a tuple whose type the string argument loses as well (#3849): it
             // arrives as the JSON list `[1, 2]` where Django's tag prints `P(x=1, y=2)`.
+            // A list or dict that HOLDS a member its JSON text loses is handed over too (#3895):
+            // see `text_loses_a_member`. Only then: the common list costs one walk, no objects.
             if standins_only
                 && !matches!(
                     value,
                     Value::Tuple(_) | Value::NamedTuple { .. } | Value::Encoded(_)
                 )
+                && !text_loses_a_member(&value)
             {
                 continue;
             }
@@ -1600,6 +1603,40 @@ fn typed_operands(
     }
     context.take_provenance_flatten();
     typed
+}
+
+/// Does a list or dict operand hold a member that its JSON text (the handler's string argument,
+/// [`value_to_arg_string`]) cannot carry? (#3895)
+///
+/// A handler that reads lists from that text (`data_table`'s `rows` and `columns`) sees a
+/// different value from the one the Python tag is given:
+///
+/// * a `SafeString` arrives as a plain string, so a developer's `mark_safe` cell was escaped;
+/// * a `NaN` or infinite float arrives as `null` (JSON has no such number);
+/// * a namedtuple arrives as a list, and a live object (a plain object, a callable) as its `str()`.
+///
+/// For such an operand the standins-only channel hands the value over as well, and the handler
+/// takes back only what the text lost. A list of plain data (the common case) still crosses only
+/// as text: this walk reads the variants and builds nothing. A temporal value (a `datetime` in a
+/// row) is not counted: its text is what the handler has always read.
+fn text_loses_a_member(value: &Value) -> bool {
+    let mut pending: Vec<&Value> = match value {
+        Value::List(_) | Value::Object(_) | Value::DictView { .. } => vec![value],
+        _ => return false,
+    };
+    while let Some(member) = pending.pop() {
+        match member {
+            Value::SafeString(_) | Value::NamedTuple { .. } => return true,
+            Value::Float(f) if !f.is_finite() => return true,
+            Value::Encoded(e) if e.live.is_some() && e.temporal_kind().is_none() => return true,
+            Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
+                pending.extend(items.iter());
+            }
+            Value::Object(map) => pending.extend(map.values()),
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Attribute a registry call's failure to its tag — unless it is the
@@ -9146,6 +9183,44 @@ mod tests {
         // Scalars go through Display, so this follows it to `True` (#2203).
         assert_eq!(value_to_arg_string(&Value::Bool(true)), "True");
         assert_eq!(value_to_arg_string(&Value::String("hi".to_string())), "hi");
+    }
+
+    /// #3895: which list/dict operands cross the standins-only typed channel. A member the JSON
+    /// text loses (a `SafeString`, a non-finite float, a namedtuple), at any depth, makes the
+    /// operand cross; plain data, including a finite float and a plain string with markup,
+    /// does not; a scalar is never this rule's.
+    #[test]
+    fn text_loses_a_member_names_only_what_the_json_text_drops() {
+        let row = |cell: Value| {
+            let mut map = IndexMap::new();
+            map.insert("id".into(), Value::Integer(1));
+            map.insert("name".into(), cell);
+            Value::List(vec![Value::Object(map)])
+        };
+        assert!(text_loses_a_member(&row(Value::SafeString(
+            "<i>N</i>".into()
+        ))));
+        assert!(text_loses_a_member(&row(Value::Float(f64::NAN))));
+        assert!(text_loses_a_member(&row(Value::Float(f64::INFINITY))));
+        assert!(text_loses_a_member(&row(Value::Float(f64::NEG_INFINITY))));
+        assert!(text_loses_a_member(&Value::List(vec![Value::NamedTuple {
+            name: "Col".into(),
+            fields: vec!["key".into()],
+            items: vec![Value::String("name".into())],
+        }])));
+        // Nested deeper than a row: a cell holding a list.
+        assert!(text_loses_a_member(&row(Value::List(vec![
+            Value::SafeString("x".into())
+        ]))));
+        assert!(!text_loses_a_member(&row(Value::String(
+            "<b>plain</b>".into()
+        ))));
+        assert!(!text_loses_a_member(&row(Value::Float(1.5))));
+        assert!(!text_loses_a_member(&row(Value::None)));
+        assert!(!text_loses_a_member(&Value::List(vec![])));
+        // A scalar operand is not a container: the existing rules decide it.
+        assert!(!text_loses_a_member(&Value::SafeString("x".into())));
+        assert!(!text_loses_a_member(&Value::Float(f64::NAN)));
     }
 
     // ---- #2416: the CustomTag argument channel's (text, SafeData) pair -----

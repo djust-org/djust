@@ -47,7 +47,12 @@ from djust.components.utils import (
     safe_css_ratio,
 )
 from djust.components.components.dashboard_grid import clamp_cells, clamp_columns
-from djust.components.utils import _exact_str
+from djust.components.utils import (
+    _exact_str,
+    table_column,
+    table_rows,
+    table_value_is_url,
+)
 from django.utils.safestring import mark_safe
 
 
@@ -811,8 +816,9 @@ def _checked_column_widths(columns: Any) -> Any:
     value as the key, so it still reads a row's ``int`` key (the native handler reads the row
     after a JSON round trip, where that key is the same text).
 
-    Any other object (a column class, a namedtuple) is left as it is: the template reads its
-    ``key`` / ``label`` / ``width`` attributes, the #3894 contract."""
+    Any other object (a column class, a namedtuple) becomes the dict of the attributes it has
+    (``table_column``), which is what the native handler is now handed too; a function in a column
+    is dropped on both engines, with a warning (#3895)."""
     if not isinstance(columns, (list, tuple)):
         return columns
     checked = []
@@ -823,10 +829,23 @@ def _checked_column_widths(columns: Any) -> Any:
             text = _exact_str(col)
             key = col if type(col) is int else text
             col = {"key": key, "label": text}
+        else:
+            col = table_column(col)
         if isinstance(col, dict) and col.get("width") and not safe_css_length(col["width"], ""):
             col = {**col, "width": ""}
         checked.append(col)
     return checked
+
+
+def _table_row_keys(columns: Any, *named: Any) -> list[Any]:
+    """The row keys a table reads: each column's ``key`` and ``link``, and the named ones
+    (``row_key``, ``row_url``, ``row_click_value_key``), plus ``id`` (the selection checkbox).
+    An object row is read for these attributes only (``table_row``)."""
+    keys: list[Any] = ["id", *named]
+    for col in columns if isinstance(columns, (list, tuple)) else ():
+        if isinstance(col, Mapping):
+            keys += [col.get("key"), col.get("link")]
+    return keys
 
 
 @register.filter
@@ -884,16 +903,17 @@ def table_href(row: Any, key: Any) -> Any:
 @register.filter
 def table_has_href(row: Any, key: Any) -> bool:
     """Whether ``row[key]`` is a URL at all (#3895): not for a row that is not a mapping, a key
-    it lacks, ``None`` or blank text. ``table_cell`` writes those as ``""`` / ``"None"``, which as
-    an ``href`` is the current page or ``<page>/None``; a link column then draws plain text and a
-    ``row_url`` row is not clickable. The native table decides the same (``_has_row_href``)."""
+    it lacks, ``None``, blank text or a number that is not one (``NaN``, an infinity).
+    ``table_cell`` writes those as ``""`` / ``"None"`` / ``"nan"``, which as an ``href`` is the
+    current page or a relative link; a link column then draws plain text and a ``row_url`` row is
+    not clickable. The native table decides the same (``_has_row_href``)."""
     if not isinstance(row, Mapping):
         return False
     try:
         value = row.get(key)
     except TypeError:  # an unhashable key
         return False
-    return value is not None and str(value).strip() != ""
+    return table_value_is_url(value)
 
 
 @register.inclusion_tag("djust_components/table.html")
@@ -1118,9 +1138,11 @@ def data_table(
         ``<a href="{{ row[col.link] }}">{{ row[col.key] }}</a>``;
         otherwise plain text (pre-#1110 behavior).
     """
+    columns = _checked_column_widths(columns)
     return {
-        "rows": rows,
-        "columns": _checked_column_widths(columns),
+        # A model instance or another object is read as the dict the native handler reads (#3895).
+        "rows": table_rows(rows, _table_row_keys(columns, row_key, row_url, row_click_value_key)),
+        "columns": columns,
         "sort_by": sort_by,
         "sort_desc": sort_desc,
         "sort_event": sort_event,

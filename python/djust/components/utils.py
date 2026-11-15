@@ -5,14 +5,20 @@ Centralises functions and constants that were previously duplicated across
 templatetags, rust_handlers, mixins, and component classes.
 """
 
+import logging
+import math
 import re
+from collections.abc import Mapping
 from typing import Any
 from urllib.parse import urlsplit
 
+from django.utils.functional import Promise
 from django.utils.html import conditional_escape, escape
 from django.utils.safestring import SafeData
 
 from djust.security.urls import url_as_parsed, url_is_protocol_relative
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "CURRENCY_SYMBOLS",
@@ -24,6 +30,10 @@ __all__ = [
     "safe_css_number",
     "safe_css_ratio",
     "safe_url",
+    "table_column",
+    "table_row",
+    "table_rows",
+    "table_value_is_url",
     "unique_ids",
     "url_allowed",
     "url_as_parsed",
@@ -649,3 +659,199 @@ def rich_html(value: Any) -> str:
     from .components.markdown import _sanitize
 
     return _sanitize(str(value))
+
+
+# ---------------------------------------------------------------------------
+# data_table rows and columns, as both engines read them (#3895)
+# ---------------------------------------------------------------------------
+
+#: Every attribute either ``data_table`` implementation reads off a column: ``table.html`` reads
+#: ``key``, ``label``, ``sortable``, ``width``, ``link`` and ``link_class``; the native handler
+#: also reads the rest (and ``format_cell`` the type options). A column given as an object or a
+#: namedtuple is read through these names into the dict form.
+TABLE_COLUMN_ATTRS: tuple[str, ...] = (
+    "key",
+    "label",
+    "sortable",
+    "filterable",
+    "filter_type",
+    "filter_options",
+    "width",
+    "pinned",
+    "link",
+    "link_class",
+    "type",
+    "cell_class",
+    "cell_template",
+    "stats",
+    "decimals",
+    "currency_symbol",
+    "true_label",
+    "false_label",
+    "date_format",
+)
+
+#: ``(column key, attribute)`` pairs already warned about, so a table re-rendered on every event
+#: logs a callable once per process, not once per render.
+_WARNED_CALLABLE_COLUMNS: set[tuple[str, str]] = set()
+
+
+def _warn_callable_column(column: Any, names: list[str]) -> None:
+    key = _exact_str(column)
+    for name in names:
+        if (key, name) in _WARNED_CALLABLE_COLUMNS:
+            continue
+        _WARNED_CALLABLE_COLUMNS.add((key, name))
+        logger.warning(
+            "data_table column %r: %r is a function, which a column cannot hold; it is ignored, "
+            "as if the column had no %r. Compute the value into the row instead.",
+            key,
+            name,
+            name,
+        )
+
+
+def _column_fields(col: Any) -> Any:
+    """``col``'s fields as a mapping when it is a namedtuple (a real one, or the native handler's
+    ``NamedTupleValue``, which is a list), else ``None``."""
+    fields = getattr(col, "_fields", None)
+    if isinstance(col, (list, tuple)) and isinstance(fields, tuple) and len(fields) == len(col):
+        return dict(zip(fields, col))
+    return None
+
+
+def table_column(col: Any) -> Any:
+    """A ``data_table`` column as both engines read it (#3895).
+
+    * A dict is returned as it is, except that a value which is a function is dropped (a warning
+      names the column once): Django would call it while reading ``col.link``, the native handler
+      could only ever be handed its text, so neither does anything with it. A link that is
+      computed belongs in the row.
+    * A namedtuple or any other object (not a scalar, not a list) becomes the dict of the
+      :data:`TABLE_COLUMN_ATTRS` it has, read as ``table.html`` reads ``col.key``, so the native
+      handler, which is handed the column after a JSON round trip, draws what the Python tag draws.
+      A function there is dropped the same way.
+    * Anything else (a bare name, a number, ``None``, a list) is returned unchanged: the bare-name
+      rule decides it.
+    """
+    if isinstance(col, dict):
+        dropped = [name for name, value in col.items() if callable(value)]
+        if not dropped:
+            return col
+        _warn_callable_column(col.get("key", ""), [str(name) for name in dropped])
+        return {name: value for name, value in col.items() if name not in dropped}
+    fields = _column_fields(col)
+    if fields is None and (
+        col is None
+        or isinstance(col, (str, bytes, int, float, list, tuple, set, frozenset, Promise))
+    ):
+        return col
+    out: dict[str, Any] = {}
+    dropped = []
+    for name in TABLE_COLUMN_ATTRS:
+        if fields is not None:
+            if name not in fields:
+                continue
+            value = fields[name]
+        else:
+            try:
+                value = getattr(col, name)
+            except AttributeError:
+                continue
+        if callable(value):
+            dropped.append(name)
+            continue
+        out[name] = value
+    if dropped:
+        _warn_callable_column(out.get("key", ""), dropped)
+    return out
+
+
+def _row_attribute(row: Any, name: str) -> Any:
+    """``row.<name>`` of a plain object, as a template reads it, or ``_MISSING``.
+
+    A name starting with ``_`` is never read (Django's rule). A method is called with no argument,
+    unless it is marked ``alters_data`` or ``do_not_call_in_templates`` (then nothing is read), and
+    a call that needs an argument reads nothing.
+    """
+    if not name or name.startswith("_"):
+        return _MISSING
+    try:
+        value = getattr(row, name)
+    except AttributeError:
+        return _MISSING
+    if callable(value):
+        if getattr(value, "alters_data", False) or getattr(
+            value, "do_not_call_in_templates", False
+        ):
+            return _MISSING
+        try:
+            value = value()
+        except TypeError:
+            return _MISSING
+    return value
+
+
+_MISSING = object()
+
+
+def table_row(row: Any, keys: Any) -> Any:
+    """A ``data_table`` row as the mapping both engines read (#3895).
+
+    * A mapping is returned as it is.
+    * A model instance is the dict the serializer makes of it, the one the native handler is
+      handed (``normalize_django_value``): the exposure floor applies, so a field that is
+      excluded (``password``, ``djust_exclude_fields``, a field outside
+      ``djust_serializable_fields``) is not in it and its cell is empty on both engines. A floor
+      proxy (what the engine hands a native handler for a model) is read through its own hook.
+    * Any other object is the dict of the ``keys`` it has as attributes (:func:`_row_attribute`).
+    * A scalar, a list or ``None`` is returned unchanged: not a row (the Python tag draws an empty
+      row, the native handler omits it).
+    """
+    if isinstance(row, Mapping):
+        return row
+    if row is None or isinstance(row, (str, bytes, int, float, list, tuple, set, frozenset)):
+        return row
+    from django.db import models
+
+    if isinstance(row, models.Model):
+        from djust.serialization import normalize_django_value
+
+        floored = normalize_django_value(row)
+        return floored if isinstance(floored, Mapping) else {}
+    hook = getattr(row, "__djust_serialize__", None)
+    if callable(hook):
+        floored = hook()
+        if isinstance(floored, Mapping):
+            return floored
+    out = {}
+    for key in keys:
+        if not isinstance(key, str) or key in out:
+            continue
+        value = _row_attribute(row, key)
+        if value is not _MISSING:
+            out[key] = value
+    return out
+
+
+def table_rows(rows: Any, keys: Any) -> Any:
+    """``rows`` with each row as :func:`table_row` reads it; ``rows`` itself (the same object)
+    when every row is already a mapping, so a table of dicts is untouched."""
+    if isinstance(rows, (list, tuple)) and all(isinstance(row, Mapping) for row in rows):
+        return rows
+    try:
+        items = list(rows)
+    except TypeError:
+        return rows
+    key_list = [key for key in keys if isinstance(key, str)]
+    return [table_row(row, key_list) for row in items]
+
+
+def table_value_is_url(value: Any) -> bool:
+    """Whether a row's value can be a URL at all (#3895): not ``None``, not blank text, and not a
+    number that is not one (``NaN``, an infinity), whose text ``nan`` would be a relative link."""
+    if value is None:
+        return False
+    if isinstance(value, float) and not math.isfinite(value):
+        return False
+    return str(value).strip() != ""
