@@ -70,7 +70,6 @@ from djust.components import _operands
 # Kept for importers of this module: defined here before #3883 moved them to `_operands`.
 NamedTupleValue = _operands.NamedTupleValue
 TupleValue = _operands.TupleValue
-_from_typed = _operands._from_typed
 
 
 # ---------------------------------------------------------------------------
