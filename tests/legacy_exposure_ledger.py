@@ -64,7 +64,7 @@ MIGRATED_4082: tuple[str, ...] = (
 #: The #4082 files that still state the legacy policy, each with its reason.
 REMAINING_4082: dict[str, str] = {
     "python/djust/tests/test_async_check_permissions.py": (
-        "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
+        "migrated; the reauth_on_event tests stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
     ),
     "python/djust/tests/test_async_pending_flag_2963.py": (
         "migrated; one case stays legacy: an unhandled async failure ends loading with a named source=async frame on legacy views only"
@@ -79,7 +79,7 @@ REMAINING_4082: dict[str, str] = {
         "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
     ),
     "python/djust/tests/test_live_auth_denials_and_wrappers.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
+        "migrated; the post()-only event refusal cases stay legacy: a legacy view refuses the event and stays mounted"
     ),
     "python/djust/tests/test_live_auth_event_holders_and_user_checks.py": (
         "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
@@ -91,7 +91,7 @@ REMAINING_4082: dict[str, str] = {
         "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
     ),
     "python/djust/tests/test_model_form_object_recheck_3967.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
+        "migrated; the record-reuse cases stay legacy: gap, the explicit render leaves _djust_prop_cache on the record and ModelFormMixin._fingerprint never matches"
     ),
     "python/djust/tests/test_multi_view_refusal_3252.py": (
         "migrated; the revocation cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
@@ -127,7 +127,7 @@ REMAINING_4082: dict[str, str] = {
         "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
     ),
     "python/tests/test_render_call_guard_3815.py": (
-        "not migrated yet (#4082): failure under explicit not yet diagnosed"
+        "migrated; the lazy live_render children stay legacy: gap, {% live_render lazy %} refuses explicit children (ADR-038 D-m)"
     ),
     "tests/unit/test_layout_switching.py": (
         "migrated; one case stays legacy: a production failure log names the error for legacy views only (D-a)"
@@ -445,5 +445,9 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_turn_middleware_core.py",
     "python/djust/tests/test_push_handler_marker_3002.py",
     "python/djust/tests/test_event_loop_offload_3074.py",
+    "python/tests/test_render_call_guard_3815.py",
+    "python/djust/tests/test_async_check_permissions.py",
+    "python/djust/tests/test_live_auth_denials_and_wrappers.py",
+    "python/djust/tests/test_model_form_object_recheck_3967.py",
     "tests/unit/test_layout_switching.py",
 )
