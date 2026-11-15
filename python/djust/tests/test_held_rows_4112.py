@@ -2067,3 +2067,29 @@ async def test_a_session_save_is_not_a_write_even_for_a_view_that_reads_the_sess
         assert frame.get("type") == "noop", frame
     finally:
         await client.close()
+
+
+def test_a_collected_view_does_not_deadlock_a_thread_holding_the_lock():
+    """The garbage collector runs a weakref callback at any allocation, also in a
+    thread that holds ``_lock`` (``_mark`` and ``note_reads`` allocate under it).
+    The callback must not take that lock again: found as a hang of the suite."""
+    import gc
+
+    class View:
+        pass
+
+    def collect_under_the_lock():
+        view = View()
+        _held_rows.mark_tree(view, frozenset({"t"}))
+        with _held_rows._lock:
+            del view
+            gc.collect()
+
+    worker = threading.Thread(target=collect_under_the_lock, daemon=True)
+    worker.start()
+    worker.join(5)
+    stuck = worker.is_alive()
+    if stuck:  # free the deadlocked thread so the rest of the session can run
+        _held_rows._lock.release()
+        worker.join(5)
+    assert not stuck, "a weakref callback re-entered _lock in the thread that held it"

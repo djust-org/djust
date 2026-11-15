@@ -691,8 +691,18 @@ def attributed(view: Any, fn: Callable[..., _T], *, writes: bool = True) -> Call
 
 
 def _forget(registry: Dict[int, Any], key: int) -> Callable[[Any], None]:
-    def callback(_ref: Any) -> None:
-        with _lock:
+    """A weakref callback dropping ``registry[key]`` once its view is collected.
+
+    It takes no lock: the garbage collector runs it at any allocation, also in a
+    thread that already holds ``_lock`` (``_mark`` / ``note_reads`` allocate
+    under it), and a non-reentrant acquire there deadlocks the thread. It drops
+    the entry only if it still holds the collected reference, so an entry made
+    since for a new view at the same ``id()`` stays.
+    """
+
+    def callback(ref: Any) -> None:
+        entry = registry.get(key)
+        if entry is not None and entry[0] is ref:
             registry.pop(key, None)
 
     return callback
