@@ -37,7 +37,7 @@ _TEMPLATE = (
 
 
 class _FormView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _TEMPLATE
 
     def mount(self, request, **kwargs):
@@ -77,8 +77,12 @@ def _socket_app():
     return AuthMiddlewareStack(LiveViewConsumer.as_asgi())
 
 
-async def _mount_html(cookie_header: str, *, app=None) -> str:
+async def _mount_html(cookie_header: str, *, app=None, live_session: bool = False) -> str:
+    """``live_session``: give the socket a saved server session when the cookies
+    it sends carry none (an explicit view's mount binds to one)."""
     from channels.testing import WebsocketCommunicator
+
+    from djust.tests._live_session import with_live_session
 
     socket = WebsocketCommunicator(
         app or _socket_app(),
@@ -89,6 +93,8 @@ async def _mount_html(cookie_header: str, *, app=None) -> str:
             (b"cookie", cookie_header.encode()),
         ],
     )
+    if live_session:
+        with_live_session(socket)
     connected, _ = await socket.connect()
     assert connected
     try:
@@ -157,7 +163,7 @@ class TestSocketRenderedTokenPosts:
 
         browser, _ = await sync_to_async(_browser_with_page)()
         cookies = _cookie_header(browser, settings.CSRF_COOKIE_NAME)
-        html = await _mount_html(cookies, app=LiveViewConsumer.as_asgi())
+        html = await _mount_html(cookies, app=LiveViewConsumer.as_asgi(), live_session=True)
         response = await sync_to_async(browser.post)(
             "/csrf-2998/submit/", {"csrfmiddlewaretoken": _token(html)}
         )
@@ -169,7 +175,9 @@ class TestSocketRenderedTokenPosts:
         assert _token(html)
 
     async def test_malformed_csrf_cookie_still_renders(self):
-        html = await _mount_html(f"{settings.CSRF_COOKIE_NAME}=not-a-valid-token!")
+        html = await _mount_html(
+            f"{settings.CSRF_COOKIE_NAME}=not-a-valid-token!", live_session=True
+        )
         assert _token(html)
 
 
