@@ -178,6 +178,7 @@ async def amount_on_consumer(
     user: Any = None,
     url: str = "/",
     params: dict | None = None,
+    stop_tick: bool = True,
 ) -> Any:
     """Mount ``view_path`` on a hand-built ``LiveViewConsumer``, as a socket does.
 
@@ -189,7 +190,8 @@ async def amount_on_consumer(
     This gives the consumer a socket scope with a saved session logged in as
     ``user`` (anonymous when ``None``), the per-connection state ``connect()``
     creates, and runs the real ``handle_mount``. The mount's frames are
-    cleared from ``consumer.sent`` when the test captures sends there. Needs
+    cleared from ``consumer.sent`` when the test captures sends there, and the
+    tick loop a ``tick_interval`` view starts is stopped (``stop_tick``). Needs
     ``django_db(transaction=True)``. Returns the mounted view.
     """
     from django.contrib.auth.models import AnonymousUser
@@ -224,6 +226,18 @@ async def amount_on_consumer(
     sent = getattr(consumer, "sent", None)
     if consumer.view_instance is None:
         raise AssertionError(f"the consumer did not mount {view_path}: {sent!r}")
+    task = getattr(consumer, "_tick_task", None)
+    if task is not None and stop_tick:
+        # A view with ``tick_interval`` starts its tick loop at mount. These
+        # tests drive ``_tick_once`` themselves: a wall-clock loop beside
+        # them is a race (#2124).
+        import asyncio
+        import contextlib
+
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        consumer._tick_task = None
     if isinstance(sent, list):
         sent.clear()
     return consumer.view_instance
