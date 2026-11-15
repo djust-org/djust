@@ -46,6 +46,9 @@ WORK_ENTERED = threading.Event()
 
 
 class SlowWorkPage(BackgroundPage):
+    exposure_policy = (
+        "explicit"  # as test_exposure_sse_resilience_3200.BackgroundPage, which it subclasses
+    )
     count = state(0, persist="server")
 
     @event_handler()

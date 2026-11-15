@@ -37,6 +37,8 @@ SUCCESS_FRAMES = {"patch", "html_update", "noop"}
 class CommittedView(RuntimeView):
     """An explicit view with server-persisted fields."""
 
+    exposure_policy = "explicit"  # as test_exposure_runtime.RuntimeView, which it subclasses
+
     count = state(0, persist="server")
     hidden = state("SERVER_SENTINEL", persist="server")
 

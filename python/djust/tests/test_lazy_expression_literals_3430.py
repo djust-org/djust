@@ -8,6 +8,7 @@ from djust.tests.test_lazy_provenance_http_3252 import Child, Page, TAG, get_ids
 
 
 class Hidden(Child):
+    exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Child, which it subclasses
     abstract = True  # Test-local owner: exclude from global binding discovery.
     mounts = 0
 
@@ -43,6 +44,7 @@ def test_expression_opener_cannot_be_closed_by_value(opener, q):
 @pytest.mark.parametrize("q", ["-->", "x"])
 def test_http_expression_opener_never_mounts_hidden_child(opener, q):
     class ExpressionPage(Page):
+        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = "<div dj-root>" + TAG + opener + "{{ q|safe }}" + HIDDEN + "--></div>"
 
@@ -123,6 +125,7 @@ def test_block_super_literal_context(tmp_path, filter_suffix):
 )
 def test_http_value_output_and_final_survival(value, expected):
     class ValuePage(Page):
+        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = "<div dj-root>" + TAG + "{{ q|safe }}" + HIDDEN + "</div>"
 
@@ -161,6 +164,7 @@ def test_http_filtered_super_cannot_mount_hidden_child(tmp_path, settings, filte
     )
 
     class SuperPage(Page):
+        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = "<div dj-root>" + TAG + '{% include "inherited.html" %}</div>'
 
@@ -293,6 +297,7 @@ def test_standalone_literal_revival_registers_zero(opener, q):
 @pytest.mark.parametrize("q", ["-->", "x"])
 def test_http_standalone_literal_revival_registers_zero_and_never_mounts(opener, q):
     class ExpressionPage(Page):
+        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = "<div dj-root>" + opener + "{{ q|safe }}" + HIDDEN + "--></div>"
 
