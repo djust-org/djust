@@ -249,6 +249,54 @@ def get_context_data(self, **kwargs):
     return context
 ```
 
+### Rows after a handler writes
+
+A QuerySet kept on the view is evaluated by the first render and then read from
+its result cache. When a step of the view writes to the database, djust drops
+those caches before the next render, so the page shows the rows as they are now,
+on every transport (WebSocket, SSE and the HTTP fallback):
+
+```python
+@event_handler
+def delete_product(self, pk: int, **kwargs):
+    Product.objects.filter(pk=pk).delete()  # nothing else to do: the list re-reads
+```
+
+What is guaranteed after a step that wrote (an event handler, `async def` or
+not, `@background` / `start_async` work, `handle_tick`, a server push or
+`handle_info`, a component's handler):
+
+- every QuerySet held on the view, public or private, and inside the dicts,
+  lists, tuples and sets it holds (three levels deep), is read again, once;
+- every `cached_property` of the view is computed again;
+- a model held on the view re-reads the relations it was loaded with by
+  `prefetch_related()`;
+- the turn renders even if the handler changed nothing on the view.
+
+A write is any statement that is not a read, on any database alias, through
+the ORM (`save()`, `update()`, `delete()`, `bulk_*`) or a raw cursor. A turn
+that writes nothing re-reads nothing: no query is added to it.
+
+What stays a snapshot, on every transport:
+
+- a list of rows (`list(qs)`) or a model instance held on the view: its rows
+  and field values are what they were when it was read. Keep the QuerySet, or
+  read the instance again in the handler (`obj.refresh_from_db()`);
+- a `prefetch_related(Prefetch(..., to_attr=...))` list;
+- rows another session or process changed. Nothing tells this view to render;
+  to show them, push to it (see [Push updates from outside the view](#push-updates-from-outside-the-view)).
+
+To keep a QuerySet or a `cached_property` exactly as first read (an audit view
+of what was there at mount), name it in `frozen_rows`:
+
+```python
+class OrderAudit(LiveView):
+    frozen_rows = ("_orders_at_mount",)
+```
+
+A QuerySet built with `select_for_update()` is never re-read (outside its
+transaction it would raise).
+
 ---
 
 ## Event Handlers
@@ -1662,6 +1710,7 @@ When building a djust LiveView:
 - [ ] Declare the parameters each binding sends (`manage.py check` reports `djust.T020`); keep `**kwargs` on legacy `dj-input`/`dj-change`/`dj-submit` handlers, or declare `field`/`_target`
 - [ ] Use `value` as the parameter name for `dj-input`/`dj-change`
 - [ ] Store QuerySets in private variables (`self._items`)
+- [ ] Keep the QuerySet, not `list(qs)`, when the rows can change: a held QuerySet is read again after a write; a list is a snapshot
 - [ ] Assign to public in `get_context_data()` for JIT serialization
 - [ ] Call `super().get_context_data()` to trigger Rust serialization
 - [ ] Never convert QuerySets to lists
