@@ -676,10 +676,9 @@ def _live_render_site(tag_args: str, named: bool = False) -> Callable[[str, dict
             attrs["template_name"] = "live_render_child_3880.html"
         else:
             attrs["template"] = source
-        # {% live_render lazy %} refuses explicit children (ADR-038 D-m).
-        lazy_policy = {"exposure_policy": "legacy"}  # gap #4154: lazy live_render (D-m)
-        policy = lazy_policy if "lazy" in tag_args else {"exposure_policy": "explicit"}
-        child_cls = type("LiveRenderChild3880", (LiveView,), {**policy, **attrs})
+        child_cls = type(
+            "LiveRenderChild3880", (LiveView,), {"exposure_policy": "explicit", **attrs}
+        )
         setattr(sys.modules[__name__], "LiveRenderChild3880", child_cls)
         page_cls = type(
             "LiveRenderPage3880",

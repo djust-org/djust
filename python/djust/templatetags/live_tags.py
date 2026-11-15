@@ -1933,6 +1933,93 @@ def _render_sticky_child_html(
     )
 
 
+def _lazy_fill_request(request: Any) -> Any:
+    """The request a lazy explicit child is filled under (#4154).
+
+    The fill runs after the page's shell was sent, so the session and user are
+    read from storage again rather than trusted from the render: a session
+    deleted or flushed in between (a logout elsewhere) refuses the fill, and a
+    session that now holds another user changes the identity the fill must
+    match. A request without a server-side session (none, no key yet, or the
+    signed-cookie store, which holds no state to revoke) is used as it is; its
+    identity is still checked.
+    """
+    from .._exposure_auth import reload_request_session
+    from .._exposure_sessions import session_store_supported
+
+    session = getattr(request, "session", None)
+    if session is None or not session.session_key or not session_store_supported(type(session)):
+        return request
+    return reload_request_session(request)
+
+
+def _fill_lazy_explicit_child(
+    child_cls: type,
+    parent: Any,
+    request: Any,
+    view_id: str,
+    mount_inputs: Dict[str, Any],
+    kwargs: Dict[str, Any],
+    identity: Any,
+    view_path: str,
+) -> str:
+    """Mount, authorize and render a lazy explicit child in its fill (#4154).
+
+    The transient explicit child of :func:`live_render` (ADR-038 D-m), mounted
+    when its slot is filled instead of during the page render, with the same
+    checks in the same order: view auth (session, user, permissions) before
+    ``mount``, object permission after it, and the identity compiled when the
+    tag rendered (parent, slot, inputs, session, user, tenant) matched before
+    mount, after mount and after authorization. Every refusal is the same
+    ``PermissionError``, so the fill's error envelope does not say which check
+    failed. Nothing is persisted: a transient child declares no stored state.
+    """
+    from .._exposure import ExposureError
+    from .._exposure_child_identity import child_reuse_identity
+    from .._exposure_children import record_child_mount_inputs
+    from .._params_form import _refuse_removed_configuration
+    from ..auth.core import check_view_auth, enforce_object_permission
+    from ..sync_turn import run_sync_step
+
+    def still_matches(current: Any) -> bool:
+        return bool(
+            identity.matches(
+                child_reuse_identity(child_cls, parent, current, view_id, mount_inputs)
+            )
+        )
+
+    refused = PermissionError("child %r denied access" % view_path)
+    try:
+        fill_request = _lazy_fill_request(request)
+        if not still_matches(fill_request):
+            raise refused
+        child = child_cls()
+        mark_embedded(child)
+        child.request = fill_request
+        if check_view_auth(child, fill_request) is not None:
+            raise refused
+        record_child_mount_inputs(child, mount_inputs)
+        mount_fn = getattr(child, "mount", None)
+        if callable(mount_fn):
+            # Its own worker thread, outside the parent's render hop: the
+            # child's hooks enter their own steps (#3646).
+            run_sync_step(child, "mount", mount_fn, fill_request, **kwargs)
+        _refuse_removed_configuration(child)
+        if not still_matches(fill_request):
+            raise refused
+        enforce_object_permission(child, fill_request)
+        if not still_matches(fill_request):
+            raise refused
+    except (PermissionDenied, ExposureError):
+        raise refused from None
+    child._explicit_child_reuse_identity = identity
+    parent._register_child(view_id, child)
+    html: str = run_sync_step(
+        child, "render", _render_sticky_child_html, child, view_id, None, fill_request, view_path
+    )
+    return html
+
+
 # Context-render-local scratch key for tracking sticky_ids already
 # registered in the current parent render pass. Used to raise
 # TemplateSyntaxError on ``{% live_render 'X' sticky=True %}`` collisions.
@@ -2170,12 +2257,6 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     from .._exposure import uses_legacy_exposure as _legacy_policy
 
     explicit_target = not _legacy_policy(child_cls)
-    if explicit_target and lazy_kwarg:
-        # ADR-038 D-m: the lazy fill runs outside the authorized explicit
-        # mount/registration path. Refuse before any placeholder or thunk.
-        raise TemplateSyntaxError(
-            "{% live_render %} lazy= is not supported for explicit-exposure children."
-        )
     if explicit_target and not sticky_kwarg:
         from .._exposure import ExposureContract
 
@@ -2353,6 +2434,18 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         # be mutated by the eager branch path).
         captured_kwargs = dict(kwargs)
         view_id = parent._assign_view_id(preferred_view_id)
+        lazy_identity = None
+        lazy_inputs: Dict[str, Any] = {}
+        if explicit_target:
+            # #4154: a lazy explicit child is a transient one (ADR-038 D-m)
+            # mounted later. Its identity -- the parent, the slot, the inputs,
+            # and the session, user and tenant of THIS render -- is compiled
+            # now, before the placeholder; the fill must match it.
+            from .._exposure import clone_json_state
+            from .._exposure_child_identity import child_reuse_identity
+
+            lazy_inputs = clone_json_state(kwargs)
+            lazy_identity = child_reuse_identity(child_cls, parent, request, view_id, lazy_inputs)
         # Reserve the id by registering a placeholder NOW so a sibling
         # eager `_register_child` collision is detectable (the actual
         # child is created at thunk-fire time, but registry slot is
@@ -2387,6 +2480,17 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 # branch below. Returns the stamped child HTML.
                 from ..sync_turn import run_sync_step
 
+                if lazy_identity is not None:
+                    return _fill_lazy_explicit_child(
+                        child_cls,
+                        parent,
+                        request,
+                        view_id,
+                        lazy_inputs,
+                        captured_kwargs,
+                        lazy_identity,
+                        view_path,
+                    )
                 child = child_cls()
                 mark_embedded(child)
                 child.request = request

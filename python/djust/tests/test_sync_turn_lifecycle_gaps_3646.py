@@ -772,6 +772,54 @@ async def test_a_lazy_childs_mount_and_context_run_inside_the_wrapper():
     assert {step for step, _thread in seen("lazy_context")} == {"render"}, SEEN
 
 
+class ExplicitLazyKid(LiveView):
+    exposure_policy = "explicit"
+    template = "<div><p>lazy {{ value }}</p></div>"
+
+    def mount(self, request, **kwargs):
+        note("explicit_lazy_mount")
+        self.value = "explicit kid"
+
+    def get_context_data(self, **kwargs):
+        note("explicit_lazy_context")
+        return {"value": self.value}
+
+
+class ExplicitLazyPage(LiveView):
+    exposure_policy = "explicit"
+    template = (
+        "{% load live_tags %}"
+        "<html><body><div dj-root>"
+        '{% live_render "' + MOD + '.ExplicitLazyKid" lazy=True %}'
+        "</div></body></html>"
+    )
+
+    def mount(self, request, **kwargs):
+        pass
+
+
+async def test_an_explicit_lazy_childs_mount_and_context_run_inside_the_wrapper():
+    """The explicit fill (#4154) enters the same steps as the legacy one."""
+    from django.contrib.sessions.middleware import SessionMiddleware
+
+    def render_page():
+        request = RequestFactory().get("/")
+        request.user = AnonymousUser()
+        SessionMiddleware(lambda r: None).process_request(request)
+        request.session.save()
+        view = ExplicitLazyPage()
+        view.setup(request)
+        view.streaming_render = False
+        with override_settings(DJUST_LIVE_RENDER_ALLOWED_MODULES=[MOD]):
+            return view.get(request).content.decode("utf-8")
+
+    html = await sync_to_async(render_page)()
+
+    assert "lazy explicit kid" in html, html
+    assert [step for step, _thread in seen("explicit_lazy_mount")] == ["mount"], SEEN
+    assert {step for step, _thread in seen("explicit_lazy_context")} == {"render"}, SEEN
+
+
 # --------------------------------------------------------------------------- #
 # The guide's "entries per request" list, as executable claims (#3646 item 5)
 # --------------------------------------------------------------------------- #

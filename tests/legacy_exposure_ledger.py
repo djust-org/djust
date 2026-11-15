@@ -62,6 +62,7 @@ MIGRATED_4082: tuple[str, ...] = (
     "python/tests/test_form_adapter_a11y.py",
     "python/tests/test_form_as_liveview_state_3767.py",
     "python/tests/test_remaining_builtin_tags_2556.py",
+    "python/tests/test_render_call_guard_3815.py",
     "python/tests/test_sse.py",
     "python/tests/test_sse_ws_symmetry.py",
     "python/tests/test_waiter_component_propagation.py",
@@ -111,9 +112,6 @@ REMAINING_4082: dict[str, str] = {
     ),
     "python/djust/tests/test_ws_mount_flip_parity_1911.py": (
         "migrated; the sticky_hold cases stay legacy: product gap #4149, an explicit sticky child cannot survive live_redirect to another page"
-    ),
-    "python/tests/test_render_call_guard_3815.py": (
-        "migrated; the lazy live_render children stay legacy: product gap #4154, {% live_render lazy %} refuses explicit children (ADR-038 D-m)"
     ),
     "tests/unit/test_layout_switching.py": (
         "migrated; one case stays legacy: a production failure log names the error for legacy views only (D-a)"
@@ -429,7 +427,6 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_turn_middleware_core.py",
     "python/djust/tests/test_push_handler_marker_3002.py",
     "python/djust/tests/test_event_loop_offload_3074.py",
-    "python/tests/test_render_call_guard_3815.py",
     "python/djust/tests/test_async_check_permissions.py",
     "python/djust/tests/test_live_auth_denials_and_wrappers.py",
     "tests/unit/test_layout_switching.py",
