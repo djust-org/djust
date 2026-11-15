@@ -1379,9 +1379,8 @@ class DataTableHandler:
                 # The row's URL (#3887). ``data-href`` is read by ``data-table-row-click.js``.
                 # A row with no URL under the key is not clickable (#3895).
                 row_classes.append("data-table-row-clickable")
-                row_attrs += (
-                    f' data-href="{_row_href(row, row_url)}" {_ROW_NAV_A11Y}{row_pointer_style()}'
-                )
+                row_attrs += f' data-href="{_row_href(row, row_url)}" {_ROW_NAV_A11Y}'
+                row_attrs += row_pointer_style()
 
             cells = ""
             # Drag handle cell
