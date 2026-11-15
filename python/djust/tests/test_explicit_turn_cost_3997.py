@@ -11,6 +11,7 @@ this file pins the structural facts behind the savings, never a duration:
 
 from __future__ import annotations
 
+import json
 import zlib
 from typing import Any, Dict, List
 
@@ -164,3 +165,110 @@ async def test_a_changed_turn_encodes_the_state_once_and_builds_one_name_rule(mo
     # Once: the state's own text plus its names and the envelope's skeleton.
     assert state_chars <= written[0] < state_chars * 1.1, (written[0], state_chars)
     assert rules[0] == 1, "one name rule per save"
+
+
+# --- the state encoder's leaf fast path ------------------------------------------------
+
+
+def _node_count(value: Any) -> int:
+    """The nodes ``encode_state_value`` counts for plain JSON data: one per
+    container and per member (a dict's keys are not nodes)."""
+    if isinstance(value, dict):
+        return 1 + sum(_node_count(child) for child in value.values())
+    if isinstance(value, list):
+        return 1 + sum(_node_count(child) for child in value)
+    return 1
+
+
+def _depth(value: Any) -> int:
+    if isinstance(value, dict) and value:
+        return 1 + max(_depth(child) for child in value.values())
+    if isinstance(value, list) and value:
+        return 1 + max(_depth(child) for child in value)
+    return 0
+
+
+PLAIN = [
+    [],
+    {},
+    [None, True, False, "", "x", 0, -1, 2**53 - 1, -(2**53) + 1, 1.5, -0.0],
+    {"a": [1, {"b": [None, "é", 2.25]}], "c": {}, "d": []},
+    [{"id": i, "name": f"row {i}", "qty": i % 7, "tags": ["a", f"t{i}"]} for i in range(20)],
+    [[[[["deep"]]]]],
+]
+
+
+@pytest.mark.parametrize("value", PLAIN)
+def test_plain_data_encodes_as_itself_with_exact_node_and_depth_limits(value):
+    from djust.serialization import StateValueError, encode_state_value
+
+    nodes, depth = _node_count(value), _depth(value)
+    encoded = encode_state_value(value, max_nodes=nodes, max_depth=depth)
+    assert encoded == value and json.dumps(encoded) == json.dumps(value)
+    assert encoded is not value or not isinstance(value, (list, dict)), "a copy, never the value"
+    with pytest.raises(StateValueError) as over_nodes:
+        encode_state_value(value, max_nodes=nodes - 1, max_depth=depth)
+    assert over_nodes.value.kind == "structure"
+    if depth:
+        with pytest.raises(StateValueError) as over_depth:
+            encode_state_value(value, max_nodes=nodes, max_depth=depth - 1)
+        assert over_depth.value.kind == "structure"
+
+
+@pytest.mark.parametrize(
+    "value, tagged",
+    [
+        ([2**53, 2.0], [{"__djust_type": ["int", str(2**53)]}, 2.0]),
+        ([float("inf")], [{"__djust_type": ["float", "inf"]}]),
+        ({"t": (1, "a")}, {"t": {"__djust_type": ["tuple", [1, "a"]]}}),
+        ({1: "x"}, {"__djust_type": ["dict", [[1, "x"]]]}),
+        ({"__djust_x": 1}, {"__djust_type": ["dict", [["__djust_x", 1]]]}),
+    ],
+)
+def test_values_that_are_not_their_own_encoding_still_go_through_the_walk(value, tagged):
+    from djust.serialization import STATE_VALUE_TAG, encode_state_value
+
+    expected = json.loads(json.dumps(tagged).replace("__djust_type", STATE_VALUE_TAG))
+    assert encode_state_value(value) == expected
+
+
+def test_the_first_refusal_is_the_one_met_first_in_order():
+    from djust.serialization import StateValueError, encode_state_value
+
+    with pytest.raises(StateValueError) as early_type:
+        encode_state_value([object()] + [0] * 10, max_nodes=5)
+    assert early_type.value.kind != "structure"
+    with pytest.raises(StateValueError) as early_size:
+        encode_state_value([0] * 10 + [object()], max_nodes=5)
+    assert early_size.value.kind == "structure"
+    with pytest.raises(StateValueError) as subclass:
+        encode_state_value({"a": [1, True, type("S", (str,), {})("x")]})
+    assert subclass.value.kind != "structure", "an str subclass is refused, never kept"
+
+
+def test_a_list_of_scalars_is_one_walk_call_not_one_per_member():
+    """Counted with a profile hook, not timed: the encoder's ``walk`` runs
+    once for a list of 1,000 scalars, and once per row (plus once per nested
+    list) for a list of dict rows, not once per cell."""
+    import sys
+
+    from djust.serialization import encode_state_value
+
+    def walk_calls(value: Any) -> int:
+        calls = [0]
+
+        def hook(frame: Any, event: str, arg: Any) -> None:
+            if event == "call" and frame.f_code.co_name == "walk":
+                if frame.f_code.co_filename.endswith("serialization.py"):
+                    calls[0] += 1
+
+        sys.setprofile(hook)
+        try:
+            encode_state_value(value)
+        finally:
+            sys.setprofile(None)
+        return calls[0]
+
+    assert walk_calls(list(range(1000)) + ["x", None, 1.5, True]) == 1
+    rows = [{"id": i, "name": f"r{i}", "tags": ["a", "b"]} for i in range(100)]
+    assert walk_calls(rows) == 1 + 100 + 100
