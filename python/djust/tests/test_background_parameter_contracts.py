@@ -10,21 +10,19 @@ from asgiref.sync import sync_to_async
 
 from djust import event_handler
 from djust.runtime import ViewRuntime, WSConsumerTransport
-from djust.tests.test_background_html_fallback import BackgroundView as _ExplicitBackgroundView
+from djust.tests.test_background_html_fallback import BackgroundView
 from djust.websocket import LiveViewConsumer
 
 
-class BackgroundView(_ExplicitBackgroundView):
-    """The view this file drives without a real mount, so on the legacy policy it always had.
+class LegacyBackgroundView(BackgroundView):
+    """``test_background_html_fallback.BackgroundView`` runs as explicit since
+    #4082; these tests install views on hand-built consumers and runtimes with
+    no mount, which an explicit view's turns refuse. Not migrated yet."""
 
-    It inherited ``legacy`` from test_background_html_fallback's view until #4082's second pass
-    ran that one as explicit (with real mounts); the policy is stated here now.
-    """
-
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # not migrated (#4082): hand-built consumer/runtime, no mount
 
 
-class ContractView(BackgroundView):
+class ContractView(LegacyBackgroundView):
     @event_handler(parameter_policy="strict")
     def choose(self, value: int):
         self.count = value
@@ -97,7 +95,7 @@ async def test_background_frame_and_recovery_share_render_contract(source, full_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", SOURCES)
 async def test_legacy_background_frames_keep_legacy_shape(source):
-    consumer, _, _ = await setup(view_class=BackgroundView)
+    consumer, _, _ = await setup(view_class=LegacyBackgroundView)
     if source.startswith("async"):
         consumer.view_instance.handle_async_result = lambda *args, **kwargs: None
     await produce(consumer, source)
@@ -210,7 +208,7 @@ async def test_cancelled_render_retains_lock_until_worker_settles(source):
 @pytest.mark.parametrize("source", SOURCES)
 async def test_replaced_owner_during_render_cannot_deliver(source):
     consumer, view, _ = await setup()
-    replacement = BackgroundView()
+    replacement = LegacyBackgroundView()
     replacement.mount(None)
     original = view.render_with_diff
 
@@ -231,7 +229,7 @@ async def test_replaced_owner_during_render_cannot_deliver(source):
 @pytest.mark.parametrize("source", SOURCES)
 async def test_replaced_owner_while_waiting_never_runs_result_handler(source):
     consumer, view, _ = await setup()
-    replacement = BackgroundView()
+    replacement = LegacyBackgroundView()
     replacement.mount(None)
     async with consumer._render_lock:
         task = asyncio.create_task(produce(consumer, source))

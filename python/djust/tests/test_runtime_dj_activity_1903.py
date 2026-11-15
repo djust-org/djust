@@ -147,10 +147,15 @@ class MockTransport:
             self._in_event_context = False
 
 
-def _make_runtime(view: LiveView, *, scope: Optional[dict] = None):
+async def _make_runtime(view: LiveView, *, scope: Optional[dict] = None):
+    """A runtime that MOUNTED ``view`` on a live session (an explicit view's
+    events are authorized against its mount binding); the mount's frames are
+    cleared."""
+    from djust.tests._live_session import amount_on_runtime
+
     transport = MockTransport()
     runtime = ViewRuntime(transport, scope=scope)
-    runtime.view_instance = view
+    await amount_on_runtime(runtime, view)
     return runtime, transport
 
 
@@ -170,7 +175,7 @@ def _make_runtime(view: LiveView, *, scope: Optional[dict] = None):
 class _ActivityView(LiveView):
     """Counter with a ``panel`` activity registered HIDDEN at mount."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">count={{ count }} opens={{ opens }}</div>'
 
     def mount(self, request, **kwargs):
@@ -198,7 +203,7 @@ class _NoActivityView(LiveView):
     """A plain counter with NO activity region — the gate must be a total no-op
     (zero-cost-when-unused)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">count={{ count }}</div>'
 
     def mount(self, request, **kwargs):
@@ -219,11 +224,12 @@ class _NoActivityView(LiveView):
 
 class TestRuntimeActivityGate:
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_hidden_activity_event_is_queued_and_noop(self):
         """An event targeting a HIDDEN activity → queued + no-op (NO render)."""
         view = _ActivityView()
         view.mount(None)
-        runtime, transport = _make_runtime(view)
+        runtime, transport = await _make_runtime(view)
 
         await runtime.dispatch_event(
             {
@@ -246,12 +252,13 @@ class TestRuntimeActivityGate:
         assert transport.sent[0].get("event_name") == "bump"
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_gate_off_hidden_activity_event_renders_immediately(self):
         """GATE-OFF (#1468): with the gate disabled, the hidden-activity event
         WRONGLY runs + renders immediately — proving the gate is load-bearing."""
         view = _ActivityView()
         view.mount(None)
-        runtime, transport = _make_runtime(view)
+        runtime, transport = await _make_runtime(view)
 
         # Neuter the gate by making the view report the panel as always-visible
         # (the gate's hidden-check then never fires).
@@ -277,12 +284,13 @@ class TestRuntimeActivityGate:
         assert "panel" not in view._deferred_activity_events
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_flip_visible_drains_queue_same_round_trip(self):
         """Queue while hidden, then a show_panel event flips visible → the queued
         event drains in the SAME round-trip (2nd render frame)."""
         view = _ActivityView()
         view.mount(None)
-        runtime, transport = _make_runtime(view)
+        runtime, transport = await _make_runtime(view)
 
         # 1) Hidden bump → queued + noop.
         await runtime.dispatch_event(
@@ -306,12 +314,13 @@ class TestRuntimeActivityGate:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_view_without_activity_region_renders_normally(self):
         """A view with NO {% dj_activity %} region → the gate is a no-op; the
         event renders normally even with a stray _activity param."""
         view = _NoActivityView()
         view.mount(None)
-        runtime, transport = _make_runtime(view)
+        runtime, transport = await _make_runtime(view)
 
         # Even a stray _activity marker is harmless: is_activity_visible returns
         # True for an unknown name, so the gate falls through to a normal render.
@@ -326,13 +335,14 @@ class TestRuntimeActivityGate:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_redispatcher_runs_inside_borrowed_context_no_reentry(self):
         """The lock-free re-dispatcher MUST run inside the borrowed event_context
         and NEVER re-enter it (a real consumer's non-reentrant _render_lock would
         deadlock on re-entry). The MockTransport records any re-entry attempt."""
         view = _ActivityView()
         view.mount(None)
-        runtime, transport = _make_runtime(view)
+        runtime, transport = await _make_runtime(view)
 
         await runtime.dispatch_event(
             {"type": "event", "event": "bump", "params": {"_activity": "panel"}, "ref": 1}
@@ -351,17 +361,19 @@ class TestRuntimeActivityGate:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_redispatcher_revalidates_denied_queued_event(self):
         """A denied queued event never dispatches — the re-dispatcher re-runs the
         full auth pipeline, so an unknown/denied handler in the queue is dropped
         (matches the WS flush per-event behavior)."""
         view = _ActivityView()
-        view.mount(None)
+        # Mounted first: the runtime's mount runs mount(), which resets the
+        # activity state queued below.
+        runtime, transport = await _make_runtime(view)
         # Queue a non-existent handler directly (simulating a client-supplied
         # event that passed the queue but has no handler).
         view._queue_deferred_activity_event("panel", "no_such_handler", {})
         view.set_activity_visible("panel", True)
-        runtime, transport = _make_runtime(view)
 
         # Drain directly (the path the post-render flush takes).
         await runtime._flush_deferred_activity_events()
@@ -426,7 +438,7 @@ class _ActivitySSEView(LiveView):
     inline Rust engine doesn't support the tag — same #1896 parity-net pattern as
     the direct-runtime views above)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">count={{ count }} opens={{ opens }}</div>'
 
     def mount(self, request, **kwargs):
@@ -448,7 +460,7 @@ class _ActivitySSEView(LiveView):
 
 
 class _NoActivitySSEView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">count={{ count }}</div>'
 
     def mount(self, request, **kwargs):
@@ -483,8 +495,15 @@ def _drain(session):
     return msgs
 
 
+#: The server session each stream was mounted with, by stream id.
+_HTTP_SESSIONS: dict = {}
+
+
 async def _mount_stream(view_path, *, query=""):
+    from asgiref.sync import sync_to_async
     from django.contrib.auth.models import AnonymousUser
+
+    from djust.tests._live_session import live_session
     from django.test import RequestFactory
 
     from djust.sse import DjustSSEStreamView, _sse_sessions
@@ -497,20 +516,22 @@ async def _mount_stream(view_path, *, query=""):
         f"/djust/sse/{sid}/{q}", HTTP_ORIGIN=ALLOWED_ORIGIN, HTTP_HOST="example.com", secure=True
     )
     request.user = AnonymousUser()
+    # A saved server session: an explicit view's mount binds to it, and every
+    # event POST of this stream carries the same one (``_post_event``).
+    request.session = _HTTP_SESSIONS[sid] = await sync_to_async(live_session)(None)
     view = DjustSSEStreamView()
     response = await view.get(request, session_id=sid)
     return response, _sse_sessions.get(sid), sid
 
 
 async def _post_event(session, sid, event, params=None):
-    from unittest.mock import MagicMock
-
+    """An event POST carrying the stream's own server session (anonymous, as
+    the mount), so it owns the session (Finding #24) and reaches dispatch."""
+    from django.contrib.auth.models import AnonymousUser
     from django.test import RequestFactory
 
     from djust.sse import DjustSSEMessageView
 
-    session._owner_user_pk = 7
-    session._owner_session_key = None
     rf = RequestFactory()
     request = rf.post(
         f"/djust/sse/{sid}/message/",
@@ -520,7 +541,8 @@ async def _post_event(session, sid, event, params=None):
         HTTP_HOST="example.com",
         secure=True,
     )
-    request.user = MagicMock(is_authenticated=True, pk=7)
+    request.user = AnonymousUser()
+    request.session = _HTTP_SESSIONS[sid]
     view = DjustSSEMessageView()
     return await view.post(request, session_id=sid)
 
@@ -528,6 +550,7 @@ async def _post_event(session, sid, event, params=None):
 @pytest.mark.django_db
 class TestSSEActivityViaRuntime:
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_hidden_activity_event_deferred_over_sse(self):
         """Over the REAL SSE transport: an event on a HIDDEN activity → queued +
         noop (no render). This is the LIVE parity improvement for SSE."""
@@ -552,6 +575,7 @@ class TestSSEActivityViaRuntime:
             assert any(m.get("type") == "noop" for m in msgs), f"expected a noop, got {msgs!r}"
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_flip_visible_drains_over_sse_same_round_trip(self):
         """Over SSE: queue while hidden, then flip visible → the queued event
         drains in the same /message/ round-trip."""
@@ -580,6 +604,7 @@ class TestSSEActivityViaRuntime:
             )
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_no_activity_sse_view_unaffected(self):
         """An SSE view with NO {% dj_activity %} region renders normally — the
         gate adds zero behavior when unused."""

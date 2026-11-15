@@ -204,6 +204,21 @@ def _isolate_current_tenant():
 
 
 @pytest.fixture(autouse=True)
+def _release_left_sse_sessions():
+    """Shut down every SSE session a test left registered (`tests/sse_isolation.py`).
+
+    A left session of an explicit view held a save task of a closed event loop,
+    and `test_sse_save_teardown_3212` failed with "belongs to a different loop"
+    when such a test ran first in the same worker. Does nothing, and imports
+    nothing, unless `djust.sse` is already loaded and its registry is non-empty.
+    """
+    yield
+    from tests.sse_isolation import release_sse_sessions
+
+    release_sse_sessions()
+
+
+@pytest.fixture(autouse=True)
 def _no_agent_hint_env(monkeypatch):
     """Disable inherited AI hints in subprocess check tests; I001 tests opt in.
 

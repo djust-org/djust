@@ -26,7 +26,6 @@ import json
 import sys
 import uuid
 from copy import copy
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -97,7 +96,7 @@ class _PassThroughAuth:
 
 
 class _LrmBase(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False  # not an exemption under the middleware
 
     def mount(self, request, **kwargs):
@@ -484,14 +483,31 @@ def test_live_render_child_follows_its_page():
 # --------------------------------------------------------------------------- #
 
 
-def _scoped(app, user):
-    async def mw(scope, receive, send):
-        scope = dict(scope)
-        scope["user"] = user
-        scope.setdefault("session", {})
-        return await app(scope, receive, send)
+def _login(user):
+    """A real user and a live session standing in for the stub ``user``.
 
-    return mw
+    An explicit view binds to the session it was mounted on and re-reads its
+    user there: ``_Anon`` becomes an anonymous session, ``_Authed`` a saved
+    user logged into one.
+    """
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import AnonymousUser
+
+    from djust.tests._live_session import live_session
+
+    if not user.is_authenticated:
+        return AnonymousUser(), live_session(None)
+    saved = get_user_model().objects.create_user("lrm" + uuid.uuid4().hex[:10], password="pw-x")
+    return saved, live_session(saved)
+
+
+async def _scoped(communicator, user):
+    """Give the socket the real user and live session standing in for ``user``."""
+    from asgiref.sync import sync_to_async
+
+    real, session = await sync_to_async(_login)(user)
+    communicator.scope.update(user=real, session=session)
+    return communicator
 
 
 async def _ws_mount(user, view_cls, url):
@@ -500,7 +516,7 @@ async def _ws_mount(user, view_cls, url):
 
     from djust.websocket import LiveViewConsumer
 
-    socket = WebsocketCommunicator(_scoped(LiveViewConsumer.as_asgi(), user), "/ws/")
+    socket = await _scoped(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"), user)
     connected, _ = await socket.connect()
     assert connected
     await socket.receive_json_from()
@@ -528,7 +544,7 @@ WS_CASES = [
 ]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("lrm")
 @pytest.mark.parametrize("view_cls,url,refused", WS_CASES)
@@ -543,7 +559,7 @@ async def test_ws_anonymous(view_cls, url, refused):
         assert f"{view_cls.__name__}:1" in (frame.get("html") or "")
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("lrm")
 async def test_ws_public_page_renders_its_children():
@@ -553,7 +569,7 @@ async def test_ws_public_page_renders_its_children():
         assert f"{name}:1" in (frame.get("html") or ""), name
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("lrm")
 @pytest.mark.parametrize("view_cls,url,refused", WS_CASES)
@@ -562,7 +578,7 @@ async def test_ws_authenticated(view_cls, url, refused):
     assert frame.get("type") == "mount", frame
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_lrm")
 async def test_ws_without_middleware_unchanged():
@@ -570,7 +586,7 @@ async def test_ws_without_middleware_unchanged():
     assert frame.get("type") == "mount", frame
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_ws_subclass_exemption():
     with _settings(True, f"{MOD}.PrefixExemptLRM"):
@@ -588,11 +604,12 @@ async def test_ws_subclass_exemption():
 async def _sse_mount(user, view_cls, request_path="/djust/sse/stream/"):
     from djust import sse
 
+    from asgiref.sync import sync_to_async
+
     request = RequestFactory().get(request_path)
-    request.user = user
-    request.session = MagicMock()
+    request.user, request.session = await sync_to_async(_login)(user)
     session = sse.SSESession(str(uuid.uuid4()))
-    session._owner_user_pk = getattr(user, "pk", None)
+    session._owner_user_pk = getattr(request.user, "pk", None)
     legacy_mount = getattr(sse, "_sse_mount_view", None)  # releases before the runtime
     if legacy_mount is not None:
         mounted = await legacy_mount(session, request, f"{MOD}.{view_cls.__name__}")
@@ -608,7 +625,7 @@ async def _sse_mount(user, view_cls, request_path="/djust/sse/stream/"):
     return mounted, [m for m in msgs if m]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("lrm")
 @pytest.mark.parametrize("view_cls", [LrmPrivateView, LrmEmbeddedView])
@@ -618,7 +635,7 @@ async def test_sse_anonymous_refused(view_cls):
     assert any(m.get("type") == "navigate" and LOGIN in json.dumps(m) for m in msgs), msgs
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("lrm")
 async def test_sse_authenticated_allowed():
@@ -627,7 +644,7 @@ async def test_sse_authenticated_allowed():
     assert any(m.get("type") == "mount" for m in msgs), msgs
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("lrm")
 @pytest.mark.parametrize("view_cls", [LrmMarkedView, LrmPublicRouteView])
@@ -637,7 +654,7 @@ async def test_sse_public_views_allowed_anonymously(view_cls):
     assert mounted is True
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_lrm")
 async def test_sse_without_middleware_unchanged():
@@ -845,7 +862,7 @@ async def test_ws_refused_view_beside_the_page_keeps_the_page_view_observed():
             await super().connect()
 
     _CONSUMERS.clear()
-    socket = WebsocketCommunicator(_scoped(_Capturing.as_asgi(), _Anon()), "/ws/")
+    socket = await _scoped(WebsocketCommunicator(_Capturing.as_asgi(), "/ws/"), _Anon())
     connected, _ = await socket.connect()
     assert connected
     try:

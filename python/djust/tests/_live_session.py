@@ -178,6 +178,7 @@ async def amount_on_consumer(
     url: str = "/",
     params: dict | None = None,
     stop_tick: bool = True,
+    view: Any = None,
 ) -> Any:
     """Mount ``view_path`` on a hand-built ``LiveViewConsumer``, as a socket does.
 
@@ -190,7 +191,9 @@ async def amount_on_consumer(
     ``user`` (anonymous when ``None``), the per-connection state ``connect()``
     creates, and runs the real ``handle_mount``. The mount's frames are
     cleared from ``consumer.sent`` when the test captures sends there, and the
-    tick loop a ``tick_interval`` view starts is stopped (``stop_tick``). Needs
+    tick loop a ``tick_interval`` view starts is stopped (``stop_tick``).
+    ``view``: mount this instance instead of a new one (only the view lookup
+    is stubbed; ``view_path`` must still pass the allowlist). Needs
     ``django_db(transaction=True)``. Returns the mounted view.
     """
     from django.contrib.auth.models import AnonymousUser
@@ -221,6 +224,10 @@ async def amount_on_consumer(
     frame = {"type": "mount", "view": view_path, "url": url}
     if params:
         frame["params"] = params
+    if view is not None:
+        from unittest.mock import MagicMock
+
+        consumer._get_runtime()._instantiate_view = MagicMock(return_value=view)
     await consumer.handle_mount(frame)
     sent = getattr(consumer, "sent", None)
     if consumer.view_instance is None:

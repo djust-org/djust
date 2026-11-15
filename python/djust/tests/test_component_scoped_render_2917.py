@@ -48,7 +48,7 @@ if not settings.configured:
 
 from djust import LiveView  # noqa: E402
 from djust.components.descriptors.base import LiveComponent, TypedState  # noqa: E402
-from djust.decorators import computed, event_handler  # noqa: E402
+from djust.decorators import computed, event_handler, state  # noqa: E402
 from djust.runtime import (  # noqa: E402
     ViewRuntime,
     _scoped_component_for,
@@ -99,7 +99,7 @@ class Idempotent(LiveComponent):
 
 
 class IdempotentPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ banner }}</div>"
     banner = Idempotent()
 
@@ -126,9 +126,11 @@ class Probe(LiveComponent):
 class OpaquePage(LiveView):
     """``{{ nav }}`` is the only read of the component: D2 holds."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>{{ title }}</h1>{{ nav }}<i>{{ note }}</i></div>"
     nav = Tabs()
+    title = state("")
+    note = state("")
 
     def mount(self, request: Any, **kwargs: Any) -> None:
         self.title = "Page"
@@ -157,7 +159,7 @@ class OpaquePage(LiveView):
 class ReadsStatePage(LiveView):
     """``{{ nav.active }}`` elsewhere: not opaque, page render."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ nav }}|{{ nav.active }}</div>"
     nav = Tabs()
 
@@ -168,7 +170,7 @@ class ReadsStatePage(LiveView):
 class ComputedPage(LiveView):
     """A memoised ``@computed`` over the component: page render."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
     nav = Tabs()
 
@@ -179,12 +181,16 @@ class ComputedPage(LiveView):
     def label(self) -> str:
         return f"tab:{self.nav.active}"
 
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        # An explicit view supplies a derived value through its context.
+        return super().get_context_data(label=self.label, **kwargs)
+
 
 class PropertyPage(LiveView):
     """A view ``@property`` derived from the component, read by the template
     under another name (review of #2920 🔴1)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
     nav = Tabs()
 
@@ -195,11 +201,15 @@ class PropertyPage(LiveView):
     def label(self) -> str:
         return f"tab:{self.nav.active}"
 
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        # An explicit view supplies a derived value through its context.
+        return super().get_context_data(label=self.label, **kwargs)
+
 
 class ContextDataPage(LiveView):
     """``get_context_data`` derives a value from the component."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
     nav = Tabs()
 
@@ -215,7 +225,7 @@ class ContextDataPage(LiveView):
 class PlainComputedPage(LiveView):
     """A dep-less ``@computed`` over the component."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ nav }}<b>{{ label }}</b></div>"
     nav = Tabs()
 
@@ -226,11 +236,16 @@ class PlainComputedPage(LiveView):
     def label(self) -> str:
         return f"tab:{self.nav.active}"
 
+    def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+        # An explicit view supplies a derived value through its context.
+        return super().get_context_data(label=self.label, **kwargs)
+
 
 class AliasPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>{{ title }}</h1>{{ probe }}</div>"
     probe = Probe()
+    title = state("")
 
     def mount(self, request: Any, **kwargs: Any) -> None:
         self.title = "Alias"
@@ -281,18 +296,18 @@ class MockTransport:
         yield
 
 
-def _runtime(view: LiveView) -> tuple[ViewRuntime, MockTransport]:
+async def _mounted(cls: type) -> tuple[LiveView, ViewRuntime, MockTransport]:
+    """A ``cls`` view mounted for real on a runtime (the mount renders the baseline).
+
+    An explicit view's turns need the runtime that mounted it and a mount
+    binding to a live server session (``amount_on_runtime``).
+    """
+    from djust.tests._live_session import amount_on_runtime
+
+    view = cls()
     transport = MockTransport()
     runtime = ViewRuntime(transport)
-    runtime.view_instance = view
-    return runtime, transport
-
-
-def _mounted(cls: type) -> tuple[LiveView, ViewRuntime, MockTransport]:
-    view = cls()
-    view.mount(None)
-    runtime, transport = _runtime(view)
-    view.render_with_diff()  # the mount baseline
+    await amount_on_runtime(runtime, view, url="/2917/")
     return view, runtime, transport
 
 
@@ -342,32 +357,34 @@ def test_template_is_component_opaque(source, opaque):
     assert _template_is_component_opaque(source, "nav") is opaque
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
 class TestScopedComponentFor:
-    def test_the_one_changed_slot_of_a_templated_component(self):
-        view, _, _ = _mounted(OpaquePage)
+    async def test_the_one_changed_slot_of_a_templated_component(self):
+        view, _, _ = await _mounted(OpaquePage)
         assert _scoped_component_for(view, {"_component_nav"}) is view.nav
 
     @pytest.mark.parametrize(
         "changed", [set(), None, {"title"}, {"_component_nav", "title"}, {"_component_zzz"}]
     )
-    def test_anything_else_is_none(self, changed):
-        view, _, _ = _mounted(OpaquePage)
+    async def test_anything_else_is_none(self, changed):
+        view, _, _ = await _mounted(OpaquePage)
         assert _scoped_component_for(view, changed) is None
 
-    def test_a_component_without_a_template_is_none(self):
+    async def test_a_component_without_a_template_is_none(self):
         class Plain(LiveComponent):
             class State(TypedState):
                 x: int = 0
 
         class Page(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root>{{ plain }}</div>"
             plain = Plain()
 
             def mount(self, request: Any, **kwargs: Any) -> None:
                 pass
 
-        view, _, _ = _mounted(Page)
+        view, _, _ = await _mounted(Page)
         assert _scoped_component_for(view, {"_component_plain"}) is None
 
 
@@ -376,7 +393,7 @@ class TestScopedComponentFor:
 # ------------------------------------------------------------------ #
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestScopedPath:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("frame_type", ["noop", "patch", "html_update"])
@@ -385,7 +402,7 @@ class TestScopedPath:
 
         release = asyncio.Event()
         completed = []
-        view, runtime, transport = _mounted(OpaquePage)
+        view, runtime, transport = await _mounted(OpaquePage)
 
         @event_handler()
         def select(component, **kwargs):
@@ -434,7 +451,7 @@ class TestScopedPath:
 
     @pytest.mark.asyncio
     async def test_component_event_patches_only_the_component_subtree(self):
-        view, runtime, transport = _mounted(OpaquePage)
+        view, runtime, transport = await _mounted(OpaquePage)
         prefix = _component_prefix(view, "nav")
         await runtime.dispatch_event(
             {
@@ -459,7 +476,7 @@ class TestScopedPath:
     @pytest.mark.asyncio
     async def test_alias_event_takes_the_scoped_path_too(self):
         """No ``component_id``: the runtime event route through the skip gate."""
-        view, runtime, transport = _mounted(AliasPage)
+        view, runtime, transport = await _mounted(AliasPage)
         await runtime.dispatch_event(
             {"type": "event", "event": "probe_set", "params": {"value": "billing"}, "ref": 1}
         )
@@ -477,7 +494,7 @@ class TestScopedPath:
         """Full render after a scoped one: the Rust state and fragment cache
         were updated, so the page shows the patched component, the next page
         patch is only the title, and versions stay monotonic."""
-        view, runtime, transport = _mounted(OpaquePage)
+        view, runtime, transport = await _mounted(OpaquePage)
         await runtime.dispatch_event(
             {"type": "event", "event": "select", "params": {"component_id": "nav", "value": "b1"}}
         )
@@ -503,8 +520,8 @@ class TestScopedPath:
 
     @pytest.mark.asyncio
     async def test_other_views_are_untouched(self):
-        other, _, _ = _mounted(OpaquePage)
-        view, runtime, _ = _mounted(OpaquePage)
+        other, _, _ = await _mounted(OpaquePage)
+        view, runtime, _ = await _mounted(OpaquePage)
         await runtime.dispatch_event(
             {"type": "event", "event": "select", "params": {"component_id": "nav", "value": "b"}}
         )
@@ -512,14 +529,14 @@ class TestScopedPath:
         assert "overview<b" in other.render_with_diff()[0]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestNoChangeOnTheComponentRoute:
     @pytest.mark.asyncio
     async def test_a_handler_that_changed_nothing_answers_noop(self):
         """#2922: the component route rendered the whole page as an
         ``html_update`` for a click whose handler left the state equal; the
         view route answered ``noop``. Now both do."""
-        view, runtime, transport = _mounted(IdempotentPage)
+        view, runtime, transport = await _mounted(IdempotentPage)
         event = {"type": "event", "event": "accept", "params": {"component_id": "banner"}}
         await runtime.dispatch_event({**event, "ref": 1})
         first = _last_frame(transport)
@@ -536,7 +553,7 @@ class TestNoChangeOnTheComponentRoute:
         so does the component route — the push drains before the noop."""
         import asyncio
 
-        view, runtime, transport = _mounted(IdempotentPage)
+        view, runtime, transport = await _mounted(IdempotentPage)
         await runtime.dispatch_event(
             {"type": "event", "event": "toast", "params": {"component_id": "banner"}, "ref": 1}
         )
@@ -549,7 +566,7 @@ class TestNoChangeOnTheComponentRoute:
     async def test_forced_full_html_is_consumed_on_the_component_route(self):
         """#2923 review 🟡2: the flag was never reset here, so every later
         component event bypassed the noop and scoped branches."""
-        view, runtime, transport = _mounted(IdempotentPage)
+        view, runtime, transport = await _mounted(IdempotentPage)
         event = {"type": "event", "params": {"component_id": "banner"}}
         await runtime.dispatch_event({**event, "event": "force", "ref": 1})
         assert _last_frame(transport)["type"] == "html_update"
@@ -560,13 +577,13 @@ class TestNoChangeOnTheComponentRoute:
         assert _last_frame(transport)["type"] == "noop"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestFullPathGates:
     """Every gate failure is today's path: no ``scope``, and the page
     re-renders (the state change is still on the wire)."""
 
     async def _run(self, cls, event):
-        view, runtime, transport = _mounted(cls)
+        view, runtime, transport = await _mounted(cls)
         await runtime.dispatch_event({"type": "event", **event})
         assert transport.errors == []
         frame = _last_frame(transport)
@@ -631,11 +648,6 @@ class TestFullPathGates:
 # ------------------------------------------------------------------ #
 
 
-class _ScopeSession:
-    def __init__(self, key: str) -> None:
-        self.session_key = key
-
-
 async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
@@ -648,18 +660,12 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
 async def _connect_and_mount(view_path: str, url: str = "/2917/"):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
-    from django.contrib.sessions.backends.db import SessionStore
 
+    from djust.tests._live_session import with_live_session
     from djust.websocket import LiveViewConsumer
 
-    def _create_session():
-        s = SessionStore()
-        s.create()
-        return s.session_key
-
-    session_key = await sync_to_async(_create_session)()
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    communicator.scope["session"] = _ScopeSession(session_key)
+    await sync_to_async(with_live_session)(communicator)
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from()  # connect frame

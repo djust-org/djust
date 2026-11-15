@@ -61,7 +61,7 @@ class _DocAPIView(LiveView):
     *denied* object is the one a forbidden caller mounts unless overridden.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = None
     api_name = "objperm.doc"
     doc_id = 2  # default to the DENIED object so the gap is the default path
@@ -97,7 +97,7 @@ class _DocAPIView(LiveView):
 class _PublicAPIView(LiveView):
     """No custom get_object → object-perm lifecycle inactive (must stay no-op)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = None
     api_name = "objperm.public"
 
@@ -236,7 +236,7 @@ def test_server_function_noop_for_non_object_scoped_view():
 # render-path test which overrides render_with_diff). The object-perm check must
 # fire BEFORE this render, so a denied object never reaches the renderer.
 class _DocSSEView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><main>{{ doc }}</main></div>"
 
     def __init__(self, *args, **kwargs):
@@ -258,7 +258,7 @@ class _DocSSEView(LiveView):
 
 
 class _PublicSSEView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>public</div>"
 
     def get_context_data(self, **kwargs):
@@ -274,11 +274,14 @@ def _sse_session():
 
 
 def _sse_request(doc_id=None):
+    from djust.tests._live_session import with_live_session
+
     rf = RequestFactory()
     query = f"?view=x&doc_id={doc_id}" if doc_id is not None else "?view=x"
     request = rf.get(f"/djust/sse/sse-objperm/{query}")
-    request.user = AnonymousUser()
-    return request
+    # A saved server session, as the stream request carries through
+    # SessionMiddleware: an explicit mount binds to it.
+    return with_live_session(request, AnonymousUser())
 
 
 def _drain(session):
@@ -315,6 +318,7 @@ def _run_sse_mount(session, request, view_path):
     return session.runtime.view_instance is not None
 
 
+@pytest.mark.django_db(transaction=True)
 def test_sse_mount_denies_forbidden_object():
     sys.modules[__name__]._DocSSEView = _DocSSEView  # type: ignore[attr-defined]
     session = _sse_session()
@@ -332,6 +336,7 @@ def test_sse_mount_denies_forbidden_object():
     assert not any("GLOBEX" in str(m) for m in msgs), "denied object content leaked over SSE"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_sse_mount_allows_permitted_object():
     sys.modules[__name__]._DocSSEView = _DocSSEView  # type: ignore[attr-defined]
     session = _sse_session()
@@ -346,6 +351,7 @@ def test_sse_mount_allows_permitted_object():
     assert any("ACME" in str(m) for m in msgs), "permitted object should have rendered"
 
 
+@pytest.mark.django_db(transaction=True)
 def test_sse_mount_noop_for_non_object_scoped_view():
     sys.modules[__name__]._PublicSSEView = _PublicSSEView  # type: ignore[attr-defined]
     session = _sse_session()

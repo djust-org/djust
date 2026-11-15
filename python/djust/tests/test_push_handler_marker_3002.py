@@ -61,7 +61,7 @@ MARKED = ("refresh_room", "handle_marked", "called_form")
 
 
 class RoomView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><b>{{ n }}</b></div>"
     login_required = False
 
@@ -123,7 +123,7 @@ class DeepView(OverrideView):
 
 
 class StaticView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     login_required = False
 
@@ -340,7 +340,7 @@ async def test_ws_debug_refusal_does_not_reveal_that_the_handler_exists():
 
 def test_debug_hints_never_suggest_a_push_handler():
     class Twin(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @push_handler
         def _secret(self, **kwargs): ...
@@ -354,7 +354,7 @@ def test_debug_hints_never_suggest_a_push_handler():
         # Control: an ordinary private twin still is.
 
         class Ordinary(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def _secret(self, **kwargs): ...
 
@@ -517,7 +517,7 @@ def test_v004_does_not_flag_an_unmarked_override_of_a_marked_method():
     from djust.checks.components import check_liveviews
 
     class Base(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
         login_required = False
 
@@ -608,7 +608,7 @@ def test_http_api_answers_unknown_handler_for_a_marked_handler():
     from djust.api.registry import register_api_view, reset_registry
 
     class ApiRoom(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "push.room"
         login_required = False
 
@@ -647,7 +647,7 @@ def test_v004_skips_marked_handlers_of_any_name_but_keeps_flagging_the_rest():
     from djust.checks.components import check_liveviews
 
     class Checked(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
         login_required = False
 
@@ -680,7 +680,7 @@ from djust.decorators import event_handler, push_handler
 
 
 class Bound(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
 <button dj-click="refresh_room">a</button>
 <button dj-click="helper">b</button>
@@ -781,6 +781,14 @@ def test_test_client_send_push_reaches_push_handlers_and_the_consumer_allowlist(
     assert RAN == [("refresh_room", "a"), ("handle_marked",), ("handle_plain",)]
 
 
+class LegacyRoomView(RoomView):
+    exposure_policy = "legacy"  # legacy subject: debug eval_handler is legacy-only (409 otherwise)
+
+
+class LegacyOverrideView(OverrideView):
+    exposure_policy = "legacy"  # legacy subject: debug eval and time-travel replay are legacy-only
+
+
 def test_eval_handler_answers_a_marked_handler_like_a_missing_one():
     from djust.observability.registry import _clear_registry, register_view
     from djust.observability.views import eval_handler
@@ -798,7 +806,7 @@ def test_eval_handler_answers_a_marked_handler_like_a_missing_one():
     _clear_registry()
     try:
         with override_settings(DEBUG=True):
-            room = RoomView()  # the registry holds views weakly
+            room = LegacyRoomView()  # the registry holds views weakly
             register_view("s", room)
             for name in ("refresh_room", "handle_marked"):
                 marked = call(name)
@@ -807,7 +815,7 @@ def test_eval_handler_answers_a_marked_handler_like_a_missing_one():
                 assert "has no callable" in json.loads(missing.content)["error"]
                 strip = lambda r, n: json.loads(r.content)["error"].replace(n, "X")  # noqa: E731
                 assert strip(marked, name) == strip(missing, "nope_" + name)
-            override = OverrideView()
+            override = LegacyOverrideView()
             register_view("s", override)
             assert call("refresh_room").status_code == 404
             # Control: an ordinary undecorated method is the 403 it always was.
@@ -874,7 +882,7 @@ async def test_ws_override_is_refused_as_not_found_not_as_a_security_failure(cap
 
 def test_debug_hints_skip_overrides_of_push_handlers():
     class Base(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @push_handler
         def _secret(self, **kwargs): ...
@@ -901,7 +909,7 @@ def test_http_api_refuses_an_unmarked_override_like_an_unknown_handler():
     from djust.api.registry import register_api_view, reset_registry
 
     class ApiBase(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "push.base"
         login_required = False
 
@@ -983,7 +991,7 @@ async def test_time_travel_replay_refuses_an_event_handler_override_of_a_push_na
     def snapshot(name):
         return EventSnapshot(event_name=name, params={}, ref=None, ts=0.0, state_before={})
 
-    view = OverrideView()
+    view = LegacyOverrideView()
     view.mount(RequestFactory().get("/"))
     for name in ("called_form", "refresh_room", "mixin_refresh"):
         assert await sync_to_async(replay_event)(view, snapshot(name), record_replay=False) is None
@@ -995,7 +1003,7 @@ async def test_time_travel_replay_refuses_an_event_handler_override_of_a_push_na
 
 def test_v021_sees_an_unmarked_definition_on_another_base_than_the_marker():
     class Marker(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
 
         @push_handler
@@ -1005,7 +1013,7 @@ def test_v021_sees_an_unmarked_definition_on_another_base_than_the_marker():
         def bar(self, **kwargs): ...
 
     class Eh(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @event_handler
         def foo(self, **kwargs): ...

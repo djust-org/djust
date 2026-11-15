@@ -16,6 +16,7 @@ from djust.tests.test_exposure_child_mount import MountChild, make_request
 
 
 class ShellChild(MountChild):
+    exposure_policy = "explicit"  # as test_exposure_child_mount.MountChild, which it subclasses
     sticky_id = "shell"
     count = state(1, persist="server")
     secret = state("SERVER_SENTINEL", persist="server")
@@ -23,6 +24,7 @@ class ShellChild(MountChild):
 
 
 class RootChild(MountChild):
+    exposure_policy = "explicit"  # as test_exposure_child_mount.MountChild, which it subclasses
     sticky_id = "root"
     count = state(1, persist="server")
     secret = state("SERVER_SENTINEL", persist="server")

@@ -33,13 +33,15 @@ import os
 import sys
 import types
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 pytest.importorskip("channels")
 
+from asgiref.sync import sync_to_async  # noqa: E402
 from django.contrib.auth.decorators import login_required, user_passes_test  # noqa: E402
+from django.contrib.auth.models import AnonymousUser  # noqa: E402
 from django.contrib.sessions.middleware import SessionMiddleware  # noqa: E402
 from django.core.exceptions import PermissionDenied  # noqa: E402
 from django.http import Http404, HttpResponseRedirect  # noqa: E402
@@ -112,7 +114,7 @@ def _template(name, body):
 
 
 class _Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     abstract = True
 
     def mount(self, request, **kwargs):
@@ -214,7 +216,7 @@ SetupGateView = _view("SetupGateView", {"setup": _setup_gate})
 class BodyGateView(LiveView):
     """Visible to both the source scan and the inspect-based S012."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _template("BodyGateView", "BODYGATEVIEW-MARKER")
 
     def dispatch(self, request, *args, **kwargs):
@@ -296,6 +298,14 @@ PostOnlyView = _view(
     "PostOnlyView",
     decorators=[method_decorator(user_passes_test(lambda u: u.is_superuser), name="post")],
 )
+# On a legacy view a post()-only refusal of an event answers "Permission denied"
+# and keeps the view mounted; an explicit view applies the same rule while
+# authorizing the turn, and a refused authorization ends the view.
+LegacyPostOnlyView = _view(
+    "LegacyPostOnlyView",
+    decorators=[method_decorator(user_passes_test(lambda u: u.is_superuser), name="post")],
+    exposure_policy="legacy",  # legacy subject: event refusal keeps the view mounted
+)
 
 
 async def _async_is_staff(user):
@@ -341,7 +351,7 @@ _pkg = _module(
     "            return self.handle_no_permission()\n"
     "        return super().dispatch(request, *args, **kwargs)\n"
     "class EditorView(EditorMixin, LiveView):\n"
-    "    exposure_policy = 'legacy'\n"
+    "    exposure_policy = 'explicit'\n"
     "    template = '<div>editor</div>'\n",
 )
 
@@ -364,14 +374,29 @@ def _clear_ran():
     RAN.clear()
 
 
-def _with_user(app, user_cls):
-    async def mw(scope, receive, send):
-        scope = dict(scope)
-        scope["user"] = user_cls()
-        scope.setdefault("session", {})
-        return await app(scope, receive, send)
+def _login(user_cls):
+    """A saved user, logged into a live session, standing in for ``user_cls``.
 
-    return mw
+    An explicit view binds to the session it was mounted on and re-reads its
+    user there, so the stub users (which no session can name) become real ones
+    with the same flags: anonymous, a member, staff, a superuser. ``is_verified``
+    is set on the object as django-otp's middleware sets it on ``request.user``.
+    """
+    from django.contrib.auth import get_user_model
+
+    from djust.tests._live_session import live_session
+
+    if user_cls is _AnonUser:
+        return AnonymousUser(), live_session(None)
+    name = "auth" + uuid.uuid4().hex[:10]
+    users = get_user_model().objects
+    if user_cls is _SuperUser:
+        user = users.create_superuser(name, password="pw-auth-x")
+    else:
+        user = users.create_user(name, password="pw-auth-x", is_staff=user_cls is _StaffUser)
+    verified = user_cls is _VerifiedUser
+    user.is_verified = lambda: verified
+    return user, live_session(user)
 
 
 async def _next_output(communicator):
@@ -405,7 +430,9 @@ async def _ws(user_cls, view_name, event=None, url="/x/"):
 
     from djust.websocket import LiveViewConsumer
 
-    communicator = WebsocketCommunicator(_with_user(LiveViewConsumer.as_asgi(), user_cls), "/ws/")
+    user, session = await sync_to_async(_login)(user_cls)
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    communicator.scope.update(user=user, session=session)
     connected, _ = await communicator.connect()
     assert connected
     ack = await _next_output(communicator)  # connect ack
@@ -477,10 +504,9 @@ async def _sse_mount(user, view_name, event=None):
     from djust.sse import SSESession
 
     request = RequestFactory().get("/x/")
-    request.user = user
-    request.session = MagicMock()
+    request.user, request.session = await sync_to_async(_login)(type(user))
     session = SSESession(str(uuid.uuid4()))
-    session._owner_user_pk = user.pk
+    session._owner_user_pk = request.user.pk
     session._request = request
     await session.runtime.dispatch_mount(
         {"type": "mount", "view": f"{_MOD}.{view_name}", "url": "/x/", "params": {}}
@@ -518,7 +544,7 @@ R1_SHAPES = [
 # --------------------------------------------------------------------------- #
 # R1
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestDenialsAreGates:
@@ -556,7 +582,7 @@ class TestDenialsAreGates:
         assert _close_code(outputs) == 4403, outputs
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestDenialsOnThePostFallback:
     @pytest.mark.parametrize("view_name", R1_SHAPES)
     def test_anonymous_post_is_refused(self, view_name):
@@ -593,7 +619,7 @@ class TestDenialPredicate:
 # --------------------------------------------------------------------------- #
 # R2
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestUrlconfWrappers:
@@ -639,7 +665,7 @@ class TestUrlconfWrappers:
         assert mounted is True
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.usefixtures("_live")
 class TestUrlconfWrappersOnThePostFallback:
     def test_anonymous_post_is_refused(self):
@@ -659,7 +685,7 @@ class TestUrlconfWrappersOnThePostFallback:
 # --------------------------------------------------------------------------- #
 # R3
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestDecoratorBuiltOnUserPassesTest:
@@ -675,7 +701,7 @@ class TestDecoratorBuiltOnUserPassesTest:
 # --------------------------------------------------------------------------- #
 # Item 6: post()-only rules apply to events, not to the mount
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestPostOnlyDecorator:
@@ -685,7 +711,7 @@ class TestPostOnlyDecorator:
 
     @pytest.mark.parametrize("user_cls", [_AnonUser, _MemberUser, _StaffUser])
     async def test_event_is_refused(self, user_cls):
-        outputs = await _ws(user_cls, "PostOnlyView", event="touch")
+        outputs = await _ws(user_cls, "LegacyPostOnlyView", event="touch")
         assert _mounted(outputs)
         assert RAN == [], "a post()-gated handler ran for %s" % user_cls.__name__
         assert any(
@@ -698,15 +724,15 @@ class TestPostOnlyDecorator:
         assert RAN == ["PostOnlyView"]
 
     async def test_sse_event_is_refused_and_runs_for_the_permitted_user(self):
-        mounted, messages = await _sse_mount(_MemberUser(), "PostOnlyView", event="touch")
+        mounted, messages = await _sse_mount(_MemberUser(), "LegacyPostOnlyView", event="touch")
         assert mounted is True
         assert RAN == []
         assert "Permission denied" in repr(messages)
-        mounted, _ = await _sse_mount(_SuperUser(), "PostOnlyView", event="touch")
-        assert RAN == ["PostOnlyView"]
+        mounted, _ = await _sse_mount(_SuperUser(), "LegacyPostOnlyView", event="touch")
+        assert RAN == ["LegacyPostOnlyView"]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestPostOnlyDecoratorOnThePostFallback:
     def test_refused(self):
         assert _post(PostOnlyView, _AnonUser()).status_code == 403
@@ -728,7 +754,7 @@ class TestPostOnlyDecoratorOnThePostFallback:
 # --------------------------------------------------------------------------- #
 # Item 7: async test functions
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @ws
 class TestAsyncTestFunc:
@@ -781,7 +807,7 @@ def _for(messages, check_id, label):
     return [m for m in messages if m.id == check_id and m.msg.startswith(label + ":")]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_checks_report_refused_views_as_errors_and_the_rest_as_warnings():
     messages = _run_checks(
         [
@@ -815,7 +841,7 @@ def test_checks_report_refused_views_as_errors_and_the_rest_as_warnings():
     assert unknown_warnings and "URLconf" in unknown_warnings[0].msg
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_no_duplicate_s012_for_a_view_both_scans_see():
     """The source scan skips classes the inspect-based S012 analysed."""
     messages = _run_checks()

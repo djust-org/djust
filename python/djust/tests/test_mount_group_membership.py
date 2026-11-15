@@ -29,13 +29,13 @@ from djust.presence import PresenceManager, PresenceMixin
 
 pytest.importorskip("channels")
 
-pytestmark = pytest.mark.django_db
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 class _GatedPresenceView(PresenceMixin, LiveView):
     """Presence view that requires a logged-in user."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = True
     template = '<div dj-view="gated" dj-id="0">members only</div>'
 
@@ -46,7 +46,7 @@ class _GatedPresenceView(PresenceMixin, LiveView):
 class _OpenPresenceView(PresenceMixin, LiveView):
     """Presence view open to anonymous users."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = '<div dj-view="open" dj-id="0">open</div>'
 
@@ -57,7 +57,7 @@ class _OpenPresenceView(PresenceMixin, LiveView):
 class _ObjectGatedPresenceView(PresenceMixin, LiveView):
     """Presence view whose object check refuses every request (runs after mount())."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = '<div dj-view="obj" dj-id="0">object</div>'
 
@@ -72,7 +72,7 @@ class _ObjectGatedPresenceView(PresenceMixin, LiveView):
 
 
 class _PlainView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = '<div dj-view="plain" dj-id="0">plain</div>'
 
@@ -105,8 +105,12 @@ async def _connect():
 
     from djust.websocket import LiveViewConsumer
 
+    from djust.tests._live_session import with_live_session
+
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await communicator.connect()
+    # A live server session: an explicit mount binds to one, so a refusal
+    # below is the view's own and not a missing session.
+    connected, _ = await with_live_session(communicator).connect()
     assert connected
     await communicator.receive_json_from()  # connect ack
     return communicator
@@ -315,13 +319,15 @@ async def test_handler_forwards_event_with_mounted_view(handler, frame_type):
 def _sse_session(path: str):
     from djust.sse import SSESession
 
+    from djust.tests._live_session import with_live_session
+
     session = SSESession("22222222-2222-2222-2222-222222222222")
-    request = RequestFactory().get(path)
-    request.user = AnonymousUser()
+    request = with_live_session(RequestFactory().get(path), AnonymousUser())
     session._request = request
     return session
 
 
+@pytest.mark.django_db(transaction=True)
 @override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__])
 @pytest.mark.asyncio
 async def test_sse_refused_mount_leaves_session_unmounted():
@@ -333,6 +339,7 @@ async def test_sse_refused_mount_leaves_session_unmounted():
     assert session.view_instance is None
 
 
+@pytest.mark.django_db(transaction=True)
 @override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__])
 @pytest.mark.asyncio
 async def test_sse_admitted_mount_marks_session_mounted():
