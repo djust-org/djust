@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
+import uuid
 import sys
 from typing import Any, Dict, List
 
@@ -89,7 +90,7 @@ def _seen(site):
 
 
 class TurnView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-view="x" dj-id="0">n={{ n }}</div>'
     tick_interval = None
 
@@ -188,14 +189,20 @@ class _User:
         return True
 
 
-def _asgi(app):
-    async def wrapped(scope, receive, send):
-        scope = dict(scope)
-        scope["user"] = _User()
-        scope["session"] = {}
-        return await app(scope, receive, send)
+async def _signed_in():
+    """A saved user logged into a live session: an explicit view re-reads its
+    user from the session it was mounted on (a stub scope user reads as
+    anonymous there)."""
+    from asgiref.sync import sync_to_async
+    from django.contrib.auth import get_user_model
 
-    return wrapped
+    from djust.tests._live_session import live_session
+
+    def make():
+        user = get_user_model().objects.create_user("turns" + uuid.uuid4().hex[:8], password="x")
+        return user, live_session(user)
+
+    return await sync_to_async(make)()
 
 
 async def _frames(comm, wait=0.4, *, deadline=3.0):
@@ -223,7 +230,9 @@ async def _ws(view="TurnView", *, mount_extra=None, expect_mount=True):
 
     from djust.websocket import LiveViewConsumer
 
-    comm = WebsocketCommunicator(_asgi(LiveViewConsumer.as_asgi()), "/ws/")
+    user, session = await _signed_in()
+    comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    comm.scope.update(user=user, session=session)
     ok, _ = await comm.connect()
     assert ok
     await _frames(comm, 0.3)  # connect banner
@@ -442,19 +451,20 @@ ORIGIN = "http://testserver"
 SID = "31111111-1111-1111-1111-111111111111"
 
 
-def _sse_user():
-    user = _User()
-    user.pk = 7
-    return user
+#: The signed-in user and server session the SSE stream was opened with.
+_SSE_LOGIN: list = []
 
 
-async def _sse_mount(view="TurnView"):
+async def _sse_mount(view="TurnView", *, reopen=False):
+    """Open the stream; ``reopen`` reopens it as the same browser (same login)."""
     from djust.sse import DjustSSEStreamView, _sse_sessions
 
     request = RequestFactory().get(
         f"/djust/sse/{SID}/?view={MOD}.{view}&_djust_url=/turns/", HTTP_ORIGIN=ORIGIN
     )
-    request.user = _sse_user()
+    if not reopen:
+        _SSE_LOGIN[:] = await _signed_in()
+    request.user, request.session = _SSE_LOGIN
     await DjustSSEStreamView().get(request, session_id=SID)
     return _sse_sessions.get(SID)
 
@@ -468,7 +478,9 @@ async def _sse_post(frame):
         content_type="application/json",
         HTTP_ORIGIN=ORIGIN,
     )
-    request.user = _sse_user()
+    # The stream's own login: the POST owns the stream and its user is the
+    # one the explicit view re-reads from that session.
+    request.user, request.session = _SSE_LOGIN
     return await DjustSSEMessageView().post(request, session_id=SID)
 
 
@@ -525,7 +537,7 @@ async def test_sse_every_turn_kind_runs_the_chain(_sse_clean):
 async def test_sse_stream_reopened_with_the_same_id_is_a_reconnect(_sse_clean):
     await _sse_mount()
     TURNS.clear()
-    await _sse_mount()
+    await _sse_mount(reopen=True)
     assert _kinds("sse")[0] == ("reconnect", "page")
 
 
@@ -625,7 +637,7 @@ def test_api_dispatch_runs_the_chain():
     from djust.api.registry import register_api_view, reset_registry
 
     class ApiView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         api_name = "turns.api"
 
         def mount(self, request, **kwargs):
