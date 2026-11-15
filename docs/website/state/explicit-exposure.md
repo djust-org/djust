@@ -337,8 +337,9 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   runs the checks of a direct mount: login and `check_permissions` before
   `mount()`, the object permission after it. It also requires the session,
   user, tenant and parent that the page rendered under. A fill that fails any
-  of these shows `child '<view path>' denied access` in the slot; the page
-  still renders. Like other non-sticky children it may not declare persisted
+  of these, or whose `mount()` raises `Http404` or `PermissionDenied`, shows
+  `child '<view path>' denied access` in the slot. Any other failure shows
+  `Lazy child <id> failed.`, without the exception. The page still renders. Like other non-sticky children it may not declare persisted
   fields, and `sticky=True` with `lazy=True` is refused.
 - **Tenancy.** The configured tenant resolver is applied to every request,
   including WebSocket mounts, whether or not `TenantMiddleware` is installed.
