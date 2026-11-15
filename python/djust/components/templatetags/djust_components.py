@@ -890,7 +890,7 @@ def table_width(value: Any) -> Any:
 def table_width_attrs(value: Any) -> Any:
     """``col.width`` as the header's width attribute(s), or ``""`` (#3979).
 
-    ``' style="width:..."'`` by default; with ``LIVEVIEW_CONFIG["csp_strict_styles"]`` the
+    ``' style="width:..."'`` by default; with ``LIVEVIEW_CONFIG["csp_strict"]`` the
     ``data-dj-style-*`` attributes the client applies. The value passes the same check as
     :func:`table_width`."""
     if not value:

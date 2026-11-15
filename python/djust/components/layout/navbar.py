@@ -7,7 +7,7 @@ Similar to shadcn/ui components - framework-agnostic with customizable styles.
 
 from typing import Dict, Any, Optional
 from ..base import LiveComponent
-from ..utils import data_url_attr, attr_text, strict_styles, style_attrs
+from ..utils import data_url_attr, attr_text, csp_strict, style_attrs
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 from ...config import config
@@ -162,7 +162,7 @@ class NavbarComponent(LiveComponent):
             link_style = ""
             link_class = ""
             if item.external:
-                if strict_styles():
+                if csp_strict():
                     link_class = " dj-navbar-link--external"
                 else:
                     link_style = ' style="color: #667eea !important; font-weight: 600;"'

@@ -28,7 +28,7 @@ from djust._component_subscriptions import (
 from djust.decorators import event_handler
 from djust.live_view import LiveView
 from .base import LiveComponent
-from .utils import strict_styles
+from .utils import csp_strict
 
 #: The native dropdown's popover placement, as it has always been written (#3979: the
 #: default, inline mode; ``.dj-dropdown-menu__content--popover`` is the strict-CSP twin).
@@ -429,7 +429,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
                 # The popover's placement: an inline style by default; under a strict CSP
                 # (which refuses it) the `dj-dropdown-menu__content--popover` class of
                 # components.css (#3979). A constant, never a caller's value.
-                if strict_styles():
+                if csp_strict():
                     content_class, placement = (
                         "dj-dropdown-menu__content dj-dropdown-menu__content--popover",
                         "",

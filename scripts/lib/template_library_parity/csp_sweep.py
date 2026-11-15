@@ -12,7 +12,7 @@ for all five:
    ``DjustTemplateBackend`` (the Rust engine; a native handler wins).
 2. **Every component class** the URL sweep drives (``url_sweep.component_classes``), under each
    of the three ``css_framework`` renderers.
-3. **Each in both modes** of ``LIVEVIEW_CONFIG["csp_strict_styles"]`` (#3979), with a request
+3. **Each in both modes** of ``LIVEVIEW_CONFIG["csp_strict"]`` (#3979), with a request
    that carries a CSP nonce (:data:`NONCE`).
 
 What it reports (:func:`findings`) is ``(kind, detail)`` per output:
@@ -171,12 +171,12 @@ def inventory() -> dict[str, variants.TagInfo]:
 def mode(name: str) -> Iterator[None]:
     from djust.config import config
 
-    before = config.get("csp_strict_styles", False)
-    config.set("csp_strict_styles", name == "strict")
+    before = config.get("csp_strict", False)
+    config.set("csp_strict", name == "strict")
     try:
         yield
     finally:
-        config.set("csp_strict_styles", before)
+        config.set("csp_strict", before)
 
 
 @contextlib.contextmanager

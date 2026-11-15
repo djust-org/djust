@@ -464,6 +464,14 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
+### C039: csp_strict and csp_strict_styles disagree
+
+**Severity**: Error
+
+**What causes it**: `LIVEVIEW_CONFIG` has `"csp_strict": False` and `"csp_strict_styles": True`, or the other way round.
+
+**Fix**: Keep only `LIVEVIEW_CONFIG["csp_strict"]` and remove `csp_strict_styles`.
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
@@ -2403,11 +2411,11 @@ Independently of this check, `get_theme_config()` raises `ImproperlyConfigured` 
 
 **Fix**: Set `LIVEVIEW_CONFIG["theme"]["component_catalog_css"] = True` if pages render catalog tags such as `{% modal %}`, `{% data_table %}` or `{% app_shell %}`, or `False` if none does (or the pages that do link the file themselves).
 
-### djust_theming.W005: alert or toast close button without components.js
+### djust_theming.W005: strict-CSP alert or toast close button without components.js
 
 **Severity**: Warning
 
-**What causes it**: a project template renders `{% theme_head include_js=False %}`, a project template renders `{% theme_toast %}` or `{% theme_alert dismissible=... %}`, and no project template loads `djust_theming/js/components.js`. The close button of the alert and the toast used to be an inline `onclick`, which a `script-src` without `'unsafe-inline'` refuses; it is now a `data-theme-dismiss` marker that `components.js` handles ([#4146](https://github.com/djust-org/djust/issues/4146)). `{% theme_head %}` loads that script unless it is given `include_js=False`, so on such a page the button does nothing.
+**What causes it**: `LIVEVIEW_CONFIG["csp_strict"]` is on, a project template renders `{% theme_head include_js=False %}`, a project template renders `{% theme_toast %}` or `{% theme_alert dismissible=... %}`, and no project template loads `djust_theming/js/components.js`. By default the close button of the alert and the toast is an inline `onclick`, which needs no script (and the check stays quiet). A `script-src` without `'unsafe-inline'` refuses that, so in strict mode it is a `data-theme-dismiss` marker that `components.js` handles ([#4146](https://github.com/djust-org/djust/issues/4146)). `{% theme_head %}` loads that script unless it is given `include_js=False`, so on such a page the button does nothing.
 
 **Fix**: Load the script on those pages, `<script src="{% static 'djust_theming/js/components.js' %}" defer></script>`, or drop `include_js=False`. The check reads project templates only; a page that loads the script some other way can silence it with `SILENCED_SYSTEM_CHECKS = ["djust_theming.W005"]`.
 

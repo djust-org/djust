@@ -24,7 +24,7 @@ from django.template import Context
 from django.utils.html import format_html
 from django.utils.safestring import SafeString, mark_safe
 
-from djust.components.utils import _srcset_candidates, url_allowed
+from djust.components.utils import _srcset_candidates, csp_strict, url_allowed
 
 from ..manager import get_theme_config
 from ..template_resolver import resolve_component_template
@@ -275,6 +275,8 @@ def theme_alert(
     # caller-supplied slot rendered as nothing at all.
     slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
+        # #4146: the close button's inline onclick by default, a marker under csp_strict.
+        "csp_strict": csp_strict(),
         "message": message,
         "title": title,
         "variant": variant,
@@ -1236,6 +1238,8 @@ def theme_toast(
     request = context.get("request")
     tmpl = resolve_component_template(request, "toast")
     ctx = {
+        # #4146: the close button's inline onclick by default, a marker under csp_strict.
+        "csp_strict": csp_strict(),
         "message": message,
         "variant": variant,
         "position": position,

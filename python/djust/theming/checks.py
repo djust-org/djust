@@ -330,15 +330,20 @@ _DISMISS_BUTTON_TAG = re.compile(
 
 @register(Tags.compatibility)
 def check_dismiss_needs_components_js(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """Report a project whose alert or toast close button may have no script behind it (#4146).
+    """Report a strict-CSP project whose alert or toast close button may have no script (#4146).
 
-    The close button of ``{% theme_alert dismissible=True %}`` and ``{% theme_toast %}`` was an
-    inline ``onclick``, which a ``script-src`` without ``'unsafe-inline'`` refuses. It is now a
-    ``data-theme-dismiss`` marker handled by ``djust_theming/js/components.js``, which
-    ``{% theme_head %}`` loads unless it is given ``include_js=False``. A project that does that,
-    renders one of the two tags and loads ``components.js`` nowhere itself has a close button that
-    does nothing. Only project templates are read (``djust.checks``' template directories).
+    By default the close button of ``{% theme_alert dismissible=True %}`` and ``{% theme_toast %}``
+    is an inline ``onclick``, which needs no script. Under ``LIVEVIEW_CONFIG["csp_strict"]`` (a
+    ``script-src`` without ``'unsafe-inline'`` refuses it) it is a ``data-theme-dismiss`` marker
+    handled by ``djust_theming/js/components.js``, which ``{% theme_head %}`` loads unless it is
+    given ``include_js=False``. A strict project that does that, renders one of the two tags and
+    loads ``components.js`` nowhere itself has a close button that does nothing. Only project
+    templates are read (``djust.checks``' template directories).
     """
+    from djust.components.utils import csp_strict
+
+    if not csp_strict():
+        return []
     from djust.checks.utils import (
         _blank_template_comments,
         _get_template_dirs,
@@ -366,11 +371,13 @@ def check_dismiss_needs_components_js(app_configs: Any, **kwargs: Any) -> list[C
             "A template renders {%% theme_head include_js=False %%} (%s) and another renders a "
             "dismissible {%% theme_alert %%} or a {%% theme_toast %%} (%s). Their close button "
             "is handled by djust_theming/js/components.js, which that page does not load, so it "
-            "does nothing there." % (without_js[0], dismissing[0]),
+            'does nothing there under LIVEVIEW_CONFIG["csp_strict"].'
+            % (without_js[0], dismissing[0]),
             hint=(
                 "Load {% static 'djust_theming/js/components.js' %} on those pages (a <script "
-                "src> with defer), or drop include_js=False. The button used to be an inline "
-                "onclick, which a strict Content-Security-Policy refuses (#4146)."
+                "src> with defer), or drop include_js=False. In strict mode the button is a "
+                "marker, because a strict Content-Security-Policy refuses its default inline "
+                "onclick (#4146)."
             ),
             id="djust_theming.W005",
         )

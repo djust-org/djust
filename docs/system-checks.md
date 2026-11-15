@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 125 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 126 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -49,6 +49,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C036 | Config | Error | `DJUST_STATE_STORE` does not import or does not name a `ViewStateStore` subclass |
 | C037 | Config | Error | The sealed state store has no usable `DJUST_STATE_STORE_KEYS` or `cryptography` is not installed |
 | C038 | Config | Error | `DJUST_STATE_STORE_STRICT` is not `True` or `False` |
+| C039 | Config | Error | `csp_strict` and `csp_strict_styles` set to different values |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -368,6 +369,13 @@ console.log("debug info"); // noqa: Q003
 - **Method**: Settings inspection (`DJUST_STATE_STORE_STRICT`)
 - **What it detects**: `DJUST_STATE_STORE_STRICT` is set to something other than `True` or `False`. Only `True` is strict, so a value such as `1` or `"true"` would be read as not strict: an event whose state the store could not take would be served unsaved instead of refused (#4132).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C038"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C038"]`
+- **False positives**: None.
+
+### C039 — csp_strict and csp_strict_styles disagree
+- **Severity**: Error
+- **Method**: Settings inspection (`LIVEVIEW_CONFIG`)
+- **What it detects**: `LIVEVIEW_CONFIG` sets both `csp_strict` and `csp_strict_styles`, one on and the other off. `csp_strict_styles` is the earlier name of `csp_strict`, the one switch for output a strict Content-Security-Policy accepts (#4146); either one on turns it on, so the project has said two different things.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C039"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C039"]`
 - **False positives**: None.
 
 <!-- END GENERATED check-sections:C -->

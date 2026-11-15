@@ -930,6 +930,37 @@ def _check_automatic_state_switch(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_csp_strict_alias(errors: list[CheckMessage]) -> None:
+    """C039: ``LIVEVIEW_CONFIG`` sets ``csp_strict`` and ``csp_strict_styles`` differently.
+
+    ``csp_strict_styles`` is the name the strict-CSP switch shipped with (#3979);
+    ``csp_strict`` is its name now that it also covers inline handlers (#4146). Either on
+    means strict, so ``{"csp_strict": False, "csp_strict_styles": True}`` is strict: a
+    project that sets both differently has said two things, and this refuses to guess.
+    """
+    from django.conf import settings
+
+    live = getattr(settings, "LIVEVIEW_CONFIG", None) or {}
+    if not isinstance(live, dict) or "csp_strict" not in live or "csp_strict_styles" not in live:
+        return
+    if bool(live["csp_strict"]) == bool(live["csp_strict_styles"]):
+        return
+    if _is_check_suppressed("djust.C039"):
+        return
+    errors.append(
+        DjustError(
+            'LIVEVIEW_CONFIG sets "csp_strict" to %r and "csp_strict_styles" to %r.'
+            % (live["csp_strict"], live["csp_strict_styles"]),
+            hint=(
+                '"csp_strict_styles" is the earlier name of "csp_strict", the one switch for '
+                "output a strict Content-Security-Policy accepts. Either one on turns it on."
+            ),
+            id="djust.C039",
+            fix_hint='Keep only `LIVEVIEW_CONFIG["csp_strict"]` and remove `csp_strict_styles`.',
+        )
+    )
+
+
 def _check_state_store(errors: list[CheckMessage]) -> None:
     """C036 / C037 / C038 — the state store named in settings cannot be used (#4132).
 
@@ -1845,6 +1876,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     _check_automatic_state_session_engine(errors)
     _check_automatic_state_switch(errors)
     _check_state_store(errors)
+
+    # C039 -- csp_strict and its alias csp_strict_styles set to different values (#4146)
+    _check_csp_strict_alias(errors)
 
     # C031 -- the session store is a cache local to one process (#4103)
     _check_process_local_session_cache(errors)

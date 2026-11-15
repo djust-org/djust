@@ -302,9 +302,9 @@ def _client_config_html(request: Any = None) -> Any:
     if config.get("auto_navigate"):
         html = html + '\n<meta name="djust-auto-navigate" content="1">'
     # #3979: strict-CSP style mode (the client applies data-dj-style-* only on such a page).
-    from djust.components.utils import STYLES_META, strict_styles
+    from djust.components.utils import STYLES_META, csp_strict
 
-    if strict_styles():
+    if csp_strict():
         html = html + "\n" + STYLES_META
     # Auto-emit the route map (#1733). get_route_map_script returns "" when
     # the app has no LiveView routes (empty-safe — no stray <script>), and a
@@ -1146,7 +1146,7 @@ def do_colocated_hook(parser: Parser, token: Token) -> "ColocatedHookNode":
 # Shimmer CSS emitted once per render. Small enough to inline; deduped via
 # ``context.render_context`` so a page that calls ``{% djust_skeleton %}`` in
 # a {% for %} loop still only writes one <style> block to the DOM. Under a strict
-# CSP (``LIVEVIEW_CONFIG["csp_strict_styles"]``), which refuses an inline <style>,
+# CSP (``LIVEVIEW_CONFIG["csp_strict"]``), which refuses an inline <style>,
 # the first block carries ``data-dj-css="skeleton"`` instead and the client module
 # ``54-dj-style.js`` adds the same rules through the CSSOM (#3979).
 _SKELETON_STYLE_KEY = "_djust_skeleton_style_emitted"
@@ -1216,7 +1216,7 @@ def djust_skeleton(
     a ``<div>`` (or several, when ``shape="line"`` and ``count > 1``) with
     a shimmering background gradient keyed off a single inline
     ``@keyframes`` block that is deduped via Django's ``render_context``.
-    With ``LIVEVIEW_CONFIG["csp_strict_styles"]`` (a strict CSP refuses inline
+    With ``LIVEVIEW_CONFIG["csp_strict"]`` (a strict CSP refuses inline
     styles) the width and height are ``data-dj-style-*`` attributes and the
     first block of the render carries ``data-dj-css="skeleton"``: the client
     adds the same rules through the CSSOM (#3979).
@@ -1277,9 +1277,9 @@ def djust_skeleton(
     # Dedupe the shimmer <style> block (or marker) across repeated invocations in the
     # same render. Django's render_context is a ChainMap-based per-render
     # scratch space and is the idiomatic home for this kind of dedupe.
-    from djust.components.utils import strict_styles
+    from djust.components.utils import csp_strict
 
-    strict = strict_styles()
+    strict = csp_strict()
     first_in_render = False
     if not context.render_context.get(_SKELETON_STYLE_KEY):
         context.render_context[_SKELETON_STYLE_KEY] = True

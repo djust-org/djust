@@ -2,8 +2,9 @@
  * #4146 -- the inline event handlers djust used to write, as delegated listeners.
  *
  * A Content-Security-Policy whose script-src lacks 'unsafe-inline' refuses every
- * `on*=` attribute. NavBar's menu toggle (Tailwind and plain) and the theme
- * alert's and toast's close button are now markers handled from a listener on
+ * `on*=` attribute. By default NavBar's menu toggle (Tailwind and plain) and the
+ * theme alert's and toast's close button stay inline handlers; under
+ * LIVEVIEW_CONFIG["csp_strict"] they are markers handled from a listener on
  * `document`:
  *
  *   navbar-toggle.js   [data-navbar-toggle] -> toggle data-navbar-toggle-class
@@ -12,9 +13,12 @@
  *                      (was this.parentElement.remove()).
  *
  * Each test loads the REAL script into a page holding the markup the server
- * renders (python/djust/tests/test_csp_inline_handlers_4146.py pins it), for a
- * button present at load, one inserted afterwards, and one inserted by the
- * client's real patch path (applyPatches / InsertChild).
+ * renders in strict mode (python/djust/tests/test_csp_inline_handlers_4146.py
+ * pins it), for a button present at load, one inserted afterwards, and one
+ * inserted by the client's real patch path (applyPatches / InsertChild). A
+ * <script> a patch inserts never runs, so a strict LiveView page loads
+ * navbar-toggle.js with the client; the patch tests load it that way and carry
+ * the navbar's own (inert) <script> in the patch, as the server renders it.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -166,26 +170,42 @@ function livePage(scripts) {
     return window;
 }
 
+const NAVBAR_PATCH = [
+    {
+        type: 'InsertChild', path: [0], d: 'P', index: 0, ref_d: null,
+        node: vnode('nav', 'n0', { class: 'navbar navbar-light' }, [
+            vnode('button', 'b1', {
+                class: 'navbar-toggler',
+                'data-navbar-toggle': 'm1',
+                'data-navbar-toggle-class': 'show',
+            }, [text('menu')]),
+            vnode('div', 'm1', { id: 'm1', class: 'navbar-menu' }),
+            vnode('script', 's1', {
+                src: '/static/djust_components/navbar-toggle.js', defer: '',
+            }),
+        ]),
+    },
+];
+
 describe('a button the client inserts with applyPatches', () => {
-    it('NavBar toggle', async () => {
+    it('NavBar toggle: a navbar that first arrives in a patch, on a strict page', async () => {
+        // The strict page loaded navbar-toggle.js with the client, before any navbar.
         const window = livePage([NAVBAR_JS]);
-        const ok = await window.djust.applyPatches([
-            {
-                type: 'InsertChild', path: [0], d: 'P', index: 0, ref_d: null,
-                node: vnode('button', 'b1', {
-                    class: 'navbar-toggler',
-                    'data-navbar-toggle': 'm1',
-                    'data-navbar-toggle-class': 'show',
-                }, [text('menu')]),
-            },
-            {
-                type: 'InsertChild', path: [0], d: 'P', index: 1, ref_d: null,
-                node: vnode('div', 'm1', { id: 'm1', class: 'navbar-menu' }),
-            },
-        ]);
+        expect(window.document.querySelector('nav')).toBe(null);
+        const ok = await window.djust.applyPatches(NAVBAR_PATCH);
         expect(ok).toBe(true);
         click(window, window.document.querySelector('[data-navbar-toggle]'));
         expect(window.document.getElementById('m1').classList.contains('show')).toBe(true);
+        click(window, window.document.querySelector('[data-navbar-toggle]'));
+        expect(window.document.getElementById('m1').classList.contains('show')).toBe(false);
+    });
+
+    it('why the page loads it: the navbar\'s own <script> in a patch does not run', async () => {
+        const window = livePage([]);
+        const ok = await window.djust.applyPatches(NAVBAR_PATCH);
+        expect(ok).toBe(true);
+        click(window, window.document.querySelector('[data-navbar-toggle]'));
+        expect(window.document.getElementById('m1').classList.contains('show')).toBe(false);
     });
 
     it('theme alert close button', async () => {

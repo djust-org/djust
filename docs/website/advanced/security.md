@@ -463,12 +463,13 @@ property. How it is written depends on one setting.
 component has always written: it is there at first paint and with JavaScript
 off, and nothing changes for an app without a strict style policy.
 
-**Strict mode (opt in).** For a `style-src` without `'unsafe-inline'`:
+**Strict mode (opt in).** For a `style-src` without `'unsafe-inline'` (the same
+setting covers inline event handlers, see "Inline event handlers" below):
 
 ```python
 # settings.py
 LIVEVIEW_CONFIG = {
-    "csp_strict_styles": True,
+    "csp_strict": True,
 }
 ```
 
@@ -545,7 +546,7 @@ stylesheet the page might not load: a clickable data-table row's pointer
 cursor, the dismissible Bootstrap badge's close-button size, the Bootstrap
 navbar's external-link colour and the pointer cursor of a Bootstrap sortable
 table header (`Table` and `TableComponent`). They stay inline by default; with
-`csp_strict_styles` they are the classes `data-table-row-clickable`
+`csp_strict` they are the classes `data-table-row-clickable`
 (`components.css`), `dj-badge-close`, `dj-navbar-link--external` and
 `dj-sortable-th` (`components.css` and `components-classes.css`), so load that
 stylesheet on such a page.
@@ -559,9 +560,10 @@ request that carries a nonce, and reports each `style` attribute, each `<style>`
 and executable inline `<script>` block without the nonce, each inline event
 handler and each `javascript:` URL; its test is
 `python/djust/tests/test_csp_constant_styles_4139.py`. Styles and inline script
-blocks are covered, and so are inline event handlers (below): the only handler
-it accepts is a caller-supplied `onclick=` on the button components, and any
-other handler fails that test in both modes.
+blocks are covered, and so are inline event handlers (below): in strict mode
+the only handler it accepts is a caller-supplied `onclick=` on the button
+components; by default djust's own four are accepted as well; any other handler
+fails that test.
 
 What strict mode costs:
 
@@ -594,32 +596,40 @@ What strict mode costs:
 
 A `script-src` without `'unsafe-inline'` refuses every inline event-handler
 attribute (`onclick=`, `onchange=` ...), and no nonce can allow one. djust
-writes none of its own (#4146): what used to be one is a marker that a static
-module handles from a listener on `document`, so it also works for markup a
-LiveView patch inserts later.
+writes four of its own, and what it writes depends on the same setting as the
+free-form styles above.
+
+**Default.** They are the inline `onclick` they have always been, byte for
+byte, and need no script: NavBar's menu toggle (Tailwind and plain renderers)
+toggles its menu's class, and the close button of
+`{% theme_alert dismissible=True %}` and `{% theme_toast %}` removes its parent
+element.
+
+**`LIVEVIEW_CONFIG["csp_strict"] = True`.** Each is a marker that a static
+module handles from a listener on `document`, with the same behaviour, so it
+also works for markup a LiveView patch inserts later (#4146):
 
 | Element | Marker | Handled by |
 |---|---|---|
 | `{% theme_alert dismissible=True %}` and `{% theme_toast %}` close button | `data-theme-dismiss` | `djust_theming/js/components.js` |
 | `NavBar`'s menu toggle (Tailwind and plain renderers) | `data-navbar-toggle` (the menu's id), `data-navbar-toggle-class` | `djust_components/navbar-toggle.js` |
 
-The behaviour is the old handler's: the close button removes its parent
-element, the toggle toggles that class on that element.
+What strict mode needs loaded:
 
-- `{% theme_head %}` loads `components.js`. A page rendered with
+- `components.js`, which `{% theme_head %}` loads. A strict page rendered with
   `{% theme_head include_js=False %}` has to load
   `{% static 'djust_theming/js/components.js' %}` itself for the close button
-  to work; the system check `djust_theming.W005` reports a project that seems
-  not to.
-- `NavBar` renders the `<script src>` for `navbar-toggle.js` inside its own
-  `<nav>`, so a page needs no setup: `script-src 'self'` allows it. A policy
-  that admits scripts only by nonce (with `'strict-dynamic'`) refuses that
-  tag; load the file yourself with the nonce. The tag runs when the page
-  loads or a LiveView mounts; a navbar that first appears in a later patch
-  needs the file loaded by the page.
+  to work; the system check `djust_theming.W005` reports a strict project that
+  seems not to.
+- `navbar-toggle.js` needs no setup. A strict LiveView page loads it with the
+  client (with the request's nonce), so a navbar that first arrives in a later
+  patch works too; and the navbar renders a `<script src defer>` for it inside
+  its own `<nav>` for a page without the client. That tag has a nonce only when
+  you pass one (`NavBar(..., nonce=request.csp_nonce)`); under a nonce-only
+  policy (`'strict-dynamic'`) a plain Django page needs it.
 
-The one inline handler djust still writes is yours: the `onclick=` argument
-of `{% theme_button %}` and of the `Button` component. It is the caller's
+In both modes djust also writes the handler you give it: the `onclick=`
+argument of `{% theme_button %}` and of the `Button` component. It is the caller's
 code, written as given and escaped for the attribute (a value marked safe,
 including a template string literal, is escaped too, so `onclick='go("a")'`
 stays one attribute). A strict `script-src` refuses it, so under one use a
