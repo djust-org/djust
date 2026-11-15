@@ -13,31 +13,47 @@ whose ``items()`` yields the last value of each key) keeps its own behaviour.
 
 from __future__ import annotations
 
+import weakref
 from typing import Any, ItemsView, KeysView, ValuesView
 
 __all__ = ["mapping_items", "mapping_keys", "mapping_values"]
 
+#: Per dict SUBCLASS: whether ``items`` / ``values`` / ``keys`` is a property there.
+#: Decided once per class, not per call: these helpers run for every dict of every
+#: context on every turn. Weak, so a class created at runtime is not kept alive.
+_SHADOWED: "weakref.WeakKeyDictionary[type, tuple[bool, bool, bool]]" = weakref.WeakKeyDictionary()
 
-def _shadowed(value: Any, name: str) -> bool:
-    return isinstance(value, dict) and isinstance(getattr(type(value), name, None), property)
+
+def _shadows(cls: type) -> "tuple[bool, bool, bool]":
+    """``(items, values, keys)``: which of the three ``cls`` replaced with a property."""
+    found = _SHADOWED.get(cls)
+    if found is None:
+        found = tuple(  # type: ignore[assignment]
+            isinstance(getattr(cls, name, None), property) for name in ("items", "values", "keys")
+        )
+        _SHADOWED[cls] = found  # type: ignore[assignment]
+    return found  # type: ignore[return-value]
 
 
 def mapping_items(value: Any) -> ItemsView[Any, Any]:
     """``value.items()``, or ``dict.items(value)`` when a field shadows it."""
-    if _shadowed(value, "items"):
+    cls = type(value)
+    if cls is not dict and issubclass(cls, dict) and _shadows(cls)[0]:
         return dict.items(value)
     return value.items()  # type: ignore[no-any-return]
 
 
 def mapping_values(value: Any) -> ValuesView[Any]:
     """``value.values()``, or ``dict.values(value)`` when a field shadows it."""
-    if _shadowed(value, "values"):
+    cls = type(value)
+    if cls is not dict and issubclass(cls, dict) and _shadows(cls)[1]:
         return dict.values(value)
     return value.values()  # type: ignore[no-any-return]
 
 
 def mapping_keys(value: Any) -> KeysView[Any]:
     """``value.keys()``, or ``dict.keys(value)`` when a field shadows it."""
-    if _shadowed(value, "keys"):
+    cls = type(value)
+    if cls is not dict and issubclass(cls, dict) and _shadows(cls)[2]:
         return dict.keys(value)
     return value.keys()  # type: ignore[no-any-return]
