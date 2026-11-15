@@ -17,7 +17,6 @@ import shutil
 import socket
 import stat
 import sys
-import time
 from pathlib import Path
 
 import pytest
@@ -89,13 +88,13 @@ def test_falls_back_to_tcp_when_the_unix_socket_never_answers(fake_redis):
 
 
 def test_a_process_that_exits_fails_at_once_with_everything_it_said(fake_redis):
-    started = time.monotonic()
     with pytest.raises(harness.RedisStartError) as raised:
         with harness.redis_server(fake_redis("exit"), guard_s=600):
             pass
     # Not the 600 s guard (twice, for both transports): the exit is seen at once.
-    # The margin is two orders of magnitude, so load cannot make this flaky.
-    assert time.monotonic() - started < 60
+    # The message proves it: only a seen exit reports "exited before it answered
+    # PING" with the return code; a guard that ran out says something else. No
+    # wall-clock bound (#3711): a wait for the guard would hit the run's hang guard.
     message = str(raised.value)
     assert "exited before it answered PING" in message
     assert "returncode: 3" in message
