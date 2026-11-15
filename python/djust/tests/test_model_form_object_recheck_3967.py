@@ -146,22 +146,12 @@ class QueueMountSelects(Queue):
         self.open_id = type(self).mount_selects
 
 
-class LegacyWrites(Writes):
-    exposure_policy = "legacy"  # gap #4153: explicit render adds _djust_prop_cache, defeating reuse
-
-
-class LegacyQueue(Queue):
-    exposure_policy = "legacy"  # gap #4153: explicit render adds _djust_prop_cache, defeating reuse
-
-
 urlpatterns = [
     path("queue-mount/", QueueMountSelects.as_view()),
     path("every/<int:pk>/", EveryEvent.as_view()),
     path("writes/<int:pk>/", Writes.as_view()),
     path("overridden/<int:pk>/", WritesOverridden.as_view()),
     path("queue/", Queue.as_view()),
-    path("legacy-writes/<int:pk>/", LegacyWrites.as_view()),
-    path("legacy-queue/", LegacyQueue.as_view()),
     path("queue-every/", QueueEveryEvent.as_view()),
     path("queue-required/", QueueRequired.as_view()),
 ]
@@ -170,7 +160,6 @@ ROUTES = {
     EveryEvent: "/every/%s/",
     Writes: "/writes/%s/",
     WritesOverridden: "/overridden/%s/",
-    LegacyWrites: "/legacy-writes/%s/",
 }
 
 
@@ -299,7 +288,7 @@ async def test_the_default_resolves_and_authorizes_before_every_event_including_
 @pytest.mark.django_db(transaction=True)
 async def test_validate_field_reuses_the_authorized_record_and_runs_no_query(sql):
     alice, mine, _ = await sync_to_async(_world)()
-    socket, mounted = await _open(LegacyWrites, alice, ROUTES[LegacyWrites] % mine.pk)
+    socket, mounted = await _open(Writes, alice, ROUTES[Writes] % mine.pk)
     try:
         assert mounted["type"] == "mount", mounted
         EVENTS.clear()
@@ -389,7 +378,7 @@ async def test_a_write_by_a_user_whose_access_was_revoked_is_denied_under_every_
 async def test_revocation_is_seen_by_the_next_event_that_is_not_read_only():
     """The documented trade of "writes": read-only events keep working until a write."""
     alice, mine, _ = await sync_to_async(_world)()
-    socket, _ = await _open(LegacyWrites, alice, ROUTES[LegacyWrites] % mine.pk)
+    socket, _ = await _open(Writes, alice, ROUTES[Writes] % mine.pk)
     try:
         REVOKED.add(mine.pk)
         frames = await _event(socket, 1, "validate_field", {"field": "name", "value": "x"})
@@ -409,7 +398,7 @@ async def test_revocation_is_seen_by_the_next_event_that_is_not_read_only():
 @pytest.mark.django_db(transaction=True)
 async def test_a_handler_declared_read_only_reuses_and_one_that_is_not_does_not():
     alice, mine, _ = await sync_to_async(_world)()
-    socket, _ = await _open(LegacyWrites, alice, ROUTES[LegacyWrites] % mine.pk)
+    socket, _ = await _open(Writes, alice, ROUTES[Writes] % mine.pk)
     try:
         EVENTS.clear()
         await _event(socket, 1, "peek", {})
@@ -449,7 +438,7 @@ async def test_an_overridden_validate_field_is_a_write_and_is_checked_in_full():
 )
 async def test_a_record_changed_in_memory_is_not_reused(event, params):
     alice, mine, _ = await sync_to_async(_world)()
-    socket, _ = await _open(LegacyWrites, alice, ROUTES[LegacyWrites] % mine.pk)
+    socket, _ = await _open(Writes, alice, ROUTES[Writes] % mine.pk)
     try:
         await _event(socket, 1, event, params)
         EVENTS.clear()
@@ -666,9 +655,7 @@ async def test_nothing_selected_mounts_with_no_object_and_no_form():
 @pytest.mark.django_db(transaction=True)
 async def test_a_record_selected_by_a_query_parameter_is_authorized_and_edited():
     alice, mine, _ = await sync_to_async(_world)()
-    socket, mounted = await _open(
-        LegacyQueue, alice, "/legacy-queue/?open=%s" % mine.pk, {"open": str(mine.pk)}
-    )
+    socket, mounted = await _open(Queue, alice, "/queue/?open=%s" % mine.pk, {"open": str(mine.pk)})
     try:
         assert mounted["type"] == "mount", mounted
         assert mine.name in json.dumps(mounted)

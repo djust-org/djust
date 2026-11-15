@@ -31,6 +31,7 @@ MIGRATED_4082: tuple[str, ...] = (
     "python/djust/tests/test_live_redirect_skip_render_1643.py",
     "python/djust/tests/test_login_required_middleware_live.py",
     "python/djust/tests/test_metadata_decorators_async.py",
+    "python/djust/tests/test_model_form_object_recheck_3967.py",
     "python/djust/tests/test_mount_group_membership.py",
     "python/djust/tests/test_mount_object_permission_after_params.py",
     "python/djust/tests/test_multi_view_render_locks_3252.py",
@@ -57,6 +58,7 @@ MIGRATED_4082: tuple[str, ...] = (
     "python/djust/tests/test_trusted_dispatch_context.py",
     "python/djust/tests/test_turn_middleware_transports.py",
     "python/djust/tests/test_ws_transport_hardening_f21_f17.py",
+    "python/tests/test_form_adapter_a11y.py",
     "python/tests/test_form_as_liveview_state_3767.py",
     "python/tests/test_remaining_builtin_tags_2556.py",
     "python/tests/test_sse.py",
@@ -85,9 +87,6 @@ REMAINING_4082: dict[str, str] = {
     "python/djust/tests/test_live_auth_event_holders_and_user_checks.py": (
         "migrated; the upload-resume case stays legacy: an explicit view does not resume an upload across a reconnect (ADR-038 D-g)"
     ),
-    "python/djust/tests/test_model_form_object_recheck_3967.py": (
-        "migrated; the record-reuse cases stay legacy: product gap #4153, the explicit render leaves _djust_prop_cache on the record and ModelFormMixin._fingerprint never matches"
-    ),
     "python/djust/tests/test_multi_view_refusal_3252.py": (
         "migrated; the revocation cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
     ),
@@ -114,9 +113,6 @@ REMAINING_4082: dict[str, str] = {
     ),
     "python/djust/tests/test_ws_mount_flip_parity_1911.py": (
         "migrated; the sticky_hold cases stay legacy: product gap #4149, an explicit sticky child cannot survive live_redirect to another page"
-    ),
-    "python/tests/test_form_adapter_a11y.py": (
-        "migrated; the test-client case stays legacy: product gap #4151, LiveView.render() cannot resolve view for form tags under explicit"
     ),
     "python/tests/test_render_call_guard_3815.py": (
         "migrated; the lazy live_render children stay legacy: product gap #4154, {% live_render lazy %} refuses explicit children (ADR-038 D-m)"
@@ -431,7 +427,6 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_runtime_reauth_async_1905.py",
     "python/djust/tests/test_server_turn_reauth.py",
     "python/djust/tests/test_server_turn_reauth_slots.py",
-    "python/tests/test_form_adapter_a11y.py",
     "python/djust/tests/test_async_pending_flag_2963.py",
     "python/djust/tests/test_multi_view_refusal_3252.py",
     "python/djust/tests/test_turn_middleware_core.py",
@@ -440,7 +435,6 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/tests/test_render_call_guard_3815.py",
     "python/djust/tests/test_async_check_permissions.py",
     "python/djust/tests/test_live_auth_denials_and_wrappers.py",
-    "python/djust/tests/test_model_form_object_recheck_3967.py",
     "tests/unit/test_layout_switching.py",
     "python/djust/tests/test_live_auth_event_holders_and_user_checks.py",
 )

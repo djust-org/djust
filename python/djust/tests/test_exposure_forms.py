@@ -15,21 +15,26 @@ the real HTTP POST fallback. The Rust renderer has no handler for the
 ``{% live_form %}`` family, so templates use plain variables.
 """
 
+import contextlib
 import json
+import re
+import uuid
 
 import pytest
 from asgiref.sync import sync_to_async
 from django import forms
-from django.contrib.auth.models import AnonymousUser, User
+from django.contrib.auth.models import AnonymousUser, Group, Permission, User
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
+from django.urls import path
 
 from djust import LiveView
 from djust._exposure import ExposureConfigurationError, ExposureContract
 from djust._exposure_sessions import server_state_adapter
 from djust._exposure_snapshots import snapshot_codec
-from djust.decorators import state
-from djust.forms import FormMixin, persisted_form_input
+from djust.decorators import event_handler, state
+from djust.forms import FormMixin, ModelFormMixin, persisted_form_input
 from djust.runtime import ViewRuntime
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
@@ -455,3 +460,349 @@ def test_raw_model_pk_is_re_resolved_only_for_legacy_views(staged, policy):
         assert view._model_instance == user  # control: the unscoped lookup ran
     else:
         assert view._model_instance is None
+
+
+# ---------------------------------------------------------------------------
+# 6. LiveView.render() (the test client's render) resolves ``view`` for form
+#    tags under both policies, as render_with_diff() does (#4151).
+# ---------------------------------------------------------------------------
+
+FIELD_TEMPLATE = '{% load live_tags %}<div dj-root>{% live_field view "name" %}</div>'
+
+
+class ExplicitFieldView(ExplicitFormView):
+    template = FIELD_TEMPLATE
+
+
+class LegacyFieldView(LegacyFormView):
+    template = FIELD_TEMPLATE
+
+
+FIELD_VIEWS = {"explicit": ExplicitFieldView, "legacy": LegacyFieldView}
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_test_client_render_resolves_view_for_form_tags(staged, policy):
+    from djust.testing import LiveViewTestClient
+
+    client = LiveViewTestClient(FIELD_VIEWS[policy])
+    client.mount()
+    client.send_event("validate_field", field="name", value="toolong")
+    html = client.render()
+    assert "does not have as_live_field" not in html
+    assert re.search(r'<input[^>]*name="name"[^>]*value="toolong"', html), html
+    assert NAME_ERROR in html
+
+
+# ---------------------------------------------------------------------------
+# 7. ModelFormMixin ``object_recheck = "writes"`` reuses the authorized record
+#    under both policies, and a real change to the record still forces the full
+#    check (#4153). The explicit render caches the record's @property values on
+#    the instance (``_djust_prop_cache``); that is not a change to the record.
+# ---------------------------------------------------------------------------
+
+RECHECKS: list = []
+#: Whether the record's groups are prefetched / its ``codename`` deferred, for the test
+#: that sets it.
+PREFETCH: list = [False]
+DEFER: list = [False]
+
+
+class PermissionForm(forms.ModelForm):
+    class Meta:
+        model = Permission
+        fields = ["name"]
+
+
+class ExplicitRecheckView(ModelFormMixin, LiveView):
+    exposure_policy = "explicit"
+    template = (
+        '<div dj-root><h1>{{ object.name }}</h1><input name="name" value="{{ form_data.name }}">'
+        "</div>"
+    )
+    model = Permission
+    form_class = PermissionForm
+    object_recheck = "writes"
+    object_read_only_events = frozenset({"touch"})
+    login_required = True
+
+    def get_queryset(self):
+        RECHECKS.append("lookup")
+        queryset = super().get_queryset()
+        if DEFER[0]:
+            queryset = queryset.defer("codename")
+        return queryset.prefetch_related("group_set") if PREFETCH[0] else queryset
+
+    def has_object_permission(self, request, obj):
+        RECHECKS.append("permission")
+        return True
+
+    @event_handler()
+    def touch(self, change="", other=None, **kwargs):
+        """Declared read-only (so it reuses), and changes the record as asked: the NEXT
+        read-only event must see the change and check the record in full."""
+        obj = self.object
+        if change == "field":
+            obj.name = obj.name + " (edited)"
+        elif change == "deferred":
+            assert "codename" not in obj.__dict__
+            obj.codename  # noqa: B018 - loads the deferred field
+            assert "codename" in obj.__dict__
+        elif change == "fk":
+            obj.content_type_id = other
+        else:
+            assert change == "none", change
+
+
+class LegacyRecheckView(ExplicitRecheckView):
+    exposure_policy = "legacy"
+
+
+RECHECK_VIEWS = {"explicit": ExplicitRecheckView, "legacy": LegacyRecheckView}
+
+urlpatterns = [
+    path("recheck-explicit/<int:pk>/", ExplicitRecheckView.as_view()),
+    path("recheck-legacy/<int:pk>/", LegacyRecheckView.as_view()),
+]
+
+
+def _recheck_world():
+    tag = uuid.uuid4().hex[:8]
+    user = User.objects.create_user(username="recheck-" + tag)
+    own_type, other_type = (
+        ContentType.objects.get_for_model(User),
+        ContentType.objects.get_for_model(Group),
+    )
+    record = Permission.objects.create(
+        name="Can recheck " + tag, codename="recheck_" + tag, content_type=own_type
+    )
+    return user, record, {"fk": other_type.pk}
+
+
+@contextlib.asynccontextmanager
+async def _recheck_socket(policy, user, record):
+    from channels.testing import WebsocketCommunicator
+
+    from djust.tests._live_session import live_session
+    from djust.websocket import LiveViewConsumer
+
+    session = await sync_to_async(live_session)(user)
+    socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    socket.scope.update(session=session, user=user, tenant=None)
+    assert (await socket.connect())[0]
+    await socket.receive_json_from()
+    view = RECHECK_VIEWS[policy]
+    await socket.send_json_to(
+        {
+            "type": "mount",
+            "view": __name__ + "." + view.__name__,
+            "url": "/recheck-%s/%s/" % (policy, record.pk),
+            "params": {},
+        }
+    )
+    mounted = await socket.receive_json_from()
+    assert mounted["type"] == "mount", mounted
+    try:
+        yield socket
+    finally:
+        await socket.disconnect()
+
+
+async def _recheck_event(socket, ref, event, params):
+    await socket.send_json_to({"type": "event", "event": event, "params": params, "ref": ref})
+    frames = []
+    for _ in range(6):
+        frame = await socket.receive_json_from()
+        frames.append(frame)
+        if frame.get("type") in {"patch", "html_update", "error", "noop", "navigate"}:
+            break
+    assert not any(frame.get("type") == "error" for frame in frames), frames
+    return frames
+
+
+@pytest.fixture
+def recheck_urls():
+    RECHECKS.clear()
+    PREFETCH[0] = DEFER[0] = False
+    with override_settings(
+        ROOT_URLCONF=__name__, DJUST_TENANTS=None, LIVEVIEW_ALLOWED_MODULES=[__name__]
+    ):
+        yield
+    RECHECKS.clear()
+    PREFETCH[0] = DEFER[0] = False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("change", ["none", "field", "fk"])
+async def test_a_read_only_event_reuses_the_record_until_it_changes(recheck_urls, policy, change):
+    user, record, others = await sync_to_async(_recheck_world)()
+    async with _recheck_socket(policy, user, record) as socket:
+        # The record authorized at mount is reused: no lookup, no permission check.
+        RECHECKS.clear()
+        await _recheck_event(socket, 1, "validate_field", {"field": "name", "value": "a"})
+        await _recheck_event(socket, 2, "touch", {"change": change, "other": others.get(change)})
+        assert RECHECKS == [], (policy, change, RECHECKS)
+        # The next read-only event: an unchanged record is reused again, a changed one
+        # is resolved and authorized in full.
+        await _recheck_event(socket, 3, "validate_field", {"field": "name", "value": "ab"})
+        expected = [] if change == "none" else ["lookup", "permission"]
+        assert RECHECKS == expected, (policy, change, RECHECKS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+async def test_a_write_resolves_and_authorizes_the_record_while_it_is_reusable(
+    recheck_urls, policy
+):
+    user, record, _ = await sync_to_async(_recheck_world)()
+    async with _recheck_socket(policy, user, record) as socket:
+        RECHECKS.clear()
+        await _recheck_event(socket, 1, "validate_field", {"field": "name", "value": "a"})
+        assert RECHECKS == [], RECHECKS
+        await _recheck_event(socket, 2, "submit_form", {"name": "Saved " + policy})
+        assert RECHECKS == ["lookup", "permission"], RECHECKS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+async def test_a_record_with_prefetched_relations_is_never_reused(recheck_urls, policy):
+    """The fingerprint covers many-to-many data only through Django's prefetch cache, and a
+    prefetched ``QuerySet`` compares by identity: such a record is checked in full on every
+    event, so an m2m change can never be missed (the conservative side of #4153)."""
+    PREFETCH[0] = True
+    user, record, _ = await sync_to_async(_recheck_world)()
+    async with _recheck_socket(policy, user, record) as socket:
+        for ref in range(2):
+            RECHECKS.clear()
+            await _recheck_event(socket, ref, "validate_field", {"field": "name", "value": "a"})
+            assert RECHECKS == ["lookup", "permission"], RECHECKS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+async def test_loading_a_deferred_field_is_a_change_to_the_record(recheck_urls, policy):
+    """A deferred field loaded since the record was authorized forces the full check. The
+    legacy render leaves ``codename`` deferred, so the record is reused until a handler loads
+    it; the explicit render serializes every field of ``object`` and loads it itself, so such
+    a record is checked in full on every event."""
+    DEFER[0] = True
+    user, record, _ = await sync_to_async(_recheck_world)()
+    async with _recheck_socket(policy, user, record) as socket:
+        RECHECKS.clear()
+        await _recheck_event(socket, 1, "validate_field", {"field": "name", "value": "a"})
+        if policy == "explicit":
+            assert RECHECKS == ["lookup", "permission"], RECHECKS
+            RECHECKS.clear()
+            await _recheck_event(socket, 2, "validate_field", {"field": "name", "value": "ab"})
+            assert RECHECKS == ["lookup", "permission"], RECHECKS
+            return
+        await _recheck_event(socket, 2, "touch", {"change": "deferred"})
+        assert RECHECKS == [], RECHECKS
+        await _recheck_event(socket, 3, "validate_field", {"field": "name", "value": "ab"})
+        assert RECHECKS == ["lookup", "permission"], RECHECKS
+
+
+def _authorized(policy, user, record):
+    """A view of ``policy`` that resolved and authorized ``record`` for ``request``."""
+    from djust.auth.core import enforce_object_permission
+
+    request = RequestFactory().get("/recheck-%s/%s/" % (policy, record.pk))
+    request.user, request.tenant = user, None
+    request.session = SessionStore()
+    request.session.create()
+    view = RECHECK_VIEWS[policy]()
+    view.setup(request, pk=record.pk)
+    view._djust_bind_route_kwargs({"pk": record.pk})
+    view.mount(request, pk=record.pk)
+    enforce_object_permission(view, request)
+    assert view._djust_reuses_authorized_object(view.validate_field, request) is True
+    return view, request
+
+
+def _another(request, **changes):
+    from copy import copy
+
+    other = copy(request)
+    for name, value in changes.items():
+        setattr(other, name, value)
+    return other
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_reuse_is_only_for_the_same_user_session_and_tenant(recheck_urls, policy):
+    from djust.tenants.resolvers import TenantInfo
+
+    user, record, _ = _recheck_world()
+    view, request = _authorized(policy, user, record)
+    reuses = view._djust_reuses_authorized_object
+    handler = view.validate_field
+
+    stranger = User.objects.create_user(username="stranger-" + uuid.uuid4().hex[:8])
+    assert reuses(handler, _another(request, user=stranger)) is False
+    assert reuses(handler, _another(request, user=AnonymousUser())) is False
+
+    other_session = SessionStore()
+    other_session.create()
+    assert reuses(handler, _another(request, session=other_session)) is False
+    # The same session, loaded again (as every explicit turn does), is the same session.
+    assert reuses(handler, _another(request, session=SessionStore(request.session.session_key)))
+
+    assert reuses(handler, _another(request, tenant=TenantInfo("acme"))) is False
+    assert reuses(handler, _another(request, tenant=Group.objects.create(name="t"))) is False
+    assert reuses(handler, _another(request, tenant=object())) is False
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_a_tenant_of_the_same_identity_is_the_same_tenant(recheck_urls, policy):
+    """The stamp compares a tenant by identity, not by object: a model tenant re-read
+    for the next turn (a new instance), or a ``TenantInfo`` resolved again, is the same
+    tenant, and a different one never is."""
+    from djust.auth.core import enforce_object_permission
+    from djust.tenants.resolvers import TenantInfo
+
+    user, record, _ = _recheck_world()
+    tenant_row = Group.objects.create(name="tenant-" + uuid.uuid4().hex[:8])
+    for tenant, same, different in [
+        (TenantInfo("acme"), TenantInfo("acme"), TenantInfo("globex")),
+        (tenant_row, Group.objects.get(pk=tenant_row.pk), Group.objects.create(name="other")),
+    ]:
+        view, request = _authorized(policy, user, record)
+        request.tenant = tenant
+        enforce_object_permission(view, request)  # authorized again, for this tenant
+        reuses = view._djust_reuses_authorized_object
+        assert reuses(view.validate_field, _another(request, tenant=same)) is True
+        assert reuses(view.validate_field, _another(request, tenant=different)) is False
+        assert reuses(view.validate_field, _another(request, tenant=None)) is False
+
+    # A tenant of no known identity matches nothing, not even itself.
+    unknown = object()
+    view, request = _authorized(policy, user, record)
+    request.tenant = unknown
+    enforce_object_permission(view, request)
+    assert view._djust_reuses_authorized_object(view.validate_field, request) is False
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_a_write_never_reuses_the_record(recheck_urls, policy):
+    user, record, _ = _recheck_world()
+    view, request = _authorized(policy, user, record)
+    for name in ("submit_form", "reset_form"):
+        assert view._djust_reuses_authorized_object(getattr(view, name), request) is False
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_the_render_cache_on_the_record_is_not_a_change(recheck_urls, policy):
+    """What the explicit render stores on the instance (``_djust_prop_cache``) is ignored;
+    the field it sits beside is not."""
+    from djust.serialization import DjangoJSONEncoder
+
+    user, record, _ = _recheck_world()
+    view, request = _authorized(policy, user, record)
+    before = set(vars(view.object))
+    DjangoJSONEncoder()._add_property_values(view.object, {})
+    added = set(vars(view.object)) - before
+    assert added == {"_djust_prop_cache"}, added
+    assert view._djust_reuses_authorized_object(view.validate_field, request) is True
+    view.object.name += " (edited)"
+    assert view._djust_reuses_authorized_object(view.validate_field, request) is False
