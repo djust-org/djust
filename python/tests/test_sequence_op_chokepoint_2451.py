@@ -375,9 +375,11 @@ class TestTheReferenceTableIsRunNotTranscribed:
         # engines a `dict`, so Django answers `KeyError`, while djust reads the
         # `__str__` marker (`python_len`'s own predicate, #2294) and answers
         # what a real MODEL does — `TypeError: not subscriptable`. Both refuse.
+        # `last` left this list when it began running Django's own `value[-1]`
+        # (#4005): it is handed the same `dict` Django is, and answers its
+        # `KeyError`.
         assert [(n, k) for n, k, _a, _b in mismatches] == [
             ("first", "d-model"),
-            ("last", "d-model"),
         ], mismatches
 
     def test_the_sweep_is_not_vacuous(self) -> None:
@@ -482,7 +484,8 @@ class TestTheDictHalfIsAKeyLookupAndNotAPositionalOne:
         # a `KeyError`, the same answer as the map.
         assert len(dicts) == 9, dicts
         for key in dicts:
-            with pytest.raises(Exception, match="KeyError|not subscriptable"):
+            # Django's own `value[-1]` since #4005: its `KeyError` crosses whole.
+            with pytest.raises(KeyError):
                 _rust.render_template("{{ p|last }}", normalize_django_value({"p": CORPUS[key]}))
 
     def test_last_reads_key_minus_one_when_there_is_one(self) -> None:
@@ -546,7 +549,8 @@ class TestRandomOverAMapping:
     def test_a_mapping_with_no_integer_key_always_raises(self) -> None:
         value = {"x": 1, "y": 2, "z": 3}
         for _ in range(20):
-            with pytest.raises(Exception, match="KeyError"):
+            # Django's own `random.choice` since #4005: its `KeyError` crosses whole.
+            with pytest.raises(KeyError):
                 _rust.render_template("{{ p|random }}", normalize_django_value({"p": value}))
 
     def test_a_view_is_not_subscriptable_so_it_refuses_outright(self) -> None:
@@ -683,16 +687,16 @@ class TestOneChokepointAnswersWhichExceptionPythonRaises:
     def test_the_constructor_is_reached_from_every_arm_that_can_refuse(self) -> None:
         """The COUNT, so an arm that grows a bespoke `Err` is visible.
 
-        Six filters and seven call sites: `first`, `last` and the two native
-        iterators have one each, and `random` has two — one for the subscript
-        and one for the missing `len()`. `unordered_list` is Django's own
+        Four filters and four call sites: `first` and the two native iterators
+        have one each (`last` and `random` are Django's own functions since
+        #4005, so their refusal is Django's exception). `unordered_list` is Django's own
         function since 2.0, with one native refusal ahead of the routing: a
         serialized model is not iterable, and Django must not be handed the
         map it was serialized to. (`phone2numeric` is Django's own function.)
         """
         source = production(FILTERS_RS)
         arm = source.split("fn apply_builtin_filter", 1)[1].split("\n}\n", 1)[0]
-        assert arm.count("value_op_error(") == 7, arm.count("value_op_error(")
+        assert arm.count("value_op_error(") == 4, arm.count("value_op_error(")
 
     def test_the_pin_goes_red_when_an_arm_stops_using_the_constructor(self) -> None:
         """Canary, direction one: a bespoke ``Err`` in every arm."""

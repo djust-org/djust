@@ -556,8 +556,11 @@ class TestErrorsSurfaceUsefully:
                 source = '{{ p|%s:"%s" }}' % (name, width)
                 try:
                     _rust.render_template(source, {"p": value})
-                except RuntimeError:
-                    pass  # A raise is fine; an abort is what this rules out.
+                except (RuntimeError, LookupError):
+                    # A raise is fine; an abort is what this rules out. A routed
+                    # filter's own Python exception crosses whole (#4005):
+                    # `dictsort:"9…9"` is `itemgetter("9…9")`, a `KeyError`.
+                    pass
 
     def test_urlizetrunc_is_not_capped(self) -> None:
         """Its limit is a comparison bound, never an allocation, so the pad cap

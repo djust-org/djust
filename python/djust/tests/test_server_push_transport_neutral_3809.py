@@ -7,9 +7,9 @@ renders each step with a push froze over SSE: the push, the tick and the
 for SSE. Ordering is asserted by event order, never by a duration.
 
 Slice 1 covers the view's OWN push and tick. ``push_to_view`` groups, push
-scopes and ``db_notify`` stay WebSocket-only over SSE (they need the channel
-layer); ``test_groups_stay_websocket_only_over_sse`` pins that, so a later
-slice that changes it has to change this test.
+scopes and ``db_notify`` reach SSE since #3885
+(``test_sse_push_groups_3885.py``); ``test_groups_reach_sse_since_3885``
+below only pins that the SSE view joined its push group.
 """
 
 import asyncio
@@ -595,12 +595,15 @@ async def test_a_push_cannot_call_a_handler_the_websocket_would_refuse(caplog):
     assert "blocked handler" in caplog.text
 
 
-async def test_groups_stay_websocket_only_over_sse():
-    """Slice 1 does not wire ``push_to_view`` groups, push scopes or ``db_notify`` to SSE."""
+async def test_groups_reach_sse_since_3885():
+    """#3885: the SSE view's channel joined the ``push_to_view`` group of its class."""
+    from channels.layers import get_channel_layer
+
+    from djust.push import view_group_name
+
     session, _key = await _sse()
-    runtime = session.runtime
-    assert not hasattr(runtime.transport, "join_view_group")
-    assert getattr(session.view_instance, "_view_group", None) is None
+    member = session.runtime.transport.channel_member
+    assert member.channel_name in get_channel_layer().groups[view_group_name(PUSH)]
 
 
 # -- cleanup ----------------------------------------------------------------

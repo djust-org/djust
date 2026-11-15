@@ -151,16 +151,9 @@ class NoTemplateDemo(LiveView):
                         <h5 class="card-title">Progress Tracker</h5>
                         <div class="mb-3">
                             <p class="mb-2">Current Progress: {{ progress }}%</p>
-                            <div class="progress" style="height: 30px;">
-                                <div class="progress-bar progress-bar-striped progress-bar-animated bg-success"
-                                     role="progressbar"
-                                     style="width: {{ progress }}%"
-                                     aria-valuenow="{{ progress }}"
-                                     aria-valuemin="0"
-                                     aria-valuemax="100">
-                                    {{ progress }}%
-                                </div>
-                            </div>
+                            {# A native <progress>: no inline style a strict CSP would refuse (#3979) #}
+                            <progress class="w-100" value="{{ progress }}" max="100"
+                                      aria-label="Current progress">{{ progress }}%</progress>
                         </div>
                         <div class="d-flex gap-2">
                             <button class="btn btn-danger btn-sm" dj-click="decrease_progress">- 10%</button>

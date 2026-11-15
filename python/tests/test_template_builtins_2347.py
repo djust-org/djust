@@ -486,7 +486,9 @@ class TestOnlyAddWasBrokenByTheBareLiteral:
         # tests. With the `int(value)` chokepoint in place BOTH spellings agree
         # (measured: `divisibleby:True` and `divisibleby:1` are `True` on both
         # engines over `1.5`), so the row has nothing left to assert.
-        ("dictsort", "False", "0", "ab"),
+        # `dictsort` was here until #4005, which made it Django's own
+        # `sorted()`: `dictsort:0` and `dictsort:False` over `"ab"` now agree
+        # with Django on both spellings, so the row has nothing left to assert.
         ("pluralize", "True", "1", 5),
         # `get_digit` was here until #2403, and it left the same way
         # `stringformat`, `date` and `time` did: the numeric control

@@ -1217,6 +1217,73 @@ jobs:
       - name: Run ESLint with security plugin
         run: npm run lint
 
+  # The multi-process harness's Redis rows (#4136). tests/integration/multinode
+  # pushes to a view from another process over a Redis channel layer (WebSocket
+  # and SSE), shares presence over it, and keeps sessions in Redis caches. Those
+  # rows need `redis-server` and `channels_redis`; python-tests has neither, so
+  # there they skip. This job installs both and sets DJUST_REQUIRE_REDIS_ROWS=1,
+  # under which a row that cannot run FAILS instead of skipping, so the Redis
+  # rows of the state-survival table cannot silently go unexercised again.
+  #
+  # No `services: redis` container: the harness starts its own private
+  # redis-server per module on a Unix socket (harness.py `redis_server`), so it
+  # needs the binary on the runner, not a server on a port.
+  #
+  # Tier: like the slow Python tier these tests live in — push to main, nightly
+  # (main-health calls this workflow on its schedule), manual dispatch, and a PR
+  # labelled `full-tests`; skipped on other PRs and in the merge queue.
+  #
+  # NON-GATING until it has been green on a runner once (#1534 discipline):
+  # job-level `continue-on-error` and deliberately NOT in test-summary's
+  # `needs` / AND-chain. Promote it per #4136 after the first green run: drop
+  # `continue-on-error` and add it to test-summary (and update
+  # tests/integration/multinode/test_require_redis_rows.py, which pins this).
+  multinode-redis-rows:
+    name: multinode Redis rows (non-gating, #4136)
+    needs: [changes, python-build]
+    if: needs.changes.outputs.docs_only != 'true' && ((github.event_name != 'pull_request' && github.event_name != 'merge_group') || contains(github.event.pull_request.labels.*.name, 'full-tests'))
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install redis-server
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends redis-server
+          redis-server --version
+
+      - name: Download the prebuilt extension
+        uses: actions/download-artifact@v8
+        with:
+          name: djust-wheel-py3.12
+          path: ${{ runner.temp }}/djust-wheel
+
+      # channels-redis is in the `dev` extra (pyproject.toml), so the frozen lock installs it.
+      - name: Install Python dependencies and prebuilt extension
+        run: |
+          uv sync --frozen --extra dev --no-install-project --python "${{ steps.python.outputs.python-path }}"
+          scripts/ci-install-prebuilt-djust.sh "$RUNNER_TEMP/djust-wheel"
+          .venv/bin/python -c "import channels_redis; print('channels_redis', channels_redis.__version__)"
+
+      # The whole harness, not a hand-picked list of Redis tests: a new Redis row
+      # is covered without editing this job, and `-rs` prints any skip reason.
+      - name: Run the multinode harness with the Redis rows required
+        env:
+          DJUST_REQUIRE_REDIS_ROWS: "1"
+        run: |
+          PYTHONPATH=. .venv/bin/python -m pytest tests/integration/multinode -rs -p no:cacheprovider
+
   # Security tests with coverage - runs in parallel
   security-tests:
     runs-on: ubuntu-latest

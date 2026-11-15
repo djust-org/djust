@@ -89,8 +89,8 @@ class SkeletonFactory(Component):
 
     def _render_table(self, cls: str, cols: int, rows: int) -> str:
         header_cells = "".join(
-            '<th><span class="dj-skeleton__line dj-skeleton__pulse" '
-            'style="width:70%">&nbsp;</span></th>'
+            '<th><span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-70">'
+            "&nbsp;</span></th>"
             for _ in range(cols)
         )
         header = f"<thead><tr>{header_cells}</tr></thead>"
@@ -117,12 +117,12 @@ class SkeletonFactory(Component):
             f'role="status" aria-label="Loading">'
             f'<div class="dj-skeleton__card-image dj-skeleton__pulse">&nbsp;</div>'
             f'<div class="dj-skeleton__card-body">'
-            f'<span class="dj-skeleton__line dj-skeleton__pulse" '
-            f'style="width:60%">&nbsp;</span>'
-            f'<span class="dj-skeleton__line dj-skeleton__pulse" '
-            f'style="width:90%">&nbsp;</span>'
-            f'<span class="dj-skeleton__line dj-skeleton__pulse" '
-            f'style="width:40%">&nbsp;</span>'
+            f'<span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-60">'
+            f"&nbsp;</span>"
+            f'<span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-90">'
+            f"&nbsp;</span>"
+            f'<span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-40">'
+            f"&nbsp;</span>"
             f"</div></div>"
         )
 
@@ -132,8 +132,8 @@ class SkeletonFactory(Component):
             items.append(
                 '<div class="dj-skeleton__list-item">'
                 '<span class="dj-skeleton__circle dj-skeleton__pulse">&nbsp;</span>'
-                '<span class="dj-skeleton__line dj-skeleton__pulse" '
-                'style="width:80%">&nbsp;</span>'
+                '<span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-80">'
+                "&nbsp;</span>"
                 "</div>"
             )
         return (
@@ -148,8 +148,8 @@ class SkeletonFactory(Component):
         for i in range(rows):
             w = widths[i % len(widths)]
             lines.append(
-                f'<span class="dj-skeleton__line dj-skeleton__pulse" '
-                f'style="width:{w}%">&nbsp;</span>'
+                f'<span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-{w}">'
+                f"&nbsp;</span>"
             )
         return (
             f'<div class="{cls} dj-skeleton--text" '

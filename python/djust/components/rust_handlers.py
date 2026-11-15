@@ -1058,7 +1058,7 @@ class DataTableHandler:
         # --- Loading state ---
         if loading:
             skeleton_rows = "".join(
-                '<div class="skeleton skeleton-line" style="width:100%"></div>' for _ in range(5)
+                '<div class="skeleton skeleton-line dj-progress-w-100"></div>' for _ in range(5)
             )
             return _safe(
                 f'<div class="{" ".join(wrapper_classes)}" role="grid"'
@@ -1495,9 +1495,11 @@ class DataTableHandler:
                         if cf_type == "data_bar":
                             cf_pct = max(0, min(100, ((cf_num - cf_min) / cf_span) * 100))
                             td_classes.append("data-table-cf-data-bar")
+                            # A width class, not `style="width:N%"`, which a strict
+                            # `style-src` refuses (#3979; the `{% progress %}` pattern).
                             cf_html = (
-                                f'<div class="data-table-data-bar"'
-                                f' style="width:{cf_pct:.1f}%"></div>'
+                                f'<div class="data-table-data-bar'
+                                f' dj-progress-w-{round(cf_pct)}"></div>'
                             )
                         elif cf_type == "color_scale":
                             cf_ratio = max(0.0, min(1.0, (cf_num - cf_min) / cf_span))

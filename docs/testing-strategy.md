@@ -224,6 +224,14 @@ A test skipped there too was skipped on every cell; `-rs` lists it with its reas
 on Django 6.0, and a 6.x-only break in a test that also runs (and passes) on 5.2, are found by the
 next nightly instead of before merge.
 
+**The multinode Redis rows** (#4136): `tests/integration/multinode` skips its Redis
+channel-layer, presence and Redis-session rows where `redis-server` or `channels_redis` is
+missing, which is every shard. The `multinode-redis-rows` job in `test.yml` (same events as the
+slow tier) installs both and sets `DJUST_REQUIRE_REDIS_ROWS=1`, which turns such a skip into a
+failure. It is non-gating (`continue-on-error`, not in `test-summary`) until it has been green on
+a runner once; #4136 tracks the promotion. Locally: `DJUST_REQUIRE_REDIS_ROWS=1 .venv/bin/python
+-m pytest tests/integration/multinode/`.
+
 **The slow tier** is derived: `tests/slow_tier.py` marks every test recorded over 1 s in
 `.test_durations` as `slow`. `@pytest.mark.pr_tier` keeps a slow test in the PR tier (a
 structural pin: a ratchet, an inventory, a doc table, a census); `@pytest.mark.nightly` keeps it

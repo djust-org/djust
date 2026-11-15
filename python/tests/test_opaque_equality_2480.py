@@ -647,8 +647,13 @@ class TestTheChokepointIsStructural:
         # `values_equal` (through `encoded_equal`), `try_compare`, and the
         # definition itself.
         assert renderer.count("encoded_partial_cmp(") == 3, renderer.count("encoded_partial_cmp(")
-        # `dictsort`'s ordering.
-        assert filters.count("encoded_partial_cmp(") == 1
+        # None in the filters since #4005: `dictsort` / `dictsortreversed` hand
+        # the bounded list to Django's own `sorted(value, key=...)`, so their
+        # ordering is Django's, not a Rust comparison.
+        assert filters.count("encoded_partial_cmp(") == 0, filters.count("encoded_partial_cmp(")
+        arm = filters[filters.index('"dictsort" | "dictsortreversed" =>') :]
+        arm = arm[: arm.index('"urlencode" =>')]
+        assert "filter_registry::apply_django_builtin_filter_keeping(" in arm
 
     def test_the_counter_goes_red_in_BOTH_directions(self) -> None:
         """The canary: each mutation asserts it APPLIED before its count is

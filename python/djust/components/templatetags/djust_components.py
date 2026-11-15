@@ -3175,7 +3175,9 @@ def gauge(
     label_html = f'<div class="gauge-label">{e_label}</div>' if e_label else ""
 
     return mark_safe(
-        f'<div class="gauge gauge-{e_color}" style="width:{px}px;height:{px}px;">'
+        # The box's size is a class (`gauge--sm` / `--md` / `--lg`), not an inline
+        # `style`, which a strict `style-src` refuses (#3979).
+        f'<div class="gauge gauge-{e_color} gauge--{str(size) if str(size) in sizes else "md"}">'
         f'<svg width="{px}" height="{px}" viewBox="0 0 {px} {px}">'
         f'<circle cx="{cx}" cy="{cy}" r="{r:.1f}" class="gauge-track" '
         f'stroke-width="8" fill="none"/>'
@@ -8199,7 +8201,9 @@ class TokenCounterNode(template.Node):
             f'aria-label="Token usage">'
             f"{label_html}"
             f'<div class="dj-token__track">'
-            f'<div class="dj-token__bar" style="width:{pct:.1f}%"></div>'
+            # The fill's width is a class, as `{% progress %}` draws it (#3969): a
+            # `style-src` without 'unsafe-inline' refuses `style="width:N%"` (#3979).
+            f'<div class="dj-token__bar dj-progress-w-{round(min(max(pct, 0), 100))}"></div>'
             f"</div>"
             f"</div>"
         )
@@ -8710,8 +8714,8 @@ class SkeletonForNode(template.Node):
 
     def _render_table(self, cls: Any, cols: Any, rows: Any) -> Any:
         header_cells = "".join(
-            '<th><span class="dj-skeleton__line dj-skeleton__pulse" '
-            'style="width:70%">&nbsp;</span></th>'
+            '<th><span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-70">'
+            "&nbsp;</span></th>"
             for _ in range(cols)
         )
         header = f"<thead><tr>{header_cells}</tr></thead>"
@@ -8736,12 +8740,12 @@ class SkeletonForNode(template.Node):
             f'role="status" aria-label="Loading">'
             f'<div class="dj-skeleton__card-image dj-skeleton__pulse">&nbsp;</div>'
             f'<div class="dj-skeleton__card-body">'
-            f'<span class="dj-skeleton__line dj-skeleton__pulse" '
-            f'style="width:60%">&nbsp;</span>'
-            f'<span class="dj-skeleton__line dj-skeleton__pulse" '
-            f'style="width:90%">&nbsp;</span>'
-            f'<span class="dj-skeleton__line dj-skeleton__pulse" '
-            f'style="width:40%">&nbsp;</span>'
+            f'<span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-60">'
+            f"&nbsp;</span>"
+            f'<span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-90">'
+            f"&nbsp;</span>"
+            f'<span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-40">'
+            f"&nbsp;</span>"
             f"</div></div>"
         )
 
@@ -8751,8 +8755,8 @@ class SkeletonForNode(template.Node):
             items.append(
                 '<div class="dj-skeleton__list-item">'
                 '<span class="dj-skeleton__circle dj-skeleton__pulse">&nbsp;</span>'
-                '<span class="dj-skeleton__line dj-skeleton__pulse" '
-                'style="width:80%">&nbsp;</span>'
+                '<span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-80">'
+                "&nbsp;</span>"
                 "</div>"
             )
         return (
@@ -8767,8 +8771,8 @@ class SkeletonForNode(template.Node):
         for i in range(rows):
             w = widths[i % len(widths)]
             lines.append(
-                f'<span class="dj-skeleton__line dj-skeleton__pulse" '
-                f'style="width:{w}%">&nbsp;</span>'
+                f'<span class="dj-skeleton__line dj-skeleton__pulse dj-progress-w-{w}">'
+                f"&nbsp;</span>"
             )
         return (
             f'<div class="{cls} dj-skeleton--text" '
@@ -9812,11 +9816,12 @@ class MeterNode(template.Node):
                 pct = 0
             color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
             seg_label = attr_text(seg.get("label", ""))  # only in aria-label= (#3904)
-            style = f"width:{pct:.1f}%"
-            if color:
-                style += f";background:{color}"
+            # The width is a class, as `{% progress %}` draws it (#3969, #3979). A
+            # segment's own colour has no class to stand for it, so it is the one
+            # thing still written as a style, and only when one is given.
+            style_attr = f' style="background:{color}"' if color else ""
             bar_parts.append(
-                f'<div class="dj-meter__segment" style="{style}" '
+                f'<div class="dj-meter__segment dj-progress-w-{round(pct)}"{style_attr} '
                 f'role="meter" aria-valuenow="{int(val)}" '
                 f'aria-valuemin="0" aria-valuemax="{total}" '
                 f'aria-label="{seg_label}"></div>'
@@ -9833,10 +9838,11 @@ class MeterNode(template.Node):
                 color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
                 seg_label = conditional_escape(str(seg.get("label", "")))
                 val = conditional_escape(seg.get("value", 0))
-                swatch_style = f"background:{color}" if color else ""
+                # No `style` attribute at all without a colour (#3979).
+                swatch_style = f' style="background:{color}"' if color else ""
                 legend_items.append(
                     f'<div class="dj-meter__legend-item">'
-                    f'<span class="dj-meter__legend-swatch" style="{swatch_style}"></span>'
+                    f'<span class="dj-meter__legend-swatch"{swatch_style}></span>'
                     f'<span class="dj-meter__legend-label">{seg_label}</span>'
                     f'<span class="dj-meter__legend-value">{val}</span></div>'
                 )

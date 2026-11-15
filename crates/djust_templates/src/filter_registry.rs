@@ -818,6 +818,38 @@ pub(crate) fn apply_django_builtin_filter(
     autoescape: bool,
     input_safety: InputSafety,
 ) -> djust_core::Result<Value> {
+    apply_django_builtin_filter_keeping(name, value, None, arg, autoescape, input_safety)
+}
+
+/// [`apply_django_builtin_filter`] for a filter whose answer is the INPUT
+/// itself or some of its ELEMENTS — `default_if_none`, `last`, `random`,
+/// `dictsort` (#4005).
+///
+/// Django hands back the very objects it was given (`return value`,
+/// `value[-1]`, `random.choice(value)`, `sorted(value, key=…)`). Converting
+/// those objects back into `Value`s would lose what djust carries beside them
+/// and Django cannot see: a live handle, a model's floor proxy, a namedtuple's
+/// shape, the facts a later `{% with x=rows|last %}{{ x.name }}` reads. So the
+/// answer is mapped back by IDENTITY: an object that *is* the input answers the
+/// input `Value`, an object that *is* one of the elements answers that element,
+/// and a list made only of elements answers those elements in Django's order.
+/// Anything else is an object Django built (a character of a string, `""` from
+/// a caught exception) and converts as usual.
+///
+/// `items` is the sequence to hand Django in place of `value` when the
+/// elements must cross as djust's handler objects: `dictsort` reads each
+/// element's attributes, so a carried model crosses on its floor proxy
+/// ([`djust_core::value_into_handler_pyobject`]), as it does for a bridged
+/// tag, and a carried collection crosses already bounded by the cap of
+/// [`crate::filters::iter_values`]. `None` hands Django `django_object(value)`.
+pub(crate) fn apply_django_builtin_filter_keeping(
+    name: &str,
+    value: &Value,
+    items: Option<&[Value]>,
+    arg: Option<Value>,
+    autoescape: bool,
+    input_safety: InputSafety,
+) -> djust_core::Result<Value> {
     Python::attach(|py| -> PyResult<Value> {
         // The REGISTERED filter, not the module attribute: the module also
         // imports `django.utils.html.linebreaks`, which shadows the
@@ -832,10 +864,44 @@ pub(crate) fn apply_django_builtin_filter(
             .getattr("needs_autoescape")
             .and_then(|flag| flag.is_truthy())
             .unwrap_or(false);
-        let py_value = mark_input_safety(py, django_object(py, value)?, input_safety)?;
+        let raw = match items {
+            Some(items) => {
+                let list = PyList::empty(py);
+                for item in items {
+                    list.append(djust_core::value_into_handler_pyobject(py, item.clone())?)?;
+                }
+                list.into_any()
+            }
+            None => django_object(py, value)?,
+        };
+        let py_value = mark_input_safety(py, raw, input_safety)?;
+        // The elements as Django will see them — AFTER any item marking, which
+        // rebuilds them — each paired with the `Value` it came from.
+        let element_values: Option<&[Value]> = match (items, value) {
+            (Some(items), _) => Some(items),
+            (None, Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. }) => {
+                Some(items)
+            }
+            _ => None,
+        };
+        let mut elements: Vec<(usize, &Value)> = Vec::new();
+        if let Some(values) = element_values {
+            if py_value.len().ok() == Some(values.len()) {
+                for (index, item_value) in values.iter().enumerate() {
+                    elements.push((py_value.get_item(index)?.as_ptr() as usize, item_value));
+                }
+            }
+        }
+        let element = |obj: &Bound<'_, PyAny>| -> Option<Value> {
+            let ptr = obj.as_ptr() as usize;
+            elements
+                .iter()
+                .find(|(p, _)| *p == ptr)
+                .map(|(_, v)| (*v).clone())
+        };
         let args = match arg {
-            Some(arg) => PyTuple::new(py, [py_value, django_object(py, &arg)?])?,
-            None => PyTuple::new(py, [py_value])?,
+            Some(arg) => PyTuple::new(py, [py_value.clone(), django_object(py, &arg)?])?,
+            None => PyTuple::new(py, [py_value.clone()])?,
         };
         let kwargs = if needs_autoescape {
             let kw = PyDict::new(py);
@@ -845,6 +911,20 @@ pub(crate) fn apply_django_builtin_filter(
             None
         };
         let out = func.call(args, kwargs.as_ref())?;
+        if out.is(&py_value) {
+            return Ok(value.clone());
+        }
+        if let Some(found) = element(&out) {
+            return Ok(found);
+        }
+        if !elements.is_empty() {
+            if let Ok(list) = out.cast::<PyList>() {
+                let mapped: Option<Vec<Value>> = list.iter().map(|o| element(&o)).collect();
+                if let Some(mapped) = mapped {
+                    return Ok(Value::List(mapped));
+                }
+            }
+        }
         let is_safe = py_value_is_safe_string(&out);
         let result: Value = out.extract()?;
         Ok(if is_safe {

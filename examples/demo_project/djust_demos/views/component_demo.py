@@ -142,16 +142,9 @@ class TodoComponent(LiveComponent):
                     </div>
 
                     <div class="mt-3">
-                        <div class="progress">
-                            <div class="progress-bar"
-                                 role="progressbar"
-                                 style="width: {{ progress }}%"
-                                 aria-valuenow="{{ progress }}"
-                                 aria-valuemin="0"
-                                 aria-valuemax="100">
-                                {{ progress }}%
-                            </div>
-                        </div>
+                        {# A native <progress>: no inline style a strict CSP would refuse (#3979) #}
+                        <progress class="w-100" value="{{ progress }}" max="100"
+                                  aria-label="Task progress">{{ progress }}%</progress>
                     </div>
                 {% else %}
                     <p class="text-muted text-center">No tasks assigned</p>
