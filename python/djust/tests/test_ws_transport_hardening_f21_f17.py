@@ -63,7 +63,7 @@ def _own_the_bucket_clock(frozen_rate_limit_clock):
     """
 
 
-class _StateTargetView:
+class _StateTargetView(LiveView):
     """A real (non-Mock) view stand-in for server_push state application.
 
     A real object is required, not a MagicMock: a MagicMock would silently
@@ -73,39 +73,46 @@ class _StateTargetView:
     attribute and the test can observe it (#1650 reproduction fidelity).
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ count }}</div>"
 
-    def __init__(self):
+    def mount(self, request, **kwargs):
         # User-facing public state (legitimately settable).
         self.count = 0
-        # Framework internals an attacker must NOT be able to overwrite.
-        self._framework_attrs = frozenset({"count"})
-        self._components = {"original": object()}
-        self._rust_view = object()
+
+    def get_context_data(self, **kwargs):
+        return {"count": self.count}
 
 
-def _make_consumer(view):
-    """Build a minimal consumer wired to drive ``server_push`` directly.
+setattr(sys.modules[__name__], "_StateTargetView", _StateTargetView)
 
-    Mirrors ``tests/unit/test_server_push.py::_make_consumer`` but uses the
-    provided real view instead of a MagicMock so attribute mutations are
-    observable.
+
+async def _make_consumer():
+    """A consumer that mounted a real ``_StateTargetView``, wired to drive
+    ``server_push`` directly.
+
+    Mirrors ``tests/unit/test_server_push.py::_make_consumer``. The view is
+    mounted through the real ``handle_mount`` (an explicit view's push turn is
+    authorized by the runtime that mounted it); only the render is mocked
+    after that, since server_push re-renders after applying state.
     """
     from unittest.mock import AsyncMock, MagicMock
 
+    from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer()
-    consumer.view_instance = view
-    # Render path is mocked — server_push re-renders after applying state.
     consumer.send = AsyncMock()
+    consumer.send_json = AsyncMock()
+    view = await amount_on_consumer(consumer, f"{__name__}._StateTargetView")
     consumer._send_update = AsyncMock()
     # render_with_diff returns (html, patches, version).
     view._sync_state_to_rust = MagicMock()
     view.render_with_diff = MagicMock(return_value=("<div>ok</div>", '[{"op":"replace"}]', 2))
-    return consumer
+    return consumer, view
 
 
+@pytest.mark.django_db(transaction=True)
 class TestServerPushStateMassAssignment:
     """F21: server_push must route state through safe_setattr."""
 
@@ -113,8 +120,7 @@ class TestServerPushStateMassAssignment:
     async def test_legit_public_state_applies(self):
         """A legitimate public attribute in ``state`` must still apply —
         the fix tightens the blocklist without breaking normal usage."""
-        view = _StateTargetView()
-        consumer = _make_consumer(view)
+        consumer, view = await _make_consumer()
 
         await consumer.server_push({"state": {"count": 5}, "handler": None, "payload": None})
 
@@ -123,9 +129,8 @@ class TestServerPushStateMassAssignment:
     @pytest.mark.asyncio
     async def test_dunder_class_is_blocked(self):
         """``__class__`` overwrite (type confusion) must be blocked."""
-        view = _StateTargetView()
+        consumer, view = await _make_consumer()
         original_cls = view.__class__
-        consumer = _make_consumer(view)
 
         await consumer.server_push({"state": {"__class__": dict}, "handler": None, "payload": None})
 
@@ -135,9 +140,8 @@ class TestServerPushStateMassAssignment:
     @pytest.mark.asyncio
     async def test_dunder_init_is_blocked(self):
         """``__init__`` overwrite must be blocked."""
-        view = _StateTargetView()
+        consumer, view = await _make_consumer()
         original_init = type(view).__init__
-        consumer = _make_consumer(view)
 
         await consumer.server_push(
             {"state": {"__init__": lambda self: None}, "handler": None, "payload": None}
@@ -151,23 +155,21 @@ class TestServerPushStateMassAssignment:
     async def test_framework_attrs_is_blocked(self):
         """``_framework_attrs`` (snapshot-order invariant, #1393) must be
         blocked — it is private and framework-critical."""
-        view = _StateTargetView()
+        consumer, view = await _make_consumer()
         original = view._framework_attrs
-        consumer = _make_consumer(view)
 
         await consumer.server_push(
             {"state": {"_framework_attrs": set()}, "handler": None, "payload": None}
         )
 
         assert view._framework_attrs is original, "F21: _framework_attrs was overwritten"
-        assert view._framework_attrs == frozenset({"count"})
+        assert view._framework_attrs == original
 
     @pytest.mark.asyncio
     async def test_components_is_blocked(self):
         """``_components`` (component registry) must be blocked."""
-        view = _StateTargetView()
+        consumer, view = await _make_consumer()
         original = view._components
-        consumer = _make_consumer(view)
 
         await consumer.server_push({"state": {"_components": {}}, "handler": None, "payload": None})
 
@@ -177,8 +179,7 @@ class TestServerPushStateMassAssignment:
     async def test_private_state_is_blocked(self):
         """Arbitrary private ``_`` state must be blocked with
         ``allow_private=False`` (matches every other restore sink)."""
-        view = _StateTargetView()
-        consumer = _make_consumer(view)
+        consumer, view = await _make_consumer()
 
         await consumer.server_push(
             {"state": {"_rust_view": "hijacked"}, "handler": None, "payload": None}
@@ -190,9 +191,8 @@ class TestServerPushStateMassAssignment:
     async def test_mixed_state_applies_safe_blocks_dangerous(self):
         """A single push mixing safe + dangerous keys: safe applies,
         dangerous is dropped (the loop doesn't abort on a blocked key)."""
-        view = _StateTargetView()
+        consumer, view = await _make_consumer()
         original_cls = view.__class__
-        consumer = _make_consumer(view)
 
         await consumer.server_push(
             {
@@ -225,7 +225,7 @@ class _UploadView(LiveView, UploadMixin):
     """An upload-enabled LiveView so ``_upload_manager`` is non-None and the
     real ``_handle_upload_frame`` path is reachable for legit frames."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-view="djust.tests.test_ws_transport_hardening_f21_f17._UploadView"'
         ' dj-id="0">up</div>'
@@ -258,8 +258,10 @@ async def _connect_and_mount():
 
     from djust.websocket import LiveViewConsumer
 
+    from djust.tests._live_session import with_live_session
+
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    connected, _ = await communicator.connect()
+    connected, _ = await with_live_session(communicator).connect()
     assert connected
     # Drain the initial connect/ack frame.
     await communicator.receive_json_from()
