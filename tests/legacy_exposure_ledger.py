@@ -31,6 +31,7 @@ MIGRATED_4082: tuple[str, ...] = (
     "python/djust/tests/test_live_redirect_skip_render_1643.py",
     "python/djust/tests/test_login_required_middleware_live.py",
     "python/djust/tests/test_metadata_decorators_async.py",
+    "python/djust/tests/test_model_form_object_recheck_3967.py",
     "python/djust/tests/test_mount_group_membership.py",
     "python/djust/tests/test_mount_object_permission_after_params.py",
     "python/djust/tests/test_multi_view_render_locks_3252.py",
@@ -85,9 +86,6 @@ REMAINING_4082: dict[str, str] = {
     ),
     "python/djust/tests/test_live_auth_event_holders_and_user_checks.py": (
         "migrated; the upload-resume case stays legacy: an explicit view does not resume an upload across a reconnect (ADR-038 D-g)"
-    ),
-    "python/djust/tests/test_model_form_object_recheck_3967.py": (
-        "migrated; the record-reuse cases stay legacy: product gap #4153, the explicit render leaves _djust_prop_cache on the record and ModelFormMixin._fingerprint never matches"
     ),
     "python/djust/tests/test_multi_view_refusal_3252.py": (
         "migrated; the revocation cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
@@ -437,7 +435,6 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/tests/test_render_call_guard_3815.py",
     "python/djust/tests/test_async_check_permissions.py",
     "python/djust/tests/test_live_auth_denials_and_wrappers.py",
-    "python/djust/tests/test_model_form_object_recheck_3967.py",
     "tests/unit/test_layout_switching.py",
     "python/djust/tests/test_live_auth_event_holders_and_user_checks.py",
 )
