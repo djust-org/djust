@@ -66,6 +66,20 @@ what another request stored earlier is not carried over to the new key.
 
 The cost is one extra session read per save (``db``: one ``SELECT ... FOR
 UPDATE`` in the same transaction as the ``UPDATE``).
+
+The holder fence (design: save frequency). A save of a view's automatic
+state names the holder epoch it writes (:meth:`TrackedSessionData.fence`).
+The merge compares it with the epoch of the entry the store holds NOW: a
+lower one means another connection or request restored the tab since and
+claimed it, so this writer's entry is not written (the stored one is kept,
+and taken back into the live dict), the rest of the snapshot is, and
+:class:`~djust.state_store.StateSuperseded` is raised once the write is
+over. A claim (``claim=True``) is refused by an equal epoch too, so two
+claims of one epoch cannot both win. On ``db`` and ``cached_db`` the
+comparison sits under the row lock; on ``cache`` and ``file`` it is
+check-then-write with the window described above. A whole-session save
+(an untracked session, an unreadable store, a row that is gone) checks
+nothing: there is no stored entry it reads.
 """
 
 from __future__ import annotations
@@ -128,6 +142,25 @@ class Snapshot(NamedTuple):
     changed: Dict[Any, Any]  #: key -> the value to write
     removed: Set[Any]
     baselines: Dict[Any, Any]  #: key -> copy of a watched value, for the next save
+    #: key -> (holder epoch, is a claim): the fence of each entry it writes
+    fences: Dict[Any, Tuple[int, bool]] = {}
+
+
+def stored_epoch(entry: Any) -> Optional[int]:
+    """The holder epoch an automatic-state entry (envelope or index entry)
+    carries, or None when it carries none (written before the fence)."""
+    if type(entry) is not dict:
+        return None
+    epoch = entry.get("epoch")
+    return epoch if type(epoch) is int and epoch >= 0 else None
+
+
+def fence_refuses(stored: Any, epoch: int, claim: bool) -> bool:
+    """Whether a write of holder ``epoch`` must not replace ``stored``."""
+    held = stored_epoch(stored)
+    if held is None:
+        return False
+    return held >= epoch if claim else held > epoch
 
 
 class TrackedSessionData(dict):
@@ -138,7 +171,7 @@ class TrackedSessionData(dict):
     entry would be read back as a tracker by another session.
     """
 
-    __slots__ = ("written", "removed", "_seen", "_stamp", "_gen", "_lock")
+    __slots__ = ("written", "removed", "_seen", "_stamp", "_gen", "_lock", "_fences")
 
     def __init__(self, data: Dict[Any, Any]) -> None:
         super().__init__(data)
@@ -151,6 +184,8 @@ class TrackedSessionData(dict):
         self._gen = 0
         # A save runs on a pool thread while the next handler may write.
         self._lock = threading.RLock()
+        # key -> (holder epoch, claim): what the next merge checks (the fence).
+        self._fences: Dict[Any, Tuple[int, bool]] = {}
 
     def __reduce_ex__(self, protocol: Any) -> Tuple[Any, ...]:
         return (dict, (dict(self),))
@@ -223,6 +258,13 @@ class TrackedSessionData(dict):
             self[key] = default
             return default
 
+    def fence(self, key: Any, epoch: int, *, claim: bool = False) -> None:
+        """The entry written under ``key`` is held at ``epoch``: the merge
+        refuses to write it over an entry with a higher one (an equal one too,
+        for a claim)."""
+        with self._lock:
+            self._fences[key] = (epoch, claim)
+
     def put_back(self, key: Any, value: Any) -> None:
         """Undo a removal made through this object, without recording a write.
 
@@ -265,7 +307,7 @@ class TrackedSessionData(dict):
                     if _differs(before, now):
                         changed[key] = now
             baselines = {k: _baseline(v) for k, v in changed.items() if _watches(k, v)}
-            return Snapshot(self._gen, changed, set(self.removed), baselines)
+            return Snapshot(self._gen, changed, set(self.removed), baselines, dict(self._fences))
 
     def reconcile(self, merged: Dict[Any, Any], snap: Snapshot) -> None:
         """Bring this dict up to ``merged`` (what was written), key by key.
@@ -316,6 +358,9 @@ class TrackedSessionData(dict):
             for key, baseline in snap.baselines.items():
                 if self._stamp.get(key, 0) <= snap.gen and key in self:
                     self._seen[key] = baseline
+            for key, fence in snap.fences.items():
+                if self._fences.get(key) == fence:
+                    del self._fences[key]
 
 
 def put_back_unrecorded(session: Any, key: Any, value: Any) -> None:
@@ -443,18 +488,25 @@ def save_merged(session: Any, expected_key: Optional[str] = None) -> None:
         return
     try:
         with _row_lock(type(session)):
-            after_commit = _merge_and_save(session, data, key, expected_key)
+            after_commit, superseded = _merge_and_save(session, data, key, expected_key)
     except _Unreadable:
         _save(session, expected_key)
         return
     if after_commit is not None:
         after_commit()
+    if superseded:
+        from .state_store import StateSuperseded
+
+        # Raised once the write is over (outside the transaction): what else
+        # the snapshot held is stored; only the fenced entries were not.
+        raise StateSuperseded("A newer holder claimed this state")
 
 
 def _merge_and_save(
     session: Any, data: TrackedSessionData, key: str, expected_key: Optional[str]
-) -> Optional[Callable[[], None]]:
-    """Merge and write; returns what has to run once the transaction is over."""
+) -> Tuple[Optional[Callable[[], None]], bool]:
+    """Merge and write; returns what has to run once the transaction is over,
+    and whether a fenced entry was refused."""
     try:
         stored = _read_stored(type(session), key)
     except Exception as exc:  # noqa: BLE001 — an unreadable store is not a logout
@@ -474,12 +526,22 @@ def _merge_and_save(
         snap = data.snapshot()
         session.save()  # the row is gone and this is no pool save: the backend answers
         data.settle(snap)
-        return None
+        return None, False
     snap = data.snapshot()
+    # The holder fence: an entry another holder claimed since is kept as stored.
+    refused = [
+        name
+        for name, (epoch, claim) in snap.fences.items()
+        if name in snap.changed and name in stored and fence_refuses(stored[name], epoch, claim)
+    ]
     merged = dict(stored)
     merged.update(snap.changed)
     for name in snap.removed:
         merged.pop(name, None)
+    for name in refused:
+        merged[name] = stored[name]
+        # The live dict takes the newer entry, unrecorded: nothing re-writes ours.
+        data.put_back(name, stored[name])
     # A store object of its own writes the merged copy: the live dict is not
     # touched while the write is in flight, and a handler's write meanwhile
     # stays recorded for the next save.
@@ -493,7 +555,7 @@ def _merge_and_save(
     after_commit = _write(writer)
     data.reconcile(merged, snap)
     data.settle(snap)
-    return after_commit
+    return after_commit, bool(refused)
 
 
 def _write(writer: Any) -> Optional[Callable[[], None]]:

@@ -222,6 +222,7 @@ def test_state_store(store, survival):
             "expires",
             "bytes",
             "stamp",
+            "epoch",  # the holder epoch (a counter, not view content)
         }
         if store == "sealed":
             index.add("sealed")

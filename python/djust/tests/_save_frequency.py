@@ -77,23 +77,50 @@ async def ws_run(view_class: type, key: str, events: List[Tuple[str, Any]]) -> L
     return replies
 
 
-async def sse_run(view_class: type, key: str, events: List[Tuple[str, Any]], module: str) -> None:
-    """Open an SSE stream for ``view_class`` on session ``key`` and POST ``events``."""
+def _sse_request(key: str, method: str, target: str, body: Any) -> Any:
     from django.contrib.auth import get_user
     from django.utils.functional import SimpleLazyObject
 
-    from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+    factory = RequestFactory()
+    if method == "GET":
+        made = factory.get(target, data=body)
+    else:
+        made = factory.post(target, data=json.dumps(body), content_type="application/json")
+    made.session = SessionStore(key)
+    made.user = SimpleLazyObject(lambda: get_user(made))
+    made.tenant = None
+    return made
+
+
+async def sse_post(sid: str, key: str, name: str, params: Any = None) -> Any:
+    """POST one event to the open SSE session ``sid``."""
+    from djust.sse import DjustSSEMessageView
+
+    posted = await sync_to_async(_sse_request)(
+        key,
+        "POST",
+        f"/djust/sse/{sid}/message/",
+        {"type": "event", "event": name, "params": params or {}},
+    )
+    answer = await DjustSSEMessageView().post(posted, session_id=sid)
+    assert answer.status_code in (200, 202, 204), answer.content
+    return answer
+
+
+async def sse_run(
+    view_class: type,
+    key: str,
+    events: List[Tuple[str, Any]],
+    module: str,
+    *,
+    keep: bool = False,
+) -> str:
+    """Open an SSE stream for ``view_class`` on session ``key`` and POST
+    ``events``; the session id. ``keep``: leave the SSE session open."""
+    from djust.sse import DjustSSEStreamView, _sse_sessions
 
     def request_for(method: str, target: str, body: Any) -> Any:
-        factory = RequestFactory()
-        if method == "GET":
-            made = factory.get(target, data=body)
-        else:
-            made = factory.post(target, data=json.dumps(body), content_type="application/json")
-        made.session = SessionStore(key)
-        made.user = SimpleLazyObject(lambda: get_user(made))
-        made.tenant = None
-        return made
+        return _sse_request(key, method, target, body)
 
     sid = str(uuid.uuid4())
     first = await sync_to_async(request_for)(
@@ -105,15 +132,11 @@ async def sse_run(view_class: type, key: str, events: List[Tuple[str, Any]], mod
     assert response.status_code == 200
     try:
         for name, params in events:
-            posted = await sync_to_async(request_for)(
-                "POST",
-                f"/djust/sse/{sid}/message/",
-                {"type": "event", "event": name, "params": params or {}},
-            )
-            answer = await DjustSSEMessageView().post(posted, session_id=sid)
-            assert answer.status_code in (200, 202, 204), answer.content
+            await sse_post(sid, key, name, params)
     finally:
-        _sse_sessions.pop(sid, None)
+        if not keep:
+            _sse_sessions.pop(sid, None)
+    return sid
 
 
 def one_tab(monkeypatch: Any) -> None:

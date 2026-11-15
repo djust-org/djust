@@ -389,6 +389,7 @@ def save_server_state(view: Any, request: Any, *, page_load: bool = False) -> No
     :class:`~djust.state_store.StateStoreError` instead, with nothing written.
     """
     from . import _automatic_state
+    from .state_store import StateSuperseded
 
     adapter = _declared_adapter(view, request, create=True)
     # Projected first: a refusal must leave the session dict untouched.
@@ -410,11 +411,19 @@ def save_server_state(view: Any, request: Any, *, page_load: bool = False) -> No
                 undo()
             field = _limit_culprit(adapter.contract, view)
             raise StateLimitExceeded(field, error.limit, adapter.contract.limits) from None
+        except StateSuperseded:
+            _automatic_state._supersede(view)
+            raise
     elif undo is not None:
         session = request.session
         try:
             to_store()
             _flush(session, session.session_key)
+        except StateSuperseded:
+            # Refused by the holder fence: the session already holds the newer
+            # holder's entry again (unrecorded); undoing would record ours.
+            _automatic_state._supersede(view)
+            raise
         except BaseException:
             # Never leave a staged envelope behind a write that failed: the
             # session middleware would try the same write again at the response.

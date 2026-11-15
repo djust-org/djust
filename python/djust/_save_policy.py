@@ -46,4 +46,24 @@ def save_mode(view: Any, transport: Any, *, source: str) -> str:
     return IMMEDIATE
 
 
-__all__ = ["DEFERRED", "IMMEDIATE", "MODES", "save_mode", "transport_holds_view"]
+def holder_claims(view: Any) -> bool:
+    """Whether restoring ``view``'s saved state claims it (the holder fence).
+
+    A claim is one session write at a socket mount or fallback request that
+    restores the tab's state; after it, an older holder of the same tab can
+    no longer write (``djust._automatic_state._hold``). It is needed only
+    where a holder can write after its last turn, which only a deferred save
+    does. False in this release: no turn is deferred, and no restore pays
+    the write.
+    """
+    return False
+
+
+__all__ = [
+    "DEFERRED",
+    "IMMEDIATE",
+    "MODES",
+    "holder_claims",
+    "save_mode",
+    "transport_holds_view",
+]

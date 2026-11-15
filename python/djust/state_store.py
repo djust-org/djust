@@ -86,6 +86,7 @@ __all__ = [
     "StateKey",
     "StateStoreConfigurationError",
     "StateStoreError",
+    "StateSuperseded",
     "ViewStateStore",
     "configured_store",
     "generate_key",
@@ -111,6 +112,13 @@ class StateStoreError(Exception):
     is on: the event is refused. Carries no value and no store exception."""
 
     user_message = "State unavailable. Please reload the page."
+
+
+class StateSuperseded(StateStoreError):
+    """This view no longer holds its tab's saved state: another connection or
+    request restored the tab since (it claimed the holder epoch, design: save
+    frequency), and a write from here would replace newer state. Nothing was
+    written. Refused like a strict store's failure, on every transport."""
 
 
 @dataclass(frozen=True)
