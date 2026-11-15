@@ -476,6 +476,18 @@ object the view holds:
   (through `.items()` or `.values()`, or just `request.session.modified = True`)
   is not seen: assign the key.
 
+In an explicit view a handler's session write is stored before the turn's
+reply on every transport (WebSocket, SSE and the HTTP fallback), also when the
+handler changed nothing else on the view, and also an in-place change, which
+Django's own `SessionMiddleware` would not save without
+`request.session.modified = True`.
+The same holds for a component's handler, a sticky child's handler, and
+`start_async()` work, whose write is stored with its result, under the result's
+own authorization (a session logged out while the work ran is not written).
+A turn that does not write the session adds no session write. (A view with
+`exposure_policy = "legacy"` saves nothing after a WebSocket or SSE event, its
+session writes included; only its HTTP fallback requests store them.)
+
 Right before it writes, the save reads the session as storage holds it **now**
 and applies those changes to that copy. When two writers change the same key,
 the view's value wins. This costs one extra session read per save; on the `db`
