@@ -2373,22 +2373,32 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 else:
                     import json
 
-                    from .._exposure_children import rebind_child_state
+                    from .._exposure_children import (
+                        commit_child_state_moves,
+                        rebind_child_state,
+                    )
 
                     try:
+                        # Declared server state moves to the destination scope,
+                        # all of the subtree or none of it: prepared first,
+                        # written in one session save.
+                        moves = [
+                            rebind_child_state(survivor, parent, request, sticky_id_value, kwargs)
+                        ]
+                        for descendant, _identity in planned:
+                            moves.append(
+                                rebind_child_state(
+                                    descendant,
+                                    descendant._parent_view,
+                                    request,
+                                    descendant._view_id,
+                                    json.loads(descendant._explicit_child_mount_inputs),
+                                )
+                            )
+                        commit_child_state_moves(moves)
                         survivor._explicit_child_reuse_identity = carried_identity
                         for descendant, identity in planned:
                             descendant._explicit_child_reuse_identity = identity
-                        # Declared server state moves to the destination scope.
-                        rebind_child_state(survivor, parent, request, sticky_id_value, kwargs)
-                        for descendant, _identity in planned:
-                            rebind_child_state(
-                                descendant,
-                                descendant._parent_view,
-                                request,
-                                descendant._view_id,
-                                json.loads(descendant._explicit_child_mount_inputs),
-                            )
                     except BaseException:
                         _drop_preserved_child(parent, sticky_id_value, survivor)
                         raise

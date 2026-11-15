@@ -84,6 +84,33 @@ class StoredInner(InnerSticky):
     n = state(0, persist="server")
 
 
+class StoredInner2(InnerSticky):
+    sticky_id = "stored-inner-2"
+    n = state(0, persist="server")
+
+
+class StoredPair(LiveView):
+    """A sticky child with server state nesting two sticky children with
+    server state: three moves that must land together or not at all."""
+
+    exposure_policy = "explicit"
+    sticky = True
+    sticky_id = "pair"
+    m = state(0, persist="server")
+    template = (
+        "{% load live_tags %}<div>pair={{ m }}"
+        f'{{% live_render "{MODULE}.StoredInner" sticky=True %}}'
+        f'{{% live_render "{MODULE}.StoredInner2" sticky=True %}}</div>'
+    )
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.m += 1
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(m=self.m, **kwargs)
+
+
 def _outer(name, inner, extra=""):
     return type(
         name,
@@ -184,6 +211,7 @@ def _embed(cls):
 NA, NB, ND = (_page(n, _embed("Outer")) for n in ("NA", "NB", "ND"))
 SA, SB = (_page(n, _embed("StoredOuter")) for n in ("SA", "SB"))
 KA, KB = (_page(n, _embed("StickyOuter")) for n in ("KA", "KB"))
+QA, QB = (_page(n, _embed("StoredPair")) for n in ("QA", "QB"))
 GA, GB, GC = (_page(n, _embed("Guarded")) for n in ("GA", "GB", "GC"))
 Plain = _page("Plain", "")
 
@@ -201,6 +229,8 @@ urlpatterns = [
     path("nd/", ND.as_view()),
     path("sa/", SA.as_view()),
     path("sb/", SB.as_view()),
+    path("qa/", QA.as_view()),
+    path("qb/", QB.as_view()),
     path("ka/", KA.as_view()),
     path("kb/", KB.as_view()),
     path("ga/", GA.as_view()),
@@ -482,6 +512,84 @@ async def test_failed_state_move_rolls_the_carry_back(monkeypatch):
             assert "v=2" not in json.dumps(frames)
         finally:
             await comm.disconnect()
+
+
+@pytest.mark.parametrize("failure", ["prepare", "write"])
+async def test_subtree_state_moves_all_or_nothing(monkeypatch, failure):
+    """Review: the state of a carried child and of the children it embeds is
+    stored at the destination together or not at all. Failing on the last
+    of three moves (or on the one write) stores none, the destination answers
+    with an error frame, and a later fresh mount of it restores no torn
+    subtree."""
+    from djust import _exposure_children, _session_merge
+
+    if failure == "prepare":
+        original = _exposure_children.rebind_child_state
+
+        def flaky(child, *args, **kwargs):
+            if FLAGS["fail_save"] and type(child) is StoredInner2:
+                raise RuntimeError("store down")
+            return original(child, *args, **kwargs)
+
+        monkeypatch.setattr(_exposure_children, "rebind_child_state", flaky)
+    else:
+        original_save = _session_merge.save_merged
+
+        def failing_save(*args, **kwargs):
+            if FLAGS["fail_save"]:
+                raise RuntimeError("store down")
+            return original_save(*args, **kwargs)
+
+        monkeypatch.setattr(_session_merge, "save_merged", failing_save)
+    key = await sync_to_async(_new_session)()
+    with override_settings(**SETTINGS):
+        comm = await _connect(key, "QA", "/qa/")
+        try:
+            await _event(comm, "bump", view_id="pair")
+            await _event(comm, "inc", view_id="stored-inner")
+            await _event(comm, "inc", view_id="stored-inner-2")
+            FLAGS["fail_save"] = True
+            frames = await _redirect(comm, "QB", "/qb/")
+            FLAGS["fail_save"] = False
+            assert frames[-1]["type"] == "error", frames
+            await _settle(comm)
+            for slots in (("pair",), ("pair", "stored-inner"), ("pair", "stored-inner-2")):
+                assert (await _stored(key, "/qb/", slots)) is None, slots
+            frames = await _send(comm, {"type": "mount", "view": f"{MODULE}.QB", "url": "/qb/"})
+            wire = json.dumps(frames)
+            assert "pair=0" in wire and "inner=0" in wire
+            assert "pair=1" not in wire and "inner=1" not in wire
+        finally:
+            await comm.disconnect()
+
+
+async def test_subtree_state_moves_in_one_write(monkeypatch):
+    """The three moves of a carried subtree are stored by one session write,
+    so a store failing part-way cannot leave part of them behind."""
+    from djust import _session_merge
+
+    original_save = _session_merge.save_merged
+    moves = []
+
+    def counting_save(session, *args, **kwargs):
+        if any(f.function == "commit_child_state_moves" for f in inspect.stack()):
+            moves.append(
+                sorted(k for k in session.keys() if k.startswith("_djust_explicit_child_"))
+            )
+        return original_save(session, *args, **kwargs)
+
+    monkeypatch.setattr(_session_merge, "save_merged", counting_save)
+    key = await sync_to_async(_new_session)()
+    with override_settings(**SETTINGS):
+        comm = await _connect(key, "QA", "/qa/")
+        try:
+            await _event(comm, "inc", view_id="stored-inner-2")
+            frames = await _redirect(comm, "QB", "/qb/")
+            assert _held(frames) == ["pair"]
+        finally:
+            await comm.disconnect()
+    assert len(moves) == 1, moves
+    assert (await _stored(key, "/qb/", ("pair", "stored-inner-2"))) == {"n": 1}
 
 
 async def test_children_staged_for_a_destination_that_never_rendered_are_released():
