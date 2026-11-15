@@ -25,7 +25,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.tests.test_transport_behavioral_parity import (
     _EventSpineMixin,
-    _event_runtime_with_view,
+    _mounted_event_runtime,
 )
 
 
@@ -42,7 +42,7 @@ class _DbOnlyView(_EventSpineMixin, LiveView):
     identity only; a plain dict would be seen structurally since #2664), with
     NO public ``self.*`` attr ever changing in the handler."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self._external = _Row(n=0)  # stands in for a DB row
@@ -70,10 +70,11 @@ def _noops(transport):
 
 class TestZeroArgSetChangedKeys1992:
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_db_only_without_hatch_is_skipped(self):
         """Gate-off baseline: a DB-only mutation with no hatch auto-skips
         (``_snapshot_assigns`` sees no changed public attr)."""
-        runtime, transport = _event_runtime_with_view(_DbOnlyView())
+        runtime, transport = await _mounted_event_runtime(_DbOnlyView())
         runtime.view_instance._external = _Row(n=0)
 
         await runtime.dispatch_event({"type": "event", "event": "bump_no_hatch", "params": {}})
@@ -85,11 +86,12 @@ class TestZeroArgSetChangedKeys1992:
         assert _noops(transport), f"expected a noop, got {transport.sent!r}"
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_db_only_with_zero_arg_renders(self):
         """``set_changed_keys()`` (zero-arg) forces the re-render the auto-skip
         would drop — same DB-only mutation as the gate-off test, plus the
         zero-arg hatch, now renders."""
-        runtime, transport = _event_runtime_with_view(_DbOnlyView())
+        runtime, transport = await _mounted_event_runtime(_DbOnlyView())
         runtime.view_instance._external = _Row(n=0)
 
         await runtime.dispatch_event({"type": "event", "event": "bump_zero_arg", "params": {}})

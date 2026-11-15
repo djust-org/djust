@@ -26,7 +26,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.tests.test_transport_behavioral_parity import (
     _EventSpineMixin,
-    _event_runtime_with_view,
+    _mounted_event_runtime,
 )
 
 
@@ -46,7 +46,7 @@ class _InPlaceView(_EventSpineMixin, LiveView):
     is the shape the structural fingerprint cannot see (identity leaf); moving
     the card between lists IS seen (#2664)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self.count = 0
@@ -85,11 +85,12 @@ def _noops(transport):
 
 class TestSetChangedKeys1981:
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_in_place_without_hatch_is_skipped(self):
         """By-design: an in-place attribute write on an OPAQUE object with no
         hatch auto-skips (``_snapshot_assigns`` compares it by identity) → noop,
         no render. This is the gate-off baseline for the next test."""
-        runtime, transport = _event_runtime_with_view(_InPlaceView())
+        runtime, transport = await _mounted_event_runtime(_InPlaceView())
         runtime.view_instance.count = 0
         runtime.view_instance.rows = _fresh_rows()
 
@@ -102,11 +103,12 @@ class TestSetChangedKeys1981:
         assert _noops(transport), f"expected a noop, got {transport.sent!r}"
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_in_place_container_mutation_renders_without_hatch(self):
         """#2664: the in-place CONTAINER mutation the pre-#2664 version of this
         file pinned as "invisible, auto-skips" is now detected structurally and
         renders with no hatch at all."""
-        runtime, transport = _event_runtime_with_view(_InPlaceView())
+        runtime, transport = await _mounted_event_runtime(_InPlaceView())
         runtime.view_instance.count = 0
         runtime.view_instance.rows = _fresh_rows()
 
@@ -118,6 +120,7 @@ class TestSetChangedKeys1981:
         )
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_raw_changed_keys_alone_is_still_skipped(self):
         """Mechanism pin (#1982 review 🔴): ``_changed_keys`` is excluded from the
         assigns snapshot (``_FRAMEWORK_INTERNAL_ATTRS``), so setting it DIRECTLY
@@ -128,7 +131,7 @@ class TestSetChangedKeys1981:
         itself. Gate-off: remove ``_changed_keys``/``_force_full_html`` from
         ``_FRAMEWORK_INTERNAL_ATTRS`` → the raw flag perturbs the fingerprint →
         this RENDERS instead of nooping → FAILS."""
-        runtime, transport = _event_runtime_with_view(_InPlaceView())
+        runtime, transport = await _mounted_event_runtime(_InPlaceView())
         runtime.view_instance.count = 0
         runtime.view_instance.rows = _fresh_rows()
 
@@ -144,12 +147,13 @@ class TestSetChangedKeys1981:
         assert _noops(transport), f"expected a noop, got {transport.sent!r}"
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_in_place_with_hatch_renders(self):
         """``set_changed_keys`` forces the re-render the auto-skip would drop —
         the same mutation as the gate-off test, plus the hatch, now renders.
         Paired with ``test_raw_changed_keys_alone_is_still_skipped``, the render
         here is isolated to the ``_force_full_html`` mechanism."""
-        runtime, transport = _event_runtime_with_view(_InPlaceView())
+        runtime, transport = await _mounted_event_runtime(_InPlaceView())
         runtime.view_instance.count = 0
         runtime.view_instance.rows = _fresh_rows()
 
