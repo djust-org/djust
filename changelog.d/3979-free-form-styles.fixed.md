@@ -10,9 +10,10 @@
   `LIVEVIEW_CONFIG["csp_strict_styles"] = True` (for a `style-src` without
   `'unsafe-inline'`) components write `data-dj-style` plus
   `data-dj-style-<property>="<value>"` instead, pages carry
-  `<meta name="djust-styles" content="attrs">`, and a new client module
-  (`54-dj-style.js`) applies the values with `element.style.setProperty` on
-  such pages only, re-checking each value (allowlisted properties, no `url(`,
+  `<meta name="djust-styles" content="attrs">` in their head (the setting is
+  project-wide), and a new client module (`54-dj-style.js`) applies the values
+  with `element.style.setProperty` on such pages only (the meta is read from
+  the server-rendered head, once), re-checking each value (allowlisted properties, no `url(`,
   `image`, `attr(`, `@`, `;`, braces, quotes or comments, custom properties by
   kind), after every patch, morph, navigation and lazy mount, and removing a
   property when its attribute goes away. In strict mode `{% djust_skeleton %}`

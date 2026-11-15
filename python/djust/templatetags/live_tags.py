@@ -1190,10 +1190,15 @@ _SKELETON_SHAPE_DEFAULTS = {
 
 def _validate_skeleton_size(value: Any, default: str, prop: str) -> str:
     """``value`` if it passes the check every free-form style value passes
-    (:func:`djust.components.utils.style_value`), else ``default``."""
+    (:func:`djust.components.utils.style_value`) and is not negative, else ``default``.
+
+    A size below zero (``-3``, ``-3px``) falls back to the shape default, as it always has."""
     from djust.components.utils import style_value
 
-    return style_value(prop, value) or default
+    text = style_value(prop, value)
+    if not text or text.lstrip().startswith(("-", "+")):
+        return default
+    return text
 
 
 @register.simple_tag(takes_context=True)

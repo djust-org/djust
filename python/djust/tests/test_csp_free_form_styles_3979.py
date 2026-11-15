@@ -262,6 +262,24 @@ class TestTheHelper:
         assert progress_fill(-3)[0] == "dj-progress-w-0"
         assert progress_fill("nope")[0] == "dj-progress-w-0"
         assert progress_fill(float("inf"))[0] == "dj-progress-w-0"
+        if mode == "default":
+            # Checked and clamped: nothing but a number in 0..100 reaches the style.
+            assert progress_fill(40)[1] == ' style="width: 40%"'
+            assert progress_fill(250)[1] == ' style="width: 100%"'
+            assert progress_fill(-3)[1] == ' style="width: 0%"'
+            assert progress_fill('40"><script>')[1] == ' style="width: 0%"'
+            assert progress_fill(float("nan"))[1] == ' style="width: 0%"'
+            assert progress_fill("33.5")[1] == ' style="width: 33.5%"'
+
+    @pytest.mark.parametrize("size", ["-3", "-3px", "+3px", -3])
+    def test_a_negative_skeleton_size_falls_back_as_it_always_has(self, mode, size):
+        out = _ENGINE.from_string(
+            "{% load live_tags %}{% djust_skeleton width=w height=w %}"
+        ).render(Context({"w": size}))
+        assert "-3" not in out and "+3" not in out
+        assert ("width:100%;height:1em" in out) or (
+            _dj("width", "100%") in out and _dj("height", "1em") in out
+        ), out
 
 
 class TestTheClientAndServerAgree:
@@ -990,23 +1008,59 @@ class TestThePageMarker:
 
         assert (STYLES_META in str(_client_config_html())) == (mode == "strict")
 
-    @pytest.mark.django_db
-    def test_a_liveview_page_carries_it_in_its_head_only_in_strict_mode(self, mode, rf):
+    @staticmethod
+    def _page(template: str, rf) -> str:
+        from django.contrib.sessions.backends.signed_cookies import SessionStore
+
         from djust import LiveView
 
         class V(LiveView):
             exposure_policy = "explicit"
-            template = "<html><head><title>t</title></head><body><div dj-root>x</div></body></html>"
 
+        V.template = template
         request = rf.get("/")
-        from django.contrib.sessions.backends.signed_cookies import SessionStore
-
         request.session = SessionStore()
         response = V.as_view()(request)
-        html = response.content.decode() if hasattr(response, "content") else str(response)
+        return response.content.decode() if hasattr(response, "content") else str(response)
+
+    @pytest.mark.django_db
+    def test_a_liveview_page_carries_it_in_its_head_only_in_strict_mode(self, mode, rf):
+        html = self._page(
+            "<html><head><title>t</title></head><body><div dj-root>x</div></body></html>", rf
+        )
         head = html.split("</head>")[0]
         assert (STYLES_META in head) == (mode == "strict"), head
         assert html.count(STYLES_META) == (1 if mode == "strict" else 0)
+
+    @pytest.mark.django_db
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "<div dj-root>x</div>",
+            "<!DOCTYPE html><div dj-root>x</div>",
+            "<!doctype html>\n<html><body><div dj-root>x</div></body></html>",
+        ],
+    )
+    def test_a_page_without_a_head_carries_it_where_the_parser_puts_it_in_the_head(
+        self, strict, rf, template
+    ):
+        """The client reads the meta from ``document.head`` only. Without a ``<head>`` it is the
+        first thing after the doctype, which the HTML parser places in the implied head."""
+        html = self._page(template, rf)
+        rest = re.sub(r"^\s*<!doctype[^>]*>", "", html, flags=re.I)
+        # Only metas before it (the tab id is written the same way): all in the implied head.
+        leading = re.match(r"(?:\s*<meta [^<>]*>)*", rest).group(0)
+        assert STYLES_META in leading, html[:200]
+        assert html.count(STYLES_META) == 1
+
+    def test_strict_mode_is_one_project_wide_setting(self, strict):
+        """Live navigation keeps the document head (``_page_shell``), so the meta of the first
+        page stands for every page: the setting is project-wide, read from one config key, and
+        every full page render and ``{% djust_client_config %}`` carry the meta."""
+        from djust.templatetags.live_tags import _client_config_html
+
+        assert strict_styles() is True
+        assert STYLES_META in str(_client_config_html())
 
 
 # ---------------------------------------------------------------------------

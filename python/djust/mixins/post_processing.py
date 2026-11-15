@@ -554,11 +554,14 @@ class PostProcessingMixin:
         # the client applies them only on a page that says so.
         from ..components.utils import STYLES_META, strict_styles
 
+        styles_meta_first = False
         if strict_styles():
             if head_close >= 0:
                 head_inject += STYLES_META
             else:
-                full_script = STYLES_META + full_script
+                # The client reads it from the document head only: written before any
+                # other content (after a doctype), the parser puts it in the implied head.
+                styles_meta_first = True
         if debug_css_link and head_close >= 0:
             head_inject += debug_css_link
         # #3036: what this page's shell loads, so a live navigation to a page
@@ -581,5 +584,9 @@ class PostProcessingMixin:
             html = html[:body_close] + full_script + html[body_close:]
         else:
             html += full_script
+        if styles_meta_first:
+            doctype = re.match(r"\s*<!doctype[^>]*>", html, re.IGNORECASE)
+            at = doctype.end() if doctype else 0
+            html = html[:at] + STYLES_META + html[at:]
 
         return html

@@ -77,6 +77,48 @@ describe('dj-style', () => {
         expect(dom.window.document.getElementById('c').getAttribute('style')).toBe(null);
     });
 
+    it('turns on only for the meta in the head: one in the body does not count', async () => {
+        const off = createDom(
+            `<meta name="djust-styles" content="attrs"><div id="a" ${S} data-dj-style-width="240px"></div>`,
+            { meta: false },
+        );
+        const a = off.window.document.getElementById('a');
+        expect(off.window.document.querySelector('body meta[name="djust-styles"]')).not.toBe(null);
+        expect(a.getAttribute('style')).toBe(null);
+        a.setAttribute('data-dj-style-width', '300px');
+        await flush();
+        expect(a.getAttribute('style')).toBe(null);
+
+        const on = createDom(`<div id="b" ${S} data-dj-style-width="240px"></div>`);
+        expect(on.window.document.head.querySelector('meta[name="djust-styles"]')).not.toBe(null);
+        expect(on.window.document.getElementById('b').style.getPropertyValue('width')).toBe('240px');
+    });
+
+    it('handles a change other code makes while the module writes', async () => {
+        // A custom element that reacts to its `style` changing by setting a new value:
+        // its record arrives while the module's callback runs and must not be dropped.
+        const dom = createDom('');
+        dom.window.eval(`
+            class XEl extends HTMLElement {
+                static get observedAttributes() { return ['style']; }
+                attributeChangedCallback() {
+                    if (!this._done && this.style.getPropertyValue('height') === '10px') {
+                        this._done = true;
+                        this.setAttribute('data-dj-style-height', '77px');
+                    }
+                }
+            }
+            customElements.define('x-el', XEl);
+        `);
+        dom.window.document.body.insertAdjacentHTML(
+            'beforeend', `<x-el id="x" ${S} data-dj-style-height="10px"></x-el>`);
+        await flush();
+        await flush();
+        const x = dom.window.document.getElementById('x');
+        expect(x.getAttribute('data-dj-style-height')).toBe('77px');
+        expect(x.style.getPropertyValue('height')).toBe('77px');
+    });
+
     it('applies a custom property of its kind', () => {
         const dom = createDom(
             `<div id="a" ${S} data-dj-style---dj-calendar-event-color="#123456" ` +

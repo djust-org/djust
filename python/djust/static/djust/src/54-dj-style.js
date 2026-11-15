@@ -94,9 +94,14 @@ function _djCss(name) {
     });
 }
 
+// The elements whose `style` this module wrote in the current pass: their
+// `style` records are its own (anything else is handled).
+let _djWrote = new Set();
+
 function _djStyleSet(el, attr, onlyMissing) {
     const prop = attr.slice(14);
     const value = el.getAttribute(attr);
+    _djWrote.add(el);
     if (value === null || !_djStyleOk(prop, value)) el.style.removeProperty(prop);
     else if (!onlyMissing || !el.style.getPropertyValue(prop)) el.style.setProperty(prop, value);
 }
@@ -120,28 +125,40 @@ function _djStyleScan(root) {
     });
 }
 
+function _djStyleHandle(mutations) {
+    // A record that adds many nodes (an `innerHTML` swap) is one scan of
+    // its parent, not one per node.
+    const parents = new Set();
+    mutations.forEach(function (m) {
+        if (m.type === 'childList') {
+            if (m.addedNodes.length > 8) parents.add(m.target);
+            else m.addedNodes.forEach(_djStyleScan);
+        } else if (m.attributeName === 'style') {
+            const el = m.target;
+            if (el.hasAttribute('data-dj-style')) _djStyleApply(el, true);
+        } else if (m.attributeName === 'data-dj-css') {
+            _djStyleScan(m.target);
+        } else {
+            _djStyleSet(m.target, m.attributeName, false);
+        }
+    });
+    parents.forEach(_djStyleScan);
+}
+
 function _installDjStyleObserver() {
     _djStyleScan(document.documentElement);
     const observer = new MutationObserver(function (mutations) {
-        // A record that adds many nodes (an `innerHTML` swap) is one scan of
-        // its parent, not one per node.
-        const parents = new Set();
-        mutations.forEach(function (m) {
-            if (m.type === 'childList') {
-                if (m.addedNodes.length > 8) parents.add(m.target);
-                else m.addedNodes.forEach(_djStyleScan);
-            } else if (m.attributeName === 'style') {
-                const el = m.target;
-                if (el.hasAttribute('data-dj-style')) _djStyleApply(el, true);
-            } else if (m.attributeName === 'data-dj-css') {
-                _djStyleScan(m.target);
-            } else {
-                _djStyleSet(m.target, m.attributeName, false);
-            }
-        });
-        parents.forEach(_djStyleScan);
-        // What this callback wrote is only our own `style` writes: drop it.
-        observer.takeRecords();
+        // Records queued while this runs: the module's own `style` writes are
+        // dropped; anything else (code reacting synchronously to a write) is
+        // handled in a further pass.
+        for (let pass = 0; mutations.length && pass < 8; pass++) {
+            _djWrote = new Set();
+            _djStyleHandle(mutations);
+            const wrote = _djWrote;
+            mutations = observer.takeRecords().filter(function (m) {
+                return !(m.attributeName === 'style' && wrote.has(m.target));
+            });
+        }
     });
     observer.observe(document.documentElement, {
         attributes: true,
@@ -154,9 +171,13 @@ function _installDjStyleObserver() {
 // The bundle is a `defer`red script: it runs once the document is parsed, so
 // the first scan sees the whole page. Installed at once (not on
 // DOMContentLoaded) so the values are set before the init pass and the hooks
-// it mounts run. Nothing at all unless the page opted in (the meta).
-if (typeof document !== 'undefined' &&
-        document.querySelector('meta[name="djust-styles"][content="attrs"]')) {
+// it mounts run. Nothing at all unless the page opted in: the meta in the
+// server-rendered <head>, read once here (one in the body, which markup a
+// page renders could carry, does not count). Strict mode is a project-wide
+// setting, so every page of a strict project has it, and live navigation
+// keeps the document head.
+if (typeof document !== 'undefined' && document.head &&
+        document.head.querySelector('meta[name="djust-styles"][content="attrs"]')) {
     _installDjStyleObserver();
 }
 

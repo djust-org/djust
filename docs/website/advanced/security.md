@@ -506,6 +506,19 @@ from djust.components.utils import style_attrs
 html = f'<div class="bar"{style_attrs(width=width, background_color=colour)}></div>'
 ```
 
+Two behaviours to know in strict mode:
+
+- **The attribute is the source of truth.** While a `data-dj-style-*`
+  attribute is present the client re-applies it: an outside
+  `el.style.removeProperty(...)` is undone, and an `el.style` write made in
+  the same task right after setting the attribute loses to it. To change the
+  value, change (or remove) the attribute.
+- **It is a project-wide setting.** The client decides once, when the page
+  loads, from the meta in the server-rendered `<head>`; live navigation keeps
+  the document head, so every page of a project has to be in the same mode.
+  It is one config key, and every full page render (with or without a
+  `<head>` in the template) and `{% djust_client_config %}` carry the meta.
+
 What strict mode costs:
 
 - **JavaScript.** With it off (or before the deferred bundle runs) a
@@ -517,9 +530,14 @@ What strict mode costs:
   without them has no fill width in strict mode).
 - **Untrusted HTML.** If your app renders HTML it did not write (`|safe` on
   user content, a sanitizer that allows `data-*` attributes), strip
-  `data-dj-style`, `data-dj-style-*` and `data-dj-css` from it in strict
-  mode: the client checks every value, but those attributes are meant for
-  the framework's own markup.
+  `data-dj-style`, `data-dj-style-*`, `data-dj-css` and any
+  `<meta name="djust-styles">` from it. The client checks every value and
+  only reads the meta from the server-rendered `<head>`, but in strict mode
+  injected markup carrying these attributes can still restyle and reposition
+  its own elements within the allowlist (sizes, colours, sticky positioning,
+  a `z-index` up to 9999), which is enough to cover the page, exactly as it
+  could with a page's utility classes. That is why untrusted HTML must be
+  stripped of them.
 - A few constant inline styles are still written (a hidden trigger button's
   `display:none`, a clickable row's `cursor:pointer`, the Bootstrap navbar's
   `display:flex !important`); they carry no caller's value.

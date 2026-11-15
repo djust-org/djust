@@ -6,6 +6,7 @@ templatetags, rust_handlers, mixins, and component classes.
 """
 
 import logging
+import math
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -618,13 +619,22 @@ def progress_fill(percent: Any, *, css: str = "width: {}%") -> tuple[str, str]:
     ``LIVEVIEW_CONFIG["csp_strict_styles"]`` on there is no style, only the class.
     """
     try:
-        # Half up, as the Rust components round (``f64::round``): one bar, one class.
-        whole = max(0, min(100, int(float(percent) + 0.5)))
-    except (TypeError, ValueError, OverflowError):
-        whole = 0
+        number = float(percent)
+    except (TypeError, ValueError):
+        number = 0.0
+    finite = math.isfinite(number)
+    clamped = max(0.0, min(100.0, number)) if finite else 0.0
+    # Half up, as the Rust components round (``f64::round``): one bar, one class.
+    whole = int(clamped + 0.5)
     if strict_styles():
         return f"dj-progress-w-{whole}", ""
-    return f"dj-progress-w-{whole}", f' style="{escape(css.format(percent))}"'
+    # A number already in range is written as given (the bar's old markup); anything else
+    # (out of range, not a number, text) as the clamped number.
+    if type(percent) in (int, float) and finite and number == clamped:
+        shown = str(percent)
+    else:
+        shown = f"{clamped:g}"
+    return f"dj-progress-w-{whole}", f' style="{escape(css.format(shown))}"'
 
 
 def style_value(prop: str, value: Any) -> str:
