@@ -296,7 +296,9 @@ class _Names:
         if declared is _MISSING:
             return True
         for owner in self.view_class.__mro__:
-            if name in namespace(owner):
+            # A membership test, not a walk: one lookup, no copy of the class
+            # dictionary per name (#3997; a lookup is atomic, #3151).
+            if name in owner.__dict__:
                 if not _is_application_class(owner):
                     return False  # a djust (or Django) class defines it: configuration
                 break
@@ -1591,8 +1593,12 @@ def _present(view: Any, names: Optional[_Names] = None) -> frozenset:
     their values. ``names``: the save's own name rule, when it has one."""
     if names is None:
         names = _Names(view)
+    # A framework attribute is neither (both rules refuse it first thing), so
+    # only the others are asked: a connected view holds ~60 of them (#3997).
     return frozenset(
-        name for name in list(vars(view)) if names.application(name) or names.private(name)
+        name
+        for name in vars(view).keys() - names.framework
+        if names.application(name) or names.private(name)
     )
 
 

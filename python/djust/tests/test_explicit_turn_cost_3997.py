@@ -272,3 +272,70 @@ def test_a_list_of_scalars_is_one_walk_call_not_one_per_member():
     assert walk_calls(list(range(1000)) + ["x", None, 1.5, True]) == 1
     rows = [{"id": i, "name": f"r{i}", "tags": ["a", "b"]} for i in range(100)]
     assert walk_calls(rows) == 1 + 100 + 100
+
+
+# --- the save's name rule -----------------------------------------------------------------
+
+
+class NamedView(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0)
+    plain_default = 3
+
+    def mount(self, request, **kwargs):
+        self.count = 1
+        self.note = "public, undeclared"
+        self._cursor = 2  # recorded as mount()'s private attribute below
+        self.template_name = "x.html"  # configuration a djust base defines
+
+
+def _brute_present(view: Any, names: Any) -> frozenset:
+    return frozenset(n for n in list(vars(view)) if names.application(n) or names.private(n))
+
+
+def test_present_asks_the_rule_only_for_names_that_are_not_the_frameworks(monkeypatch):
+    view = NamedView()
+    view.mount(None)
+    view.__dict__["_user_private_keys"] = frozenset({"_cursor"})
+    names = _automatic_state._Names(view)
+    expected = _brute_present(view, names)
+    assert {"note", "_cursor"} <= expected and "template_name" not in expected
+
+    asked: List[str] = []
+    real_application = _automatic_state._Names.application
+
+    def counting_application(self: Any, name: Any) -> bool:
+        asked.append(name)
+        return real_application(self, name)
+
+    monkeypatch.setattr(_automatic_state._Names, "application", counting_application)
+    assert _automatic_state._present(view, names) == expected
+    framework = set(vars(view)) & names.framework
+    assert len(framework) > 20, "a constructed view holds the framework's own attributes"
+    assert not framework & set(asked), "no framework attribute is classified"
+    assert len(asked) == len(set(vars(view)) - names.framework)
+
+
+def test_a_name_a_djust_mixin_defines_is_configuration_read_live():
+    """The rule looks a class-level name up in the live class dictionaries of
+    the view's MRO (no snapshot): a name a djust mixin defines is
+    configuration, never saved, and so is one the mixin gains later."""
+    from djust.forms import FormMixin
+
+    class FormNamed(FormMixin, LiveView):
+        exposure_policy = "explicit"
+        template = "<div dj-root></div>"
+
+    view = FormNamed()
+    view.form_class = None
+    view.late_name = 1
+    names = _automatic_state._Names(view)
+    assert not names.application("form_class")
+    assert names.application("late_name")
+    setattr(FormMixin, "late_name", None)
+    try:
+        assert not _automatic_state._Names(view).application("late_name")
+    finally:
+        delattr(FormMixin, "late_name")
+    assert _automatic_state._Names(view).application("late_name")
