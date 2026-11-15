@@ -20,7 +20,7 @@ ENVELOPE = {"_form_values": {"title": "T"}, "_data_attrs": {"canvas-id": "main"}
 
 
 class RecoveryView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root><div dj-auto-recover="restore_state" data-canvas-id="main">'
         '<input name="title"></div><button dj-click="pick">x</button></div>'
@@ -53,18 +53,31 @@ def _reset():
     CALLS.clear()
 
 
+def _live_runtime(view):
+    """A runtime that MOUNTED ``view`` on a live session (an explicit view's
+    events are authorized against its mount binding); the mount render is the
+    diff baseline and its frames are cleared."""
+    from asgiref.sync import async_to_sync
+
+    from djust.runtime import ViewRuntime
+    from djust.tests._live_session import amount_on_runtime
+    from djust.tests.test_runtime_child_routing_1892 import MockTransport
+
+    transport = MockTransport()
+    runtime = ViewRuntime(transport)
+    async_to_sync(amount_on_runtime)(runtime, view)
+    return runtime, transport
+
+
 def _dispatch(view_class, event, params):
     from asgiref.sync import async_to_sync
-    from djust.tests.test_runtime_child_routing_1892 import _make_runtime_with_view
 
-    view = view_class()
-    view.mount(None)
-    runtime, transport = _make_runtime_with_view(view)
+    runtime, transport = _live_runtime(view_class())
     async_to_sync(runtime.dispatch_event)({"type": "event", "event": event, "params": params})
     return transport
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("view_class", [RecoveryView, DeclaredStrictRecoveryView])
 def test_recovery_still_works_in_a_strict_project(view_class):
     config.set("event_parameter_policy", "strict")
@@ -74,7 +87,7 @@ def test_recovery_still_works_in_a_strict_project(view_class):
     assert get_handler_parameter_policy(view.restore_state) == "legacy"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_other_handlers_of_the_view_stay_strict():
     config.set("event_parameter_policy", "strict")
     view = RecoveryView()
@@ -84,7 +97,7 @@ def test_other_handlers_of_the_view_stay_strict():
     assert CALLS == [("pick", 7)]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_the_public_manifest_advertises_recovery_handlers_as_legacy():
     from djust._parameter_metadata import parameter_contract_manifest
 
@@ -116,7 +129,7 @@ def test_strict_project_reports_nothing_else_for_recovery_handlers():
     assert _messages() == [("djust.V019", 30)]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_legacy_project_is_unchanged():
     transport = _dispatch(RecoveryView, "restore_state", dict(ENVELOPE))
     assert CALLS == [("restore_state", ENVELOPE)], transport.sent
@@ -129,7 +142,7 @@ MOD = __name__
 
 
 class _RecoveryBase(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self.show = False
@@ -283,12 +296,8 @@ def templates(tmp_path):
 
 
 def _mounted(view_class):
-    from djust.tests.test_runtime_child_routing_1892 import _make_runtime_with_view
-
     view = view_class()
-    view.mount(None)
-    view.render_with_diff()
-    return view, _make_runtime_with_view(view)[0]
+    return view, _live_runtime(view)[0]
 
 
 def _send(runtime, event, params):
@@ -297,7 +306,7 @@ def _send(runtime, event, params):
     async_to_sync(runtime.dispatch_event)({"type": "event", "event": event, "params": params})
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("view_class", [IncludedRecovery, ExtendedRecovery, DynamicRecovery])
 def test_rendered_recovery_targets_follow_includes_extends_and_dynamic_values(
     templates, view_class
@@ -317,7 +326,7 @@ def test_rendered_recovery_targets_follow_includes_extends_and_dynamic_values(
     assert get_handler_parameter_policy(view.pick) == "strict"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_a_recovery_form_in_a_conditional_include_is_legacy_from_mount(templates):
     """The class-level scan keeps every {% if %} branch (ADR-037 row 18), so a
     recovery form an event reveals later is already a legacy target at mount."""
@@ -330,7 +339,7 @@ def test_a_recovery_form_in_a_conditional_include_is_legacy_from_mount(templates
     assert CALLS == [("restore_state", ENVELOPE)]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_a_client_cannot_claim_the_downgrade(templates):
     config.set("event_parameter_policy", "strict")
     view, runtime = _mounted(IncludedRecovery)
@@ -345,7 +354,7 @@ def test_a_client_cannot_claim_the_downgrade(templates):
     assert CALLS == []
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_rendered_user_html_cannot_claim_the_downgrade(templates):
     """#3127: user HTML rendered with ``|safe`` (a sanitizer that keeps unknown
     attributes) is real markup in the render, but the template declares every
@@ -398,7 +407,7 @@ def test_the_scan_is_complete_on_a_djust_only_templates_list(templates, tmp_path
     _RECOVERY_HANDLERS.clear()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_a_djust_tag_does_not_reopen_the_downgrade(templates):
     """PR #3159 review: ``{% dj_flash %}`` made the scan a gap, so the page went
     back to trusting rendered user HTML. djust's own tags are transparent to
@@ -411,7 +420,7 @@ def test_a_djust_tag_does_not_reopen_the_downgrade(templates):
     assert get_handler_parameter_policy(view.restore_state) == "legacy"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("view_class", [InstanceTemplateNameRecovery, InstanceTemplateRecovery])
 def test_a_template_chosen_on_the_instance_keeps_its_targets(templates, view_class):
     """PR #3159 review: the class-level scan describes the class template, not
@@ -422,7 +431,7 @@ def test_a_template_chosen_on_the_instance_keeps_its_targets(templates, view_cla
     assert get_handler_parameter_policy(view.pick) == "legacy"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 def test_a_computed_target_still_reads_the_render(templates):
     """The documented limit of #3127: where the template computes a target, the
     render is the only source, so ``|safe`` user HTML there must not keep
