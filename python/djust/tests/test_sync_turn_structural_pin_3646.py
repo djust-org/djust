@@ -708,6 +708,13 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     # Over the size limit with saves deferred, the session writes of a turn
     # whose own state could not be saved (option A): a session write only.
     ("runtime.py", "ViewRuntime.commit_explicit_turn", "_save_session_writes"): plumbing(_SESSION),
+    # Background work that failed: its session writes, under the result's
+    # authorization, without saving the view (#4162).
+    (
+        "runtime.py",
+        "ViewRuntime._execute_explicit_async_task.complete.keep_session_writes",
+        "_save_session_writes",
+    ): plumbing(_SESSION),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "codec.capture"): plumbing(_RENDER),
     # The same three calls in one hop (#3997): the session binding read, then
     # the codec and the signature (render plumbing, as the entries above).

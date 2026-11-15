@@ -476,6 +476,30 @@ object the view holds:
   (through `.items()` or `.values()`, or just `request.session.modified = True`)
   is not seen: assign the key.
 
+In an explicit view a handler's session write is stored before the turn's
+reply on every transport (WebSocket, SSE and the HTTP fallback), also when the
+handler changed nothing else on the view, and also an in-place change, which
+Django's own `SessionMiddleware` would not save without
+`request.session.modified = True`.
+The same holds for a component's handler, a sticky child's handler, and
+`start_async()` work, whose write is stored with its result, under the result's
+own authorization: when that authorization fails (a logout, a revoked
+permission, another user signed into the session), nothing the work wrote is
+stored. Work that writes the session and then raises keeps what it wrote, with
+or without `handle_async_result()`, as its other side effects stand; only the
+view's state is not saved. A turn that does not write the session adds no
+session write.
+
+On the HTTP fallback the session is now tracked from the start of the request,
+for a legacy view too. Its saves merge: a key another request stores while this
+one is handled survives, where the whole-session save before let it be
+overwritten. That costs one session read per fallback request that saves
+(`db`: one more `SELECT`, 3 to 4 statements for a turn that changes state), and
+a turn that assigns a session key now makes two writes (djust's merged save,
+then Django's own `SessionMiddleware` save) instead of one. An in-place change
+is stored there now, for a legacy view as well. Over WebSocket and SSE a
+legacy view still saves nothing after an event, its session writes included.
+
 Right before it writes, the save reads the session as storage holds it **now**
 and applies those changes to that copy. When two writers change the same key,
 the view's value wins. This costs one extra session read per save; on the `db`
