@@ -1253,6 +1253,7 @@ class TestMutatorsAreNeverAutoCalled2507:
             "update",
             "trigger_update",
             "clear_context_providers",
+            "save_state",  # the deferred state-save request (#4164 groundwork)
         }
         assert "render" not in ALTERS_DATA_COMPONENT_METHODS
         assert getattr(LiveComponent.render, "alters_data", False) is False

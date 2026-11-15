@@ -58,7 +58,7 @@ def alters_data(func: F) -> F:
 #: read-only, ``{{ c.render }}`` is a documented spelling (#2501), and
 #: stamping them would break the very cell that issue exists to fix.
 ALTERS_DATA_COMPONENT_METHODS = frozenset(
-    {"mount", "unmount", "update", "trigger_update", "clear_context_providers"}
+    {"mount", "unmount", "update", "trigger_update", "clear_context_providers", "save_state"}
 )
 
 
