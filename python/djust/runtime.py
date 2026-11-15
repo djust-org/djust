@@ -451,15 +451,10 @@ def _save_session_writes(view: Any) -> None:
     """Store what the turn's handler wrote to ``request.session`` when the
     view's own state could not be saved (over its limit, option A): the
     refusal left the session dict untouched apart from those writes."""
-    from ._session_merge import is_tracked, save_merged
+    from ._session_merge import save_session_writes
 
     request = getattr(view, "_djust_event_request", None)
-    session = getattr(request, "session", None)
-    if session is None or not is_tracked(session):
-        return
-    data = session._session_cache
-    if data.has_foreign_changes():
-        save_merged(session, session.session_key)
+    save_session_writes(getattr(request, "session", None))
 
 
 def _is_refusal(exc: BaseException) -> bool:
@@ -8309,6 +8304,9 @@ class ViewRuntime(RuntimeTurnPort):
                 return
             finally:
                 view.__dict__.pop("_djust_event_request", None)
+        # The request the callback runs with: what it writes to its session is
+        # committed with the result, under the result's own authorization (#4162).
+        callback_request = view.request
 
         result = error = None
         try:
@@ -8345,6 +8343,12 @@ class ViewRuntime(RuntimeTurnPort):
                         if self.view_instance is view:
                             await self.deny_explicit_turn()
                         return
+                    from ._session_merge import carry_session_writes
+
+                    carry_session_writes(
+                        getattr(callback_request, "session", None),
+                        getattr(view.request, "session", None),
+                    )
                     handler = getattr(view, "handle_async_result", None)
                     if callable(handler):
                         try:
