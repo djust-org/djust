@@ -12,9 +12,14 @@ a djust class takes its place under ``csp_strict_styles``, as #3979 did for the 
 
 * ``TestTheSweep`` runs ``scripts/template-library-csp-sweep.py`` (every tag of djust's template
   libraries on both engines, every component class under each ``css_framework``, both modes, a
-  request with a nonce) and asserts: in strict mode nothing a strict CSP refuses; by default only
-  the validated free-form values #3979 kept; every tag was rendered; and a planted inline style is
-  found (gate-off).
+  request with a nonce) and asserts: in strict mode no inline style, ``<style>`` or executable
+  inline ``<script>`` BLOCK without the nonce, and no ``javascript:`` URL; by default only the
+  validated free-form values #3979 kept and the constants listed below; every tag was rendered;
+  and a planted inline style is found (gate-off). Inline event-handler attributes are reported
+  too, but converting them is #4146: the ones that exist today are named exceptions
+  (:data:`HANDLERS_4146`), and a handler anywhere else fails.
+* ``TestTheFindings``: what the sweep counts as a finding (handler, ``javascript:`` URL, the
+  JavaScript MIME types).
 * ``TestEverySite``: one test per converted site, in both modes, on each render path it has.
 * ``TestTheStylesheets``: each class and ``[hidden]`` guard a site relies on is defined.
 * ``TestTheScaffold``: a generated project's pages carry no inline style, and ``app.css`` defines
@@ -109,6 +114,22 @@ KEPT_BLOCKS = {("style-element", "@keyframes djust-skeleton-shimmer")}
 #: (``style_attrs(css="background:{}")``, ``scroll_area``'s custom property).
 _PRINTED_AS = {"background": "background-color", "--dj-scroll-area-max-height": "max-height"}
 
+#: The inline event handlers that exist today, each to be converted by #4146 (not here): what the
+#: sweep reports for each, ``(key, "<element attribute>")``. A handler anywhere else fails.
+HANDLERS_4146 = {
+    ("theme_components:theme_alert", "<button onclick>"): "#4146: the alert's dismiss button",
+    ("theme_components:theme_toast", "<button onclick>"): "#4146: the toast's close button",
+    ("djust.components.ui.navbar_simple.NavBar", "<button onclick>"): (
+        "#4146: NavBar's two menu toggles (Tailwind mobile menu, Bootstrap navbar-toggler)"
+    ),
+    ("theme_components:theme_button", "<button onclick>"): (
+        "#4146: a caller-supplied onclick= (button.html and the six theme packs' button.html)"
+    ),
+    ("djust.components.components.button.Button", "<button onclick>"): (
+        "#4146: a caller-supplied onclick= on the Button component"
+    ),
+}
+
 #: The one tag the Rust engine cannot render at all, a gap older than this change: it has no
 #: handler in ``djust/template_tags/pwa.py`` (the Django tag carries the nonce, #655).
 NO_RUST_HANDLER = {"djust_pwa:djust_offline_styles"}
@@ -152,6 +173,10 @@ def _free_form_problems(value: str) -> list[str]:
     return problems
 
 
+def _named_handler(key: str, finding: list[str]) -> bool:
+    return finding[0] == "handler" and (key, finding[1]) in HANDLERS_4146
+
+
 class TestTheSweep:
     def test_strict_mode_leaves_nothing_a_strict_csp_refuses(self, sweep):
         found = [
@@ -159,9 +184,22 @@ class TestTheSweep:
             for r in sweep["renders"]
             if r["mode"] == "strict"
             for f in r["findings"]
+            if not _named_handler(r["key"], f)
         ]
         assert found == []
         assert sum(r["mode"] == "strict" for r in sweep["renders"]) > 1000
+
+    def test_the_handler_exceptions_are_real(self, sweep):
+        """Not vacuous: the sweep does report the handlers #4146 will convert."""
+        seen = {
+            (r["key"], f[1]) for r in sweep["renders"] for f in r["findings"] if f[0] == "handler"
+        }
+        assert {
+            ("theme_components:theme_alert", "<button onclick>"),
+            ("theme_components:theme_toast", "<button onclick>"),
+            ("djust.components.ui.navbar_simple.NavBar", "<button onclick>"),
+        } <= seen
+        assert seen <= set(HANDLERS_4146)
 
     def test_by_default_the_only_inline_styles_are_checked_free_form_values(self, sweep):
         bad = set()
@@ -169,6 +207,8 @@ class TestTheSweep:
             if r["mode"] != "default":
                 continue
             for kind, detail in r["findings"]:
+                if _named_handler(r["key"], [kind, detail]):
+                    continue
                 if kind == "style-attr":
                     value = re.match(r"<\w+ style=(['\"])(.*)\1>$", detail, re.S).group(2)
                     bad |= {(r["key"], d) for d in _free_form_problems(value)}
@@ -220,6 +260,77 @@ class TestTheSweep:
                 if f == ["style-attr", "<i style='display:none'>"]
             ]
             assert hits, mode_name
+
+
+class TestTheFindings:
+    """What the sweep counts (``csp_sweep.findings``), on synthetic markup."""
+
+    @staticmethod
+    def _findings(markup: str) -> list[tuple[str, str]]:
+        from scripts.lib.template_library_parity import csp_sweep
+
+        return csp_sweep.findings(markup)
+
+    @pytest.mark.parametrize("attr", ["onclick", "onload", "onerror", "ONMOUSEOVER"])
+    def test_an_event_handler_attribute(self, attr):
+        assert self._findings('<b %s="x()">t</b>' % attr) == [("handler", "<b %s>" % attr.lower())]
+
+    @pytest.mark.parametrize(
+        "markup,where",
+        [
+            ('<a href="javascript:x()">', "<a href>"),
+            ('<a href="java&#x09;script:x()">', "<a href>"),
+            ('<a href=" JAVASCRIPT:x()">', "<a href>"),
+            ('<iframe src="javascript:x()">', "<iframe src>"),
+            ('<form action="javascript:x()">', "<form action>"),
+            ('<button formaction="javascript:x()">', "<button formaction>"),
+            ('<svg><a xlink:href="javascript:x()"></a></svg>', "<a xlink:href>"),
+        ],
+    )
+    def test_a_javascript_url(self, markup, where):
+        assert ("js-url", where) in self._findings(markup)
+
+    def test_a_safe_url_is_not_one(self):
+        assert (
+            self._findings('<a href="/x?javascript:1">a</a><img src="data:image/png;base64,AA">')
+            == []
+        )
+
+    @pytest.mark.parametrize(
+        "script_type",
+        [
+            "",
+            "module",
+            "text/javascript",
+            "text/javascript; charset=utf-8",
+            "TEXT/JavaScript",
+            "application/x-javascript",
+            "application/ecmascript",
+            "text/javascript1.5",
+            "text/jscript",
+        ],
+    )
+    def test_an_executable_inline_script(self, script_type):
+        attr = ' type="%s"' % script_type if script_type else ""
+        assert self._findings("<script%s>x()</script>" % attr) == [("script-inline", "x()")]
+
+    @pytest.mark.parametrize(
+        "script_type", ["application/json", "application/ld+json", "djust/hook", "text/template"]
+    )
+    def test_a_data_block_is_not_executable(self, script_type):
+        assert self._findings('<script type="%s">x</script>' % script_type) == []
+
+    def test_a_nonce_or_a_src_is_not_a_finding(self):
+        from scripts.lib.template_library_parity import csp_sweep
+
+        nonce = csp_sweep.NONCE
+        assert (
+            self._findings(
+                '<script nonce="%s">x()</script><style nonce="%s">a{}</style>' % (nonce, nonce)
+            )
+            == []
+        )
+        assert self._findings('<script type="module" src="/m.js"></script>') == []
 
 
 # ---------------------------------------------------------------------------
@@ -403,10 +514,11 @@ class TestEverySite:
         else:
             assert '<th style="cursor: pointer" aria-sort=' in html, html
 
-    def test_ttyd_hook_registers_from_a_static_module(self, mode):
+    @staticmethod
+    def _ttyd(**extra: Any) -> str:
         from djust.components.utils import strict_styles
 
-        html = _ENGINE.get_template("djust_components/ttyd_terminal.html").render(
+        return _ENGINE.get_template("djust_components/ttyd_terminal.html").render(
             Context(
                 {
                     "ttyd_url": "ws://h/x",
@@ -414,17 +526,72 @@ class TestEverySite:
                     "cols": 8,
                     "theme_json": "{}",
                     "strict_styles": strict_styles(),
+                    **extra,
                 }
             )
         )
+
+    def test_ttyd_hook_module_is_loaded_by_its_own_static_url(self, mode):
+        html = self._ttyd()
         scripts = re.findall(r"<script\b([^>]*)>(.*?)</script>", html, re.S)
         assert scripts, html
         for attrs, body in scripts:
             assert re.search(r'\bsrc="', attrs), attrs  # no inline body: nothing for script-src
             assert body.strip() == "", body
-        assert 'type="module" src="/static/djust_components/ttyd/register.js"' in html, html
-        register = PKG / "components" / "static" / "djust_components" / "ttyd" / "register.js"
-        assert 'from "./ttyd_terminal.js"' in register.read_text(encoding="utf-8")
+        assert '<script type="module" src="/static/djust_components/ttyd/ttyd_terminal.js">' in html
+        hook = PKG / "components" / "static" / "djust_components" / "ttyd" / "ttyd_terminal.js"
+        # It registers itself: no second module, so no relative import a manifest would not rewrite.
+        assert "window.djust.hooks.TtydTerminal = TtydTerminalHook;" in hook.read_text()
+        assert not (hook.parent / "register.js").exists()
+
+    def test_ttyd_hook_module_carries_the_request_nonce(self):
+        html = self._ttyd(csp_nonce="n0nce")
+        assert re.search(r'<script type="module" src="[^"]+ttyd_terminal\.js" nonce="n0nce">', html)
+
+    def test_ttyd_view_hands_the_template_the_request_nonce(self, rf):
+        from djust.components.ttyd.terminal import TtydTerminalView
+
+        request = rf.get("/")
+        request.csp_nonce = "n0nce"
+        view = TtydTerminalView()
+        view.request = request
+        assert view.get_context_data()["csp_nonce"] == "n0nce"
+        view.request = rf.get("/")
+        assert view.get_context_data()["csp_nonce"] == ""
+
+    def test_ttyd_hook_url_is_the_hashed_one_under_manifest_storage(self, tmp_path, settings):
+        """Django's manifest storage serves only the hashed name; the template must ask for it."""
+        hashed = "djust_components/ttyd/ttyd_terminal.0123456789ab.js"
+        (tmp_path / "staticfiles.json").write_text(
+            json.dumps(
+                {
+                    "version": "1.1",
+                    "paths": {
+                        "djust_components/ttyd/ttyd_terminal.js": hashed,
+                        "djust_components/vendor/xterm/xterm.mjs": "djust_components/vendor/xterm/xterm.ffff.mjs",
+                        "djust_components/vendor/xterm/xterm.css": "djust_components/vendor/xterm/xterm.ffff.css",
+                    },
+                }
+            )
+        )
+        from django.contrib.staticfiles.storage import staticfiles_storage
+
+        settings.DEBUG = False
+        settings.STATIC_ROOT = str(tmp_path)
+        settings.STORAGES = {
+            **settings.STORAGES,
+            "staticfiles": {
+                "BACKEND": "django.contrib.staticfiles.storage.ManifestStaticFilesStorage"
+            },
+        }
+        from django.utils.functional import empty
+
+        staticfiles_storage._wrapped = empty  # the lazy storage reads the overridden settings
+        try:
+            html = self._ttyd()
+        finally:
+            staticfiles_storage._wrapped = empty
+        assert '<script type="module" src="/static/%s">' % hashed in html, html
 
     def test_theme_modal_and_dropdown_closed(self, mode):
         from django.template.loader import render_to_string
@@ -439,6 +606,40 @@ class TestEverySite:
         assert re.search(r'data-theme-modal="m"\s+hidden>', modal), modal
         assert re.search(r'role="menu"\s+hidden>', dropdown), dropdown
         _no_style(modal + dropdown)
+
+    @pytest.mark.parametrize("prefix", ["", "dj-"])
+    def test_theme_modal_and_dropdown_closed_stay_hidden_under_the_components_css(self, prefix):
+        """With css_prefix="dj-" the theme backdrop and menu carry ``dj-modal-backdrop`` /
+        ``dj-dropdown-menu``, which components.css gives a ``display``; its guard must hide them
+        when ``hidden`` (a page with that stylesheet and not the theming one)."""
+        from django.template.loader import render_to_string
+
+        modal = render_to_string(
+            "djust_theming/components/modal.html",
+            {"id": "m", "is_open": False, "css_prefix": prefix},
+        )
+        dropdown = render_to_string(
+            "djust_theming/components/dropdown.html",
+            {"id": "d", "is_open": False, "css_prefix": prefix},
+        )
+        backdrop = re.search(r'<div class="([^"]*modal-backdrop)"[^>]*\shidden>', modal).group(1)
+        menu = re.search(r'<div class="([^"]*dropdown-menu)\b[^"]*"[^>]*\shidden>', dropdown).group(
+            1
+        )
+        css = COMPONENTS_CSS.read_text()
+        bare = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        for cls in (backdrop, menu):
+            sets_display = any(
+                ("." + cls) in [x.strip() for x in m.group(1).split(",")]
+                and re.search(r"(?<![-\w])display:\s*(?!none)", m.group(2))
+                for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", bare)
+            )
+            if sets_display:  # components.css gives it a display: its [hidden] guard must exist
+                assert re.search(
+                    r"display:\s*none\s*!important", _rule(css, ".%s:where([hidden])" % cls)
+                ), cls
+        if prefix:
+            assert backdrop == "dj-modal-backdrop" and menu == "dj-dropdown-menu"
 
     def test_accessibility_report_score(self):
         from djust.theming.accessibility import AccessibilityValidator

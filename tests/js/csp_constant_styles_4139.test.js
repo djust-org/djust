@@ -8,8 +8,8 @@
  * the scroll-to-top button, the connection-status bar, the theme modal and dropdown.
  * Each test loads the REAL script into a page holding the markup the server renders
  * (python/djust/tests/test_csp_constant_styles_4139.py pins that markup) and drives
- * it. The ttyd hook registers from a static module (`register.js`) instead of an
- * inline module script; its test imports that module.
+ * it. The ttyd hook module registers itself (the template loads it by its own
+ * hashed static URL instead of an inline module script); its test imports it.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -145,13 +145,10 @@ describe('djust_theming/js/components.js (the plain-page fallback)', () => {
     });
 });
 
-describe('ttyd register.js', () => {
-    it('registers the TtydTerminal hook from the module next to it', async () => {
-        const src = pathToFileURL(path.resolve(DIR + 'ttyd/register.js')).href;
+describe('ttyd_terminal.js', () => {
+    it('registers the TtydTerminal hook itself, so the template loads one hashed module', async () => {
         const hook = pathToFileURL(path.resolve(DIR + 'ttyd/ttyd_terminal.js')).href;
         globalThis.window = globalThis.window || globalThis;
-        delete globalThis.window.djust;
-        await import(/* @vite-ignore */ src);
         const { TtydTerminalHook } = await import(/* @vite-ignore */ hook);
         expect(globalThis.window.djust.hooks.TtydTerminal).toBe(TtydTerminalHook);
     });

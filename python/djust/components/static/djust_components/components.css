@@ -2948,4 +2948,8 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .data-table-import-trigger:where([hidden]),
 .data-table-expression-trigger:where([hidden]),
 .data-grid-edit-trigger:where([hidden]),
-.tab-pane:where([hidden]) { display: none !important; }
+.tab-pane:where([hidden]),
+/* The theme modal and dropdown (djust_theming/components/modal.html, dropdown.html) rendered
+   with css_prefix="dj-" collide with these two classes, which set a display. */
+.dj-modal-backdrop:where([hidden]),
+.dj-dropdown-menu:where([hidden]) { display: none !important; }

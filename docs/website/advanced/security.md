@@ -530,10 +530,11 @@ them toggle that attribute. The stylesheets that give one of these elements a
 `display` (`components.css`, the theming `components.css` and `scaffold.css`)
 carry a `[hidden]` rule with `!important`, so the attribute wins. The
 Bootstrap modal is shown by `d-block` and the Bootstrap navbar's menu by
-`d-flex`, Bootstrap's own utilities. The ttyd terminal registers its hook from a static module
-(`djust_components/ttyd/register.js`, loaded with
-`<script type="module" src=...>`), which `script-src 'self'` runs without a
-nonce. `{% djust_pwa_head %}` and the theme context processor's
+`d-flex`, Bootstrap's own utilities, in every mode. The ttyd terminal's hook
+module registers itself and is loaded by its own hashed static URL
+(`<script type="module" src="{% static 'djust_components/ttyd/ttyd_terminal.js' %}">`),
+which `script-src 'self'` runs without a nonce; it also carries the request's
+nonce, for a `'strict-dynamic'` policy. `{% djust_pwa_head %}` and the theme context processor's
 `theme_switcher` put the request's nonce on their `<style>` and `<script>`
 (django-csp's `request.csp_nonce`), as the other PWA and theme tags do, and the
 switcher's buttons use `data-theme-mode` instead of an `onclick`.
@@ -553,9 +554,14 @@ stylesheet on such a page.
 
 `scripts/template-library-csp-sweep.py` renders every tag of djust's template
 libraries on both engines and every component class, in both modes, with a
-request that carries a nonce, and reports each `style` attribute, `<style>` and
-executable inline `<script>` without the nonce; its test is
-`python/djust/tests/test_csp_constant_styles_4139.py`.
+request that carries a nonce, and reports each `style` attribute, each `<style>`
+and executable inline `<script>` block without the nonce, each inline event
+handler and each `javascript:` URL; its test is
+`python/djust/tests/test_csp_constant_styles_4139.py`. Styles and inline script
+blocks are covered. Inline event-handler attributes are not converted yet: the
+theme alert's and toast's dismiss buttons, `NavBar`'s menu toggles and a
+caller-supplied `onclick=` on the button components are tracked in #4146, and
+any other handler fails that test.
 
 What strict mode costs:
 
@@ -576,9 +582,13 @@ What strict mode costs:
   a `z-index` up to 9999), which is enough to cover the page, exactly as it
   could with a page's utility classes. That is why untrusted HTML must be
   stripped of them.
-- A few constant inline styles are still written (a hidden trigger button's
-  `display:none`, a clickable row's `cursor:pointer`, the Bootstrap navbar's
-  `display:flex !important`); they carry no caller's value.
+- Constants (#4139): in both modes a hidden trigger, a collapsed node or a
+  waiting status bar is the `hidden` attribute, and the Bootstrap navbar's menu
+  is `d-flex`. By default a clickable data-table row keeps its inline
+  `cursor:pointer` (as do the Bootstrap badge's close button, navbar external
+  link and sortable headers); in strict mode they are the classes listed above,
+  so a strict page must load `components.css` (or `components-classes.css` for
+  the three Bootstrap ones). None of them carries a caller's value.
 
 ## Reporting Vulnerabilities
 

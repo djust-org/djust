@@ -1,10 +1,11 @@
 """The strict-CSP inline sweep over djust's own template libraries and components (#4139).
 
-A ``Content-Security-Policy`` without ``'unsafe-inline'`` refuses three things a page can carry
-inline: a ``style="..."`` attribute, a ``<style>`` element and an executable ``<script>`` element
-without a ``src``. Each of the last two runs anyway when it carries the request's nonce. This
-module renders everything djust draws from a template tag or a component, and reads the FINAL
-markup for those three:
+A ``Content-Security-Policy`` without ``'unsafe-inline'`` refuses what a page carries inline: a
+``style="..."`` attribute, a ``<style>`` element and an executable ``<script>`` element without a
+``src`` (the last two run anyway when they carry the request's nonce), an inline event-handler
+attribute (``onclick=``) and a ``javascript:`` URL (neither can carry a nonce). This module
+renders everything djust draws from a template tag or a component, and reads the FINAL markup
+for all five:
 
 1. **Every tag** of :data:`SWEPT_LIBRARIES`, in every call ``variants`` makes for it (the parity
    harness's inventory), through BOTH real engines: Django's (the Python tag) and
@@ -18,9 +19,14 @@ What it reports (:func:`findings`) is ``(kind, detail)`` per output:
 
 * ``style-attr``: a ``style`` attribute, with its value;
 * ``style-element``: a ``<style>`` without the nonce;
-* ``script-inline``: an executable ``<script>`` with no ``src`` and without the nonce. A script
-  whose ``type`` is data (``application/json``, ``application/ld+json``) or not JavaScript at all
-  (``djust/hook``) is never run by the browser, so it is not a finding.
+* ``script-inline``: an executable ``<script>`` with no ``src`` and without the nonce.
+  Executable is what the HTML standard runs as a classic or module script: no ``type`` or an
+  empty one, ``module``, or a JavaScript MIME type (:func:`is_javascript_type`). A script whose
+  ``type`` is data (``application/json``, ``application/ld+json``) or not JavaScript at all
+  (``djust/hook``) is never run by the browser, so it is not a finding;
+* ``handler``: an ``on*`` event-handler attribute, as ``<element attribute>``;
+* ``js-url``: a ``javascript:`` URL in ``href`` / ``src`` / ``action`` / ``formaction`` /
+  ``xlink:href``, as ``<element attribute>``.
 
 The judgement of what is allowed in each mode is the test's
 (``python/djust/tests/test_csp_constant_styles_4139.py``), not this module's.
@@ -50,20 +56,42 @@ NONCE = "sweep4139nonce"
 
 MODES = ("default", "strict")
 
-#: ``<script type>`` values a browser runs: the empty type, ``module`` and the JavaScript MIME
-#: types. Anything else (``application/json``, ``djust/hook``) is an inert data block.
-_JS_TYPES = frozenset(
+#: The JavaScript MIME type essences of the HTML standard ("JavaScript MIME type", WHATWG MIME
+#: Sniffing): a ``<script type>`` whose essence is one of these runs as a classic script.
+JS_MIME_ESSENCES = frozenset(
     {
-        "",
-        "module",
-        "text/javascript",
-        "application/javascript",
         "application/ecmascript",
+        "application/javascript",
+        "application/x-ecmascript",
+        "application/x-javascript",
         "text/ecmascript",
+        "text/javascript",
+        "text/javascript1.0",
+        "text/javascript1.1",
+        "text/javascript1.2",
+        "text/javascript1.3",
+        "text/javascript1.4",
+        "text/javascript1.5",
         "text/jscript",
         "text/livescript",
+        "text/x-ecmascript",
+        "text/x-javascript",
     }
 )
+
+
+def is_javascript_type(value: str) -> bool:
+    """Whether a ``<script type>`` value runs: missing or empty, ``module``, or a JavaScript
+    MIME type matched on its essence (parameters stripped, ASCII case-insensitive)."""
+    text = value.strip().lower()
+    if text in ("", "module"):
+        return True
+    essence = text.split(";", 1)[0].strip()
+    return essence in JS_MIME_ESSENCES
+
+
+#: The attributes whose ``javascript:`` URL a browser runs (``xlink:href`` on SVG ``<a>``).
+_URL_ATTRS = frozenset({"href", "src", "action", "formaction", "xlink:href"})
 
 _COMMENT = re.compile(r"<!--.*?-->", re.S)
 _OPEN = re.compile(r"<(style|script)\b((?:[^>\"']|\"[^\"]*\"|'[^']*')*)>", re.I)
@@ -83,6 +111,10 @@ def findings(markup: str) -> list[tuple[str, str]]:
     for attr in url_sweep.attributes(markup):
         if attr.name == "style":
             out.append(("style-attr", "<%s style=%r>" % (attr.element, attr.value)))
+        elif attr.name.startswith("on") and len(attr.name) > 2:
+            out.append(("handler", "<%s %s>" % (attr.element, attr.name)))
+        elif attr.name in _URL_ATTRS and url_sweep.scheme_of(attr.value) == "javascript":
+            out.append(("js-url", "<%s %s>" % (attr.element, attr.name)))
     text = _COMMENT.sub("", markup)
     for m in _OPEN.finditer(text):
         element = m.group(1).lower()
@@ -93,8 +125,7 @@ def findings(markup: str) -> list[tuple[str, str]]:
             body = text[m.end() : text.find("</style", m.end())]
             out.append(("style-element", body.strip()[:120]))
             continue
-        script_type = attrs.get("type", "").strip().lower()
-        if script_type not in _JS_TYPES or "src" in attrs:
+        if not is_javascript_type(attrs.get("type", "")) or "src" in attrs:
             continue
         body = text[m.end() : text.find("</script", m.end())]
         out.append(("script-inline", body.strip()[:120]))
