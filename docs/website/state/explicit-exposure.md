@@ -331,6 +331,15 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 - **Embedded children.** Sticky explicit children persist their declared
   fields. Non-sticky explicit children are transient and may not declare
   persisted fields.
+- **`lazy=True` children.** A lazy explicit child is a transient child that
+  mounts when its slot is filled, on the plain page render and on the
+  streaming GET. The fill reads the session and user from storage again and
+  runs the checks of a direct mount: login and `check_permissions` before
+  `mount()`, the object permission after it. It also requires the session,
+  user, tenant and parent that the page rendered under. A fill that fails any
+  of these shows `child '<view path>' denied access` in the slot; the page
+  still renders. Like other non-sticky children it may not declare persisted
+  fields, and `sticky=True` with `lazy=True` is refused.
 - **Tenancy.** The configured tenant resolver is applied to every request,
   including WebSocket mounts, whether or not `TenantMiddleware` is installed.
 - **Invalidation.** Change detection is unchanged. After mutating an object in
@@ -345,7 +354,6 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 - **Time-travel restore and replay.** The timeline is a redacted, read-only
   history.
 
-- **`lazy=True` children.** Refused, with a template error.
 - **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare a
   `LiveComponent` at class level; hold a plain component as shown under
   Components above.
