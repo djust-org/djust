@@ -598,6 +598,7 @@ class TestEverySinkIsReached:
         lines = executed[str(source)]
         assert 3 in lines and 4 not in lines
 
+    @pytest.mark.pr_tier
     def test_sink_groups_are_one_per_flagged_call(self):
         # render_modal has two flagged sinks, PromptEditorNode.render one: coverage is per sink.
         # (RibbonNode.render and OrgChartNode.render were the one-sink example until #3846 and

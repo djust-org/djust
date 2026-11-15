@@ -660,6 +660,7 @@ def _normalizer_calls() -> list[tuple[str, str, str]]:
     return found
 
 
+@pytest.mark.pr_tier
 class TestBoundaryInventory:
     """Grep the SINK, not the callers you expect."""
 

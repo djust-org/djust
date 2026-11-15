@@ -1252,6 +1252,7 @@ class TestOneSink:
     sites is pinned (not a floor), under every spelling: an alias, another module, a direct
     ``Template(...).render(...)``."""
 
+    @pytest.mark.pr_tier
     def test_every_site_that_renders_a_template_string_is_the_helper_or_listed(self) -> None:
         found = _tree_census(CENSUS_ROOTS, SINK_NAMES)
         listed = set(RENDER_SITES)

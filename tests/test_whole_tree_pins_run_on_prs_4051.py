@@ -38,7 +38,14 @@ SLOW_SECONDS = 1.0  # tests/slow_tier.py SLOW_SECONDS
 #: A test file whose name says it pins the tree.
 PIN_FILE = re.compile(r"ratchet|_audit_\d|structural|_pin(?:_|\.py$)|inventory_ratchet")
 #: A test whose name says it pins a count or a closed set.
-PIN_TEST = re.compile(r"ratchet|only_falls|exactly_the_known|known_ones|structural_pin")
+#: ``Inventory::`` (a test class that inventories call sites), ``exactly_the``,
+#: ``expected_set`` and ``expected_modules`` since main went red on 8ed012dd4 on
+#: ``TestBoundaryInventory::test_the_template_bound_calls_are_the_expected_modules``, a set pin
+#: none of the first patterns matched.
+PIN_TEST = re.compile(
+    r"ratchet|only_falls|exactly_the_known|known_ones|structural_pin"
+    r"|Inventory::|exactly_the|expected_set|expected_modules"
+)
 
 #: Slow-tier tests that match the patterns and may stay out of the PR tier.
 #: Keyed by node-id prefix (a file, a class or a test); the value is the reason.
@@ -50,6 +57,11 @@ ALLOWED: dict[str, str] = {
         "nightly (#4074): asks whether EVERY audited sink ran under a tracer (about 6 min "
         "recorded per test), so it needs the whole payload sweep, which a PR only samples; "
         "the site audit beside it is pr_tier"
+    ),
+    "python/tests/test_marked_safe_attribute_sweep_4009.py::test_the_marked_safe_breakouts_are_exactly_the_known_ones": (
+        "explicitly @pytest.mark.slow by its author: it renders every tag with a marked-safe "
+        "value in each argument (about 10 s recorded); the per-inclusion-tag cases beside it run "
+        "on every PR, and the push to main and the nightly run this one"
     ),
 }
 

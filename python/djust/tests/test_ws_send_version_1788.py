@@ -405,6 +405,7 @@ def _count_version_sites(ws_src: str, helper_src: str) -> dict:
     }
 
 
+@pytest.mark.pr_tier
 def test_every_client_checked_send_path_uses_next_version():
     """Source-pin: every ``_send_update(...)`` call that stamps a client-checked frame
     must route through the consumer counter — RENDER-SEND paths via

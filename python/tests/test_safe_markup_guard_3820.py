@@ -1320,6 +1320,7 @@ class TestTheDifferentialFuzz:
         caught = result["false_negatives"] or _directed_false_negatives()
         assert caught, f"nothing noticed: {mutant}"
 
+    @pytest.mark.pr_tier
     def test_the_unbroken_analysis_has_no_directed_misses(self):
         assert _directed_false_negatives() == []
 

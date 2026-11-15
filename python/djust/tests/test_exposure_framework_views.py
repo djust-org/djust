@@ -205,6 +205,7 @@ def test_the_set_of_shipped_liveviews_is_pinned():
     assert not EXPLICIT & set(LEGACY)
 
 
+@pytest.mark.pr_tier
 def test_every_shipped_liveview_is_explicit_unless_it_is_listed_with_a_reason():
     policies = _liveviews()
     assert {key: policies[key] for key in EXPLICIT} == dict.fromkeys(EXPLICIT, "explicit")

@@ -2898,6 +2898,7 @@ class TestTheStaticHunt:
         assert sorted({f.split(":")[0] for f in planted}) == defined, planted
         assert static_sink_hunt(CLEAN_BUILDERS) == []
 
+    @pytest.mark.pr_tier
     def test_the_tag_modules_have_exactly_the_judged_findings(self) -> None:
         found = {f"{mod}:{f}": None for mod, fs in _hunted().items() for f in fs}
         assert set(found) == set(STATIC_SINK_ALLOWED), (

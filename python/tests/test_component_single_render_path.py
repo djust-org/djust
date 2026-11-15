@@ -106,6 +106,7 @@ class TestRegistration:
         rh.register_with_rust_engine()
         assert rh._bridged_handlers(lib.register) is first
 
+    @pytest.mark.pr_tier
     def test_raw_body_tags_are_exactly_the_bridged_tags_that_read_their_children(self):
         """Derived from the source of each body-consuming tag's node (both directions).
 
