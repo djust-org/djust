@@ -56,7 +56,16 @@ import functools
 import logging
 from typing import Any, Callable, ContextManager, Optional, Tuple, TypeVar
 
-from ._held_rows import RECORDED_STEPS, attributed, is_marked, refresh_for_render, unmark, writes_by
+from ._held_rows import (
+    RECORDED_STEPS,
+    attributed,
+    is_marked,
+    mark_generation,
+    reading,
+    refresh_for_render,
+    unmark,
+    writes_by,
+)
 from ._query_budget import budgeted, hop
 
 logger = logging.getLogger(__name__)
@@ -170,19 +179,22 @@ def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **
     here (``djust._query_budget``), inside the wrapper so a transaction the
     wrapper opens is not charged to the step.
 
-    A step that writes to the database marks the view with the tables it
-    wrote, and the view's next ``"render"`` step first empties the QuerySets and
-    cached properties it holds that read those tables, so they are read again;
-    the mark is cleared when that render returns, and kept when it raises
-    (``djust._held_rows``, #4112).
+    A step that writes to the database marks the view, and its reads (and a
+    ``"render"`` step's) enter the view's read set. The view's next
+    ``"render"`` step first decides whether to empty everything it holds; the
+    mark is cleared when that render returns (only if no newer mark was made
+    meanwhile), and kept when it raises (``djust._held_rows``, #4112).
     """
     if step == "render":
-        if is_marked(view):
+        with reading(view):
+            if not is_marked(view):
+                return _run_step(view, step, fn, *args, **kwargs)
+            generation = mark_generation(view)
             refresh_for_render(view)
             result = _run_step(view, step, fn, *args, **kwargs)
-            unmark(view)
+            unmark(view, generation)
             return result
-    elif step in RECORDED_STEPS and view is not None and not _is_async(fn):
+    if step in RECORDED_STEPS and view is not None and not _is_async(fn):
         with writes_by(view):
             return _run_step(view, step, fn, *args, **kwargs)
     return _run_step(view, step, fn, *args, **kwargs)
@@ -220,9 +232,9 @@ def sync_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """
     if _is_async(fn):
         return fn
-    if step == "render" and is_marked(view):
-        # A view with a write it has not rendered: the reset (and the mark's
-        # clearing once the render returns) happen in ``run_sync_step``.
+    if step == "render" and view is not None:
+        # The render's reads enter the view's read set, and a marked view is
+        # reset first: both in ``run_sync_step`` (#4112).
         @functools.wraps(fn)
         def rendering(*args: Any, **kwargs: Any) -> _T:
             return run_sync_step(view, step, fn, *args, **kwargs)

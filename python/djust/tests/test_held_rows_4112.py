@@ -24,7 +24,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
-from django.db import connection, connections, transaction
+from django.db import connection, connections, models, transaction
 from django.test import RequestFactory, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import path
@@ -1045,7 +1045,8 @@ WRITES = {
     "locked_read": (0, set()),
     # Not writes: the session's own table, a read-only CTE, a commented read.
     "session_save": (0, set()),
-    "read_cte": (0, set()),
+    # A WITH is not a shape the readers follow: everything is read again.
+    "read_cte": (1, set()),
     "commented_read": (0, set()),
     # A write under Django's execute wrappers is not seen; rows_changed() says so.
     "unseen_write": (0, set()),
@@ -1244,86 +1245,6 @@ def test_a_write_on_another_alias_is_recorded():
         assert not _held_rows.is_marked(view)
     finally:
         other.close()
-
-
-@pytest.mark.parametrize(
-    "statement,write",
-    [
-        ("SELECT 1", False),
-        ('  SELECT "a" FROM "t" FOR UPDATE', False),
-        ('(SELECT "a" FROM "t") UNION (SELECT "b" FROM "u")', False),
-        ('SAVEPOINT "s1"', False),
-        ('RELEASE SAVEPOINT "s1"', False),
-        ("ROLLBACK", False),
-        ("BEGIN", False),
-        ("SET LOCAL app.user = 1", False),
-        ("PRAGMA foreign_keys", False),
-        ("INSERT INTO t VALUES (1)", True),
-        ("update t set x = 1", True),
-        ("DELETE FROM t", True),
-        ("WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x", True),
-        ("/* app=shop */ SELECT 1", False),
-        ("-- a note\n  /* another */ (SELECT 1)", False),
-        ("/* app=shop */ UPDATE t SET x = 1", True),
-        ("WITH x AS (SELECT 1) SELECT * FROM x", False),
-        ("WITH RECURSIVE x(n) AS (SELECT 1 UNION SELECT n + 1 FROM x) SELECT * FROM x", False),
-        ("WITH x AS MATERIALIZED (SELECT ')' AS p) SELECT * FROM x", False),
-        ("WITH a AS (SELECT 1), b AS (SELECT 2) UPDATE t SET x = 1", True),
-        ("WITH a AS (SELECT 1), b AS (INSERT INTO t VALUES (1) RETURNING *) SELECT 1", True),
-        ("START TRANSACTION", False),
-        ("END", False),
-        ("LISTEN orders", False),
-        ("NOTIFY orders, 'x'", False),
-        ("DESCRIBE t", False),
-        ("USE shop", False),
-        ("TRUNCATE t", True),
-        ("MERGE INTO t USING u ON t.id = u.id WHEN MATCHED THEN DELETE", True),
-        (b"SELECT 1", False),
-        (b"DELETE FROM t", True),
-        # Django's and djust's bookkeeping: the session, the database cache tables
-        ('UPDATE "django_session" SET "session_data" = %s', False),
-        ('INSERT INTO "django_session" ("session_key") VALUES (%s)', False),
-        ('DELETE FROM "public"."django_session" WHERE 1', False),
-        ("", True),  # unreadable: one extra re-read, never stale rows
-    ],
-)
-def test_is_write(statement, write):
-    assert _held_rows.is_write(statement) is write
-
-
-class _FakeSQL:
-    """The shape of psycopg2's ``sql.SQL`` (``.string``); psycopg is not installed here."""
-
-    def __init__(self, string):
-        self.string = string
-
-
-class _FakeComposed:
-    """The shape of psycopg2's ``sql.Composed`` (``.seq``)."""
-
-    def __init__(self, *seq):
-        self.seq = list(seq)
-
-
-class _FakeSQL3:
-    """The shape of psycopg 3's ``sql.SQL`` / ``sql.Composed`` (``._obj``)."""
-
-    def __init__(self, obj):
-        self._obj = obj
-
-
-@pytest.mark.parametrize(
-    "statement,write",
-    [
-        (_FakeComposed(_FakeSQL("SELECT * FROM "), _FakeSQL('"t"')), False),
-        (_FakeComposed(_FakeComposed(_FakeSQL("UPDATE t SET x = ")), 1), True),
-        (_FakeSQL3([_FakeSQL3("SELECT 1")]), False),
-        (_FakeSQL3([_FakeSQL3("DELETE FROM t")]), True),
-        (object(), True),
-    ],
-)
-def test_is_write_reads_composed_statements(statement, write):
-    assert _held_rows.is_write(statement) is write
 
 
 def test_ignored_tables_follow_the_settings():
@@ -1655,7 +1576,9 @@ def test_the_walk_warns_once_per_class_when_spent(caplog):
         pass
 
     holder = Holder()
-    holder.__dict__["_many"] = [{"k": i} for i in range(_held_rows._VISIT_LIMIT + 10)]
+    holder.__dict__["_many"] = [
+        {"k": {i}} for i in range(_held_rows._VISIT_LIMIT + 10)
+    ]  # not plain: walked
     _held_rows._budget_warned.discard(Holder)
     try:
         with caplog.at_level("WARNING", logger="djust._held_rows"):
@@ -1666,6 +1589,22 @@ def test_the_walk_warns_once_per_class_when_spent(caplog):
     spent = [r.getMessage() for r in caplog.records if "Holder" in r.getMessage()]
     assert len(spent) == 1, spent
     assert "'k'" not in spent[0] and "10010" not in spent[0]  # it names no values
+
+
+@pytest.mark.django_db
+def test_records_of_scalars_do_not_spend_the_walk():
+    """Rows as dicts (with a list of tags) are one probe, not one visit each."""
+    _world()
+
+    class Holder:
+        pass
+
+    holder = Holder()
+    holder.__dict__["_items"] = [{"id": i, "tags": ["a", "b"]} for i in range(20_000)]
+    holder.__dict__["_late"] = late = [_rows()]
+    list(late[0])
+    _held_rows.reset_held_rows(holder)
+    assert late[0]._result_cache is None
 
 
 @pytest.mark.django_db
@@ -1693,7 +1632,7 @@ def test_depth_zero_querysets_are_reset_even_after_the_walk_is_spent():
         pass
 
     holder = Holder()
-    holder.__dict__["_many"] = [{"k": i} for i in range(12_000)]  # past the 10,000 limit
+    holder.__dict__["_many"] = [{"k": {i}} for i in range(12_000)]  # walked, past the 10,000 limit
     holder.__dict__["_rows"] = rows = _rows()
     holder.__dict__["_late"] = late = [_rows()]
     list(rows)
@@ -1870,7 +1809,7 @@ async def test_a_write_whose_table_cannot_be_read_refreshes_everything(sql, capl
         assert frame.get("type") == "patch", frame
         assert _row_selects(sql) == 1, sql
         assert sum(_held_rows.fallback_counts.values()) > before
-        assert any("could not be read" in r.getMessage() for r in caplog.records)
+        assert any("UNKNOWN" in r.getMessage() for r in caplog.records)
     finally:
         await client.close()
 
@@ -1959,74 +1898,6 @@ def test_a_write_through_another_alias_names_its_table():
         other.close()
 
 
-@pytest.mark.parametrize(
-    "statement,kind,tables",
-    [
-        ('SELECT "a"."x" FROM "a" INNER JOIN "b" T3 ON ("a"."id" = T3."a_id")', "read", {"a", "b"}),
-        ('SELECT * FROM "public"."a" AS x, "b" WHERE 1', "read", {"a", "b"}),
-        ('SELECT 1 FROM (SELECT "id" FROM "c") sub', "read", {"c"}),
-        ('SELECT EXISTS(SELECT 1 FROM "d" U0 WHERE U0."x" = "e"."x") FROM "e"', "read", {"d", "e"}),
-        ("SELECT * FROM generate_series(1, 3)", "read", None),
-        ("SELECT 'FROM nowhere'", "read", set()),
-        ('INSERT INTO "auth_permission" ("name") VALUES (%s)', "write", {"auth_permission"}),
-        ('INSERT OR IGNORE INTO "t" VALUES (1)', "write", {"t"}),
-        ('UPDATE "auth_group" SET "name" = %s WHERE "id" = %s', "write", {"auth_group"}),
-        ('DELETE FROM "auth_user_groups" WHERE "id" IN (%s)', "write", {"auth_user_groups"}),
-        ("TRUNCATE a, b", "write", {"a", "b"}),
-        ("CREATE TABLE t (x INTEGER)", "write", None),
-        ("WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x", "write", None),
-        ('WITH x AS (SELECT 1 FROM "t") SELECT * FROM x', "read", {"t", "x"}),
-        ("SAVEPOINT s1", "other", set()),
-    ],
-)
-def test_statement_tables(statement, kind, tables):
-    got_kind, got = _held_rows.statement_tables(statement)
-    assert got_kind == kind
-    assert (None if got is None else set(got)) == tables
-
-
-@pytest.mark.django_db
-def test_queryset_tables():
-    from django.db.models import Exists, OuterRef, Prefetch, Subquery
-
-    User = get_user_model()
-    tables = _held_rows.queryset_tables
-    assert tables(Group.objects.all()) == {"auth_group"}
-    assert tables(Group.objects.filter(user__username="x")) == {
-        "auth_group",
-        "auth_user_groups",
-        "auth_user",
-    }
-    assert tables(Permission.objects.select_related("content_type")) == {
-        "auth_permission",
-        "django_content_type",
-    }
-    assert tables(User.objects.prefetch_related("groups__permissions")) >= {
-        "auth_user",
-        "auth_user_groups",
-        "auth_group",
-        "auth_group_permissions",
-        "auth_permission",
-    }
-    assert tables(Group.objects.prefetch_related("user_set")) >= {"auth_user", "auth_user_groups"}
-    assert "django_content_type" in tables(
-        Group.objects.prefetch_related(
-            Prefetch("permissions", queryset=Permission.objects.select_related("content_type"))
-        )
-    )
-    assert "auth_permission" in tables(
-        Group.objects.filter(Exists(Permission.objects.filter(group=OuterRef("pk"))))
-    )
-    assert "auth_user" in tables(
-        Group.objects.annotate(u=Subquery(User.objects.values("username")[:1]))
-    )
-    assert "auth_permission" in tables(
-        Group.objects.values_list("name").union(Permission.objects.order_by().values_list("name"))
-    )
-    assert tables(Group.objects.none()) == {"auth_group"}
-    assert tables(Group.objects.prefetch_related("no_such_relation")) is None
-
-
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("transport", list(TRANSPORTS))
 async def test_a_relation_read_at_render_time_counts_as_read(request, transport):
@@ -2093,3 +1964,666 @@ def test_a_collected_view_does_not_deadlock_a_thread_holding_the_lock():
         _held_rows._lock.release()
         worker.join(5)
     assert not stuck, "a weakref callback re-entered _lock in the thread that held it"
+
+
+# ============================================================================
+# The strict grammars (#4112, round 3)
+# ============================================================================
+
+U = None  # an UNKNOWN table set
+
+CLASSIFICATION = [
+    # --- the ORM's own write shapes: the table is known ---
+    (
+        'INSERT INTO "auth_group" ("name") VALUES (%s) RETURNING "auth_group"."id"',
+        "write",
+        {"auth_group"},
+    ),
+    ('INSERT INTO "t" ("x") VALUES (%s), (%s)', "write", {"t"}),
+    ('INSERT INTO "t" DEFAULT VALUES', "write", {"t"}),
+    (
+        'INSERT OR IGNORE INTO "auth_user_groups" ("user_id", "group_id") VALUES (%s, %s)',
+        "write",
+        {"auth_user_groups"},
+    ),
+    ("INSERT IGNORE INTO `t` (`x`) VALUES (1)", "write", {"t"}),
+    ('INSERT OR REPLACE INTO "t" ("x") VALUES (1)', "write", U),
+    ('INSERT INTO "t" ("x") SELECT * FROM UNNEST((%s)::integer[])', "write", {"t"}),
+    (
+        'INSERT INTO "t" ("x") VALUES (1) ON CONFLICT ("x") DO UPDATE SET "x" = 2 RETURNING "id"',
+        "write",
+        {"t"},
+    ),
+    ("INSERT INTO `t` (`x`) VALUES (1) ON DUPLICATE KEY UPDATE `x` = 2", "write", {"t"}),
+    (
+        'UPDATE "auth_group" SET "name" = %s WHERE "auth_group"."id" IN (%s)',
+        "write",
+        {"auth_group"},
+    ),
+    (
+        'UPDATE "t" SET "n" = (SELECT MAX("y") FROM "u") WHERE "t"."id" IN (SELECT U0."id" FROM "t" U0)',
+        "write",
+        {"t"},
+    ),
+    ('UPDATE "T" SET "x" = 1', "write", {"t"}),
+    ('UPDATE "My Table" SET x = 1', "write", {"my table"}),
+    ("UPDATE \"t\" SET note = 'FROM x INTO y; DELETE FROM q'", "write", {"t"}),
+    ('/* FROM y INTO z */ UPDATE "t" SET x = 1', "write", {"t"}),
+    ('-- UPDATE other\nDELETE FROM "t"', "write", {"t"}),
+    ('DELETE FROM "t" WHERE "t"."id" IN (%s, %s)', "write", {"t"}),
+    ('DELETE FROM "t" RETURNING "id"', "write", {"t"}),
+    ('UPDATE "t" SET x = 1;', "write", {"t"}),
+    # --- anything else that is not a read is a write to UNKNOWN tables ---
+    ('UPDATE "public"."t" SET x = 1', "write", U),
+    ("UPDATE schema.t SET x = 1", "write", U),
+    ("UPDATE t SET x = 1", "write", U),
+    ("UPDATE `db`.`t` SET x = 1", "write", U),
+    ("UPDATE [dbo].[t] SET x = 1", "write", U),
+    ('UPDATE "we""ird" SET x = 1', "write", U),
+    ('INSERT INTO "t" AS a ("x") VALUES (1)', "write", U),
+    ('UPDATE ONLY "t" SET x = 1', "write", U),
+    ('UPDATE "t1" SET x = "u"."x" FROM "t2" "u" WHERE 1 = 1', "write", U),
+    ('DELETE FROM "t" USING "u" WHERE 1 = 1', "write", U),
+    ('DELETE FROM "t" "a" WHERE 1 = 1', "write", U),
+    ('DELETE FROM "t" AS "a" WHERE 1 = 1', "write", U),
+    ('UPDATE "t" SET x = \'unterminated', "write", U),
+    ('INSERT INTO "public"."t" ("x") VALUES (1)', "write", U),
+    ('UPDATE "t1", "t2" SET a = 1', "write", U),
+    ('UPDATE "t1" JOIN "t2" ON 1 = 1 SET b = 2', "write", U),
+    ('DELETE "t1", "t2" FROM "t1" JOIN "t2" ON 1 = 1', "write", U),
+    ('DELETE FROM "t1", "t2" USING "t1"', "write", U),
+    ('UPDATE LOW_PRIORITY "t" SET x = 1', "write", U),
+    ('DELETE QUICK FROM "t"', "write", U),
+    ('INSERT LOW_PRIORITY INTO "t" VALUES (1)', "write", U),
+    ('INSERT "t" VALUES (1)', "write", U),
+    ('UPDATE TOP (5) "t" SET x = 1', "write", U),
+    ('INSERT ALL INTO "a" VALUES (1) INTO "b" VALUES (2) SELECT 1 FROM dual', "write", U),
+    ('INSERT INTO "t" SELECT * FROM "u"', "write", U),
+    ('INSERT INTO "t" ("x") VALUES (1) RETURNING "id" INTO :out', "write", U),
+    ('REPLACE INTO "t" VALUES (1)', "write", U),
+    ('MERGE INTO "t" USING "u" ON 1 = 1 WHEN MATCHED THEN DELETE', "write", U),
+    ('TRUNCATE "a", "b" CASCADE', "write", U),
+    ('TRUNCATE "a"', "write", U),
+    ("WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", "write", U),
+    ("WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x", "write", U),
+    ('WITH x AS (SELECT 1) SELECT * FROM x JOIN "t" ON 1 = 1', "write", U),
+    ('UPDATE "a" SET x = 1; UPDATE "b" SET y = 2', "write", U),
+    ('SELECT 1; DELETE FROM "t"', "write", U),
+    ('BEGIN; UPDATE "t" SET x = 1; COMMIT', "write", U),
+    ("CALL p()", "write", U),
+    ("DO $$ BEGIN UPDATE t SET x = 1; END $$", "write", U),
+    ("COPY t FROM STDIN", "write", U),
+    ("CREATE TEMP TABLE x AS SELECT 1", "write", U),
+    ("DROP TABLE t", "write", U),
+    ("ALTER TABLE t ADD c int", "write", U),
+    ("EXPLAIN ANALYZE DELETE FROM t", "write", U),
+    ("VACUUM t", "write", U),
+    ("REFRESH MATERIALIZED VIEW m", "write", U),
+    ("TABLE t", "write", U),
+    ('SELECT "x" INTO "y" FROM "t"', "write", U),
+    ("", "write", U),
+    # --- reads: the tables are known only when every FROM / JOIN is followed ---
+    ('SELECT "a"."x" FROM "a" INNER JOIN "b" T3 ON ("a"."id" = T3."a_id")', "read", {"a", "b"}),
+    (
+        'SELECT "a"."x" FROM "a" LEFT OUTER JOIN "b" ON ("a"."id" = "b"."a_id") WHERE 1',
+        "read",
+        {"a", "b"},
+    ),
+    ('SELECT * FROM "a" AS "x", "b" WHERE 1', "read", {"a", "b"}),
+    ('SELECT (SELECT MAX("id") FROM "u") FROM "t"', "read", {"u", "t"}),
+    ('SELECT * FROM (SELECT * FROM "u") "s"', "read", {"u"}),
+    ('SELECT EXTRACT(YEAR FROM "t"."d") FROM "t"', "read", {"t"}),
+    ('SELECT 1 FROM "a" WHERE "x" IS DISTINCT FROM "y"', "read", {"a"}),
+    ('SELECT EXISTS(SELECT 1 FROM "d" U0 WHERE U0."x" = "e"."x") FROM "e"', "read", {"d", "e"}),
+    ('(SELECT "n" FROM "a") UNION (SELECT "n" FROM "b")', "read", {"a", "b"}),
+    ('SELECT "a from b" FROM "t"', "read", {"t"}),
+    ("SELECT 'x' FROM \"t\" WHERE c = 'FROM z'", "read", {"t"}),
+    ('SELECT * FROM "t" FOR UPDATE', "read", {"t"}),
+    ('SELECT * FROM "T"', "read", {"t"}),
+    ("/* app=shop */ SELECT 1", "read", set()),
+    ("SELECT nextval('s')", "read", set()),
+    ('SELECT * FROM ONLY "t"', "read", U),
+    ("SELECT * FROM t1, t2 a", "read", U),
+    ("select * from T", "read", U),
+    ('SELECT * FROM "public"."t"', "read", U),
+    ('SELECT * FROM "t" WHERE x = \'unterminated', "write", U),  # unreadable
+    ("SELECT * FROM generate_series(1, 2)", "read", U),
+    ("SELECT value FROM json_each('[1]')", "read", U),
+    ('SELECT * FROM "t" JOIN LATERAL (SELECT 1) x ON true', "read", U),
+    ('SELECT * FROM "t" TABLESAMPLE SYSTEM (1)', "read", U),
+    # --- no rows change ---
+    ('SAVEPOINT "s1"', "other", set()),
+    ("RELEASE SAVEPOINT s1", "other", set()),
+    ("ROLLBACK", "other", set()),
+    ("BEGIN", "other", set()),
+    ("START TRANSACTION", "other", set()),
+    ("END", "other", set()),
+    ("SET LOCAL app.user = 1", "other", set()),
+    ("PRAGMA foreign_keys = ON", "other", set()),
+    ("LISTEN orders", "other", set()),
+    ("NOTIFY orders, 'x'", "other", set()),
+    ("LOCK TABLE t", "other", set()),
+    ("EXPLAIN SELECT 1", "other", set()),
+]
+
+
+@pytest.mark.parametrize("statement,kind,tables", CLASSIFICATION)
+def test_statement_tables(statement, kind, tables):
+    got_kind, got = _held_rows.statement_tables(statement)
+    assert got_kind == kind
+    assert (None if got is None else set(got)) == tables
+
+
+@pytest.mark.parametrize(
+    "statement,write",
+    [
+        ('UPDATE "django_session" SET "session_data" = %s', False),
+        ('INSERT INTO "django_session" ("session_key") VALUES (%s)', False),
+        ('DELETE FROM "public"."django_session" WHERE 1', True),  # schema: UNKNOWN
+        ('UPDATE "auth_group" SET "name" = %s', True),
+        ("SELECT 1", False),
+        (b'DELETE FROM "t"', True),
+        (b"SELECT 1", False),
+        (object(), True),
+    ],
+)
+def test_is_write(statement, write):
+    assert _held_rows.is_write(statement) is write
+
+
+class SQL:
+    """psycopg2's ``sql.SQL`` shape (``.string``); psycopg is not installed here."""
+
+    def __init__(self, string):
+        self.string = string
+
+
+class Identifier:
+    """psycopg2's ``sql.Identifier`` shape (``.strings``)."""
+
+    def __init__(self, *strings):
+        self.strings = strings
+
+
+class Literal:
+    def __init__(self, wrapped):
+        self.wrapped = wrapped
+
+
+class Composed:
+    """psycopg2's ``sql.Composed`` shape (``.seq``)."""
+
+    def __init__(self, *seq):
+        self.seq = list(seq)
+
+
+@pytest.mark.parametrize(
+    "statement,kind,tables",
+    [
+        (Composed(SQL("UPDATE "), Identifier("t"), SQL(" SET x = 1")), "write", {"t"}),
+        (Composed(SQL("UPDATE "), Identifier("app", "t"), SQL(" SET x = 1")), "write", U),
+        (
+            Composed(SQL("DELETE FROM "), Identifier("t"), SQL(" WHERE id = "), Literal(1)),
+            "write",
+            U,
+        ),
+        (Composed(SQL("SELECT * FROM "), Identifier("t")), "read", {"t"}),
+        (Composed(SQL("SELECT * FROM a JOIN "), Identifier("t"), SQL(" ON 1 = 1")), "read", U),
+        (Composed(Identifier('we"ird'), SQL(" x")), "write", U),
+        (SQL('SELECT * FROM "t"'), "read", {"t"}),
+    ],
+)
+def test_psycopg_composed_statements(statement, kind, tables):
+    got_kind, got = _held_rows.statement_tables(statement)
+    assert got_kind == kind
+    assert (None if got is None else set(got)) == tables
+
+
+# ============================================================================
+# The decision (#4112, round 3)
+# ============================================================================
+
+
+class _Probe:
+    """Stands for a view in the pipeline's order: a recorded render, a step, a decision."""
+
+    def get_context_data(self):
+        return {}
+
+    def render_with_diff(self):
+        return self._show()
+
+    render_with_diff = _held_rows.recorded_render(render_with_diff)
+
+
+def _turn(view, show, write):
+    """render -> step(write) -> decision -> render; what the page then shows."""
+    view._show = show
+    view.render_with_diff()
+    with _held_rows.writes_by(view):
+        write()
+    if _held_rows.rows_written(view):
+        from djust.sync_turn import run_sync_step
+
+        return run_sync_step(view, "render", view.render_with_diff)
+    return show()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_related_rows_read_at_render_time_are_fresh():
+    """Review round 2 cases A, A2, B, C, C2 and K: the tables reach R as the
+    render's own SELECTs (lazy foreign keys, prefetches, per-row queries)."""
+    from django.contrib.contenttypes.models import ContentType
+
+    owner = _world()
+    group = Group.objects.get(name=TAG["value"] + "alice")
+    perms = list(Permission.objects.order_by("pk")[:2])
+    group.permissions.add(perms[0])
+    content_type = ContentType.objects.get(pk=perms[0].content_type_id)
+    original_model = content_type.model
+
+    # A: a lazy foreign key followed at render time (no select_related)
+    view = _Probe()
+    view._rows = Permission.objects.filter(pk=perms[0].pk)
+    show = lambda: [(p.codename, p.content_type.model) for p in view._rows]  # noqa: E731
+
+    def rename_type():
+        ContentType.objects.filter(pk=content_type.pk).update(model="renamed")
+
+    try:
+        assert _turn(view, show, rename_type) == [(perms[0].codename, "renamed")]
+    finally:
+        ContentType.objects.filter(pk=content_type.pk).update(model=original_model)
+        ContentType.objects.clear_cache()
+
+    # B: a prefetch read at render time
+    view = _Probe()
+    view._rows = Group.objects.filter(pk=group.pk).prefetch_related("permissions")
+    show = lambda: [sorted(p.pk for p in g.permissions.all()) for g in view._rows]  # noqa: E731
+    assert _turn(view, show, lambda: group.permissions.add(perms[1])) == [
+        sorted(p.pk for p in perms)
+    ]
+
+    # C: a QuerySet filtering across a many-to-many; the write is to its through table
+    view = _Probe()
+    view._rows = get_user_model().objects.filter(groups__name=TAG["value"] + "zed")
+    zed = Group.objects.create(name=TAG["value"] + "zed")
+    show = lambda: [u.username for u in view._rows]  # noqa: E731
+    assert _turn(view, show, lambda: owner.groups.add(zed)) == [owner.username]
+
+    # K: a per-row value cached on held rows, counted at render time
+    counted = Group.objects.create(name=TAG["value"] + "k")
+    view = _Probe()
+    view._rows = Group.objects.filter(pk=counted.pk)
+
+    def show_k():
+        out = []
+        for row in view._rows:
+            if not hasattr(row, "_n"):
+                row._n = row.permissions.count()
+            out.append(row._n)
+        return out
+
+    assert _turn(view, show_k, lambda: counted.permissions.add(perms[0])) == [1]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_cached_property_computed_outside_a_recorded_render_makes_r_unknown():
+    """Review round 2 case I: the read that filled it was never seen."""
+    _world()
+
+    class Cached(_Probe):
+        @cached_property
+        def names(self):
+            return [g.name for g in _rows()]
+
+    def rename_without_reading():  # an UPDATE alone: the step reads nothing itself
+        Group.objects.filter(name=TAG["value"] + "alice").update(name=TAG["value"] + "bob")
+
+    view = Cached()
+    view.names  # filled with nothing recording (a restore, a thread, a module cache)
+    show = lambda: list(view.names)  # noqa: E731
+    assert _turn(view, show, rename_without_reading) == [TAG["value"] + "bob"]
+
+    # Filled outside, then a recorded render ran with it already there: still unknown.
+    class Cached2(Cached):
+        pass
+
+    later = Cached2()
+    later.names
+    later._show = lambda: list(later.names)
+    later.render_with_diff()
+    later.render_with_diff()  # a second render does not make it known either
+    with _held_rows.writes_by(later):
+        Group.objects.filter(name=TAG["value"] + "bob").update(name=TAG["value"] + "cy")
+    assert _held_rows.rows_written(later) is True
+    _held_rows.unmark(later)
+
+    # The same with no recorded render at all (the review's harness): the view
+    # has no read set, and what it holds makes R UNKNOWN.
+    class Plain:
+        @cached_property
+        def names(self):
+            return [g.name for g in _rows()]
+
+    plain = Plain()
+    plain.names
+    _held_rows.mark_tree(plain, frozenset({"auth_group"}))
+    assert _held_rows.rows_written(plain) is True
+    _held_rows.unmark(plain)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_view_that_never_rendered_under_recording_has_r_unknown():
+    _world()
+
+    class Never:
+        def render_with_diff(self):  # a view, but no recorded render has run
+            return None
+
+    view = Never()
+    view._rows = rows = _rows()
+    list(rows)
+    _held_rows.mark_tree(view, frozenset({"auth_permission"}))
+    assert _held_rows.rows_written(view) is True
+    _held_rows.unmark(view)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_restore_makes_r_unknown_until_the_next_render():
+    _world()
+    view = _Probe()
+    view._rows = _rows()
+    view._show = lambda: [g.name for g in view._rows]
+    view.render_with_diff()
+    _held_rows.mark_tree(view, frozenset({"auth_permission"}))
+    assert _held_rows.rows_written(view) is False  # known R, unrelated write
+    _held_rows.reads_unknown(view)  # what djust's restore calls
+    _held_rows.mark_tree(view, frozenset({"auth_permission"}))
+    assert _held_rows.rows_written(view) is True
+    _held_rows.unmark(view)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("switch", [False, True])
+def test_writes_the_database_makes_by_itself_need_the_switch(switch):
+    """Review round 2 cases D, E, H: a trigger, a database view, ON DELETE CASCADE.
+
+    The trigger stands for all three: the statement djust sees writes one table,
+    the database changes another. Stale by default (documented); fresh with
+    ``DJUST_REFRESH_ON_ANY_WRITE``."""
+    _world()
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "CREATE TRIGGER held_rows_4112 AFTER INSERT ON auth_permission BEGIN "
+            "UPDATE auth_group SET name = name || '!' WHERE name LIKE '%alice'; END"
+        )
+    try:
+        view = _Probe()
+        view._rows = _rows()
+        show = lambda: [g.name for g in view._rows]  # noqa: E731
+        with override_settings(DJUST_REFRESH_ON_ANY_WRITE=switch):
+            shown = _turn(view, show, _permission)
+        truth = [g.name for g in _rows()]
+        assert (shown == truth) is switch, (shown, truth)
+    finally:
+        with connection.cursor() as cursor:
+            cursor.execute("DROP TRIGGER held_rows_4112")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_mark_made_during_a_render_survives_it():
+    from djust.sync_turn import run_sync_step
+
+    _world()
+    view = _Probe()
+    view._rows = _rows()
+    list(view._rows)
+    _held_rows.mark_tree(view, None)
+
+    def render():
+        list(view._rows)
+        _held_rows.mark_tree(view, None)  # another thread's write, mid-render
+        return 1
+
+    run_sync_step(view, "render", render)
+    assert _held_rows.is_marked(view)
+    run_sync_step(view, "render", lambda: 1)
+    assert not _held_rows.is_marked(view)
+
+
+def test_the_read_set_overflows_to_unknown():
+    class View:
+        pass
+
+    view = View()
+    _held_rows.note_reads(view, frozenset("t%d" % i for i in range(500)))
+    assert _held_rows._read_sets[id(view)].unknown is False
+    _held_rows.note_reads(view, frozenset("u%d" % i for i in range(20)))  # 520 > 512
+    entry = _held_rows._read_sets[id(view)]
+    assert entry.unknown is True and entry.tables == set()
+    _held_rows.note_reads(view, frozenset({"v"}))
+    assert entry.unknown is True  # stays UNKNOWN
+
+
+def test_concurrent_reads_never_lose_the_overflow():
+    """``note_reads`` is under the lock: threads adding at once end UNKNOWN, never
+    with a partial set past the limit (a free-threaded build has no GIL to lean on)."""
+
+    class View:
+        pass
+
+    view = View()
+    barrier = threading.Barrier(8)
+
+    def add(n):
+        barrier.wait(5)
+        for i in range(100):
+            _held_rows.note_reads(view, frozenset({"t%d_%d" % (n, i)}))
+
+    threads = [threading.Thread(target=add, args=(n,)) for n in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    entry = _held_rows._read_sets[id(view)]
+    assert entry.unknown is True and entry.tables == set()
+
+
+class TickWritesUsers(HeldQuerySet):
+    """A tick that writes ``auth_user`` (a last-seen stamp): the framework's own
+    per-turn user check reads ``auth_user`` and must not put it in R."""
+
+    tick_interval = 50
+
+    def handle_tick(self) -> None:
+        get_user_model().objects.filter(username="owner" + TAG["value"]).update(last_login=None)
+
+
+urlpatterns.append(path("late/tick-users/", TickWritesUsers.as_view()))
+URL[TickWritesUsers] = "/late/tick-users/"
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_framework_reads_do_not_enter_the_read_set():
+    owner = await sync_to_async(_world)()
+    client = _WS()
+    await client.open(TickWritesUsers, owner)
+    try:
+        assert await client.sock.receive_nothing(timeout=0.5, interval=0.05)
+    finally:
+        await client.close()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_the_switch_makes_an_unrelated_write_refresh(sql):
+    owner = await sync_to_async(_world)()
+    client = _WS()
+    await client.open(Unrelated, owner)
+    try:
+        with override_settings(DJUST_REFRESH_ON_ANY_WRITE=True):
+            sql.clear()
+            (frame,) = await client.event("other_table")
+        assert frame.get("type") == "patch", frame
+        assert _row_reads(sql) == 1, sql
+    finally:
+        await client.close()
+
+
+class ProbeAuthor(models.Model):
+    name = models.CharField(max_length=50)
+
+    class Meta:
+        app_label = "held_rows_probe_4112"
+        db_table = "HeldAuthor4112"  # mixed case: compared case-folded
+
+
+class ProbePost(models.Model):
+    title = models.CharField(max_length=50)
+    author = models.ForeignKey(ProbeAuthor, on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = "held_rows_probe_4112"
+        db_table = "held_post_4112"
+
+
+@pytest.fixture
+def probe_tables(transactional_db):
+    with connection.schema_editor() as editor:
+        editor.create_model(ProbeAuthor)
+        editor.create_model(ProbePost)
+    yield
+    with connection.schema_editor() as editor:
+        editor.delete_model(ProbePost)
+        editor.delete_model(ProbeAuthor)
+
+
+@pytest.mark.parametrize("load", ["lazy", "prefetch_related", "select_related"])
+def test_a_foreign_key_read_at_render_time_on_a_mixed_case_table(probe_tables, load):
+    """Review round 2 cases A, B and B2: the related row is read lazily, by a
+    prefetch, or by a join; the related table's name is mixed case."""
+    author = ProbeAuthor.objects.create(name="ann")
+    ProbePost.objects.create(title="p1", author=author)
+    view = _Probe()
+    rows = ProbePost.objects.order_by("pk")
+    if load != "lazy":
+        rows = getattr(rows, load)("author")
+    view._rows = rows
+    show = lambda: [(p.title, p.author.name) for p in view._rows]  # noqa: E731
+    shown = _turn(view, show, lambda: ProbeAuthor.objects.filter(pk=author.pk).update(name="bob"))
+    assert shown == [("p1", "bob")]
+
+
+class ProbeOverView(models.Model):
+    """A model over a database view: the database changes its rows by itself."""
+
+    title = models.CharField(max_length=50)
+
+    class Meta:
+        app_label = "held_rows_probe_4112"
+        db_table = "held_post_view_4112"
+        managed = False
+
+
+@pytest.mark.parametrize("setting,expected", [(False, ["djust.C042"]), (True, [])])
+def test_c042_names_models_the_database_changes_by_itself(monkeypatch, setting, expected):
+    from django.apps import apps
+
+    from djust.checks.configuration import _check_database_side_writes
+
+    monkeypatch.setattr(apps, "get_models", lambda: [Group, ProbeOverView])
+    errors: list = []
+    with override_settings(DJUST_REFRESH_ON_ANY_WRITE=setting):
+        _check_database_side_writes(errors)
+    assert [e.id for e in errors] == expected
+    if errors:
+        assert "held_rows_probe_4112.ProbeOverView (managed = False)" in errors[0].msg
+        assert "auth.Group" not in errors[0].msg
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("restore", ["restore_public_state", "restore_snapshot"])
+def test_djusts_restores_make_r_unknown(restore):
+    from types import SimpleNamespace
+
+    _world()
+    view = _Probe()
+    view._rows = _rows()
+    view._show = lambda: [g.name for g in view._rows]
+    view.render_with_diff()
+    if restore == "restore_public_state":
+        from djust._state_restore import restore_public_state
+
+        restore_public_state(view, {})
+    else:
+        from djust.time_travel import restore_snapshot
+
+        restore_snapshot(view, SimpleNamespace(restorable=False), "before")
+    _held_rows.mark_tree(view, frozenset({"auth_permission"}))
+    assert _held_rows.rows_written(view) is True
+    _held_rows.unmark(view)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_statement_a_render_cannot_follow_makes_r_unknown():
+    """A ``WITH`` read in a render is not a recognised read: R becomes UNKNOWN."""
+    _world()
+    view = _Probe()
+
+    def show():
+        with connection.cursor() as cursor:
+            cursor.execute("WITH x AS (SELECT 1) SELECT * FROM x")
+            cursor.fetchall()
+        return 1
+
+    view._show = show
+    view.render_with_diff()
+    _held_rows.mark_tree(view, frozenset({"auth_permission"}))
+    assert _held_rows.rows_written(view) is True
+    _held_rows.unmark(view)
+
+
+def test_c042_names_a_cascade_the_database_performs(monkeypatch):
+    from types import SimpleNamespace
+
+    from django.apps import apps
+
+    from djust.checks.configuration import _check_database_side_writes
+
+    def DB_CASCADE():  # noqa: N802 - the name Django gives it
+        pass
+
+    field = SimpleNamespace(name="post", remote_field=SimpleNamespace(on_delete=DB_CASCADE))
+    meta = SimpleNamespace(
+        proxy=False, managed=True, label="app.Comment", get_fields=lambda: [field]
+    )
+    monkeypatch.setattr(apps, "get_models", lambda: [SimpleNamespace(_meta=meta)])
+    errors: list = []
+    with override_settings(DJUST_REFRESH_ON_ANY_WRITE=False):
+        _check_database_side_writes(errors)
+    assert [e.id for e in errors] == ["djust.C042"]
+    assert "app.Comment.post (DB_CASCADE)" in errors[0].msg
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("entry", ["sync_step", "run_sync_step"])
+def test_a_render_step_records_the_views_reads(entry):
+    """The render step alone (as the component-scoped render and StreamingMixin
+    run ``get_context_data``, outside the decorated render methods)."""
+    from djust import sync_turn
+
+    _world()
+
+    class View:
+        pass
+
+    view = View()
+
+    def get_context_data():
+        return {"rows": list(_rows())}
+
+    if entry == "sync_step":
+        sync_turn.sync_step(view, "render", get_context_data)()
+    else:
+        sync_turn.run_sync_step(view, "render", get_context_data)
+    assert "auth_group" in _held_rows._read_sets[id(view)].tables

@@ -109,7 +109,10 @@ def test_no_wrapper_configured_returns_the_function_itself():
         return 1
 
     assert config.get("sync_turn_wrapper") is None
-    assert sync_step(object(), "render", fn) is fn
+    assert sync_step(object(), "state_store", fn) is fn
+    # A render records the view's reads (#4112): fn, with no wrapper scope around it.
+    rendering = sync_step(object(), "render", fn)
+    assert rendering.__wrapped__ is fn and rendering() == 1
     assert run_sync_step(object(), "render", fn) == 1
 
 

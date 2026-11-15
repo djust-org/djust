@@ -633,7 +633,9 @@ class TestZeroCostWhenUnused:
             return 1
 
         plain = view(None)()
-        assert sync_step(plain, "render", fn) is fn
+        assert sync_step(plain, "auth", fn) is fn
+        # A render records the view's reads (#4112); no meter for an unbudgeted view.
+        assert sync_step(plain, "render", fn).__wrapped__ is fn
         assert guarded_step(plain, "handle_params", fn) is fn
         # An event step only attributes its statements to the view (#4112), no meter.
         attributed = sync_step(plain, "event", fn)

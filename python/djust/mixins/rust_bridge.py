@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional,
 from django.utils.datastructures import MultiValueDict
 from django.utils.safestring import SafeData
 
+from .._held_rows import recorded_render
 from .._rust import RustLiveView
 from .._mapping import mapping_values
 from .._exposure_providers import (
@@ -876,6 +877,7 @@ class RustBridgeMixin:
         self._cached_csrf_token = token
         return token
 
+    @recorded_render
     def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
         """Sync Python state to Rust backend.
 
