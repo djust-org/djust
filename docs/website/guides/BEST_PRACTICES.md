@@ -252,8 +252,8 @@ def get_context_data(self, **kwargs):
 ### Rows after a handler writes
 
 A QuerySet kept on the view is evaluated by the first render and then read from
-its result cache. When a step of the view writes to a table, djust empties the
-caches that read that table before the view's next render, so the page shows
+its result cache. When a step of the view writes to a table the view shows,
+djust empties what the view holds before its next render, so the page shows
 the rows as they are now, on every transport (WebSocket, SSE and the HTTP
 fallback):
 
@@ -269,43 +269,40 @@ def delete_product(self, pk: int, **kwargs):
 or `handle_info()`, `connected()` / `disconnected()`, and a component's handler.
 Not the render itself, nor authorization checks.
 
-**What counts as a write, and to which table:** a statement whose first keyword
-(after comments and whitespace) is not a read, on any database alias: its table
-is the target of `INSERT INTO`, `UPDATE`, `DELETE FROM`, `MERGE INTO` or
-`TRUNCATE`. The ORM's `save()`, `update()`, `delete()` (and each cascaded
-delete), `bulk_*`, a many-to-many `add()` / `remove()` (its through table) and a
-model with a parent model (both tables) all name their tables. `SELECT` (with
-`FOR UPDATE`), a `WITH` whose parts all read, `SET`, `SHOW`, `BEGIN` / `COMMIT`
-/ `END`, `LISTEN` / `NOTIFY` and the like are reads. Writes to Django's and
-djust's own bookkeeping never count: `django_session` (the session, and djust's
-default state store) and every `DatabaseCache` table in `CACHES`. Add your own
-(a heartbeat or audit table, a table state store) with
+**The rule.** djust records two sets of table names:
+
+- **W**, the tables a step wrote. A write names its table only when it is one
+  of the single-table statements Django's ORM emits: `INSERT INTO "t" ...`,
+  `UPDATE "t" SET ...`, `DELETE FROM "t" ...` (with the backend's quoting, no
+  schema prefix, no alias, no second table). `save()`, `update()`,
+  `delete()` and each cascaded delete, `bulk_*`, many-to-many `add()` /
+  `remove()` (the through table) all do. Any other statement that is not a
+  read (raw SQL with unquoted names, `TRUNCATE`, `MERGE`, `WITH`, DDL, several
+  statements at once) writes UNKNOWN tables.
+- **R**, the tables the view read: the `SELECT` statements its own code and its
+  renders ran, including the queries a render runs by itself (a foreign key
+  followed lazily, a `prefetch_related()`, a count per row). A read djust
+  cannot follow (a function or `ONLY` in `FROM`, a schema-qualified name) makes
+  R UNKNOWN. So does a cached value or held rows that were not filled by a
+  recorded render, and a restored state, until the view renders again.
+  djust's own per-turn checks (the session and the user) do not count.
+
+When W and R are both known and share no table, nothing is read again and a
+handler that changed nothing on the view still answers `noop`: a click that
+writes an audit row costs what it did before. **Otherwise everything the view
+holds is read again before its next render**: every held QuerySet (public or
+private, and in the dicts, lists, tuples and sets it holds, three levels deep;
+its `prefetch_related()` runs again with it) and every `cached_property`. The
+turn renders even if the handler changed nothing else. Each such decision made
+because W or R was UNKNOWN is logged at DEBUG level by `djust._held_rows`.
+
+Table names are compared without schema, case-folded. Two schemas with a table
+of the same name are one name here, which can only re-read more than needed.
+
+Writes to Django's and djust's own bookkeeping never count: `django_session`
+(the session, and djust's default state store) and every `DatabaseCache` table
+in `CACHES`. Add your own (a heartbeat or audit table) with
 `DJUST_IGNORED_WRITE_TABLES = ["app_heartbeat"]`.
-
-**What is read again, once, after a write to table T:**
-
-- every QuerySet held on the view (public or private, and in the dicts, lists,
-  tuples and sets it holds, three levels deep) that reads T: its base table, the
-  tables it joins (filters across relations, `select_related`), its
-  subqueries, `Exists` / `OuterRef`, `union()` parts, and the tables of its
-  `prefetch_related()` lookups including many-to-many through tables and a
-  `Prefetch(queryset=...)`. Its prefetches run again with it: one query per
-  level. A related-manager QuerySet held from `mount()`
-  (`self._tags = obj.tags.all()`) is one of these;
-- every `cached_property` of the view, if the view's own queries (in its turns
-  and renders) have read T: they are computed again, as on a new request.
-
-When something the view shows is affected, the turn renders even if the handler
-changed nothing else. **A write to a table the view neither holds nor reads
-changes nothing:** no re-read, and a handler that changed nothing on the view
-still answers `noop`.
-
-**When the table cannot be determined, everything is read again** (slower,
-never stale): a write that names no table djust can read (`CREATE`, a `WITH`
-that writes, raw SQL it cannot parse), a QuerySet whose tables cannot be read,
-or a view that once ran a query whose tables cannot be read (a function in
-`FROM`, such as `json_each()`). Each such fallback is logged at DEBUG level by
-`djust._held_rows`, with the reason and the view class.
 
 **What stays a snapshot, on every transport:**
 
@@ -330,23 +327,36 @@ class OrderAudit(LiveView):
     frozen_rows = ("_orders_at_mount", "exchange_rates")
 ```
 
-**Writes djust cannot see:** a `SELECT` with side effects (`nextval()`, a
-function that writes, `SELECT ... INTO`), `cursor.callproc()` (it bypasses
-Django's execute wrappers), and any write made outside the view's steps: in a
-thread or an `asyncio` task the handler starts and that finishes later, in an
-`on_commit` callback, or by another process. Call `self.rows_changed()` after
-such a write, with the models or tables written (`self.rows_changed(Order)`;
-with none, everything the view holds is read again). It marks the view; the
-view re-reads at its next render. Nothing is sent by itself in between: a write
-that lands after the turn has answered shows on the next event, or push to the
-view (see [Push updates from outside the view](#push-updates-from-outside-the-view))
-and call `rows_changed()` in its push handler.
+**Writes djust cannot see:**
+
+- writes the database makes by itself: a trigger (`AFTER INSERT` writing
+  another table), `ON DELETE CASCADE` done by the database (and Django's
+  `DB_*` `on_delete` options), a model over a database view or another
+  unmanaged table, rules and partitions that route a write elsewhere. The
+  statement djust sees names one table; the database changes another;
+- a `SELECT` with side effects (`nextval()`, a function that writes,
+  `SELECT ... INTO`), and `cursor.callproc()` (it bypasses Django's execute
+  wrappers);
+- any write made outside the view's steps: in a thread or an `asyncio` task
+  the handler starts and that finishes later, in an `on_commit` callback, or by
+  another process.
+
+For the first group, set `DJUST_REFRESH_ON_ANY_WRITE = True`: every write a
+view's step makes then re-reads everything it holds, whatever its table (the
+system check `djust.C042` points at unmanaged models and `DB_*` cascades when
+this is off). For the others, call `self.rows_changed()` after the write, with
+the models or tables written (`self.rows_changed(Order)`; with none, the
+written tables are UNKNOWN). It marks the view; the view re-reads at its next
+render. Nothing is sent by itself in between: a write that lands after the
+turn has answered shows on the next event, or push to the view (see
+[Push updates from outside the view](#push-updates-from-outside-the-view)) and
+call `rows_changed()` in its push handler.
 
 **Several views on one page:** a write marks the view that made it, the views
-above it and every view and component below the topmost. Each re-reads at its
-own next render: when a sticky child writes, the child shows the new rows at
-once and its parent shows them on its next render (the parent is not rendered
-for the child's event).
+above it and every view and component below the topmost, and R is their
+combined reads. Each re-reads at its own next render: when a sticky child
+writes, the child shows the new rows at once and its parent shows them on its
+next render (the parent is not rendered for the child's event).
 
 For very large views: the walk looks at most 10,000 values in containers. A
 container whose first eight items are plain values (numbers, strings, dates,
