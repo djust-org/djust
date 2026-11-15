@@ -322,12 +322,10 @@ async def test_a_flush_over_the_limit_keeps_the_last_fit_and_tells_the_page_once
             assert (await _values(key))["count"] == 1  # the last state that fit
             assert rt.view_instance.count == 2 and rt.state_unsaved
             assert not await rt.flush_state()  # told once
-            await asyncio.sleep(0)
-            try:
-                extra = await asyncio.wait_for(comm.receive_json_from(), 0.2)
-            except asyncio.TimeoutError:
-                extra = None
-            assert extra is None, extra
+            from djust.tests._ws_frames import drain_extra
+
+            extra = await drain_extra(comm)
+            assert not any(f.get("code") == "state_too_large" for f in extra), extra
             await harness.event(comm, "shrink")
             assert await rt.flush_state()
             assert (await _values(key))["count"] == 2

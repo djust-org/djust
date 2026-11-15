@@ -3245,6 +3245,7 @@ class ViewRuntime(RuntimeTurnPort):
         # timer that flushes it, the flush it started, and consecutive failures.
         self._state_dirty_view: Any = None
         self._state_timer: Optional[asyncio.TimerHandle] = None
+        self._state_timer_delay: Optional[float] = None
         self._state_flush_task: Optional["asyncio.Future[Any]"] = None
         self._state_flush_failures = 0
         # The (field, limit) the page was last told was over its limit at a
@@ -6573,6 +6574,7 @@ class ViewRuntime(RuntimeTurnPort):
         if delay is None:
             delay = interval_for(view) * _state_jitter()
         loop = asyncio.get_running_loop()
+        self._state_timer_delay = delay  # what it was armed with (introspection, tests)
         self._state_timer = loop.call_later(delay, self._state_timer_fired)
 
     def _state_timer_fired(self) -> None:

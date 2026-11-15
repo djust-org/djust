@@ -18,7 +18,6 @@ stay immediate. Timers are fired by hand, never waited for.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, List
 
 import pytest
@@ -88,6 +87,18 @@ urlpatterns = [_path(sf.PATH.strip("/") + "/", Deferred.as_view())]
 def _each(monkeypatch):
     sf.one_tab(monkeypatch)
     DISCONNECTED.clear()
+
+
+@pytest.fixture
+def armed(monkeypatch):
+    """The jitter fixed at 0.8, so the delay a timer is armed with is known."""
+    monkeypatch.setattr(runtime, "_state_jitter", lambda: 0.8)
+
+
+def test_the_jitter_only_shortens_the_interval():
+    shares = {runtime._state_jitter() for _ in range(500)}
+    assert min(shares) >= 0.75 and max(shares) <= 1.0
+    assert len(shares) > 1
 
 
 @pytest.fixture
@@ -167,7 +178,9 @@ async def test_an_invalid_interval_is_read_as_zero(caplog):
 
 
 @pytest.mark.parametrize("deferral", ["on", "off"])
-async def test_a_deferred_turn_answers_and_the_timer_writes_it(runtimes, monkeypatch, deferral):
+async def test_a_deferred_turn_answers_and_the_timer_writes_it(
+    runtimes, monkeypatch, deferral, armed
+):
     off = ("deferred_save",) if deferral == "off" else ()
     with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL), harness.shortcuts(monkeypatch, *off):
         key = await _page()
@@ -181,11 +194,10 @@ async def test_a_deferred_turn_answers_and_the_timer_writes_it(runtimes, monkeyp
                 return
             assert await _stored(key) == 0  # answered; not yet stored
             assert rt.state_unsaved
-            first = rt._state_timer.when()
-            delay = first - asyncio.get_running_loop().time()
-            assert 0.75 * INTERVAL - 0.5 <= delay <= INTERVAL
+            first = rt._state_timer
+            assert rt._state_timer_delay == INTERVAL * 0.8
             await harness.event(comm, "inc")
-            assert rt._state_timer.when() == first  # a later change does not push it back
+            assert rt._state_timer is first  # a later change does not push it back
             assert await _fire(rt)
             assert await _stored(key) == 2
             assert rt._state_timer is None and not rt.state_unsaved
@@ -405,7 +417,7 @@ async def test_a_failed_flush_keeps_the_change_and_retries(runtimes, monkeypatch
             await comm.disconnect()
 
 
-async def test_a_busy_connection_is_flushed_a_moment_later(runtimes):
+async def test_a_busy_connection_is_flushed_a_moment_later(runtimes, armed):
     with _settings(DJUST_STATE_SAVE_INTERVAL=INTERVAL):
         key, comm, rt = await _dirty_counter(runtimes)
         try:
@@ -415,7 +427,7 @@ async def test_a_busy_connection_is_flushed_a_moment_later(runtimes):
             finally:
                 rt._explicit_event_lock.release()
             assert rt.state_unsaved
-            assert rt._state_timer.when() - asyncio.get_running_loop().time() <= 0.5
+            assert rt._state_timer_delay == runtime._STATE_FLUSH_RETRY_S
             assert await _fire(rt)
             assert await _stored(key) == 1
         finally:
