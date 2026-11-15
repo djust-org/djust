@@ -31,7 +31,7 @@ SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 
 
 class SpinnerView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>{{ status }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -87,14 +87,22 @@ def _session():
     return session
 
 
-async def _mounted():
+async def _mounted(view="SpinnerView"):
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     socket.scope.update(session=await sync_to_async(_session)(), user=AnonymousUser(), tenant=None)
     assert (await socket.connect())[0]
     await socket.receive_json_from()
-    await socket.send_json_to({"type": "mount", "view": __name__ + ".SpinnerView", "url": "/p/"})
+    await socket.send_json_to({"type": "mount", "view": __name__ + "." + view, "url": "/p/"})
     assert (await socket.receive_json_from())["type"] == "mount"
     return socket
+
+
+class LegacySpinnerView(SpinnerView):
+    """An unhandled failure ends a legacy view's loading state with a
+    ``source="async"`` frame naming the event; an explicit view ends it with
+    the opaque ``async_complete`` batch frame (no callback names)."""
+
+    exposure_policy = "legacy"  # legacy subject: the named source=async error frame
 
 
 async def _frames(socket, until):
@@ -164,7 +172,7 @@ async def test_reply_without_work_does_not_announce_it():
 async def test_failing_work_without_handler_still_ends_loading():
     """The announced loading state must end even when the work raises."""
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
-        socket = await _mounted()
+        socket = await _mounted("LegacySpinnerView")
         try:
             frames = await _event(socket, "start_failing", 3, work=True)
             assert _reply(frames, 3).get("async_pending") is True
@@ -230,7 +238,7 @@ async def test_consumer_cancel_path_sends_the_settle_frame_only_for_an_event():
         view = MagicMock()
         # A bare MagicMock has no readable exposure policy, which ADR-038
         # treats as nonlegacy (fail closed). This pins the legacy path.
-        view.exposure_policy = "legacy"
+        view.exposure_policy = "legacy"  # legacy subject: the legacy cancelled-task path
         view._async_cancelled = {"job"}
         view.render_with_diff = MagicMock(return_value=("<div dj-root>x</div>", "[]", 2))
         for drain in ("push_events", "navigation", "accessibility", "flash"):

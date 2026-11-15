@@ -353,7 +353,7 @@ class TestThemeClasses:
 
 
 class OrderView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = OrderForm
     template = (
         '{% load live_tags %}<div dj-root><form dj-submit="submit_form">'
@@ -361,13 +361,22 @@ class OrderView(FormMixin, LiveView):
     )
     submitted = None
 
+    def form_valid(self, form):
+        self.submitted = form.cleaned_data["size"]
+
+
+class LegacyOrderView(OrderView):
+    """The test-client round trip renders with ``render()``, which resolves the
+    form tags' ``view`` only from the context; an explicit view cannot put it
+    there (``render_with_diff`` falls back to the rendered view, ``render``
+    does not)."""
+
+    exposure_policy = "legacy"  # gap #4151: explicit render() cannot resolve view for form tags
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context["view"] = self
         return context
-
-    def form_valid(self, form):
-        self.submitted = form.cleaned_data["size"]
 
 
 def _mounted() -> OrderView:
@@ -419,7 +428,7 @@ class TestRadioRoundTrip:
 
     @pytest.mark.django_db
     def test_through_the_test_client(self):
-        client = LiveViewTestClient(OrderView)
+        client = LiveViewTestClient(LegacyOrderView)
         client.mount()
         client.send_event("validate_field", field="size", value="m")
         html = client.render()

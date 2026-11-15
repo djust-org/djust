@@ -60,7 +60,7 @@ class DictFeed(LiveView):
     """Like ``Feed`` with rows as dicts: the HTTP fallback round-trips the view's
     state through the session, which turns a dataclass into its repr."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         f'<div dj-view="{MODULE}.DictFeed" dj-id="0"><div id="list" dj-stream="rows">'
         '{% for r in streams.rows %}<div id="rows-{{ r.id }}">{{ r.body }}</div>{% endfor %}'
@@ -85,7 +85,7 @@ class DictFeed(LiveView):
 
 
 class DictTemp(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     temporary_assigns = {"rows": []}
     template = (
         f'<div dj-view="{MODULE}.DictTemp" dj-id="0"><div id="list" dj-update="append">'
@@ -97,6 +97,9 @@ class DictTemp(LiveView):
         self.rows = [{"id": i, "body": f"B{i}"} for i in range(5)]
         self.k = 0
 
+    def get_context_data(self, **kwargs):
+        return {"rows": self.rows, "k": self.k}
+
     @event_handler()
     def add(self, **kwargs):
         self.k += 1
@@ -104,7 +107,7 @@ class DictTemp(LiveView):
 
 
 class TickFeed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     tick_interval = 50
     template = f'<div dj-view="{MODULE}.TickFeed" dj-id="0"><div id="list">{{% for r in streams.rows %}}<div id="rows-{{{{ r.id }}}}">{{{{ r.body }}}}</div>{{% endfor %}}</div></div>'
 
@@ -119,7 +122,14 @@ class TickFeed(LiveView):
 
 
 class _SseSession:
-    """What the SSE transport needs of an ``SSESession``: a queue to push to."""
+    """What the SSE transport needs of an ``SSESession``: a queue to push to,
+    and the request each event POST carries.
+
+    ``_event_request`` is the stamp the real stream view puts on the session
+    for each POST and the transport takes (and clears) as the event's fresh
+    request. Every event here comes from the session the view was mounted on,
+    so it always reads as that mount request.
+    """
 
     def __init__(self):
         self.session_id = "sse-test"
@@ -127,43 +137,60 @@ class _SseSession:
         self._render_lock = asyncio.Lock()
         # ``client_backlogged`` (the tick's "is the client draining" check) reads its depth.
         self.queue = queue.Queue()
+        self.mount_request = None
+
+    @property
+    def _event_request(self):
+        return self.mount_request
+
+    @_event_request.setter
+    def _event_request(self, value):
+        pass  # the transport clears the stamp after reading it
 
     def push(self, data):
         self.frames.append(data)
 
+    async def send_error(self, error, **kwargs):
+        self.frames.append({"type": "error", "error": error, **kwargs})
 
-def _sse_runtime(view):
+
+async def _sse_runtime(view):
+    """A runtime over the SSE transport that MOUNTED ``view`` on a live session
+    (an explicit view's events and ticks are authorized against it); the mount
+    render is the diff baseline."""
     from djust.runtime import SSESessionTransport, ViewRuntime
+    from djust.tests._live_session import amount_on_runtime
 
     session = _SseSession()
     runtime = ViewRuntime(SSESessionTransport(session))
-    view.mount(None)
-    view.render_with_diff()
-    runtime.view_instance = view
+    session.runtime = runtime
+    session.mount_request = await amount_on_runtime(runtime, view)
+    session.frames.clear()
     return runtime, session
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 class TestSseRuntime:
     async def test_a_stream_only_handler_renders_over_sse(self):
-        runtime, session = _sse_runtime(Feed())
+        runtime, session = await _sse_runtime(Feed())
         await runtime.dispatch_event({"event": "ins", "params": {}})
         (frame,) = [f for f in session.frames if f.get("type") in ("patch", "noop")]
         assert frame["type"] == "patch" and _kinds(frame) == ["InsertChild"], frame
 
     async def test_an_idle_handler_is_a_noop_over_sse(self):
-        runtime, session = _sse_runtime(Feed())
+        runtime, session = await _sse_runtime(Feed())
         await runtime.dispatch_event({"event": "nothing", "params": {}})
         assert [f["type"] for f in session.frames if f.get("type") in ("patch", "noop")] == ["noop"]
 
     async def test_a_stream_prune_alone_renders_over_sse(self):
-        runtime, session = _sse_runtime(Feed())
+        runtime, session = await _sse_runtime(Feed())
         await runtime.dispatch_event({"event": "prune", "params": {}})
         (frame,) = [f for f in session.frames if f.get("type") in ("patch", "noop")]
         assert _kinds(frame).count("RemoveChild") == 2, frame
 
     async def test_temporary_rows_are_appended_over_sse(self):
-        runtime, session = _sse_runtime(Temp())
+        runtime, session = await _sse_runtime(Temp())
         await runtime.dispatch_event({"event": "add", "params": {}})
         (frame,) = [f for f in session.frames if f.get("type") in ("patch", "noop")]
         assert [p["index"] for p in frame["patches"] if p["type"] == "InsertChild"] == [5], frame
@@ -173,41 +200,41 @@ class TestSseRuntime:
         """The same event answers with the same patch kinds on both transports."""
         from .test_stream_only_handlers_3639 import drive
 
-        runtime, session = _sse_runtime(Feed())
+        runtime, session = await _sse_runtime(Feed())
         await runtime.dispatch_event({"event": "ins", "params": {}})
         (sse,) = [f for f in session.frames if f.get("type") in ("patch", "noop")]
         (ws,) = await drive("Feed", ["ins"])
         assert sse["type"] == ws["type"] and _kinds(sse) == _kinds(ws)
 
 
-def _tick_consumer():
+async def _tick_consumer():
+    """A consumer that mounted ``TickFeed`` through ``handle_mount`` (its render
+    is the baseline); its own tick loop is stopped, the tests drive the tick."""
+    from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer()
-    consumer.scope = {"session": None, "user": None}
     consumer.sent = []
 
     async def _capture(payload):
         consumer.sent.append(payload)
 
     consumer.send_json = _capture
-    view = TickFeed()
-    view.mount(None)
-    view.render_with_diff()
-    consumer.view_instance = view
+    await amount_on_consumer(consumer, f"{__name__}.TickFeed")
     return consumer
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 class TestTick:
     async def test_a_tick_whose_only_effect_is_a_stream_insert_is_sent(self):
-        consumer = _tick_consumer()
+        consumer = await _tick_consumer()
         assert await consumer._tick_once() is True
         (frame,) = [f for f in consumer.sent if f.get("source") == "tick"]
         assert "InsertChild" in _kinds(frame), frame
 
     async def test_a_tick_after_the_stream_tick_is_idle_and_sends_nothing(self):
-        consumer = _tick_consumer()
+        consumer = await _tick_consumer()
         await consumer._tick_once()
         consumer.sent.clear()
         assert await consumer._tick_once() is False
@@ -215,6 +242,7 @@ class TestTick:
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 class TestSseTick:
     """``ViewRuntime._tick_body``, the SSE twin of the WebSocket tick (#3809, slice 1).
 
@@ -225,8 +253,8 @@ class TestSseTick:
     """
 
     @staticmethod
-    def _tick_runtime():
-        runtime, session = _sse_runtime(TickFeed())
+    async def _tick_runtime():
+        runtime, session = await _sse_runtime(TickFeed())
         runtime._mount_sent_for = runtime.view_instance  # the mount frame has gone out
         return runtime, session
 
@@ -235,13 +263,13 @@ class TestSseTick:
         return [f for f in session.frames if f.get("source") == "tick"]
 
     async def test_a_tick_whose_only_effect_is_a_stream_insert_is_sent_over_sse(self):
-        runtime, session = self._tick_runtime()
+        runtime, session = await self._tick_runtime()
         assert await runtime._tick_once(runtime.view_instance) is True
         (frame,) = self._tick_frames(session)
         assert "InsertChild" in _kinds(frame), frame
 
     async def test_a_tick_after_the_stream_tick_is_idle_and_sends_nothing_over_sse(self):
-        runtime, session = self._tick_runtime()
+        runtime, session = await self._tick_runtime()
         await runtime._tick_once(runtime.view_instance)
         session.frames.clear()
         assert await runtime._tick_once(runtime.view_instance) is False
@@ -249,10 +277,10 @@ class TestSseTick:
 
     async def test_sse_and_websocket_agree_on_the_tick_frame(self):
         """The same tick answers with the same patch kinds on both transports."""
-        runtime, session = self._tick_runtime()
+        runtime, session = await self._tick_runtime()
         await runtime._tick_once(runtime.view_instance)
         (sse,) = self._tick_frames(session)
-        consumer = _tick_consumer()
+        consumer = await _tick_consumer()
         await consumer._tick_once()
         (ws,) = [f for f in consumer.sent if f.get("source") == "tick"]
         assert _kinds(sse) == _kinds(ws)
@@ -462,7 +490,7 @@ class TestCallSiteInventory:
 class _StreamChild(LiveView):
     """A sticky child whose only handler effect is a stream insert."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "child"
     template = (
@@ -478,21 +506,30 @@ class _StreamChild(LiveView):
 
 
 class _Parent(LiveView):
-    exposure_policy = "legacy"
-    template = '<div dj-root dj-id="0"><h1>parent</h1></div>'
+    exposure_policy = "explicit"
+    # The child is embedded by the tag: an explicit child's events are
+    # authorized against the identity it was rendered with.
+    template = (
+        '{% load live_tags %}<div dj-root dj-id="0"><h1>parent</h1>'
+        f'{{% live_render "{MODULE}._StreamChild" sticky=True %}}</div>'
+    )
 
     def mount(self, request, **kwargs):
         pass
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 class TestEmbeddedChild:
     """A ``view_id`` event re-renders the child's whole subtree and sends it as
     ``embedded_update`` whether or not state changed: there is no skip decision
     on that route to teach, so a stream-only child handler reaches the page."""
 
-    async def test_a_stream_only_child_handler_sends_the_row(self):
+    async def test_a_stream_only_child_handler_sends_the_row(self, settings):
         from djust.runtime import ViewRuntime
+        from djust.tests._live_session import amount_on_runtime
+
+        settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = [MODULE]
 
         sent = []
 
@@ -525,15 +562,14 @@ class TestEmbeddedChild:
                 yield
 
         parent = _Parent()
-        parent.mount(None)
-        child = _StreamChild()
-        child.mount(None)
-        parent._register_child("child-1", child)
         runtime = ViewRuntime(Transport())
-        runtime.view_instance = parent
+        # Mounted on a live session; the mount render embeds the child.
+        await amount_on_runtime(runtime, parent)
+        (child_id,) = parent._get_all_child_views()
+        sent.clear()
 
         await runtime.dispatch_event(
-            {"type": "event", "event": "ins", "params": {"view_id": "child-1"}, "ref": 1}
+            {"type": "event", "event": "ins", "params": {"view_id": child_id}, "ref": 1}
         )
 
         (frame,) = [f for f in sent if f.get("type") == "embedded_update"]

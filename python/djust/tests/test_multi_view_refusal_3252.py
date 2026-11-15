@@ -27,6 +27,7 @@ from django.test import RequestFactory, override_settings
 from django.urls import path
 from django.utils.functional import SimpleLazyObject
 
+from djust.tests._live_session import live_session
 from djust import LiveView, event_handler, sse
 from djust.hooks import on_mount
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
@@ -43,7 +44,7 @@ def send_elsewhere(view, request, **kwargs):
 
 
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Page"><b>page</b></div>'
 
     @event_handler()
@@ -62,6 +63,20 @@ class Widget(Page):
 class NeedsLogin(Page):
     login_required = True
     template = '<div dj-view="' + MOD + '.NeedsLogin"><b>secret</b></div>'
+
+
+# The reauth_on_event cases (``revocable``) revoke a principal through that
+# re-check, which runs for legacy views only (turns.reauth).
+class ReauthPage(Page):
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
+
+
+class ReauthWidget(Widget):
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
+
+
+class ReauthNeedsLogin(NeedsLogin):
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
 
 
 class NeedsPermission(Page):
@@ -194,7 +209,8 @@ async def test_a_signed_in_user_without_the_permission_is_refused_in_the_contain
 
     user = await sync_to_async(get_user_model().objects.create_user)("plain3252", password="x")
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    communicator.scope["session"] = SessionStore(await sync_to_async(_fresh_key)())
+    # Logged into the session: an explicit view re-reads its user there.
+    communicator.scope["session"] = await sync_to_async(live_session)(user)
     communicator.scope["user"] = user
     assert (await communicator.connect())[0]
     await communicator.receive_json_from()
@@ -314,9 +330,9 @@ async def test_a_slot_whose_authority_is_revoked_is_refused_alone_and_the_page_s
     # the socket with 4403 and only then sent a view_refused nobody could show.)
     communicator = await _signed_in_connect()
     try:
-        await _mount(communicator, Page)
+        await _mount(communicator, ReauthPage)
         await _frames(communicator, "mount")
-        for cls, target in ((Widget, "w1"), (NeedsLogin, "members")):
+        for cls, target in ((ReauthWidget, "w1"), (ReauthNeedsLogin, "members")):
             await _mount(communicator, cls, target)
             await _frames(communicator, "mount")
         revocable()
@@ -341,7 +357,7 @@ async def test_the_page_views_own_revoked_authority_still_navigates_and_closes_t
 ):
     communicator = await _signed_in_connect()
     try:
-        await _mount(communicator, NeedsLogin)
+        await _mount(communicator, ReauthNeedsLogin)
         await _frames(communicator, "mount")
         revocable()
         await communicator.send_json_to({"type": "event", "event": "click", "params": {}, "ref": 1})
@@ -515,12 +531,12 @@ async def test_over_sse_a_view_refused_after_it_mounted_shows_the_refusal_and_en
 async def test_over_sse_a_slot_whose_authority_is_revoked_is_refused_alone(revocable):
     from unittest.mock import patch
 
-    session, key, stream, first = await _sse_open()
+    session, key, stream, first = await _sse_open(ReauthPage)
     try:
         await _sse_post(
             session,
             key,
-            {"type": "mount", "view": MOD + ".Widget", "url": "/page/", "target_id": "w1"},
+            {"type": "mount", "view": MOD + ".ReauthWidget", "url": "/page/", "target_id": "w1"},
         )
         await _sse_frame(stream, "mount")
         session._slots["w1"].view.login_required = True  # a view that requires auth

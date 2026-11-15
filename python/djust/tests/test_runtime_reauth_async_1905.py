@@ -64,7 +64,7 @@ class _PermSSEView(LiveView):
     mid-session — exactly what login/owner binding cannot catch.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
     permission_required = "app.view_thing"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
@@ -91,7 +91,7 @@ class _PermSSEView(LiveView):
 
 
 class _CounterSSEView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -147,7 +147,7 @@ def _perm_user(*, has_perm: bool, pk: int = 7):
     return user
 
 
-async def _mount_stream(view_path, *, user, query=""):
+async def _mount_stream(view_path, *, user, query="", session=None):
     sid = "21111111-1111-1111-1111-111111111111"
     _sse_sessions.pop(sid, None)
     rf = RequestFactory()
@@ -156,12 +156,14 @@ async def _mount_stream(view_path, *, user, query=""):
         f"/djust/sse/{sid}/{q}", HTTP_ORIGIN=ALLOWED_ORIGIN, HTTP_HOST="example.com", secure=True
     )
     request.user = user
+    if session is not None:
+        request.session = session
     view = DjustSSEStreamView()
     response = await view.get(request, session_id=sid)
     return response, _sse_sessions.get(sid), sid
 
 
-async def _post_event(session, sid, event, *, user, params=None):
+async def _post_event(session, sid, event, *, user, params=None, http_session=None):
     """Drive the REAL /message/ endpoint with an ``event`` frame against an
     owner-bound session.
 
@@ -178,6 +180,8 @@ async def _post_event(session, sid, event, *, user, params=None):
         secure=True,
     )
     request.user = user
+    if http_session is not None:
+        request.session = http_session
     view = DjustSSEMessageView()
     return await view.post(request, session_id=sid)
 
@@ -314,7 +318,7 @@ class TestReauthHookShape291:
 
     @pytest.mark.asyncio
     async def test_runtime_clears_view_instance_even_if_close_is_gated(self):
-        view = MagicMock(exposure_policy="legacy")
+        view = MagicMock(exposure_policy="legacy")  # legacy subject: reauth_on_event
         view._view_id = None
 
         closed = {"called": False}
@@ -395,7 +399,8 @@ class TestReauthHookShape291:
                 return contextlib.nullcontext()
 
         runtime = ViewRuntime(_FakeTransport())
-        runtime.view_instance = MagicMock(_view_id=None, exposure_policy="legacy")
+        stub = MagicMock(_view_id=None, exposure_policy="legacy")  # legacy subject: reauth_on_event
+        runtime.view_instance = stub
 
         async def _fake_render(self, data):
             reached["render"] = True
@@ -506,22 +511,30 @@ class TestWSReauthAdapterPort:
 class TestAsyncSourceReconcile:
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_async_result_frame_carries_source_async_over_sse(self):
         """A start_async result frame routed through the runtime carries
         ``source="async"`` (matching WS _run_async_work), end-to-end over the real
         SSE transport."""
+        from asgiref.sync import sync_to_async
+
+        from djust.tests._live_session import live_session
+
         path = _register(_CounterSSEView)
+        # One live server session for the stream and the event POST: an explicit
+        # view is bound to it at mount and re-reads it on every turn, and the
+        # owner binding (Finding #24) matches the POSTer by it.
+        http_session = await sync_to_async(live_session)(None)
         with _allowlist():
-            _resp, session, sid = await _mount_stream(path, user=AnonymousUser())
+            _resp, session, sid = await _mount_stream(
+                path, user=AnonymousUser(), session=http_session
+            )
         assert session is not None
         _drain(session)
 
-        # Bind the session to a known owner pk + post as that owner so owner-binding
-        # (Finding #24) passes and the event reaches the runtime (mirrors the
-        # convergence test's _post_event owner setup).
-        session._owner_user_pk = 7
-        session._owner_session_key = None
-        resp = await _post_event(session, sid, "begin_async", user=_perm_user(has_perm=True, pk=7))
+        resp = await _post_event(
+            session, sid, "begin_async", user=AnonymousUser(), http_session=http_session
+        )
         assert resp.status_code == 200
         _drain(session)  # the immediate event frame (source="event")
 

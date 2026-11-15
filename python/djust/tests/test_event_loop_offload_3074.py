@@ -30,6 +30,7 @@ from djust.push import apush_to_view
 pytest.importorskip("channels")
 
 VIEW = f"{__name__}._OffloadView"
+LEGACY_VIEW = f"{__name__}._LegacyOffloadView"
 _SEEN: dict = {}
 
 
@@ -38,7 +39,7 @@ def _note(key):
 
 
 class _OffloadView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="djust.tests.test_event_loop_offload_3074._OffloadView">'
         "<b>{{ count }}</b><i>{{ label }}</i></div>"
@@ -47,6 +48,9 @@ class _OffloadView(LiveView):
     def mount(self, request, **kwargs):
         self.count = 0
         self.label = "start"
+
+    def get_context_data(self, **kwargs):
+        return {"count": self.count, "label": self.label}
 
     @event_handler()
     def bump(self, **kwargs):
@@ -76,6 +80,18 @@ class _OffloadView(LiveView):
             self._explode = False
             raise RuntimeError("render exploded")
         return super()._sync_state_to_rust(*args, **kwargs)
+
+
+class _LegacyOffloadView(_OffloadView):
+    """The one-hop offloaded push turn runs for legacy views only
+    (``LiveViewConsumer._run_server_push_turn``): an explicit view's push turn
+    takes the stock path, its hooks hopping to the pool one by one."""
+
+    exposure_policy = "legacy"  # gap #4152: the one-hop offloaded push turn is legacy-only
+    template = (
+        '<div dj-root dj-view="djust.tests.test_event_loop_offload_3074._LegacyOffloadView">'
+        "<b>{{ count }}</b><i>{{ label }}</i></div>"
+    )
 
 
 @pytest.fixture(params=[None, 2], ids=["stock", "pool"])
@@ -120,7 +136,7 @@ def spies(monkeypatch):
     return calls
 
 
-async def _connect():
+async def _connect(view=None):
     from channels.testing import WebsocketCommunicator
     from django.contrib.sessions.backends.db import SessionStore
 
@@ -141,7 +157,7 @@ async def _connect():
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from()
-    await communicator.send_json_to({"type": "mount", "view": VIEW, "url": "/offload/"})
+    await communicator.send_json_to({"type": "mount", "view": view or VIEW, "url": "/offload/"})
     frame = await _receive_until(communicator, "mount")
     assert frame.get("type") == "mount", frame
     return communicator
@@ -182,11 +198,11 @@ async def test_pre_event_snapshot_runs_with_the_handler(pool, spies):
 async def test_server_push_turn_is_one_hop_with_the_pool(pool, spies):
     loop_thread = threading.get_ident()
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        comm = await _connect()
+        comm = await _connect(LEGACY_VIEW)
         try:
             _SEEN.clear()
             before = spies["aclose"]
-            await apush_to_view(VIEW, handler="handle_push", payload={"label": "pushed"})
+            await apush_to_view(LEGACY_VIEW, handler="handle_push", payload={"label": "pushed"})
             frame = await _receive_until(comm, "patch")
             aclose_calls = spies["aclose"] - before
         finally:
@@ -266,10 +282,14 @@ async def test_a_push_hook_that_changes_push_scope_moves_the_session(pool):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_a_render_error_still_runs_the_hooks_queued_work(pool, caplog):
+async def test_a_render_error_still_runs_the_hooks_queued_work(pool, caplog, settings):
     """As in the stock turn: the hook succeeded, so its start_async work runs
     even though the render raised, and the error is logged."""
     import asyncio
+
+    # An explicit view's failure log names the error under DEBUG only
+    # (production logs a value-free line, decision D-a).
+    settings.DEBUG = True
 
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
         comm = await _connect()

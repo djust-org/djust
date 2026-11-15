@@ -29,7 +29,7 @@ from djust.websocket import LiveViewConsumer
 
 
 class _FlowCounter(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -128,8 +128,14 @@ def _allow_flow_module(settings):
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_multi_lazy_mount_flows_as_batch(_allow_flow_module):
+    from djust.tests._live_session import with_live_session
+
     consumer = _FakeConsumer()
+    # A live server session on the socket scope: an explicit view's mount
+    # binds its state to one.
+    with_live_session(consumer.scope)
     data = {
         "type": "mount_batch",
         "views": [

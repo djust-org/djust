@@ -91,7 +91,7 @@ def liveview_render(src: str, ctx: Optional[Dict[str, Any]] = None, path: str = 
     values = dict(ctx or {})
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request, **kwargs):
             for key, value in values.items():
@@ -681,11 +681,14 @@ class TestDebugTag:
         from djust.live_view import LiveView
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def mount(self, request, **kwargs):
                 self.public_thing = "PUBLIC_MARK"
                 self._secret_thing = "PRIVATE_MARK"
+
+            def get_context_data(self, **kwargs):
+                return super().get_context_data(public_thing=self.public_thing, **kwargs)
 
         _V.template = "<div dj-root>inner</div>"
         _V._full_template = (
@@ -806,7 +809,7 @@ class TestQuerystringTag:
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def mount(self, request, **kwargs):
                 self.x = 1
@@ -944,7 +947,7 @@ class TestQueryDictLookupsKeepDjangosLastValue:
         assert backend_render(src, {}, request=request, request_context=True) == expected
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def mount(self, request, **kwargs):
                 self.x = 1
@@ -996,10 +999,13 @@ class TestQueryDictLookupsKeepDjangosLastValue:
         assert backend_render(src, ctx) == expected
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def mount(self, request, **kwargs):
                 self.qd = QueryDict("a=1&a=2&page=3")
+
+            def get_context_data(self, **kwargs):
+                return {"qd": self.qd}
 
         _V.template = f"<div dj-root>{src}</div>"
         client = LiveViewTestClient(_V)
@@ -1132,11 +1138,14 @@ def _probe_liveview(ctx: Dict[str, Any]) -> Dict[str, Any]:
     values = dict(ctx)
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request, **kwargs):
             for key, value in values.items():
                 setattr(self, key, value)
+
+        def get_context_data(self, **kwargs):
+            return {key: getattr(self, key) for key in values}
 
     _V.template = "<div dj-root>{% djust_floor_probe_2556 %}</div>"
     client = LiveViewTestClient(_V)
@@ -1319,10 +1328,13 @@ class TestProtectingAMultiValueDictKeepsItsType:
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def mount(self, request, **kwargs):
                 self.qd = make_qd()
+
+            def get_context_data(self, **kwargs):
+                return {"qd": self.qd}
 
         _V.template = "<div dj-root>%s</div>" % src
         client = LiveViewTestClient(_V)

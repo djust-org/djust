@@ -29,6 +29,7 @@ import contextvars
 import json
 import sys
 import threading
+import uuid
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, patch
 
@@ -87,7 +88,7 @@ def _answer():
 
 
 class _Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-view="x" dj-id="0">n={{ n }}</div>'
     login_required = True
     tick_interval = None
@@ -154,6 +155,21 @@ class AnyOfAsyncCheckView(AsyncCheckView):
     permission_required = AnyOf("acp.alpha", "acp.beta")
 
 
+# The ``reauth_on_event`` re-check runs for legacy views only (turns.reauth);
+# an explicit view re-authorizes every turn regardless. The reauth tests below
+# use these legacy twins.
+class LegacySyncCheckView(SyncCheckView):
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
+
+
+class LegacyAsyncCheckView(AsyncCheckView):
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
+
+
+class LegacyBridgedCheckView(BridgedCheckView):
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
+
+
 VIEWS = (
     SyncCheckView,
     AsyncCheckView,
@@ -162,6 +178,9 @@ VIEWS = (
     OpenAsyncCheckView,
     AnyOfSyncCheckView,
     AnyOfAsyncCheckView,
+    LegacySyncCheckView,
+    LegacyAsyncCheckView,
+    LegacyBridgedCheckView,
 )
 for _cls in VIEWS:
     setattr(sys.modules[MOD], _cls.__name__, _cls)
@@ -170,6 +189,7 @@ urlpatterns = [path("acp/%s/" % cls.__name__, cls.as_view()) for cls in VIEWS]
 
 FLAVOURS = {"sync": SyncCheckView, "async": AsyncCheckView}
 OPEN = {"sync": OpenSyncCheckView, "async": OpenAsyncCheckView}
+LEGACY = {"sync": LegacySyncCheckView, "async": LegacyAsyncCheckView}
 ANY_OF = {"sync": AnyOfSyncCheckView, "async": AnyOfAsyncCheckView}
 
 
@@ -342,13 +362,41 @@ async def _frames(comm, wait=0.3, *, deadline=3.0):
             out.append(json.loads(msg["text"]))
 
 
+async def _login(user=None):
+    """A saved user logged into a live session standing in for ``user``.
+
+    An explicit view re-reads its user from the session it was mounted on, so
+    a stub scope user reads as anonymous there. ``_User()`` (the permitted
+    stub) becomes a superuser, ``_User(perms=())`` a user with no permission,
+    and an anonymous user an anonymous session.
+    """
+    from asgiref.sync import sync_to_async
+    from django.contrib.auth import get_user_model
+
+    from djust.tests._live_session import live_session
+
+    def make():
+        if isinstance(user, AnonymousUser):
+            return user, live_session(None)
+        name = "acp" + uuid.uuid4().hex[:10]
+        users = get_user_model().objects
+        if user is not None and not user.perms:
+            real = users.create_user(name, password="pw-acp-x")
+        else:
+            real = users.create_superuser(name, password="pw-acp-x")
+        return real, live_session(real)
+
+    return await sync_to_async(make)()
+
+
 async def _ws(view_cls, user=None):
     from channels.testing import WebsocketCommunicator
 
     from djust.websocket import LiveViewConsumer
 
-    user = user if user is not None else _User()
-    comm = WebsocketCommunicator(_asgi(LiveViewConsumer.as_asgi(), user), "/ws/")
+    real, session = await _login(user)
+    comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    comm.scope.update(user=real, session=session)
     ok, _ = await comm.connect()
     assert ok
     await _frames(comm, 0.2)
@@ -434,7 +482,7 @@ class TestWebSocket:
 
     async def test_reauth_runs_the_check_before_every_event(self, flavour, reauth_on):
         with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            comm, _ = await _ws(FLAVOURS[flavour])
+            comm, _ = await _ws(LEGACY[flavour])
             try:
                 for ref in (1, 2, 3):
                     await comm.send_json_to(_event("bump", ref))
@@ -452,7 +500,7 @@ class TestWebSocket:
     @pytest.mark.parametrize("value", REFUSALS)
     async def test_reauth_refusal_blocks_the_handler(self, flavour, reauth_on, value):
         with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            comm, _ = await _ws(FLAVOURS[flavour])
+            comm, _ = await _ws(LEGACY[flavour])
             VERDICT["value"] = value
             try:
                 await comm.send_json_to(_event("bump", 1))
@@ -464,7 +512,7 @@ class TestWebSocket:
 
     async def test_reauth_exception_fails_closed(self, flavour, reauth_on):
         with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            comm, _ = await _ws(FLAVOURS[flavour])
+            comm, _ = await _ws(LEGACY[flavour])
             VERDICT["value"] = RuntimeError("SECRET-IN-CHECK")
             try:
                 await comm.send_json_to(_event("bump", 1))
@@ -501,7 +549,7 @@ class TestWebSocketSlowAsyncCheck:
     async def _two_events_behind_a_gate(self, final_verdict):
         gate = asyncio.Event()
         with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            comm, _ = await _ws(AsyncCheckView)
+            comm, _ = await _ws(LegacyAsyncCheckView)
             assert RAN == ["mount"]
             GATE["gate"] = gate
             try:
@@ -563,7 +611,9 @@ class TestSharedSyncThreadStaysFree:
         from djust.websocket import LiveViewConsumer
 
         gate = asyncio.Event()
-        comm = WebsocketCommunicator(_asgi(LiveViewConsumer.as_asgi(), _User()), "/ws/")
+        real, session = await _login()
+        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm.scope.update(user=real, session=session)
         assert (await comm.connect())[0]
         try:
             await _frames(comm, 0.2)
@@ -601,14 +651,14 @@ class TestSharedSyncThreadStaysFree:
 
     async def test_async_reauth_check_leaves_the_thread_free(self, reauth_on):
         with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            free, ran = await self._mount_held(AsyncCheckView, reauth_event=True)
+            free, ran = await self._mount_held(LegacyAsyncCheckView, reauth_event=True)
         assert free, "an async re-check must not hold the shared sync thread"
         assert ran == ["mount"]  # the handler waits for its check
         assert RAN == ["mount", "bump"]
 
     async def test_bridged_reauth_check_blocks_the_thread(self, reauth_on):
         with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            free, ran = await self._mount_held(BridgedCheckView, reauth_event=True)
+            free, ran = await self._mount_held(LegacyBridgedCheckView, reauth_event=True)
         assert not free
         assert ran == ["mount"]
 
@@ -634,6 +684,10 @@ ORIGIN = "http://testserver"
 SID = "41111111-1111-1111-1111-111111111111"
 
 
+#: The saved user and session the SSE stream was opened with.
+_SSE_LOGIN: list = []
+
+
 async def _sse_mount(view_cls, user=None):
     from djust.sse import DjustSSEStreamView, _sse_sessions
 
@@ -641,7 +695,8 @@ async def _sse_mount(view_cls, user=None):
         f"/djust/sse/{SID}/?view={MOD}.{view_cls.__name__}&_djust_url=/acp/{view_cls.__name__}/",
         HTTP_ORIGIN=ORIGIN,
     )
-    request.user = user if user is not None else _User()
+    _SSE_LOGIN[:] = await _login(user)
+    request.user, request.session = _SSE_LOGIN
     try:
         await DjustSSEStreamView().get(request, session_id=SID)
     except Exception:  # noqa: BLE001 - a refused mount may answer with an error response
@@ -658,7 +713,8 @@ async def _sse_post(frame, user=None):
         content_type="application/json",
         HTTP_ORIGIN=ORIGIN,
     )
-    request.user = user if user is not None else _User()
+    # The stream's own login: the POST owns the stream by it.
+    request.user, request.session = _SSE_LOGIN
     return await DjustSSEMessageView().post(request, session_id=SID)
 
 
@@ -706,7 +762,7 @@ class TestSSE:
         assert session is None or session.view_instance is None
 
     async def test_reauth_runs_before_every_event_and_refuses(self, flavour, sse_clean, reauth_on):
-        session = await _sse_mount(FLAVOURS[flavour])
+        session = await _sse_mount(LEGACY[flavour])
         _drain(session)
         await _sse_post(_event("bump", 1))
         await _sse_post(_event("bump", 2))
@@ -719,7 +775,7 @@ class TestSSE:
         assert any(f.get("code") == "permission_denied" for f in frames), frames
 
     async def test_reauth_exception_fails_closed(self, flavour, sse_clean, reauth_on):
-        session = await _sse_mount(FLAVOURS[flavour])
+        session = await _sse_mount(LEGACY[flavour])
         _drain(session)
         VERDICT["value"] = RuntimeError("SECRET-IN-CHECK")
         await _sse_post(_event("bump", 1))
@@ -785,7 +841,10 @@ class TestHTTP:
         assert response["Location"].startswith("/login/")
         assert "mount" not in RAN
 
-    def test_get_exception_fails_closed(self, flavour, chain):
+    def test_get_exception_fails_closed(self, flavour, chain, settings):
+        # An explicit view's failing check reaches the caller under DEBUG; in
+        # production the GET answers a value-free 500 (decision D-a).
+        settings.DEBUG = True
         VERDICT["value"] = RuntimeError("check backend down")
         with pytest.raises(RuntimeError):
             FLAVOURS[flavour].as_view()(_http("get", "/acp/x/", _User()))

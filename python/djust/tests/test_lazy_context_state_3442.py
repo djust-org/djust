@@ -9,6 +9,7 @@ from djust.tests.test_lazy_provenance_http_3252 import Child, Page, get_ids, pos
 
 
 class Hidden(Child):
+    exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Child, which it subclasses
     abstract = True  # Test-local owner: exclude from global binding discovery.
     mounts = 0
 
@@ -18,6 +19,7 @@ HIDDEN = '<div dj-view="' + __name__ + '.Hidden" dj-lazy></div>'
 
 def run(tpl, state):
     class P(Page):
+        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = tpl
 
@@ -738,6 +740,7 @@ def test_round6_http_literal_parser(tmp_path, settings, label, closer):
     (tmp_path / "o.html").write_text(inc)
 
     class P(Page):
+        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = "<div dj-root>" + TAG + pre + body + post_ + "{{ q|safe }}" + HIDDEN + "</div>"
 
@@ -765,6 +768,7 @@ def test_round6_cache_shared_fragment(order):
     cache.clear()
 
     class Plain(Page):
+        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = "<div dj-root>" + SIDEBAR + "<main>plain</main></div>"
 
@@ -772,6 +776,7 @@ def test_round6_cache_shared_fragment(order):
             self.user_label = "u"
 
     class Lazy(Page):
+        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = "<div dj-root>" + SIDEBAR + TAG + "</div>"
 

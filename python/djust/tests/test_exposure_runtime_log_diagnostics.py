@@ -450,6 +450,7 @@ async def test_time_travel_push_failure_logs_detail_under_debug_for_every_policy
             await socket.disconnect()
 
 
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restricted", [False, True])
 async def test_scoped_component_render_failure_honours_a_restricted_turn(
@@ -469,7 +470,7 @@ async def test_scoped_component_render_failure_honours_a_restricted_turn(
 
     from .test_component_scoped_render_2917 import OpaquePage, _mounted
 
-    view, runtime, _transport = _mounted(OpaquePage)
+    view, runtime, _transport = await _mounted(OpaquePage)
     component = view.nav
     calls = []
 

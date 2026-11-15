@@ -21,7 +21,6 @@ import asyncio
 import json
 import sys
 from typing import Any, Dict, List
-from unittest.mock import MagicMock
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -30,6 +29,7 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import RequestFactory, override_settings
 
+from djust.tests._live_session import live_session
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
@@ -44,11 +44,14 @@ RAN: List[str] = []
 
 
 class ParityView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
         self.count = 0
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(count=self.count, **kwargs)
 
     @event_handler()
     def bump(self, **kwargs):
@@ -202,6 +205,9 @@ async def _run_sse(turn: str) -> Dict[str, Any]:
     rf = RequestFactory(HTTP_HOST="example.com")
     get = rf.get(f"/djust/sse/{sid}/?view={VIEW_PATH}", HTTP_ORIGIN=ORIGIN, secure=True)
     get.user = AnonymousUser()
+    # A saved server session for the stream and its event POST: an explicit
+    # view is bound to it at mount, and the POST owns the stream by it.
+    get.session = await sync_to_async(live_session)(None)
     await DjustSSEStreamView().get(get, session_id=sid)
     session = _sse_sessions[sid]
     frames: List[Dict[str, Any]] = []
@@ -215,8 +221,6 @@ async def _run_sse(turn: str) -> Dict[str, Any]:
     try:
         await collect()
         frames.clear()  # the mount frame
-        session._owner_user_pk = 7
-        session._owner_session_key = None
         post = rf.post(
             f"/djust/sse/{sid}/message/",
             data=json.dumps({"type": "event", "event": turn, "params": {}, "ref": 1}),
@@ -224,7 +228,8 @@ async def _run_sse(turn: str) -> Dict[str, Any]:
             HTTP_ORIGIN=ORIGIN,
             secure=True,
         )
-        post.user = MagicMock(is_authenticated=True, pk=7)
+        post.user = AnonymousUser()
+        post.session = get.session
         response = await DjustSSEMessageView().post(post, session_id=sid)
         assert response.status_code == 200, response.content
         await collect()

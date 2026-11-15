@@ -36,6 +36,7 @@ from django.test import RequestFactory, override_settings
 from django.urls import path
 from django.utils.functional import SimpleLazyObject
 
+from djust.tests._live_session import live_session
 from djust import LiveView, event_handler, sse
 from djust.presence import PresenceManager, PresenceMixin
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
@@ -54,7 +55,7 @@ CONSUMERS: list = []
 class Guarded(PresenceMixin, LiveView):
     """Checks the user in ``mount()``, after joining presence, as apps do."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     presence_key = ROOM
     tick_interval = 20
@@ -69,6 +70,9 @@ class Guarded(PresenceMixin, LiveView):
 
     def admitted(self, user):
         return user.is_authenticated
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(shown=self.shown, **kwargs)
 
     def handle_tick(self):
         TICKS.append(type(self).__name__)
@@ -117,7 +121,7 @@ class GuardedLate(Guarded):
 
 
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Page"><b>page</b></div>'
 
     @event_handler()
@@ -165,7 +169,11 @@ async def _connect(user=None):
     from channels.testing import WebsocketCommunicator
 
     communicator = WebsocketCommunicator(_Recorded.as_asgi(), "/ws/")
-    communicator.scope["session"] = SessionStore(await sync_to_async(_fresh_key)())
+    if user is None:
+        communicator.scope["session"] = SessionStore(await sync_to_async(_fresh_key)())
+    else:
+        # Logged into the session: an explicit view re-reads its user there.
+        communicator.scope["session"] = await sync_to_async(live_session)(user)
     communicator.scope["user"] = user or AnonymousUser()
     assert (await communicator.connect())[0]
     await communicator.receive_json_from()
@@ -448,8 +456,11 @@ async def test_over_sse_a_page_view_whose_mount_raises_is_not_mounted(cls, code)
         await stream.aclose()
 
 
-async def test_over_sse_a_mount_step_after_mount_that_raises_leaves_no_view():
+async def test_over_sse_a_mount_step_after_mount_that_raises_leaves_no_view(settings):
     """The exception still reaches the stream view, as before; nothing stays."""
+    # An explicit view's failure reaches the stream view under DEBUG; in
+    # production it is answered with a value-free 500 (decision D-a).
+    settings.DEBUG = True
     with pytest.raises(RuntimeError, match="baseline failed"):
         await _sse_open(GuardedLate)
     assert _sse_sessions == {}

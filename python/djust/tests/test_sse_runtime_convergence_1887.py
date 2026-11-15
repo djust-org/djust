@@ -36,8 +36,10 @@ from unittest.mock import patch
 
 import pytest
 from django.contrib.auth.models import AnonymousUser
+from asgiref.sync import sync_to_async
 from django.test import RequestFactory, override_settings
 
+from djust.tests._live_session import live_session
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.sse import DjustSSEStreamView, _sse_sessions
@@ -55,7 +57,7 @@ ALLOWED_ORIGIN = "https://example.com"
 class _CounterSSEView(LiveView):
     """A minimal counter view used for the mount + event + async paths."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -92,7 +94,7 @@ class _CounterSSEView(LiveView):
 class _DocSSEView(LiveView):
     """Object-scoped view: only doc_id == 1 is permitted (IDOR gate)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><main>{{ doc }}</main></div>"
 
     def __init__(self, *args, **kwargs):
@@ -111,6 +113,10 @@ class _DocSSEView(LiveView):
 
     def get_context_data(self, **kwargs):
         return {"doc": {1: "ACME (yours)", 2: "GLOBEX (NOT yours)"}[self.doc_id]}
+
+
+#: The server session each stream was mounted with, by stream id.
+_HTTP_SESSIONS: dict = {}
 
 
 def _register(view_cls):
@@ -142,6 +148,9 @@ async def _mount_stream(view_path, *, query=""):
         f"/djust/sse/{sid}/{q}", HTTP_ORIGIN=ALLOWED_ORIGIN, HTTP_HOST="example.com", secure=True
     )
     request.user = AnonymousUser()
+    # A saved server session: an explicit view's mount binds to it, and every
+    # event POST of this stream carries the same one (``_post_event``).
+    request.session = _HTTP_SESSIONS[sid] = await sync_to_async(live_session)(None)
     view = DjustSSEStreamView()
     response = await view.get(request, session_id=sid)
     return response, _sse_sessions.get(sid), sid
@@ -152,18 +161,14 @@ async def _post_event(session, sid, event, params=None, ref=None):
     owner-bound session.
 
     Owner-binding (Finding #24) is an endpoint-level check, not part of the
-    runtime convergence under test; bind the session to a known pk and stamp the
-    event request's user with the same pk so the POST owns the session and
-    reaches dispatch_event (mirrors _attach_owner in the other SSE test files).
+    runtime convergence under test; the POST carries the stream's own server
+    session (anonymous, as the mount was), so it owns the session and reaches
+    dispatch_event.
 
     The body carries a top-level ``ref`` only when one is supplied.
     """
-    from unittest.mock import MagicMock
-
     from djust.sse import DjustSSEMessageView
 
-    session._owner_user_pk = 7
-    session._owner_session_key = None
     body = {"type": "event", "event": event, "params": params or {}}
     if ref is not None:
         body["ref"] = ref
@@ -176,7 +181,8 @@ async def _post_event(session, sid, event, params=None, ref=None):
         HTTP_HOST="example.com",
         secure=True,
     )
-    request.user = MagicMock(is_authenticated=True, pk=7)
+    request.user = AnonymousUser()
+    request.session = _HTTP_SESSIONS[sid]
     view = DjustSSEMessageView()
     return await view.post(request, session_id=sid)
 
@@ -190,12 +196,8 @@ async def _post_message(session, sid, body):
     is the real SSE transport that exercises the Phase-2.0 ``ref`` echo
     end-to-end without touching websocket.py / sse.py (#1889, ADR-022).
     """
-    from unittest.mock import MagicMock
-
     from djust.sse import DjustSSEMessageView
 
-    session._owner_user_pk = 7
-    session._owner_session_key = None
     rf = RequestFactory()
     request = rf.post(
         f"/djust/sse/{sid}/message/",
@@ -205,7 +207,8 @@ async def _post_message(session, sid, body):
         HTTP_HOST="example.com",
         secure=True,
     )
-    request.user = MagicMock(is_authenticated=True, pk=7)
+    request.user = AnonymousUser()
+    request.session = _HTTP_SESSIONS[sid]
     view = DjustSSEMessageView()
     return await view.post(request, session_id=sid)
 
@@ -218,6 +221,7 @@ async def _post_message(session, sid, body):
 class TestSSEMountViaRuntime:
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_mount_renders_and_registers_session(self):
         path = _register(_CounterSSEView)
         with _allowlist():
@@ -234,6 +238,7 @@ class TestSSEMountViaRuntime:
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_mount_uses_real_request_user(self):
         """The runtime mounts against the REAL request.user (not a synthesized
         userless RequestFactory request) — build_request hook (#1887)."""
@@ -253,6 +258,7 @@ class TestSSEMountViaRuntime:
 class TestSSEEventViaRuntime:
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_event_updates_and_streams_frame(self):
         path = _register(_CounterSSEView)
         with _allowlist():
@@ -277,6 +283,7 @@ class TestSSEEventViaRuntime:
 class TestSSEObjectPermViaRuntime:
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_denied_object_blocks_mount(self):
         path = _register(_DocSSEView)
         with _allowlist():
@@ -286,6 +293,7 @@ class TestSSEObjectPermViaRuntime:
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_permitted_object_mounts(self):
         path = _register(_DocSSEView)
         with _allowlist():
@@ -296,6 +304,7 @@ class TestSSEObjectPermViaRuntime:
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_gate_off_denied_object_would_render(self):
         """Gate-off witness (#1468): neuter the object-perm enforcement and the
         denied object now mounts/renders — proving the deny assertion above is
@@ -323,6 +332,7 @@ class TestSSEObjectPermViaRuntime:
 class TestSSEAsyncWorkViaRuntime:
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     @pytest.mark.parametrize("render", [False, True])
     @pytest.mark.parametrize("route", ["live", "deferred"])
     async def test_named_root_work_advertises_an_owned_completion_batch(
@@ -356,6 +366,9 @@ class TestSSEAsyncWorkViaRuntime:
             else:
                 view = session.runtime.view_instance
                 async with session.runtime.transport.event_context(view):
+                    # The activity flush runs inside an authorized event turn;
+                    # an explicit view's commit needs that turn's fresh request.
+                    await session.runtime.authorize_explicit_turn(view)
                     await session.runtime._dispatch_single_event(view, "begin_async", {}, 114)
             frames = _drain(session)
             ack = next(frame for frame in frames if frame.get("ref") == 114)
@@ -382,6 +395,7 @@ class TestSSEAsyncWorkViaRuntime:
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_start_async_streams_followup_frame(self):
         """An event scheduling ``start_async`` must run the background task
         off-thread and stream a follow-up render frame when it completes.
@@ -420,6 +434,7 @@ class TestSSEAsyncWorkViaRuntime:
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_gate_off_async_work_not_dispatched(self):
         """Gate-off witness (#1468): neuter the runtime async dispatcher and the
         background task never runs / never streams a follow-up — proving the test
@@ -453,6 +468,7 @@ class TestSSEAsyncWorkViaRuntime:
 class TestSSEEventSpineParity:
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_update_frame_echoes_ref_source_event_name(self):
         """A state-changing event over the REAL SSE /message/ transport echoes the
         client ``ref`` + ``source="event"`` + ``event_name`` on the update frame
@@ -483,6 +499,7 @@ class TestSSEEventSpineParity:
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_noop_frame_echoes_ref_source_event_name(self):
         """A no-change event over the REAL SSE transport echoes ``ref`` +
         ``source="event"`` + ``event_name`` on the noop frame (#560 sequencing)."""
@@ -505,6 +522,7 @@ class TestSSEEventSpineParity:
 
     @override_settings(ALLOWED_HOSTS=["example.com"])
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_push_only_event_skips_render_over_sse(self):
         """A push-only handler over the REAL SSE transport emits a noop (#700
         identity-skip) plus the push frame — not a render frame."""

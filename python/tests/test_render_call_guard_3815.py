@@ -133,11 +133,14 @@ def liveview_render(source: str, ctx: dict) -> str:
     from djust.testing import LiveViewTestClient
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request, **kwargs):
             for name, value in ctx.items():
                 setattr(self, name, value)
+
+        def get_context_data(self, **kwargs):
+            return {name: getattr(self, name) for name in ctx}
 
     _V.template = f"<div dj-root>{source}</div>"
     client = LiveViewTestClient(_V)
@@ -149,23 +152,32 @@ def liveview_render(source: str, ctx: dict) -> str:
 
 
 def http_get_render(source: str, ctx: dict) -> str:
-    from django.test import RequestFactory
+    from django.test import RequestFactory, override_settings
 
     from djust.live_view import LiveView
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request, **kwargs):
             for name, value in ctx.items():
                 setattr(self, name, value)
 
+        def get_context_data(self, **kwargs):
+            return {name: getattr(self, name) for name in ctx}
+
     _V.template = f"<div dj-root>{source}</div>"
     from django.contrib.sessions.middleware import SessionMiddleware
 
+    from django.contrib.auth.models import AnonymousUser
+
     request = RequestFactory().get("/")
     SessionMiddleware(lambda r: None).process_request(request)
-    response = _V.as_view()(request)
+    request.user = AnonymousUser()  # as AuthenticationMiddleware sets it
+    # An explicit view's render failure reaches the caller under DEBUG; in
+    # production the GET answers a value-free 500 instead (decision D-a).
+    with override_settings(DEBUG=True):
+        response = _V.as_view()(request)
     if hasattr(response, "render"):
         response.render()
     html = response.content.decode()
@@ -586,7 +598,7 @@ def _child(source: str, ctx: dict, name: str | None = None) -> Any:
     else:
         _TEMPLATES[name] = source
         attrs["template_name"] = name
-    child = type("Child3880", (LiveView,), {"exposure_policy": "legacy", **attrs})()
+    child = type("Child3880", (LiveView,), {"exposure_policy": "explicit", **attrs})()
     child.mount(None)
     return child
 
@@ -664,13 +676,16 @@ def _live_render_site(tag_args: str, named: bool = False) -> Callable[[str, dict
             attrs["template_name"] = "live_render_child_3880.html"
         else:
             attrs["template"] = source
-        child_cls = type("LiveRenderChild3880", (LiveView,), {"exposure_policy": "legacy", **attrs})
+        # {% live_render lazy %} refuses explicit children (ADR-038 D-m).
+        lazy_policy = {"exposure_policy": "legacy"}  # gap #4154: lazy live_render (D-m)
+        policy = lazy_policy if "lazy" in tag_args else {"exposure_policy": "explicit"}
+        child_cls = type("LiveRenderChild3880", (LiveView,), {**policy, **attrs})
         setattr(sys.modules[__name__], "LiveRenderChild3880", child_cls)
         page_cls = type(
             "LiveRenderPage3880",
             (LiveView,),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "template": (
                     "{% load live_tags %}<html><body><div dj-root>"
                     '{% live_render "' + __name__ + '.LiveRenderChild3880" ' + tag_args + " %}"
@@ -684,6 +699,7 @@ def _live_render_site(tag_args: str, named: bool = False) -> Callable[[str, dict
         SessionMiddleware(lambda r: None).process_request(request)
         request.session.save()
         view = page_cls()
+        view.setup(request)  # as ``as_view()`` does: the tag reads the page's request
         view.streaming_render = False  # the page-POST fallback shape: lazy slots are filled
         with override_settings(DJUST_LIVE_RENDER_ALLOWED_MODULES=[__name__]):
             html = view.get(request).content.decode("utf-8")
@@ -977,7 +993,7 @@ def test_the_embedded_child_reproducer_from_the_issue():
         render.alters_data = True
 
     class C(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "[{% include obj %}]"
 
         def mount(self, request, **kw):
@@ -1466,7 +1482,7 @@ def testing_client_site(source: str, ctx: dict) -> str:
     _TEMPLATES["client_3880.html"] = source
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "client_3880.html"
 
         def mount(self, request, **kwargs):
@@ -1554,7 +1570,9 @@ def bound_component_extends_site(source: str, ctx: dict) -> str:
     )
     state = type("State", (TypedState,), {"__annotations__": {"obj": Any}, "obj": None})
     comp = type("Nav3880", (LiveComponent,), {"State": state, "template_name": "bound_3880.html"})
-    page = type("Page3880", (LiveView,), {"exposure_policy": "legacy", "nav": comp(obj=ctx["obj"])})
+    page = type(
+        "Page3880", (LiveView,), {"exposure_policy": "explicit", "nav": comp(obj=ctx["obj"])}
+    )
     html = str(page().nav)
     match = re.search(r"<c>(.*)</c>", html, re.S)
     assert match is not None, html
