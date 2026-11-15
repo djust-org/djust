@@ -140,6 +140,72 @@ class WithSticky(Plain):
     )
 
 
+#: Switches the background-work views below flip while their work runs.
+FLAGS: Dict[str, Any] = {"deny": False}
+
+
+class Revocable(Plain):
+    """Its permission check reads ``FLAGS``: the work revokes it."""
+
+    def check_permissions(self, request):
+        return not FLAGS["deny"]
+
+    @event_handler()
+    def revoke_bg(self, **kwargs):
+        self.start_async(self._revoke_bg, name="w")
+
+    def _revoke_bg(self):
+        self.request.session["late"] = "yes"
+        self.request.session["cart"].append("bg")
+        FLAGS["deny"] = True
+
+    @event_handler()
+    def del_bg(self, **kwargs):
+        self.start_async(self._del_bg, name="w")
+
+    def _del_bg(self):
+        del self.request.session["cart"]
+
+    @event_handler()
+    def fail_bg(self, **kwargs):
+        self.start_async(self._fail_bg, name="w")
+
+    def _fail_bg(self):
+        self.request.session["late"] = "yes"
+        raise RuntimeError("the work failed after writing")
+
+
+class RevocableHandled(Revocable):
+    def handle_async_result(self, name, result=None, error=None):
+        pass
+
+
+class ResultHandlerRaises(Revocable):
+    def handle_async_result(self, name, result=None, error=None):
+        raise RuntimeError("the result handler failed too")
+
+
+class SignsInElsewhere(Plain):
+    """Its work signs another user into the same session (as a login in
+    another tab would): the principal the result resolves is not the mount's."""
+
+    @event_handler()
+    def sign_in_bg(self, **kwargs):
+        self.start_async(self._sign_in_bg, name="w")
+
+    def _sign_in_bg(self):
+        from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY
+        from django.contrib.auth.models import User
+
+        user = User.objects.create_user("other-4162")
+        elsewhere = SessionStore(self.request.session.session_key)
+        elsewhere[SESSION_KEY] = str(user.pk)
+        elsewhere[BACKEND_SESSION_KEY] = "django.contrib.auth.backends.ModelBackend"
+        elsewhere[HASH_SESSION_KEY] = user.get_session_auth_hash()
+        elsewhere.save()
+        self.request.session["late"] = "yes"
+
+
 def seed(request):
     request.session["cart"] = ["a"]
     request.session["gone"] = 1
@@ -164,6 +230,10 @@ urlpatterns = [
     _path("plain-view/", Plain.as_view()),
     _path("with-component/", WithComponent.as_view()),
     _path("with-sticky/", WithSticky.as_view()),
+    _path("revocable/", Revocable.as_view()),
+    _path("revocable-handled/", RevocableHandled.as_view()),
+    _path("result-handler-raises/", ResultHandlerRaises.as_view()),
+    _path("signs-in-elsewhere/", SignsInElsewhere.as_view()),
 ]
 
 #: What a plain Django view reads after each handler, starting from ``seed``.
@@ -186,12 +256,18 @@ def _tab_and_saves(monkeypatch):
 
     monkeypatch.setattr(SessionStore, "save", save)
     SAVES.clear()
+    FLAGS.update(deny=False)
 
 
 def _url(view: type) -> str:
-    return {WithComponent: "/with-component/", WithSticky: "/with-sticky/"}.get(
-        view, "/plain-view/"
-    )
+    return {
+        WithComponent: "/with-component/",
+        WithSticky: "/with-sticky/",
+        Revocable: "/revocable/",
+        RevocableHandled: "/revocable-handled/",
+        ResultHandlerRaises: "/result-handler-raises/",
+        SignsInElsewhere: "/signs-in-elsewhere/",
+    }.get(view, "/plain-view/")
 
 
 def _page(view: type = Plain) -> Any:
@@ -609,3 +685,127 @@ async def test_background_work_does_not_revive_a_session_logged_out_meanwhile():
         exists = await sync_to_async(SessionStore().exists)(key)
     assert [f.get("code") for f in frames if f.get("type") == "error"] == ["permission_denied"]
     assert exists is False
+
+
+# -- background work: refusals, removals, failures ------------------------------
+
+
+def _stored_or_none(key: str) -> Optional[Dict[str, Any]]:
+    store = SessionStore(key)
+    if not store.exists(key):
+        return None
+    return {k: v for k, v in store.load().items() if not k.startswith(("_djust", "liveview_"))}
+
+
+async def _ws_background(view: type, name: str) -> Any:
+    """Page, socket, one event whose work runs after the reply; the frames up
+    to the work's own outcome (its result, or a refusal), and the session key."""
+    from djust.tests._ws_frames import receive_until
+
+    client = await sync_to_async(_page)(view)
+    key = _key(client)
+    comm = await _ws_mount(view, key)
+    try:
+        await harness.event(comm, name)
+        frames = await receive_until(
+            comm,
+            lambda got: any(f.get("source") == "async" or f.get("type") == "error" for f in got),
+            what="the background outcome",
+            allow_close=True,
+        )
+        await asyncio.sleep(0.2)
+    finally:
+        await comm.disconnect()
+    return frames, key
+
+
+@pytest.mark.parametrize("view", [Revocable, RevocableHandled], ids=["plain", "handled"])
+async def test_revoked_writes_nothing(view):
+    """Permission revoked while the work runs: the result's authorization fails,
+    the page is told, and nothing the work wrote is stored (an assignment and an
+    in-place change alike), with or without ``handle_async_result``. The
+    session row is still there, so it is the refusal that withholds the write."""
+    with _settings(0):
+        frames, key = await _ws_background(view, "revoke_bg")
+        stored = await sync_to_async(_stored_or_none)(key)
+    assert [f.get("code") for f in frames if f.get("type") == "error"] == ["permission_denied"]
+    assert stored == SEEDED
+
+
+async def test_a_changed_principal_refuses_and_writes_nothing():
+    """Another user signed into the session while the work ran: the result's
+    request no longer matches the mount's identity, so it is refused. The
+    session row still exists (only the principal changed), so it is the
+    refusal, not a missing row, that keeps the work's write out of it."""
+    with _settings(0):
+        frames, key = await _ws_background(SignsInElsewhere, "sign_in_bg")
+        stored = await sync_to_async(_stored_or_none)(key)
+    assert [f.get("code") for f in frames if f.get("type") == "error"] == ["permission_denied"]
+    assert stored is not None
+    assert {k: v for k, v in stored.items() if not k.startswith("_auth")} == SEEDED
+
+
+async def test_background_removal_is_stored():
+    with _settings(0):
+        _frames, key = await _ws_background(Revocable, "del_bg")
+        stored = await sync_to_async(_stored_or_none)(key)
+    assert stored == {"gone": 1}
+
+
+@pytest.mark.parametrize(
+    "view",
+    [Revocable, RevocableHandled, ResultHandlerRaises],
+    ids=["plain", "handled", "handler-raises"],
+)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_failed_work_keeps_what_it_wrote(transport, view):
+    """One rule for work that writes the session and then raises: the write is
+    kept, with or without ``handle_async_result`` and on every transport (the
+    fallback runs the work inside its request and always kept it). The work's
+    other effects stand as well; only the view's state is not saved."""
+    with _settings(0):
+        client, _ = await turns(transport, view, ["fail_bg"])
+        for _ in range(50):
+            seen = await sync_to_async(_read)(client)
+            if "late" in seen:
+                break
+            await asyncio.sleep(0.02)
+    assert seen == {"cart": ["a"], "gone": 1, "late": "yes"}
+
+
+# -- the fallback's merged save ------------------------------------------------------
+
+
+class ChangesState(Plain):
+    @event_handler()
+    def inc_while_another_request_writes(self, **kwargs):
+        # Another request stores a key while this one is being handled.
+        other = SessionStore(self.request.session.session_key)
+        other["other"] = "kept"
+        other.save()
+        self.count += 1
+
+
+urlpatterns.append(_path("changes-state/", ChangesState.as_view()))
+
+
+def test_fallback_keeps_a_write_made_during_the_request():
+    """The fallback's state save merges into the session as stored when it
+    writes, so a key another request stored after this request loaded the
+    session survives both that save and Django's whole-session save after it
+    (which writes the reconciled dict). This is what the extra session read
+    of a tracked fallback request buys."""
+    with _settings(0):
+        client = Client()
+        assert client.get("/seed/").status_code == 200
+        assert client.get("/changes-state/").status_code == 200
+        response = client.post(
+            "/changes-state/",
+            data="{}",
+            content_type="application/json",
+            HTTP_X_DJUST_EVENT="inc_while_another_request_writes",
+            HTTP_X_DJUST_TAB=harness.TAB,
+        )
+        assert response.status_code == 200, response.content[:300]
+        seen = _read(client)
+    assert seen == {"cart": ["a"], "gone": 1, "other": "kept"}

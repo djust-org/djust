@@ -8349,6 +8349,29 @@ class ViewRuntime(RuntimeTurnPort):
                         getattr(callback_request, "session", None),
                         getattr(view.request, "session", None),
                     )
+
+                    async def keep_session_writes() -> None:
+                        # A failure renders and saves nothing of the view, but
+                        # what the work wrote to the session before it is kept,
+                        # with or without ``handle_async_result``: the work's
+                        # other effects stand too, and the fallback, which runs
+                        # the work inside its request, keeps them (#4162).
+                        try:
+                            await sync_to_async(_save_session_writes)(view)
+                        except Exception as exc:  # noqa: BLE001 — storage errors carry values
+                            from ._exposure_diagnostics import log_failure_for
+
+                            log_failure_for(
+                                logger,
+                                (view,),
+                                exc,
+                                "Runtime: session writes of task '%s' not stored: %s",
+                                task_name,
+                                exc,
+                                level="warning",
+                                traceback=True,
+                            )
+
                     handler = getattr(view, "handle_async_result", None)
                     if callable(handler):
                         try:
@@ -8367,9 +8390,11 @@ class ViewRuntime(RuntimeTurnPort):
                                 level="warning",
                                 traceback=True,
                             )
+                            await keep_session_writes()
                             return
                     elif error is not None:
                         # Legacy parity: an unhandled failure renders nothing.
+                        await keep_session_writes()
                         return
                     if self.view_instance is not view:
                         return
