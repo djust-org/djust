@@ -115,7 +115,7 @@ class NoTemplate(LiveComponent):
 
 
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">{{ nav }}|{{ nav.active }}|{{ plain }}</div>'
     nav = Tabs(active="overview")
     plain = NoTemplate()
@@ -124,10 +124,14 @@ class Page(LiveView):
         pass
 
 
-def _runtime(view: LiveView) -> tuple[ViewRuntime, MockTransport]:
+async def _runtime(view: LiveView) -> tuple[ViewRuntime, MockTransport]:
+    """A runtime that MOUNTED ``view`` (an explicit view's events are
+    authorized against its mount binding to a live session)."""
+    from djust.tests._live_session import amount_on_runtime
+
     transport = MockTransport()
     runtime = ViewRuntime(transport)
-    runtime.view_instance = view
+    await amount_on_runtime(runtime, view)
     return runtime, transport
 
 
@@ -241,13 +245,13 @@ class TestBoundComponentRenderCache:
 # ------------------------------------------------------------------ #
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestBoundComponentRenderRoundTrip:
     @pytest.mark.asyncio
     async def test_click_inside_rendered_markup_reaches_handler_and_re_renders(self):
         view = Page()
         view.mount(None)
-        runtime, transport = _runtime(view)
+        runtime, transport = await _runtime(view)
         # Mount-shaped first render through the real path.
         html, _patches, _version = view.render_with_diff()
         assert 'data-component-id="nav"' in html
@@ -273,7 +277,7 @@ class TestBoundComponentRenderRoundTrip:
         other = Page()
         view = Page()
         view.mount(None)
-        runtime, transport = _runtime(view)
+        runtime, transport = await _runtime(view)
         view.render_with_diff()
         await runtime.dispatch_event(
             {
@@ -303,7 +307,7 @@ class TestBoundComponentRenderRoundTrip:
                 self.state["rows"].append("x")
 
         class RowsPage(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = '<div dj-root dj-id="0">{{ grid }}</div>'
             grid = Rows()
 
@@ -313,7 +317,7 @@ class TestBoundComponentRenderRoundTrip:
         view = RowsPage()
         view.mount(None)
         view.grid.state["rows"] = []  # own list per view
-        runtime, transport = _runtime(view)
+        runtime, transport = await _runtime(view)
         view.render_with_diff()
         for expected in ("1", "2"):
             transport.sent.clear()
@@ -340,7 +344,7 @@ class TestBoundComponentRenderRoundTrip:
             template = "<p>{{ active }}:{{ items|length }}</p>"
 
         class MenuPage(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             menu = Menu(items=["x", "y"])
 
         view = MenuPage()
@@ -366,7 +370,7 @@ class TestBoundComponentRenderRoundTrip:
             template_name = "bound_nav.html"
 
         class FilePage(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             nav = FileTabs()
 
         view = FilePage()
@@ -385,7 +389,7 @@ class TestBoundComponentRenderRoundTrip:
             template_name = "bound_child.html"
 
         class ExtPage(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             nav = ExtTabs()
 
         assert "<s>f!</s>" in str(ExtPage().nav)
@@ -398,7 +402,7 @@ class TestBoundComponentRenderRoundTrip:
                 active: str = "z"
 
         class InlinePage(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             nav = Bare(template="<q>{{ active }}</q>", active="k")
 
         view = InlinePage()
@@ -408,7 +412,7 @@ class TestBoundComponentRenderRoundTrip:
 
     def test_shipped_descriptor_without_template_is_unchanged(self):
         class ShippedPage(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = '<div dj-root dj-id="0">{{ tabs }}</div>'
             tabs = ShippedTabs(active="one")
 
