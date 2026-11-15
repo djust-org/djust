@@ -459,3 +459,24 @@ def test_a_method_on_an_object_column_is_ignored_on_both_engines(engine) -> None
     assert page.rows[0]["anchors"] == [], page.rows
     plain = engine(SRC, {"rows": [ROW], "cols": [ColumnObject("name", "Name"), cols[1]]})
     assert _table(engine(SRC, {"rows": [ROW], "cols": cols})) == _table(plain)
+
+
+# --- a row whose keys are not all text: Django's lookup, on both engines --------------------------
+
+
+@pytest.mark.parametrize("engine", [_django, _rust], ids=["python", "rust"])
+@pytest.mark.parametrize(("key", "expected"), [("1", "B"), (1, "A")], ids=["text-key", "int-key"])
+def test_an_int_and_a_text_key_that_collide_in_json_read_like_django(engine, key, expected) -> None:
+    """``{1: "A", "1": "B"}``: JSON has one key ``"1"``, Django two. The native handler is handed
+    the row itself and reads the key as it is, as ``table_cell`` does."""
+    rows = [{"id": 9, 1: "A", "1": "B", "u": "/u"}]
+    cols = [{"key": key, "label": "K", "link": "u"}]
+    body = _part(engine(SRC, {"rows": rows, "cols": cols}), "tbody")
+    assert body == f'<tr><td><a href="/u">{expected}</a></td></tr>', body
+
+
+def test_the_collision_case_agrees_between_the_engines() -> None:
+    for key in ("1", 1):
+        ctx = {"rows": [{"id": 9, 1: "A", "1": "B"}], "cols": [{"key": key, "label": "K"}]}
+        py, rs = _both(ctx)
+        assert _table(py) == _table(rs), (key, _table(py), _table(rs))

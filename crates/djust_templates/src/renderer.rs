@@ -1613,7 +1613,8 @@ fn typed_operands(
 ///
 /// * a `SafeString` arrives as a plain string, so a developer's `mark_safe` cell was escaped;
 /// * a `NaN` or infinite float arrives as `null` (JSON has no such number);
-/// * a namedtuple arrives as a list, and a live object (a plain object, a callable) as its `str()`.
+/// * a namedtuple arrives as a list, and a live object (a plain object, a callable) as its `str()`;
+/// * a dict key that is not text arrives as text, so `{1: "a", "1": "b"}` loses one of the two.
 ///
 /// For such an operand the standins-only channel hands the value over as well, and the handler
 /// takes back only what the text lost. A list of plain data (the common case) still crosses only
@@ -1632,7 +1633,17 @@ fn text_loses_a_member(value: &Value) -> bool {
             Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
                 pending.extend(items.iter());
             }
-            Value::Object(map) => pending.extend(map.values()),
+            // A key that is not text (`{1: "a"}`) is text in JSON, where `1` and `"1"` are the
+            // same key: the handler must read the keys as they are (#3895).
+            Value::Object(map) => {
+                if map
+                    .keys()
+                    .any(|key| !matches!(key, djust_core::ObjectKey::Str(_)))
+                {
+                    return true;
+                }
+                pending.extend(map.values());
+            }
             _ => {}
         }
     }
@@ -9218,6 +9229,12 @@ mod tests {
         assert!(!text_loses_a_member(&row(Value::Float(1.5))));
         assert!(!text_loses_a_member(&row(Value::None)));
         assert!(!text_loses_a_member(&Value::List(vec![])));
+        // A row with a key that is not text (JSON would make `1` the text `"1"`).
+        let mut int_keyed = IndexMap::new();
+        int_keyed.insert(djust_core::ObjectKey::Int(1), Value::String("a".into()));
+        assert!(text_loses_a_member(&Value::List(vec![Value::Object(
+            int_keyed
+        )])));
         // A scalar operand is not a container: the existing rules decide it.
         assert!(!text_loses_a_member(&Value::SafeString("x".into())));
         assert!(!text_loses_a_member(&Value::Float(f64::NAN)));

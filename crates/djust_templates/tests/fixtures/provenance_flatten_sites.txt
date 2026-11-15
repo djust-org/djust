@@ -487,6 +487,7 @@ fields: vec!["key".into()],
 items: vec![Value::String("name".into())],
 Value::SafeString("x".into())
 "<b>plain</b>".into()
+int_keyed.insert(djust_core::ObjectKey::Int(1), Value::String("a".into()));
 assert!(!text_loses_a_member(&Value::SafeString("x".into())));
 let s = Value::String("<b>".to_string());
 Value::List(vec![Value::String("<b>".to_string())]),
