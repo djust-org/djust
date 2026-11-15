@@ -27,6 +27,7 @@ from djust.decorators import permission_required, state
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, has_type, receive_until
+from ._live_session import live_session
 from .test_exposure_runtime import make_request
 
 CODE = "permission_denied"
@@ -47,7 +48,7 @@ class ExplicitView(LiveView):
 
 
 class GuardedHandlerView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>x</div>"
 
     @permission_required("auth.delete_user")
@@ -57,14 +58,14 @@ class GuardedHandlerView(LiveView):
 
 
 class GuardedMountView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>x</div>"
     login_required = True
     permission_required = "auth.delete_user"
 
 
 class ObjectView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>x</div>"
 
     def get_object(self):
@@ -132,9 +133,10 @@ async def test_ws_handler_permission_denied_frame_carries_code(monkeypatch):
     user = await sync_to_async(get_user_model().objects.create_user)(
         username="u3319h", password="x"
     )
-    request = await sync_to_async(make_request)()
+    # Logged into the session: an explicit view re-reads its user from there.
+    session = await sync_to_async(live_session)(user)
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=False, DJUST_TENANTS=None):
-        socket = await _open(user, request.session)
+        socket = await _open(user, session)
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".GuardedHandlerView", "url": "/g/"}
@@ -156,9 +158,10 @@ async def test_ws_mount_permission_denied_frame_carries_code():
     user = await sync_to_async(get_user_model().objects.create_user)(
         username="u3319m", password="x"
     )
-    request = await sync_to_async(make_request)()
+    # Logged into the session: an explicit view re-reads its user from there.
+    session = await sync_to_async(live_session)(user)
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=False, DJUST_TENANTS=None):
-        socket = await _open(user, request.session)
+        socket = await _open(user, session)
         try:
             await socket.send_json_to(
                 {"type": "mount", "view": __name__ + ".GuardedMountView", "url": "/m/"}
