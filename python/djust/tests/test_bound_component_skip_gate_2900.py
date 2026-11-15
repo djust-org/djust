@@ -152,7 +152,7 @@ class TestOneFingerprintRule:
                 items: list = []
 
         class MenuView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             menu = Menu()
 
         view = MenuView()
@@ -175,7 +175,7 @@ class TestOneFingerprintRule:
             template = "<b>{{ rows|length }}</b>"
 
         class RowsView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = '<div dj-root dj-id="0">{{ grid }}</div>'
             grid = Rows()
 
@@ -376,7 +376,7 @@ def test_shipped_descriptor_alias_changes_the_snapshot():
     """The eight shipped descriptors ride the same alias; one of them, run."""
 
     class TabsView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         tabs = Tabs(active="one")
 
     view = TabsView()
