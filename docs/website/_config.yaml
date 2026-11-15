@@ -115,6 +115,11 @@ navigation:
         file: state/state-store.md
         order: 6
         level: advanced
+      - title: How Often State Is Saved
+        slug: save-frequency
+        file: state/save-frequency.md
+        order: 7
+        level: advanced
 
   - title: Guides
     slug: guides
