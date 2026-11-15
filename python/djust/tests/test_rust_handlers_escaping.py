@@ -5,7 +5,8 @@ way the Rust template engine does (``render(args, context)`` for inline tags,
 ``render(args, content, context)`` for block tags), with the value under test
 supplied through the template context.
 
-- Text and attribute values are HTML-escaped; values marked safe pass through.
+- Text and attribute values are HTML-escaped, a value marked safe as well: a native handler is
+  handed plain operands (``djust.components._operands``), as it always was through the engine.
 - ``href`` values go through the URL helper: non-navigation schemes
   (``javascript:``) become ``#``; relative and ``https`` URLs are kept.
 - ``<img src>`` values go through the same helper with ``image=True``, which
@@ -20,15 +21,15 @@ import pytest
 from django.utils.safestring import mark_safe
 
 from djust.components import rust_handlers as rh
+from djust.tests.native_call import native_render
 
 MARKUP_ATTR = 'x" onmouseover="y'
 MARKUP_TEXT = "<img src=x onerror=alert(1)>"
 
 
 def _call(handler: Any, block: bool, args: list[str], context: dict[str, object]) -> str:
-    if block:
-        return str(handler.render(args, "", context))
-    return str(handler.render(args, context))
+    # As the engine calls it: the operands resolved, never a name to look up (#3882).
+    return native_render(handler, args, dict(context), "" if block else None)
 
 
 def _kept(name: str) -> Any:
@@ -304,10 +305,13 @@ def test_text_value_is_html_escaped(case: Any) -> None:
 
 
 @pytest.mark.parametrize("case", TEXT_CASES, ids=TEXT_IDS)
-def test_marked_safe_text_passes_through(case: Any) -> None:
+def test_marked_safe_text_is_escaped_like_any_other(case: Any) -> None:
+    """The engine hands a native handler a marked-safe value inside a list or dict as JSON text,
+    i.e. plain; a direct call used to keep the marker and print it raw. Both are plain now."""
     _id, handler, block, args, ctx = case
     html = _call(handler, block, args, ctx(mark_safe("<b>ok</b>")))
-    assert "<b>ok</b>" in html
+    assert "<b>ok</b>" not in html
+    assert "&lt;b&gt;ok&lt;/b&gt;" in html
 
 
 @pytest.mark.parametrize("case", TEXT_CASES, ids=TEXT_IDS)

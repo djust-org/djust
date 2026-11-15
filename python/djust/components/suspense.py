@@ -36,6 +36,7 @@ import logging
 from typing import Any, Iterable
 
 from ..async_result import AsyncResult
+from ..template_tags import TYPED_ARGS_KEY
 from .._html import safe_html
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,18 @@ class SuspenseTagHandler:
     * Any awaited ref is ``failed``                           → render error div.
     * All awaited refs are ``ok``                             → render body.
     * No ``await=`` arg                                       → passthrough body.
+
+    The awaited names are the template's own words (``await="metrics"``). An ``await=`` operand
+    the engine RESOLVED (``await=v``, a variable) is not a list of names: its value was chosen
+    at render time, possibly by a user, and reading it as names let it pick which context entry
+    gates the body and whose failure message is printed (#3882). It is treated as an unknown
+    reference (loading), with a warning. ``TYPED_ARGS`` is how the engine says which operands it
+    resolved (a quoted literal is not among them).
     """
+
+    #: Hand over the resolved operands by name (``TYPED_ARGS_KEY``), so a resolved ``await=``
+    #: can be told from a literal one.
+    TYPED_ARGS = True
 
     def render(self, args: list[str], content: str, context: dict[str, Any]) -> str:
         """Mark the boundary's HTML safe, at the ONE exit (#2379).
@@ -145,6 +157,26 @@ class SuspenseTagHandler:
         kwargs = _parse_suspense_args(args)
         await_raw = kwargs.get("await", "")
         fallback = kwargs.get("fallback", "")
+
+        # The operands the engine resolved (``TYPED_ARGS``): a quoted literal is not among them.
+        resolved = context.get(TYPED_ARGS_KEY)
+        resolved = resolved if isinstance(resolved, dict) else {}
+        if "fallback" in resolved:
+            # A template NAME chosen at render time would render any template the loader can
+            # find, with this page's context. Only the template's own literal names one.
+            logger.warning(
+                "dj_suspense: fallback= must name the template in the template "
+                '(fallback="components/skeleton.html"); a variable\'s value is not used'
+            )
+            fallback = ""
+        # Checked BEFORE the emptiness of ``await``: a resolved empty value is still a resolved
+        # value, and an empty one would otherwise render the body ungated.
+        if "await" in resolved:
+            logger.warning(
+                "dj_suspense: await= must name the async results in the template "
+                '(await="metrics"); a variable\'s value is not read as names'
+            )
+            return _render_fallback(fallback, context)
 
         if not await_raw:
             return content

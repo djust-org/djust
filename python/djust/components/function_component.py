@@ -138,10 +138,9 @@ def component(
 
 
 # ---------------------------------------------------------------------------
-# Arg parsing — local (sub-)copy of the rust_handlers._parse_args pattern.
-#
-# Keeping a local copy avoids a circular import between function_component and
-# rust_handlers. The semantics match exactly.
+# Arg parsing: the operands are read by ``rust_handlers._parse_args``, the one reader of a native
+# handler's operands (#3882, #3883). Imported where it is used: ``rust_handlers`` imports this module
+# when it registers the handlers.
 # ---------------------------------------------------------------------------
 
 
@@ -166,58 +165,21 @@ def _parse_call_args(
         # Caller forgot the component name.
         return None, {}
     else:
-        # Bareword — may be a context variable, but most callers write a
-        # literal. Try context lookup first, fall back to the word itself.
-        value = context.get(name_raw)
-        name = value if isinstance(value, str) else name_raw
+        # A bareword the engine already resolved: the component's name is the resolved value (an
+        # unresolved one arrives as the word itself). It is never looked up a second time (#3882).
+        name = name_raw
 
     kwargs = _parse_kwargs(args[1:], context)
     return name, kwargs
 
 
 def _parse_kwargs(args: list[str], context: dict[str, Any]) -> dict[str, Any]:
-    """Parse ``key=val`` pairs from the argv-like list emitted by the Rust lexer.
+    """``key=val`` operands of ``{% call %}`` / ``{% slot %}``, read as every native handler reads
+    them (``rust_handlers._parse_args``): a resolved value is the value it is, never re-read as
+    source text or looked up in the context a second time (#3882, #3883)."""
+    from .rust_handlers import _parse_args
 
-    Mirrors :func:`djust.components.rust_handlers._parse_args` so that
-    semantics (string literals, JSON, numeric, variable lookup) stay
-    consistent with existing handlers.
-    """
-
-    result: dict[str, Any] = {}
-    for arg in args:
-        if "=" not in arg:
-            continue
-        key, val = arg.split("=", 1)
-        key = key.strip()
-        val = val.strip()
-        if (val.startswith('"') and val.endswith('"')) or (
-            val.startswith("'") and val.endswith("'")
-        ):
-            result[key] = val[1:-1]
-        elif (val.startswith("[") and val.endswith("]")) or (
-            val.startswith("{") and val.endswith("}")
-        ):
-            try:
-                result[key] = json.loads(val)
-            except (ValueError, TypeError):
-                result[key] = context.get(val, val)
-        elif val in ("True", "true"):
-            result[key] = True
-        elif val in ("False", "false"):
-            result[key] = False
-        elif val == "":
-            result[key] = ""
-        elif val in ("None", "null"):
-            result[key] = None
-        else:
-            try:
-                result[key] = int(val)
-            except ValueError:
-                try:
-                    result[key] = float(val)
-                except ValueError:
-                    result[key] = context.get(val, val)
-    return result
+    return _parse_args(args, context)
 
 
 # ---------------------------------------------------------------------------

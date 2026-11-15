@@ -82,11 +82,12 @@ class TestSlotExtraction:
         assert remainder == "freeform body"
 
     def test_attrs_resolved_from_context(self):
+        # Called as the engine calls it: the operand resolved, not a name to look up (#3882).
+        from djust.tests.native_call import native_render
+
         slot = SlotTagHandler()
-        sentinel = slot.render(
-            ["col", "label=page_title"],
-            "cell",
-            {"page_title": "Dashboard"},
+        sentinel = native_render(
+            slot, ["col", "label=page_title"], {"page_title": "Dashboard"}, "cell"
         )
         slots, _ = _extract_slots(sentinel)
         assert slots["col"][0]["attrs"]["label"] == "Dashboard"

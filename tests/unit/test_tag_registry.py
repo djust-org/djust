@@ -130,32 +130,43 @@ class TestTagHandlerBase:
         result = handler._resolve_arg("-5", {})
         assert result == -5
 
-    def test_tag_handler_resolve_simple_variable(self):
-        """Simple context variables are resolved."""
+    def test_tag_handler_does_not_look_a_word_up_again(self):
+        """The engine resolved the operand already: a value that spells a
+        variable's name is that value, not the variable's (#3882)."""
         from djust.template_tags import TagHandler
 
         handler = TagHandler()
         context = {"name": "Django"}
         result = handler._resolve_arg("name", context)
-        assert result == "Django"
+        assert result == "name"
 
-    def test_tag_handler_resolve_nested_variable(self):
-        """Nested context variables are resolved."""
+    def test_tag_handler_does_not_walk_a_dotted_value(self):
+        """A resolved value shaped like a dotted path is not traversed (#3882)."""
         from djust.template_tags import TagHandler
 
         handler = TagHandler()
         context = {"user": {"name": "Alice"}}
         result = handler._resolve_arg("user.name", context)
-        assert result == "Alice"
+        assert result == "user.name"
 
     def test_tag_handler_resolve_named_param(self):
-        """Named parameters are resolved."""
+        """A named parameter splits; its resolved value is not looked up (#3882)."""
         from djust.template_tags import TagHandler
 
         handler = TagHandler()
         context = {"pk": 42}
         result = handler._resolve_arg("id=pk", context)
-        assert result == ("id", 42)
+        assert result == ("id", "pk")
+        assert handler._resolve_arg("id=42", context) == ("id", 42)
+
+    def test_tag_handler_keeps_a_non_canonical_integer_text(self):
+        """``"007"`` is a resolved string, not the integer 7 (#3883)."""
+        from djust.template_tags import TagHandler
+
+        handler = TagHandler()
+        assert handler._resolve_arg("007", {}) == "007"
+        assert handler._resolve_arg("-0", {}) == "-0"
+        assert handler._resolve_arg("id=007", {}) == ("id", "007")
 
     def test_tag_handler_resolve_missing_variable(self):
         """Missing variables return original string."""

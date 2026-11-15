@@ -1573,16 +1573,19 @@ fn typed_operands(
                 Value::String(text) if safe => Value::SafeString(text),
                 other => other,
             };
-            // `standins_only` (#3768): a handler that reads only the types its string argument
-            // loses wants a tuple and an object (a `UUID`, a `Path`). A list, a dict, a number or a
-            // string is left out, so a large operand is not materialised a second time as Python
-            // objects for nothing: the handler has it, as JSON or text, in its string argument.
-            // A namedtuple is a tuple whose type the string argument loses as well (#3849): it
-            // arrives as the JSON list `[1, 2]` where Django's tag prints `P(x=1, y=2)`.
+            // `standins_only` (#3768): a handler that reads only the operands its string argument
+            // does not carry EXACTLY. A list, a dict or a dict view is left out: the string
+            // argument carries it in full as JSON, and a large one is not materialised a second
+            // time as Python objects for nothing. Everything else is handed over. A tuple and an
+            // object (a `UUID`, a `Path`) lose their type in the text, a namedtuple too (#3849:
+            // the JSON list `[1, 2]` where Django's tag prints `P(x=1, y=2)`), and so does a
+            // STRING (#3883): the text `false`, `007` or `"x"` cannot say it was a string, and a
+            // handler that reads it as source text turns it into `False`, `7` or `x`, or looks it
+            // up as a variable name (#3882). A scalar costs one small object.
             if standins_only
-                && !matches!(
+                && matches!(
                     value,
-                    Value::Tuple(_) | Value::NamedTuple { .. } | Value::Encoded(_)
+                    Value::List(_) | Value::Object(_) | Value::DictView { .. }
                 )
             {
                 continue;

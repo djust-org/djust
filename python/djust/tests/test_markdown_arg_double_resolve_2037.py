@@ -69,15 +69,17 @@ class TestResolveArgNoDoubleResolution:
         out = self.p._resolve_arg("title=My Post", {})
         assert out == ("title", "My Post")
 
-    def test_genuine_dotted_variable_still_resolves(self):
-        assert self.p._resolve_arg("block.text", {"block": {"text": "hi"}}) == "hi"
+    def test_a_dotted_value_is_not_walked(self):
+        """The engine resolves ``block.text`` before the handler runs; what arrives is the
+        value, and a value shaped like a path is not walked again (#3882)."""
+        assert self.p._resolve_arg("block.text", {"block": {"text": "hi"}}) == "block.text"
 
     def test_string_literal_and_int_unchanged(self):
         assert self.p._resolve_arg("'hello'", {}) == "hello"
         assert self.p._resolve_arg("123", {}) == 123
 
-    def test_bare_word_in_context_still_resolves(self):
-        assert self.p._resolve_arg("name", {"name": "Ada"}) == "Ada"
+    def test_a_bare_word_is_not_looked_up(self):
+        assert self.p._resolve_arg("name", {"name": "Ada"}) == "name"
 
 
 # --- Handler level: what Rust actually hands MarkdownTagHandler ----------------

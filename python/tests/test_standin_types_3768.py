@@ -109,24 +109,33 @@ class TestParseArgsPutsTheTypeBack:
         assert got["n"] is ident and int(got["n"]) == 7
         assert got["p"] is path
 
-    @pytest.mark.parametrize(
-        "typed",
-        [
-            [1, 2],
-            {"a": 1},
-            3,
-            2.5,
-            "text",
-            True,
-            None,
-            Decimal("1.5"),
-        ],
-        ids=["list", "dict", "int", "float", "str", "bool", "None", "Decimal"],
-    )
-    def test_every_other_type_reaches_the_handler_exactly_as_before(self, typed):
+    @pytest.mark.parametrize("typed", [[1, 2], {"a": 1}], ids=["list", "dict"])
+    def test_a_container_is_read_from_its_json_text(self, typed):
+        """The engine hands an inline handler a list or dict only as JSON; a typed one (a block
+        handler is handed every operand) does not replace it."""
         before = rust_handlers._parse_args(["v=[1,2]"], {})
         after = self.parse({"v": typed}, "v=[1,2]")
         assert after == before and type(after["v"]) is type(before["v"])
+
+    @pytest.mark.parametrize(
+        "typed, expected",
+        [
+            (3, 3),
+            (2.5, 2.5),
+            ("text", "text"),
+            ("false", "false"),
+            ("[1,2]", "[1,2]"),
+            (True, True),
+            (None, None),
+            (Decimal("1.5"), 1.5),
+        ],
+        ids=["int", "float", "str", "str-false", "str-json", "bool", "None", "Decimal"],
+    )
+    def test_a_scalar_is_taken_as_the_value_it_is(self, typed, expected):
+        """#3883: a resolved scalar is the operand, whatever its text reads like; a ``Decimal`` is the
+        ``float`` its text always gave a handler."""
+        after = self.parse({"v": typed}, "v=[1,2]")
+        assert after == {"v": expected} and type(after["v"]) is type(expected)
 
     def test_a_typed_operand_with_no_string_argument_is_not_invented(self):
         assert self.parse({"ghost": (1, 2)}, "label=x") == {"label": "x"}
@@ -324,9 +333,10 @@ class TestADeeplyNestedTupleIsNotAnError:
 
 
 class TestTheNarrowAsk:
-    """A handler that declares ``TYPED_ARGS_STANDINS_ONLY`` is handed only the operands whose
-    string form loses their type (a tuple, an object), so a large list or dict is not materialised
-    a second time. One that declares only ``TYPED_ARGS`` still gets every operand (json_viewer)."""
+    """A handler that declares ``TYPED_ARGS_STANDINS_ONLY`` is handed every operand but a list or
+    dict (whose JSON text carries it), so a large one is not materialised a second time; a scalar's
+    text loses that it was a string (#3883). One that declares only ``TYPED_ARGS`` still gets every
+    operand (json_viewer)."""
 
     @pytest.fixture
     def seen(self):
@@ -393,7 +403,8 @@ class TestTheNarrowAsk:
 
         _rust.render_template("{% narrow_probe_3768 " + self.OPERANDS + " %}", dict(self.CTX))
         # A namedtuple is a tuple whose type the string argument loses too (#3849).
-        assert set(seen["narrow"]) == {"t", "u", "p", "nt"}, seen["narrow"]
+        assert set(seen["narrow"]) == {"t", "u", "p", "n", "s", "nt"}, seen["narrow"]
+        assert seen["narrow"]["s"] == "text" and seen["narrow"]["n"] == 5
         assert seen["narrow"]["t"] == (1, 2) and type(seen["narrow"]["t"]) is tuple
         assert seen["narrow"]["u"] == self.CTX["u"]
         assert seen["narrow"]["nt"] == (1, 2) and type(seen["narrow"]["nt"]).__name__ == "Pt"
@@ -418,7 +429,7 @@ class TestTheNarrowAsk:
             "{% ball_probe_3768 " + self.OPERANDS + " %}x{% endball_probe_3768 %}",
             dict(self.CTX),
         )
-        assert set(seen["block_narrow"]) == {"t", "u", "p", "nt"}, seen["block_narrow"]
+        assert set(seen["block_narrow"]) == {"t", "u", "p", "n", "s", "nt"}, seen["block_narrow"]
         assert set(seen["block_all"]) == {"t", "u", "p", "rows", "d", "n", "s", "nt"}
 
     def test_the_component_wrapper_asks_for_the_narrow_form(self):
