@@ -63,6 +63,7 @@ from djust.components.utils import (
 from djust.components.utils import (
     attr_text,
     component_id_attr,
+    row_pointer_style,
     style_attrs,
     table_column,
     table_rows,
@@ -569,8 +570,8 @@ _ROW_CLICK_SCRIPT = '<script src="/static/djust_components/data-table-row-click.
 
 
 #: What makes a clickable row reachable by keyboard and announced as a control (``table.html``).
-#: Its pointer cursor is the ``data-table-row-clickable`` class of components.css (#4139): a
-#: constant inline style is refused by a strict CSP.
+#: Its pointer cursor follows :func:`row_pointer_style` (#4139): inline by default, the
+#: ``data-table-row-clickable`` class's under a strict CSP.
 _ROW_NAV_A11Y = 'role="button" tabindex="0"'
 
 
@@ -1372,13 +1373,15 @@ class DataTableHandler:
                 row_attrs += (
                     f' dj-click="{row_click_event}"'
                     f' data-value="{escape(str(row.get(row_click_value_key, "")))}"'
-                    f" {_ROW_NAV_A11Y}"
+                    f" {_ROW_NAV_A11Y}{row_pointer_style()}"
                 )
             elif row_url and _has_row_href(row, row_url):
                 # The row's URL (#3887). ``data-href`` is read by ``data-table-row-click.js``.
                 # A row with no URL under the key is not clickable (#3895).
                 row_classes.append("data-table-row-clickable")
-                row_attrs += f' data-href="{_row_href(row, row_url)}" {_ROW_NAV_A11Y}'
+                row_attrs += (
+                    f' data-href="{_row_href(row, row_url)}" {_ROW_NAV_A11Y}{row_pointer_style()}'
+                )
 
             cells = ""
             # Drag handle cell

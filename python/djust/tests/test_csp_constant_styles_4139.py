@@ -100,6 +100,9 @@ def _no_style(markup: str) -> None:
 #: ``{% djust_skeleton shape="circle" %}``'s ``border-radius:50%`` and its ``<style>`` of keyframes
 #: (``TestDjustSkeleton.test_default_mode_is_unchanged`` in ``test_csp_free_form_styles_3979.py``).
 KEPT_DECLARATIONS = {("border-radius", "50%")}
+#: Constants #4139 keeps inline by default, because the class that replaces them in strict mode is
+#: defined only in a djust stylesheet a page may not load: a clickable data-table row's pointer.
+KEPT_DECLARATIONS |= {("cursor", "pointer")}
 KEPT_BLOCKS = {("style-element", "@keyframes djust-skeleton-shimmer")}
 
 #: The shorthand / custom names the sites' ``css=`` templates print for a checked property
@@ -255,19 +258,28 @@ class TestEverySite:
         assert '<input type="file" class="data-table-import-file" hidden' in html, html
         _no_style(html)
 
+    @staticmethod
+    def _assert_row_pointer(html: str, mode: str) -> None:
+        """Default: the inline pointer it always carried (the class's rule is only in
+        components.css, which a page may not load). Strict: the class alone."""
+        row = re.search(r'<tr class="data-table-row-clickable"[^>]*>', html)
+        assert row, html
+        assert 'role="button" tabindex="0"' in row.group(0), html
+        if mode == "strict":
+            assert "style" not in row.group(0), html
+            assert "cursor" not in html, html
+        else:
+            assert row.group(0).count('style="cursor:pointer"') == 1, html
+
     @pytest.mark.parametrize("nav", ["row_click_event", "row_url"])
     def test_data_table_clickable_row_native(self, nav, mode):
         html = _native_table(**{nav: "open" if nav == "row_click_event" else "u"})
-        assert re.search(
-            r'<tr class="data-table-row-clickable"[^>]*role="button" tabindex="0"', html
-        )
-        _no_style(html)
+        self._assert_row_pointer(html, mode)
 
     @pytest.mark.parametrize("nav", ['row_click_event="open"', 'row_url="u"'])
     def test_data_table_clickable_row_django(self, nav, mode):
         html = _tag("{% data_table rows=r columns=c " + nav + " %}", r=_ROWS, c=_COLS)
-        assert 'class="data-table-row-clickable"' in html, html
-        assert "cursor" not in html, html
+        self._assert_row_pointer(html, mode)
 
     def test_data_grid_hidden_trigger(self, mode):
         html = _tag("{% data_grid columns=c rows=r %}", c=[{"key": "a"}], r=[{"id": 1}])

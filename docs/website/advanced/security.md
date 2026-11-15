@@ -528,10 +528,9 @@ inactive tab pane, the connection-status bar, the scroll-to-top button and the
 theme modal and dropdown are the `hidden` attribute, and the scripts that show
 them toggle that attribute. The stylesheets that give one of these elements a
 `display` (`components.css`, the theming `components.css` and `scaffold.css`)
-carry a `[hidden]` rule with `!important`, so the attribute wins. A clickable
-data-table row's pointer cursor is the `data-table-row-clickable` class; the
+carry a `[hidden]` rule with `!important`, so the attribute wins. The
 Bootstrap modal is shown by `d-block` and the Bootstrap navbar's menu by
-`d-flex`. The ttyd terminal registers its hook from a static module
+`d-flex`, Bootstrap's own utilities. The ttyd terminal registers its hook from a static module
 (`djust_components/ttyd/register.js`, loaded with
 `<script type="module" src=...>`), which `script-src 'self'` runs without a
 nonce. `{% djust_pwa_head %}` and the theme context processor's
@@ -539,14 +538,15 @@ nonce. `{% djust_pwa_head %}` and the theme context processor's
 (django-csp's `request.csp_nonce`), as the other PWA and theme tags do, and the
 switcher's buttons use `data-theme-mode` instead of an `onclick`.
 
-Three Bootstrap-only constants have no Bootstrap utility: the dismissible
-badge's close-button size, the navbar's external-link colour and the pointer
-cursor of a sortable table header (`Table` and `TableComponent`). A Bootstrap
-page may load no djust stylesheet, so they stay inline by default; with
-`csp_strict_styles` they are the classes `dj-badge-close`,
-`dj-navbar-link--external` and `dj-sortable-th`, defined in both
-`components.css` and `components-classes.css`, so load one of those on such a
-page.
+Four constants have no framework utility and would otherwise depend on a djust
+stylesheet the page might not load: a clickable data-table row's pointer
+cursor, the dismissible Bootstrap badge's close-button size, the Bootstrap
+navbar's external-link colour and the pointer cursor of a Bootstrap sortable
+table header (`Table` and `TableComponent`). They stay inline by default; with
+`csp_strict_styles` they are the classes `data-table-row-clickable`
+(`components.css`), `dj-badge-close`, `dj-navbar-link--external` and
+`dj-sortable-th` (`components.css` and `components-classes.css`), so load that
+stylesheet on such a page.
 
 `djust new` projects link their own `<app>/static/<app>/app.css` from
 `base.html` instead of an inline `<style>` and inline `style` attributes.

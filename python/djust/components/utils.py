@@ -31,6 +31,7 @@ __all__ = [
     "safe_css_ratio",
     "progress_fill",
     "safe_url",
+    "row_pointer_style",
     "strict_styles",
     "style_attrs",
     "style_value",
@@ -613,6 +614,18 @@ def style_attrs(props: Any = None, /, *, css: str | None = None, **kwargs: Any) 
     else:
         declarations = ";".join(f"{prop}:{text}" for prop, text in kept)
     return f' style="{escape(declarations)}"'
+
+
+#: A clickable data-table row's pointer cursor (#4139). By default the inline style it has always
+#: carried: the ``data-table-row-clickable`` rule lives only in ``components.css``, which a page
+#: may not load. Under ``LIVEVIEW_CONFIG["csp_strict_styles"]`` (a strict CSP refuses the inline
+#: style) nothing, and the class carries it.
+_ROW_POINTER_STYLE = ' style="cursor:pointer"'
+
+
+def row_pointer_style() -> str:
+    """The clickable row's inline pointer cursor by default, ``""`` in strict mode (#4139)."""
+    return "" if strict_styles() else _ROW_POINTER_STYLE
 
 
 def progress_fill(percent: Any, *, css: str = "width: {}%") -> tuple[str, str]:

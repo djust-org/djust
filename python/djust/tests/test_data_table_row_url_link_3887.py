@@ -4,7 +4,7 @@
 native ``data_table`` handler (every render after the socket opens) did not:
 
 * ``row_url="key"``: each ``<tr>`` carries ``data-href`` (the row's URL), ``role="button"``,
-  ``tabindex="0"`` and the ``data-table-row-clickable`` class (its pointer cursor, #4139), and the
+  ``tabindex="0"``, ``style="cursor:pointer"`` and the ``data-table-row-clickable`` class, and the
   table loads ``data-table-row-click.js``, which does the navigating (it reads ``data-href``);
 * ``{"key": "name", "link": "url_key", "link_class": "c"}``: the cell is an ``<a href>``.
 
@@ -151,9 +151,7 @@ def test_row_url_makes_a_navigable_row_with_the_script(engine) -> None:
     row = page.rows[0]["attrs"]
     assert row["data-href"] == "/claims/1", html
     assert row["class"] == "data-table-row-clickable", html
-    # The pointer cursor is the class's (components.css), not an inline style (#4139).
-    assert (row["role"], row["tabindex"]) == ("button", "0"), html
-    assert "style" not in row, html
+    assert (row["role"], row["tabindex"], row["style"]) == ("button", "0", "cursor:pointer"), html
     assert page.scripts == [(SCRIPT_SRC, True)], html
 
 

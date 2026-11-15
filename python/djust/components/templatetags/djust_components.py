@@ -45,6 +45,7 @@ from djust.components.utils import (
     srcset_attr,
 )
 from djust.components.utils import (
+    row_pointer_style,
     safe_css_color,
     safe_css_length,
     style_attrs,
@@ -1176,6 +1177,9 @@ def data_table(
     """
     columns = _checked_column_widths(columns)
     return {
+        # The clickable row's pointer: inline by default, the class's under a strict CSP (#4139).
+        # A context without it (an app rendering table.html itself) keeps the inline pointer.
+        "row_pointer_class_only": not row_pointer_style(),
         # A model instance or another object is read as the dict the native handler reads (#3895).
         "rows": table_rows(rows, _table_row_keys(columns, row_key, row_url, row_click_value_key)),
         "columns": columns,

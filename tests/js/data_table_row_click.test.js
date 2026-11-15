@@ -57,7 +57,7 @@ function clickableRowMarkup({
         <tbody>
           <tr class="data-table-row-clickable"
               data-href="${href}"
-              role="button" tabindex="0">
+              role="button" tabindex="0" style="cursor:pointer">
             ${
               withCheckbox
                 ? `<td><input type="checkbox" class="data-table-checkbox" id="cb1"></td>`
