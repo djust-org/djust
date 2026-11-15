@@ -451,6 +451,8 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     for k, v in items:
         if k in _fw_attrs or k in _static_skip or k in CHANGE_DETECTION_IGNORED:
             continue
+        if type(k) is not str:
+            continue  # not an attribute name: nothing renders it (#4143)
         # Identity + STRUCTURAL fingerprint for mutable containers (#2664):
         # ``deep_fingerprint`` walks dict/list/tuple/set down to the leaves
         # and shares no reference with the state, so ``columns["done"]

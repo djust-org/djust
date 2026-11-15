@@ -96,7 +96,11 @@ class ComponentMixin:
         from ..components.base import Component, LiveComponent
 
         for key, value in self.__dict__.items():
-            if isinstance(value, (Component, LiveComponent)) and not key.startswith("_"):
+            if (
+                isinstance(value, (Component, LiveComponent))
+                and type(key) is str  # #4143
+                and not key.startswith("_")
+            ):
                 # _auto_id is a dynamic framework slot read via hasattr in
                 # components/base.py (_generate_id); not declared on the class.
                 value._auto_id = key  # type: ignore[union-attr]

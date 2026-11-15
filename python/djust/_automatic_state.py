@@ -354,7 +354,8 @@ def _candidates(view: Any, names: Optional[_Names] = None) -> Dict[str, Any]:
         found[name] = value
 
     for name, value in list(vars(view).items()):
-        if not name.startswith("_"):
+        # A key that is not a ``str`` is not an attribute name (#4143).
+        if type(name) is str and not name.startswith("_"):
             take(name, value)
     # A state() field stores its value under ``_state_<name>``.
     for owner in type(view).__mro__:
@@ -654,12 +655,13 @@ def _held_components(view: Any) -> Dict[str, Any]:
     from .components.base import BoundComponent, Component, LiveComponent
 
     found: Dict[str, Any] = {}
-    held = [(n, v) for n, v in list(vars(view).items()) if not n.startswith("_")]
+    attrs = [(n, v) for n, v in list(vars(view).items()) if type(n) is str]  # #4143
+    held = [(n, v) for n, v in attrs if not n.startswith("_")]
     held += list((vars(view).get("_component_bindings") or {}).items())
     # A class-level component descriptor caches its per-view binding here.
     held += [
         (n[len("_component_") :], v)
-        for n, v in list(vars(view).items())
+        for n, v in attrs
         if n.startswith("_component_") and n != "_component_bindings"
     ]
     for name, value in held:
@@ -687,7 +689,8 @@ def _component_values(component: Any) -> Tuple[Any, Dict[str, Any]]:
     values = {
         key: value
         for key, value in list(vars(holder).items())
-        if not key.startswith("_")
+        if type(key) is str  # #4143
+        and not key.startswith("_")
         and key not in ("template", "template_name", "component_id", "state")
         and not callable(value)
     }
@@ -811,7 +814,13 @@ def project(view: Any, names: Optional[_Names] = None) -> Projection:
         # form controls). Runs on the encoded copy, never on the live values.
         public = hook(public)
     result = Projection(public, private, remount, components, names)
-    size = len(result.text.encode("utf-8"))
+    try:
+        size = len(result.text.encode("utf-8"))
+    except UnicodeEncodeError:
+        # Only here, never on the common path: a ``str`` holding a lone
+        # surrogate encodes as JSON but not as UTF-8 (#4143).
+        result = _without_unencodable(view, result)
+        size = len(result.text.encode("utf-8"))
     if size > warn or size > maximum:
         both = [*public.items(), *private.items()]
         sizes = sorted(((len(_encode({name: item})), name) for name, item in both), reverse=True)
@@ -830,6 +839,45 @@ def project(view: Any, names: Optional[_Names] = None) -> Projection:
                 ", ".join("%s %d KB" % (name, bytes_ // 1024) for bytes_, name in sizes[:3]),
             )
     return result
+
+
+def _encodable(text: str) -> bool:
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _without_unencodable(view: Any, result: Projection) -> Projection:
+    """``result`` without the values whose encoding is not valid UTF-8 (a
+    ``str`` holding a lone surrogate, as a value or a dictionary key, at any
+    depth), each left out like any other value the save cannot hold (#4143): a
+    public one is reported once by name (never its value), a private one and a
+    component's are skipped quietly as in 1.3, and the next request runs
+    ``mount()`` again."""
+    public: Dict[str, Any] = {}
+    for name, value in result.public.items():
+        if _encodable(result.public_texts[name]):
+            public[name] = value
+        else:
+            _report(
+                view,
+                name,
+                "type",
+                "a str holding a lone surrogate (not valid UTF-8) cannot be saved",
+                _FIX,
+            )
+    private = {
+        name: value
+        for name, value in result.private.items()
+        if _encodable(result.private_texts[name])
+    }
+    components = {
+        name: {key: item for key, item in values.items() if _encodable(_encode({key: item}))}
+        for name, values in result.components.items()
+    }
+    return Projection(public, private, True, components, result.names)
 
 
 # ---------------------------------------------------------------------------

@@ -340,18 +340,31 @@ class TestACostIsCountedNotTimed:
 
 
 class TestTheLiveViewStatePathIsRecordedNotChanged:
-    """A tuple held as LiveView STATE is a list before it reaches the engine, namedtuple or not.
+    """A plain tuple held as LiveView STATE is a list before it reaches the engine; a namedtuple
+    keeps its type (#4141).
 
     ``normalize_django_value`` is the state contract (JSON-shaped state; ``json.dumps`` and Django's
-    own ``DjangoJSONEncoder`` have no tuple either, ``test_tuple_roundtrip_2276``), and it is not
-    the typed channel this issue is about. Recorded so the two entry points are not confused:
-    ``RustLiveView.update_state`` (a context handed over as it is, pinned above) keeps the
-    namedtuple, the Python ``LiveView`` state path does not, for any tuple. Decision: not changed.
+    own ``DjangoJSONEncoder`` have no tuple either, ``test_tuple_roundtrip_2276``). This class
+    recorded that it also turned a namedtuple into a list, and that the decision was "not changed".
+    #4141 reversed it for the namedtuple only: as a list, ``{{ cols.0.key }}`` was empty and a
+    ``{% data_table %}`` with namedtuple columns drew lists. It is rebuilt with the same
+    ``rebuild_namedtuple`` the template serializer uses; ``json.dumps`` of it is still the list,
+    and the session boundary (``state_roundtrip=True``) still writes the list.
     """
 
-    @pytest.mark.parametrize("value", [(1, 2), P(1, 2), ()], ids=["tuple", "namedtuple", "empty"])
+    @pytest.mark.parametrize("value", [(1, 2), ()], ids=["tuple", "empty"])
     def test_state_normalisation_is_a_list(self, value):
         from djust.serialization import normalize_django_value
 
         assert normalize_django_value(value) == list(value)
         assert type(normalize_django_value(value)) is list
+
+    def test_a_namedtuple_keeps_its_type_on_the_render_path_and_is_a_list_at_the_session(self):
+        import json
+
+        from djust.serialization import normalize_django_value
+
+        assert type(normalize_django_value(P(1, 2))) is P
+        assert json.dumps(normalize_django_value(P(1, 2))) == "[1, 2]"
+        rows = normalize_django_value(P(1, 2), state_roundtrip=True)
+        assert rows == [1, 2] and type(rows) is list

@@ -90,6 +90,27 @@ def test_the_benchmark_job_actually_runs_the_benchmarks():
     assert "tests/benchmarks" in run, "the job must actually run the benchmarks"
 
 
+def test_the_turn_cost_smoke_runs_without_benchmark_only():
+    """#4143: ``--benchmark-only`` skips every test without the benchmark
+    fixture, which is how the #3997 turn-cost table's frame-equivalence check
+    (every exposure setting answers with legacy's frames) never ran in CI. A
+    step of this job runs its 3-round smoke form, serially, without that flag.
+    """
+    target = "tests/benchmarks/test_explicit_turn_cost_3997.py"
+    steps = _test_yml()["jobs"]["benchmarks"]["steps"]
+    commands = [
+        line
+        for step in steps
+        for line in code_only(step.get("run", "")).splitlines()
+        if "pytest" in line and target in line
+    ]
+    assert commands, "the benchmarks job must run %s" % target
+    for line in commands:
+        assert "--benchmark-only" not in line, line  # it would skip the table
+        assert "-n " not in line, line
+        assert "DJUST_TURN_BENCH_ROUNDS" not in line, line  # the smoke form: 3 rounds
+
+
 # --- a new timing gate must not block a merge until it has proven itself --
 
 

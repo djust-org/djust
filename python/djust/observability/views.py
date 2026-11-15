@@ -78,7 +78,7 @@ def _lenient_assigns(view: Any) -> Dict[str, Any]:
 
     assigns: Dict[str, Any] = {}
     for key, value in view.__dict__.items():
-        if key.startswith("_") or callable(value):
+        if type(key) is not str or key.startswith("_") or callable(value):  # #4143
             continue
         if _safe_check(value):
             assigns[key] = value
@@ -414,7 +414,11 @@ def reset_view_state(request: HttpRequest) -> HttpResponse:
     # will then repopulate them. Private (_foo) attrs stay so that framework
     # bookkeeping (websocket_session_id, stashed request, etc.) isn't lost.
     for key in list(view.__dict__.keys()):
-        if not key.startswith("_") and not callable(getattr(view, key, None)):
+        if (
+            type(key) is str  # #4143
+            and not key.startswith("_")
+            and not callable(getattr(view, key, None))
+        ):
             delattr(view, key)
 
     try:

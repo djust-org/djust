@@ -118,3 +118,30 @@ def test_no_source_is_empty_with_a_warning_on_both(caplog) -> None:
     with caplog.at_level(logging.WARNING, logger="djust.template_tags.markdown"):
         assert _django("{% djust_markdown %}", {}) == _native("{% djust_markdown %}", {}) == ""
     assert sum("without a source" in r.getMessage() for r in caplog.records) == 2
+
+
+#: Sources that open with an indented code block (#4142). Only blank lines at the start and end
+#: may be dropped: stripping all leading whitespace turns the first line into a paragraph.
+INDENTED_OPENING = {
+    "four-spaces": ("    code line\n    more\n", "<pre><code>code line\nmore\n</code></pre>\n"),
+    "tab": ("\tcode line\n", "<pre><code>code line\n</code></pre>\n"),
+    "blank-lines-around": ("\n\n    code\n\n", "<pre><code>code\n</code></pre>\n"),
+    "whitespace-only-lines-around": (" \t\n    code\n  \n", "<pre><code>code\n</code></pre>\n"),
+    "code-then-paragraph": (
+        "    x = 1\n\npara\n",
+        "<pre><code>x = 1\n</code></pre>\n<p>para</p>\n",
+    ),
+    "no-trailing-newline": ("    code", "<pre><code>code</code></pre>\n"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(INDENTED_OPENING))
+def test_a_source_opening_with_an_indented_code_block_is_a_code_block_on_both(name: str) -> None:
+    """#4142: the first line's indentation survives on both engines, byte for byte.
+
+    Fixed by train/2.0-q (8ed012dd4), which dropped the source strip on both engines; this pins it.
+    """
+    body, expected = INDENTED_OPENING[name]
+    ctx = {"body": body}
+    assert _django("{% djust_markdown body %}", ctx) == expected
+    assert _native("{% djust_markdown body %}", ctx) == expected
