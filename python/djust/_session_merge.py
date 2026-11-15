@@ -434,6 +434,53 @@ def is_tracked(session: Any) -> bool:
     return type(getattr(session, "_session_cache", None)) is TrackedSessionData
 
 
+def save_session_writes(session: Any) -> bool:
+    """Store what code other than djust wrote to ``session`` since its last
+    save (:meth:`TrackedSessionData.has_foreign_changes`), merged as every
+    save is; True when it saved. A turn that changed no state of its own
+    still stores its handler's ``request.session`` writes before its reply
+    (#4162). An untracked session, or one with no such write, costs nothing:
+    no read, no write."""
+    data = getattr(session, "_session_cache", None)
+    if type(data) is not TrackedSessionData or not data.has_foreign_changes():
+        return False
+    save_merged(session, session.session_key)
+    return True
+
+
+def _own(key: Any) -> bool:
+    return isinstance(key, str) and key.startswith(_OWN_PREFIXES)
+
+
+def carry_session_writes(source: Any, target: Any) -> None:
+    """Record on ``target`` what code other than djust wrote to ``source`` (the
+    same session, an earlier object of it) since ``source`` was last saved.
+
+    Background work (``start_async``) runs on the request its turn authorized
+    before it; its result is committed under a request authorized after it,
+    with a session object of its own. What the work wrote is moved to that
+    object, so the commit's merged save stores it, and only once that second
+    authorization passed (a session logged out meanwhile is not written)."""
+    src = getattr(source, "_session_cache", None)
+    dst = getattr(target, "_session_cache", None)
+    if (
+        source is target
+        or type(src) is not TrackedSessionData
+        or type(dst) is not TrackedSessionData
+        or getattr(source, "session_key", None) != getattr(target, "session_key", None)
+        or not src.has_foreign_changes()
+    ):
+        return
+    snap = src.snapshot()
+    for key, value in snap.changed.items():
+        if not _own(key):
+            target[key] = value
+    for key in snap.removed:
+        if not _own(key) and key in dst:
+            del target[key]
+    src.settle(snap)
+
+
 class _Unreadable(Exception):
     """The stored session could not be read; the save goes ahead whole."""
 
@@ -635,4 +682,12 @@ async def asave_merged(session: Any) -> None:
     await sync_to_async(save_merged)(session)
 
 
-__all__ = ["TrackedSessionData", "asave_merged", "is_tracked", "save_merged", "track_session"]
+__all__ = [
+    "TrackedSessionData",
+    "asave_merged",
+    "carry_session_writes",
+    "is_tracked",
+    "save_merged",
+    "save_session_writes",
+    "track_session",
+]

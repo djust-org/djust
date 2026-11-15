@@ -1770,6 +1770,12 @@ class RequestMixin:
             self.__dict__["_djust_tab"] = _automatic_state.tab_id(
                 request.headers.get(_automatic_state.TAB_HEADER)
             )
+            # Record what this request's code writes to the session, so a
+            # handler's in-place change to a value it read (which Django's
+            # ``SessionMiddleware`` does not see) is stored too (#4162).
+            from .._session_merge import track_session
+
+            track_session(getattr(request, "session", None))
             saved_view = load_saved_view(self, request)
 
             def _assign(values: Dict[str, Any]) -> None:

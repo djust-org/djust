@@ -44,7 +44,10 @@ COMMIT_CALL_SITES = frozenset(
         ("runtime.py", "ViewRuntime._server_push_body"),
         ("runtime.py", "ViewRuntime._tick_body"),
         ("websocket.py", "LiveViewConsumer._dispatch_single_event_body"),
-        ("websocket.py", "LiveViewConsumer._render_background"),
+        # The commit of a consumer-owned background turn (tick, NOTIFY, a
+        # push), shared by ``_render_background`` and the worker pool's
+        # one-hop push turn (#4152).
+        ("websocket.py", "LiveViewConsumer._commit_explicit_background_turn"),
     }
 )
 

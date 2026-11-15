@@ -551,7 +551,8 @@ COST_CELLS: Dict[Tuple[str, str], Entry] = {
     ("ws_event", "updates"): Cell("1", _T + "session_cost_per_event"),
     ("http_event", "loads"): Cell("1", _T + "session_cost_per_event"),
     ("http_event", "saves"): Cell("2", _T + "session_cost_per_event"),
-    ("http_event", "selects"): Cell("1", _T + "session_cost_per_event"),
+    # #4162: the fallback tracks and merges its session, one more read per saving request.
+    ("http_event", "selects"): Cell("2", _T + "session_cost_per_event"),
     ("http_event", "updates"): Cell("2", _T + "session_cost_per_event"),
 }
 

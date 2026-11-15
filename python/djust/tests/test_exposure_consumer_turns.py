@@ -97,6 +97,54 @@ def staged(monkeypatch):
     RAN.clear()
 
 
+class _PushPaths:
+    """Which server-push turn path a test runs (#4152), and a count of the
+    worker pool's one-hop turns, so a "pool" case cannot silently run stock."""
+
+    def __init__(self, size):
+        from django.conf import settings
+
+        self.size = size
+        # ``override_settings`` reloads djust's config, so the pool is set
+        # there, not by patching the loaded config.
+        self.settings = {
+            "LIVEVIEW_CONFIG": {
+                **(getattr(settings, "LIVEVIEW_CONFIG", None) or {}),
+                "worker_threads": size,
+            }
+        }
+        self.offloaded = 0
+        #: For each server push the socket received: was the session on the pool?
+        self.pushes_on_pool: list = []
+
+
+@pytest.fixture(params=[None, 2], ids=["stock", "pool"])
+def pool(request, monkeypatch):
+    """Both server-push turn paths: stock, and the worker pool's one-hop turn,
+    which authorizes an explicit root inside its hop (#4152)."""
+    from djust import worker_pool
+
+    monkeypatch.setattr(worker_pool, "_pool", [])
+    paths = _PushPaths(request.param)
+    real = LiveViewConsumer._run_server_push_turn_offloaded
+
+    async def offloaded(self, *args, **kwargs):
+        paths.offloaded += 1
+        return await real(self, *args, **kwargs)
+
+    monkeypatch.setattr(LiveViewConsumer, "_run_server_push_turn_offloaded", offloaded)
+    real_push = LiveViewConsumer.server_push
+
+    async def server_push(self, *args, **kwargs):
+        from djust.worker_pool import offload_enabled
+
+        paths.pushes_on_pool.append(offload_enabled())
+        return await real_push(self, *args, **kwargs)
+
+    monkeypatch.setattr(LiveViewConsumer, "server_push", server_push)
+    return paths
+
+
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 
 
@@ -193,10 +241,10 @@ async def test_db_notify_on_a_revoked_session_is_denied():
             await socket.disconnect()
 
 
-async def test_server_push_mutation_is_persisted():
+async def test_server_push_mutation_is_persisted(pool):
     from djust.push import apush_to_view
 
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
         request = await sync_to_async(make_request)()
         socket, _ = await _connect(request, TurnView)
         try:
@@ -207,6 +255,161 @@ async def test_server_push_mutation_is_persisted():
         finally:
             await socket.disconnect()
         assert ">4<" in await _restored_count(request, TurnView), "push state not persisted"
+    assert pool.offloaded == (1 if pool.size else 0), pool.offloaded
+
+
+async def test_server_push_on_a_revoked_session_is_denied(pool):
+    """A push to an explicit root whose session was revoked runs no hook, sends
+    no render and gets the foreground denial, on both push-turn paths (#4152:
+    the pool's turn authorizes inside its hop, before the hook)."""
+    from djust.push import apush_to_view
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
+        request = await sync_to_async(make_request)()
+        socket, _ = await _connect(request, TurnView)
+        try:
+            await sync_to_async(SessionStore(request.session.session_key).delete)()
+            await apush_to_view(__name__ + ".TurnView", handler="handle_push", payload={"count": 4})
+            frames, closed = await _collect(
+                socket, lambda frames: frames[-1:] and frames[-1]["type"] == "websocket.close"
+            )
+            assert RAN == [], "the push hook ran without current authorization"
+            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            assert [f.get("code") for f in frames if f.get("type") == "error"] == [
+                "permission_denied"
+            ]
+            assert closed == {"type": "websocket.close", "code": 4403}
+        finally:
+            await socket.disconnect()
+    assert pool.offloaded == (1 if pool.size else 0), pool.offloaded
+
+
+class AsyncCheckTurnView(TurnView):
+    count = state(0, persist="server")
+    allowed = True
+
+    async def check_permissions(self, request):
+        return AsyncCheckTurnView.allowed
+
+
+@pytest.mark.parametrize("allowed", [True, False], ids=["allowed", "refused"])
+async def test_push_to_a_view_with_async_check_permissions(pool, allowed):
+    """An explicit root whose ``check_permissions`` is ``async def`` is
+    authorized on the loop before its hooks, on both push-turn paths: the
+    pool's one-hop turn leaves it to the stock path (#4152)."""
+    from djust.push import apush_to_view
+
+    path = __name__ + ".AsyncCheckTurnView"
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
+        request = await sync_to_async(make_request)()
+        socket, _ = await _connect(request, AsyncCheckTurnView)
+        try:
+            AsyncCheckTurnView.allowed = allowed
+            await apush_to_view(path, handler="handle_push", payload={"count": 6})
+            if allowed:
+                frames, closed = await _collect(socket, _UPDATE)
+                assert RAN == ["push"] and closed is None, (RAN, frames)
+            else:
+                frames, closed = await _collect(
+                    socket, lambda frames: frames[-1:] and frames[-1]["type"] == "websocket.close"
+                )
+                assert RAN == [], "the push hook ran on a refused async check_permissions"
+                assert closed == {"type": "websocket.close", "code": 4403}
+                assert not [f for f in frames if f.get("type") in {"patch", "html_update"}]
+        finally:
+            AsyncCheckTurnView.allowed = True
+            await socket.disconnect()
+    # The pool was on for the pool case, and still no push took the one-hop turn.
+    assert pool.pushes_on_pool == [bool(pool.size)], pool.pushes_on_pool
+    assert pool.offloaded == 0, pool.offloaded
+
+
+class LabelTurnView(TurnView):
+    template = "<div dj-root><span>{{ count }}</span><i>{{ label }}</i></div>"
+    count = state(0, persist="server")
+    label = state("a", persist="server")
+
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(label=self.label, **kwargs)
+
+    def handle_label(self, label="", **kwargs):
+        RAN.append("label")
+        self.label = label
+
+
+async def test_server_push_whose_save_fails_withholds_the_frame(pool, monkeypatch):
+    """A push turn whose commit fails sends ``state_error`` and no render, and
+    the next frame still brings the page up to the view. The pool's turn
+    renders in its hop before the commit (#4152), so it must withhold that
+    render AND drop its diff baseline: a later patch diffed against the
+    withheld render would leave that turn's change off the page."""
+    from djust.push import apush_to_view
+    from djust.runtime import ViewRuntime
+
+    real_save = ViewRuntime._save_explicit_root
+    fail = {"on": True}
+
+    def save(self, view, request):
+        if fail["on"]:
+            raise RuntimeError("storage down")
+        return real_save(self, view, request)
+
+    monkeypatch.setattr(ViewRuntime, "_save_explicit_root", save)
+    path = __name__ + ".LabelTurnView"
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
+        request = await sync_to_async(make_request)()
+        socket, _ = await _connect(request, LabelTurnView)
+        try:
+            await apush_to_view(path, handler="handle_push", payload={"count": 4})
+            frames, closed = await _collect(socket, has_type("error"))
+            assert RAN == ["push"] and closed is None, (RAN, frames)
+            assert [f.get("code") for f in frames if f.get("type") == "error"] == ["state_error"]
+            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            fail["on"] = False
+            # This push changes only the label; the withheld count must still land.
+            await apush_to_view(path, handler="handle_label", payload={"label": "b"})
+            frames, _ = await _collect(socket, _UPDATE)
+            updates = [f for f in frames if f.get("type") in {"patch", "html_update"}]
+            assert len(updates) == 1, frames
+            assert "4" in json.dumps(updates[0]), updates
+        finally:
+            await socket.disconnect()
+        restored = await _restored_count(request, LabelTurnView)
+        assert ">4<" in restored and ">b<" in restored, restored
+    assert pool.offloaded == (2 if pool.size else 0), pool.offloaded
+
+
+class SnapshotPushView(TurnView):
+    count = state(0, persist="server")
+    navigation = state("initial", persist="client", client=True)
+
+    def handle_push(self, count=0, **kwargs):
+        RAN.append("push")
+        self.navigation = "from-push"
+        self.count = count
+
+
+async def test_push_turn_refreshes_the_client_snapshot(pool):
+    """A push that changes a ``persist="client"`` field carries the refreshed
+    signed token, on both push-turn paths (ADR-038 E3, #4152)."""
+    from djust.push import apush_to_view
+
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
+        request = await sync_to_async(make_request)()
+        socket, mount_frame = await _connect(request, SnapshotPushView)
+        try:
+            await apush_to_view(
+                __name__ + ".SnapshotPushView", handler="handle_push", payload={"count": 2}
+            )
+            frames, _ = await _collect(socket, _UPDATE)
+        finally:
+            await socket.disconnect()
+    updates = [f for f in frames if f.get("type") in {"patch", "html_update"}]
+    assert updates, frames
+    token = updates[-1].get("state_snapshot_signed")
+    assert isinstance(token, str) and token and token != mount_frame.get("state_snapshot_signed")
+    assert updates[-1]["view"] == __name__ + ".SnapshotPushView"
+    assert pool.offloaded == (1 if pool.size else 0), pool.offloaded
 
 
 async def test_tick_mutation_is_persisted():

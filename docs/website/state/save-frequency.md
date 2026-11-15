@@ -41,11 +41,12 @@ and saves before it answers.
   whose state cannot be stored, which needs the save before the reply;
   system check `djust.C041` says so);
 - a URL change (`url_change`, `live_patch`) and a turn that queues navigation;
-- a turn whose handler wrote `request.session` itself: the session write is
-  stored with that turn's save, before the reply, when the turn's save writes
-  (it changed the view's state, or an earlier deferred turn did). A turn that
-  changes only `request.session` and no view state writes nothing on the
-  socket path, with or without an interval (a separate issue);
+- a turn whose handler wrote `request.session` itself (an assignment, a
+  removal, or an in-place change such as `request.session["cart"].append(x)`):
+  the session write is stored before the reply, merged into the session as
+  storage holds it, with or without an interval, and also when the turn
+  changed no view state. A turn that does not write the session adds no
+  session write;
 - a handler marked `@event_handler(save=True)`, and any turn that calls
   `self.save_state()` (from a handler, a background callback or
   `handle_tick()`; a component's `save_state()` saves its view).
