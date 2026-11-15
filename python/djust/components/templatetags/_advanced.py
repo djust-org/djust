@@ -1228,7 +1228,6 @@ class CollabSelectionNode(template.Node):
             e_name = conditional_escape(str(name))
             a_name = attr_text(name)  # the data-user= attribute; e_name stays the text (#3904)
             palette = self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)]
-            e_color = conditional_escape(safe_css_color(color, palette))
             e_text = conditional_escape(str(text))
 
             try:

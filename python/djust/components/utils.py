@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "CURRENCY_SYMBOLS",
+    "STYLES_META",
     "format_cell",
     "interpolate_color",
     "interpolate_color_gradient",
