@@ -6,6 +6,7 @@ from django.utils.html import conditional_escape
 from djust import Component
 from typing import Any, Optional
 from djust.components.utils import safe_css_color
+from djust.components.utils import style_attrs
 
 
 class Meter(Component):
@@ -81,7 +82,7 @@ class Meter(Component):
             # The width is a class, as `{% progress %}` draws it (#3969, #3979). A
             # segment's own colour has no class to stand for it, so it is the one
             # thing still written as a style, and only when one is given.
-            style_attr = f' style="background:{color}"' if color else ""
+            style_attr = style_attrs(background_color=color, css="background:{}")
             bar_parts.append(
                 f'<div class="dj-meter__segment dj-progress-w-{round(pct)}"{style_attr} '
                 f'role="meter" aria-valuenow="{conditional_escape(val)}" '
@@ -99,7 +100,7 @@ class Meter(Component):
                 seg_label = html.escape(str(seg.get("label", "")))
                 val = seg.get("value", 0)
                 # No `style` attribute at all without a colour (#3979).
-                swatch_style = f' style="background:{color}"' if color else ""
+                swatch_style = style_attrs(background_color=color, css="background:{}")
                 legend_items.append(
                     f'<div class="dj-meter__legend-item">'
                     f'<span class="dj-meter__legend-swatch"{swatch_style}></span>'

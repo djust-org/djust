@@ -444,6 +444,104 @@ attribute, so apps can switch to strict nonce-based CSP.
 - **User-generated inline content** (e.g. rich-text editors that allow
   `style=` attributes) is application responsibility, not framework.
 
+### Free-form style values under a strict CSP
+
+A nonce covers a `<style>` element, never a `style="..."` attribute: a
+`style-src` (or `style-src-attr`) without `'unsafe-inline'` refuses every
+inline style attribute. Where a component draws a bounded value it uses a
+class (`dj-progress-w-0` … `-100` for a percent fill, `gauge--sm`). Where the
+value is free-form (a column width, a user's colour, an item height, a grid
+placement) it goes through one helper, `djust.components.utils.style_attrs`,
+which checks it first: a length is a number with a unit or a percentage (or a
+keyword, `var()`, `calc()`); a colour is hex, `rgb()`/`hsl()`, a named colour
+or `var(--token)`; nothing with `url(`, `expression`, `;`, `}` or a quote is
+ever written, and a value that fails is dropped with one warning per
+property. How it is written depends on one setting.
+
+**Default (no strict CSP).** The checked value is the inline `style` the
+component has always written: it is there at first paint and with JavaScript
+off, and nothing changes for an app without a strict style policy.
+
+**Strict mode (opt in).** For a `style-src` without `'unsafe-inline'`:
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    "csp_strict_styles": True,
+}
+```
+
+The component then writes data attributes instead of `style`:
+
+```html
+<th data-dj-style data-dj-style-width="240px" data-dj-style-min-width="240px">Name</th>
+```
+
+and every LiveView page (and `{% djust_client_config %}`) carries
+`<meta name="djust-styles" content="attrs">` in its head. The client bundle
+(`54-dj-style.js`) applies the values with `element.style.setProperty(...)`
+only on a page with that meta: it is the CSSOM, which a strict policy allows,
+and `setProperty` sets one property, so a value cannot add a second
+declaration. The client does not trust the attribute text either: it applies
+only the properties in its allowlist (the same list as
+`djust.components.utils.STYLE_PROPERTY_NAMES`), never a value containing
+`url(`, `image`, `attr(`, `expression`, `@`, `\`, a comment, `;`, `{`, `}` or a
+quote, never `position: fixed`/`absolute`, a `z-index` only within ±9999, and
+a `--dj-*` custom property only of its kind (colour, integer or length). It
+keeps the values in step with every patch, morph, navigation and lazily
+mounted child, and removes a property when its attribute goes away.
+
+The rules a few components put in an inline `<style>` block in the default
+mode (the `{% djust_skeleton %}` shimmer, the Tailwind progress bar's
+`shimmer` keyframes) are added the same way, through a constructed
+stylesheet, when an element asks for them with `data-dj-css="skeleton"` /
+`"shimmer"`. The native dropdown's popover placement is the
+`dj-dropdown-menu__content--popover` class of `components.css`.
+
+Use the same helper in your own components:
+
+```python
+from djust.components.utils import style_attrs
+
+html = f'<div class="bar"{style_attrs(width=width, background_color=colour)}></div>'
+```
+
+Two behaviours to know in strict mode:
+
+- **The attribute is the source of truth.** While a `data-dj-style-*`
+  attribute is present the client re-applies it: an outside
+  `el.style.removeProperty(...)` is undone, and an `el.style` write made in
+  the same task right after setting the attribute loses to it. To change the
+  value, change (or remove) the attribute.
+- **It is a project-wide setting.** The client decides once, when the page
+  loads, from the meta in the server-rendered `<head>`; live navigation keeps
+  the document head, so every page of a project has to be in the same mode.
+  It is one config key, and every full page render (with or without a
+  `<head>` in the template) and `{% djust_client_config %}` carry the meta.
+
+What strict mode costs:
+
+- **JavaScript.** With it off (or before the deferred bundle runs) a
+  free-form value is not applied: the element keeps what your stylesheet gives
+  it (a column sizes to its content, a custom colour falls back to the theme's
+  colour, a skeleton has no shimmer). Percent fills are classes and draw
+  without it, if a stylesheet that defines `dj-progress-w-*` is loaded
+  (`components.css` or `components-classes.css`; a Bootstrap or Tailwind page
+  without them has no fill width in strict mode).
+- **Untrusted HTML.** If your app renders HTML it did not write (`|safe` on
+  user content, a sanitizer that allows `data-*` attributes), strip
+  `data-dj-style`, `data-dj-style-*`, `data-dj-css` and any
+  `<meta name="djust-styles">` from it. The client checks every value and
+  only reads the meta from the server-rendered `<head>`, but in strict mode
+  injected markup carrying these attributes can still restyle and reposition
+  its own elements within the allowlist (sizes, colours, sticky positioning,
+  a `z-index` up to 9999), which is enough to cover the page, exactly as it
+  could with a page's utility classes. That is why untrusted HTML must be
+  stripped of them.
+- A few constant inline styles are still written (a hidden trigger button's
+  `display:none`, a clickable row's `cursor:pointer`, the Bootstrap navbar's
+  `display:flex !important`); they carry no caller's value.
+
 ## Reporting Vulnerabilities
 
 If you discover a security issue in djust:

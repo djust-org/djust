@@ -6,6 +6,7 @@ from typing import Any, Optional
 from django.utils.html import conditional_escape
 from djust import Component
 from djust.components.utils import safe_css_length
+from djust.components.utils import style_attrs
 
 
 #: The largest grid a dashboard renders: columns and rows are capped so a stored
@@ -172,11 +173,11 @@ class DashboardGrid(Component):
                 panel.get("height", 1),
             )
 
-            style = f"grid-column:{col}/span {w};grid-row:{row}/span {h}"
+            cell = style_attrs(grid_column=f"{col}/span {w}", grid_row=f"{row}/span {h}")
 
             panels_html.append(
-                f'<div class="dj-dashboard-grid__panel" data-panel-id="{pid}" '
-                f'style="{style}" draggable="true">'
+                f'<div class="dj-dashboard-grid__panel" data-panel-id="{pid}"'
+                f'{cell} draggable="true">'
                 f'<div class="dj-dashboard-grid__panel-header">'
                 f'<span class="dj-dashboard-grid__panel-title">{title}</span>'
                 f'<span class="dj-dashboard-grid__panel-drag" aria-hidden="true">&#x2630;</span>'
@@ -186,13 +187,15 @@ class DashboardGrid(Component):
                 f"</div>"
             )
 
-        grid_style = (
-            f'style="display:grid;grid-template-columns:repeat({cols},1fr);'
-            f'grid-auto-rows:minmax({e_row_height},auto);gap:{e_gap}"'
+        grid_style = style_attrs(
+            display="grid",
+            grid_template_columns=f"repeat({cols},1fr)",
+            grid_auto_rows=f"minmax({e_row_height},auto)",
+            gap=e_gap,
         )
 
         return (
             f'<div class="{class_str}" dj-hook="DashboardGrid" '
             f'data-move-event="{e_move}" data-resize-event="{e_resize}" '
-            f'data-columns="{cols}" {grid_style}>{"".join(panels_html)}</div>'
+            f'data-columns="{cols}"{grid_style}>{"".join(panels_html)}</div>'
         )

@@ -221,6 +221,15 @@ class LiveViewConfig:
         # ``LIVEVIEW_CONFIG["auto_navigate"] = False`` (e.g. apps that wire their
         # own external TurboNav). On 1.0.x this defaulted OFF (opt-in).
         "auto_navigate": True,
+        # Free-form style values under a strict Content-Security-Policy (#3979).
+        # OFF (default): a component writes a checked width, colour or height as
+        # an inline ``style`` attribute, as it always has (there at first paint,
+        # and with JavaScript off). ON (``LIVEVIEW_CONFIG["csp_strict_styles"]
+        # = True``, for a ``style-src`` without 'unsafe-inline'): it writes
+        # ``data-dj-style-*`` attributes instead, the page head carries
+        # ``<meta name="djust-styles" content="attrs">``, and the client applies
+        # them through the CSSOM. Without that meta the client applies nothing.
+        "csp_strict_styles": False,
         # Re-check auth on every WS event (#1777, threat model T3, defense-in-depth).
         # Auth normally runs only at mount; with this OFF (default) an
         # authenticated user who logs out / loses a permission mid-session keeps

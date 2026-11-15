@@ -29,7 +29,11 @@ __all__ = [
     "safe_css_length",
     "safe_css_number",
     "safe_css_ratio",
+    "progress_fill",
     "safe_url",
+    "strict_styles",
+    "style_attrs",
+    "style_value",
     "table_column",
     "table_row",
     "table_rows",
@@ -375,6 +379,294 @@ def safe_css_number(value: Any, default: str = "", *, integer: bool = False) -> 
     else:
         ok = bool(_CSS_NUMBER_RE.fullmatch(candidate))
     return text if ok else default
+
+
+# ---------------------------------------------------------------------------
+# Free-form style values under a strict CSP (#3979)
+# ---------------------------------------------------------------------------
+#
+# A component that must set a value no class can stand for (a column width, a colour, an
+# item height) writes it through ``style_attrs``. The value is validated HERE, by the kind of
+# the property; a value that fails is dropped. By default it is an inline ``style``. A
+# ``style-src`` without 'unsafe-inline' refuses every ``style="..."`` attribute, so with
+# ``LIVEVIEW_CONFIG["csp_strict_styles"]`` on it is ``data-dj-style-<property>="<value>"``
+# instead, and the client module ``54-dj-style.js`` applies it with
+# ``element.style.setProperty`` (the CSSOM, which a strict CSP allows).
+
+_STYLE_ATTR_PREFIX = "data-dj-style-"
+_CSS_TIME_RE = re.compile(rf"{_CSS_NUM}(?:ms|s)", re.IGNORECASE)
+_CSS_GRID_LINE_RE = re.compile(r"\d{1,4}(?:\s*/\s*span\s+\d{1,4})?|span\s+\d{1,4}|auto")
+
+
+def _style_keyword(*words: str) -> Any:
+    allowed = frozenset(words)
+
+    def check(value: Any) -> str:
+        text = _exact_str(value).strip()
+        return text if text.lower() in allowed else ""
+
+    return check
+
+
+def _style_length(value: Any) -> str:
+    return safe_css_length(value, "").strip()
+
+
+def _style_color(value: Any) -> str:
+    return safe_css_color(value, "").strip()
+
+
+def _style_integer(value: Any) -> str:
+    return safe_css_number(value, "", integer=True).strip()
+
+
+def _style_number(value: Any) -> str:
+    return safe_css_number(value, "").strip()
+
+
+def _style_ratio(value: Any) -> str:
+    return safe_css_ratio(value, "").strip()
+
+
+def _style_time(value: Any) -> str:
+    text = _exact_str(value).strip()
+    return text if _CSS_TIME_RE.fullmatch(text) else ""
+
+
+def _style_grid_line(value: Any) -> str:
+    text = _exact_str(value).strip()
+    return text if _CSS_GRID_LINE_RE.fullmatch(text) else ""
+
+
+def _split_top(text: str, sep: str) -> list[str]:
+    """``text`` split at each ``sep`` outside parentheses (``sep=" "``: any whitespace)."""
+    parts, depth, cur = [], 0, ""
+    for ch in text:
+        depth += ch == "("
+        depth -= ch == ")"
+        if depth == 0 and (ch.isspace() if sep == " " else ch == sep):
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return [p.strip() for p in parts + [cur] if p.strip()]
+
+
+def _style_track(text: str) -> bool:
+    """One grid track: what :func:`safe_css_length` accepts, or ``minmax(<that>, <that>)``."""
+    if text.lower().startswith("minmax(") and text.endswith(")"):
+        args = _split_top(text[7:-1], ",")
+        return len(args) == 2 and all(_style_track(a) for a in args)
+    return bool(safe_css_length(text, ""))
+
+
+def _style_grid_tracks(value: Any) -> str:
+    """``repeat(<n>, <track>)``, or tracks separated by spaces (``grid-template-columns``,
+    ``grid-auto-rows``)."""
+    text = _exact_str(value).strip()
+    if not text or len(text) > _CSS_MAX_VALUE_LEN:
+        return ""
+    if text.lower().startswith("repeat(") and text.endswith(")"):
+        args = _split_top(text[7:-1], ",")
+        ok = len(args) == 2 and args[0].isdigit() and _style_track(args[1])
+        return text if ok else ""
+    tracks = _split_top(text, " ")
+    return text if tracks and all(_style_track(t) for t in tracks) else ""
+
+
+def _style_z_index(value: Any) -> str:
+    """An integer stacking order within +/-9999 (nothing can be lifted above everything)."""
+    text = safe_css_number(value, "", integer=True).strip()
+    return text if text and text.lower() != "auto" and abs(int(text)) <= 9999 else ""
+
+
+#: Every CSS property ``style_attrs`` writes, in one list: the client's own copy
+#: (``54-dj-style.js``) is pinned equal to it, both ways, by
+#: ``python/djust/tests/test_csp_free_form_styles_3979.py`` and ``tests/js/dj_style.test.js``.
+STYLE_PROPERTY_NAMES = (
+    "width",
+    "min-width",
+    "max-width",
+    "height",
+    "min-height",
+    "max-height",
+    "top",
+    "left",
+    "margin-right",
+    "padding-left",
+    "gap",
+    "font-size",
+    "--dj-masonry-gap",
+    "background-color",
+    "color",
+    "border-top-color",
+    "--dj-calendar-event-color",
+    "--dj-collab-sel-color",
+    "z-index",
+    "-webkit-line-clamp",
+    "--dj-masonry-columns",
+    "--dj-data-card-grid-cols",
+    "flex",
+    "aspect-ratio",
+    "animation-delay",
+    "grid-column",
+    "grid-row",
+    "grid-template-columns",
+    "grid-auto-rows",
+    "position",
+    "display",
+    "overflow",
+    "overflow-y",
+    "-webkit-box-orient",
+    "font-weight",
+)
+
+_STYLE_KINDS: dict[str, Any] = {
+    "background-color": _style_color,
+    "color": _style_color,
+    "border-top-color": _style_color,
+    "--dj-calendar-event-color": _style_color,
+    "--dj-collab-sel-color": _style_color,
+    "z-index": _style_z_index,
+    "-webkit-line-clamp": _style_integer,
+    "--dj-masonry-columns": _style_integer,
+    "--dj-data-card-grid-cols": _style_integer,
+    "flex": _style_number,
+    "aspect-ratio": _style_ratio,
+    "animation-delay": _style_time,
+    "grid-column": _style_grid_line,
+    "grid-row": _style_grid_line,
+    "grid-template-columns": _style_grid_tracks,
+    "grid-auto-rows": _style_grid_tracks,
+    # Only what the call sites use: never ``fixed`` / ``absolute`` (an element that covers
+    # the page).
+    "position": _style_keyword("sticky", "relative"),
+    "display": _style_keyword("grid", "-webkit-box"),
+    "overflow": _style_keyword("auto", "hidden", "scroll", "visible", "clip"),
+    "overflow-y": _style_keyword("auto", "hidden", "scroll", "visible", "clip"),
+    "-webkit-box-orient": _style_keyword("vertical", "horizontal"),
+    "font-weight": _style_keyword("bold", "normal"),
+}
+
+#: The check each property's value passes (a length unless listed in ``_STYLE_KINDS``).
+STYLE_PROPERTIES: dict[str, Any] = {
+    name: _STYLE_KINDS.get(name, _style_length) for name in STYLE_PROPERTY_NAMES
+}
+
+_STYLE_WARNED: set[str] = set()
+
+#: The page-level marker of strict-CSP style mode, written into the head of a LiveView page
+#: (and by ``{% djust_client_config %}``). ``54-dj-style.js`` applies nothing without it, so
+#: ``data-dj-style-*`` on a page that did not opt in stays inert (#3979).
+STYLES_META = '<meta name="djust-styles" content="attrs">'
+
+
+def strict_styles() -> bool:
+    """Whether free-form style values are written for a strict CSP (#3979).
+
+    ``LIVEVIEW_CONFIG["csp_strict_styles"]``, off by default. The one switch
+    :func:`style_attrs` (and the Rust components' ``strict_styles`` argument) follow.
+    """
+    from djust.config import config
+
+    return bool(config.get("csp_strict_styles", False))
+
+
+def style_attrs(props: Any = None, /, *, css: str | None = None, **kwargs: Any) -> str:
+    """Free-form style values as attributes, in the mode the project chose (#3979).
+
+    ``style_attrs({"min-width": w})`` or ``style_attrs(width=w, min_height=h)`` (an underscore
+    in a keyword is a hyphen). Each value is first checked by its property's kind
+    (:data:`STYLE_PROPERTIES`): a length (:func:`safe_css_length`: a number with a unit or
+    ``%``, a keyword, ``var()``, ``calc()`` ...), a colour (:func:`safe_css_color`), an integer, a
+    ratio, a time, a grid line or track list, or a keyword from a fixed set. ``None`` and ``""``
+    write nothing. A value that fails is dropped, never written, with one warning per property.
+    A marked-safe value is judged as the plain text it prints. A property outside the table is a
+    programming error and raises ``ValueError``.
+
+    The values that pass are then written
+
+    * by default, as an inline ``style`` attribute: ``' style="width:240px"'``. ``css`` is the
+      declaration text with one ``{}`` per property in order (a site keeps its exact markup:
+      ``css="height: {};"``); without it, ``prop:value`` pairs joined by ``;``. When a value
+      was dropped the pairs are written instead.
+    * with ``LIVEVIEW_CONFIG["csp_strict_styles"]`` on (a ``style-src`` without
+      'unsafe-inline'), as ``' data-dj-style data-dj-style-width="240px"'``, which the client
+      module ``54-dj-style.js`` applies with ``element.style.setProperty`` (the CSSOM, which a
+      strict CSP allows). The bare ``data-dj-style`` marks the element for the client.
+
+    Returns ``""`` when nothing passes. The text has a leading space, ready to follow a tag name
+    or another attribute.
+    """
+    items: list[tuple[str, Any]] = list(dict(props or {}).items())
+    items += [(key.replace("_", "-"), value) for key, value in kwargs.items()]
+    pairs = [(prop, style_value(prop, value)) for prop, value in items]
+    kept = [(prop, text) for prop, text in pairs if text]
+    if not kept:
+        return ""
+    if strict_styles():
+        return " data-dj-style" + "".join(
+            f' {_STYLE_ATTR_PREFIX}{prop}="{escape(text)}"' for prop, text in kept
+        )
+    if css is not None and len(kept) == len(pairs):
+        declarations = css.format(*(text for _, text in kept))
+    else:
+        declarations = ";".join(f"{prop}:{text}" for prop, text in kept)
+    return f' style="{escape(declarations)}"'
+
+
+def progress_fill(percent: Any, *, css: str = "width: {}%") -> tuple[str, str]:
+    """``(class, style)`` for a percent fill (a progress bar), in both modes (#3979).
+
+    The class is ``dj-progress-w-N`` (``N`` the whole percent, clamped to 0..100), defined in
+    the components stylesheets: no JavaScript and no first-paint jump. By default the style is
+    also the inline width the bar has always carried (``css`` with the percent as written), so a
+    page without those stylesheets draws it as before; with
+    ``LIVEVIEW_CONFIG["csp_strict_styles"]`` on there is no style, only the class.
+    """
+    try:
+        number = float(percent)
+    except (TypeError, ValueError):
+        number = 0.0
+    finite = math.isfinite(number)
+    clamped = max(0.0, min(100.0, number)) if finite else 0.0
+    # Half up, as the Rust components round (``f64::round``): one bar, one class.
+    whole = int(clamped + 0.5)
+    if strict_styles():
+        return f"dj-progress-w-{whole}", ""
+    # A number already in range is written as given (the bar's old markup); anything else
+    # (out of range, not a number, text) as the clamped number.
+    if type(percent) in (int, float) and finite and number == clamped:
+        shown = str(percent)
+    else:
+        shown = f"{clamped:g}"
+    return f"dj-progress-w-{whole}", f' style="{escape(css.format(shown))}"'
+
+
+def style_value(prop: str, value: Any) -> str:
+    """The check :func:`style_attrs` makes, for one property: ``value`` as the plain text to
+    write, or ``""`` (nothing to write).
+
+    For a caller that needs the checked value itself (a template that writes the attribute,
+    a fallback default: ``style_value("height", h) or "400px"``). ``None`` and ``""`` return
+    ``""``; a value that fails is dropped with one warning per property; a property outside
+    :data:`STYLE_PROPERTIES` raises ``ValueError``.
+    """
+    check = STYLE_PROPERTIES.get(prop)
+    if check is None:
+        raise ValueError(f"style_attrs: {prop!r} is not in STYLE_PROPERTIES")
+    if value is None or isinstance(value, bool) or _exact_str(value).strip() == "":
+        return ""
+    text: str = check(value)
+    if not text and prop not in _STYLE_WARNED:
+        _STYLE_WARNED.add(prop)
+        logger.warning(
+            "Dropped a %s value that is not a plain CSS value (#3979); "
+            "further invalid %s values are dropped silently",
+            prop,
+            prop,
+        )
+    return text
 
 
 # ---------------------------------------------------------------------------

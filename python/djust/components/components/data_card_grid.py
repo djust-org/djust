@@ -5,6 +5,7 @@ from typing import Any, List, Optional
 
 from djust import Component
 from djust.components.utils import data_url_attr
+from djust.components.utils import style_attrs
 
 
 class DataCardGrid(Component):
@@ -130,10 +131,10 @@ class DataCardGrid(Component):
                 f"</div></div>"
             )
 
-        style = f"--dj-data-card-grid-cols:{cols}"
+        style = style_attrs({"--dj-data-card-grid-cols": cols}, css="--dj-data-card-grid-cols:{}")
 
         return (
-            f'<div class="{cls}" style="{style}">'
+            f'<div class="{cls}"{style}>'
             f"{filter_html}"
             f'<div class="dj-data-card-grid__grid" role="list">'
             f"{''.join(cards)}</div></div>"

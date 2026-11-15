@@ -1039,7 +1039,10 @@ engine (every socket render).
   The track is `role="progressbar"` with `aria-valuenow`, `aria-valuemin`, `aria-valuemax` and an
   `aria-label` (the `label=`; an unlabelled bar has no name, so give one). `value` is clamped to 0-100; the `Progress` class
   draws to the whole percent and keeps the exact value in `aria-valuenow`. The Bootstrap/Tailwind
-  `djust.components.ui.Progress` still writes inline styles.
+  `djust.components.ui.Progress` (and `Progress` / `RustProgress`) carry the same width class, and
+  by default also their inline width; with `LIVEVIEW_CONFIG["csp_strict_styles"]` only the class,
+  and their height as a `data-dj-style-height` the client applies (see "Free-form style values
+  under a strict CSP" in the security guide).
 - **`{% stepper %}`** is an `<ol class="stepper">` of `<li class="stepper-step">`, each holding a
   `<button type="button">` (focusable, Enter and Space activate it, never submits a form). The
   current step is `aria-current="step"`; a completed step that is not the current one adds a
@@ -1965,7 +1968,7 @@ columns = [
 - A card's `href` makes its title a link (`javascript:` and other unsafe schemes are refused).
 - A card's `targets` lists the column ids it may move to, for a board whose cards follow a state machine: `{"id": "c1", "title": "A", "targets": ["doing", "done"]}`. While the card drags, only those columns take a drop and are marked `kanban-col-target`; elsewhere the browser shows no drop. Without `targets` every column is offered. `targets` (a list, any iterable of strings, or one string) is guidance for the reader, not authorization: your `move_event` handler must still check the move. Column ids may not contain whitespace (the list is space-separated; such an id logs a warning).
 - A card moves by keyboard too: Tab to it, Space picks it up, the arrow keys choose a column (only the allowed ones), Enter or Space drops it there and sends the same `move_event`, and Escape (or moving focus away) cancels. Each step is announced to screen readers.
-- A column's `color` is a theme name, `primary`, `success`, `warning`, `destructive`, `info` or `muted`, rendered as the class `kanban-col--<name>`. No `color` gives the stylesheet's default. Any other CSS colour (`"#6366F1"`) still works, but as an inline `style` attribute, which a CSP with `style-src-attr 'none'` refuses; use a theme name under a strict policy.
+- A column's `color` is a theme name, `primary`, `success`, `warning`, `destructive`, `info` or `muted`, rendered as the class `kanban-col--<name>`. No `color` gives the stylesheet's default. Any other CSS colour (`"#6366F1"`) still works: an inline `style` by default; with `LIVEVIEW_CONFIG["csp_strict_styles"]` a `data-dj-style-border-top-color` the client applies, so a strict CSP allows it too (it needs JavaScript; a theme name does not).
 - `add_col_event` is deprecated (since 2.0, removed no earlier than 3.0.0): it has never drawn a control, and passing it warns once. Leave it out, and draw your own "Add column" control that sends your view's event.
 
 The `KanbanBoard` class component draws a static board: its cards do not drag. It also takes `add_card_event=None` to leave the button out.

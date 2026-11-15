@@ -15,7 +15,7 @@ from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
 from djust.components.utils import attr_text, data_url_attr
-from djust.components.utils import safe_css_color, safe_css_length
+from djust.components.utils import safe_css_color, style_attrs, style_value
 
 # ``safe_url`` comes from where it is DEFINED, not through ``._registry``: the safe-markup guard
 # trusts an escaper by its origin, and a re-export is a different origin (#3820, as #3774).
@@ -221,15 +221,14 @@ class CalendarViewNode(template.Node):
                 ev_html = ""
                 for i, ev in enumerate(day_events[:3]):
                     title = conditional_escape(str(ev.get("title", "")))
-                    color = conditional_escape(
-                        safe_css_color(
-                            ev.get("color", self.COLORS[i % len(self.COLORS)]),
-                            self.COLORS[i % len(self.COLORS)],
-                        )
+                    fallback = self.COLORS[i % len(self.COLORS)]
+                    color = (
+                        style_value("--dj-calendar-event-color", ev.get("color", fallback))
+                        or fallback
                     )
                     ev_html += (
-                        f'<div class="dj-calendar__event" '
-                        f'style="--dj-calendar-event-color: {color}">{title}</div>'
+                        f'<div class="dj-calendar__event"'
+                        f"{style_attrs({'--dj-calendar-event-color': color}, css='--dj-calendar-event-color: {}')}>{title}</div>"
                     )
                 if len(day_events) > 3:
                     ev_html += f'<div class="dj-calendar__more">+{len(day_events) - 3} more</div>'
@@ -996,11 +995,12 @@ class MasonryGridNode(template.Node):
                 item_cards.append(f'<div class="dj-masonry__item{extra}">{content}</div>')
             col_html.append(f'<div class="dj-masonry__col">{"".join(item_cards)}</div>')
 
-        style = f"--dj-masonry-columns: {columns}; --dj-masonry-gap: {gap}px"
-
-        return mark_safe(
-            f'<div class="{class_str}" style="{style}" role="list">{"".join(col_html)}</div>'
+        style = style_attrs(
+            {"--dj-masonry-columns": columns, "--dj-masonry-gap": f"{gap}px"},
+            css="--dj-masonry-columns: {}; --dj-masonry-gap: {}",
         )
+
+        return mark_safe(f'<div class="{class_str}"{style} role="list">{"".join(col_html)}</div>')
 
 
 @register.tag("masonry_grid")
@@ -1055,9 +1055,8 @@ class CursorsOverlayNode(template.Node):
 
             e_name = conditional_escape(str(name))
             a_name = attr_text(name)  # the data-user= attribute; e_name stays the text (#3904)
-            e_color = conditional_escape(
-                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
-            )
+            palette = self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)]
+            e_color = conditional_escape(safe_css_color(color, palette))
 
             try:
                 px = int(x)
@@ -1076,12 +1075,12 @@ class CursorsOverlayNode(template.Node):
             )
 
             parts.append(
-                f'<div class="dj-cursors__cursor" '
-                f'style="left:{px}px;top:{py}px" '
+                f'<div class="dj-cursors__cursor"'
+                f"{style_attrs(left=f'{px}px', top=f'{py}px')} "
                 f'data-user="{a_name}">'
                 f"{cursor_svg}"
-                f'<span class="dj-cursors__label" '
-                f'style="background:{e_color}">{e_name}</span>'
+                f'<span class="dj-cursors__label"'
+                f"{style_attrs(background_color=style_value('background-color', color) or palette, css='background:{}')}>{e_name}</span>"
                 f"</div>"
             )
 
@@ -1228,9 +1227,8 @@ class CollabSelectionNode(template.Node):
 
             e_name = conditional_escape(str(name))
             a_name = attr_text(name)  # the data-user= attribute; e_name stays the text (#3904)
-            e_color = conditional_escape(
-                safe_css_color(color, self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)])
-            )
+            palette = self.DEFAULT_COLORS[i % len(self.DEFAULT_COLORS)]
+            e_color = conditional_escape(safe_css_color(color, palette))
             e_text = conditional_escape(str(text))
 
             try:
@@ -1243,12 +1241,12 @@ class CollabSelectionNode(template.Node):
                 e = 0
 
             parts.append(
-                f'<span class="dj-collab-sel__range" '
-                f'style="--dj-collab-sel-color:{e_color}" '
+                f'<span class="dj-collab-sel__range"'
+                f"{style_attrs({'--dj-collab-sel-color': style_value('--dj-collab-sel-color', color) or palette}, css='--dj-collab-sel-color:{}')} "
                 f'data-user="{a_name}" data-start="{s}" data-end="{e}">'
                 f'<span class="dj-collab-sel__highlight">{e_text}</span>'
-                f'<span class="dj-collab-sel__label" '
-                f'style="background:{e_color}">{e_name}</span>'
+                f'<span class="dj-collab-sel__label"'
+                f"{style_attrs(background_color=style_value('background-color', color) or palette, css='background:{}')}>{e_name}</span>"
                 f"</span>"
             )
 
@@ -1481,7 +1479,6 @@ class MapPickerNode(template.Node):
 
         e_class = conditional_escape(str(custom_class))
         e_event = conditional_escape(str(pick_event))
-        e_height = conditional_escape(safe_css_length(height, "400px"))
         e_label = conditional_escape(str(kw.get("label", "Map picker")))
 
         cls = "dj-map-picker"
@@ -1500,8 +1497,8 @@ class MapPickerNode(template.Node):
         return mark_safe(
             f'<div class="{cls}" dj-hook="MapPicker" '
             f'data-lat="{lat}" data-lng="{lng}" '
-            f'data-zoom="{zoom}" data-pick-event="{e_event}"{extra} '
-            f'style="height:{e_height}" '
+            f'data-zoom="{zoom}" data-pick-event="{e_event}"{extra}'
+            f"{style_attrs(height=style_value('height', height) or '400px', css='height:{}')} "
             f'role="application" aria-label="{e_label}">'
             f'<div class="dj-map-picker__map"></div>'
             f"</div>"
@@ -2195,10 +2192,10 @@ class DataCardGridNode(template.Node):
                 f"</div></div>"
             )
 
-        style = f"--dj-data-card-grid-cols:{cols}"
+        style = style_attrs({"--dj-data-card-grid-cols": cols})
 
         return mark_safe(
-            f'<div class="{cls}" style="{style}">'
+            f'<div class="{cls}"{style}>'
             f"{filter_html}"
             f'<div class="dj-data-card-grid__grid" role="list">'
             f"{''.join(cards)}</div></div>"

@@ -4,6 +4,7 @@ import html
 from typing import Any, Optional
 
 from djust import Component
+from djust.components.utils import style_attrs
 
 
 class TreeView(Component):
@@ -68,7 +69,7 @@ class TreeView(Component):
                 + "</div>"
             )
         return (
-            f'<div class="tree-node{sel_cls}{exp_cls}" style="padding-left:{indent}rem">'
+            f'<div class="tree-node{sel_cls}{exp_cls}"{style_attrs(padding_left=f"{indent}rem", css="padding-left:{}")}>'
             f'<div class="tree-node-row">{toggle_html}'
             f'<button class="tree-node-label" {self.event_attrs(self.select_event, value=node_id)}>'
             f"{label}</button></div>"

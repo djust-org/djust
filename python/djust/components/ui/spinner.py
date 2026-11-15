@@ -9,6 +9,8 @@ from ..base import LiveComponent
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
+from ..utils import strict_styles, style_attrs
+
 
 class SpinnerComponent(LiveComponent):
     """
@@ -109,9 +111,9 @@ class SpinnerComponent(LiveComponent):
         # Custom size for lg/xl
         custom_size = ""
         if self.size == "lg":
-            custom_size = ' style="width: 3rem; height: 3rem;"'
+            custom_size = style_attrs(width="3rem", height="3rem", css="width: {}; height: {};")
         elif self.size == "xl":
-            custom_size = ' style="width: 5rem; height: 5rem;"'
+            custom_size = style_attrs(width="5rem", height="5rem", css="width: {}; height: {};")
 
         # Spinner type
         spinner_type = "spinner-border" if self.type == "border" else "spinner-grow"
@@ -186,8 +188,11 @@ class SpinnerComponent(LiveComponent):
             # Dots animation
             html = f'<div class="{container_class} space-x-2" id="{conditional_escape(self.component_id)}">'
             for i in range(3):
-                delay = f"animation-delay: {i * 150}ms;" if i > 0 else ""
-                html += f'<div class="h-2 w-2 {color_class.replace("border-", "bg-")} rounded-full animate-bounce" style="{delay}"></div>'
+                if i:
+                    delay = style_attrs(animation_delay=f"{i * 150}ms", css="animation-delay: {};")
+                else:  # the first dot has no delay (an empty style, as it always had)
+                    delay = "" if strict_styles() else ' style=""'
+                html += f'<div class="h-2 w-2 {color_class.replace("border-", "bg-")} rounded-full animate-bounce"{delay}></div>'
             html += "</div>"
             if self.label:
                 html += f'<span class="ml-2 text-gray-700">{conditional_escape(self.label)}</span>'
