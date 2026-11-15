@@ -1034,6 +1034,18 @@ class Transport(Protocol):
     def client_ip(self) -> Optional[str]:
         """Resolved client IP, or ``None`` when unavailable."""
 
+    @property
+    def holds_view(self) -> bool:
+        """Whether this process keeps the view between the connection's turns.
+
+        True for WebSocket and SSE: the next turn finds the same view object,
+        so its state need not be read back from storage. The HTTP fallback is
+        not a transport of this protocol; it rebuilds the view per request.
+        :func:`djust._save_policy.save_mode` reads it; a transport that does
+        not define it is taken to hold nothing.
+        """
+        return False
+
     async def send(self, data: Dict[str, Any]) -> None:
         """Send an ordinary outbound frame to the client."""
 
@@ -1523,6 +1535,8 @@ class WSConsumerTransport:
 
     #: ``Turn.transport`` for turns this transport carries (ADR-044).
     turn_transport = "ws"
+    #: The consumer keeps the view between turns (``Transport.holds_view``).
+    holds_view = True
 
     def __init__(self, consumer: Any):
         self._consumer = consumer
@@ -2376,6 +2390,10 @@ class SSESessionTransport:
 
     #: ``Turn.transport`` for turns this transport carries (ADR-044).
     turn_transport = "sse"
+    #: The SSE session keeps the view between turns (``Transport.holds_view``):
+    #: an event POST that reaches another process gets a 404, never a read
+    #: of saved state.
+    holds_view = True
 
     def __init__(self, session: Any):
         from ._sse_channels import SSEChannelMember
@@ -6343,8 +6361,14 @@ class ViewRuntime(RuntimeTurnPort):
         from ._exposure_sessions import StateLimitExceeded
         from .state_store import StateStoreError
 
+        from ._save_policy import save_mode
+
         if uses_legacy_exposure(view):
             return True
+        # The one place a socket turn's save is decided (``_save_policy``).
+        # Only the immediate mode exists yet: whatever it answers, the state
+        # is saved before the frame below.
+        save_mode(view, self.transport, source=source)
         self._explicit_binding_verified = None
         extra = self._explicit_error_fields(view, source=source, async_batch=async_batch)
         try:
