@@ -34,28 +34,26 @@ from djust import LiveView
 _ALLOWED = "djust.tests.test_tick_skip_render_2822"
 
 
-def _consumer_with_view(view_class):
-    """A ``LiveViewConsumer`` with ``view_class`` mounted and its sends captured.
+async def _consumer_with_view(view_class):
+    """A ``LiveViewConsumer`` that mounted ``view_class``, its sends captured.
 
-    Lifted verbatim from ``test_ws_mount_flip_parity_1911.py::_consumer_with_view``.
+    Lifted from ``test_ws_mount_flip_parity_1911.py::_consumer_with_view``; the
+    view is mounted through the real ``handle_mount`` (whose render establishes
+    the diff baseline, so these tests exercise patches) because an explicit
+    view's tick is authorized by the runtime that mounted it. The tick loop the
+    mount starts is stopped: the tests drive ``_tick_once`` themselves.
     """
+    from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer()
-    consumer.scope = {"session": None, "user": None}
     consumer.sent = []
 
     async def _capture(payload):
         consumer.sent.append(payload)
 
     consumer.send_json = _capture
-
-    view = view_class()
-    view.mount(None)
-    # Establish the real mount's diff baseline so these tests exercise patches,
-    # rather than the full-HTML fallback used when no baseline is available.
-    view.render_with_diff()
-    consumer.view_instance = view
+    await amount_on_consumer(consumer, f"{_ALLOWED}.{view_class.__name__}")
     return consumer
 
 
@@ -86,7 +84,7 @@ class SkipRenderTickView(LiveView):
     """The #2822 non-host-session shape: handle_tick early-returns having set
     ``_skip_render = True`` and touched no public attr."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     tick_interval = 50
     template = f'<div dj-root dj-view="{_ALLOWED}.SkipRenderTickView" dj-id="0">c={{{{ c }}}}</div>'
 
@@ -104,7 +102,7 @@ class MutatingTickView(LiveView):
     """Control: handle_tick changes public state and does NOT set
     ``_skip_render`` — must render normally (both snapshots taken)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     tick_interval = 50
     template = f'<div dj-root dj-view="{_ALLOWED}.MutatingTickView" dj-id="0">c={{{{ c }}}}</div>'
 
@@ -124,7 +122,7 @@ class SkipRenderDespiteMutationTickView(LiveView):
     ``_skip_render`` unconditionally, before any change-detection), so an
     explicit skip request wins even though the state did change."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     tick_interval = 50
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.SkipRenderDespiteMutationTickView" dj-id="0">'
@@ -147,7 +145,7 @@ class ForceFullHtmlWinsOverSkipRenderTickView(LiveView):
     ``set_changed_keys()``) set in the same tick — ``_force_full_html`` must
     win: the render must still happen."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     tick_interval = 50
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.ForceFullHtmlWinsOverSkipRenderTickView" dj-id="0">'
@@ -171,7 +169,7 @@ class ConsumedSkipRenderTickView(LiveView):
     (reset to False) rather than leaking into the next tick and silently
     suppressing an unrelated later render."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     tick_interval = 50
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.ConsumedSkipRenderTickView" dj-id="0">'
@@ -198,13 +196,13 @@ class ConsumedSkipRenderTickView(LiveView):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestTickHonorsSkipRender:
     async def test_skip_render_suppresses_the_tick_frame(self):
         """The observable symptom half of #2822: a tick handler that sets
         _skip_render must not send a patch/tick frame."""
-        consumer = _consumer_with_view(SkipRenderTickView)
+        consumer = await _consumer_with_view(SkipRenderTickView)
 
         sent = await consumer._tick_once()
 
@@ -225,7 +223,7 @@ class TestTickHonorsSkipRender:
         wall-clock).
         """
         count = _patch_snapshot_call_counter(monkeypatch)
-        consumer = _consumer_with_view(SkipRenderTickView)
+        consumer = await _consumer_with_view(SkipRenderTickView)
 
         await consumer._tick_once()
 
@@ -241,7 +239,7 @@ class TestTickHonorsSkipRender:
         vacuous — a normal state-changing tick (no _skip_render) legitimately
         calls _snapshot_assigns TWICE (pre + post) and DOES send a frame."""
         count = _patch_snapshot_call_counter(monkeypatch)
-        consumer = _consumer_with_view(MutatingTickView)
+        consumer = await _consumer_with_view(MutatingTickView)
 
         sent = await consumer._tick_once()
 
@@ -257,7 +255,7 @@ class TestTickHonorsSkipRender:
         the render even though handle_tick ALSO mutated public state — mirrors
         the event paths (server_push/db_notify/runtime dispatch_event), which
         check _skip_render unconditionally before any change-detection."""
-        consumer = _consumer_with_view(SkipRenderDespiteMutationTickView)
+        consumer = await _consumer_with_view(SkipRenderDespiteMutationTickView)
 
         sent = await consumer._tick_once()
 
@@ -270,7 +268,7 @@ class TestTickHonorsSkipRender:
         """#1981's _force_full_html must not be silently dropped by a
         concurrently-set _skip_render — the explicit "render everything"
         request wins."""
-        consumer = _consumer_with_view(ForceFullHtmlWinsOverSkipRenderTickView)
+        consumer = await _consumer_with_view(ForceFullHtmlWinsOverSkipRenderTickView)
 
         sent = await consumer._tick_once()
 
@@ -288,7 +286,7 @@ class TestTickHonorsSkipRender:
         subsequent tick's render forever. Tick 1 sets the flag and is
         skipped; tick 2 mutates state and does NOT set the flag, and must
         render normally."""
-        consumer = _consumer_with_view(ConsumedSkipRenderTickView)
+        consumer = await _consumer_with_view(ConsumedSkipRenderTickView)
 
         first_sent = await consumer._tick_once()
         assert first_sent is False, "tick 1 (flag set) must be skipped"

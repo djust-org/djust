@@ -76,7 +76,7 @@ impl RustProgress {
 
         // The fill is a `dj-progress-w-N` class (no JavaScript, no first-paint jump). By
         // default the height and the width are also the inline style they have always been;
-        // with `strict_styles` (LIVEVIEW_CONFIG["csp_strict_styles"], for a `style-src`
+        // with `strict_styles` (LIVEVIEW_CONFIG["csp_strict"], for a `style-src`
         // without 'unsafe-inline') the height is a `data-dj-style-height` the client applies
         // and the width is the class alone (#3979). The Python wrapper checks `height` first.
         let whole = (percentage + 0.5).floor().clamp(0.0, 100.0) as i64;

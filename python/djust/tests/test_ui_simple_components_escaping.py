@@ -15,7 +15,8 @@ schemes become ``#``), is checked and escaped whatever it is marked as (#3898).
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Tuple
+import contextlib
+from typing import Any, Callable, Dict, Iterator, List, Tuple
 from unittest.mock import patch
 
 from html.parser import HTMLParser
@@ -400,6 +401,41 @@ def test_navbar_id_in_onclick_is_js_string_escaped(framework: str) -> None:
 def test_navbar_plain_id_in_onclick_is_unchanged(framework: str) -> None:
     html = _python_render(NavBar(items=[], id="main-nav"), framework)
     assert "getElementById('main-nav-" in html
+
+
+@contextlib.contextmanager
+def _csp_strict() -> Iterator[None]:
+    from djust.config import config
+
+    before = config.get("csp_strict", False)
+    config.set("csp_strict", True)
+    try:
+        yield
+    finally:
+        config.set("csp_strict", before)
+
+
+# --- NavBar id in the strict-mode toggle marker (#4146) --------------------------
+
+
+@pytest.mark.parametrize("framework", ("tailwind", "plain"))
+def test_navbar_id_in_toggle_marker_is_attribute_escaped(framework: str) -> None:
+    from scripts.lib.template_library_parity import url_sweep
+
+    with _csp_strict():
+        html = _python_render(NavBar(items=[], id='x" onclick="alert(1)'), framework)
+    names = {a.name for a in url_sweep.attributes(html)}
+    assert "onclick" not in names, html
+    assert 'data-navbar-toggle="x&quot; onclick=&quot;alert(1)-' in html
+
+
+@pytest.mark.parametrize("framework", ("tailwind", "plain"))
+def test_navbar_plain_id_in_toggle_marker_is_unchanged(framework: str) -> None:
+    with _csp_strict():
+        html = _python_render(NavBar(items=[], id="main-nav"), framework)
+    suffix = "mobile" if framework == "tailwind" else "menu"
+    assert 'data-navbar-toggle="main-nav-%s"' % suffix in html
+    assert 'id="main-nav-%s"' % suffix in html
 
 
 # --- Default render() for components with no Rust implementation or template ----

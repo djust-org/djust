@@ -32,7 +32,7 @@ _RAN: list[str] = []
 
 
 class _StoredSessionView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
     login_required = True
     template = '<div dj-view="djust.tests.test_reauth_reads_stored_session._StoredSessionView" dj-id="0">x</div>'
 

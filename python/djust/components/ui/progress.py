@@ -9,7 +9,7 @@ from ..base import LiveComponent
 from django.utils.html import conditional_escape
 from djust.components.utils import attr_text
 
-from djust.components.utils import progress_fill, safe_css_length, strict_styles, style_attrs
+from djust.components.utils import progress_fill, safe_css_length, csp_strict, style_attrs
 from django.utils.safestring import SafeString, mark_safe
 
 
@@ -180,7 +180,7 @@ class ProgressComponent(LiveComponent):
         # An animated bar names the `shimmer` keyframes: an inline `<style>` block by default;
         # under a strict CSP (which refuses it) the client adds them through the CSSOM when the
         # bar carries `data-dj-css` (#3979).
-        strict = strict_styles()
+        strict = csp_strict()
         shimmer = ' data-dj-style data-dj-css="shimmer"' if self.animated and strict else ""
         html += f'<div class="{bar_classes}"{fill_style}{shimmer}'
         html += f' role="progressbar" aria-valuenow="{conditional_escape(self.value)}" aria-valuemin="{conditional_escape(self.min_value)}" aria-valuemax="{conditional_escape(self.max_value)}">'

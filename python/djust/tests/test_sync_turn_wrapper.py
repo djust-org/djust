@@ -22,6 +22,7 @@ from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import RequestFactory
 
 from djust import LiveView
+from djust.tests._live_session import amount_on_runtime
 from djust.config import config
 from djust.decorators import event_handler
 
@@ -68,7 +69,7 @@ def probe():
 
 
 class ProbeView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="tests.ProbeView">{{ count }} {{ seen }}</div>'
 
     def mount(self, request, **kwargs):
@@ -91,7 +92,7 @@ class ProbeView(LiveView):
         self.seen = open_step() or "none"
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
+        context = super().get_context_data(count=self.count, seen=self.seen, **kwargs)
         context["render_scope"] = open_step()
         return context
 
@@ -201,33 +202,36 @@ class _Transport:
         yield
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_socket_event_handler_and_render_run_inside_the_wrapper(probe):
     from djust.runtime import ViewRuntime
 
     view = ProbeView()
-    view.mount(None)
-    ENTERED.clear()
     runtime = ViewRuntime(_Transport(), scope=None)
-    runtime.view_instance = view
+    # Mounted for real: an explicit view's events are authorized against its
+    # mount binding. The mount's own wrapper entries are not this test's.
+    await amount_on_runtime(runtime, view, view_path=f"{__name__}.ProbeView")
+    ENTERED.clear()
 
     await runtime.dispatch_event({"type": "event", "event": "bump", "params": {}, "ref": 1})
 
     assert view.count == 1
     assert view.handler_scope == "event"
     seen = steps()
-    assert seen[0] == "event"
-    assert "render" in seen[1:]
+    # An explicit turn first authorizes its request, as its own step.
+    assert seen[0] == "auth"
+    assert seen[1] == "event"
+    assert "render" in seen[2:]
     # Every step is entered on the thread that runs it, one call each.
-    event_thread = ENTERED[0][3]
+    event_thread = ENTERED[1][3]
     assert event_thread != threading.get_ident()
     # The handler's own get_context_data() did not enter it again.
     assert seen.count("event") == 1
     assert {kind for _v, _s, kind, _t in ENTERED} == {"event"}
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_start_async_callback_runs_inside_the_wrapper(probe):
     import asyncio
@@ -235,9 +239,8 @@ async def test_start_async_callback_runs_inside_the_wrapper(probe):
     from djust.runtime import ViewRuntime
 
     view = ProbeView()
-    view.mount(None)
     runtime = ViewRuntime(_Transport(), scope=None)
-    runtime.view_instance = view
+    await amount_on_runtime(runtime, view, view_path=f"{__name__}.ProbeView")
 
     await runtime.dispatch_event({"type": "event", "event": "later", "params": {}, "ref": 1})
     for _ in range(100):

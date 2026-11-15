@@ -10,7 +10,7 @@ from ..base import Component
 from django.utils.html import conditional_escape
 from djust.components.utils import attr_text
 
-from djust.components.utils import progress_fill, safe_css_length, strict_styles, style_attrs
+from djust.components.utils import progress_fill, safe_css_length, csp_strict, style_attrs
 
 from djust._rust import RustProgress
 
@@ -44,7 +44,7 @@ class Progress(Component):
     _rust_impl_class = RustProgress
 
     # The fill is a `dj-progress-w-N` class. By default the height and the width are also the
-    # inline style they have always been; with LIVEVIEW_CONFIG["csp_strict_styles"] (a strict
+    # inline style they have always been; with LIVEVIEW_CONFIG["csp_strict"] (a strict
     # CSP refuses `style=`) the height is a `data-dj-style-height` the client applies (#3979).
     template = """<div class="progress"{% if height %}{% if strict_styles %} data-dj-style data-dj-style-height="{{ height }}"{% else %} style="height: {{ height }}"{% endif %}{% endif %}>
     <div class="progress-bar{% if striped %} progress-bar-striped{% endif %}{% if animated %} progress-bar-animated{% endif %} bg-{{ variant }} {{ fill_class }}"
@@ -122,13 +122,13 @@ class Progress(Component):
             "max_value": self.max_value,
             "percentage": self.percentage,
             "label_text": self.label_text,
-            "strict_styles": strict_styles(),
+            "strict_styles": csp_strict(),
             "fill_class": progress_fill(self.percentage)[0],
         }
 
     def _create_rust_instance(self, **props: Any) -> None:
         """The Rust instance writes the project's style mode too (#3979)."""
-        super()._create_rust_instance(**props, strict_styles=strict_styles())
+        super()._create_rust_instance(**props, strict_styles=csp_strict())
 
     def _render_custom(self) -> str:
         """Pure Python fallback (f-string rendering)."""
@@ -143,7 +143,7 @@ class Progress(Component):
 
         # Build outer style
         outer_style = style_attrs(height=self.height, css="height: {}")
-        width_line = "" if strict_styles() else f'\n         style="width: {self.percentage:.1f}%"'
+        width_line = "" if csp_strict() else f'\n         style="width: {self.percentage:.1f}%"'
 
         # Build label
         label_html = conditional_escape(self.label_text) if (self.show_label or self.label) else ""

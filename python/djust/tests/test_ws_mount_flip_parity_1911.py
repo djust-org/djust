@@ -95,32 +95,28 @@ class _FakeChannelLayer:
         return None
 
 
-def _consumer_with_view(view_class):
-    """A ``LiveViewConsumer`` with ``view_class`` mounted and its sends captured.
+async def _consumer_with_view(view_class):
+    """A ``LiveViewConsumer`` that mounted ``view_class``, its sends captured.
 
     Direct construction rather than a ``WebsocketCommunicator`` because these
     tests drive ``_tick_once`` explicitly — there is no timer to wait on and no
     wire to read. Follows the established pattern in
-    ``test_live_redirect_mount_resolve_1647.py``.
+    ``test_live_redirect_mount_resolve_1647.py``. The view is mounted through
+    the real ``handle_mount`` (its render establishes the diff baseline, so the
+    patch branch is exercised) because an explicit view's tick is authorized
+    by the runtime that mounted it; the tick loop that mount starts is stopped.
     """
+    from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer()
-    consumer.scope = {"session": None, "user": None}
     consumer.sent = []
 
     async def _capture(payload):
         consumer.sent.append(payload)
 
     consumer.send_json = _capture
-
-    view = view_class()
-    view.mount(None, **{})
-    # Establish the diff baseline the real mount render establishes. Without
-    # it the first render_with_diff() returns full HTML with patches=None,
-    # exercising the fallback rather than the patch branch tested here.
-    view.render_with_diff()
-    consumer.view_instance = view
+    await amount_on_consumer(consumer, f"{_ALLOWED}.{view_class.__name__}")
     return consumer
 
 
@@ -181,7 +177,7 @@ _ALLOWED = "djust.tests.test_ws_mount_flip_parity_1911"
 class PlainMountView(LiveView):
     """A plain view: the "other group" in the broadcast gate-off."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.PlainMountView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -195,7 +191,7 @@ class TickView(LiveView):
     """A view with a short ``tick_interval`` whose ``handle_tick`` changes public
     state — so the tick loop emits a ``source="tick"`` render frame."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     tick_interval = 50  # ms
     template = f'<div dj-root dj-view="{_ALLOWED}.TickView" dj-id="0">t={{{{ t }}}}</div>'
 
@@ -214,7 +210,7 @@ class StaticTickView(LiveView):
     NOTHING, so the #560 no-change guard must suppress the render. Proves a
     tick frame comes from a STATE CHANGE, not merely from a tick firing."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     tick_interval = 50  # ms
     template = f'<div dj-root dj-view="{_ALLOWED}.StaticTickView" dj-id="0">t={{{{ t }}}}</div>'
 
@@ -232,7 +228,7 @@ class NoTickView(LiveView):
     """Gate-off control: NO ``tick_interval`` → no tick frame ever (proves the
     tick frame comes from the interval opt-in, not from every mount)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.NoTickView" dj-id="0">t={{{{ t }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -246,7 +242,7 @@ class BroadcastView(LiveView):
     """Plain view — mount joins the per-view channel group, so a server-push
     broadcast to that group reaches this session (proves group_add at mount)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.BroadcastView" dj-id="0">v={{{{ v }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -273,7 +269,7 @@ class OptimisticUploadMountView(LiveView):
     manager) on its mount frame — the Phase-3.0 grows, characterized against the
     BESPOKE WS path."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     _component_descriptors = {"acc": _OptDescriptor()}
     template = f'<div dj-root dj-view="{_ALLOWED}.OptimisticUploadMountView" dj-id="0">ready</div>'
 
@@ -287,7 +283,7 @@ class OptimisticUploadMountView(LiveView):
 class PlainNoExtrasView(LiveView):
     """Gate-off control: no descriptors, no upload manager → neither key."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.PlainNoExtrasView" dj-id="0">ready</div>'
 
     def mount(self, request, **kwargs):
@@ -303,7 +299,7 @@ class PlainNoExtrasView(LiveView):
 class StickyChild(LiveView):
     """Sticky child embedded via ``{% live_render sticky=True %}``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # gap #4082: an explicit sticky child cannot survive live_redirect
     sticky = True
     sticky_id = "sticky-widget"
     template = "<div>track={{ track }}</div>"
@@ -318,7 +314,7 @@ class StickyChild(LiveView):
 class StickyParentView(LiveView):
     """Parent embedding the sticky child (the live_redirect SOURCE)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # gap #4082: an explicit sticky child cannot survive live_redirect
     template = (
         "{% load live_tags %}"
         f'<div dj-root dj-view="{_ALLOWED}.StickyParentView" dj-id="0">'
@@ -338,7 +334,7 @@ class DestinationWithSlotView(LiveView):
     """live_redirect DESTINATION carrying a matching ``[dj-sticky-slot]`` so the
     survivor reattaches and appears in the sticky_hold ``views`` list."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # gap #4082: an explicit sticky child cannot survive live_redirect
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.DestinationWithSlotView" dj-id="0">'
         '<h1>Dest B</h1><div dj-sticky-slot="sticky-widget"></div></div>'
@@ -354,7 +350,7 @@ class DestinationWithSlotView(LiveView):
 class RedirectViewA(LiveView):
     """Plain re-mount source A (no sticky) for the idempotency test."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.RedirectViewA" dj-id="0"><h1>A</h1></div>'
 
     def mount(self, request, **kwargs):
@@ -367,7 +363,7 @@ class RedirectViewA(LiveView):
 class RedirectViewB(LiveView):
     """Plain re-mount destination B for the idempotency test."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.RedirectViewB" dj-id="0"><h1>B</h1></div>'
 
     def mount(self, request, **kwargs):
@@ -404,7 +400,7 @@ except Exception:  # pragma: no cover - channels/Django optional at import time
 # ===========================================================================
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestStickyHoldOrdering:
     async def test_sticky_hold_precedes_mount_frame_on_live_redirect(self):
@@ -501,7 +497,7 @@ class TestStickyHoldOrdering:
 # ===========================================================================
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestGroupAddReachability:
     async def test_mount_joins_view_group_broadcast_reaches_session(self):
@@ -568,7 +564,7 @@ class TestGroupAddReachability:
 # ===========================================================================
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestTickAtMount:
     async def test_tick_once_emits_a_source_tick_frame(self):
@@ -585,7 +581,7 @@ class TestTickAtMount:
         is the same one — drive the async primitive explicitly and assert the
         logical invariant.
         """
-        consumer = _consumer_with_view(TickView)
+        consumer = await _consumer_with_view(TickView)
 
         sent = await consumer._tick_once()
 
@@ -600,7 +596,7 @@ class TestTickAtMount:
         """The other half of what the wall-clock test proved: mount STARTS the
         loop. Asserted structurally against the runtime's mount path, so it
         does not depend on any tick actually having fired yet."""
-        consumer = _consumer_with_view(TickView)
+        consumer = await _consumer_with_view(TickView)
         assert consumer._tick_task is None
 
         assert _start_tick_task(consumer, TickView) is True
@@ -625,7 +621,7 @@ class TestTickAtMount:
         """
         from djust.runtime import WSConsumerTransport
 
-        consumer = _consumer_with_view(TickView)
+        consumer = await _consumer_with_view(TickView)
         consumer.channel_layer = _FakeChannelLayer()
         consumer.channel_name = "t"
         consumer.scope = {
@@ -651,7 +647,7 @@ class TestTickAtMount:
         pass merely because mounting always creates a task."""
         from djust.runtime import WSConsumerTransport
 
-        consumer = _consumer_with_view(NoTickView)
+        consumer = await _consumer_with_view(NoTickView)
         consumer.channel_layer = _FakeChannelLayer()
         consumer.channel_name = "t"
         consumer.scope = {
@@ -675,7 +671,7 @@ class TestTickAtMount:
         """GATE-OFF (#1468): the frame comes from ``handle_tick`` CHANGING
         state, not from the tick firing. A view whose handle_tick is a no-op
         must send nothing — so the assertion above cannot pass for free."""
-        consumer = _consumer_with_view(StaticTickView)
+        consumer = await _consumer_with_view(StaticTickView)
 
         sent = await consumer._tick_once()
 
@@ -688,7 +684,7 @@ class TestTickAtMount:
     async def test_gate_off_tick_once_skips_during_a_user_event(self):
         """GATE-OFF (#1468) for the #560 sequencing guard: a tick that lands
         while a user event is in flight must skip rather than interleave."""
-        consumer = _consumer_with_view(TickView)
+        consumer = await _consumer_with_view(TickView)
         consumer._processing_user_event = True
 
         assert await consumer._tick_once() is False
@@ -719,7 +715,7 @@ class TestTickAtMount:
 # ===========================================================================
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestOptimisticUploadOnMountFrame:
     async def test_mount_frame_carries_optimistic_rules_and_upload_configs(self):
@@ -770,7 +766,7 @@ class TestOptimisticUploadOnMountFrame:
 # ===========================================================================
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestLiveRedirectRemountIdempotency:
     async def test_live_redirect_actually_remounts_not_noop(self):

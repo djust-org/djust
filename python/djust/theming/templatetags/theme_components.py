@@ -24,7 +24,7 @@ from django.template import Context
 from django.utils.html import format_html
 from django.utils.safestring import SafeString, mark_safe
 
-from djust.components.utils import _srcset_candidates, url_allowed
+from djust.components.utils import _srcset_candidates, csp_strict, url_allowed
 
 from ..manager import get_theme_config
 from ..template_resolver import resolve_component_template
@@ -78,8 +78,13 @@ def theme_button(
         element: 'button' or 'a'. Defaults to 'a' when ``href`` is given and
             'button' otherwise.
         **attrs: Additional HTML attributes. ``class``, ``id``, ``onclick``
-            and ``type`` (``<button>`` only) are handled by the template;
-            everything else (``dj_click``, ``dj_value_id``, ``name``,
+            and ``type`` (``<button>`` only) are handled by the template.
+            ``onclick`` is the caller's own inline handler, written as given
+            (escaped for the attribute): a ``Content-Security-Policy`` whose
+            ``script-src`` lacks ``'unsafe-inline'`` refuses it. Under such a
+            policy use ``dj_click="handler"`` (a server event) or a JS command
+            instead; see "Inline event handlers" in the security guide (#4146).
+            Everything else (``dj_click``, ``dj_value_id``, ``name``,
             ``value``, ``disabled``, ``data_*``, ``aria_*`` ...) is emitted on
             the element, escaped per attribute, underscores becoming hyphens.
             Other ``on*`` handler attributes are refused. On an ``<a>``,
@@ -123,6 +128,15 @@ def theme_button(
     # templates only ever read as `attrs.class` / `attrs.id`, so a
     # caller-supplied slot rendered as nothing at all.
     slots, remaining_attrs = _extract_slots(attrs)
+    if remaining_attrs.get("onclick"):
+        # The caller's handler is written into ``onclick="..."`` by every pack's button.html as
+        # ``{{ attrs.onclick }}``, which leaves a marked-safe value alone, and a template literal
+        # is marked safe: ``onclick='go("a")'`` closed the attribute at its first ``"`` (#4146).
+        # ``escape`` (not ``conditional_escape``), as ``_passthrough_attrs`` does for every other
+        # attribute: the browser decodes it back to exactly the caller's text.
+        from django.utils.html import escape
+
+        remaining_attrs = {**remaining_attrs, "onclick": escape(remaining_attrs["onclick"])}
     ctx = {
         "text": text,
         "variant": variant,
@@ -261,6 +275,8 @@ def theme_alert(
     # caller-supplied slot rendered as nothing at all.
     slots, remaining_attrs = _extract_slots(attrs)
     ctx = {
+        # #4146: the close button's inline onclick by default, a marker under csp_strict.
+        "csp_strict": csp_strict(),
         "message": message,
         "title": title,
         "variant": variant,
@@ -1222,6 +1238,8 @@ def theme_toast(
     request = context.get("request")
     tmpl = resolve_component_template(request, "toast")
     ctx = {
+        # #4146: the close button's inline onclick by default, a marker under csp_strict.
+        "csp_strict": csp_strict(),
         "message": message,
         "variant": variant,
         "position": position,

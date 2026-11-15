@@ -10,7 +10,7 @@ from django.utils.html import conditional_escape
 from djust.components.utils import attr_text
 from django.utils.safestring import SafeString, mark_safe
 
-from ..utils import strict_styles, style_attrs
+from ..utils import csp_strict, style_attrs
 
 
 class SpinnerComponent(LiveComponent):
@@ -192,7 +192,7 @@ class SpinnerComponent(LiveComponent):
                 if i:
                     delay = style_attrs(animation_delay=f"{i * 150}ms", css="animation-delay: {};")
                 else:  # the first dot has no delay (an empty style, as it always had)
-                    delay = "" if strict_styles() else ' style=""'
+                    delay = "" if csp_strict() else ' style=""'
                 html += f'<div class="h-2 w-2 {color_class.replace("border-", "bg-")} rounded-full animate-bounce"{delay}></div>'
             html += "</div>"
             if self.label:

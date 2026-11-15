@@ -12,7 +12,7 @@ for all five:
    ``DjustTemplateBackend`` (the Rust engine; a native handler wins).
 2. **Every component class** the URL sweep drives (``url_sweep.component_classes``), under each
    of the three ``css_framework`` renderers.
-3. **Each in both modes** of ``LIVEVIEW_CONFIG["csp_strict_styles"]`` (#3979), with a request
+3. **Each in both modes** of ``LIVEVIEW_CONFIG["csp_strict"]`` (#3979), with a request
    that carries a CSP nonce (:data:`NONCE`).
 
 What it reports (:func:`findings`) is ``(kind, detail)`` per output:
@@ -171,12 +171,12 @@ def inventory() -> dict[str, variants.TagInfo]:
 def mode(name: str) -> Iterator[None]:
     from djust.config import config
 
-    before = config.get("csp_strict_styles", False)
-    config.set("csp_strict_styles", name == "strict")
+    before = config.get("csp_strict", False)
+    config.set("csp_strict", name == "strict")
     try:
         yield
     finally:
-        config.set("csp_strict_styles", before)
+        config.set("csp_strict", before)
 
 
 @contextlib.contextmanager
@@ -229,7 +229,23 @@ EXTRA_CALLS: dict[str, list[tuple[str, dict[str, Any]]]] = {
     "theme_form_tags:theme_form_errors": [
         ("{% load theme_form_tags %}{% theme_form_errors form=bound_form %}", {}),
     ],
+    # The caller's own ``onclick=`` (#4146): the one handler djust writes because it was asked
+    # to. :data:`CALLER_HANDLER_VARIANTS` names this call; a handler in any other call is djust's.
+    "theme_components:theme_button": [
+        ('{% load theme_components %}{% theme_button "Go" onclick="go()" %}', {}),
+    ],
 }
+
+#: The calls that pass a caller's ``onclick=`` (#4146), per key: the variant names the test
+#: excuses a ``<button onclick>`` in. The tag's is its ``EXTRA_CALLS`` entry; the component
+#: class's is a second render with :data:`CALLER_ONCLICK_KWARGS`.
+CALLER_HANDLER_VARIANTS: dict[str, str] = {
+    "theme_components:theme_button": "extra_0",
+    "djust.components.components.button.Button": "caller_onclick",
+}
+
+#: What the ``caller_onclick`` render of a component class in :data:`CALLER_HANDLER_VARIANTS` adds.
+CALLER_ONCLICK_KWARGS = {"onclick": "go()"}
 
 #: The arguments a ``*_block`` tag requires (its inline twin's, less the one the body fills).
 BLOCK_ARGS = {
@@ -345,14 +361,20 @@ def run_sweep(only: Optional[set[str]] = None, plant: Optional[str] = None) -> S
                     continue
                 _names, required = url_sweep.component_params(cls)
                 required = {**required, **EXTRA_KWARGS.get(key, {})}
+                calls = [("required", required)]
+                if CALLER_HANDLER_VARIANTS.get(key) == "caller_onclick":
+                    calls.append(("caller_onclick", {**required, **CALLER_ONCLICK_KWARGS}))
                 for fw in COMPONENT_FRAMEWORKS:
-                    with framework(fw):
-                        harness.reset_ids()
-                        try:
-                            out = str(cls(**required).render())  # type: ignore[call-arg]
-                        except Exception:  # noqa: BLE001 - a class that needs more draws nothing
-                            continue
-                    engine_name = "class:" + fw
-                    sweep.rendered.setdefault((mode_name, engine_name), set()).add(key)
-                    sweep.renders.append(Render(mode_name, engine_name, key, "required", findings(out)))
+                    for variant_name, kwargs in calls:
+                        with framework(fw):
+                            harness.reset_ids()
+                            try:
+                                out = str(cls(**kwargs).render())  # type: ignore[call-arg]
+                            except Exception:  # noqa: BLE001 - a class that needs more draws nothing
+                                continue
+                        engine_name = "class:" + fw
+                        sweep.rendered.setdefault((mode_name, engine_name), set()).add(key)
+                        sweep.renders.append(
+                            Render(mode_name, engine_name, key, variant_name, findings(out))
+                        )
     return sweep

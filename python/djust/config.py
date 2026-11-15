@@ -221,14 +221,21 @@ class LiveViewConfig:
         # ``LIVEVIEW_CONFIG["auto_navigate"] = False`` (e.g. apps that wire their
         # own external TurboNav). On 1.0.x this defaulted OFF (opt-in).
         "auto_navigate": True,
-        # Free-form style values under a strict Content-Security-Policy (#3979).
-        # OFF (default): a component writes a checked width, colour or height as
-        # an inline ``style`` attribute, as it always has (there at first paint,
-        # and with JavaScript off). ON (``LIVEVIEW_CONFIG["csp_strict_styles"]
-        # = True``, for a ``style-src`` without 'unsafe-inline'): it writes
-        # ``data-dj-style-*`` attributes instead, the page head carries
-        # ``<meta name="djust-styles" content="attrs">``, and the client applies
-        # them through the CSSOM. Without that meta the client applies nothing.
+        # Output for a strict Content-Security-Policy (#3979, #4146): a
+        # ``style-src`` and ``script-src`` without 'unsafe-inline'.
+        # OFF (default): components write what they always have, an inline
+        # ``style`` for a checked width, colour or height (there at first paint,
+        # and with JavaScript off) and an inline ``onclick`` on NavBar's menu
+        # toggle and the theme alert's and toast's close button (no script
+        # needed). ON (``LIVEVIEW_CONFIG["csp_strict"] = True``): free-form
+        # values are ``data-dj-style-*`` attributes the client applies through
+        # the CSSOM (the page head carries ``<meta name="djust-styles"
+        # content="attrs">``), and those handlers are markers that static
+        # modules handle from a delegated listener.
+        "csp_strict": False,
+        # The same switch under the name it shipped with (#3979): either on means
+        # strict (``components.utils.csp_strict``). Setting both to different
+        # values is reported by the system check ``djust.C039``.
         "csp_strict_styles": False,
         # Re-check auth on every WS event (#1777, threat model T3, defense-in-depth).
         # Auth normally runs only at mount; with this OFF (default) an

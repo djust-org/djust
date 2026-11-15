@@ -880,7 +880,7 @@ def table_width(value: Any) -> Any:
 def table_width_attrs(value: Any) -> Any:
     """``col.width`` as the header's width attribute(s), or ``""`` (#3979).
 
-    ``' style="width:..."'`` by default; with ``LIVEVIEW_CONFIG["csp_strict_styles"]`` the
+    ``' style="width:..."'`` by default; with ``LIVEVIEW_CONFIG["csp_strict"]`` the
     ``data-dj-style-*`` attributes the client applies. The value passes the same check as
     :func:`table_width`."""
     if not value:
@@ -1149,14 +1149,11 @@ def data_table(
             on the dj-click. Default "id". Override for slug-based routing
             (e.g. "uuid", "slug").
         row_url: row dict key holding a URL. When set, the <tr> gets
-            data-href + an inline onclick that navigates via
-            window.location. **Security**: values flow into JS via
-            ``this.dataset.href`` — only assign developer-controlled URLs
-            (typically computed from ``reverse()``). User-controlled
-            strings could enable ``javascript:`` URI execution.
-            **CSP**: requires ``'unsafe-inline'`` in script-src; prefer
-            row_click_event when CSP is strict. row_click_event takes
-            precedence when both are set.
+            data-href, and ``data-table-row-click.js`` (which the table
+            loads) navigates to it; no inline handler (#3887). Only an
+            http(s) URL or a path starting with ``/`` or ``.`` is followed
+            (not ``//host``). row_click_event
+            takes precedence when both are set.
 
     Cell-level link column (#1110):
         column dicts now accept ``link`` (key in row dict holding the

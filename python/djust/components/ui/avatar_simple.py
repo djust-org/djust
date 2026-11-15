@@ -33,7 +33,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-from djust.components.utils import data_url_attr, attr_text, strict_styles, style_attrs
+from djust.components.utils import data_url_attr, attr_text, csp_strict, style_attrs
 
 from djust._rust import RustAvatar
 
@@ -92,7 +92,7 @@ class Avatar(Component):
 
     def _create_rust_instance(self, **props: Any) -> None:
         """The Rust instance writes the project's style mode too (#3979)."""
-        super()._create_rust_instance(**props, strict_styles=strict_styles())
+        super()._create_rust_instance(**props, strict_styles=csp_strict())
 
     def get_context_data(self) -> dict[str, Any]:
         return {

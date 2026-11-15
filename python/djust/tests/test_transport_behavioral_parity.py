@@ -557,6 +557,23 @@ def _event_runtime_with_view(view):
     return runtime, transport
 
 
+async def _mounted_event_runtime(view, *, user=None):
+    """A ViewRuntime that has MOUNTED *view* through the real ``dispatch_mount``.
+
+    The explicit-policy counterpart of :func:`_event_runtime_with_view`: an
+    explicit view's events are authorized against its mount binding to a live
+    server session, so the view is mounted (``_live_session.amount_on_runtime``)
+    rather than installed. Needs ``django_db(transaction=True)``.
+    """
+    from djust.runtime import ViewRuntime
+    from djust.tests._live_session import amount_on_runtime
+
+    transport = MockTransport()
+    runtime = ViewRuntime(transport)
+    await amount_on_runtime(runtime, view, user=user)
+    return runtime, transport
+
+
 class _BumpView(_EventSpineMixin, LiveView):
     """A handler that changes public state (forces a render)."""
 

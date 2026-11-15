@@ -32,7 +32,7 @@ Example usage:
 Template usage (``p.color`` is the user's colour checked in the view with
 ``djust.components.utils.style_value("background-color", p["meta"]["color"])``: a value
 from data is never written into a style unchecked, #3979; under a strict CSP use
-``style_attrs`` and ``LIVEVIEW_CONFIG["csp_strict_styles"]`` instead):
+``style_attrs`` and ``LIVEVIEW_CONFIG["csp_strict"]`` instead):
 
     <div class="presence-bar">
       {{ presence_count }} users online

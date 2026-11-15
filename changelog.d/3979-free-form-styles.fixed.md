@@ -7,7 +7,7 @@
   with one warning per property). By default the result is the inline `style`
   each component has always written, byte for byte, so nothing changes for an
   app without a strict style policy. With
-  `LIVEVIEW_CONFIG["csp_strict_styles"] = True` (for a `style-src` without
+  `LIVEVIEW_CONFIG["csp_strict"] = True` (for a `style-src` without
   `'unsafe-inline'`) components write `data-dj-style` plus
   `data-dj-style-<property>="<value>"` instead, pages carry
   `<meta name="djust-styles" content="attrs">` in their head (the setting is
