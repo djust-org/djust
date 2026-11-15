@@ -57,6 +57,7 @@ MIGRATED_4082: tuple[str, ...] = (
     "python/djust/tests/test_trusted_dispatch_context.py",
     "python/djust/tests/test_turn_middleware_transports.py",
     "python/djust/tests/test_ws_transport_hardening_f21_f17.py",
+    "python/tests/test_form_as_liveview_state_3767.py",
     "python/tests/test_remaining_builtin_tags_2556.py",
     "python/tests/test_sse.py",
     "python/tests/test_sse_ws_symmetry.py",
@@ -116,9 +117,6 @@ REMAINING_4082: dict[str, str] = {
     ),
     "python/tests/test_form_adapter_a11y.py": (
         "migrated; the test-client case stays legacy: product gap #4151, LiveView.render() cannot resolve view for form tags under explicit"
-    ),
-    "python/tests/test_form_as_liveview_state_3767.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
     ),
     "python/tests/test_render_call_guard_3815.py": (
         "migrated; the lazy live_render children stay legacy: gap, {% live_render lazy %} refuses explicit children (ADR-038 D-m)"

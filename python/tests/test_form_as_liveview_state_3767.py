@@ -59,7 +59,7 @@ from django.test import override_settings
 from django.utils.safestring import mark_safe
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from djust.testing import LiveViewTestClient
 
 pytestmark = [pytest.mark.pr_tier]
@@ -183,9 +183,23 @@ def _page(src: str) -> str:
     return "<div dj-root>" + LOAD + src + "</div>"
 
 
+class _Held(LiveView):
+    """An explicit view supplies what its template reads (ADR-038). A form is no
+    ``state()`` field (it is not JSON): the view holds it as an attribute and
+    returns it from ``get_context_data``, as the explicit guide says for any
+    value that is not declared state. ``SUPPLIES`` names those attributes."""
+
+    exposure_policy = "explicit"
+    SUPPLIES: tuple[str, ...] = ()
+
+    def get_context_data(self, **kwargs):
+        held = {name: getattr(self, name) for name in self.SUPPLIES if hasattr(self, name)}
+        return super().get_context_data(**held, **kwargs)
+
+
 def _view_class(src: str, make: Callable[[], dict[str, Any]]) -> type[LiveView]:
-    class HeldView(LiveView):
-        exposure_policy = "legacy"
+    class HeldView(_Held):
+        SUPPLIES = tuple(make())
         template = _page(src)
 
         def mount(self, request, **kwargs):
@@ -254,10 +268,11 @@ class TestTheIssuesExactClaims:
 # --------------------------------------------------------------------------- #
 
 
-class SteppingView(LiveView):
+class SteppingView(_Held):
     """A form that CHANGES: the partial-render path only runs for a changed name."""
 
-    exposure_policy = "legacy"
+    SUPPLIES = ("form",)
+    tick = state(0)
     template = _page("")
 
     def mount(self, request, **kwargs):
@@ -465,8 +480,8 @@ class TestTheLimit:
 
         wrapped = self._wrapped
 
-        class V(LiveView):
-            exposure_policy = "legacy"
+        class V(_Held):
+            SUPPLIES = ("deep4", "deep5")
             template = _page("[{{ deep4.0.0.0.0.name.errors }}][{{ deep5.0.0.0.0.0.name.errors }}]")
 
             def mount(self, request, **kwargs):
@@ -519,8 +534,8 @@ class TestAManagementFormHeldDirectly:
         return user, fs
 
     def _live(self, src, attrs):
-        class V(LiveView):
-            exposure_policy = "legacy"
+        class V(_Held):
+            SUPPLIES = tuple(attrs())
             template = _page(src)
 
             def mount(self, request, **kwargs):
@@ -554,8 +569,9 @@ class TestAManagementFormHeldDirectly:
 # --------------------------------------------------------------------------- #
 
 
-class KeepView(LiveView):
-    exposure_policy = "legacy"
+class KeepView(_Held):
+    SUPPLIES = ("forms", "d")
+    tick = state(0)
     template = _page(
         "{% for f in forms %}{{ f.name.errors }}{% endfor %}{{ d.form.name.errors }}[{{ tick }}]"
     )
@@ -613,8 +629,10 @@ class TestAContainerOfFormsSurvivesAnEventThatDoesNotChangeIt:
 @pytest.mark.django_db
 class TestAFormIsNotState:
     def _view(self):
-        class V(LiveView):
-            exposure_policy = "legacy"
+        class V(_Held):
+            SUPPLIES = ("form",)
+            # client=True: the field get_state() (the client projection) exports.
+            plain = state("", client=True)
             template = _page("{{ form.name }}{{ plain }}")
 
             def mount(self, request, **kwargs):
@@ -638,8 +656,9 @@ class TestAFormIsNotState:
         """Control for the assertion above: past the scan depth a form is still flattened into
         the state, and the snapshot then holds its markup."""
 
-        class V(LiveView):
-            exposure_policy = "legacy"
+        class V(_Held):
+            SUPPLIES = ("deep",)
+            plain = state("")
             template = _page("{{ plain }}")
 
             def mount(self, request, **kwargs):
@@ -672,8 +691,9 @@ class TestAFormIsNotState:
         holds ``{name: html}`` under ``form``. The value stack answers first, so it must go, on an
         event that does not re-send the form too."""
 
-        class V(LiveView):
-            exposure_policy = "legacy"
+        class V(_Held):
+            SUPPLIES = ("form",)
+            tick = state(0)
             template = _page("{{ form.name }}[{{ tick }}]")
 
             def mount(self, request, **kwargs):
@@ -714,8 +734,8 @@ def _http_get(view_cls: type[LiveView]) -> str:
     return view_cls.as_view()(request).content.decode()
 
 
-class WsFormView(LiveView):
-    exposure_policy = "legacy"
+class WsFormView(_Held):
+    SUPPLIES = ("form",)
     template = _page(COMPOSITE)
 
     def mount(self, request, **kwargs):
@@ -730,8 +750,8 @@ class WsFormView(LiveView):
         self.form = _valid()
 
 
-class HttpFormView(LiveView):
-    exposure_policy = "legacy"
+class HttpFormView(_Held):
+    SUPPLIES = ("form",)
     template = _page(COMPOSITE)
 
     def mount(self, request, **kwargs):
@@ -742,13 +762,13 @@ async def _ws_run(view_path: str, events: list[str]) -> list[str]:
     """The html after mount, and (via ``request_html``) after each event."""
     from channels.testing import WebsocketCommunicator
 
+    from asgiref.sync import sync_to_async
+
+    from djust.tests._live_session import with_live_session
     from djust.websocket import LiveViewConsumer
 
-    class _Session:
-        session_key = "ws-3767"
-
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    communicator.scope["session"] = _Session()
+    await sync_to_async(with_live_session)(communicator)
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from()
@@ -837,8 +857,8 @@ class TestIncludesCarryTheForm:
         ]
         src = "{% include 'form_3767.html' %}"
 
-        class V(LiveView):
-            exposure_policy = "legacy"
+        class V(_Held):
+            SUPPLIES = ("form", "d")
             template = _page(src)
 
             def mount(self, request, **kwargs):
@@ -866,20 +886,27 @@ class TestTheSseTransport:
     @pytest.mark.asyncio
     async def test_sse_mount_and_event_carry_the_form(self):
         pytest.importorskip("channels")
-        from django.contrib.auth.models import AnonymousUser
-        from django.contrib.sessions.backends.db import SessionStore
+        from asgiref.sync import sync_to_async
+        from django.contrib.auth import get_user
         from django.test import RequestFactory
 
         from djust.runtime import SSESessionTransport, ViewRuntime
         from djust.sse import SSESession, _sse_sessions
+        from djust.tests._live_session import with_live_session
 
         session = SSESession("sse-3767")
         _sse_sessions["sse-3767"] = session
         session.runtime = ViewRuntime(SSESessionTransport(session))
-        request = RequestFactory().get("/")
-        request.user = AnonymousUser()
-        request.session = SessionStore()
+        request = await sync_to_async(with_live_session)(RequestFactory().get("/"))
         session._request = request
+
+        def event_post():
+            """The browser's ``/message/`` POST: the stream's session, its user read
+            from it as ``AuthenticationMiddleware`` reads it."""
+            post = RequestFactory().post("/")
+            post.session = type(request.session)(request.session.session_key)
+            post.user = get_user(post)
+            return post
 
         def frames() -> list[dict[str, Any]]:
             out = []
@@ -899,6 +926,7 @@ class TestTheSseTransport:
                 assert _canon(mounted[0]["html"]) == _canon(
                     _django(COMPOSITE, {"form": _unbound()})
                 )
+                session._event_request = await sync_to_async(event_post)()
                 await session.runtime.dispatch_event(
                     {"type": "event", "event": "to_invalid", "params": {}, "ref": 1}
                 )
@@ -909,11 +937,11 @@ class TestTheSseTransport:
             _sse_sessions.pop("sse-3767", None)
 
 
-class ShellView(LiveView):
+class ShellView(_Held):
     """The form is read OUTSIDE the dj-root too: the page shell renders that part, on its own
     ``RustLiveView`` (``render_full_template``), which only a ``template_name`` view has."""
 
-    exposure_policy = "legacy"
+    SUPPLIES = ("form", "d")
     template_name = "page_3767.html"
 
     def mount(self, request, **kwargs):
