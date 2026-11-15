@@ -1,19 +1,19 @@
-<div class="{{ css_prefix }}input-group {% if attrs.class %}{{ attrs.class }}{% endif %}">
+<div class="{{ css_prefix }}input-group {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}">
     {% if slot_label %}
     {{ slot_label }}
     {% elif label %}
-    <label for="{{ field_id|default:name }}" class="{{ css_prefix }}input-label">{{ label }}</label>
+    <label for="{{ field_id|default:name|force_escape }}" class="{{ css_prefix }}input-label">{{ label }}</label>
     {% endif %}
     {% if slot_input %}
     {{ slot_input }}
     {% else %}
     <input
-        type="{{ type }}"
-        name="{{ name }}"
-        id="{{ field_id|default:name }}"
-        placeholder="{{ placeholder }}"
+        type="{{ type|force_escape }}"
+        name="{{ name|force_escape }}"
+        id="{{ field_id|default:name|force_escape }}"
+        placeholder="{{ placeholder|force_escape }}"
         class="{{ css_prefix }}input"
-        {% if attrs.value %}value="{{ attrs.value }}"{% endif %}
+        {% if attrs.value %}value="{{ attrs.value|force_escape }}"{% endif %}
         {% if attrs.required %}required{% endif %}
         {% if attrs.disabled %}disabled{% endif %}
         {% if attrs.readonly %}readonly{% endif %}

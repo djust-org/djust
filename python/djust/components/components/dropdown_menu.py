@@ -2,7 +2,8 @@
 
 import html
 
-from django.utils.html import conditional_escape
+
+from djust.components.utils import attr_text
 from djust import Component
 from typing import Any, Optional
 
@@ -92,7 +93,7 @@ class DropdownMenu(Component):
         menu_items = [render_menu_item(item, event_attrs=_event_attrs) for item in self.items]
 
         menu = (
-            f'<div class="dj-dropdown-menu__content dj-dropdown-menu--{conditional_escape(self.align)}" '
+            f'<div class="dj-dropdown-menu__content dj-dropdown-menu--{attr_text(self.align)}" '
             f'role="menu">{"".join(menu_items)}</div>'
         )
 

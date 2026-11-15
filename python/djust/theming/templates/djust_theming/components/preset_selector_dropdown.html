@@ -1,8 +1,8 @@
 {# Preset selector: dropdown layout #}
-<select class="theme-preset-select {{ dropdown_class }}"
+<select class="theme-preset-select {{ dropdown_class|force_escape }}"
         data-theme-preset-select
         aria-label="Select theme">
     {% for preset in presets %}
-    <option value="{{ preset.name }}"{% if preset.is_active %} selected{% endif %}>{{ preset.display_name }}</option>
+    <option value="{{ preset.name|force_escape }}"{% if preset.is_active %} selected{% endif %}>{{ preset.display_name }}</option>
     {% endfor %}
 </select>

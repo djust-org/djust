@@ -1,6 +1,6 @@
-<nav class="{{ css_prefix }}pagination {% if attrs.class %}{{ attrs.class }}{% endif %}"
+<nav class="{{ css_prefix }}pagination {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
      aria-label="Pagination"
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     <ul class="{{ css_prefix }}pagination-list">
         <li>
             {% if slot_prev %}

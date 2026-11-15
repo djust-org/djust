@@ -158,7 +158,7 @@ class ButtonGroup(Component):
 
         buttons_str = "\n".join(button_html)
 
-        return f'<div class="{group_class}{size_class}" role="{conditional_escape(self.role)}" aria-label="Button group">\n{buttons_str}\n</div>'
+        return f'<div class="{group_class}{size_class}" role="{attr_text(self.role)}" aria-label="Button group">\n{buttons_str}\n</div>'
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS button group"""
@@ -222,12 +222,12 @@ class ButtonGroup(Component):
 
         buttons_str = "\n".join(button_html)
 
-        return f'<div class="inline-flex {flex_dir}" role="{conditional_escape(self.role)}" aria-label="Button group">\n{buttons_str}\n</div>'
+        return f'<div class="inline-flex {flex_dir}" role="{attr_text(self.role)}" aria-label="Button group">\n{buttons_str}\n</div>'
 
     def _render_plain(self) -> str:
         """Render plain HTML button group"""
         # Size class
-        size_class = f" btn-group-{conditional_escape(self.size)}" if self.size != "md" else ""
+        size_class = f" btn-group-{attr_text(self.size)}" if self.size != "md" else ""
 
         # Vertical or horizontal
         group_class = "btn-group-vertical" if self.vertical else "btn-group"
@@ -249,4 +249,4 @@ class ButtonGroup(Component):
 
         buttons_str = "\n".join(button_html)
 
-        return f'<div class="{group_class}{size_class}" role="{conditional_escape(self.role)}" aria-label="Button group">\n{buttons_str}\n</div>'
+        return f'<div class="{group_class}{size_class}" role="{attr_text(self.role)}" aria-label="Button group">\n{buttons_str}\n</div>'

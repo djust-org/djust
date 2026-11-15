@@ -7,6 +7,7 @@ Provides loading spinners for indicating activity.
 from typing import Dict, Any
 from ..base import LiveComponent
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from django.utils.safestring import SafeString, mark_safe
 
 from ..utils import strict_styles, style_attrs
@@ -119,7 +120,7 @@ class SpinnerComponent(LiveComponent):
         spinner_type = "spinner-border" if self.type == "border" else "spinner-grow"
 
         # Variant
-        variant_class = f"text-{conditional_escape(self.variant)}"
+        variant_class = f"text-{attr_text(self.variant)}"
 
         # Container classes
         container_class = ""
@@ -130,9 +131,9 @@ class SpinnerComponent(LiveComponent):
 
         # Build HTML
         html = (
-            f'<div class="{container_class}" id="{conditional_escape(self.component_id)}">'
+            f'<div class="{container_class}" id="{attr_text(self.component_id)}">'
             if container_class
-            else f'<div id="{conditional_escape(self.component_id)}">'
+            else f'<div id="{attr_text(self.component_id)}">'
         )
 
         html += (
@@ -182,11 +183,11 @@ class SpinnerComponent(LiveComponent):
         # Spinner animation based on type
         if self.type == "grow" or self.type == "pulse":
             # Pulse animation
-            html = f'<div class="{container_class}" id="{conditional_escape(self.component_id)}">'
+            html = f'<div class="{container_class}" id="{attr_text(self.component_id)}">'
             html += f'<div class="{size_class} {color_class.replace("border-", "bg-")} rounded-full animate-pulse"></div>'
         elif self.type == "dots":
             # Dots animation
-            html = f'<div class="{container_class} space-x-2" id="{conditional_escape(self.component_id)}">'
+            html = f'<div class="{container_class} space-x-2" id="{attr_text(self.component_id)}">'
             for i in range(3):
                 if i:
                     delay = style_attrs(animation_delay=f"{i * 150}ms", css="animation-delay: {};")
@@ -199,7 +200,7 @@ class SpinnerComponent(LiveComponent):
             return html
         else:
             # Border/ring spinner (default)
-            html = f'<div class="{container_class}" id="{conditional_escape(self.component_id)}">'
+            html = f'<div class="{container_class}" id="{attr_text(self.component_id)}">'
             html += f'<div class="animate-spin rounded-full {size_class} border-4 border-gray-200 {color_class} border-t-transparent"></div>'
 
         # Label
@@ -227,7 +228,7 @@ class SpinnerComponent(LiveComponent):
         if self.inline:
             container_class += " spinner-inline"
 
-        html = f'<div class="{container_class}" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="{container_class}" id="{attr_text(self.component_id)}">'
 
         # Spinner type
         if self.type == "dots":
@@ -235,10 +236,12 @@ class SpinnerComponent(LiveComponent):
             html += "<span></span><span></span><span></span>"
             html += "</div>"
         elif self.type == "pulse":
-            html += f'<div class="spinner-pulse {size_class} spinner-{conditional_escape(self.variant)}"></div>'
+            html += (
+                f'<div class="spinner-pulse {size_class} spinner-{attr_text(self.variant)}"></div>'
+            )
         else:
             # Default border spinner
-            html += f'<div class="spinner {size_class} spinner-{conditional_escape(self.variant)}">'
+            html += f'<div class="spinner {size_class} spinner-{attr_text(self.variant)}">'
             html += '<div class="spinner-border"></div>'
             html += "</div>"
 

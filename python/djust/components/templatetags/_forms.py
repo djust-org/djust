@@ -81,10 +81,10 @@ def slider(
         value = min_val
     value = int(value)
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    dj_event = conditional_escape(event or name)
-    e_class = conditional_escape(custom_class)
+    dj_event = attr_text(event or name)
+    e_class = attr_text(custom_class)
 
     disabled_attr = " disabled" if disabled else ""
     range_mode = value_end is not None
@@ -174,12 +174,12 @@ def search_input(
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    e_value = conditional_escape(value)
-    e_placeholder = conditional_escape(placeholder)
-    dj_event = conditional_escape(event or name)
-    e_class = conditional_escape(custom_class)
+    e_value = attr_text(value)
+    e_placeholder = attr_text(placeholder)
+    dj_event = attr_text(event or name)
+    e_class = attr_text(custom_class)
     debounce_val = int(debounce)
 
     disabled_attr = " disabled" if disabled else ""
@@ -263,13 +263,13 @@ def password_input(
     if isinstance(show_strength, str):
         show_strength = show_strength.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    e_value = conditional_escape(value)
-    e_placeholder = conditional_escape(placeholder)
-    dj_event = conditional_escape(event or name)
+    e_value = attr_text(value)
+    e_placeholder = attr_text(placeholder)
+    dj_event = attr_text(event or name)
     e_error = conditional_escape(error)
-    e_class = conditional_escape(custom_class)
+    e_class = attr_text(custom_class)
     strength_val = max(0, min(4, int(strength)))
 
     required_attr = " required" if required else ""
@@ -380,15 +380,15 @@ def autocomplete(
     if not isinstance(suggestions, (list, tuple)):
         suggestions = []
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
-    e_value = conditional_escape(str(value))
-    e_display = conditional_escape(str(display_value or value))
-    e_placeholder = conditional_escape(placeholder)
-    e_source_event = conditional_escape(source_event)
-    dj_event = conditional_escape(event or name)
+    e_value = attr_text(str(value))
+    e_display = attr_text(str(display_value or value))
+    e_placeholder = attr_text(placeholder)
+    e_source_event = attr_text(source_event)
+    dj_event = attr_text(event or name)
     e_error = conditional_escape(error)
-    e_class = conditional_escape(custom_class)
+    e_class = attr_text(custom_class)
     debounce_val = int(debounce)
     min_chars_val = int(min_chars)
 
@@ -482,17 +482,17 @@ def render_confirm_dialog(kw: Any, body: Any = "") -> SafeString:
     cancel_label = kw.get("cancel_label", "Cancel")
     custom_class = kw.get("custom_class", "")
 
-    dialog_id = conditional_escape(kw.get("id", "") or "dj-confirm")
+    dialog_id = attr_text(kw.get("id", "") or "dj-confirm")
     title_id = f"{dialog_id}-title"
     msg_id = f"{dialog_id}-msg"
 
-    e_confirm_event = conditional_escape(confirm_event)
-    e_cancel_event = conditional_escape(cancel_event)
+    e_confirm_event = attr_text(confirm_event)
+    e_cancel_event = attr_text(cancel_event)
     e_title = conditional_escape(title)
-    e_variant = conditional_escape(variant)
+    e_variant = attr_text(variant)
     e_confirm_label = conditional_escape(confirm_label)
     e_cancel_label = conditional_escape(cancel_label)
-    e_custom_class = conditional_escape(custom_class)
+    e_custom_class = attr_text(custom_class)
 
     variant_cls = f" dj-confirm-dialog--{e_variant}" if variant != "default" else ""
     extra_cls = f" {e_custom_class}" if custom_class else ""
@@ -583,19 +583,19 @@ def render_popconfirm(kw: Any, content: Any) -> SafeString:
     custom_class = kw.get("custom_class", "")
     uid = kw.get("id", "")
 
-    e_cancel_event = conditional_escape(cancel_event)
-    e_confirm_event = conditional_escape(confirm_event)
-    variant_cls = f" dj-popconfirm--{conditional_escape(variant)}" if variant != "default" else ""
-    extra_cls = f" {conditional_escape(custom_class)}" if custom_class else ""
-    id_attr = f' id="{conditional_escape(uid)}"' if uid else ""
+    e_cancel_event = attr_text(cancel_event)
+    e_confirm_event = attr_text(confirm_event)
+    variant_cls = f" dj-popconfirm--{attr_text(variant)}" if variant != "default" else ""
+    extra_cls = f" {attr_text(custom_class)}" if custom_class else ""
+    id_attr = f' id="{attr_text(uid)}"' if uid else ""
 
     return mark_safe(
         f'<div class="dj-popconfirm-wrapper{variant_cls}{extra_cls}"{id_attr}>'
         f'<div class="dj-popconfirm-trigger" aria-expanded="false" aria-haspopup="dialog">'
         f"{content}"
         f"</div>"
-        f'<div class="dj-popconfirm dj-popconfirm-{conditional_escape(placement)}" '
-        f'role="alertdialog" aria-label="{conditional_escape(message)}">'
+        f'<div class="dj-popconfirm dj-popconfirm-{attr_text(placement)}" '
+        f'role="alertdialog" aria-label="{attr_text(message)}">'
         f'<p class="dj-popconfirm__message">{conditional_escape(message)}</p>'
         f'<div class="dj-popconfirm__actions">'
         f'<button type="button" class="dj-popconfirm__btn dj-popconfirm__btn--cancel" '
@@ -672,14 +672,14 @@ def dependent_select(
     if isinstance(required, str):
         required = required.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
-    e_parent = conditional_escape(parent)
-    e_source_event = conditional_escape(source_event or name)
+    e_name = attr_text(name)
+    e_parent = attr_text(parent)
+    e_source_event = attr_text(source_event or name)
     e_label = conditional_escape(label)
     e_placeholder = conditional_escape(placeholder)
     e_value = conditional_escape(str(value))
     e_error = conditional_escape(error)
-    e_class = conditional_escape(custom_class)
+    e_class = attr_text(custom_class)
 
     if options is None:
         options = []
@@ -790,23 +790,24 @@ def currency_input(
     if isinstance(required, str):
         required = required.lower() not in ("false", "0", "")
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_currency = conditional_escape(str(currency).upper())
-    e_value = conditional_escape(str(value))
+    a_currency = attr_text(str(currency).upper())
+    e_value = attr_text(str(value))
     e_label = conditional_escape(label)
-    e_placeholder = conditional_escape(placeholder)
-    e_step = conditional_escape(str(step))
-    e_event = conditional_escape(event or name)
+    e_placeholder = attr_text(placeholder)
+    e_step = attr_text(str(step))
+    e_event = attr_text(event or name)
     e_error = conditional_escape(error)
-    e_class = conditional_escape(custom_class)
+    e_class = attr_text(custom_class)
 
     symbol = CURRENCY_SYMBOLS.get(str(currency).upper(), str(currency).upper())
     e_symbol = conditional_escape(symbol)
 
     disabled_attr = " disabled" if disabled else ""
     required_attr = " required" if required else ""
-    min_attr = f' min="{conditional_escape(str(min_val))}"' if min_val is not None else ""
-    max_attr = f' max="{conditional_escape(str(max_val))}"' if max_val is not None else ""
+    min_attr = f' min="{attr_text(str(min_val))}"' if min_val is not None else ""
+    max_attr = f' max="{attr_text(str(max_val))}"' if max_val is not None else ""
 
     cls = "dj-currency-input"
     if error:
@@ -829,7 +830,7 @@ def currency_input(
         f'<input type="number" name="{e_name}" id="{e_name}" '
         f'value="{e_value}" placeholder="{e_placeholder}" '
         f'step="{e_step}"{min_attr}{max_attr} '
-        f'data-currency="{e_currency}" '
+        f'data-currency="{a_currency}" '
         f'dj-input="{e_event}" '
         f'class="dj-currency-input__field"'
         f"{disabled_attr}{required_attr}>"
@@ -858,7 +859,7 @@ def form_errors(form: Any = None, custom_class: Any = "") -> SafeString:
     if not errors:
         return ""
 
-    e_class = conditional_escape(custom_class)
+    e_class = attr_text(custom_class)
     cls = "dj-form-errors"
     if e_class:
         cls += f" {e_class}"
@@ -894,7 +895,7 @@ def field_error(field: Any = None, custom_class: Any = "") -> SafeString:
     if not errors:
         return ""
 
-    e_class = conditional_escape(custom_class)
+    e_class = attr_text(custom_class)
     cls = "dj-field-error"
     if e_class:
         cls += f" {e_class}"
@@ -1058,12 +1059,13 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
             value = str(v)
             selected_values = _selected_values(v, field_type)
 
-    e_name = conditional_escape(name)
+    e_name = attr_text(name)
     e_label = conditional_escape(label)
     e_value = conditional_escape(value)
+    a_value = attr_text(value)
     e_helper = conditional_escape(help_text)
     e_error = conditional_escape(error_msg)
-    dj_event = conditional_escape(event_prefix + name if event_prefix else name)
+    dj_event = attr_text(event_prefix + name if event_prefix else name)
 
     required_attr = " required" if required else ""
     disabled_attr = " disabled" if disabled else ""
@@ -1088,7 +1090,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
         extra_errors_html = extra_items
 
     if field_type == "hidden":
-        return f'<input type="hidden" name="{e_name}" id="{e_name}" value="{e_value}">'
+        return f'<input type="hidden" name="{e_name}" id="{e_name}" value="{a_value}">'
 
     if field_type == "checkbox":
         checked_attr = " checked" if value and value not in ("False", "false", "0", "") else ""
@@ -1149,7 +1151,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
         radios = ""
         for ov, ol in choices:
             checked_attr = " checked" if str(ov) == str(value) else ""
-            radio_id = conditional_escape(f"{name}_{ov}")
+            radio_id = attr_text(f"{name}_{ov}")
             radios += (
                 f'<div class="form-radio-wrapper">'
                 f'<input class="form-radio" type="radio" '
@@ -1171,7 +1173,7 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
         checks = ""
         for ov, ol in choices:
             checked_attr = " checked" if ov in selected_values else ""
-            cb_id = conditional_escape(f"{name}_{ov}")
+            cb_id = attr_text(f"{name}_{ov}")
             checks += (
                 f'<div class="form-checkbox-wrapper">'
                 f'<input class="form-checkbox" type="checkbox" '
@@ -1215,17 +1217,17 @@ def _render_field(bound_field: Any, event_prefix: Any = "") -> Any:
         if field_type in ("email", "url", "number", "date", "datetime-local", "time")
         else "text"
     )
-    e_type = conditional_escape(input_type)
+    e_type = attr_text(input_type)
     placeholder = ""
     if hasattr(bound_field.field, "widget") and hasattr(bound_field.field.widget, "attrs"):
         placeholder = bound_field.field.widget.attrs.get("placeholder", "")
-    e_placeholder = conditional_escape(placeholder)
+    e_placeholder = attr_text(placeholder)
 
     return (
         f'<div class="form-group">'
         f"{label_html}"
         f'<input class="form-input{error_cls}" type="{e_type}" '
-        f'name="{e_name}" id="{e_name}" value="{e_value}" '
+        f'name="{e_name}" id="{e_name}" value="{a_value}" '
         f'placeholder="{e_placeholder}" '
         f'dj-input="{dj_event}"{required_attr}{disabled_attr}>'
         f"{error_html}{extra_errors_html}{helper_html}"
@@ -1267,11 +1269,11 @@ def dj_form(
     if form is None:
         return ""
 
-    e_class = conditional_escape(custom_class)
+    e_class = attr_text(custom_class)
     e_action = safe_url(action)
-    e_method = conditional_escape(method)
+    e_method = attr_text(method)
     e_submit_label = conditional_escape(submit_label)
-    e_submit_event = conditional_escape(submit_event)
+    e_submit_event = attr_text(submit_event)
 
     cls = "dj-form"
     if e_class:
@@ -1309,8 +1311,8 @@ def dj_form(
             if v is not None:
                 h_value = str(v)
         hidden_html += (
-            f'<input type="hidden" name="{conditional_escape(h_name)}" '
-            f'id="{conditional_escape(h_name)}" value="{conditional_escape(h_value)}">'
+            f'<input type="hidden" name="{attr_text(h_name)}" '
+            f'id="{attr_text(h_name)}" value="{attr_text(h_value)}">'
         )
 
     # Action/method attributes
@@ -1575,16 +1577,16 @@ def model_table(
         safe_rows.append(safe_row)
 
     # Build the table HTML directly (composing the data_table pattern)
-    e_class = conditional_escape(custom_class)
-    e_sort_event = conditional_escape(sort_event)
-    e_search_event = conditional_escape(search_event)
-    e_filter_event = conditional_escape(filter_event)
-    e_prev_event = conditional_escape(prev_event)
-    e_next_event = conditional_escape(next_event)
-    e_select_event = conditional_escape(select_event)
+    e_class = attr_text(custom_class)
+    e_sort_event = attr_text(sort_event)
+    e_search_event = attr_text(search_event)
+    e_filter_event = attr_text(filter_event)
+    e_prev_event = attr_text(prev_event)
+    e_next_event = attr_text(next_event)
+    e_select_event = attr_text(select_event)
     e_empty_title = conditional_escape(empty_title)
     e_empty_desc = conditional_escape(empty_description)
-    e_search_query = conditional_escape(search_query)
+    e_search_query = attr_text(search_query)
 
     if selected_rows is None:
         selected_rows = []
@@ -1671,7 +1673,7 @@ def model_table(
                 else:
                     filter_cells += (
                         f'<td class="data-table__filter-cell">'
-                        f'<input type="{conditional_escape(ft)}" '
+                        f'<input type="{attr_text(ft)}" '
                         f'class="data-table__filter-input" value="{fval}" '
                         f'dj-input="{e_filter_event}" dj-value-column="{col_key}">'
                         f"</td>"

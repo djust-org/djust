@@ -1,4 +1,4 @@
-<div class="{{ css_prefix }}page-error {{ css_prefix }}page-404 {% if attrs.class %}{{ attrs.class }}{% endif %}">
+<div class="{{ css_prefix }}page-error {{ css_prefix }}page-404 {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}">
     {% if slot_illustration %}
     <div class="{{ css_prefix }}page-illustration">
         {{ slot_illustration }}

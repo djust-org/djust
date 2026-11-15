@@ -22,25 +22,25 @@
     {
       "label": "OrgChartNode._render_node writes the event as it is given",
       "file": "python/djust/components/templatetags/_advanced.py",
-      "old": "        # escaped HERE, where it is written, so the method is safe for any caller (#3845)\n        e_event = conditional_escape(str(event)) if event else \"\"\n",
+      "old": "        # escaped HERE, where it is written, so the method is safe for any caller (#3845)\n        e_event = attr_text(str(event)) if event else \"\"\n",
       "new": "        e_event = event\n"
     },
     {
       "label": "FeedbackWidgetNode._render_thumbs writes the event as it is given",
       "file": "python/djust/components/templatetags/djust_components.py",
-      "old": "    def _render_thumbs(self, event: Any, value: Any) -> Any:\n        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)\n",
+      "old": "    def _render_thumbs(self, event: Any, value: Any) -> Any:\n        e_event = attr_text(str(event))  # escaped where it is written (#3845)\n",
       "new": "    def _render_thumbs(self, event: Any, value: Any) -> Any:\n        e_event = event\n"
     },
     {
       "label": "FeedbackWidgetNode._render_stars writes the event as it is given",
       "file": "python/djust/components/templatetags/djust_components.py",
-      "old": "    def _render_stars(self, event: Any, value: Any) -> Any:\n        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)\n",
+      "old": "    def _render_stars(self, event: Any, value: Any) -> Any:\n        e_event = attr_text(str(event))  # escaped where it is written (#3845)\n",
       "new": "    def _render_stars(self, event: Any, value: Any) -> Any:\n        e_event = event\n"
     },
     {
       "label": "FeedbackWidgetNode._render_emoji writes the event as it is given",
       "file": "python/djust/components/templatetags/djust_components.py",
-      "old": "    def _render_emoji(self, event: Any, value: Any) -> Any:\n        e_event = conditional_escape(str(event))  # escaped where it is written (#3845)\n",
+      "old": "    def _render_emoji(self, event: Any, value: Any) -> Any:\n        e_event = attr_text(str(event))  # escaped where it is written (#3845)\n",
       "new": "    def _render_emoji(self, event: Any, value: Any) -> Any:\n        e_event = event\n"
     },
     {

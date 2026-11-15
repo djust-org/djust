@@ -1,7 +1,8 @@
 """Status Indicator component for service health displays."""
 
 import html
-from django.utils.html import conditional_escape
+
+from djust.components.utils import attr_text
 from typing import Any, Optional
 
 from djust import Component
@@ -83,7 +84,7 @@ class StatusIndicator(Component):
         """Render the status indicator HTML."""
         classes = [
             "dj-status-indicator",
-            f"dj-status-indicator--{conditional_escape(self.size)}",
+            f"dj-status-indicator--{attr_text(self.size)}",
             f"dj-status-indicator--{self.color}",
         ]
 

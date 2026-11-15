@@ -1,7 +1,8 @@
 """Progress Circle component for circular SVG progress indicators."""
 
 import html
-from django.utils.html import conditional_escape
+
+from djust.components.utils import attr_text
 
 from djust import Component
 from typing import Any
@@ -65,8 +66,8 @@ class ProgressCircle(Component):
         """Render the circular progress SVG HTML."""
         classes = [
             "dj-progress-circle",
-            f"dj-progress-circle--{conditional_escape(self.size)}",
-            f"dj-progress-circle--{conditional_escape(self.color)}",
+            f"dj-progress-circle--{attr_text(self.size)}",
+            f"dj-progress-circle--{attr_text(self.color)}",
         ]
 
         if self.custom_class:

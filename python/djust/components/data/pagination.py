@@ -6,6 +6,7 @@ Provides pagination controls for navigating through data sets.
 
 from typing import Dict, Any, List
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from django.utils.safestring import SafeString
 from ..._html import attr_name
 from ..base import LiveComponent
@@ -159,11 +160,11 @@ class PaginationComponent(LiveComponent):
         align_map = {"left": "", "center": "justify-content-center", "right": "justify-content-end"}
         align_class = align_map.get(self.alignment, "justify-content-center")
 
-        html = f'<div id="{conditional_escape(self.component_id)}">'
+        html = f'<div id="{attr_text(self.component_id)}">'
 
         # Page info
         if self.show_page_info:
-            html += f'<div class="text-muted mb-2 text-{conditional_escape(self.alignment)}">{conditional_escape(self._get_page_info())}</div>'
+            html += f'<div class="text-muted mb-2 text-{attr_text(self.alignment)}">{conditional_escape(self._get_page_info())}</div>'
 
         # Pagination controls
         pagination_class = f"pagination {size_class} {align_class}".strip()
@@ -224,7 +225,7 @@ class PaginationComponent(LiveComponent):
         }
         size_class = size_map.get(self.size, size_map["md"])
 
-        html = f'<div id="{conditional_escape(self.component_id)}">'
+        html = f'<div id="{attr_text(self.component_id)}">'
 
         # Page info
         if self.show_page_info:
@@ -322,7 +323,7 @@ class PaginationComponent(LiveComponent):
 
     def _render_plain(self) -> str:
         """Render plain HTML pagination"""
-        html = f'<div class="pagination-container text-{conditional_escape(self.alignment)}" id="{conditional_escape(self.component_id)}">'
+        html = f'<div class="pagination-container text-{attr_text(self.alignment)}" id="{attr_text(self.component_id)}">'
 
         # Page info
         if self.show_page_info:

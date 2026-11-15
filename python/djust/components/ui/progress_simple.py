@@ -8,6 +8,7 @@ from typing import Any, Optional
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 from djust.components.utils import progress_fill, safe_css_length, strict_styles, style_attrs
 
@@ -137,7 +138,7 @@ class Progress(Component):
             classes.append("progress-bar-striped")
         if self.animated:
             classes.append("progress-bar-animated")
-        classes.append(f"bg-{conditional_escape(self.variant)}")
+        classes.append(f"bg-{attr_text(self.variant)}")
         classes.append(progress_fill(self.percentage)[0])
 
         # Build outer style

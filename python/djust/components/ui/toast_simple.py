@@ -9,6 +9,7 @@ For interactive toasts with state, use ToastComponent (LiveComponent).
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from typing import Any
 
 
@@ -250,7 +251,7 @@ class Toast(Component):
         }
         icon = icon_map.get(self.variant, "ℹ") if self.show_icon else ""
 
-        html = f'<div class="toast toast-{conditional_escape(self.variant)}" role="alert">\n'
+        html = f'<div class="toast toast-{attr_text(self.variant)}" role="alert">\n'
 
         if icon and self.show_icon:
             html += f'    <span class="toast-icon">{icon}</span>\n'

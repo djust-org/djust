@@ -1,5 +1,5 @@
-<div class="{{ css_prefix }}card {{ css_prefix }}card-elevated {% if attrs.class %}{{ attrs.class }}{% endif %}"
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+<div class="{{ css_prefix }}card {{ css_prefix }}card-elevated {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     {% if slot_header %}
     <div class="{{ css_prefix }}card-header">
         {{ slot_header }}

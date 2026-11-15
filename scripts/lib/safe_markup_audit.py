@@ -210,12 +210,12 @@ AUDITED: dict[tuple[str, str], Audit] = {
         1,
         "min/max/step/value/value_end are int()'d; name, label, event and class conditional_escape'd",
         (FM, "value = int(value)"),
-        (FM, "e_name = conditional_escape(name)"),
+        (FM, "e_name = attr_text(name)"),
     ),
     (FM, "render_confirm_dialog"): S(
         1,
         "every kwarg is conditional_escape'd; `body` is the already-rendered tag body (Django nodelist.render, Rust block handler's rendered children), autoescaped by the engine",
-        (FM, "e_confirm_event = conditional_escape(confirm_event)"),
+        (FM, "e_confirm_event = attr_text(confirm_event)"),
         (
             FM,
             'body = self.nodelist.render(context) if self.nodelist is not None else ""',
@@ -225,8 +225,8 @@ AUDITED: dict[tuple[str, str], Audit] = {
     (DC, "render_filter_bar"): S(
         1,
         "bar id, class, event and clear_event, every control's name, label, option value and label, date and search value and placeholder are conditional_escape'd; debounce is int(); `extra_html` is whatever else the template put in the bar, the Rust block handler's already-rendered children (autoescaped by the engine) with the filter comments removed, and empty for the Django tag",
-        (DC, "e_event = conditional_escape(event)"),
-        (DC, "e_clear = conditional_escape(clear_event)"),
+        (DC, "e_event = attr_text(event)"),
+        (DC, "e_clear = attr_text(clear_event)"),
         (DC, 'dj-debounce="{int(debounce)}"'),
         (
             PKG + "components/rust_handlers.py",
@@ -237,7 +237,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
     (FM, "render_popconfirm"): S(
         1,
         "every kwarg is conditional_escape'd; `content` is the rendered tag body (nodelist.render / the Rust block handler's children)",
-        (FM, "e_cancel_event = conditional_escape(cancel_event)"),
+        (FM, "e_cancel_event = attr_text(cancel_event)"),
         (
             FM,
             "return render_popconfirm(kw, self.nodelist.render(context))",
@@ -284,7 +284,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
     (DC, "render_modal"): S(
         2,
         "title, close event and ids conditional_escape'd; size from a four-key dict, role from a two-way test, heading level int() in 2..6; `content` is the rendered tag body",
-        (DC, 'modal_id = conditional_escape(kw.get("id", "modal"))'),
+        (DC, 'modal_id = attr_text(kw.get("id", "modal"))'),
         (DC, "if not 2 <= level <= 6:"),
         (DC, 'content = str(content).replace(_MODAL_DESCRIPTION_MARKER, "")'),
         (DC, "return render_modal(kw, self.nodelist.render(context))", "ModalNode.render"),
@@ -292,19 +292,19 @@ AUDITED: dict[tuple[str, str], Audit] = {
     (DC, "TooltipNode.render"): S(
         1,
         "text, position and component_id conditional_escape'd; tip_id is the escaped component id or a counter; content is the rendered body",
-        (DC, 'tip_id = f"{conditional_escape(component_id)}-tip"'),
+        (DC, 'tip_id = f"{attr_text(component_id)}-tip"'),
         (DC, "_tooltip_id_counter = itertools.count(1)", "<module>"),
     ),
     (DC, "code_block"): S(
         1,
         "theme must match [A-Za-z0-9_-]+ and is escaped; language, filename and code conditional_escape'd; the stylesheet tag is asset_tags (format_html); the hljs JSON is conditional_escape'd into data-hljs",
         (DC, "safe_theme = theme if _re.match("),
-        (DC, 'data-hljs="{conditional_escape(hljs_json)}"'),
+        (DC, 'data-hljs="{attr_text(hljs_json)}"'),
     ),
     (DC, "render_popover"): S(
         1,
         "trigger, placement, title and ids conditional_escape'd; `content` is the rendered tag body",
-        (DC, "e_placement = conditional_escape(placement)"),
+        (DC, "e_placement = attr_text(placement)"),
         (DC, "return render_popover(kw, self.nodelist.render(context))", "PopoverNode.render"),
     ),
     (DC, "render_collapsible"): S(
@@ -346,13 +346,13 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "def _rich_select_option_html(opt: Any, is_display: Any = False) -> Any:",
             "_rich_select_option_html",
         ),
-        (DC, 'uid = conditional_escape(id or f"rs-{name}")'),
+        (DC, 'uid = attr_text(id or f"rs-{name}")'),
     ),
     (DC, "render_theme_toggle"): S(
         1,
         "mode, icon and label come from the constant _THEME_TOGGLE_MODES; current, event, class and id conditional_escape'd; the icons are render_icon output",
         (DC, "_THEME_TOGGLE_MODES = (", "<module>"),
-        (DC, "e_current = conditional_escape(current)"),
+        (DC, "e_current = attr_text(current)"),
     ),
     (DC, "PageHeaderNode.render"): S(
         1,

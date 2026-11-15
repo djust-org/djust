@@ -155,7 +155,8 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   would be wrong and the guard does not see it (#3864). A bare output anywhere nobody checked
   (``join`` of bare outputs, an argument) is not clean. AN ESCAPER THAT ONLY HTML-ESCAPES
   (``escape`` / ``conditional_escape`` / ``html.escape`` / ``attr_text``) is clean as text and in an
-  ordinary quoted value, and since #3864 flagged where that is not enough, by the same literal text
+  ordinary quoted value (``conditional_escape`` as text only: it leaves a marked-safe value as it is,
+  so in ANY quoted value it is flagged, #4009), and since #3864 flagged where that is not enough, by the same literal text
   in front of it (``_html_context``): at the START of a URL attribute's value (``href="{escape(x)}"``:
   ``javascript:`` has nothing to escape; ``data-href`` counts, the client follows it; an escaper
   around a URL escaper's output does not), in an ``on*`` handler, a ``<script>`` or ``<style>`` body,
@@ -322,6 +323,10 @@ HTML_ONLY_ORIGINS = frozenset(
         "djust.components.utils.attr_text",
     }
 )
+#: HTML-only escapers that leave a marked-safe value (``mark_safe``, ``__html__``) as it is: right in
+#: element text (the marker means "this is markup"), wrong in any attribute value, where the value
+#: can close the attribute (#4009). ``attr_text`` / ``escape`` always escape.
+MARK_HONOURING_ORIGINS = frozenset({"django.utils.html.conditional_escape"})
 #: Escapers that also refuse a URL that is not a navigation: an HTML escaper wrapped around one of
 #: these is still a checked URL (``conditional_escape(safe_url(x))``).
 URL_ESCAPER_ORIGINS = frozenset(
@@ -2471,7 +2476,7 @@ class _Module:
         return state
 
     @staticmethod
-    def _html_context(prefix: str) -> str | None:
+    def _html_context(prefix: str, quoted: bool = False) -> str | None:
         """Where HTML escaping is NOT enough for the next field after ``prefix`` (#3864), or ``None``:
         ``"script"`` / ``"style"`` (the body of that element: entities are not decoded, the text is
         code), ``"handler"`` (the quoted value of an ``on*`` attribute: the HTML parser decodes
@@ -2561,7 +2566,7 @@ class _Module:
                     or re.sub(r"[\x01-\x20]", "", value).lower().startswith("javascript:")
                 ):
                     return "url"
-                return None
+                return "value" if quoted else None
         return (None if inert else raw) or None
 
     def _text_escapers(self, value: ast.expr, sc: _Scope) -> list[tuple[ast.Call, _Scope, str]]:
@@ -2620,9 +2625,7 @@ class _Module:
             hit = self._memo_misplaced[key] = self._misplaced_after(value, sc, before, depth)
         return hit
 
-    def _misplaced_after(
-        self, value: ast.expr, sc: _Scope, before: str | None, depth: int
-    ) -> bool:
+    def _misplaced_after(self, value: ast.expr, sc: _Scope, before: str | None, depth: int) -> bool:
         """:meth:`_misplaced` once the literal text in front of ``value`` is known (``before``)."""
         d = depth + 1
 
@@ -2657,7 +2660,11 @@ class _Module:
         escapers = self._text_escapers(value, sc)
         if not escapers:
             return False
-        where = self._html_context(before) if before is not None else None
+        where = self._html_context(before, quoted=True) if before is not None else None
+        if where == "value":
+            # an ordinary quoted value: escaping is enough, but only an escaper that ESCAPES. One
+            # that leaves a marked-safe value as it is (``conditional_escape``) lets it out (#4009).
+            return any(origin in MARK_HONOURING_ORIGINS for _a, _s, origin in escapers)
         if where is None:
             return False
         for alt, asc, origin in escapers:

@@ -3,23 +3,23 @@ PWA head tags for djust - include all PWA-related meta tags and scripts.
 {% endcomment %}
 
 <!-- PWA Meta Tags -->
-<meta name="theme-color" content="{{ theme_color }}">
+<meta name="theme-color" content="{{ theme_color|force_escape }}">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="{{ name }}">
+<meta name="apple-mobile-web-app-title" content="{{ name|force_escape }}">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="application-name" content="{{ name }}">
+<meta name="application-name" content="{{ name|force_escape }}">
 
 <!-- PWA Manifest -->
 <link rel="manifest" href="/manifest.json">
 
 <!-- PWA Icons -->
-<link rel="apple-touch-icon" href="{{ static_url }}icons/icon-192.png">
-<link rel="icon" type="image/png" sizes="192x192" href="{{ static_url }}icons/icon-192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="{{ static_url }}icons/icon-512.png">
+<link rel="apple-touch-icon" href="{{ static_url|force_escape }}icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="{{ static_url|force_escape }}icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="{{ static_url|force_escape }}icons/icon-512.png">
 
 <!-- Offline Styles (the request's CSP nonce, when there is one: #4139) -->
-<style{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %}>
+<style{% if csp_nonce %} nonce="{{ csp_nonce|force_escape }}"{% endif %}>
 /* Offline/Online body classes */
 body.djust-offline [dj-offline-hide],
 body:not(.djust-online) [dj-offline-hide] {
@@ -50,7 +50,7 @@ body.djust-offline .djust-indicator-dot {
 </style>
 
 <!-- Service Worker Registration -->
-<script{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %}>
+<script{% if csp_nonce %} nonce="{{ csp_nonce|force_escape }}"{% endif %}>
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
         navigator.serviceWorker.register('/sw.js', { scope: '/' })

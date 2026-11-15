@@ -4,6 +4,7 @@ import html
 from typing import Any, Optional
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from djust import Component
 from djust._html import attr_name
 
@@ -116,7 +117,7 @@ class Card(Component):
 
         # Add variant class
         if self.variant != "default":
-            classes.append(f"dj-card-{conditional_escape(self.variant)}")
+            classes.append(f"dj-card-{attr_text(self.variant)}")
 
         # Add hover class
         if self.hover:
@@ -124,7 +125,7 @@ class Card(Component):
 
         # Add padding class (none = no padding class)
         if self.padding != "none":
-            classes.append(f"dj-card-p-{conditional_escape(self.padding)}")
+            classes.append(f"dj-card-p-{attr_text(self.padding)}")
 
         # Add clickable class if action provided
         if self.action:

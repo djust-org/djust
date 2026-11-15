@@ -1,15 +1,15 @@
 <div class="{{ css_prefix }}btn-offset">
     {% if tag == "a" %}
-    <a class="{{ css_prefix }}btn {{ css_prefix }}btn-{{ variant }} {{ css_prefix }}btn-{{ size }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
-            {% if attrs.id %}id="{{ attrs.id }}"{% endif %}
-            {% if attrs.onclick %}onclick="{{ attrs.onclick }}"{% endif %}
+    <a class="{{ css_prefix }}btn {{ css_prefix }}btn-{{ variant|force_escape }} {{ css_prefix }}btn-{{ size|force_escape }} {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
+            {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}
+            {% if attrs.onclick %}onclick="{{ attrs.onclick|force_escape }}"{% endif %}
             {% if href %}href="{{ href }}"{% endif %}
             {{ extra_attrs }}>
     {% else %}
-    <button class="{{ css_prefix }}btn {{ css_prefix }}btn-{{ variant }} {{ css_prefix }}btn-{{ size }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
-            {% if attrs.id %}id="{{ attrs.id }}"{% endif %}
-            {% if attrs.onclick %}onclick="{{ attrs.onclick }}"{% endif %}
-            {% if attrs.type %}type="{{ attrs.type }}"{% endif %}
+    <button class="{{ css_prefix }}btn {{ css_prefix }}btn-{{ variant|force_escape }} {{ css_prefix }}btn-{{ size|force_escape }} {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
+            {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}
+            {% if attrs.onclick %}onclick="{{ attrs.onclick|force_escape }}"{% endif %}
+            {% if attrs.type %}type="{{ attrs.type|force_escape }}"{% endif %}
             {{ extra_attrs }}>
     {% endif %}
         {% if slot_loading %}{{ slot_loading }}{% else %}{% if slot_icon %}{{ slot_icon }} {% endif %}{% if slot_content %}{{ slot_content }}{% else %}{{ text }}{% endif %}{% endif %}

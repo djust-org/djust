@@ -4,6 +4,7 @@ import html
 from typing import Any, Dict, Optional
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 from djust import Component
 from djust._html import attr_name
 
@@ -133,11 +134,11 @@ class Button(Component):
 
         # Add variant class
         if self.variant != "primary":
-            classes.append(f"dj-btn-{conditional_escape(self.variant)}")
+            classes.append(f"dj-btn-{attr_text(self.variant)}")
 
         # Add size class
         if self.size != "md":
-            classes.append(f"dj-btn-{conditional_escape(self.size)}")
+            classes.append(f"dj-btn-{attr_text(self.size)}")
 
         # Add state classes
         if self.loading:
@@ -150,7 +151,7 @@ class Button(Component):
         class_str = " ".join(classes)
 
         # Build attributes
-        attrs = [f'class="{class_str}"', f'type="{conditional_escape(self.type)}"']
+        attrs = [f'class="{class_str}"', f'type="{attr_text(self.type)}"']
 
         # Disable button if disabled or loading
         if self.disabled or self.loading:

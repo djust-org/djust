@@ -1,9 +1,9 @@
 {# Theme switcher component template #}
-<div class="{{ css_prefix }}theme-switcher {{ dropdown_class }}" data-theme-switcher>
+<div class="{{ css_prefix }}theme-switcher {{ dropdown_class|force_escape }}" data-theme-switcher>
     {% if show_mode_toggle %}
     <div class="{{ css_prefix }}theme-mode-controls">
         <button type="button"
-                class="{{ css_prefix }}theme-mode-btn {{ button_class }}{% if theme_mode == 'light' %} active{% endif %}"
+                class="{{ css_prefix }}theme-mode-btn {{ button_class|force_escape }}{% if theme_mode == 'light' %} active{% endif %}"
                 data-theme-mode="light"
                 aria-label="Light mode"
                 title="Light mode">
@@ -23,7 +23,7 @@
         </button>
 
         <button type="button"
-                class="{{ css_prefix }}theme-mode-btn {{ button_class }}{% if theme_mode == 'dark' %} active{% endif %}"
+                class="{{ css_prefix }}theme-mode-btn {{ button_class|force_escape }}{% if theme_mode == 'dark' %} active{% endif %}"
                 data-theme-mode="dark"
                 aria-label="Dark mode"
                 title="Dark mode">
@@ -35,7 +35,7 @@
         </button>
 
         <button type="button"
-                class="{{ css_prefix }}theme-mode-btn {{ button_class }}{% if theme_mode == 'system' %} active{% endif %}"
+                class="{{ css_prefix }}theme-mode-btn {{ button_class|force_escape }}{% if theme_mode == 'system' %} active{% endif %}"
                 data-theme-mode="system"
                 aria-label="System preference"
                 title="Follow system preference">
@@ -52,11 +52,11 @@
 
     {% if show_presets and presets %}
     <div class="{{ css_prefix }}theme-preset-controls">
-        <select class="{{ css_prefix }}theme-preset-select {{ dropdown_class }}"
+        <select class="{{ css_prefix }}theme-preset-select {{ dropdown_class|force_escape }}"
                 data-theme-preset-select
                 aria-label="Select theme">
             {% for preset in presets %}
-            <option value="{{ preset.name }}"{% if preset.is_active %} selected{% endif %}>
+            <option value="{{ preset.name|force_escape }}"{% if preset.is_active %} selected{% endif %}>
                 {{ preset.display_name }}
             </option>
             {% endfor %}

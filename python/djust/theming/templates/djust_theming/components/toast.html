@@ -1,9 +1,9 @@
-<div class="{{ css_prefix }}toast {{ css_prefix }}toast-{{ variant }} {{ css_prefix }}toast-{{ position }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
+<div class="{{ css_prefix }}toast {{ css_prefix }}toast-{{ variant|force_escape }} {{ css_prefix }}toast-{{ position|force_escape }} {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
      role="status"
      aria-live="polite"
      data-theme-toast
-     data-duration="{{ duration }}"
-     {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
+     data-duration="{{ duration|force_escape }}"
+     {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
     <div class="{{ css_prefix }}toast-content">
         {% if slot_message %}{{ slot_message }}{% else %}<div class="{{ css_prefix }}toast-message">{{ message }}</div>{% endif %}
     </div>

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from ..base import Component
 
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 
 class Accordion(Component):
@@ -83,7 +84,7 @@ class Accordion(Component):
         if self.flush:
             accordion_class += " accordion-flush"
 
-        e_id = conditional_escape(self.accordion_id)
+        e_id = attr_text(self.accordion_id)
 
         # Build accordion items
         accordion_items = []

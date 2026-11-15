@@ -1,7 +1,7 @@
-<details class="{{ css_prefix }}nav-group {% if attrs.class %}{{ attrs.class }}{% endif %}"
+<details class="{{ css_prefix }}nav-group {% if attrs.class %}{{ attrs.class|force_escape }}{% endif %}"
          {% if expanded %}open=""{% endif %}
-         {% if attrs.id %}id="{{ attrs.id }}"{% endif %}>
-    <summary class="{{ css_prefix }}sidebar-title"{% if toggle_event %} dj-click="{{ toggle_event }}" data-value="{{ label }}"{% endif %}>
+         {% if attrs.id %}id="{{ attrs.id|force_escape }}"{% endif %}>
+    <summary class="{{ css_prefix }}sidebar-title"{% if toggle_event %} dj-click="{{ toggle_event|force_escape }}" data-value="{{ label|force_escape }}"{% endif %}>
         {% if icon %}<span class="{{ css_prefix }}nav-group-icon">{{ icon }}</span>{% endif %}
         {% if slot_label %}{{ slot_label }}{% else %}{{ label }}{% endif %}
         {% if badge %}<span class="{{ css_prefix }}nav-group-badge">{{ badge }}</span>{% endif %}

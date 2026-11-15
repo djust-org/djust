@@ -7,6 +7,7 @@ Provides progress bars for showing completion status.
 from typing import Dict, Any
 from ..base import LiveComponent
 from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
 from djust.components.utils import progress_fill, safe_css_length, strict_styles, style_attrs
 from django.utils.safestring import SafeString, mark_safe
@@ -117,11 +118,11 @@ class ProgressComponent(LiveComponent):
         # Progress container. The height through ``style_attrs`` and the fill as a
         # ``dj-progress-w-N`` class (plus, by default, its inline width): a strict CSP
         # refuses a ``style=`` (#3979).
-        html = f'<div class="progress" id="{conditional_escape(self.component_id)}"{style_attrs(height=height, css="height: {};")}>'
+        html = f'<div class="progress" id="{attr_text(self.component_id)}"{style_attrs(height=height, css="height: {};")}>'
         fill_class, fill_style = progress_fill(percentage)
 
         # Progress bar classes
-        classes = f"progress-bar bg-{conditional_escape(self.variant)} {fill_class}"
+        classes = f"progress-bar bg-{attr_text(self.variant)} {fill_class}"
         if self.striped:
             classes += " progress-bar-striped"
         if self.animated:
@@ -165,7 +166,7 @@ class ProgressComponent(LiveComponent):
         fill_class, fill_style = progress_fill(percentage)
 
         # Progress container
-        html = f'<div class="w-full bg-gray-200 rounded-full {height_class}" id="{conditional_escape(self.component_id)}"{style}>'
+        html = f'<div class="w-full bg-gray-200 rounded-full {height_class}" id="{attr_text(self.component_id)}"{style}>'
 
         # Progress bar
         bar_classes = (
@@ -207,11 +208,11 @@ class ProgressComponent(LiveComponent):
         size_map = {"sm": "10px", "md": "20px", "lg": "30px"}
         height = self.height or size_map.get(self.size, "20px")
 
-        html = f'<div class="progress" id="{conditional_escape(self.component_id)}"{style_attrs(height=height, css="height: {};")}>'
+        html = f'<div class="progress" id="{attr_text(self.component_id)}"{style_attrs(height=height, css="height: {};")}>'
         fill_class, fill_style = progress_fill(percentage)
 
         # Progress bar
-        bar_class = f"progress-bar progress-bar-{conditional_escape(self.variant)} {fill_class}"
+        bar_class = f"progress-bar progress-bar-{attr_text(self.variant)} {fill_class}"
         if self.striped:
             bar_class += " progress-bar-striped"
 
