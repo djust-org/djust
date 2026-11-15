@@ -67,6 +67,10 @@ urlpatterns = [path("bg/", BackgroundPage.as_view()), path("slow/", SlowWorkPage
 @pytest.fixture(autouse=True)
 def staged(monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    # Start from an empty registry too: blocked_store's teardown gathers the pending saves of
+    # every registered session, and a session another test left behind holds a (done) save task
+    # of a loop that has closed, which gather() refuses ("belongs to a different loop").
+    _sse_sessions.clear()
     with override_settings(
         ROOT_URLCONF=__name__,
         LIVEVIEW_ALLOWED_MODULES=["djust"],
