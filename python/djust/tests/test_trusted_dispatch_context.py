@@ -35,7 +35,7 @@ FORGED = {
 
 
 class DispatchView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ n }}</div>"
     api_name = "trusted.dispatch"
 
@@ -150,16 +150,21 @@ def _expect(case: str, handler: str = "choose") -> list:
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("case", sorted(set(METADATA) - {"activity"} | set(FORGED)))
 async def test_shared_runtime_route(case):
     # WebSocket and SSE both dispatch through ViewRuntime.dispatch_event.
     # (_activity is the runtime's own deferral gate there, covered elsewhere.)
-    from djust.tests.test_runtime_child_routing_1892 import _make_runtime_with_view
+    from djust.runtime import ViewRuntime
+    from djust.tests._live_session import amount_on_runtime
+    from djust.tests.test_runtime_child_routing_1892 import MockTransport
 
     view = DispatchView()
-    view.mount(None)
-    runtime, transport = _make_runtime_with_view(view)
+    transport = MockTransport()
+    runtime = ViewRuntime(transport)
+    # Mounted on a live session: an explicit view's events are authorized
+    # against its mount binding, so a refusal here is the contract's own.
+    await amount_on_runtime(runtime, view)
     payload = {**METADATA, **FORGED}[case]
     await runtime.dispatch_event({"type": "event", "event": "choose", "params": dict(payload)})
     assert CALLS == _expect(case), transport.sent
@@ -412,7 +417,7 @@ def test_output_payload_outside_the_strict_contract_never_reaches_the_callback()
     from djust.components._interactive import DropdownMenu
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = DropdownMenu(label="Menu", items=[{"label": "Edit", "value": "edit"}])
 
         @menu.on.selected
