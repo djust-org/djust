@@ -28,8 +28,7 @@
 - [Mixins](#mixins)
   - [DraftModeMixin](#draftmodemixin)
 - [HTML Attributes](#html-attributes)
-  - [@loading](#loading)
-  - [@loading-text](#loading-text)
+  - [`dj-loading.*`](#dj-loading-attributes-not-a-decorator)
 - [Advanced Topics](#advanced-topics)
   - [Combining Decorators](#combining-decorators)
   - [Decorator Order Rules](#decorator-order-rules)
@@ -189,7 +188,6 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 | **Throttling** | Scroll, resize, mouse move | `@throttle(0.1)` | - |
 | **Instant Feedback** | Counters, toggles, sliders | - | `dj-loading.*`, JS Commands |
 | **Loading States** | Button disable, spinners, overlays | - | `dj-loading.disable`, `dj-loading.show`, `dj-loading.hide`, `dj-loading.class` |
-| **Loading Text** | Button text replacement | - | `@loading-text="Saving..."` (deprecated) |
 | **Shared State** | Multi-component coordination | One handler sets both values | - |
 | **Caching** | Autocomplete, API calls | `@cache(ttl=300)` | - |
 | **Permission Guard** | Handler access control | `@permission_required("perm")` | - |
@@ -1077,7 +1075,7 @@ Use `data-loading-display` to customize the display value for `dj-loading.show`:
 
 #### Implementation
 
-The LoadingManager class handles all @loading attribute logic:
+The client's `LoadingManager` handles the `dj-loading.*` attributes:
 
 ```javascript
 // Global instance available in client.js
@@ -1093,7 +1091,7 @@ globalLoadingManager.stopLoading('save_article', triggerElement);
 
 #### Debug Mode
 
-Enable detailed logging for troubleshooting @loading behavior:
+Enable detailed logging for troubleshooting `dj-loading.*` behavior:
 
 ```html
 <script>
@@ -1132,102 +1130,7 @@ See `tests/js/loading.test.js` for 30 comprehensive unit tests covering all modi
 
 #### See Also
 
-- [@loading-text](#loading-text) - Button text replacement
-- [LoadingManager API](#loadingmanager-api) - Client-side API
 - [STATE_MANAGEMENT_PATTERNS.md](STATE_MANAGEMENT_PATTERNS.md) - Loading state patterns
-
----
-
-### @loading-text
-
-**Status:** 🚧 Not Yet Implemented (use dj-loading.class instead)
-
-Temporarily replaces button text during event processing. Simpler alternative to `@loading` for basic button text changes.
-
-#### Syntax
-
-```html
-<button @loading-text="Text to show during loading">
-    Default text
-</button>
-```
-
-#### Example
-
-```python
-class UploadView(LiveView):
-    template = """
-    <div dj-root>
-        <form dj-submit="upload_file">
-            <input type="file" name="file" />
-
-            <button type="submit" @loading-text="Uploading...">
-                Upload File
-            </button>
-        </form>
-    </div>
-    """
-
-    @event_handler
-    def upload_file(self, file=None, **kwargs):
-        """
-        Button text changes:
-        Before: "Upload File"
-        During: "Uploading..."
-        After:  "Upload File"
-        """
-        handle_file_upload(file)
-```
-
-#### Behavior
-
-1. **Before event:** Button shows default text ("Upload File")
-2. **During event:** Button shows loading text ("Uploading...")
-3. **After event:** Button reverts to default text
-
-#### With Icons
-
-```html
-<button dj-click="save" @loading-text="⏳ Saving...">
-    💾 Save
-</button>
-
-<!-- During event: "⏳ Saving..." -->
-```
-
-#### Disable Button During Loading
-
-```html
-<button dj-click="save"
-        @loading-text="Saving..."
-        @loading-disabled>
-    Save
-</button>
-
-<!-- Button becomes disabled during event -->
-```
-
-#### Common Use Cases
-
-- Save buttons
-- Submit buttons
-- Upload buttons
-- Delete confirmations
-- Any action button with server processing
-
-#### Comparison with @loading
-
-| Feature | @loading | @loading-text |
-|---------|----------|---------------|
-| Use case | Show/hide elements | Replace button text |
-| Complexity | Medium (need extra elements) | Simple (just attribute) |
-| Flexibility | High (custom HTML) | Low (text only) |
-| Icons | Full support | Limited (text+emoji) |
-
-#### See Also
-
-- [@loading](#loading) - Show/hide loading elements
-- [STATE_MANAGEMENT_EXAMPLES.md](STATE_MANAGEMENT_EXAMPLES.md) - Button examples
 
 ---
 
@@ -1524,8 +1427,7 @@ This section estimates the implementation complexity for each feature to help pr
 |---------|-----------|----------------|----------|--------------|
 | **@debounce** | Low | 1-2 days | None | client.js decorator metadata support |
 | **@throttle** | Low | 1-2 days | None | client.js decorator metadata support |
-| **@loading** | Low | 2-3 days | None | CSS class management |
-| **@loading-text** | Low | 1 day | None | Button text replacement |
+| **`dj-loading.*`** | Low | 2-3 days | None | CSS class management |
 | **@cache** | Medium | 3-5 days | LRU cache, TTL management | Map() with expiration logic |
 | **DraftModeMixin** | Medium | 3-5 days | localStorage integration | Form field detection |
 
@@ -1533,7 +1435,7 @@ This section estimates the implementation complexity for each feature to help pr
 
 **Low Complexity (1-3 days each):**
 - **@debounce / @throttle:** Simple timer management, already understood pattern
-- **@loading / @loading-text:** CSS class toggling, straightforward implementation
+- **`dj-loading.*`:** CSS class toggling, straightforward implementation
 
 **Medium Complexity (3-5 days each):**
 - **@cache:** Need LRU eviction, TTL expiration, cache key generation
@@ -1549,8 +1451,7 @@ This section estimates the implementation complexity for each feature to help pr
 **Phase 2: Quick Wins (1 week)**
 - @debounce
 - @throttle
-- @loading
-- @loading-text
+- `dj-loading.*` attributes
 
 **Phase 4: Caching (1 week)**
 - @cache
@@ -1582,7 +1483,7 @@ client.js (current): ~5.0 KB (gzipped)
 | **@debounce implementation** | ~200 bytes | ~100 bytes | Timer management |
 | **@throttle implementation** | ~200 bytes | ~100 bytes | Rate limiting |
 | **@cache (LRU cache)** | ~800 bytes | ~400 bytes | Map with TTL/LRU |
-| **@loading CSS management** | ~300 bytes | ~150 bytes | Class toggling |
+| **`dj-loading.*` CSS management** | ~300 bytes | ~150 bytes | Class toggling |
 | **DraftModeMixin** | ~600 bytes | ~300 bytes | localStorage API |
 
 **Total additions: ~4.2 KB raw → ~2.1 KB gzipped**

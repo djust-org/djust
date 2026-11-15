@@ -1123,11 +1123,16 @@ the column; compute the value into the row instead.
 Rows are dicts, model instances or other objects, the same on both engines (#3895). A model
 instance is read as djust serialises it, so the exposure floor applies: a field the model excludes
 (`password`, `djust_exclude_fields`, a field outside `djust_serializable_fields`) is an empty
-cell. Another object is read for the column keys as attributes; a method is called as a template
-calls it, one marked `alters_data` is not, and a name starting with `_` is never read. A cell value
-you marked safe (`mark_safe`, `format_html`) keeps its markup in the cell, before and after an
-event; a plain or lazy string is escaped, and a URL (`row_url`, `link`) is checked and escaped
-whatever it is marked. `NaN` and the infinities are written as `nan` / `inf` and are never a link.
+cell. A model's `@property` values are part of what djust serialises, so a property column shows
+its value; a model's methods are not called. Another object is read for the column keys as
+attributes, and a zero-argument method is called as Django's templates call it (one marked
+`alters_data` is not); a name starting with `_` is never read. A cell value you marked safe
+(`mark_safe`, `format_html`) keeps its markup in the cell, before and after an event, and a plain
+string or a lazy translation string is escaped. Two other values are honoured only by the first
+render, under Django's engine, and escaped after an event: a lazy value that resolves to a
+marked-safe string, and a `str` subclass with an `__html__` method (`markupsafe.Markup`); call
+`mark_safe` on markup that must survive an event. A URL (`row_url`, `link`) is checked and
+escaped whatever it is marked. `NaN` and the infinities are written as `nan` / `inf` and are never a link.
 
 **Accessibility**: row-clickable `<tr>`s are focusable (`tabindex="0"`),
 announce as buttons (`role="button"`), and activate on Enter or Space.

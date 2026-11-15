@@ -1,6 +1,6 @@
 # Phase 5: @cache, DraftModeMixin & Loading States
 
-> **Dated record.** This plan also covered `@client_state` and listed `@optimistic` as done; both were removed in djust 2.0 (#4006) because nothing in the shipped client read them, and they have been taken out of this record. The `@cache`, `DraftModeMixin` and loading-state work below still stands. See the [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
+> **Dated record.** This plan also covered `@client_state` and listed `@optimistic` as done; both were removed in djust 2.0 (#4006) because nothing in the shipped client read them, and they have been taken out of this record. The `@cache` and `DraftModeMixin` work below still stands. The `@loading` / `@loading-text` HTML attributes this plan describes (Task 3) were never implemented by the client: loading states are the `dj-loading.*` attributes (see [Loading States](../website/guides/loading-states.md)). See the [2.0 migration guide](../website/guides/migrating-to-2.0.md#python-names).
 
 **Status**: 🚧 In Progress
 **Start Date**: 2025-11-13

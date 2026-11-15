@@ -284,7 +284,7 @@ djust provides Python-only state management decorators that eliminate the need f
 
 - **[@debounce](../state-management/STATE_MANAGEMENT_API.md#debounce)** - Debounce event handlers
 - **[@throttle](../state-management/STATE_MANAGEMENT_API.md#throttle)** - Throttle with leading/trailing edge
-- **[@loading](../state-management/STATE_MANAGEMENT_API.md#loading)** - Automatic loading states
+- **[`dj-loading.*`](../state-management/STATE_MANAGEMENT_API.md#dj-loading-attributes-not-a-decorator)** - Automatic loading states (attributes, not a decorator)
 - **[@cache](../state-management/STATE_MANAGEMENT_API.md#cache)** - Client-side LRU caching
 - **[Instant feedback](../state-management/STATE_MANAGEMENT_API.md#instant-feedback)** - `dj-loading.*` and JS Commands (`@optimistic` / `@client_state` were removed in 2.0, #4006)
 - **[DraftModeMixin](../state-management/STATE_MANAGEMENT_API.md#draftmodemixin)** - Auto-save drafts
