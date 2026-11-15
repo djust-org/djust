@@ -702,6 +702,12 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "self.view_instance._extract_liveview_content",
     ): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "request_binding"): plumbing(_SESSION),
+    # A deferred turn's identity check (design: save frequency): the binding
+    # read the save makes, without the save.
+    ("runtime.py", "ViewRuntime._defer_explicit_turn", "check"): plumbing(_SESSION),
+    # Over the size limit with saves deferred, the session writes of a turn
+    # whose own state could not be saved (option A): a session write only.
+    ("runtime.py", "ViewRuntime.commit_explicit_turn", "_save_session_writes"): plumbing(_SESSION),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "codec.capture"): plumbing(_RENDER),
     # The same three calls in one hop (#3997): the session binding read, then
     # the codec and the signature (render plumbing, as the entries above).

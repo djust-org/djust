@@ -94,6 +94,31 @@ class CounterView(_Probed, LiveView):
         self.set_changed_keys(["probe"])
 
 
+class PlainCounterView(_Probed, LiveView):
+    """Undeclared state only: a view whose saves may be deferred (design:
+    save frequency). The counter's declared fields would keep it immediate."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>" + PROBE + "</div>"
+
+    def mount(self, request, **kwargs):
+        self.plain_attr = 0
+        self._private_attr = 0
+        self._mounted_pid = os.getpid()
+
+    def snapshot(self):
+        return {
+            "plain_attr": self.plain_attr,
+            "private_attr": self._private_attr,
+            "mounted_pid": self._mounted_pid,
+        }
+
+    @event_handler()
+    def increment(self, **kwargs):
+        self.plain_attr += 1
+        self._private_attr += 1
+
+
 class SwitchedOffView(_Probed, LiveView):
     """The counter's kinds of state on a view that saves nothing (#4128)."""
 

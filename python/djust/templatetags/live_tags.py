@@ -1625,6 +1625,7 @@ def _authorize_reused_child(
     view_path: str,
     *,
     registered_view_id: Optional[str] = None,
+    carried_identity: Any = None,
 ) -> None:
     """Authorize an existing child before it renders or is registered for reattach.
 
@@ -1671,7 +1672,17 @@ def _authorize_reused_child(
             "{%% live_render %%} target %r denied access: object-level permission "
             "check failed for the requested object." % view_path
         ) from None
-    if not uses_legacy_exposure(child) and not child_can_reuse(
+    if carried_identity is not None:
+        # A child being carried to another page (#4149) still holds its old
+        # identity: compare with the one it will take here.
+        from .._exposure_child_identity import child_reuse_identity
+
+        if not carried_identity.matches(
+            child_reuse_identity(type(child), parent, request, slot, mount_inputs)
+        ):
+            deny()
+            raise PermissionDenied("Embedded view identity changed during authorization.")
+    elif not uses_legacy_exposure(child) and not child_can_reuse(
         child, type(child), parent, request, slot, mount_inputs
     ):
         deny()
@@ -1733,6 +1744,75 @@ def _discard_sticky_child(parent: Any, view_id: str, child: Any) -> None:
     if type(registry) is dict and registry.get(view_id) is child:
         registry.pop(view_id)
     discard_sticky_child(child, navigation=False)
+
+
+def _drop_preserved_child(parent: Any, slot: str, child: Any) -> None:
+    """Forget and dispose a preserved sticky child that will not reattach (#4149).
+
+    Removes it from the consumer's preserved map and auto-reattach set and from
+    ``parent``'s registry, then disposes its subtree, so no later render, plain
+    mount, ``mount_batch`` or ``url_change`` on this socket can pick it up.
+    """
+    consumer = getattr(parent, "_ws_consumer", None)
+    preserved_map = getattr(consumer, "_sticky_preserved", None)
+    if type(preserved_map) is dict and preserved_map.get(slot) is child:
+        preserved_map.pop(slot)
+    auto_set = getattr(consumer, "_sticky_auto_reattached", None)
+    if type(auto_set) is set:
+        auto_set.discard(slot)
+    registry = getattr(parent, "_child_views", None)
+    if type(registry) is dict and registry.get(slot) is child:
+        registry.pop(slot)
+    from .._child_lifecycle import dispose_child_subtree
+
+    dispose_child_subtree(child, navigation=True)
+
+
+def _authorize_carried_descendants(child: Any, request: Any) -> list[tuple[Any, Any]]:
+    """Re-authorize a carried child's explicit descendants on the destination (#4149).
+
+    Called once the carried child is registered under its new parent. Each
+    descendant is checked as a fresh mount would check it, against the
+    destination request, and its reuse identity for the new route and ancestry
+    is compiled. Nothing is recorded here: returns ``(descendant, identity)``
+    pairs for the caller to commit. Raises on any refusal, and for a legacy
+    descendant (its ancestry identity cannot move between pages).
+    """
+    import json
+
+    from .._exposure import ExposureError, uses_legacy_exposure
+    from .._exposure_child_identity import child_reuse_identity
+    from ..auth.core import check_view_auth, enforce_object_permission
+
+    planned: list[tuple[Any, Any]] = []
+    pending = [child]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen or len(seen) > 256:
+            raise ExposureError("Invalid carried child tree")
+        seen.add(id(current))
+        registry = getattr(current, "_child_views", None)
+        if registry is None:
+            continue
+        if type(registry) is not dict:
+            raise ExposureError("Invalid carried child registry")
+        for slot, descendant in list(registry.items()):
+            if (
+                getattr(descendant, "_parent_view", None) is not current
+                or getattr(descendant, "_view_id", None) != slot
+                or uses_legacy_exposure(descendant)
+            ):
+                raise ExposureError("Carried child tree cannot move")
+            descendant.request = request
+            if check_view_auth(descendant, request) is not None:
+                raise ExposureError("Carried descendant authorization denied")
+            enforce_object_permission(descendant, request)
+            inputs = json.loads(descendant._explicit_child_mount_inputs)
+            identity = child_reuse_identity(type(descendant), current, request, slot, inputs)
+            planned.append((descendant, identity))
+            pending.append(descendant)
+    return planned
 
 
 #: Attribute on a sticky child holding the ``{% live_render %}`` kwargs it was
@@ -2351,12 +2431,39 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         consumer = getattr(parent, "_ws_consumer", None)
         preserved_map = getattr(consumer, "_sticky_preserved", None) if consumer else None
         survivor = preserved_map.get(sticky_id_value) if preserved_map else None
-        if survivor is not None and not _match_sticky_child(
-            survivor, child_cls, parent, request, sticky_id_value, kwargs, preserved=True
+        # #4149: an explicit child that does not match this route and parent
+        # may still be carried here; nothing is recorded until it is authorized.
+        carried_identity = None
+        if survivor is not None and explicit_target:
+            from .._exposure_child_identity import carried_reuse_identity, child_can_reuse
+
+            if not child_can_reuse(survivor, child_cls, parent, request, sticky_id_value, kwargs):
+                carried_identity = carried_reuse_identity(
+                    survivor, child_cls, parent, request, sticky_id_value, kwargs
+                )
+        if (
+            survivor is not None
+            and carried_identity is None
+            and not _match_sticky_child(
+                survivor, child_cls, parent, request, sticky_id_value, kwargs, preserved=True
+            )
         ):
             survivor = None
         if survivor is not None:
-            _authorize_reused_child(survivor, request, parent, sticky_id_value, kwargs, view_path)
+            try:
+                _authorize_reused_child(
+                    survivor,
+                    request,
+                    parent,
+                    sticky_id_value,
+                    kwargs,
+                    view_path,
+                    carried_identity=carried_identity,
+                )
+            except BaseException:
+                # Refused here: never leave it for a later page to pick up.
+                _drop_preserved_child(parent, sticky_id_value, survivor)
+                raise
             try:
                 parent._register_child(sticky_id_value, survivor)
             except ValueError:
@@ -2364,7 +2471,50 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     "live_render: sticky %r already registered on parent — falling through",
                     sticky_id_value,
                 )
-            else:
+                survivor = None
+            if survivor is not None and carried_identity is not None:
+                try:
+                    planned = _authorize_carried_descendants(survivor, request)
+                except Exception:  # noqa: BLE001 — a refused descendant mounts fresh
+                    logger.info(
+                        "live_render: sticky %r not carried (a nested child was refused)",
+                        sticky_id_value,
+                    )
+                    _drop_preserved_child(parent, sticky_id_value, survivor)
+                    survivor = None
+                else:
+                    import json
+
+                    from .._exposure_children import (
+                        commit_child_state_moves,
+                        rebind_child_state,
+                    )
+
+                    try:
+                        # Declared server state moves to the destination scope,
+                        # all of the subtree or none of it: prepared first,
+                        # written in one session save.
+                        moves = [
+                            rebind_child_state(survivor, parent, request, sticky_id_value, kwargs)
+                        ]
+                        for descendant, _identity in planned:
+                            moves.append(
+                                rebind_child_state(
+                                    descendant,
+                                    descendant._parent_view,
+                                    request,
+                                    descendant._view_id,
+                                    json.loads(descendant._explicit_child_mount_inputs),
+                                )
+                            )
+                        commit_child_state_moves(moves)
+                        survivor._explicit_child_reuse_identity = carried_identity
+                        for descendant, identity in planned:
+                            descendant._explicit_child_reuse_identity = identity
+                    except BaseException:
+                        _drop_preserved_child(parent, sticky_id_value, survivor)
+                        raise
+            if survivor is not None:
                 # Load-bearing: ``_preserve_sticky_children`` set the
                 # survivor's request to its own staging-time request,
                 # which is a different object than the new parent's
@@ -2904,6 +3054,12 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         ):
             raise ExposureError("Child reuse identity changed during mount")
         child._explicit_child_reuse_identity = explicit_identity
+        if sticky_kwarg:
+            # What a live_redirect may carry it by (#4149); covered by the
+            # mount-time check above, which compares a superset of its fields.
+            child._explicit_child_carry_identity = child_reuse_identity(
+                type(child), parent, request, explicit_slot, explicit_mount_inputs, carry=True
+            )
 
     # Whether this child's declared state was put back on top of its mount() (#3989).
     explicit_child_restored = False

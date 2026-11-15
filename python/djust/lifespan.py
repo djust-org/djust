@@ -141,6 +141,13 @@ class LifespanApp:
 
     async def _run_shutdown(self) -> Optional[str]:
         failed: Optional[str] = None
+        # View state a socket's turns changed and no save has written yet
+        # (``DJUST_STATE_SAVE_INTERVAL``), before the application's hooks
+        # stop what a save needs. A server that closes its sockets first has
+        # flushed them already; this is for one that does not.
+        from .runtime import flush_unsaved_states
+
+        await flush_unsaved_states("shutdown")
         for hook in reversed([*self.shutdown, *_shutdown_hooks]):
             try:
                 await call_hook(hook)

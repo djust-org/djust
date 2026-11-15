@@ -124,6 +124,9 @@ elif _store == "file":
 elif _store is not None:  # pragma: no cover - a harness typo
     raise ValueError("unknown state store %r" % _store)
 
+# Save frequency (design: save frequency): 0 saves before every reply.
+DJUST_STATE_SAVE_INTERVAL = CONFIG.get("save_interval", 0)
+
 LIVEVIEW_ALLOWED_MODULES = ["tests.integration.multinode.app.views"]
 LIVEVIEW_CONFIG = {"hot_reload_auto_enable": False}
 

@@ -60,6 +60,49 @@ def _inert_on_push_message(key: str, name: str) -> str:
     )
 
 
+def _saving_before_reply(func: Callable[..., Any]) -> Callable[..., Any]:
+    """``func`` as a handler whose turn is saved before its reply
+    (``@event_handler(save=True)``): it asks for the save, then runs. Async
+    stays async; the metadata and the signature are ``func``'s."""
+    import inspect
+
+    from ._save_policy import request_save
+
+    # Work the handler starts (@background, or its own start_async()) runs
+    # after the turn: its result's commit is saved before its frame too.
+    from .mixins.async_work import has_pending_async_work
+
+    def after(self: Any) -> None:
+        if has_pending_async_work(self):
+            request_save(self, background_result=True)
+
+    if inspect.iscoroutinefunction(func):
+
+        @functools.wraps(func)
+        async def saving_async(self: Any, *args: Any, **kwargs: Any) -> Any:
+            request_save(self)
+            try:
+                return await func(self, *args, **kwargs)
+            finally:
+                after(self)
+
+        saving_async._djust_saves_before_reply = True  # type: ignore[attr-defined]
+        return saving_async
+
+    @functools.wraps(func)
+    def saving(self: Any, *args: Any, **kwargs: Any) -> Any:
+        request_save(self)
+        try:
+            return func(self, *args, **kwargs)
+        finally:
+            after(self)
+
+    # Not in the handler's metadata: that is rendered into every page (the
+    # client's handler table), and this option is the server's alone.
+    saving._djust_saves_before_reply = True  # type: ignore[attr-defined]
+    return saving
+
+
 def _add_decorator_metadata(func: Callable, key: str, value: Any) -> None:
     """
     Add decorator metadata to function.
@@ -148,6 +191,7 @@ def event_handler(
     expose_api: bool = False,
     serialize: Optional[Union[Callable[..., Any], str]] = None,
     parameter_policy: Optional[Literal["legacy", "strict"]] = None,
+    save: bool = False,
 ) -> Any:
     """
     Mark method as event handler with automatic signature introspection.
@@ -189,6 +233,10 @@ def event_handler(
 
             Raises ``TypeError`` at decoration time if ``serialize`` is set but
             ``expose_api`` is False.
+        save: Save the view's state before this handler's reply, even when
+            ``DJUST_STATE_SAVE_INTERVAL`` lets other turns be saved later (the
+            same as calling ``self.save_state()`` in it). Default False: with no
+            interval set every turn is saved before its reply anyway.
 
     Usage:
         @event_handler
@@ -222,6 +270,8 @@ def event_handler(
 
     if parameter_policy not in (None, "legacy", "strict"):
         raise ValueError("parameter_policy must be 'legacy', 'strict', or None")
+    if type(save) is not bool:
+        raise TypeError("@event_handler(save=...) must be True or False")
 
     def decorator(func: F) -> F:
         # Import here to avoid circular dependency
@@ -292,6 +342,8 @@ def event_handler(
             },
         )
 
+        if save:
+            return cast(F, _saving_before_reply(func))
         return cast(F, func)
 
     # Support both @event_handler and @event_handler() syntaxes

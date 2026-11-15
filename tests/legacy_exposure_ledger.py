@@ -58,6 +58,7 @@ MIGRATED_4082: tuple[str, ...] = (
     "python/djust/tests/test_transport_parity_harness.py",
     "python/djust/tests/test_trusted_dispatch_context.py",
     "python/djust/tests/test_turn_middleware_transports.py",
+    "python/djust/tests/test_ws_mount_flip_parity_1911.py",
     "python/djust/tests/test_ws_transport_hardening_f21_f17.py",
     "python/tests/test_form_adapter_a11y.py",
     "python/tests/test_form_as_liveview_state_3767.py",
@@ -109,9 +110,6 @@ REMAINING_4082: dict[str, str] = {
     ),
     "python/djust/tests/test_turn_middleware_core.py": (
         "legacy subject: its legacy view drives the reauth built-in, which re-checks legacy views only (turns.reauth)"
-    ),
-    "python/djust/tests/test_ws_mount_flip_parity_1911.py": (
-        "migrated; the sticky_hold cases stay legacy: product gap #4149, an explicit sticky child cannot survive live_redirect to another page"
     ),
     "tests/unit/test_layout_switching.py": (
         "migrated; one case stays legacy: a production failure log names the error for legacy views only (D-a)"
@@ -418,7 +416,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
 REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_event_reauth_1777.py",
     "python/djust/tests/test_reauth_reads_stored_session.py",
-    "python/djust/tests/test_ws_mount_flip_parity_1911.py",
     "python/djust/tests/test_runtime_reauth_async_1905.py",
     "python/djust/tests/test_server_turn_reauth.py",
     "python/djust/tests/test_server_turn_reauth_slots.py",
