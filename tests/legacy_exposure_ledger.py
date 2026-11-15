@@ -115,7 +115,7 @@ REMAINING_4082: dict[str, str] = {
         "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
     ),
     "python/djust/tests/test_runtime_reauth_async_1905.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
+        "migrated; the reauth_on_event cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
     ),
     "python/djust/tests/test_server_turn_reauth.py": (
         "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
@@ -478,5 +478,6 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_reauth_reads_stored_session.py",
     "python/djust/tests/test_push_skip_render_no_noop_3034.py",
     "python/djust/tests/test_ws_mount_flip_parity_1911.py",
+    "python/djust/tests/test_runtime_reauth_async_1905.py",
     "tests/unit/test_layout_switching.py",
 )
