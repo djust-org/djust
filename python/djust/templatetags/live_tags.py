@@ -1933,6 +1933,16 @@ def _render_sticky_child_html(
     )
 
 
+class _LazyFillRefused(PermissionError):
+    """The refusal of a lazy explicit child's fill (#4154): the only
+    ``PermissionError`` whose text its envelope shows."""
+
+
+def _lazy_failure_body(escaped_id: str) -> str:
+    """A lazy explicit child's failure envelope body: no exception type or text."""
+    return '<dj-error aria-live="polite">Lazy child ' + escaped_id + " failed.</dj-error>"
+
+
 def _lazy_fill_request(request: Any) -> Any:
     """The request a lazy explicit child is filled under (#4154).
 
@@ -1970,10 +1980,21 @@ def _fill_lazy_explicit_child(
     checks in the same order: view auth (session, user, permissions) before
     ``mount``, object permission after it, and the identity compiled when the
     tag rendered (parent, slot, inputs, session, user, tenant) matched before
-    mount, after mount and after authorization. Every refusal is the same
-    ``PermissionError``, so the fill's error envelope does not say which check
-    failed. Nothing is persisted: a transient child declares no stored state.
+    mount, after mount and after authorization. Before mount the inputs are the
+    tag's own copy, so that check is about the session, user, tenant and
+    parent; after mount they are the inputs the child recorded, which event
+    routing reads (``child_event_adapter``), so a mount that rewrote them is
+    refused.
+
+    Every refusal is the same ``PermissionError``, so the fill's error envelope
+    does not say which check failed. A ``mount()`` that raises ``Http404`` or
+    ``PermissionDenied`` (an application's own "not yours") is that refusal
+    too. Nothing is persisted: a transient child declares no stored state.
     """
+    import json
+
+    from django.http import Http404
+
     from .._exposure import ExposureError
     from .._exposure_child_identity import child_reuse_identity
     from .._exposure_children import record_child_mount_inputs
@@ -1981,17 +2002,27 @@ def _fill_lazy_explicit_child(
     from ..auth.core import check_view_auth, enforce_object_permission
     from ..sync_turn import run_sync_step
 
-    def still_matches(current: Any) -> bool:
+    def still_matches(current: Any, inputs: Dict[str, Any]) -> bool:
         return bool(
-            identity.matches(
-                child_reuse_identity(child_cls, parent, current, view_id, mount_inputs)
-            )
+            identity.matches(child_reuse_identity(child_cls, parent, current, view_id, inputs))
         )
 
-    refused = PermissionError("child %r denied access" % view_path)
+    def recorded_inputs(child: Any) -> Dict[str, Any]:
+        encoded = getattr(child, "_explicit_child_mount_inputs", None)
+        if type(encoded) is not str:
+            raise ExposureError("Child mount inputs unavailable")
+        try:
+            decoded = json.loads(encoded)
+        except ValueError:
+            raise ExposureError("Child mount inputs unavailable") from None
+        if type(decoded) is not dict:
+            raise ExposureError("Child mount inputs unavailable")
+        return decoded
+
+    refused = _LazyFillRefused("child %r denied access" % view_path)
     try:
         fill_request = _lazy_fill_request(request)
-        if not still_matches(fill_request):
+        if not still_matches(fill_request, mount_inputs):
             raise refused
         child = child_cls()
         mark_embedded(child)
@@ -2005,12 +2036,12 @@ def _fill_lazy_explicit_child(
             # child's hooks enter their own steps (#3646).
             run_sync_step(child, "mount", mount_fn, fill_request, **kwargs)
         _refuse_removed_configuration(child)
-        if not still_matches(fill_request):
+        if not still_matches(fill_request, recorded_inputs(child)):
             raise refused
         enforce_object_permission(child, fill_request)
-        if not still_matches(fill_request):
+        if not still_matches(fill_request, recorded_inputs(child)):
             raise refused
-    except (PermissionDenied, ExposureError):
+    except (PermissionDenied, Http404, ExposureError):
         raise refused from None
     child._explicit_child_reuse_identity = identity
     parent._register_child(view_id, child)
@@ -2593,8 +2624,13 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     + "s.</dj-error>"
                 )
             except PermissionError as exc:
-                status = "error"
-                body = '<dj-error aria-live="polite">' + escape(str(exc)) + "</dj-error>"
+                if lazy_identity is not None and not isinstance(exc, _LazyFillRefused):
+                    # An explicit child's envelope carries no application text:
+                    # only the fill's own refusal is shown as one (#4154).
+                    status, body = "error", _lazy_failure_body(escaped_id)
+                else:
+                    status = "error"
+                    body = '<dj-error aria-live="polite">' + escape(str(exc)) + "</dj-error>"
             except Exception as exc:  # noqa: BLE001
                 from .._exposure_diagnostics import log_failure_for as _log_failure_for
 
@@ -2609,13 +2645,17 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     traceback=True,
                 )
                 status = "error"
-                body = (
-                    '<dj-error aria-live="polite">Lazy child '
-                    + escaped_id
-                    + " failed: "
-                    + escape(type(exc).__name__)
-                    + "</dj-error>"
-                )
+                if lazy_identity is not None:
+                    # Explicit child: no exception type either (#4154 review).
+                    body = _lazy_failure_body(escaped_id)
+                else:
+                    body = (
+                        '<dj-error aria-live="polite">Lazy child '
+                        + escaped_id
+                        + " failed: "
+                        + escape(type(exc).__name__)
+                        + "</dj-error>"
+                    )
 
             # Build the fill envelope. Browsers parse <template> inertly;
             # the inline <script> activator runs at parse time and

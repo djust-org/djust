@@ -342,6 +342,134 @@ def test_lazy_explicit_fill_is_authorized_like_a_direct_mount(rf, monkeypatch, c
     assert OBJECT_CHECKS == []
 
 
+class RaisingLazyChild(TransientChild):
+    raises = None
+
+    def mount(self, request, **kwargs):
+        raise type(self).raises
+
+
+class LegacyRaisingLazyChild(LegacyChild):
+    raises = None
+
+    def mount(self, request, **kwargs):
+        raise type(self).raises
+
+
+@pytest.mark.parametrize(
+    "raised,refusal",
+    [
+        ("http404", True),
+        ("permission_denied", True),
+        ("value_error", False),
+        ("permission_error", False),
+    ],
+)
+def test_a_lazy_explicit_mount_that_raises_shows_no_application_detail(
+    rf, monkeypatch, raised, refusal
+):
+    """#4154 review: an explicit child whose mount() raises ``Http404`` or
+    ``PermissionDenied`` gets the same envelope as a refusal, so "not yours"
+    cannot be told from a denial. Anything else is a failure, with neither the
+    exception's type nor its text."""
+    from django.core.exceptions import PermissionDenied
+    from django.http import Http404
+
+    exc = {
+        "http404": Http404("SECRET_404"),
+        "permission_denied": PermissionDenied("SECRET_DENIED"),
+        "value_error": ValueError("SECRET_VALUE"),
+        "permission_error": PermissionError("SECRET_OS"),
+    }[raised]
+    monkeypatch.setattr(RaisingLazyChild, "raises", exc)
+    parent = ExplicitParent()
+    session = SessionStore()
+    session.create()
+    path = f"{MODULE}.RaisingLazyChild"
+    render(parent, make_request(rf, session), f'{{% live_render "{path}" lazy=True %}}')
+    view_id, status, body = _fill(parent)
+    assert status == "error"
+    assert "SECRET" not in body and type(exc).__name__ not in body
+    if refusal:
+        assert body == (
+            f'<dj-error aria-live="polite">child &#x27;{path}&#x27; denied access</dj-error>'
+        )
+    else:
+        assert body == f'<dj-error aria-live="polite">Lazy child {view_id} failed.</dj-error>'
+    assert parent._get_all_child_views() == {}
+
+
+def test_a_lazy_legacy_mount_that_raises_keeps_its_failure_message(rf, monkeypatch):
+    """Legacy control: the legacy fill's envelope is unchanged."""
+    from django.http import Http404
+
+    monkeypatch.setattr(LegacyRaisingLazyChild, "raises", Http404("x"))
+    parent = _LegacyLiveView()
+    render(
+        parent,
+        make_request(rf, SessionStore()),
+        f'{{% live_render "{MODULE}.LegacyRaisingLazyChild" lazy=True %}}',
+    )
+    view_id, status, body = _fill(parent)
+    assert status == "error"
+    assert body == f'<dj-error aria-live="polite">Lazy child {view_id} failed: Http404</dj-error>'
+
+
+class InputsRewritingLazyChild(TransientChild):
+    def mount(self, request, **kwargs):
+        super().mount(request, **kwargs)
+        self._explicit_child_mount_inputs = '{"object_id":99}'
+
+
+def test_a_lazy_explicit_mount_that_rewrites_its_inputs_is_refused(rf):
+    """After mount() the fill compares the inputs the child recorded, which
+    event routing reads, with the tag's: a rewrite is refused (#4154 review)."""
+    parent = ExplicitParent()
+    session = SessionStore()
+    session.create()
+    path = f"{MODULE}.InputsRewritingLazyChild"
+    render(parent, make_request(rf, session), f'{{% live_render "{path}" lazy=True %}}')
+    _, status, body = _fill(parent)
+    assert status == "error" and "denied access" in body, body
+    assert parent._get_all_child_views() == {}
+
+
+@pytest.mark.parametrize("gone", [None, "deleted", "expired"])
+def test_reload_request_session_refuses_a_session_that_is_gone(rf, gone):
+    """``reload_request_session``'s own refusal (#4154 review): called alone,
+    with no identity or binding comparison after it, a session deleted or
+    expired since the request read it raises instead of becoming an anonymous
+    request with no key. Its callers also compare the key afterwards; this pins
+    the helper's contract for any caller that does not."""
+    from datetime import timedelta
+
+    from django.contrib.auth.models import User
+    from django.utils import timezone
+
+    from djust._exposure_auth import reload_request_session
+
+    alice = User.objects.create_user("alice-reload-4154")
+    session = SessionStore()
+    _log_in(session, alice)
+    request = make_request(rf, session)
+    request.user = alice
+    if gone == "deleted":
+        SessionStore(session.session_key).delete()
+    elif gone == "expired":
+        from django.contrib.sessions.models import Session
+
+        Session.objects.filter(session_key=session.session_key).update(
+            expire_date=timezone.now() - timedelta(seconds=1)
+        )
+    if gone is None:
+        fresh = reload_request_session(request)
+        assert fresh is not request and fresh.user.pk == alice.pk
+        assert fresh.session.session_key == session.session_key
+        return
+    with pytest.raises(ExposureError):
+        reload_request_session(request)
+
+
 class _LegacyLiveView(LiveView):
     """A bare LiveView under the legacy policy, whatever the framework default is."""
 
