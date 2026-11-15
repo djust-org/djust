@@ -52,6 +52,7 @@ from djust.components.utils import (
     style_value,
 )
 from djust.config import config
+from djust.tests.native_call import native_render
 
 _COMPONENTS = Path(rh.__file__).resolve().parent
 _ENGINE = Engine(
@@ -416,15 +417,15 @@ def _theme_skeleton() -> str:
 
 
 def _colour_scale() -> str:
-    return str(
-        rh.DataTableHandler().render(
-            ["rows=rows", "columns=cols", "conditional_formatting=cf"],
-            {
-                "rows": [{"id": 1, "n": 50}],
-                "cols": [{"key": "n", "label": "N"}],
-                "cf": [{"column": "n", "type": "color_scale", "colors": ["#abcdef"]}],
-            },
-        )
+    # As the engine hands the operands over (#3882): the handler no longer looks a name up.
+    return native_render(
+        rh.DataTableHandler(),
+        ["rows=rows", "columns=cols", "conditional_formatting=cf"],
+        {
+            "rows": [{"id": 1, "n": 50}],
+            "cols": [{"key": "n", "label": "N"}],
+            "cf": [{"column": "n", "type": "color_scale", "colors": ["#abcdef"]}],
+        },
     )
 
 
@@ -1106,7 +1107,9 @@ class TestBothEnginesWriteTheSameAttributes:
         cols = [{"key": "a", "label": "A", "width": "12rem"}]
         rows = [{"id": 1, "a": "x"}]
         django = _tag("{% data_table rows=r columns=c %}", c=cols, r=rows)
-        native = str(rh.DataTableHandler().render(["rows=r", "columns=c"], {"c": cols, "r": rows}))
+        native = native_render(
+            rh.DataTableHandler(), ["rows=r", "columns=c"], {"c": cols, "r": rows}
+        )
         attr = (
             r'<th[^>]*( data-dj-style data-dj-style-width="[^"]*")'
             if mode == "strict"

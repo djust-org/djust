@@ -2930,7 +2930,7 @@ def djust_markdown(source: Any = _NO_SOURCE, *args: Any, **options: Any) -> Any:
         return warn_no_source()
     # The source as the native handler is handed it, so the bytes are the same: the engine passes
     # the operand as text (``None`` is ``"None"``, as ``{{ }}`` writes it), and the handler's
-    # ``_resolve_arg`` strips that text unless it is marked safe.
+    # ``_resolve_arg`` keeps that text exactly as it arrived, padding included (#3872).
     if not hasattr(source, "__html__"):
-        source = str(source).strip()
+        source = str(source)
     return djust_markdown_html(source, options, args)

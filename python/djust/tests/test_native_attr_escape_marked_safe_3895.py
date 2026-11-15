@@ -6,10 +6,12 @@ wrote some members into attribute values with ``conditional_escape``, which keep
 ``SafeString`` raw, so the markup could leave the attribute. Each site now uses ``escape``.
 
 Each case renders through the native engine with the member in a list AND in a tuple (the two
-shapes a template operand has), and a dict-valued operand through a direct handler call (the only
-way a ``SafeString`` dict value reaches a handler). The page is parsed: no element may carry an
-``on...`` attribute, and the payload's text must still be in the page (escaped), so a case that
-dropped the value would not pass.
+shapes a template operand has). The dict-valued operands render through the engine too: since
+#3882 a handler never looks a name up in the context, and the engine hands a dict to these
+parameters as its JSON text, so a ``SafeString`` dict value no longer reaches the handler at all;
+those cases pin that the engine's page carries no handler and keeps the payload as text. The page
+is parsed: no element may carry an ``on...`` attribute, and the payload's text must still be in
+the page (escaped), so a case that dropped the value would not pass.
 """
 
 from __future__ import annotations
@@ -95,10 +97,10 @@ def test_a_marked_safe_member_is_escaped_in_its_attribute(name, src, build, wrap
 
 
 def _direct(**kw: object) -> str:
-    from djust.components.rust_handlers import DataTableHandler
-
-    args = ["rows=rows", "columns=cols", *(f"{k}={k}" for k in kw)]
-    return str(DataTableHandler().render(args, {"rows": ROWS, "cols": COLS, **kw}))
+    args = " ".join(f"{k}={k}" for k in kw)
+    return _rust(
+        "{% data_table rows=rows columns=cols " + args + " %}", {"rows": ROWS, "cols": COLS, **kw}
+    )
 
 
 @pytest.mark.parametrize(
@@ -125,14 +127,10 @@ def test_a_marked_safe_dict_value_is_escaped_in_its_attribute(name: str, kw: dic
 
 
 def test_a_marked_safe_filter_value_is_escaped_in_its_attribute() -> None:
-    from djust.components.rust_handlers import DataTableHandler
-
     cols = [{"key": "name", "label": "Name", "filterable": True}]
-    html = str(
-        DataTableHandler().render(
-            ["rows=rows", "columns=cols", "filters=filters"],
-            {"rows": ROWS, "cols": cols, "filters": {"name": _marked()}},
-        )
+    html = _rust(
+        "{% data_table rows=rows columns=cols filters=filters %}",
+        {"rows": ROWS, "cols": cols, "filters": {"name": _marked()}},
     )
     assert view(html).handlers == [], html
     assert ESCAPED in html, html
