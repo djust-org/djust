@@ -367,6 +367,7 @@ GATED = [
     "windows-ai-inventory",
     "javascript-tests",
     "javascript-coverage",
+    "multinode-redis-rows",
     "playwright-tests",
     "browser-smoke",
     "nav-hooks-guard",
@@ -573,15 +574,21 @@ def _all(result: str, **overrides: str) -> dict[str, str]:
 # Jobs that carry a verdict in each path (playwright and the security scan only warn).
 INFORMATIONAL = {"playwright-tests", "security-scan"}
 CHAIN_JOBS = [j for j in GATED if j not in INFORMATIONAL]
+# The slow tier: off on pull requests and in the queue unless a PR carries `full-tests`, so the
+# gate accepts `skipped` from these on those two events only (#4136 added the Redis rows).
+SLOW_TIER = {"javascript-coverage", "multinode-redis-rows"}
 
-CODE_PR = {  # a code change on a pull request: everything runs, the slow coverage tier does not
-    "results": _all("success", **{"javascript-coverage": "skipped", "security-scan": "skipped"}),
+CODE_PR = {  # a code change on a pull request: everything runs, the slow tier does not
+    "results": _all(
+        "success", **{job: "skipped" for job in SLOW_TIER}, **{"security-scan": "skipped"}
+    ),
     "event": "pull_request",
 }
 TEST_ONLY_PR = {
     "results": _all(
         "success",
-        **{"javascript-coverage": "skipped", "security-scan": "skipped", "rust-tests": "skipped"},
+        **{job: "skipped" for job in SLOW_TIER},
+        **{"security-scan": "skipped", "rust-tests": "skipped"},
     ),
     "rust_skip": "true",
     "event": "pull_request",
@@ -620,9 +627,9 @@ def test_exactly_one_gate_step_runs_in_every_state(changes, docs_only, event):
     "scenario", [CODE_PR, {**CODE_PR, "event": "merge_group"}], ids=["pr", "queue"]
 )
 def test_a_job_that_did_not_succeed_fails_the_merge(scenario, job, bad):
-    # javascript-coverage is the one job allowed to be skipped on these events.
-    if job == "javascript-coverage" and bad == "skipped":
-        pytest.skip("allowed: the slow coverage tier is off on PRs and in the queue")
+    # The slow tier is the only set of jobs allowed to be skipped on these events.
+    if job in SLOW_TIER and bad == "skipped":
+        pytest.skip("allowed: the slow tier is off on PRs and in the queue")
     results = {**scenario["results"], job: bad}
     assert gate(**{**scenario, "results": results})[0] is False, (job, bad)
 
@@ -630,8 +637,8 @@ def test_a_job_that_did_not_succeed_fails_the_merge(scenario, job, bad):
 @pytest.mark.parametrize("bad", ["failure", "cancelled", "skipped"])
 @pytest.mark.parametrize("job", [j for j in CHAIN_JOBS if j != "rust-tests"])
 def test_a_test_only_change_still_gates_everything_but_cargo(job, bad):
-    if job == "javascript-coverage" and bad == "skipped":
-        pytest.skip("allowed: the slow coverage tier is off on PRs")
+    if job in SLOW_TIER and bad == "skipped":
+        pytest.skip("allowed: the slow tier is off on PRs")
     results = {**TEST_ONLY_PR["results"], job: bad}
     assert gate(**{**TEST_ONLY_PR, "results": results})[0] is False, (job, bad)
 
