@@ -73,7 +73,7 @@ REMAINING_4082: dict[str, str] = {
         "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
     ),
     "python/djust/tests/test_event_loop_offload_3074.py": (
-        "migrated; the one-hop offloaded push case stays legacy: product gap, the offloaded push turn runs for legacy views only"
+        "migrated; the one-hop offloaded push case stays legacy: product gap #4152, the offloaded push turn runs for legacy views only"
     ),
     "python/djust/tests/test_event_reauth_1777.py": (
         "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
@@ -121,7 +121,7 @@ REMAINING_4082: dict[str, str] = {
         "migrated; the sticky_hold cases stay legacy: product gap #4149, an explicit sticky child cannot survive live_redirect to another page"
     ),
     "python/tests/test_form_adapter_a11y.py": (
-        "migrated; the test-client case stays legacy: product gap, LiveView.render() cannot resolve view for form tags under explicit"
+        "migrated; the test-client case stays legacy: product gap #4151, LiveView.render() cannot resolve view for form tags under explicit"
     ),
     "python/tests/test_form_as_liveview_state_3767.py": (
         "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"

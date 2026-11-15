@@ -371,7 +371,7 @@ class LegacyOrderView(OrderView):
     there (``render_with_diff`` falls back to the rendered view, ``render``
     does not)."""
 
-    exposure_policy = "legacy"  # gap #4082: explicit render() cannot resolve view for form tags
+    exposure_policy = "legacy"  # gap #4151: explicit render() cannot resolve view for form tags
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)

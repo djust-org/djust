@@ -87,7 +87,7 @@ class _LegacyOffloadView(_OffloadView):
     (``LiveViewConsumer._run_server_push_turn``): an explicit view's push turn
     takes the stock path, its hooks hopping to the pool one by one."""
 
-    exposure_policy = "legacy"  # gap #4082: the one-hop offloaded push turn is legacy-only
+    exposure_policy = "legacy"  # gap #4152: the one-hop offloaded push turn is legacy-only
     template = (
         '<div dj-root dj-view="djust.tests.test_event_loop_offload_3074._LegacyOffloadView">'
         "<b>{{ count }}</b><i>{{ label }}</i></div>"
