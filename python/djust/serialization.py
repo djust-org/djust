@@ -1338,6 +1338,9 @@ class StateValueError(ValueError):
         self.kind = kind
 
 
+_STR_ONLY = frozenset({str})
+
+
 def _tag(kind: str, payload: Any) -> Dict[str, Any]:
     return {STATE_VALUE_TAG: [kind, payload]}
 
@@ -1391,6 +1394,37 @@ def encode_state_value(
             % type(tz).__name__
         )
 
+    isfinite = math.isfinite
+
+    def children(values: Any, depth: int) -> List[Any]:
+        """The members of a list (or a dict's values), encoded in order.
+
+        One call per container, not per member (#3997): a member that encodes
+        as itself (``None``, a ``bool``, a ``str``, a safe ``int``, a finite
+        ``float``: most cells of a list of rows) is counted and depth-checked
+        here exactly as :func:`walk` would, and kept; any other member goes to
+        ``walk``. Members are visited in order, so the first refusal is the one
+        ``walk`` alone would raise.
+        """
+        out: List[Any] = []
+        append = out.append
+        for child in values:
+            kind = type(child)
+            if (
+                child is None
+                or kind is str
+                or kind is bool
+                or (kind is int and -(2**53) < child < 2**53)
+                or (kind is float and isfinite(child))
+            ):
+                nodes[0] -= 1
+                if nodes[0] < 0 or depth > max_depth:
+                    raise StateValueError("it is too large or too deeply nested", "structure")
+                append(child)
+            else:
+                append(walk(child, depth))
+        return out
+
     def walk(item: Any, depth: int) -> Any:
         nodes[0] -= 1
         if nodes[0] < 0 or depth > max_depth:
@@ -1403,13 +1437,15 @@ def encode_state_value(
         if kind is float:
             return item if math.isfinite(item) else _tag("float", repr(item))
         if kind is list:
-            return [walk(child, depth + 1) for child in item]
+            return children(item, depth + 1)
         if kind is dict:
-            plain = all(type(key) is str for key in item) and not (
+            # Every key an exact ``str`` (``map(type, ...)`` runs in C; an
+            # empty dict is plain too), and not a lone ``__djust_`` key.
+            plain = (not item or set(map(type, item)) == _STR_ONLY) and not (
                 len(item) == 1 and next(iter(item)).startswith("__djust_")
             )
             if plain:
-                return {key: walk(child, depth + 1) for key, child in item.items()}
+                return dict(zip(item, children(item.values(), depth + 1)))
             return _tag(
                 "dict",
                 [[walk(key, depth + 1), walk(child, depth + 1)] for key, child in item.items()],
