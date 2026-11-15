@@ -1226,8 +1226,10 @@ jobs:
   # rows of the state-survival table cannot silently go unexercised again.
   #
   # No `services: redis` container: the harness starts its own private
-  # redis-server per module on a Unix socket (harness.py `redis_server`), so it
-  # needs the binary on the runner, not a server on a port.
+  # redis-server per module (harness.py `redis_server`: a Unix socket, falling
+  # back to TCP on 127.0.0.1, ready when PING answers), so it needs the binary
+  # on the runner, not a server on a port. The terminal summary names the
+  # transport each module used.
   #
   # Tier: like the slow Python tier these tests live in — push to main, nightly
   # (main-health calls this workflow on its schedule), manual dispatch, and a PR
@@ -1261,7 +1263,36 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends redis-server
+          # The package enables and starts its own systemd service; the harness
+          # never uses it, so stop it rather than share a host with it.
+          sudo systemctl stop redis-server || true
+          sudo systemctl disable redis-server || true
           redis-server --version
+          command -v redis-server
+
+      # Diagnostics only (never fails the job): the first runner run died with a
+      # silent redis-server (#4136), so the log shows the confinement in force
+      # and whether a hand-started server answers on a Unix socket and on TCP.
+      - name: redis-server smoke and confinement diagnostics
+        run: |
+          set +e
+          sudo aa-status 2>/dev/null | grep -i -E 'redis|profiles are' || echo "aa-status: no output"
+          ls -l /etc/apparmor.d 2>/dev/null | grep -i redis || echo "no redis AppArmor profile in /etc/apparmor.d"
+          systemctl is-active redis-server
+          redis-server --port 0 --unixsocket /tmp/smoke.sock --save "" --logfile "" --daemonize no \
+            < /dev/null > /tmp/smoke-unix.log 2>&1 &
+          UNIX_PID=$!
+          redis-server --port 6390 --bind 127.0.0.1 --save "" --logfile "" --daemonize no \
+            < /dev/null > /tmp/smoke-tcp.log 2>&1 &
+          TCP_PID=$!
+          sleep 2
+          echo "unix ping: $(redis-cli -s /tmp/smoke.sock ping 2>&1)"
+          echo "tcp ping: $(redis-cli -h 127.0.0.1 -p 6390 ping 2>&1)"
+          kill "$UNIX_PID" "$TCP_PID" 2>/dev/null
+          wait 2>/dev/null
+          echo "--- unix server output"; cat /tmp/smoke-unix.log
+          echo "--- tcp server output"; cat /tmp/smoke-tcp.log
+          exit 0
 
       - name: Download the prebuilt extension
         uses: actions/download-artifact@v8

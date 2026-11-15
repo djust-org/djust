@@ -105,11 +105,28 @@ def _need_redis(environ: Mapping[str, str] = os.environ) -> None:
     pytest.skip("%s: the Redis rows are not exercised here" % reason)
 
 
+#: The transport of every private redis-server this session started, for the
+#: terminal summary: ``unix`` normally, ``tcp`` when the Unix socket never answered.
+REDIS_TRANSPORTS: list = []
+
+
+def redis_transport(url: str) -> str:
+    return "unix" if url.startswith("unix://") else "tcp"
+
+
 @pytest.fixture(scope="module")
-def redis_url() -> Iterator[str]:
+def redis_url(request) -> Iterator[str]:
     _need_redis()
     with redis_server() as url:
+        REDIS_TRANSPORTS.append((request.node.nodeid, redis_transport(url), url))
         yield url
+
+
+def pytest_terminal_summary(terminalreporter) -> None:
+    for nodeid, transport, url in REDIS_TRANSPORTS:
+        terminalreporter.write_line(
+            "multinode redis-server for %s: transport=%s (%s)" % (nodeid, transport, url)
+        )
 
 
 @pytest.fixture(scope="module")
