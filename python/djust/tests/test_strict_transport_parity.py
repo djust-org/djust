@@ -34,7 +34,7 @@ def strict(**options):
 
 
 class ParityView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p>{{ n }}</p></div>"
     api_name = "strict.parity"
 
@@ -170,15 +170,19 @@ def _take():
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_shared_runtime():
-    from djust.tests.test_runtime_child_routing_1892 import _make_runtime_with_view
+    from djust.runtime import ViewRuntime
+    from djust.tests._live_session import amount_on_runtime
+    from djust.tests.test_runtime_child_routing_1892 import MockTransport
 
     outcomes = []
     for handler, payload, _ in MATRIX:
         view = ParityView()
-        view.mount(None)
-        runtime, _transport = _make_runtime_with_view(view)
+        runtime = ViewRuntime(MockTransport())
+        # Mounted on a live session: an explicit view's events are authorized
+        # against its mount binding.
+        await amount_on_runtime(runtime, view)
         await runtime.dispatch_event({"type": "event", "event": handler, "params": dict(payload)})
         outcomes.append(_take())
     _check(outcomes)
