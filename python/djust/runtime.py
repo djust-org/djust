@@ -393,6 +393,30 @@ _STATE_FLUSH_LOCK_WAIT_S = 0.1
 _STATE_FLUSH_RETRY_S = 0.5
 
 
+#: Every runtime holding a change no save has written, in this process: what
+#: the shutdown flush (:func:`flush_unsaved_states`) writes. Weak: a runtime
+#: that is gone has nothing to flush.
+_UNSAVED_RUNTIMES: "weakref.WeakSet[Any]" = weakref.WeakSet()
+
+
+async def flush_unsaved_states(reason: str = "shutdown") -> int:
+    """Flush every runtime of this process that holds an unsaved change.
+
+    For a server that stops without closing its sockets first (the close
+    flushes them): ``djust.lifespan`` runs it before the application's own
+    shutdown hooks. One at a time, each bounded by the save cap. Returns how
+    many were written. Never raises.
+    """
+    written = 0
+    for runtime in list(_UNSAVED_RUNTIMES):
+        try:
+            if await runtime.flush_state(reason=reason):
+                written += 1
+        except Exception:  # noqa: BLE001 — every runtime gets its turn
+            logger.warning("djust: view state flush at %s failed", reason)
+    return written
+
+
 def _state_jitter() -> float:
     """The share of the interval a flush timer waits: 0.75 to 1.0, so a
     broadcast that dirties many connections at once does not flush them at
@@ -6531,6 +6555,7 @@ class ViewRuntime(RuntimeTurnPort):
         if self._state_dirty_view is not view:
             self._state_dirty_view = view
             self._state_flush_failures = 0
+        _UNSAVED_RUNTIMES.add(self)
         if self._state_timer is None:
             self._arm_state_timer(view)
 
@@ -6569,6 +6594,7 @@ class ViewRuntime(RuntimeTurnPort):
             self._state_dirty_view = None
             self._state_flush_failures = 0
             self._cancel_state_timer()
+            _UNSAVED_RUNTIMES.discard(self)
 
     def _forget_state_flush(self) -> None:
         """Nothing is to be flushed any more (the view went, or another
@@ -6576,6 +6602,7 @@ class ViewRuntime(RuntimeTurnPort):
         self._state_dirty_view = None
         self._state_flush_failures = 0
         self._cancel_state_timer()
+        _UNSAVED_RUNTIMES.discard(self)
 
     @property
     def state_unsaved(self) -> bool:
@@ -8736,6 +8763,9 @@ class ViewRuntime(RuntimeTurnPort):
         """
 
         def stop() -> None:
+            if view is None or self._state_dirty_view is view:
+                # Its flush timer goes too; the caller flushed what it had to.
+                self._forget_state_flush()
             task = self._tick_task
             if task is not None:
                 ticking_for = getattr(task, "_djust_tick_view", None)
