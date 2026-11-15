@@ -320,7 +320,10 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
         current_keys = [
             key
             for key in list(vars(view).keys())
-            if not key.startswith("_") and key not in framework_internal and key not in state_keys
+            if type(key) is str  # #4143
+            and not key.startswith("_")
+            and key not in framework_internal
+            and key not in state_keys
         ]
     except TypeError:
         # vars() fails on objects without __dict__; degrade silently.

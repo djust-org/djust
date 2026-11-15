@@ -659,7 +659,7 @@ class ContextMixin:
         # inferred rendering assigns, so never persisted from this context.
         _configuration: frozenset = getattr(type(self), "_djust_configuration_names", frozenset())
         for key, value in _all_items:
-            if key.startswith("_"):
+            if type(key) is not str or key.startswith("_"):  # #4143: not a name
                 continue
             if key == "exposure_policy" or key in _configuration:
                 # Policy configuration is never an inferred rendering assign.

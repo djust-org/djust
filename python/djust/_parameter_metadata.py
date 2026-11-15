@@ -310,7 +310,8 @@ def _event_methods(owner: Any) -> dict[str, Any]:
     # can never resolve to a handler, so only those take the full lookup.
     for name, value in storage.items():
         if (
-            name.startswith("_")
+            type(name) is not str  # not an attribute name (#4143)
+            or name.startswith("_")
             or name in plan.names
             or type(value) not in (_METHOD_TYPES + (types.MethodType,))
         ):

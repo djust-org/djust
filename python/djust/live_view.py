@@ -1133,7 +1133,8 @@ class LiveView(
         static_skip = set(getattr(self, "static_assigns", []))
         fp: Dict[str, Any] = {}
         for k, v in self.__dict__.items():
-            if k.startswith("_") or k in static_skip:
+            # A key that is not a ``str`` is not an attribute name (#4143).
+            if type(k) is not str or k.startswith("_") or k in static_skip:
                 continue
             fp[k] = self._dirty_value_fingerprint(v)
         for name in _descriptor_fields(type(self)):
@@ -1298,7 +1299,8 @@ class LiveView(
         self._user_private_keys = {
             k
             for k in self.__dict__
-            if k.startswith("_")
+            if type(k) is str  # #4143: not an attribute name otherwise
+            and k.startswith("_")
             and k not in framework
             and k not in meta_attrs
             and k not in _FRAMEWORK_INTERNAL_ATTRS
@@ -1487,7 +1489,7 @@ class LiveView(
 
         result: Dict[str, Any] = {}
         for key, value in self.__dict__.items():
-            if key.startswith("_"):
+            if type(key) is not str or key.startswith("_"):  # #4143
                 continue
             if key in _FRAMEWORK_INTERNAL_ATTRS:
                 continue
@@ -1746,7 +1748,7 @@ class LiveView(
 
         state = {}
         for key, value in self.__dict__.items():
-            if key.startswith("_"):
+            if type(key) is not str or key.startswith("_"):  # #4143
                 continue
 
             # #762: Skip framework-internal attrs so they don't pollute
