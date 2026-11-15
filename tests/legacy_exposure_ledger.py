@@ -23,6 +23,7 @@ MIGRATED_4082: tuple[str, ...] = (
     "python/djust/tests/test_background_html_fallback.py",
     "python/djust/tests/test_bound_component_render_adr031.py",
     "python/djust/tests/test_bound_component_skip_gate_2900.py",
+    "python/djust/tests/test_component_scoped_render_2917.py",
     "python/djust/tests/test_component_state_adr033.py",
     "python/djust/tests/test_csrf_socket_render_2998.py",
     "python/djust/tests/test_failed_mount_leaves_no_view.py",
@@ -70,9 +71,6 @@ REMAINING_4082: dict[str, str] = {
     ),
     "python/djust/tests/test_async_pending_flag_2963.py": (
         "migrated; one case stays legacy: an unhandled async failure ends loading with a named source=async frame on legacy views only"
-    ),
-    "python/djust/tests/test_component_scoped_render_2917.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
     ),
     "python/djust/tests/test_event_loop_offload_3074.py": (
         "migrated; the one-hop offloaded push case stays legacy: product gap #4152, the offloaded push turn runs for legacy views only"
