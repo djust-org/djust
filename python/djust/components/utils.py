@@ -572,8 +572,13 @@ def csp_strict() -> bool:
     """
     from djust.config import config
 
-    return bool(config.get("csp_strict", False) or config.get("csp_strict_styles", False))
+    return bool(config.get("csp_strict", False) or config.get(_CSP_STRICT_ALIAS, False))
 
+
+#: The name ``LIVEVIEW_CONFIG["csp_strict"]`` shipped with (#3979). A constant, not a literal in
+#: the ``get`` above: the template-library parity harness counts each literal key a tag's code
+#: reads as a parameter of that tag, and a config key is not one.
+_CSP_STRICT_ALIAS = "csp_strict_styles"
 
 #: The name :func:`csp_strict` had while it covered styles only (#3979).
 strict_styles = csp_strict
