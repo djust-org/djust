@@ -62,7 +62,7 @@ class _AuthedUser:
 class _ParamsDocView(LiveView):
     """Resolves its document from ``?id=`` in handle_params; mount() sets none."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = (
         '<div dj-root dj-view="djust.tests.test_mount_object_permission_after_params.'
@@ -112,14 +112,15 @@ def _allow_this_module():
         yield
 
 
-def _authed_middleware(app):
-    async def mw(scope, receive, send):
-        scope = dict(scope)
-        scope["user"] = _AuthedUser()
-        scope.setdefault("session", {})
-        return await app(scope, receive, send)
+async def _saved_user():
+    """A saved, signed-in user: an explicit view re-reads its user from the
+    session it was mounted on, where a stub scope user reads as anonymous."""
+    from asgiref.sync import sync_to_async
+    from django.contrib.auth import get_user_model
 
-    return mw
+    return await sync_to_async(get_user_model().objects.create_user)(
+        "objperm" + uuid.uuid4().hex[:8], password="pw-objperm-x"
+    )
 
 
 async def _ws_mount(frame):
@@ -136,8 +137,10 @@ async def _ws_mount(frame):
 
     from djust.websocket import LiveViewConsumer
 
-    communicator = WebsocketCommunicator(_authed_middleware(LiveViewConsumer.as_asgi()), "/ws/")
-    connected, _ = await communicator.connect()
+    from djust.tests._live_session import with_live_session
+
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    connected, _ = await with_live_session(communicator, await _saved_user()).connect()
     assert connected
     await communicator.receive_json_from()  # connect ack
     await communicator.send_json_to(frame)
@@ -160,7 +163,7 @@ def _mount_frame(view_path, doc_id=None):
     return {"type": "mount", "view": view_path, "params": params, "url": url}
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_allow_this_module")
 class TestWebSocketMount:
@@ -192,20 +195,20 @@ class TestWebSocketMount:
         assert "permission_denied" not in text, outputs
 
 
-def _sse_request(path):
-    request = RequestFactory().get(path)
-    request.user = _AuthedUser()
-    request.session = MagicMock()
-    return request
+async def _sse_request(path, user):
+    from djust.tests._live_session import with_live_session
+
+    return with_live_session(RequestFactory().get(path), user)
 
 
 async def _sse_mount(view_path, doc_id=None):
     from djust.sse import SSESession
 
     frame = _mount_frame(view_path, doc_id)
+    user = await _saved_user()
     session = SSESession(str(uuid.uuid4()))
-    session._owner_user_pk = 1
-    session._request = _sse_request(frame["url"])
+    session._owner_user_pk = user.pk
+    session._request = await _sse_request(frame["url"], user)
     await session.runtime.dispatch_mount(frame)
     messages = []
     while not session.queue.empty():
@@ -213,7 +216,7 @@ async def _sse_mount(view_path, doc_id=None):
     return session.runtime.view_instance is not None, messages
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_allow_this_module")
 class TestSSEMount:
