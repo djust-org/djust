@@ -110,11 +110,13 @@ UNDRIVEN = {
     "djust.components.descriptors.%s" % n: "descriptor"
     for n in (
         "accordion.Accordion",
+        "alert.Alert",
         "announcement_bar.AnnouncementBar",
         "base.LiveComponent",
         "carousel.Carousel",
         "collapsible.Collapsible",
         "command_palette.CommandPalette",
+        "date_picker.DatePicker",
         "dropdown.Dropdown",
         "expandable_text.ExpandableText",
         "export_dialog.ExportDialog",
@@ -122,10 +124,14 @@ UNDRIVEN = {
         "markdown_textarea.MarkdownTextarea",
         "modal.Modal",
         "nav_menu.NavMenu",
+        "notification_center.NotificationCenter",
         "sheet.Sheet",
+        "sidebar.Sidebar",
         "stepper.Stepper",
         "tabs.Tabs",
+        "toasts.Toasts",
         "tooltip.Tooltip",
+        "tree_view.TreeView",
         "truncated_list.TruncatedList",
     )
 } | {

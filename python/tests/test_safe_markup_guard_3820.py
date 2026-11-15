@@ -1333,6 +1333,7 @@ ESCAPERS = {
     "safe_url": "safe_url(x)",
     "url_attr": "url_attr(x)",
     "srcset_attr": "srcset_attr(x)",
+    "component_id_attr": "component_id_attr(x)",
 }
 
 
@@ -1533,6 +1534,21 @@ class TestTheTrustedHelpersKeepTheirContract:
         assert "&" not in _ENTITY.sub("", out), out  # an ampersand only as an entity
         assert sweep.injections(f'<a href="{out}" title="{out}">{out}</a>') == []
         assert not out.lower().lstrip().startswith(("javascript:", "vbscript:", "data:"))
+
+    @pytest.mark.parametrize("value", [PAYLOAD, '" onclick="alert(1)', "<x>", "a'b&c", 7])
+    def test_component_id_attr_is_one_escaped_attribute(self, value):
+        """``component_id_attr`` (#4134) is trusted in any position: its output is either
+        empty or exactly one ``data-component-id`` attribute whose value is escaped."""
+        from djust.components.utils import component_id_attr
+
+        out = component_id_attr(value)
+        assert out.startswith(' data-component-id="') and out.endswith('"'), out
+        inner = out[len(' data-component-id="') : -1]
+        assert not (HTML_SPECIAL & set(inner)), out
+        assert "&" not in _ENTITY.sub("", inner), out
+        assert sweep.injections(f"<button{out}>x</button>") == []
+        for off in (None, False, ""):
+            assert component_id_attr(off) == ""
 
     @pytest.mark.parametrize("value", HOSTILE_URLS)
     def test_a_srcset_is_escaped_candidate_by_candidate(self, value):

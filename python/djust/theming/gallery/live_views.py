@@ -353,7 +353,7 @@ def _make_demo_handler(event: str, effects: Any):
     # "expected str, got bool (True)" — which left `switch` unable to toggle
     # even once its input carried `dj-change`.
     def handler(self: Any, value: Any = "", **kwargs: Any) -> None:
-        values = dict(self.state.values)
+        values = dict(self.state.demo_values)
         for key, transform in pairs:
             if key not in values:
                 values[key] = _example_value(self.state.examples, key)
@@ -365,7 +365,7 @@ def _make_demo_handler(event: str, effects: Any):
                 values[key] = transform(values[key], value)
         # Reassigned, not mutated in place: the State's dirty flag and the
         # change-detection snapshot both see the new dict.
-        self.state.values = values
+        self.state.demo_values = values
 
     handler.__name__ = event
     handler.__qualname__ = event
@@ -396,10 +396,10 @@ def _make_descriptor_handler(descriptor_cls: Any):
     fields = [n for n in state_cls.__annotations__ if not n.startswith("_")]
 
     def handler(self: Any, value: Any = "", **kwargs: Any) -> None:
-        current = self.state.values
+        current = self.state.demo_values
         state = state_cls(**{k: current[k] for k in fields if k in current})
         descriptor_cls()._handle_event(state, value=value, **kwargs)
-        self.state.values = {**current, **{k: state[k] for k in fields}}
+        self.state.demo_values = {**current, **{k: state[k] for k in fields}}
 
     handler.__name__ = descriptor_cls.Meta.event
     handler.__qualname__ = descriptor_cls.Meta.event
@@ -557,7 +557,7 @@ class Preview(LiveComponent):
         #: and the handlers reassign `values` rather than mutating it.
         examples: list = []
         #: Descriptor state + demo values, merged into every example.
-        values: dict = {}
+        demo_values: dict = {}
         #: The playground's overrides (`variant`, `size`, …) over the first
         #: example — the reader's choices, separate from `values` so the
         #: examples stay what they document.
@@ -565,15 +565,15 @@ class Preview(LiveComponent):
 
     template = (
         "{% load theme_tags %}"
-        "{% component_preview component_name component_type examples values playground %}"
+        "{% component_preview component_name component_type examples demo_values playground %}"
     )
 
     @event_handler()
     def reset_preview(self, **kwargs: Any) -> None:
         """ "Show again" after a dismiss or close: drop the preview-only keys."""
-        self.state.values = {
+        self.state.demo_values = {
             k: v
-            for k, v in self.state.values.items()
+            for k, v in self.state.demo_values.items()
             if k not in (PREVIEW_HIDDEN, PREVIEW_RECEIVED)
         }
 
@@ -1058,7 +1058,7 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         preview.state.component_name = component_name
         preview.state.component_type = component_type
         preview.state.examples = examples
-        preview.state.values = values
+        preview.state.demo_values = values
         preview.state.playground = {}
         self._remember_visit(request, component_name)
         # `styles` ("what do I override?") is derived ONCE, at mount, from the
@@ -1162,7 +1162,7 @@ class ComponentsDetailView(ComponentsAccessMixin, ComponentsSidebarMixin, LiveVi
         """The rendered examples, as the preview renders them now."""
         state = self.preview.state
         return render_preview_examples(
-            state.component_name, state.component_type, state.examples, state.values
+            state.component_name, state.component_type, state.examples, state.demo_values
         )
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:

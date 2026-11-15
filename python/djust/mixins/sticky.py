@@ -31,6 +31,8 @@ import re
 import uuid
 from typing import Any, Callable, Dict, Optional, Union
 
+from .._mapping import mapping_items
+
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,7 @@ def _canonical_kwarg(value: Any, depth: int = 0) -> str:
         if isinstance(value, dict):
             items = sorted(
                 (_canonical_kwarg(k, depth + 1), _canonical_kwarg(v, depth + 1))
-                for k, v in value.items()
+                for k, v in mapping_items(value)
             )
             return "{" + ",".join(f"{k}:{v}" for k, v in items) + "}"
         meta = getattr(value, "_meta", None)

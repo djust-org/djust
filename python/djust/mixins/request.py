@@ -1916,6 +1916,15 @@ class RequestMixin:
                     self, "_http_lazy_containers", {}
                 ):
                     return self._http_child_response(request, child_view, view_id, event_name)
+            from ..websocket_utils import _safe_error, component_id_refusal
+
+            bad_component_id = component_id_refusal(params) if child_view is None else None
+            if bad_component_id is not None:
+                # Before the lookup, as every transport refuses it (#4134).
+                logger.warning("HTTP POST event refused: %s", bad_component_id)
+                return JsonResponse(
+                    {"error": _safe_error(bad_component_id, "Event rejected")}, status=400
+                )
             component_id = (
                 params.get("component_id")
                 if isinstance(params, dict) and child_view is None

@@ -269,6 +269,8 @@ CLEAN_ORIGINS = frozenset(
         "djust.components.utils.srcset_attr",  # each URL through url_attr, descriptors escaped
         "djust.components.utils.data_url_attr",  # url_attr that never honours the safe marker (#3898)
         "djust.components.utils.attr_text",  # django.utils.html.escape of the exact str (#3898)
+        # A whole ``data-component-id="..."`` attribute, its value through attr_text, or "" (#4134).
+        "djust.components.utils.component_id_attr",
     }
 )
 #: NOT in ``CLEAN_ORIGINS`` on purpose (review of #3848):

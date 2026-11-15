@@ -13,6 +13,7 @@ from django.utils.datastructures import MultiValueDict
 
 from .. import _per_turn
 from .._class_snapshot import namespace as _class_namespace
+from .._mapping import mapping_items, mapping_values
 from .._exposure_providers import STREAMS_PROVIDER, actions_provider, components_provider
 from ..serialization import _crosses_as_encoded, normalize_django_value
 from ..utils import is_model_list
@@ -157,7 +158,7 @@ def _holds_db_value(value: Any, depth: int = 0) -> bool:
     elif isinstance(value, dict):
         if isinstance(value, MultiValueDict) or _crosses_as_encoded(value):
             return False
-        items = value.values()
+        items = mapping_values(value)
     elif isinstance(value, list):
         items = value
     else:
@@ -200,7 +201,7 @@ def _contains_orm_value(value: Any, seen: set[int]) -> bool:
         if identity in seen:
             return False
         seen.add(identity)
-        members = value.values() if isinstance(value, dict) else value
+        members = mapping_values(value) if isinstance(value, dict) else value
         return any(_contains_orm_value(member, seen) for member in members)
     return False
 
@@ -281,7 +282,7 @@ def _is_json_serializable(value: Any) -> bool:
     if isinstance(value, (list, tuple)):
         return all(_is_json_serializable(item) for item in value)
     if isinstance(value, dict):
-        return all(isinstance(k, str) and _is_json_serializable(v) for k, v in value.items())
+        return all(isinstance(k, str) and _is_json_serializable(v) for k, v in mapping_items(value))
     # Anything else cannot be encoded, and the answer is known from the type
     # (#3996). ``json.dumps`` without a ``default`` accepts ``None``, ``True``,
     # ``False`` and instances of ``str`` / ``int`` / ``float`` / ``list`` /

@@ -218,9 +218,10 @@ class _OwnerContext:
         return self._result(binding, self._arguments(binding, handler))
 
     def _tag_off_finding(self, tag: tuple[str, str], literal: str) -> Finding:
-        """T019 for ``close_event=None`` (or ``False``, ``""``): the tag has no
-        off state, so it still draws the control, sending an event no handler
-        has (#4126 review)."""
+        """T019 for ``toggle_event=None`` (or ``False``, ``""``) on a control the
+        tag is for: it has no off state, so the tag still draws the control,
+        sending an event no handler has (#4126 review). An optional control (a
+        close or dismiss button) has one and is never reported (#4134)."""
         tag_name, argument = tag
         rendered = "" if literal in ("''", '""') else literal
         return Finding(
@@ -247,12 +248,14 @@ class _OwnerContext:
         )
         owner = self.cls.__qualname__
         if event is not None and event.component and name == event.default:
+            # The full import, always: ``djust.components`` has other classes of
+            # the same names (``Alert``, ``Sidebar`` ...), which are not these (#4134).
             hint = (
-                "Declare the component on the view (for example "
-                "`%s = %s` from djust.components.descriptors) and pass its state to "
-                "the tag; or add an @event_handler named %r to %s; or set %s= to an "
-                "event the view handles."
+                "Declare the component on the view (`from djust.components.descriptors "
+                "import %s`, then `%s = %s`) and pass its state to the tag; or add an "
+                "@event_handler named %r to %s; or set %s= to an event the view handles."
                 % (
+                    event.component,
                     re.sub(r"(?<!^)(?=[A-Z])", "_", event.component).lower(),
                     event.declare or "%s()" % event.component,
                     name,

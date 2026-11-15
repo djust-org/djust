@@ -70,6 +70,7 @@ from django.template.context import BaseContext, Context
 from django.utils.functional import Promise
 
 from ._class_snapshot import attribute_names
+from ._mapping import mapping_items
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,10 @@ def _same_contents(original: Any, protected: Any) -> bool:
         return (
             isinstance(protected, dict)
             and len(original) == len(protected)
-            and all(k in protected and _same_contents(v, protected[k]) for k, v in original.items())
+            and all(
+                k in protected and _same_contents(v, protected[k])
+                for k, v in mapping_items(original)
+            )
         )
     if isinstance(original, (list, tuple)):
         return (

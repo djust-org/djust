@@ -61,7 +61,7 @@ from djust.components.utils import (
     url_attr,
     data_url_attr,
 )
-from djust.components.utils import attr_text
+from djust.components.utils import attr_text, component_id_attr
 from djust.template_tags import TYPED_ARGS_KEY
 from djust.components._operands import (  # noqa: F401 - TupleValue/NamedTupleValue re-exported
     STANDIN_TYPES,
@@ -362,10 +362,45 @@ def _with_typed_block_operands(handler: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
+#: What an accordion's own markup is made of, for stamping its triggers (#4134): a ``<div>``
+#: opening (a nested accordion's is told apart), a ``</div>``, and an item's trigger.
+_ACCORDION_TOKEN = _re_filters.compile(
+    r'<div class="accordion"[ >]|<div\b|</div\s*>|<button class="accordion-trigger"'
+)
+
+
+def _accordion_trigger_ends(content: str) -> list[int]:
+    """Where THIS accordion's item triggers' ``<button class="accordion-trigger"`` end (#4134).
+
+    The items render before the accordion, so only it knows its ``component_id=``, which it
+    inserts at these offsets. A trigger inside a nested ``{% accordion %}`` (already rendered,
+    and stamped by that one) is skipped: the scan counts ``<div>`` depth and leaves out
+    everything inside a nested accordion. Only offsets come back, never markup.
+    """
+    nested: list[bool] = []  # one entry per open <div>: is it a nested accordion?
+    ends: list[int] = []
+    for match in _ACCORDION_TOKEN.finditer(content):
+        token = match.group(0)
+        if token.startswith("</div"):
+            if nested:
+                nested.pop()
+        elif token.startswith("<div"):
+            nested.append(token.startswith('<div class="accordion"'))
+        elif not any(nested):
+            ends.append(match.end())
+    return ends
+
+
 class AccordionHandler:
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         accordion_id = conditional_escape(kw.get("id", "accordion"))
+        # The triggers carry ``component_id=`` as the Django tag's do (#4134): only
+        # component_id_attr's output is inserted, every other byte of ``content`` is kept.
+        cid_attr = component_id_attr(kw.get("component_id"))
+        if cid_attr:
+            for end in reversed(_accordion_trigger_ends(content)):
+                content = content[:end] + cid_attr + content[end:]
         return _safe(f'<div class="accordion" id="{accordion_id}">{content}</div>')
 
 
@@ -1860,6 +1895,8 @@ class SidebarHandler:
         title = kw.get("title", "")
         toggle_event = conditional_escape(kw.get("toggle_event", "toggle_sidebar"))
         custom_class = conditional_escape(kw.get("class", ""))
+        # ``component_id=`` names which ``Sidebar`` the toggle drives (#4134).
+        cid_attr = component_id_attr(kw.get("component_id"))
 
         collapsed_cls = " dj-sidebar--collapsed" if collapsed else ""
         cls = f"dj-sidebar{collapsed_cls}"
@@ -1871,11 +1908,11 @@ class SidebarHandler:
             header_html = (
                 f'<div class="dj-sidebar__header">'
                 f'<span class="dj-sidebar__title">{conditional_escape(title)}</span>'
-                f'<button class="dj-sidebar__toggle" dj-click="{toggle_event}">'
+                f'<button class="dj-sidebar__toggle" dj-click="{toggle_event}"{cid_attr}>'
                 f"&#9776;</button></div>"
             )
 
-        backdrop = f'<div class="dj-sidebar__backdrop" dj-click="{toggle_event}"></div>'
+        backdrop = f'<div class="dj-sidebar__backdrop" dj-click="{toggle_event}"{cid_attr}></div>'
 
         return _safe(
             f'<nav class="{cls}" id="{sidebar_id}" role="navigation">'
@@ -1972,8 +2009,9 @@ class NavMenuHandler:
             )
 
         hamburger = (
-            f'<button class="dj-nav__hamburger" dj-click="{toggle_event}" '
-            f'aria-label="Toggle navigation">&#9776;</button>'
+            f'<button class="dj-nav__hamburger" dj-click="{toggle_event}"'
+            f'{component_id_attr(kw.get("component_id"))} aria-label="Toggle navigation">'
+            f"&#9776;</button>"
         )
 
         # The menu's ``active`` reaches the items that left a marker (#3873 follow-up). Each

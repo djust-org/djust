@@ -39,11 +39,18 @@ class TagEvent:
     #: (``{% wizard %}`` counts steps by id, so ``Stepper(active="<first step
     #: id>")``), or None for ``Name()``.
     declare: Optional[str] = None
+    #: Whether the control is optional, so the argument has an off state: given
+    #: ``None``, ``False`` or ``""`` the tag leaves the control out (a close or
+    #: dismiss button, #4134). False where the control is what the tag is for
+    #: (a toggle, a step): there such a value still draws it, and T019 says so.
+    optional: bool = False
 
 
 #: tag name -> the events it sends. Every tag whose events have a framework
 #: answer through a descriptor, plus the application actions those same tags
-#: send, is listed.
+#: send, is listed. Each tag listed takes ``component_id=``, which names the
+#: declared component its controls drive when a view declares two of a type
+#: (#4134).
 TAG_EVENTS: dict[str, tuple[TagEvent, ...]] = {
     "accordion": (TagEvent("event", "accordion_toggle", "Accordion"),),
     "carousel": (
@@ -53,23 +60,30 @@ TAG_EVENTS: dict[str, tuple[TagEvent, ...]] = {
     ),
     "dropdown": (TagEvent("toggle_event", "toggle_dropdown", "Dropdown"),),
     "tabs": (TagEvent("event", "set_tab", "Tabs", unless="param"),),
-    "modal": (TagEvent("close_event", "close_modal", "Modal"),),
-    "sheet": (TagEvent("close_event", "close_sheet", "Sheet"),),
+    "modal": (TagEvent("close_event", "close_modal", "Modal", optional=True),),
+    "sheet": (TagEvent("close_event", "close_sheet", "Sheet", optional=True),),
+    "bottom_sheet": (TagEvent("close_event", "close_sheet", "Sheet", optional=True),),
     "lightbox": (
-        TagEvent("close_event", "close_lightbox", "Lightbox"),
+        TagEvent("close_event", "close_lightbox", "Lightbox", optional=True),
         TagEvent("navigate_event", "lightbox_navigate", "Lightbox"),
     ),
     "command_palette": (
-        TagEvent("close_event", "close_palette", "CommandPalette"),
+        TagEvent("close_event", "close_palette", "CommandPalette", optional=True),
         TagEvent("search_event", "palette_search"),
     ),
     "export_dialog": (
-        TagEvent("close_event", "close_export", "ExportDialog"),
+        TagEvent("close_event", "close_export", "ExportDialog", optional=True),
         TagEvent("event", "export"),
     ),
     "cookie_consent": (TagEvent("accept_event", "accept_cookies"),),
     "announcement_bar": (
-        TagEvent("dismiss_event", "dismiss_announcement", "AnnouncementBar", "dismissible"),
+        TagEvent(
+            "dismiss_event",
+            "dismiss_announcement",
+            "AnnouncementBar",
+            "dismissible",
+            optional=True,
+        ),
     ),
     "nav_menu": (TagEvent("toggle_event", "toggle_nav", "NavMenu"),),
     "expandable_text": (TagEvent("toggle_event", "toggle_expand", "ExpandableText"),),
@@ -78,5 +92,32 @@ TAG_EVENTS: dict[str, tuple[TagEvent, ...]] = {
     "stepper": (TagEvent("event", "set_step", "Stepper"),),
     "wizard": (
         TagEvent("event", "set_step", "Stepper", declare='Stepper(active="<first step id>")'),
+    ),
+    # #4134
+    "dropdown_menu": (TagEvent("toggle_event", "toggle_menu", "Dropdown"),),
+    "split_button": (TagEvent("toggle_event", "toggle_split_menu", "Dropdown"),),
+    "sidebar": (TagEvent("toggle_event", "toggle_sidebar", "Sidebar"),),
+    "notification_center": (
+        TagEvent("open_event", "toggle_notifications", "NotificationCenter"),
+        TagEvent("mark_read_event", "mark_notification_read"),
+        TagEvent("clear_event", "clear_notifications"),
+    ),
+    "notification_popover": (
+        TagEvent("toggle_event", "toggle_notifications", "NotificationCenter"),
+        TagEvent("mark_read_event", "mark_read"),
+    ),
+    "tree_view": (
+        TagEvent("expand_event", "tree_expand", "TreeView"),
+        TagEvent("select_event", "tree_select"),
+    ),
+    "alert": (TagEvent("event", "dismiss_alert", "Alert", "dismissible", optional=True),),
+    "page_alert": (
+        TagEvent("dismiss_event", "dismiss_alert", "Alert", "dismissible", optional=True),
+    ),
+    "toast_container": (TagEvent("dismiss_event", "dismiss_toast", "Toasts", optional=True),),
+    "date_picker": (
+        TagEvent("prev_event", "date_prev_month", "DatePicker"),
+        TagEvent("next_event", "date_next_month", "DatePicker"),
+        TagEvent("select_event", "date_select"),
     ),
 }

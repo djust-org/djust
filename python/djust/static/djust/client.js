@@ -20123,6 +20123,16 @@ globalThis.djust.formPolish = {
 // server is a no-op because the morph re-asserting ``dj-dialog="open"``
 // doesn't change the attribute value.
 //
+// No close control (#4134):
+//   <dialog dj-dialog="open" dj-dialog-no-close>...</dialog>
+//
+// {% modal native=True close_event=None %} has no close event to send, so the
+// browser must not close it behind the server's back: Escape (`cancel`) is
+// prevented, a backdrop click does nothing, and a `close` that still gets
+// through (Chrome can let a repeated Escape close it) re-opens it while
+// dj-dialog is still "open". Only the server closes it, by setting
+// dj-dialog="close".
+//
 // Leverages the HTML <dialog> element's own modal behavior so djust doesn't
 // re-implement focus management. A MutationObserver watches every <dialog>
 // on the page; VDOM morphs that swap the dj-dialog value fire the right
@@ -20136,10 +20146,17 @@ const _dialogsWithCloseListener = new WeakMap();
 function _installCloseListenerOnce(el) {
     if (_dialogsWithCloseListener.has(el)) return;
     _dialogsWithCloseListener.set(el, true);
+    el.addEventListener('cancel', function (e) {
+        // Read at fire time: a morph may add or drop the marker (#4134).
+        if (el.hasAttribute('dj-dialog-no-close')) e.preventDefault();
+    });
     el.addEventListener('close', function () {
         // Read at fire time so morph attribute updates take effect.
         const eventName = el.getAttribute('dj-dialog-close-event');
-        if (!eventName) return;
+        if (!eventName) {
+            _reopenIfStillOpen(el);
+            return;
+        }
         // #1706: read the published alias, NOT the bare `handleEvent` symbol.
         // `handleEvent` is declared in 11-event-handler.js, inside the
         // double-load-guard `else {}` block (block-scoped); this module runs
@@ -20155,6 +20172,16 @@ function _installCloseListenerOnce(el) {
             _handleEvent(eventName, { _targetElement: el });
         }
     });
+}
+
+// A dialog without a close control that closed anyway, while the server still
+// says it is open: show it again, since nothing told the server (#4134).
+function _reopenIfStillOpen(el) {
+    if (!el.hasAttribute('dj-dialog-no-close') || !el.isConnected || el.open) return;
+    const state = (el.getAttribute('dj-dialog') || '').trim().toLowerCase();
+    if (state !== 'open') return;
+    try { el.showModal(); }
+    catch (_e) { el.setAttribute('open', ''); }
 }
 
 function _syncDialogState(el) {
@@ -20233,7 +20260,8 @@ if (typeof document !== 'undefined') {
     document.addEventListener('click', function (e) {
         const el = e.target;
         if (el instanceof HTMLDialogElement && el.open &&
-            el.classList.contains('dj-modal--native')) {
+            el.classList.contains('dj-modal--native') &&
+            !el.hasAttribute('dj-dialog-no-close')) {
             el.close();
         }
     });
@@ -20244,6 +20272,7 @@ globalThis.djust.djDialog = {
     _syncDialogState,
     _syncAllDialogs,
     _installCloseListenerOnce,
+    _reopenIfStillOpen,
 };
 /**
  * Dev-mode error overlay — Next.js/Vite-style full-screen error display.

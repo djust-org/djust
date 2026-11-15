@@ -39,6 +39,9 @@ from djust.components.utils import (
     url_attr,
     data_url_attr,
     attr_text,
+    calendar_month,
+    component_id_attr as _cid,
+    event_is_off as _off,
     srcset_attr,
 )
 from djust.components.utils import (
@@ -228,9 +231,12 @@ def render_modal(kw: Any, content: Any) -> SafeString:
         if description
         else ""
     )
+    # ``close_event=None`` (or ``False``, ``""``) is the off state (#4134): no × and no
+    # backdrop click, so nothing sends an event no handler answers.
+    closable = not _off(close_event)
     close_html = (
         f'<button class="dj-modal__close" aria-label="Close" dj-click="{e_close_event}"{cid_attr}>&times;</button>'
-        if _truthy_flag(kw.get("close_button", True))
+        if closable and _truthy_flag(kw.get("close_button", True))
         else ""
     )
 
@@ -243,9 +249,14 @@ def render_modal(kw: Any, content: Any) -> SafeString:
         # the keyboard-nav module, as for the <div> modal.
         # <dialog> is a dialog already; only an alertdialog needs the role.
         role_attr = ' role="alertdialog"' if role == "alertdialog" else ""
+        # Without a close control the browser must not close it either (#4134):
+        # the client refuses Escape and the backdrop click for a marked dialog.
+        close_attr = (
+            f' dj-dialog-close-event="{e_close_event}"' if closable else " dj-dialog-no-close"
+        )
         return mark_safe(
-            f'<dialog class="dj-modal {size_class} dj-modal--native" dj-dialog="open" '
-            f'dj-dialog-close-event="{e_close_event}"{role_attr}{labelledby}{describedby}{cid_attr}>'
+            f'<dialog class="dj-modal {size_class} dj-modal--native" dj-dialog="open"'
+            f"{close_attr}{role_attr}{labelledby}{describedby}{cid_attr}>"
             f'<div class="dj-modal__header">'
             f'<h{level} class="dj-modal__title" id="{title_id}">{e_title}</h{level}>'
             f"{close_html}"
@@ -254,8 +265,9 @@ def render_modal(kw: Any, content: Any) -> SafeString:
             f"</dialog>"
         )
 
+    scrim_click = f' dj-click="{e_close_event}"{cid_attr}' if closable else ""
     return mark_safe(f"""<div class="dj-modal-backdrop">
-  <div class="dj-scrim" dj-click="{e_close_event}"{cid_attr}></div>
+  <div class="dj-scrim"{scrim_click}></div>
   <div class="dj-modal {size_class}" role="{role}" aria-modal="true"{labelledby}{describedby}>
     <div class="dj-modal__header">
       <h{level} class="dj-modal__title" id="{title_id}">{e_title}</h{level}>
@@ -583,14 +595,24 @@ def do_dropdown(parser: Any, token: Any) -> template.Node:
 
 
 @register.inclusion_tag("djust_components/toast.html")
-def toast_container(toasts: Any, dismiss_event: Any = "dismiss_toast") -> "dict[str, Any]":
+def toast_container(
+    toasts: Any, dismiss_event: Any = "dismiss_toast", component_id: Any = ""
+) -> "dict[str, Any]":
     """Render a stack of toast notifications.
 
     Args:
         toasts: list of dicts with keys: id, type (success|error|warning|info), message
-        dismiss_event: djust event name for dismissing a toast
+            (``toasts.toasts`` of a declared ``Toasts``)
+        dismiss_event: djust event name for dismissing a toast; a declared ``Toasts``
+            answers the default. ``None`` (or ``False``, ``""``) draws no dismiss
+            button (#4134).
+        component_id: the ``Toasts`` the dismiss buttons drive, when a view declares two
     """
-    return {"toasts": toasts, "dismiss_event": dismiss_event}
+    return {
+        "toasts": toasts,
+        "dismiss_event": None if _off(dismiss_event) else dismiss_event,
+        "component_id": None if _off(component_id) else component_id,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1345,10 +1367,12 @@ class AlertNode(template.Node):
         aria_role = "alert" if alert_type in ("error", "danger", "warning") else "status"
 
         title_html = f'<div class="alert-title">{conditional_escape(title)}</div>' if title else ""
+        # ``event=None`` (or ``False``, ``""``) is the off state (#4134): no × button.
+        # ``component_id=`` names which ``Alert`` it drives.
         close_html = (
             f'<button class="alert-close" aria-label="Dismiss" '
-            f'dj-click="{conditional_escape(event)}">&times;</button>'
-            if dismissible
+            f'dj-click="{conditional_escape(event)}"{_cid(kw.get("component_id"))}>&times;</button>'
+            if dismissible and not _off(event)
             else ""
         )
 
@@ -2338,7 +2362,13 @@ _STEP_CURRENT = mark_safe(' aria-current="step"')
 
 
 def render_stepper(
-    entries: Any, active: int, event: Any, *, number_class: str, label_class: str
+    entries: Any,
+    active: int,
+    event: Any,
+    *,
+    number_class: str,
+    label_class: str,
+    component_id: Any = "",
 ) -> SafeString:
     """The markup of ``{% stepper %}``, shared by the Django tag and the Rust handler (#3970).
 
@@ -2349,12 +2379,14 @@ def render_stepper(
     ``entries`` is ``(label, li_class, completed)`` per step. The caller decides which classes a
     step wears (the two engines differ on when a step counts as complete, which is the
     template-library parity issue, #3663); the structure is decided here, once. ``event`` is
-    escaped for an attribute, whatever it is marked as (#3898).
+    escaped for an attribute, whatever it is marked as (#3898). ``component_id`` names the
+    ``Stepper`` the steps drive (#4134).
     """
+    cid = mark_safe(_cid(component_id))
     items = format_html_join(
         "",
         '<li class="{}"><button type="button" class="stepper-step-button"{} '
-        'dj-click="{}" data-value="{}"><span class="{}">{}</span> <span class="{}">{}</span>{}'
+        'dj-click="{}" data-value="{}"{}><span class="{}">{}</span> <span class="{}">{}</span>{}'
         "</button></li>",
         (
             (
@@ -2362,6 +2394,7 @@ def render_stepper(
                 _STEP_CURRENT if i == active else "",
                 attr_text(event),
                 i,
+                cid,
                 number_class,
                 i + 1,
                 label_class,
@@ -2375,7 +2408,9 @@ def render_stepper(
 
 
 @register.simple_tag
-def stepper(steps: Any = None, active: Any = 0, event: Any = "set_step") -> SafeString:
+def stepper(
+    steps: Any = None, active: Any = 0, event: Any = "set_step", component_id: Any = ""
+) -> SafeString:
     """Render a step indicator.
 
     The steps are an ordered list of buttons; the current one is
@@ -2385,6 +2420,7 @@ def stepper(steps: Any = None, active: Any = 0, event: Any = "set_step") -> Safe
         steps: list of dicts {"label":..., "complete": False} or list of strings
         active: 0-based index of the current step
         event: dj-click event name for step navigation
+        component_id: the ``Stepper`` the steps drive, when a view declares two (#4134)
     """
     if not steps:
         return render_stepper([], 0, event, number_class="", label_class="")
@@ -2411,7 +2447,12 @@ def stepper(steps: Any = None, active: Any = 0, event: Any = "set_step") -> Safe
         entries.append((lbl, cls, complete))
 
     return render_stepper(
-        entries, active, event, number_class="stepper-number", label_class="stepper-label"
+        entries,
+        active,
+        event,
+        number_class="stepper-number",
+        label_class="stepper-label",
+        component_id=component_id,
     )
 
 
@@ -3032,19 +3073,25 @@ class SheetNode(template.Node):
             f' data-component-id="{conditional_escape(component_id)}"' if component_id else ""
         )
 
-        title_html = (
-            f'<div class="sheet-header">'
-            f'<h3 class="sheet-title">{e_title}</h3>'
+        # ``close_event=None`` (or ``False``, ``""``) is the off state (#4134): no × and no
+        # overlay click.
+        closable = not _off(close_event)
+        close_btn = (
             f'<button class="sheet-close" dj-click="{e_close}"{cid_attr}>&times;</button>'
-            f"</div>"
-            if title
-            else f'<div class="sheet-header-close">'
-            f'<button class="sheet-close" dj-click="{e_close}"{cid_attr}>&times;</button>'
-            f"</div>"
+            if closable
+            else ""
         )
+        title_html = (
+            f'<div class="sheet-header"><h3 class="sheet-title">{e_title}</h3>{close_btn}</div>'
+            if title
+            else f'<div class="sheet-header-close">{close_btn}</div>'
+            if closable
+            else ""
+        )
+        overlay_click = f' dj-click="{e_close}"{cid_attr}' if closable else ""
 
         return mark_safe(
-            f'<div class="sheet-overlay" dj-click="{e_close}"{cid_attr}{open_attr}></div>'
+            f'<div class="sheet-overlay"{overlay_click}{open_attr}></div>'
             f'<div class="sheet sheet-{e_side}"{open_attr}>'
             f"{title_html}"
             f'<div class="sheet-body">{content}</div>'
@@ -3065,10 +3112,12 @@ def notification_center(
     mark_read_event: Any = "mark_notification_read",
     clear_event: Any = "clear_notifications",
     is_open: Any = False,
+    component_id: Any = "",
 ) -> SafeString:
     """Render a notification bell with dropdown list.
 
-    ``is_open`` shows the dropdown; flip it in the ``open_event`` handler.
+    ``is_open`` shows the dropdown; a declared ``NotificationCenter`` answers the
+    bell's ``open_event`` (``component_id`` names which one, #4134).
     """
     if notifications is None:
         notifications = []
@@ -3115,7 +3164,7 @@ def notification_center(
     open_cls = " notif-center--open" if is_open else ""
     return mark_safe(
         f'<div class="notif-center{open_cls}">'
-        f'<button class="notif-trigger" dj-click="{e_open}">'
+        f'<button class="notif-trigger" dj-click="{e_open}"{_cid(component_id)}>'
         f'<span class="notif-bell">&#128276;</span>'
         f"{badge_html}"
         f"</button>"
@@ -3275,6 +3324,8 @@ def tree_view(
     expand_event: Any = "tree_expand",
     select_event: Any = "tree_select",
     selected: Any = "",
+    expanded: Any = None,
+    component_id: Any = "",
 ) -> SafeString:
     """Render an expandable tree view.
 
@@ -3282,15 +3333,25 @@ def tree_view(
         nodes: list of dicts:
             {"id": "n1", "label": "Root", "expanded": True,
              "children": [{"id": "n1a", "label": "Child"}]}
-        expand_event: dj-click event fired with node id when expanding
+        expand_event: dj-click event fired with node id when expanding; a declared
+            ``TreeView`` answers the default (#4134)
         select_event: dj-click event fired with node id when selected
         selected: currently selected node id
+        expanded: the ids of the expanded nodes (``tree.expanded`` of a declared
+            ``TreeView``). Given, it decides which nodes are open and each node's own
+            ``"expanded"`` is not read; left out, the nodes' ``"expanded"`` keys do.
+        component_id: the ``TreeView`` the toggles drive, when a view declares two
     """
     if nodes is None:
         return mark_safe('<div class="tree"></div>')
 
     e_expand = conditional_escape(expand_event)
     e_select = conditional_escape(select_event)
+    # Only the expand toggles carry it: the labels send the application's ``select_event``.
+    cid_attr = _cid(component_id)
+    open_ids = (
+        {str(i) for i in expanded} if isinstance(expanded, (list, tuple, set, frozenset)) else None
+    )
 
     def render_node(node: Any, depth: Any = 0) -> Any:
         if not isinstance(node, dict):
@@ -3298,24 +3359,27 @@ def tree_view(
         nid = attr_text(node.get("id", ""))  # only in data-value= (#3904)
         label = conditional_escape(str(node.get("label", "")))
         children = node.get("children", [])
-        expanded = node.get("expanded", False)
+        if open_ids is None:
+            is_open = node.get("expanded", False)
+        else:
+            is_open = str(node.get("id", "")) in open_ids
         has_children = bool(children)
 
         sel_cls = " tree-node-selected" if str(node.get("id", "")) == str(selected) else ""
-        exp_cls = " tree-node-expanded" if expanded else ""
+        exp_cls = " tree-node-expanded" if is_open else ""
         has_cls = " tree-node-has-children" if has_children else " tree-node-leaf"
         indent = depth * 1.25
 
-        toggle_icon = "▾" if expanded else "▸"
+        toggle_icon = "▾" if is_open else "▸"
         toggle_html = (
-            f'<button class="tree-toggle" dj-click="{e_expand}" data-value="{nid}">'
+            f'<button class="tree-toggle" dj-click="{e_expand}" data-value="{nid}"{cid_attr}>'
             f"{toggle_icon}</button>"
             if has_children
             else '<span class="tree-toggle-placeholder"></span>'
         )
 
         children_html = ""
-        if has_children and expanded:
+        if has_children and is_open:
             children_html = (
                 '<div class="tree-children">'
                 + "".join(render_node(c, depth + 1) for c in children)
@@ -3423,15 +3487,26 @@ class CommandPaletteNode(template.Node):
         e_placeholder = conditional_escape(placeholder)
         open_attr = ' data-open="true"' if open_ else ""
         content = self.nodelist.render(context)
+        # ``component_id=`` names which ``CommandPalette`` the close controls drive
+        # (#4134); the search input sends the application's own event, so it has none.
+        cid_attr = _cid(kw.get("component_id"))
+        # ``close_event=None`` (or ``False``, ``""``) is the off state (#4134).
+        closable = not _off(close_event)
+        overlay_click = f' dj-click="{e_close}"{cid_attr}' if closable else ""
+        close_btn = (
+            f'<button class="palette-close" dj-click="{e_close}"{cid_attr}>Esc</button>'
+            if closable
+            else ""
+        )
 
         return mark_safe(
-            f'<div class="palette-overlay" dj-click="{e_close}"{open_attr}></div>'
+            f'<div class="palette-overlay"{overlay_click}{open_attr}></div>'
             f'<div class="palette"{open_attr}>'
             f'<div class="palette-search">'
             f'<span class="palette-search-icon">⌕</span>'
             f'<input class="palette-input" type="text" placeholder="{e_placeholder}" '
             f'dj-input="{e_search}" autofocus>'
-            f'<button class="palette-close" dj-click="{e_close}">Esc</button>'
+            f"{close_btn}"
             f"</div>"
             f'<div class="palette-results">{content}</div>'
             f"</div>"
@@ -3551,6 +3626,7 @@ def date_picker(
     is_range: Any = False,
     range_start: Any = "",
     range_end: Any = "",
+    component_id: Any = "",
     **kwargs: Any,
 ) -> SafeString:
     """Render a server-driven calendar date picker.
@@ -3562,6 +3638,9 @@ def date_picker(
         is_range: when True, enables date range selection mode.
         range_start: start date of the range (YYYY-MM-DD).
         range_end: end date of the range (YYYY-MM-DD).
+        component_id: the ``DatePicker`` the previous / next buttons drive, when a view
+            declares two (#4134). A declared ``DatePicker`` answers the default
+            ``prev_event`` / ``next_event``; ``select_event`` is the application's.
 
     Deprecated aliases (still accepted):
         range → is_range
@@ -3573,15 +3652,10 @@ def date_picker(
     if isinstance(is_range, str):
         is_range = is_range.lower() not in ("false", "0", "")
 
-    try:
-        today = datetime.date.today()
-        year = int(year) if year else today.year
-        month = int(month) if month else today.month
-        today_str = today.strftime("%Y-%m-%d")
-    except (ValueError, TypeError):
-        today = datetime.date.today()
-        year, month = today.year, today.month
-        today_str = today.strftime("%Y-%m-%d")
+    today = datetime.date.today()
+    # Each defaulted on its own, as ``DatePicker`` steps from them (#4134).
+    year, month = calendar_month(year, month, today)
+    today_str = today.strftime("%Y-%m-%d")
 
     e_prev = conditional_escape(prev_event)
     e_next = conditional_escape(next_event)
@@ -3656,9 +3730,11 @@ def date_picker(
         f"{label_html}{required_html}"
         f'<div class="date-picker">'
         f'<div class="dp-header">'
-        f'<button class="dp-nav-btn" dj-click="{e_prev}" title="Previous month">&#8249;</button>'
+        f'<button class="dp-nav-btn" dj-click="{e_prev}"{_cid(component_id)} '
+        f'title="Previous month">&#8249;</button>'
         f'<span class="dp-month-label">{month_name} {year}</span>'
-        f'<button class="dp-nav-btn" dj-click="{e_next}" title="Next month">&#8250;</button>'
+        f'<button class="dp-nav-btn" dj-click="{e_next}"{_cid(component_id)} '
+        f'title="Next month">&#8250;</button>'
         f"</div>"
         f'<div class="dp-grid">'
         f"{header_cells}"
@@ -3941,12 +4017,36 @@ def _kanban_targets(targets: Any) -> Optional[list]:
     return ids
 
 
+#: Whether ``{% kanban_board add_col_event=... %}`` has warned in this process (#4134).
+_ADD_COL_EVENT_WARNED = False
+
+
+def _warn_add_col_event() -> None:
+    """One ``DeprecationWarning`` per process for ``add_col_event`` (#4134)."""
+    global _ADD_COL_EVENT_WARNED
+    if _ADD_COL_EVENT_WARNED:
+        return
+    _ADD_COL_EVENT_WARNED = True
+    from djust._deprecation import warn_deprecated
+
+    warn_deprecated(
+        "{% kanban_board %}'s add_col_event (it has never drawn a control)",
+        since="2.0",
+        removed_in="3.0.0",
+        instead=(
+            'nothing: leave add_col_event out, and draw your own "Add column" control '
+            "that sends your view's event"
+        ),
+        stacklevel=4,
+    )
+
+
 @register.simple_tag
 def kanban_board(
     columns: Any = None,
     move_event: Any = "kanban_move",
     add_card_event: Any = "kanban_add_card",
-    add_col_event: Any = "kanban_add_column",
+    add_col_event: Any = None,
 ) -> SafeString:
     """Render a Kanban board.
 
@@ -3968,7 +4068,12 @@ def kanban_board(
         move_event: event fired on drag-drop with JSON payload {card_id, from_col, to_col}
         add_card_event: event fired when adding a card, passes column id.
             ``None`` (or ``""``) leaves the "+ Add card" button out.
-        add_col_event: accepted for compatibility and not used.
+        add_col_event: deprecated, and never used: the board has never drawn an
+            "Add column" control. Passing it warns once per process.
+
+            .. deprecated:: 2.0
+               Removed no earlier than 3.0.0. Leave it out, and draw your own
+               "Add column" control that sends your view's event.
 
     A card moves by mouse drag, or by keyboard: Tab to the card, Space picks
     it up, the arrow keys choose a column, Enter (or Space) drops it there and
@@ -3981,6 +4086,8 @@ def kanban_board(
     # Dragging and dropping is the client bundle's delegated ``.kanban``
     # behaviour (no inline handler): a drop sends ``data-move-event`` with
     # {card_id, from_col, to_col}.
+    if add_col_event is not None:
+        _warn_add_col_event()
     e_move = conditional_escape(move_event)
     if not columns:
         return mark_safe(f'<div class="kanban" data-move-event="{e_move}"></div>')
@@ -4853,6 +4960,7 @@ def split_button(
     loading: Any = False,
     is_open: Any = False,
     toggle_event: Any = "toggle_split_menu",
+    component_id: Any = "",
     **kwargs: Any,
 ) -> SafeString:
     """Render a split button with primary action and dropdown secondary actions.
@@ -4866,7 +4974,9 @@ def split_button(
         disabled: disables all buttons
         loading: shows spinner on primary, disables all
         is_open: whether the dropdown menu is open
-        toggle_event: dj-click event for toggle button
+        toggle_event: dj-click event for toggle button; a declared ``Dropdown`` answers
+            the default (#4134)
+        component_id: the ``Dropdown`` the toggle drives, when a view declares two
 
     Deprecated aliases (still accepted):
         open → is_open
@@ -4913,7 +5023,7 @@ def split_button(
 
     open_data = "true" if is_open else "false"
     toggle_disabled = " disabled" if disabled or loading else ""
-    toggle_click = "" if disabled or loading else f' dj-click="{e_toggle}"'
+    toggle_click = "" if disabled or loading else f' dj-click="{e_toggle}"{_cid(component_id)}'
 
     menu_html = ""
     if option_items:
@@ -5500,10 +5610,12 @@ class AnnouncementBarNode(template.Node):
             cls += f" {e_custom_class}"
 
         close_html = ""
-        if dismissible:
+        # ``dismiss_event=None`` (or ``False``, ``""``) is the off state (#4134);
+        # ``component_id=`` names which ``AnnouncementBar`` it drives.
+        if dismissible and not _off(dismiss_event):
             close_html = (
                 f'<button class="dj-announcement-bar__close" '
-                f'dj-click="{e_dismiss_event}">&times;</button>'
+                f'dj-click="{e_dismiss_event}"{_cid(kw.get("component_id"))}>&times;</button>'
             )
 
         return mark_safe(
@@ -6663,6 +6775,8 @@ class SidebarNode(template.Node):
         title = kw.get("title", "")
         toggle_event = kw.get("toggle_event", "toggle_sidebar")
         custom_class = kw.get("class", "")
+        # ``component_id=`` names which ``Sidebar`` the toggle drives (#4134).
+        cid_attr = _cid(kw.get("component_id"))
 
         collapsed_cls = " dj-sidebar--collapsed" if collapsed else ""
         cls = f"dj-sidebar{collapsed_cls}"
@@ -6674,8 +6788,8 @@ class SidebarNode(template.Node):
             header_html = (
                 f'<div class="dj-sidebar__header">'
                 f'<span class="dj-sidebar__title">{conditional_escape(title)}</span>'
-                f'<button class="dj-sidebar__toggle" dj-click="{conditional_escape(toggle_event)}">'
-                f"&#9776;</button></div>"
+                f'<button class="dj-sidebar__toggle" dj-click="{conditional_escape(toggle_event)}"'
+                f"{cid_attr}>&#9776;</button></div>"
             )
 
         # Collect sections and items
@@ -6695,7 +6809,10 @@ class SidebarNode(template.Node):
         menu_html = f'<ul class="dj-sidebar__menu">{"".join(parts)}</ul>'
 
         # Mobile overlay backdrop
-        backdrop = f'<div class="dj-sidebar__backdrop" dj-click="{conditional_escape(toggle_event)}"></div>'
+        backdrop = (
+            f'<div class="dj-sidebar__backdrop" dj-click="{conditional_escape(toggle_event)}"'
+            f"{cid_attr}></div>"
+        )
 
         return mark_safe(
             f'<nav class="{cls}" id="{conditional_escape(sidebar_id)}" role="navigation">'
@@ -6841,8 +6958,8 @@ class NavMenuNode(template.Node):
             )
 
         hamburger = (
-            f'<button class="dj-nav__hamburger" dj-click="{conditional_escape(toggle_event)}" '
-            f'aria-label="Toggle navigation">&#9776;</button>'
+            f'<button class="dj-nav__hamburger" dj-click="{conditional_escape(toggle_event)}"'
+            f'{_cid(kw.get("component_id"))} aria-label="Toggle navigation">&#9776;</button>'
         )
 
         # The body as rendered, as the native handler is handed it (#3878): every item at
@@ -7469,8 +7586,10 @@ class NotificationPopoverNode(template.Node):
         if e_class:
             cls += f" {e_class}"
 
+        # ``component_id=`` names which ``NotificationCenter`` the bell drives (#4134).
         bell_html = (
-            f'<button class="dj-notif-popover__bell" dj-click="{e_toggle}" '
+            f'<button class="dj-notif-popover__bell" dj-click="{e_toggle}"'
+            f"{_cid(kw.get('component_id'))} "
             f'aria-label="Notifications">'
             f'<svg class="dj-notif-popover__icon" viewBox="0 0 24 24" fill="none" '
             f'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
@@ -8527,7 +8646,8 @@ class ExpandableTextNode(template.Node):
         return mark_safe(
             f'<div class="{cls}">'
             f'<div class="dj-expandable-text__content"{style}>{content}</div>'
-            f'<button class="dj-expandable-text__toggle" dj-click="{e_event}">'
+            f'<button class="dj-expandable-text__toggle" dj-click="{e_event}"'
+            f"{_cid(kw.get('component_id'))}>"
             f"{label}</button>"
             f"</div>"
         )
@@ -8592,7 +8712,8 @@ class TruncatedListNode(template.Node):
                     str(overflow_label).replace("{count}", str(hidden_count))
                 )
             overflow_html = (
-                f'<button class="dj-truncated-list__overflow" dj-click="{e_event}">'
+                f'<button class="dj-truncated-list__overflow" dj-click="{e_event}"'
+                f"{_cid(kw.get('component_id'))}>"
                 f"{overflow_text}</button>"
             )
 
@@ -8643,13 +8764,14 @@ class MarkdownTextareaNode(template.Node):
 
         write_active = "" if preview else " dj-md-textarea__tab--active"
         preview_active = " dj-md-textarea__tab--active" if preview else ""
+        cid_attr = _cid(kw.get("component_id"))
 
         toolbar = (
             f'<div class="dj-md-textarea__toolbar">'
             f'<button type="button" class="dj-md-textarea__tab{write_active}" '
-            f'dj-click="{e_event}" data-mode="write">Write</button>'
+            f'dj-click="{e_event}"{cid_attr} data-mode="write">Write</button>'
             f'<button type="button" class="dj-md-textarea__tab{preview_active}" '
-            f'dj-click="{e_event}" data-mode="preview">Preview</button>'
+            f'dj-click="{e_event}"{cid_attr} data-mode="preview">Preview</button>'
             f"</div>"
         )
 
@@ -8989,6 +9111,7 @@ class WizardNode(template.Node):
 
         e_event = conditional_escape(str(event))
         e_class = conditional_escape(str(custom_class))
+        cid_attr = _cid(kw.get("component_id"))
 
         classes = ["dj-wizard"]
         if e_class:
@@ -9024,7 +9147,7 @@ class WizardNode(template.Node):
 
             indicators.append(
                 f'<button class="{step_cls}" '
-                f'dj-click="{e_event}" data-value="{step_id}">'
+                f'dj-click="{e_event}" data-value="{step_id}"{cid_attr}>'
                 f"{number_html}"
                 f'<span class="dj-wizard__label">{step_label}</span></button>'
             )
@@ -9079,6 +9202,16 @@ class BottomSheetNode(template.Node):
         e_title = conditional_escape(str(title))
         e_close = conditional_escape(str(close_event))
         e_class = conditional_escape(str(custom_class))
+        # ``component_id=`` names which ``Sheet`` the close controls drive; ``close_event=None``
+        # (or ``False``, ``""``) is the off state: no scrim click and no × (#4134).
+        cid_attr = _cid(kw.get("component_id"))
+        closable = not _off(close_event)
+        scrim_click = f' dj-click="{e_close}"{cid_attr}' if closable else ""
+        close_btn = (
+            f'<button class="dj-bottom-sheet__close" dj-click="{e_close}"{cid_attr}>&times;</button>'
+            if closable
+            else ""
+        )
 
         classes = ["dj-bottom-sheet"]
         if e_class:
@@ -9093,12 +9226,12 @@ class BottomSheetNode(template.Node):
 
         return mark_safe(
             f'<div class="dj-bottom-sheet__backdrop">'
-            f'<div class="dj-scrim" dj-click="{e_close}"></div>'
+            f'<div class="dj-scrim"{scrim_click}></div>'
             f'<div class="{class_str}">'
             f'<div class="dj-bottom-sheet__handle"><div class="dj-bottom-sheet__handle-bar"></div></div>'
             f'<div class="dj-bottom-sheet__header">'
             f"{title_html}"
-            f'<button class="dj-bottom-sheet__close" dj-click="{e_close}">&times;</button>'
+            f"{close_btn}"
             f"</div>"
             f'<div class="dj-bottom-sheet__body">{content}</div>'
             f"</div></div>"
@@ -9552,11 +9685,14 @@ class PageAlertNode(template.Node):
             icon_html = f'<span class="dj-page-alert__icon">{conditional_escape(str(icon))}</span>'
 
         dismiss_html = ""
-        if dismissible:
+        # ``dismiss_event=None`` (or ``False``, ``""``) is the off state (#4134);
+        # ``component_id=`` names which ``Alert`` the button drives.
+        if dismissible and not _off(dismiss_event):
             e_dismiss = conditional_escape(str(dismiss_event))
             dismiss_html = (
                 f'<button class="dj-page-alert__dismiss" '
-                f'dj-click="{e_dismiss}" aria-label="Dismiss">&times;</button>'
+                f'dj-click="{e_dismiss}"{_cid(kw.get("component_id"))} '
+                f'aria-label="Dismiss">&times;</button>'
             )
 
         return mark_safe(
@@ -9696,9 +9832,11 @@ def render_dropdown_menu(kw: Any, content: Any = "") -> SafeString:
     class_str = " ".join(classes)
     open_attr = " data-open" if is_open else ""
 
+    # ``component_id=`` names which ``Dropdown`` the trigger drives (#4134); the items
+    # send the application's own events, so they have none.
     trigger = (
         f'<button type="button" class="dj-dropdown-menu__trigger" '
-        f'dj-click="{e_toggle}" '
+        f'dj-click="{e_toggle}"{_cid(kw.get("component_id"))} '
         f'aria-expanded="{"true" if is_open else "false"}" '
         f'aria-haspopup="menu">{e_label}</button>'
     )
@@ -9883,6 +10021,12 @@ class ExportDialogNode(template.Node):
         e_event = conditional_escape(str(event))
         e_close = conditional_escape(str(close_event))
         e_class = conditional_escape(str(custom_class))
+        # ``component_id=`` names which ``ExportDialog`` the close controls drive (#4134);
+        # the Export button sends the application's own event, so it has none.
+        cid_attr = _cid(kw.get("component_id"))
+        # ``close_event=None`` (or ``False``, ``""``) is the off state (#4134): no scrim
+        # click, no × and no Cancel.
+        closable = not _off(close_event)
 
         classes = ["dj-export-dialog"]
         if e_class:
@@ -9931,16 +10075,27 @@ class ExportDialogNode(template.Node):
             f"{''.join(col_options)}</div>"
         )
 
+        scrim_click = f' dj-click="{e_close}"{cid_attr}' if closable else ""
+        close_btn = (
+            f'<button class="dj-export-dialog__close" dj-click="{e_close}"{cid_attr}>&times;</button>'
+            if closable
+            else ""
+        )
+        cancel_btn = (
+            f'<button class="dj-export-dialog__cancel" dj-click="{e_close}"{cid_attr}>Cancel</button>'
+            if closable
+            else ""
+        )
         return mark_safe(
             f'<div class="dj-export-dialog__backdrop">'
-            f'<div class="dj-scrim" dj-click="{e_close}"></div>'
+            f'<div class="dj-scrim"{scrim_click}></div>'
             f'<div class="{class_str}">'
             f'<div class="dj-export-dialog__header">'
             f"<h3>{e_title}</h3>"
-            f'<button class="dj-export-dialog__close" dj-click="{e_close}">&times;</button></div>'
+            f"{close_btn}</div>"
             f'<div class="dj-export-dialog__body">{format_section}{col_section}</div>'
             f'<div class="dj-export-dialog__footer">'
-            f'<button class="dj-export-dialog__cancel" dj-click="{e_close}">Cancel</button>'
+            f"{cancel_btn}"
             f'<button class="dj-export-dialog__submit" dj-click="{e_event}">Export</button>'
             f"</div></div></div>"
         )
@@ -10579,6 +10734,10 @@ class LightboxNode(template.Node):
         e_close = conditional_escape(str(close_event))
         e_nav = conditional_escape(str(navigate_event))
         e_class = conditional_escape(str(custom_class))
+        # ``component_id=`` names which ``Lightbox`` the controls drive (#4134).
+        cid_attr = _cid(kw.get("component_id"))
+        # ``close_event=None`` (or ``False``, ``""``) is the off state (#4134).
+        closable = not _off(close_event)
 
         classes = ["dj-lightbox"]
         if e_class:
@@ -10614,7 +10773,7 @@ class LightboxNode(template.Node):
         prev_btn = (
             (
                 f'<button class="dj-lightbox__prev" dj-click="{e_nav}" '
-                f'data-value="{idx - 1}" aria-label="Previous">'
+                f'data-value="{idx - 1}"{cid_attr} aria-label="Previous">'
                 f"&#8249;</button>"
             )
             if total > 1
@@ -10624,7 +10783,7 @@ class LightboxNode(template.Node):
         next_btn = (
             (
                 f'<button class="dj-lightbox__next" dj-click="{e_nav}" '
-                f'data-value="{idx + 1}" aria-label="Next">'
+                f'data-value="{idx + 1}"{cid_attr} aria-label="Next">'
                 f"&#8250;</button>"
             )
             if total > 1
@@ -10635,13 +10794,20 @@ class LightboxNode(template.Node):
         if show_counter and total > 1:
             counter = f'<span class="dj-lightbox__counter">{idx + 1} of {total}</span>'
 
-        return mark_safe(
-            f'<div class="{class_str}" dj-hook="ImageLightbox" '
-            f'data-close-event="{e_close}" data-navigate-event="{e_nav}" '
-            f'role="dialog" aria-modal="true">'
-            f'<div class="dj-lightbox__backdrop" dj-click="{e_close}"></div>'
-            f'<button class="dj-lightbox__close" data-dj-close dj-click="{e_close}" '
+        close_data = f' data-close-event="{e_close}"' if closable else ""
+        backdrop_click = f' dj-click="{e_close}"{cid_attr}' if closable else ""
+        close_btn = (
+            f'<button class="dj-lightbox__close" data-dj-close dj-click="{e_close}"{cid_attr} '
             f'aria-label="Close">&times;</button>'
+            if closable
+            else ""
+        )
+        return mark_safe(
+            f'<div class="{class_str}" dj-hook="ImageLightbox"'
+            f'{close_data} data-navigate-event="{e_nav}" '
+            f'role="dialog" aria-modal="true">'
+            f'<div class="dj-lightbox__backdrop"{backdrop_click}></div>'
+            f"{close_btn}"
             f"{prev_btn}"
             f'<div class="dj-lightbox__stage">{img_html}{caption_html}</div>'
             f"{next_btn}"

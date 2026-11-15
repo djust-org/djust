@@ -115,6 +115,8 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, List, Opt
 
 from django.utils.functional import Promise
 
+from ._mapping import mapping_items
+
 logger = logging.getLogger(__name__)
 
 #: Libraries that resolve but are NOT bridged: djust's own
@@ -1499,7 +1501,7 @@ def _materialize_lazy(value: Any) -> Any:
     if isinstance(value, Promise):
         return str(value)
     if isinstance(value, dict):
-        return {k: _materialize_lazy(v) for k, v in value.items()}
+        return {k: _materialize_lazy(v) for k, v in mapping_items(value)}
     if isinstance(value, (list, tuple)):
         materialized = [_materialize_lazy(v) for v in value]
         if isinstance(value, tuple):

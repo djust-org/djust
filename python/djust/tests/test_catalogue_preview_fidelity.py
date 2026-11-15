@@ -182,7 +182,7 @@ class TestExamplesAreNotCollapsedByDemoState:
 
         view = ComponentsDetailView()
         view.mount(RequestFactory().get("/"), component_name="switch")
-        assert view.preview.state.values == {}
+        assert view.preview.state.demo_values == {}
 
         rendered = view._render_examples()
         assert rendered[0]["html"] != rendered[1]["html"], (
@@ -268,7 +268,7 @@ class TestSlotsReachTheTemplate:
 
         view = ComponentsDetailView()
         view.mount(RequestFactory().get("/"), component_name="dropdown")
-        assert view.preview.state.values["is_open"] is True
+        assert view.preview.state.demo_values["is_open"] is True
         html = "".join(example["html"] for example in view._render_examples())
         assert 'style="display:none;"' not in html
         assert "Edit" in html and "Archive" in html
@@ -280,7 +280,7 @@ class TestSlotsReachTheTemplate:
 
         view = ComponentsDetailView()
         view.mount(RequestFactory().get("/"), component_name="sheet")
-        assert view.preview.state.values["is_open"] is True
+        assert view.preview.state.demo_values["is_open"] is True
         html = "".join(example["html"] for example in view._render_examples())
         assert 'data-open="true"' in html
         assert "Status, owner and date range." in html
@@ -609,7 +609,7 @@ class TestPreviewOwnsTheDescriptorState:
 
     Before, eight descriptor slots lived on the view and `_descriptor_state`
     unwrapped the current one's `BoundComponent` (ADR-031) into the example
-    kwargs. Now the descriptor's defaults seed `preview.state.values` at mount,
+    kwargs. Now the descriptor's defaults seed `preview.state.demo_values` at mount,
     its `_handle_event` runs against a State rebuilt from those values, and the
     page reads the preview as the bare `{{ preview }}` — which is what lets an
     event that changes only the preview patch the preview alone.
@@ -637,7 +637,7 @@ class TestPreviewOwnsTheDescriptorState:
         from djust.components.descriptors import Accordion
 
         view = self._view("accordion")
-        values = view.preview.state.values
+        values = view.preview.state.demo_values
         # The descriptor's fields, each at the example's value where the
         # example documents one (it opens item "1"), else the State default.
         example = view.preview.state.examples[0]
@@ -652,12 +652,12 @@ class TestPreviewOwnsTheDescriptorState:
         before = view._render_examples()[0]["html"]
         view.accordion_toggle(value="2")
         after = view._render_examples()[0]["html"]
-        assert view.preview.state.values["active"] == "2"
+        assert view.preview.state.demo_values["active"] == "2"
         assert before != after
         assert "accordion-item--open" in after
         # The component route reaches the same handler on the preview itself.
         view.preview.accordion_toggle(value="2")
-        assert view.preview.state.values["active"] == ""
+        assert view.preview.state.demo_values["active"] == ""
 
     def test_the_page_reads_only_the_bare_preview(self):
         """D2: any other read of the component would force a page render."""
@@ -695,7 +695,7 @@ class TestEveryDemoEventResolvesOnThePreview:
         view = ComponentsDetailView()
         view.mount(RequestFactory().get("/"), component_name="rating")
         getattr(view.preview, event)(value="4")
-        assert isinstance(view.preview.state.values, dict)
+        assert isinstance(view.preview.state.demo_values, dict)
 
     def test_a_demo_value_seeds_from_the_first_example_and_moves(self):
         from django.test import RequestFactory
@@ -706,7 +706,7 @@ class TestEveryDemoEventResolvesOnThePreview:
         view.mount(RequestFactory().get("/"), component_name="rating")
         before = view._render_examples()[0]["html"]
         view.preview.set_rating(value=2)  # the example starts at 4; typed wire (ADR-033)
-        assert view.preview.state.values["value"] == 2
+        assert view.preview.state.demo_values["value"] == 2
         assert view._render_examples()[0]["html"] != before
 
     def test_the_get_renders_the_examples_once(self):

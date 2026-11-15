@@ -329,8 +329,9 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (DC, "date_picker"): S(
         1,
-        "year and month int() (month_name is calendar's); the selected, range, label, error and event values conditional_escape'd; date_str is built from ints",
-        (DC, "year = int(year) if year else today.year"),
+        "year and month are ints from calendar_month (int() of each, bounded, else today's; month_name is calendar's, #4134); the selected, range, label, error and event values conditional_escape'd; date_str is built from ints",
+        (DC, "year, month = calendar_month(year, month, today)"),
+        (PKG + "components/utils.py", "number = int(value)", "calendar_month.whole"),
         (DC, "e_selected = conditional_escape(selected)"),
     ),
     (DC, "rich_select"): S(

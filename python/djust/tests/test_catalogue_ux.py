@@ -343,7 +343,7 @@ class TestDemoEventsTakeTypedValues:
         arrives as 4 and the preview re-renders with it — no coercion."""
         view = _detail("rating")
         view.preview.set_rating(value=4)
-        assert view.preview.state.values["value"] == 4
+        assert view.preview.state.demo_values["value"] == 4
         html = str(view.preview)
         assert "failed to render" not in html and "rating-star" in html
         assert 'dj-value-value:int="4"' in html

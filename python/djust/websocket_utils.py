@@ -42,6 +42,31 @@ def _safe_error(detailed_msg: str, generic_msg: str = "Event rejected") -> str:
     return generic_msg
 
 
+#: The longest ``component_id`` an event may name. Component ids are attribute names or
+#: server-assigned ids, far shorter than this.
+MAX_COMPONENT_ID_LENGTH = 256
+
+
+def component_id_refusal(params: object) -> "str | None":
+    """Why an event's ``component_id`` is refused, or None to go on (#4134).
+
+    Absent, ``None`` and ``""`` mean "no component". Anything else must be a string of
+    at most ``MAX_COMPONENT_ID_LENGTH`` characters: a list (unhashable) used to raise
+    an uncaught ``TypeError`` from the component lookup. Checked before the lookup,
+    on every transport.
+    """
+    if not isinstance(params, dict) or "component_id" not in params:
+        return None
+    value = params["component_id"]
+    if value is None or value == "":
+        return None
+    if type(value) is not str:
+        return "component_id must be a string, not %s" % type(value).__name__
+    if len(value) > MAX_COMPONENT_ID_LENGTH:
+        return "component_id is longer than %s characters" % MAX_COMPONENT_ID_LENGTH
+    return None
+
+
 def _format_handler_not_found_error(owner_instance: object, event_name: str) -> str:
     """Build an actionable error message when no handler is found for an event.
 
