@@ -2,22 +2,24 @@
 
 Once a turn's save can come after the turn (a deferred save, a disconnect
 flush), a connection the client has left can write AFTER another process
-restored the tab and moved on, replacing newer state with older. The fence:
+took the tab and moved on, replacing newer state with older. The fence:
 
-* the saved state carries a holder epoch;
-* a restore that may be followed by such a write claims the tab (one write,
-  the epoch one higher) — gated by ``_save_policy.holder_claims``, which is
-  False in this release, so by default nothing claims and nothing changes;
-* a save that names a lower epoch than the stored one is refused, with
-  nothing of it written: in the session merge (under the row lock on ``db``
-  and ``cached_db``), and before the write of a state store, which is
-  written before the session's index entry.
+* every taker of a tab whose saves may be deferred (a socket mount, found
+  state or not; an HTTP fallback request) writes a new holder record, a
+  random token, in the session (``_automatic_state._hold``); a page load
+  ends any holding;
+* a socket's save is written only while the stored record is its own token,
+  unexpired: in the session merge (under the row lock on ``db`` and
+  ``cached_db``), and before the write of a state store, which is written
+  before the session's index entry. Whether or not a state entry is stored:
+  evicted, deleted, expired or never written makes no difference;
+* a fallback request writes within its own request, as before: it fences
+  out an older socket, not another fallback request (decision 4).
 
-Every test here is a real two-writer race: a late writer must not replace
-newer state. Each runs on every session engine the suite can run, and the
-view-level ones through the session, an external store and the sealed store.
-Each has a sibling with claims off (today's behaviour), where the late write
-does land: that is the gate-off of the claim, and the proof that by default
+Every view-level test is a real two-writer race: a late writer must not
+replace newer state. Each has a sibling with claims off (today's behaviour,
+``holder_claims`` is False with no interval set), where the late write does
+land: that is the gate-off of the claim, and the proof that by default
 nothing changed.
 """
 
@@ -33,14 +35,8 @@ from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory
 from django.urls import path as _path
 
-from djust import LiveView, _save_policy
-from djust._session_merge import (
-    TrackedSessionData,
-    fence_refuses,
-    save_merged,
-    stored_epoch,
-    track_session,
-)
+from djust import LiveView, _automatic_state, _save_policy
+from djust._session_merge import TrackedSessionData, holder_refuses, save_merged, track_session
 from djust.decorators import event_handler
 from djust.state_store import StateKey, StateSuperseded, ViewStateStore
 from djust.tests import _per_turn_harness as harness
@@ -55,6 +51,8 @@ CACHED_DB = "django.contrib.sessions.backends.cached_db"
 FILE = "django.contrib.sessions.backends.file"
 ENGINES = [DB, CACHE, CACHED_DB, FILE]
 KEY = "_djust_auto_fence_test"
+HOLDER = "_djust_hold_fence_test"
+FAR = 4102444800  # 2100-01-01: an unexpired record
 
 
 class Memory(ViewStateStore):
@@ -78,6 +76,7 @@ class Memory(ViewStateStore):
 EXTERNAL = MODULE + ".Memory"
 SEALED = "djust.state_store.SealedSessionViewStateStore"
 STORES = [None, EXTERNAL, SEALED]
+STORE_IDS = ["session", "external", "sealed"]
 
 
 @pytest.fixture(autouse=True)
@@ -93,7 +92,7 @@ def _each(monkeypatch, settings, tmp_path):
 
 @pytest.fixture
 def claims(monkeypatch):
-    """Restores claim the tab (what a deferring view will do)."""
+    """Takers claim the tab (what a view whose saves may be deferred does)."""
     monkeypatch.setattr(_save_policy, "holder_claims", lambda view: True)
 
 
@@ -111,11 +110,17 @@ def _session(engine: str, key: Optional[str] = None) -> Any:
     return session
 
 
-def _write(session: Any, value: str, epoch: int, *, claim: bool = False) -> None:
-    session[KEY] = {"epoch": epoch, "value": value}
+def _claim(session: Any, token: str, expires: int = FAR) -> None:
+    session[HOLDER] = {"token": token, "expires": expires}
+    save_merged(session, session.session_key)
+
+
+def _write(session: Any, value: str, token: str) -> None:
+    session[KEY] = {"value": value}
+    session[HOLDER] = {"token": token, "expires": FAR}
     data = session._session_cache
     assert type(data) is TrackedSessionData
-    data.fence(KEY, epoch, claim=claim)
+    data.fence(KEY, HOLDER, token)
     save_merged(session, session.session_key)
 
 
@@ -127,33 +132,47 @@ def _stored(engine: str, key: str) -> dict:
 def test_a_late_writer_does_not_replace_what_a_newer_holder_wrote(engine):
     key = _session(engine).session_key
     holder_a = _session(engine, key)
-    _write(holder_a, "a1", 0)  # A holds the tab at epoch 0
+    _claim(holder_a, "token-a")
+    _write(holder_a, "a1", "token-a")
     holder_b = _session(engine, key)
-    _write(holder_b, "b-restored", 1, claim=True)  # B restores it: claims epoch 1
-    _write(holder_b, "b2", 1)  # and moves on
+    _claim(holder_b, "token-b")  # B takes the tab
+    _write(holder_b, "b2", "token-b")  # and moves on
     holder_a["cart"] = "kept"  # A's own unrelated write rides along
     with pytest.raises(StateSuperseded):
-        _write(holder_a, "a-late", 0)
+        _write(holder_a, "a-late", "token-a")
     stored = _stored(engine, key)
-    assert stored[KEY] == {"epoch": 1, "value": "b2"}
+    assert stored[KEY] == {"value": "b2"}
+    assert stored[HOLDER]["token"] == "token-b"
     assert stored["cart"] == "kept"  # the rest of the snapshot was written
-    # A's live session took B's entry back, unrecorded: nothing re-writes A's.
-    assert dict.__getitem__(holder_a._session_cache, KEY) == {"epoch": 1, "value": "b2"}
+    # A's live session took B's entries back, unrecorded: nothing re-writes A's.
+    assert dict.__getitem__(holder_a._session_cache, KEY) == {"value": "b2"}
     holder_a["other"] = 1
     save_merged(holder_a, key)
-    assert _stored(engine, key)[KEY] == {"epoch": 1, "value": "b2"}
+    assert _stored(engine, key)[KEY] == {"value": "b2"}
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-def test_an_equal_epoch_refuses_a_claim_not_a_save(engine):
+@pytest.mark.parametrize("record", ["another", "absent", "expired"])
+def test_a_writer_that_is_not_the_holder_is_refused_with_no_entry_stored(engine, record):
+    """Nothing stored for the tab (evicted, deleted, expired, never written):
+    the record alone decides, and only the writer's own live token passes."""
     key = _session(engine).session_key
-    first = _session(engine, key)
-    _write(first, "first", 1, claim=True)
-    second = _session(engine, key)
+    holder_a = _session(engine, key)
+    _claim(holder_a, "token-a")
+    other = _session(engine, key)
+    if record == "another":
+        _claim(other, "token-b")
+    elif record == "absent":
+        del other[HOLDER]
+        save_merged(other, key)
+    else:
+        _claim(other, "token-a", expires=1)
+    assert KEY not in _stored(engine, key)
     with pytest.raises(StateSuperseded):
-        _write(second, "second", 1, claim=True)  # two claims of one epoch: one wins
-    _write(first, "first-again", 1)  # the holder itself writes at its own epoch
-    assert _stored(engine, key)[KEY]["value"] == "first-again"
+        _write(holder_a, "a-late", "token-a")
+    stored = _stored(engine, key)
+    assert KEY not in stored
+    assert KEY not in dict(holder_a._session_cache)
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -161,30 +180,28 @@ def test_without_a_fence_the_late_write_lands_as_before(engine):
     """The gate-off: the same race with no fence registered overwrites."""
     key = _session(engine).session_key
     holder_a = _session(engine, key)
-    holder_a[KEY] = {"epoch": 0, "value": "a1"}
+    holder_a[KEY] = {"value": "a1"}
     save_merged(holder_a, key)
     holder_b = _session(engine, key)
-    _write(holder_b, "b2", 1, claim=True)
-    holder_a[KEY] = {"epoch": 0, "value": "a-late"}
+    _claim(holder_b, "token-b")
+    _write(holder_b, "b2", "token-b")
+    holder_a[KEY] = {"value": "a-late"}
     save_merged(holder_a, key)  # no fence: today's merge
     assert _stored(engine, key)[KEY]["value"] == "a-late"
 
 
-def test_an_entry_written_before_the_fence_fences_nothing():
-    assert stored_epoch({"value": 1}) is None
-    assert stored_epoch({"epoch": True}) is None  # a bool is not an epoch
-    assert stored_epoch({"epoch": -1}) is None
-    assert not fence_refuses({"value": 1}, 0, True)
-    assert fence_refuses({"epoch": 2}, 1, False)
-    assert not fence_refuses({"epoch": 1}, 1, False)
-    assert fence_refuses({"epoch": 1}, 1, True)
+def test_only_an_unexpired_record_of_the_same_token_lets_a_writer_through():
+    assert not holder_refuses({"token": "t", "expires": FAR}, "t")
+    assert holder_refuses({"token": "u", "expires": FAR}, "t")
+    assert holder_refuses(None, "t")
+    assert holder_refuses({"token": "t"}, "t")
+    assert holder_refuses({"token": "t", "expires": 5}, "t", now=5)
+    assert not holder_refuses({"token": "t", "expires": 6}, "t", now=5)
 
 
 # ---------------------------------------------------------------------------
-# A view: a socket or request that restored the tab writes late
+# Views: a socket that no longer holds the tab writes late
 # ---------------------------------------------------------------------------
-
-LATE: Dict[str, Any] = {}
 
 
 class FenceCounter(LiveView):
@@ -208,8 +225,8 @@ class FenceCounter(LiveView):
 
     @event_handler()
     def late(self, **kwargs):
-        """Set a value, then let another request restore the tab and save
-        before this request's own save runs (its handler is still running)."""
+        """Set a value, then let another request take the tab and save before
+        this request's own save runs (its handler is still running)."""
         self.count = 99
         LATE["other"]()
 
@@ -217,6 +234,7 @@ class FenceCounter(LiveView):
         return {"count": self.count}
 
 
+LATE: Dict[str, Any] = {}
 urlpatterns = [_path(sf.PATH.strip("/") + "/", FenceCounter.as_view())]
 
 
@@ -240,8 +258,8 @@ def _request(engine: str, key: Optional[str], method: str = "GET", event: str = 
     return request
 
 
-def _get(engine: str) -> str:
-    request = _request(engine, None)
+def _get(engine: str, key: Optional[str] = None) -> str:
+    request = _request(engine, key)
     assert FenceCounter().get(request).status_code == 200
     return str(request.session.session_key)
 
@@ -251,105 +269,30 @@ def _post(engine: str, key: str, event: str, params=None) -> Any:
 
 
 def _restored_count(engine: str, key: str) -> int:
-    """What the next request restores (``late`` is not a handler of a read)."""
+    """What the next request restores (an unknown event changes nothing)."""
     view = FenceCounter()
     view.post(_request(engine, key, "POST", "no_such_event"))
     return view.count
 
 
-def _race(engine: str) -> tuple:
-    """A restores the tab and runs ``late``; inside it B restores, sets 7 and saves."""
-    key = _get(engine)
-    assert _post(engine, key, "set_to", {"value": 5}).status_code == 200
-    answers = {}
+async def _mount(engine: str, key: str) -> Any:
+    """A socket on ``engine``'s session, through the real consumer."""
+    from channels.testing import WebsocketCommunicator
 
-    def other() -> None:
-        answers["b"] = _post(engine, key, "set_to", {"value": 7})
+    from djust.websocket import LiveViewConsumer
 
-    LATE["other"] = other
-    try:
-        answers["a"] = _post(engine, key, "late")
-    finally:
-        LATE.clear()
-    return key, answers["a"], answers["b"]
-
-
-@pytest.mark.parametrize("store", STORES, ids=["session", "external", "sealed"])
-@pytest.mark.parametrize("engine", ENGINES)
-def test_a_late_request_save_is_refused_and_the_newer_state_stays(engine, store, settings, claims):
-    settings.SESSION_ENGINE = engine
-    settings.ROOT_URLCONF = MODULE
-    settings.DJUST_STATE_STORE = store
-    key, late, newer = _race(engine)
-    assert newer.status_code == 200
-    assert late.status_code == 503, late.content
-    assert json.loads(late.content)["code"] == "state_error"
-    assert _restored_count(engine, key) == 7
-
-
-@pytest.mark.parametrize("store", STORES, ids=["session", "external", "sealed"])
-@pytest.mark.parametrize("engine", ENGINES)
-def test_without_claims_the_late_save_lands_as_it_does_today(engine, store, settings):
-    """Default behaviour: nothing claims, the late write wins (unchanged)."""
-    settings.SESSION_ENGINE = engine
-    settings.ROOT_URLCONF = MODULE
-    settings.DJUST_STATE_STORE = store
-    key, late, newer = _race(engine)
-    assert newer.status_code == late.status_code == 200
-    assert _restored_count(engine, key) == 99
-
-
-def test_an_external_store_is_not_written_by_a_superseded_holder(settings, claims):
-    """The store is written before the index: the check must come first, or
-    the newer holder's bytes are replaced and its index stamp then refuses
-    them (its state would be lost, not just stale)."""
-    settings.SESSION_ENGINE = DB
-    settings.ROOT_URLCONF = MODULE
-    settings.DJUST_STATE_STORE = EXTERNAL
-    key = _get(DB)
-    assert _post(DB, key, "set_to", {"value": 5}).status_code == 200
-    saves_before = {}
-
-    def other() -> None:
-        assert _post(DB, key, "set_to", {"value": 7}).status_code == 200
-        saves_before["n"] = len(Memory.SAVES)
-
-    LATE["other"] = other
-    try:
-        assert _post(DB, key, "late").status_code == 503
-    finally:
-        LATE.clear()
-    assert len(Memory.SAVES) == saves_before["n"]  # the late holder wrote nothing
-    assert _restored_count(DB, key) == 7
-
-
-def test_a_page_load_starts_the_tab_at_epoch_zero_and_is_never_fenced(settings, claims):
-    settings.ROOT_URLCONF = MODULE
-    key = _get(DB)
-    assert _post(DB, key, "inc").status_code == 200  # a restore: claims epoch 1
-    assert stored_epoch(sf.only_envelope(key)) == 1
-    _get_same_session = _request(DB, key)
-    assert FenceCounter().get(_get_same_session).status_code == 200
-    assert stored_epoch(sf.only_envelope(key)) == 0
-
-
-def test_without_claims_a_restore_writes_nothing(settings):
-    """The claim is the only new write, and it is off by default."""
-    from django.contrib.sessions.models import Session
-
-    settings.ROOT_URLCONF = MODULE
-    key = _get(DB)
-    assert _post(DB, key, "set_to", {"value": 3}).status_code == 200
-    row = Session.objects.get(session_key=key).session_data
-    view = FenceCounter()
-    view.post(_request(DB, key, "POST", "no_such_event"))
-    assert Session.objects.get(session_key=key).session_data == row
-    assert stored_epoch(sf.only_envelope(key)) == 0
-
-
-# ---------------------------------------------------------------------------
-# A socket that is no longer the holder: WebSocket and SSE alike
-# ---------------------------------------------------------------------------
+    comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    comm.scope["session"] = await sync_to_async(import_module(engine).SessionStore)(key)
+    comm.scope["user"] = AnonymousUser()
+    connected, _ = await comm.connect()
+    assert connected
+    await comm.receive_json_from()
+    await comm.send_json_to(
+        {"type": "mount", "view": f"{MODULE}.FenceCounter", "url": sf.PATH, "tab": sf.TAB}
+    )
+    frame = await comm.receive_json_from()
+    assert frame["type"] == "mount", frame
+    return comm
 
 
 async def _reply_or_error(comm: Any, name: str, params: Any) -> dict:
@@ -366,62 +309,162 @@ async def _reply_or_error(comm: Any, name: str, params: Any) -> dict:
     return frames[-1]
 
 
+def _drop_tab_state(engine: str, key: str) -> None:
+    """``djust clear``: the tab's saved state goes (its holder record stays)."""
+    session = import_module(engine).SessionStore(key)
+    for name in [n for n in session.keys() if n.startswith("_djust_auto_")]:
+        del session[name]
+    session.save()
+
+
+def _expire_tab_state(engine: str, key: str) -> None:
+    session = import_module(engine).SessionStore(key)
+    for name in [n for n in session.keys() if n.startswith("_djust_auto_")]:
+        entry = dict(session[name])
+        entry["created"], entry["expires"] = 1, 2
+        session[name] = entry
+    session.save()
+
+
+def _evict_with_eight_more_tabs(engine: str, key: str, monkeypatch: Any) -> None:
+    """Eight more page loads of the page in the same browser session: the
+    tab cap (``MAX_TABS``) evicts the oldest tab's state."""
+    import itertools
+
+    ids = ("other-tab-%d" % n for n in itertools.count())
+    with monkeypatch.context() as patch:
+        patch.setattr(_automatic_state, "new_tab_id", lambda: next(ids))
+        for _ in range(_automatic_state.MAX_TABS):
+            _get(engine, key)
+    session = import_module(engine).SessionStore(key)
+    tabs = [n for n in session.keys() if n.startswith("_djust_auto_")]
+    assert len(tabs) == _automatic_state.MAX_TABS
+
+
+VARIANTS = ["restored", "cleared", "evicted", "expired", "fresh_socket"]
+
+
+async def _newer_holder(variant: str, engine: str, key: str, monkeypatch: Any) -> int:
+    """B takes the tab after the given loss of its stored state, and saves.
+    Returns the value B left."""
+    if variant == "cleared":
+        await sync_to_async(_drop_tab_state)(engine, key)
+    elif variant == "evicted":
+        await sync_to_async(_evict_with_eight_more_tabs)(engine, key, monkeypatch)
+    elif variant == "expired":
+        await sync_to_async(_expire_tab_state)(engine, key)
+    if variant == "fresh_socket":
+        await sync_to_async(_drop_tab_state)(engine, key)
+        comm_b = await _mount(engine, key)  # starts from mount(): nothing to restore
+        try:
+            assert (await harness.event(comm_b, "set_to", {"value": 3}))["type"] != "error"
+        finally:
+            await comm_b.disconnect()
+        return 3
+    newer = await sync_to_async(_post)(engine, key, "set_to", {"value": 7})
+    assert newer.status_code == 200, newer.content
+    return 7
+
+
+async def _socket_race(engine: str, variant: str, monkeypatch: Any) -> tuple:
+    key = await sync_to_async(_get)(engine)
+    comm = await _mount(engine, key)  # A takes the tab
+    try:
+        assert (await harness.event(comm, "set_to", {"value": 5}))["type"] != "error"
+        left = await _newer_holder(variant, engine, key, monkeypatch)
+        reply = await _reply_or_error(comm, "set_to", {"value": 1})  # A writes late
+    finally:
+        await comm.disconnect()
+    return reply, left, await sync_to_async(_restored_count)(engine, key)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("claiming", [True, False], ids=["claims", "today"])
-async def test_a_websocket_holder_superseded_by_a_fallback_request(monkeypatch, claiming):
-    monkeypatch.setattr(_save_policy, "holder_claims", lambda view: claiming)
+@pytest.mark.parametrize("variant", VARIANTS)
+@pytest.mark.parametrize("engine", ENGINES)
+async def test_a_socket_that_no_longer_holds_the_tab_cannot_write_it(
+    engine, variant, settings, claims, monkeypatch
+):
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE, SESSION_ENGINE=engine):
+        reply, left, restored = await _socket_race(engine, variant, monkeypatch)
+    assert reply["type"] == "error" and reply.get("code") == "state_error", reply
+    assert restored == left
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variant", VARIANTS)
+@pytest.mark.parametrize("store", STORES, ids=STORE_IDS)
+async def test_the_same_through_each_state_store(store, variant, settings, claims, monkeypatch):
+    settings.DJUST_STATE_STORE = store
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        reply, left, restored = await _socket_race(DB, variant, monkeypatch)
+    assert reply.get("code") == "state_error", reply
+    assert restored == left
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variant", VARIANTS)
+async def test_without_claims_the_late_socket_write_lands_as_it_does_today(variant, monkeypatch):
+    """Default behaviour: nothing claims, the late write wins (unchanged)."""
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        reply, _left, restored = await _socket_race(DB, variant, monkeypatch)
+    assert reply["type"] != "error", reply
+    assert restored == 1
+
+
+@pytest.mark.asyncio
+async def test_of_two_fresh_sockets_the_later_one_holds_the_tab(claims):
     with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
         key = await sync_to_async(_get)(DB)
-        comm, _mount = await harness.mount_view(FenceCounter, key)  # A restores
+        await sync_to_async(_drop_tab_state)(DB, key)
+        first = await _mount(DB, key)
+        second = await _mount(DB, key)
+        try:
+            refused = await _reply_or_error(first, "set_to", {"value": 1})
+            kept = await _reply_or_error(second, "set_to", {"value": 2})
+        finally:
+            await first.disconnect()
+            await second.disconnect()
+        restored = await sync_to_async(_restored_count)(DB, key)
+    assert refused.get("code") == "state_error", refused
+    assert kept["type"] != "error", kept
+    assert restored == 2
+
+
+@pytest.mark.asyncio
+async def test_an_external_store_is_not_written_by_a_superseded_socket(settings, claims):
+    """The store is written before the index: the check must come first, or
+    the newer holder's bytes are replaced and its index stamp then refuses
+    them (its state would be lost, not just stale)."""
+    settings.DJUST_STATE_STORE = EXTERNAL
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        key = await sync_to_async(_get)(DB)
+        comm = await _mount(DB, key)
         try:
             assert (await harness.event(comm, "set_to", {"value": 5}))["type"] != "error"
-            # B: the same tab over the HTTP fallback (another process, say).
-            newer = await sync_to_async(_post)(DB, key, "set_to", {"value": 7})
-            assert newer.status_code == 200
-            reply = await _reply_or_error(comm, "set_to", {"value": 1})  # A writes late
+            assert (await sync_to_async(_post)(DB, key, "set_to", {"value": 7})).status_code == 200
+            saves_before = len(Memory.SAVES)
+            reply = await _reply_or_error(comm, "set_to", {"value": 1})
+            assert len(Memory.SAVES) == saves_before  # the late holder wrote nothing
         finally:
             await comm.disconnect()
         restored = await sync_to_async(_restored_count)(DB, key)
-    if claiming:
-        assert reply["type"] == "error" and reply.get("code") == "state_error", reply
-        assert restored == 7
-    else:
-        assert reply["type"] != "error", reply
-        assert restored == 1
+    assert reply.get("code") == "state_error", reply
+    assert restored == 7
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("claiming", [True, False], ids=["claims", "today"])
-async def test_an_sse_holder_superseded_by_a_fallback_request(monkeypatch, claiming):
-    from djust.sse import _sse_sessions
-
-    monkeypatch.setattr(_save_policy, "holder_claims", lambda view: claiming)
-    seen = {}
-
-    async def b_then_a():
-        newer = await sync_to_async(_post)(DB, key, "set_to", {"value": 7})
-        seen["b"] = newer.status_code
-
+async def test_a_page_load_ends_an_earlier_holding(settings, claims):
     with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
         key = await sync_to_async(_get)(DB)
-        before = set(_sse_sessions)
-        await sf.sse_run(FenceCounter, key, [("set_to", {"value": 5})], MODULE, keep=True)
-        (sid,) = set(_sse_sessions) - before
+        comm = await _mount(DB, key)
         try:
-            await b_then_a()
-            await sf.sse_post(sid, key, "set_to", {"value": 1})
-            runtime = _sse_sessions[sid].runtime
-            view = runtime.view_instance
+            await sync_to_async(_get)(DB, key)  # the same tab loaded again
+            reply = await _reply_or_error(comm, "set_to", {"value": 1})
         finally:
-            _sse_sessions.pop(sid, None)
+            await comm.disconnect()
         restored = await sync_to_async(_restored_count)(DB, key)
-    assert seen["b"] == 200
-    if claiming:
-        assert view.__dict__.get("_djust_auto_superseded") is True
-        assert restored == 7
-    else:
-        assert not view.__dict__.get("_djust_auto_superseded")
-        assert restored == 1
+    assert reply.get("code") == "state_error", reply
+    assert restored == 0
 
 
 @pytest.mark.asyncio
@@ -430,7 +473,7 @@ async def test_a_superseded_socket_is_refused_even_by_a_turn_that_changes_nothin
     success frame may vouch for it, written or not."""
     with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
         key = await sync_to_async(_get)(DB)
-        comm, _mount = await harness.mount_view(FenceCounter, key)
+        comm = await _mount(DB, key)
         try:
             assert (await harness.event(comm, "set_to", {"value": 5}))["type"] != "error"
             assert (await sync_to_async(_post)(DB, key, "set_to", {"value": 7})).status_code == 200
@@ -441,3 +484,101 @@ async def test_a_superseded_socket_is_refused_even_by_a_turn_that_changes_nothin
         restored = await sync_to_async(_restored_count)(DB, key)
     assert first.get("code") == again.get("code") == "state_error", (first, again)
     assert restored == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claiming", [True, False], ids=["claims", "today"])
+async def test_an_sse_holder_superseded_by_a_fallback_request(monkeypatch, claiming):
+    from djust.sse import _sse_sessions
+
+    monkeypatch.setattr(_save_policy, "holder_claims", lambda view: claiming)
+    with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
+        key = await sync_to_async(_get)(DB)
+        before = set(_sse_sessions)
+        await sf.sse_run(FenceCounter, key, [("set_to", {"value": 5})], MODULE, keep=True)
+        (sid,) = set(_sse_sessions) - before
+        try:
+            newer = await sync_to_async(_post)(DB, key, "set_to", {"value": 7})
+            await sf.sse_post(sid, key, "set_to", {"value": 1})
+            view = _sse_sessions[sid].runtime.view_instance
+        finally:
+            _sse_sessions.pop(sid, None)
+        restored = await sync_to_async(_restored_count)(DB, key)
+    assert newer.status_code == 200
+    if claiming:
+        assert view.__dict__.get("_djust_auto_superseded") is True
+        assert restored == 7
+    else:
+        assert not view.__dict__.get("_djust_auto_superseded")
+        assert restored == 1
+
+
+# ---------------------------------------------------------------------------
+# Decision 4: the fallback writes within its own request, as before
+# ---------------------------------------------------------------------------
+
+
+def _overlap(engine: str) -> tuple:
+    """Request A loads the tab and runs ``late``; inside it request B loads,
+    sets 7 and saves; then A saves 99. The lost update main has too."""
+    key = _get(engine)
+    assert _post(engine, key, "set_to", {"value": 5}).status_code == 200
+    answers = {}
+
+    def other() -> None:
+        answers["b"] = _post(engine, key, "set_to", {"value": 7})
+
+    LATE["other"] = other
+    try:
+        answers["a"] = _post(engine, key, "late")
+    finally:
+        LATE.clear()
+    return key, answers["a"], answers["b"]
+
+
+@pytest.mark.parametrize("claiming", [True, False], ids=["claims", "today"])
+@pytest.mark.parametrize("store", STORES, ids=STORE_IDS)
+@pytest.mark.parametrize("engine", ENGINES)
+def test_overlapping_fallback_requests_answer_as_they_always_did(
+    engine, store, claiming, settings, monkeypatch
+):
+    """A fallback request rebuilds the view and saves within itself: it is
+    no late writer, and it is not fenced against another fallback request.
+    The later save wins, with or without the fence, as on main."""
+    monkeypatch.setattr(_save_policy, "holder_claims", lambda view: claiming)
+    settings.SESSION_ENGINE = engine
+    settings.ROOT_URLCONF = MODULE
+    settings.DJUST_STATE_STORE = store
+    key, late, newer = _overlap(engine)
+    assert newer.status_code == late.status_code == 200, late.content
+    assert _restored_count(engine, key) == 99
+
+
+def test_without_claims_a_restore_writes_nothing(settings):
+    """The claim is the only new write, and it is off by default."""
+    from django.contrib.sessions.models import Session
+
+    settings.ROOT_URLCONF = MODULE
+    key = _get(DB)
+    assert _post(DB, key, "set_to", {"value": 3}).status_code == 200
+    row = Session.objects.get(session_key=key).session_data
+    view = FenceCounter()
+    view.post(_request(DB, key, "POST", "no_such_event"))
+    assert Session.objects.get(session_key=key).session_data == row
+    stored = import_module(DB).SessionStore(key)
+    assert not [n for n in stored.keys() if n.startswith(_automatic_state._HOLDER_PREFIX)]
+
+
+def test_holder_records_are_bounded(claims, settings):
+    settings.ROOT_URLCONF = MODULE
+    key = _get(DB)
+    session = _session(DB, key)
+    for n in range(_automatic_state.MAX_HOLDERS + 5):
+        session["%sx%d" % (_automatic_state._HOLDER_PREFIX, n)] = {"token": "t", "expires": FAR - n}
+    session["%sold" % _automatic_state._HOLDER_PREFIX] = {"token": "t", "expires": 1}
+    save_merged(session, key)
+    assert _post(DB, key, "inc").status_code == 200  # a taker prunes
+    stored = import_module(DB).SessionStore(key)
+    held = [n for n in stored.keys() if n.startswith(_automatic_state._HOLDER_PREFIX)]
+    assert len(held) == _automatic_state.MAX_HOLDERS
+    assert "%sold" % _automatic_state._HOLDER_PREFIX not in held

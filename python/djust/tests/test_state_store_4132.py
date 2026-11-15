@@ -1394,10 +1394,7 @@ class Sized(LiveView):
 
     def mount(self, request, **kwargs):
         self.count = 0
-        # 3585, not 3600: three sealed states of it must stay under the 16 KB
-        # budget of the session-budget test with the holder epoch in the
-        # envelope (5455 bytes sealed each before it, 5467 at 3600 after).
-        self.blob = "x" * 3585
+        self.blob = "x" * 3600
 
     @event_handler()
     def bump(self, **kwargs):
