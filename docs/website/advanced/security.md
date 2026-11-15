@@ -433,9 +433,10 @@ attribute, so apps can switch to strict nonce-based CSP.
   inline scripts: behaviour such as opening a `rich_select` or a `popover`,
   dropping files on a `file_dropzone`, dragging `kanban_board` cards or
   switching `theme_toggle`'s mode runs from delegated listeners in the client
-  bundle, and `code_block` highlights through a static script. The `Button`
-  component's `onclick=` argument is the exception: it is an inline handler
-  you write, and needs `'unsafe-inline'`. `{% colocated_hook %}` carries the request nonce and the
+  bundle, and `code_block` highlights through a static script. The `onclick=`
+  argument of the `Button` component and `{% theme_button %}` is the
+  exception: it is an inline handler you write, and needs `'unsafe-inline'`
+  (see "Inline event handlers" below). `{% colocated_hook %}` carries the request nonce and the
   client registers its body through a script element with that nonce, so it
   needs no `'unsafe-eval'`; without a nonce it falls back to `new Function`.
 - **Third-party JS that djust doesn't emit** (Google Analytics, Stripe,
@@ -558,10 +559,9 @@ request that carries a nonce, and reports each `style` attribute, each `<style>`
 and executable inline `<script>` block without the nonce, each inline event
 handler and each `javascript:` URL; its test is
 `python/djust/tests/test_csp_constant_styles_4139.py`. Styles and inline script
-blocks are covered. Inline event-handler attributes are not converted yet: the
-theme alert's and toast's dismiss buttons, `NavBar`'s menu toggles and a
-caller-supplied `onclick=` on the button components are tracked in #4146, and
-any other handler fails that test.
+blocks are covered, and so are inline event handlers (below): the only handler
+it accepts is a caller-supplied `onclick=` on the button components, and any
+other handler fails that test in both modes.
 
 What strict mode costs:
 
@@ -589,6 +589,64 @@ What strict mode costs:
   link and sortable headers); in strict mode they are the classes listed above,
   so a strict page must load `components.css` (or `components-classes.css` for
   the three Bootstrap ones). None of them carries a caller's value.
+
+### Inline event handlers
+
+A `script-src` without `'unsafe-inline'` refuses every inline event-handler
+attribute (`onclick=`, `onchange=` ...), and no nonce can allow one. djust
+writes none of its own (#4146): what used to be one is a marker that a static
+module handles from a listener on `document`, so it also works for markup a
+LiveView patch inserts later.
+
+| Element | Marker | Handled by |
+|---|---|---|
+| `{% theme_alert dismissible=True %}` and `{% theme_toast %}` close button | `data-theme-dismiss` | `djust_theming/js/components.js` |
+| `NavBar`'s menu toggle (Tailwind and plain renderers) | `data-navbar-toggle` (the menu's id), `data-navbar-toggle-class` | `djust_components/navbar-toggle.js` |
+
+The behaviour is the old handler's: the close button removes its parent
+element, the toggle toggles that class on that element.
+
+- `{% theme_head %}` loads `components.js`. A page rendered with
+  `{% theme_head include_js=False %}` has to load
+  `{% static 'djust_theming/js/components.js' %}` itself for the close button
+  to work; the system check `djust_theming.W005` reports a project that seems
+  not to.
+- `NavBar` renders the `<script src>` for `navbar-toggle.js` inside its own
+  `<nav>`, so a page needs no setup: `script-src 'self'` allows it. A policy
+  that admits scripts only by nonce (with `'strict-dynamic'`) refuses that
+  tag; load the file yourself with the nonce. The tag runs when the page
+  loads or a LiveView mounts; a navbar that first appears in a later patch
+  needs the file loaded by the page.
+
+The one inline handler djust still writes is yours: the `onclick=` argument
+of `{% theme_button %}` and of the `Button` component. It is the caller's
+code, written as given and escaped for the attribute (a value marked safe,
+including a template string literal, is escaped too, so `onclick='go("a")'`
+stays one attribute). A strict `script-src` refuses it, so under one use a
+server event or a JS command instead:
+
+```django
+{# Refused by script-src 'self': #}
+{% theme_button "Delete" variant="destructive" onclick="confirmDelete()" %}
+
+{# A server event, no inline script: #}
+{% theme_button "Delete" variant="destructive" dj_click="confirm_delete" %}
+```
+
+```python
+# The Button component: `action` renders dj-click.
+Button(label="Delete", variant="danger", action="confirm_delete")
+```
+
+For a client-only effect with no round trip, give the button a
+[JS command](../guides/js-commands.md) chain as its `dj-click`
+(`self.close_panel = JS.hide("#panel")`, then
+`{% theme_button "Close" dj_click=close_panel %}`), or a class your own static
+script listens for.
+
+The developer pages (the `djust.components` gallery, and the theming gallery,
+diff and editor) still use inline handlers and inline styles; they are tools
+for development, not pages to serve under a strict policy.
 
 ## Reporting Vulnerabilities
 
