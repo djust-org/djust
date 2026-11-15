@@ -1300,15 +1300,16 @@ def theme_skeleton(
         {% theme_skeleton variant="text" width="200px" %}
         {% theme_skeleton variant="circle" width="3rem" height="3rem" %}
     """
-    from djust.components.utils import safe_css_length
+    from djust.components.utils import style_value
 
     request = context.get("request")
     tmpl = resolve_component_template(request, "skeleton")
     ctx = {
         "variant": variant,
-        # Both are written into a style attribute: only CSS lengths.
-        "width": safe_css_length(width, "100%"),
-        "height": safe_css_length(height, "1rem"),
+        # Both are written into `data-dj-style-*` attributes the client applies (a `style=`
+        # is refused by a strict CSP, #3979): only what passes their check.
+        "width": style_value("width", width) or "100%",
+        "height": style_value("height", height) or "1rem",
         "attrs": attrs,
         "css_prefix": _css_prefix(),
     }

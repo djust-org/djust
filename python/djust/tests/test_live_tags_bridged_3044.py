@@ -7,10 +7,11 @@ to register or load this tag?" even after ``{% load live_tags %}``. They now
 bridge through Django's own nodes (``_DJUST_TAGS_BRIDGED``), and the output is
 compared with the real Django engine's.
 
-``djust_skeleton`` dedupes its shimmer ``<style>`` block through
-``context.render_context``. A bridged node renders on a fresh Django
-``Context`` per call, so without a shared per-render ``render_context`` the
-block was emitted once per call instead of once per render.
+``djust_skeleton`` dedupes its shimmer-rules marker (``data-dj-css="skeleton"``,
+an inline ``<style>`` block before #3979) through ``context.render_context``. A
+bridged node renders on a fresh Django ``Context`` per call, so without a shared
+per-render ``render_context`` the marker was emitted once per call instead of
+once per render.
 """
 
 from __future__ import annotations
@@ -61,10 +62,10 @@ def test_bridged_tags_render_like_django(body):
     assert _rust(body, CTX) == _django(body, CTX)
 
 
-def test_skeleton_style_block_is_emitted_once_per_render():
+def test_skeleton_rules_marker_is_emitted_once_per_render():
     body = '{% djust_skeleton %}<p>x</p>{% djust_skeleton shape="circle" %}'
     out = _rust(body, {})
-    assert out.count("<style") == 1, out
+    assert out.count('data-dj-css="skeleton"') == 1, out
     assert out == _django(body, {})
     # A second render emits it again: the dedupe is per render, not global.
     from djust._rust import RustLiveView
@@ -74,7 +75,7 @@ def test_skeleton_style_block_is_emitted_once_per_render():
     rv.update_state({})
     for _ in range(2):
         with library_render_scope():
-            assert rv.render().count("<style") == 1
+            assert rv.render().count('data-dj-css="skeleton"') == 1
 
 
 def test_without_a_scope_each_call_is_its_own_render():
@@ -84,11 +85,11 @@ def test_without_a_scope_each_call_is_its_own_render():
 
     rv = RustLiveView(SRC_PREFIX + "{% djust_skeleton %}{% djust_skeleton %}</div>")
     rv.update_state({})
-    assert rv.render().count("<style") == 2
+    assert rv.render().count('data-dj-css="skeleton"') == 2
 
 
 @pytest.mark.django_db
-def test_every_ws_render_emits_the_style_block():
+def test_every_ws_render_emits_the_rules_marker():
     """``render_with_diff`` (the WS path) opens a fresh scope per render."""
 
     class V(LiveView):
@@ -106,7 +107,7 @@ def test_every_ws_render_emits_the_style_block():
     for i in range(3):
         v.n = i
         html, _patches, _version = v.render_with_diff(None)
-        assert html.count("<style") == 1, i
+        assert html.count('data-dj-css="skeleton"') == 1, i
 
 
 def test_the_three_tags_are_bridged():
@@ -139,5 +140,5 @@ def test_root_liveview_template_renders_them():
     v.mount(None)
     html, _patches, _version = v.render_with_diff(None)
     assert 'dj-input="search"' in html and 'value="hello"' in html
-    assert html.count("<style") == 1
+    assert html.count('data-dj-css="skeleton"') == 1
     assert "dj-track-static" in html

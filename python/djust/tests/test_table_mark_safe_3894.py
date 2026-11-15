@@ -300,7 +300,7 @@ def _column_shapes(width: object) -> dict[str, object]:
 
 def _widths(html: str) -> list[str]:
     p = page(html)
-    return [t.get("style", "") for t in p.sortable]
+    return [t.get("data-dj-style-width", "") for t in p.sortable]
 
 
 @pytest.mark.parametrize("shape", sorted(_column_shapes("1px")))
@@ -322,4 +322,4 @@ def test_a_hostile_column_width_never_leaves_the_style_attribute(
 def test_a_real_column_width_is_kept(shape: str, claim: str) -> None:
     value = "120px" if claim == "plain" else CLAIMS[claim]("120px")
     html = render({"id": 1}, _column_shapes(value)[shape], args="")  # type: ignore[arg-type]
-    assert _widths(html) == ["width:120px"], html
+    assert _widths(html) == ["120px"], html

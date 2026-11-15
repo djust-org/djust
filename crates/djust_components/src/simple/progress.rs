@@ -71,15 +71,17 @@ impl RustProgress {
             String::new()
         };
 
-        // Build outer style
+        // No `style=` attribute: a `style-src` without 'unsafe-inline' refuses it. The client
+        // module (54-dj-style.js) applies `data-dj-style-*` through the CSSOM, where a value
+        // cannot add a second declaration (#3979). The Python wrapper checks `height` first.
         let outer_style = if let Some(ref h) = self.height {
-            format!(" style=\"height: {}\"", html_escape(h))
+            format!(" data-dj-style-height=\"{}\"", html_escape(h.trim()))
         } else {
             String::new()
         };
 
         format!(
-            r#"<div class="progress"{}><div class="{} bg-{}" role="progressbar" style="width: {:.1}%" aria-valuenow="{}" aria-valuemin="{}" aria-valuemax="{}">{}</div></div>"#,
+            r#"<div class="progress"{}><div class="{} bg-{}" role="progressbar" data-dj-style-width="{:.1}%" aria-valuenow="{}" aria-valuemin="{}" aria-valuemax="{}">{}</div></div>"#,
             outer_style,
             bar_class_str,
             html_escape(&self.variant),
@@ -135,7 +137,7 @@ mod escaping_tests {
             RustProgress::new(50.0, "success", false, false, true, None, None, 0.0, 100.0).render();
         assert_eq!(
             html,
-            r#"<div class="progress"><div class="progress-bar bg-success" role="progressbar" style="width: 50.0%" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100">50%</div></div>"#
+            r#"<div class="progress"><div class="progress-bar bg-success" role="progressbar" data-dj-style-width="50.0%" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100">50%</div></div>"#
         );
     }
 }

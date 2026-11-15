@@ -9,7 +9,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-from djust.components.utils import safe_css_length
+from djust.components.utils import safe_css_length, style_attrs, style_value
 
 from djust._rust import RustProgress
 
@@ -42,10 +42,12 @@ class Progress(Component):
 
     _rust_impl_class = RustProgress
 
-    template = """<div class="progress"{% if height %} style="height: {{ height }}"{% endif %}>
+    # No `style=` attribute anywhere (a strict CSP refuses it): the client applies the
+    # `data-dj-style-*` values (#3979).
+    template = """<div class="progress"{% if style_height %} data-dj-style-height="{{ style_height }}"{% endif %}>
     <div class="progress-bar{% if striped %} progress-bar-striped{% endif %}{% if animated %} progress-bar-animated{% endif %} bg-{{ variant }}"
          role="progressbar"
-         style="width: {{ percentage }}%"
+         data-dj-style-width="{{ style_width }}"
          aria-valuenow="{{ value }}"
          aria-valuemin="{{ min_value }}"
          aria-valuemax="{{ max_value }}">{% if show_label or label %}{{ label_text }}{% endif %}</div>
@@ -118,6 +120,8 @@ class Progress(Component):
             "max_value": self.max_value,
             "percentage": self.percentage,
             "label_text": self.label_text,
+            "style_height": style_value("height", self.height),
+            "style_width": style_value("width", f"{self.percentage}%"),
         }
 
     def _render_custom(self) -> str:
@@ -131,7 +135,7 @@ class Progress(Component):
         classes.append(f"bg-{conditional_escape(self.variant)}")
 
         # Build outer style
-        outer_style = f' style="height: {conditional_escape(self.height)}"' if self.height else ""
+        outer_style = style_attrs(height=self.height)
 
         # Build label
         label_html = conditional_escape(self.label_text) if (self.show_label or self.label) else ""
@@ -139,7 +143,7 @@ class Progress(Component):
         return f"""<div class="progress"{outer_style}>
     <div class="{" ".join(classes)}"
          role="progressbar"
-         style="width: {self.percentage:.1f}%"
+        {style_attrs(width=f"{self.percentage:.1f}%")}
          aria-valuenow="{self.value}"
          aria-valuemin="{self.min_value}"
          aria-valuemax="{self.max_value}">{label_html}</div>

@@ -4,6 +4,7 @@ import html
 
 from djust import Component
 from typing import Any
+from djust.components.utils import style_attrs
 
 
 class ExpandableText(Component):
@@ -94,9 +95,13 @@ class ExpandableText(Component):
             style = ""
             label = e_less
         else:
-            style = (
-                f' style="-webkit-line-clamp:{max_lines};'
-                f'display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden"'
+            style = style_attrs(
+                {
+                    "-webkit-line-clamp": max_lines,
+                    "display": "-webkit-box",
+                    "-webkit-box-orient": "vertical",
+                    "overflow": "hidden",
+                }
             )
             label = e_more
 

@@ -17,6 +17,7 @@ from typing import Literal, NoReturn, Protocol, TypeVar, TypedDict
 from uuid import uuid4
 
 from django.utils.html import format_html, format_html_join
+from django.utils.safestring import mark_safe
 
 from djust._component_subscriptions import (
     SOURCE_PARAMETER,
@@ -27,6 +28,7 @@ from djust._component_subscriptions import (
 from djust.decorators import event_handler
 from djust.live_view import LiveView
 from .base import LiveComponent
+from .utils import style_attrs
 
 
 class _ActionRequired(TypedDict):
@@ -418,9 +420,21 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
                         self._observation_lifetime,
                         self._observation_sequence,
                     )
+                # The popover's placement, applied by the client: not a `style=` a strict CSP
+                # refuses (#3979).
+                placement = mark_safe(
+                    style_attrs(
+                        position="fixed",
+                        inset="0",
+                        margin="auto",
+                        width="max-content",
+                        height="max-content",
+                    )
+                )
                 content = format_html(
-                    '<div id="{}" popover="auto" class="dj-dropdown-menu__content" data-dj-native-dropdown="" style="position:fixed;inset:0;margin:auto;width:max-content;height:max-content"{}>{}</div>',
+                    '<div id="{}" popover="auto" class="dj-dropdown-menu__content" data-dj-native-dropdown=""{}{}>{}</div>',
                     popover_id,
+                    placement,
                     observation_attrs,
                     contents,
                 )

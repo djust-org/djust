@@ -5,6 +5,7 @@ Centralises functions and constants that were previously duplicated across
 templatetags, rust_handlers, mixins, and component classes.
 """
 
+import logging
 import re
 from typing import Any
 from urllib.parse import urlsplit
@@ -13,6 +14,8 @@ from django.utils.html import conditional_escape, escape
 from django.utils.safestring import SafeData
 
 from djust.security.urls import url_as_parsed, url_is_protocol_relative
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "CURRENCY_SYMBOLS",
@@ -24,6 +27,8 @@ __all__ = [
     "safe_css_number",
     "safe_css_ratio",
     "safe_url",
+    "style_attrs",
+    "style_value",
     "unique_ids",
     "url_allowed",
     "url_as_parsed",
@@ -365,6 +370,203 @@ def safe_css_number(value: Any, default: str = "", *, integer: bool = False) -> 
     else:
         ok = bool(_CSS_NUMBER_RE.fullmatch(candidate))
     return text if ok else default
+
+
+# ---------------------------------------------------------------------------
+# Free-form style values under a strict CSP (#3979)
+# ---------------------------------------------------------------------------
+#
+# A ``style-src`` without 'unsafe-inline' refuses every ``style="..."`` attribute. A
+# component that must set a value no class can stand for (a column width, a colour, an
+# item height) writes it as ``data-dj-style-<property>="<value>"`` instead, and the client
+# module ``54-dj-style.js`` applies it with ``element.style.setProperty`` (the CSSOM, which
+# a strict CSP allows, and which cannot add a second declaration). The value is validated
+# HERE, by the kind of the property, before it is written; a value that fails is dropped.
+
+_STYLE_ATTR_PREFIX = "data-dj-style-"
+_CSS_TIME_RE = re.compile(rf"{_CSS_NUM}(?:ms|s)", re.IGNORECASE)
+_CSS_GRID_LINE_RE = re.compile(r"\d{1,4}(?:\s*/\s*span\s+\d{1,4})?|span\s+\d{1,4}|auto")
+
+
+def _style_keyword(*words: str) -> Any:
+    allowed = frozenset(words)
+
+    def check(value: Any) -> str:
+        text = _exact_str(value).strip()
+        return text if text.lower() in allowed else ""
+
+    return check
+
+
+def _style_length(value: Any) -> str:
+    return safe_css_length(value, "").strip()
+
+
+def _style_color(value: Any) -> str:
+    return safe_css_color(value, "").strip()
+
+
+def _style_integer(value: Any) -> str:
+    return safe_css_number(value, "", integer=True).strip()
+
+
+def _style_number(value: Any) -> str:
+    return safe_css_number(value, "").strip()
+
+
+def _style_ratio(value: Any) -> str:
+    return safe_css_ratio(value, "").strip()
+
+
+def _style_time(value: Any) -> str:
+    text = _exact_str(value).strip()
+    return text if _CSS_TIME_RE.fullmatch(text) else ""
+
+
+def _style_grid_line(value: Any) -> str:
+    text = _exact_str(value).strip()
+    return text if _CSS_GRID_LINE_RE.fullmatch(text) else ""
+
+
+def _split_top(text: str, sep: str) -> list[str]:
+    """``text`` split at each ``sep`` outside parentheses (``sep=" "``: any whitespace)."""
+    parts, depth, cur = [], 0, ""
+    for ch in text:
+        depth += ch == "("
+        depth -= ch == ")"
+        if depth == 0 and (ch.isspace() if sep == " " else ch == sep):
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return [p.strip() for p in parts + [cur] if p.strip()]
+
+
+def _style_track(text: str) -> bool:
+    """One grid track: what :func:`safe_css_length` accepts, or ``minmax(<that>, <that>)``."""
+    if text.lower().startswith("minmax(") and text.endswith(")"):
+        args = _split_top(text[7:-1], ",")
+        return len(args) == 2 and all(_style_track(a) for a in args)
+    return bool(safe_css_length(text, ""))
+
+
+def _style_grid_tracks(value: Any) -> str:
+    """``repeat(<n>, <track>)``, or tracks separated by spaces (``grid-template-columns``,
+    ``grid-auto-rows``)."""
+    text = _exact_str(value).strip()
+    if not text or len(text) > _CSS_MAX_VALUE_LEN:
+        return ""
+    if text.lower().startswith("repeat(") and text.endswith(")"):
+        args = _split_top(text[7:-1], ",")
+        ok = len(args) == 2 and args[0].isdigit() and _style_track(args[1])
+        return text if ok else ""
+    tracks = _split_top(text, " ")
+    return text if tracks and all(_style_track(t) for t in tracks) else ""
+
+
+#: Every CSS property ``style_attrs`` writes and ``54-dj-style.js`` applies, with the check its
+#: value passes. The client applies exactly these names (its own copy of the list, pinned equal by
+#: ``python/djust/tests/test_csp_free_form_styles_3979.py``); any other ``data-dj-style-*`` is
+#: ignored.
+STYLE_PROPERTIES: dict[str, Any] = {
+    **{
+        name: _style_length
+        for name in (
+            "width",
+            "min-width",
+            "max-width",
+            "height",
+            "min-height",
+            "max-height",
+            "top",
+            "left",
+            "inset",
+            "margin",
+            "margin-right",
+            "padding-left",
+            "gap",
+            "font-size",
+            "--dj-masonry-gap",
+        )
+    },
+    "background-color": _style_color,
+    "color": _style_color,
+    "border-top-color": _style_color,
+    "--dj-calendar-event-color": _style_color,
+    "--dj-collab-sel-color": _style_color,
+    "z-index": _style_integer,
+    "-webkit-line-clamp": _style_integer,
+    "--dj-masonry-columns": _style_integer,
+    "--dj-data-card-grid-cols": _style_integer,
+    "flex": _style_number,
+    "aspect-ratio": _style_ratio,
+    "animation-delay": _style_time,
+    "grid-column": _style_grid_line,
+    "grid-row": _style_grid_line,
+    "grid-template-columns": _style_grid_tracks,
+    "grid-auto-rows": _style_grid_tracks,
+    "position": _style_keyword("static", "relative", "absolute", "fixed", "sticky"),
+    "display": _style_keyword("grid", "-webkit-box"),
+    "overflow": _style_keyword("auto", "hidden", "scroll", "visible", "clip"),
+    "overflow-y": _style_keyword("auto", "hidden", "scroll", "visible", "clip"),
+    "-webkit-box-orient": _style_keyword("vertical", "horizontal"),
+    "font-weight": _style_keyword("bold", "normal"),
+}
+
+_STYLE_WARNED: set[str] = set()
+
+
+def style_attrs(props: Any = None, /, **kwargs: Any) -> str:
+    """``data-dj-style-*`` attributes for free-form style values, for a strict CSP (#3979).
+
+    ``style_attrs({"min-width": w})`` or ``style_attrs(width=w, min_height=h)`` (an underscore
+    in a keyword is a hyphen) returns ``' data-dj-style-width="240px" ...'`` (a leading space,
+    escaped, ready to follow a tag name or another attribute), or ``""``. The client module
+    ``54-dj-style.js`` sets each one with ``element.style.setProperty``, so a page whose CSP has
+    no ``'unsafe-inline'`` in ``style-src`` still draws it.
+
+    Each value is checked by its property's kind (:data:`STYLE_PROPERTIES`): a length
+    (:func:`safe_css_length`: a number with a unit or ``%``, a keyword, ``var()``,
+    ``calc()``...), a colour (:func:`safe_css_color`), an integer, a ratio, a time, a grid line
+    or track list, or a keyword from a fixed set. ``None`` and ``""`` write nothing. A value that
+    fails its check is dropped, never written, with one warning per property per process. A
+    marked-safe value is judged as the plain text it prints. A property outside the table is a
+    programming error and raises ``ValueError``.
+    """
+    items: list[tuple[str, Any]] = list(dict(props or {}).items())
+    items += [(key.replace("_", "-"), value) for key, value in kwargs.items()]
+    parts: list[str] = []
+    for prop, value in items:
+        text = style_value(prop, value)
+        if text:
+            parts.append(f' {_STYLE_ATTR_PREFIX}{prop}="{escape(text)}"')
+    return "".join(parts)
+
+
+def style_value(prop: str, value: Any) -> str:
+    """The check :func:`style_attrs` makes, for one property: ``value`` as the plain text to
+    write into ``data-dj-style-<prop>``, or ``""`` (nothing to write).
+
+    For a template that writes the attribute itself (``data-dj-style-height="{{ h }}"``): hand
+    it the value this returns, so it is checked by the same rule (#3979). ``None`` and ``""``
+    return ``""``; a value that fails is dropped with one warning per property; a property
+    outside :data:`STYLE_PROPERTIES` raises ``ValueError``.
+    """
+    check = STYLE_PROPERTIES.get(prop)
+    if check is None:
+        raise ValueError(f"style_attrs: {prop!r} is not in STYLE_PROPERTIES")
+    if value is None or isinstance(value, bool) or _exact_str(value).strip() == "":
+        return ""
+    text: str = check(value)
+    if not text and prop not in _STYLE_WARNED:
+        _STYLE_WARNED.add(prop)
+        logger.warning(
+            "Dropped a %s value that is not a plain CSS value (#3979); "
+            "further invalid %s values are dropped silently",
+            prop,
+            prop,
+        )
+    return text
 
 
 # ---------------------------------------------------------------------------

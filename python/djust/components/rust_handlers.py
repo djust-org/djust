@@ -53,14 +53,12 @@ def _safe(html: str) -> str:
 
 
 from djust.components.utils import (
-    safe_css_color,
-    safe_css_length,
     format_cell as _format_cell_util,
     interpolate_color_gradient,
     url_attr,
     data_url_attr,
 )
-from djust.components.utils import attr_text
+from djust.components.utils import attr_text, style_attrs
 from djust.template_tags import TYPED_ARGS_KEY
 
 
@@ -1049,9 +1047,8 @@ class DataTableHandler:
             elif frozen_right > 0 and col_idx >= (num_cols - frozen_right):
                 frozen_cls = " data-table-frozen-right"
 
-            # Width style
-            width = safe_css_length(width, "") if width else ""
-            width_attr = f' style="width:{conditional_escape(width)}"' if width else ""
+            # The width, applied by the client: a `style=` is refused by a strict CSP (#3979).
+            width_attr = style_attrs(width=width)
 
             # Resize / reorder attributes
             extra_attrs = ""
@@ -1432,12 +1429,7 @@ class DataTableHandler:
                             cf_colors = cf_preset.get("colors", ["#ff0000", "#00ff00"])
                             cf_color = _interpolate_color_simple(cf_colors, cf_ratio)
                             td_classes.append("data-table-cf-color-scale")
-                            cf_color = safe_css_color(cf_color, "")
-                            cf_html = (
-                                f' style="background-color:{conditional_escape(cf_color)}"'
-                                if cf_color
-                                else ""
-                            )
+                            cf_html = style_attrs(background_color=cf_color)
                         elif cf_type == "icon_set":
                             cf_icons = cf_preset.get("icons", ["\u25bc", "\u25b6", "\u25b2"])
                             cf_thresholds = cf_preset.get("thresholds", [])
@@ -1490,12 +1482,12 @@ class DataTableHandler:
                     cell_val = f"{cell_val}{cf_html}"
                 elif cf_html and "data-table-cf-icon-set" in " ".join(td_classes):
                     cell_val = f"{cf_html}{cell_val}"
-                # color_scale cf_html is a style attr, handled below
+                # color_scale cf_html is a `data-dj-style-*` attr, handled below
 
                 # color_scale extra style
                 extra_style = ""
                 if cf_html and "data-table-cf-color-scale" in " ".join(td_classes):
-                    extra_style = cf_html  # this is the style="..." attr
+                    extra_style = cf_html  # the `data-dj-style-background-color` attr
 
                 # Editable cell (inline editing)
                 is_col_editable = col_k_str in editable_col_set

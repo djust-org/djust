@@ -202,7 +202,7 @@ def test_plain_values_render_unchanged() -> None:
         Spinner(size="lg", variant="primary")
     )
     assert 'title="Agent is up"' in _render(StatusDot("running", tooltip="Agent is up"))
-    assert 'style="width:30%"' in _render(SplitPane(initial=30))
+    assert 'data-dj-style-width="30%"' in _render(SplitPane(initial=30))
     assert '<div class="popover-content">plain words</div>' in _render(
         Popover(content="plain words")
     )
@@ -212,9 +212,9 @@ def test_plain_values_render_unchanged() -> None:
 
 
 def test_split_pane_initial_is_a_number() -> None:
-    """``initial`` is written into a style attribute, so a value that is not a
-    number is replaced by the default instead of being escaped."""
+    """``initial`` is written into a ``data-dj-style-width`` attribute, so a value that
+    is not a number is replaced by the default instead of being escaped."""
     out = _render(SplitPane(initial=ATTR))
     assert ATTR not in out
     assert "x&quot;" not in out
-    assert "width:50%" in out
+    assert 'data-dj-style-width="50%"' in out

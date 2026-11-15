@@ -444,6 +444,55 @@ attribute, so apps can switch to strict nonce-based CSP.
 - **User-generated inline content** (e.g. rich-text editors that allow
   `style=` attributes) is application responsibility, not framework.
 
+### Free-form style values (`data-dj-style-*`)
+
+A nonce covers a `<style>` element, never a `style="..."` attribute: a
+`style-src` (or `style-src-attr`) without `'unsafe-inline'` refuses every
+inline style attribute. Where a component draws a bounded value it uses a
+class (`dj-progress-w-0` … `-100`, `gauge--sm`). Where the value is free-form
+(a column width, a user's colour, an item height, a grid placement) the
+component writes it as a data attribute instead:
+
+```html
+<th data-dj-style-width="240px" data-dj-style-min-width="240px">Name</th>
+```
+
+and the client bundle (`54-dj-style.js`) applies it with
+`element.style.setProperty(...)`. That is the CSSOM, which a strict policy
+allows, and `setProperty` sets one property: a value cannot add a second
+declaration. The client keeps the values in step with every patch, morph,
+navigation and lazily mounted child, and removes a property when its
+attribute goes away. It applies only the properties in its allowlist (the
+same list as `djust.components.utils.STYLE_PROPERTIES`); any other
+`data-dj-style-*` is ignored.
+
+The server checks every value before it writes it, with one helper,
+`djust.components.utils.style_attrs` (its check for a single value is
+`style_value`): a length is a number with a unit or a percentage (or a
+keyword, `var()`, `calc()`); a colour is hex, `rgb()`/`hsl()`, a named colour
+or `var(--token)`; nothing with `url(`, `expression`, `;`, `}` or a quote is
+ever written. A value that fails is dropped, with one warning per property.
+Use the same helper in your own components:
+
+```python
+from djust.components.utils import style_attrs
+
+html = f'<div class="bar"{style_attrs(width=width, background_color=colour)}></div>'
+```
+
+The rules a few components used to put in an inline `<style>` block (the
+`{% djust_skeleton %}` shimmer, the Tailwind progress bar's `shimmer`
+keyframes) are added the same way, through a constructed stylesheet, when an
+element asks for them with `data-dj-css="skeleton"` / `"shimmer"`.
+
+These values need the client: with JavaScript disabled the element keeps the
+size and colour its stylesheet gives it (a column sizes to its content, a
+custom colour falls back to the theme's), and nothing breaks. Values that
+matter before the client runs and have a small, fixed range stay classes.
+A few constant inline styles are still written (a hidden trigger button's
+`display:none`, a clickable row's `cursor:pointer`, the Bootstrap navbar's
+`display:flex !important`); they carry no caller's value.
+
 ## Reporting Vulnerabilities
 
 If you discover a security issue in djust:

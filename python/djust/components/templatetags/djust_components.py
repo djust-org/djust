@@ -42,8 +42,8 @@ from djust.components.utils import (
 from djust.components.utils import (
     safe_css_color,
     safe_css_length,
-    safe_css_number,
-    safe_css_ratio,
+    style_attrs,
+    style_value,
 )
 from djust.components.components.dashboard_grid import clamp_cells, clamp_columns
 from djust.components.utils import _exact_str
@@ -793,7 +793,7 @@ def do_card(parser: Any, token: Any) -> template.Node:
 def _checked_column_widths(columns: Any) -> Any:
     """Columns with any ``width`` that is not a plain CSS length cleared.
 
-    ``table.html`` writes ``col.width`` into a style attribute."""
+    ``table.html`` writes ``col.width`` into a ``data-dj-style-width`` attribute (#3979)."""
     if not isinstance(columns, (list, tuple)):
         return columns
     checked = []
@@ -806,15 +806,17 @@ def _checked_column_widths(columns: Any) -> Any:
 
 @register.filter
 def table_width(value: Any) -> Any:
-    """``col.width`` as a CSS length for ``style="width:..."``, or ``""``.
+    """``col.width`` as a CSS length for ``data-dj-style-width="..."``, or ``""``.
 
     Checked HERE, in the template, so it holds whatever the columns are (a list of dicts, of
     objects, any other iterable) and whatever the width is marked as: the value is judged as the
-    plain text it prints (``safe_css_length``) and escaped, so a marked-safe width cannot leave
-    the attribute (#3894). ``_checked_column_widths`` only reaches dicts in a list or tuple."""
+    plain text it prints (:func:`~djust.components.utils.style_value`, the check every
+    ``data-dj-style-*`` passes) and escaped, so a marked-safe width cannot leave the attribute
+    (#3894). The client applies it; a ``style=`` attribute is refused by a strict CSP (#3979).
+    ``_checked_column_widths`` only reaches dicts in a list or tuple."""
     if not value:
         return ""
-    return mark_safe(conditional_escape(safe_css_length(str(value), "")))
+    return mark_safe(conditional_escape(style_value("width", str(value))))
 
 
 @register.filter
@@ -3277,8 +3279,8 @@ def tree_view(
             )
 
         return (
-            f'<div class="tree-node{sel_cls}{exp_cls}{has_cls}" '
-            f'style="padding-left:{indent}rem">'
+            f'<div class="tree-node{sel_cls}{exp_cls}{has_cls}"'
+            f"{style_attrs(padding_left=f'{indent}rem')}>"
             f'<div class="tree-node-row">'
             f"{toggle_html}"
             f'<button class="tree-node-label" dj-click="{e_select}" data-value="{nid}">'
@@ -3325,8 +3327,9 @@ def color_picker(
         e_sw = conditional_escape(safe_css_color(sw, "transparent"))
         active_cls = " color-swatch-active" if sw == value else ""
         swatch_html += (
-            f'<button class="color-swatch{active_cls}" '
-            f'style="background:{e_sw}" title="{e_sw}" '
+            f'<button class="color-swatch{active_cls}"'
+            f"{style_attrs(background_color=style_value('background-color', sw) or 'transparent')}"
+            f' title="{e_sw}" '
             f'dj-click="{e_event}" data-value="{e_sw}"></button>'
         )
 
@@ -3334,7 +3337,7 @@ def color_picker(
         f'<div class="form-group">'
         f"{label_html}"
         f'<div class="color-picker">'
-        f'<div class="color-preview" style="background:{conditional_escape(safe_css_color(value, "transparent"))}"></div>'
+        f'<div class="color-preview"{style_attrs(background_color=style_value("background-color", value) or "transparent")}></div>'
         f'<div class="color-swatches">{swatch_html}</div>'
         f'<input class="color-hex-input form-input" type="text" '
         f'name="{e_name}" value="{e_value}" placeholder="#000000" '
@@ -3704,22 +3707,23 @@ class SplitPaneNode(template.Node):
         id_attr = f' id="{conditional_escape(uid)}"' if uid else ""
 
         e_dir = conditional_escape(direction)
-        e_init = conditional_escape(safe_css_number(initial, "50"))
 
         content1 = self.pane1.render(context)
         content2 = self.pane2.render(context)
 
         size_prop = "width" if direction == "horizontal" else "height"
+        # ``initial`` is a percentage number; anything else is the default half.
+        pane1 = style_value(size_prop, f"{_exact_str(initial).strip()}%") or "50%"
         orientation = "vertical" if direction == "horizontal" else "horizontal"
 
         # Dragging the handle is the client bundle's delegated ``.sp-handle``
         # behaviour (pane 1 between 10% and 90%); no inline script.
         return mark_safe(
             f'<div class="split-pane split-pane-{e_dir}"{id_attr}>'
-            f'<div class="sp-pane sp-pane-1" style="{size_prop}:{e_init}%">{content1}</div>'
+            f'<div class="sp-pane sp-pane-1"{style_attrs({size_prop: pane1})}>{content1}</div>'
             f'<div class="sp-handle sp-handle-{e_dir}" role="separator" '
             f'aria-orientation="{orientation}"></div>'
-            f'<div class="sp-pane sp-pane-2" style="flex:1">{content2}</div>'
+            f'<div class="sp-pane sp-pane-2"{style_attrs(flex="1")}>{content2}</div>'
             f"</div>"
         )
 
@@ -3757,8 +3761,8 @@ def table_of_contents(
         active_cls = " toc-item-active" if str(item.get("id", "")) == active else ""
         event_attr = f' dj-click="{e_event}" data-value="{iid}"' if e_event else ""
         return (
-            f'<a href="#{iid}" class="toc-item toc-level-{level}{active_cls}" '
-            f'style="padding-left:{indent + 0.75}rem"{event_attr}>{lbl}</a>'
+            f'<a href="#{iid}" class="toc-item toc-level-{level}{active_cls}"'
+            f"{style_attrs(padding_left=f'{indent + 0.75}rem')}{event_attr}>{lbl}</a>"
         )
 
     items_html = "".join(render_item(i) for i in items)
@@ -3809,14 +3813,14 @@ def virtual_list(
             sub = conditional_escape(str(item.get("sub", item.get("subtitle", ""))))
             sub_html = f'<span class="vl-item-sub">{sub}</span>' if sub else ""
             rows += (
-                f'<div class="vl-item" style="height:{item_height}px">'
+                f'<div class="vl-item"{style_attrs(height=f"{item_height}px")}>'
                 f'<span class="vl-item-label">{label}</span>'
                 f"{sub_html}"
                 f"</div>"
             )
         else:
             rows += (
-                f'<div class="vl-item" style="height:{item_height}px">'
+                f'<div class="vl-item"{style_attrs(height=f"{item_height}px")}>'
                 f'<span class="vl-item-label">{conditional_escape(str(item))}</span>'
                 f"</div>"
             )
@@ -3913,7 +3917,8 @@ def kanban_board(
             ``warning``, ``destructive``, ``info``, ``muted``), written as the
             class ``kanban-col--<name>`` (no ``style`` attribute, so a strict
             CSP ``style-src-attr 'none'`` keeps it), or any CSS colour, written
-            as an inline ``style`` (refused by such a CSP). No ``color`` means
+            as ``data-dj-style-border-top-color`` and applied by the client
+            (allowed by such a CSP too, #3979). No ``color`` means
             no colour of the column's own (#4120). A card's ``href`` makes its
             title a link. A card's ``targets`` lists the column ids it may move
             to (``data-targets``): the client offers a drop and a keyboard move
@@ -3953,17 +3958,15 @@ def kanban_board(
         col_id = attr_text(col.get("id", ""))  # only in dj-key= / data-* (#3904)
         _warn_spaced_column_id(col.get("id", ""))
         col_title = conditional_escape(str(col.get("title", "")))
-        # No style attribute unless the column asks for a custom CSS colour:
-        # a theme name is a class (#4120).
+        # A theme name is a class (#4120); a custom CSS colour is a `data-dj-style-*` the
+        # client applies, never a `style=` a strict CSP refuses (#3979).
         color = col.get("color")
         header_class = "kanban-col-header"
         header_style = ""
         if isinstance(color, str) and color in KANBAN_COLUMN_COLORS:
             header_class += " kanban-col--" + attr_text(color)
         elif color not in (None, ""):
-            custom = safe_css_color(color, "")
-            if custom:
-                header_style = f' style="border-top-color:{conditional_escape(custom)}"'
+            header_style = style_attrs(border_top_color=color)
         cards = col.get("cards", [])
 
         cards_html = ""
@@ -4080,7 +4083,6 @@ def rich_text_editor(
     e_value = rich_html(value)
     e_event = conditional_escape(event)
     e_placeholder = conditional_escape(placeholder)
-    e_height = conditional_escape(safe_css_length(height, "200px"))
     e_label = conditional_escape(label)
 
     e_uid = conditional_escape(f"rte-{name}")
@@ -4126,8 +4128,8 @@ def rich_text_editor(
         f'<div class="rte" id="{e_uid}">'
         f'<div class="rte-toolbar">{toolbar_html}</div>'
         f'<div class="rte-editor" id="{e_uid}-editor" '
-        f'contenteditable="true" '
-        f'style="min-height:{e_height}" '
+        f'contenteditable="true"'
+        f"{style_attrs(min_height=style_value('min-height', height) or '200px')} "
         f'data-placeholder="{e_placeholder}" '
         f'role="textbox" aria-multiline="true" '
         f'dj-input="{e_event}">'
@@ -4908,7 +4910,6 @@ class ScrollAreaNode(template.Node):
         custom_class = kw.get("custom_class", "")
         label = kw.get("label", "Scrollable content")
 
-        e_max_height = conditional_escape(safe_css_length(max_height, "400px"))
         e_custom_class = conditional_escape(str(custom_class))
         e_label = conditional_escape(str(label))
 
@@ -4919,9 +4920,8 @@ class ScrollAreaNode(template.Node):
             cls += f" {e_custom_class}"
 
         return mark_safe(
-            f'<div class="{cls}" role="region" aria-label="{e_label}" tabindex="0" '
-            f'style="--dj-scroll-area-max-height: {e_max_height}; '
-            f'max-height: var(--dj-scroll-area-max-height); overflow-y: auto;">'
+            f'<div class="{cls}" role="region" aria-label="{e_label}" tabindex="0"'
+            f"{style_attrs(max_height=style_value('max-height', max_height) or '400px', overflow_y='auto')}>"
             f"{content}</div>"
         )
 
@@ -5017,7 +5017,6 @@ class AspectRatioNode(template.Node):
         ratio = kw.get("ratio", "16/9")
         custom_class = kw.get("custom_class", "")
 
-        e_ratio = conditional_escape(safe_css_ratio(ratio, "16/9"))
         e_custom_class = conditional_escape(str(custom_class))
 
         content = self.nodelist.render(context)
@@ -5026,7 +5025,9 @@ class AspectRatioNode(template.Node):
         if e_custom_class:
             cls += f" {e_custom_class}"
 
-        return mark_safe(f'<div class="{cls}" style="aspect-ratio: {e_ratio};">{content}</div>')
+        return mark_safe(
+            f'<div class="{cls}"{style_attrs(aspect_ratio=style_value("aspect-ratio", ratio) or "16/9")}>{content}</div>'
+        )
 
 
 @register.tag("aspect_ratio")
@@ -5100,8 +5101,6 @@ class StickyHeaderNode(template.Node):
         z_index = kw.get("z_index", "10")
         custom_class = kw.get("custom_class", "")
 
-        e_offset = conditional_escape(safe_css_length(offset, "0"))
-        e_z_index = conditional_escape(safe_css_number(z_index, "10", integer=True))
         e_custom_class = conditional_escape(str(custom_class))
 
         content = self.nodelist.render(context)
@@ -5110,11 +5109,12 @@ class StickyHeaderNode(template.Node):
         if e_custom_class:
             cls += f" {e_custom_class}"
 
-        return mark_safe(
-            f'<div class="{cls}" style="position: sticky; top: {e_offset}; '
-            f'z-index: {e_z_index};">'
-            f"{content}</div>"
+        sticky = style_attrs(
+            position="sticky",
+            top=style_value("top", offset) or "0",
+            z_index=style_value("z-index", z_index) or "10",
         )
+        return mark_safe(f'<div class="{cls}"{sticky}>{content}</div>')
 
 
 @register.tag("sticky_header")
@@ -5292,8 +5292,8 @@ class ProgressCircleNode(template.Node):
             value_html = (
                 f'<text x="{dim / 2}" y="{dim / 2}" '
                 f'class="dj-progress-circle__value" '
-                f'text-anchor="middle" dominant-baseline="central" '
-                f'style="font-size:{fs}">'
+                f'text-anchor="middle" dominant-baseline="central"'
+                f"{style_attrs(font_size=fs)}>"
                 f"{value}%</text>"
             )
 
@@ -5787,12 +5787,7 @@ def data_grid(
         col_key = attr_text(col.get("key", ""))  # only in data-col-key= (#3904)
         col_label = conditional_escape(str(col.get("label", col.get("key", ""))))
         width = col.get("width", "")
-        width = safe_css_length(width, "") if width else ""
-        style = (
-            f' style="width:{conditional_escape(str(width))};min-width:{conditional_escape(str(width))}"'
-            if width
-            else ""
-        )
+        style = style_attrs(width=width, min_width=width)
         frozen_cls = ""
         if idx < frozen_left:
             frozen_cls = " data-grid-frozen-left"
@@ -6195,10 +6190,8 @@ def responsive_image(
         cls += f" {e_cls}"
 
     style = ""
-    aspect_ratio = safe_css_ratio(aspect_ratio, "") if aspect_ratio else ""
     if aspect_ratio:
-        e_ratio = conditional_escape(aspect_ratio)
-        style = f' style="aspect-ratio:{e_ratio}"'
+        style = style_attrs(aspect_ratio=aspect_ratio)
 
     img_attrs = [f'src="{e_src}"', f'alt="{e_alt}"']
     if lazy:
@@ -7315,14 +7308,14 @@ class AvatarGroupNode(template.Node):
             z = len(visible) - i
             if e_src:
                 avatars_html.append(
-                    f'<span class="dj-avatar-group__item" title="{e_name}" style="z-index:{z}">'
+                    f'<span class="dj-avatar-group__item" title="{e_name}"{style_attrs(z_index=z)}>'
                     f'<img src="{e_src}" alt="{e_name}" class="dj-avatar-group__img">'
                     f"</span>"
                 )
             else:
                 avatars_html.append(
                     f'<span class="dj-avatar-group__item dj-avatar-group__initials" '
-                    f'title="{e_name}" style="z-index:{z}">{initials}</span>'
+                    f'title="{e_name}"{style_attrs(z_index=z)}>{initials}</span>'
                 )
 
         overflow_html = ""
@@ -8320,8 +8313,8 @@ class PresenceAvatarsNode(template.Node):
             dot = f'<span class="dj-presence__dot dj-presence__dot--{safe_status}"></span>'
 
             parts.append(
-                f'<span class="dj-presence__item" title="{e_name}" '
-                f'style="z-index:{z}">'
+                f'<span class="dj-presence__item" title="{e_name}"'
+                f"{style_attrs(z_index=z)}>"
                 f"{avatar_inner}{dot}"
                 f"</span>"
             )
@@ -8472,9 +8465,13 @@ class ExpandableTextNode(template.Node):
             style = ""
             label = e_less
         else:
-            style = (
-                f' style="-webkit-line-clamp:{max_lines};'
-                f'display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden"'
+            style = style_attrs(
+                {
+                    "-webkit-line-clamp": max_lines,
+                    "display": "-webkit-box",
+                    "-webkit-box-orient": "vertical",
+                    "overflow": "hidden",
+                }
             )
             label = e_more
 
@@ -9766,12 +9763,11 @@ class MeterNode(template.Node):
                 pct = min(100, max(0, (val / total) * 100))
             else:
                 pct = 0
-            color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
             seg_label = attr_text(seg.get("label", ""))  # only in aria-label= (#3904)
             # The width is a class, as `{% progress %}` draws it (#3969, #3979). A
-            # segment's own colour has no class to stand for it, so it is the one
-            # thing still written as a style, and only when one is given.
-            style_attr = f' style="background:{color}"' if color else ""
+            # segment's own colour has no class to stand for it: a `data-dj-style-*`
+            # the client applies, and only when one is given (#3979).
+            style_attr = style_attrs(background_color=seg.get("color"))
             bar_parts.append(
                 f'<div class="dj-meter__segment dj-progress-w-{round(pct)}"{style_attr} '
                 f'role="meter" aria-valuenow="{int(val)}" '
@@ -9787,11 +9783,10 @@ class MeterNode(template.Node):
             for seg in segments:
                 if not isinstance(seg, dict):
                     continue
-                color = conditional_escape(safe_css_color(seg.get("color", ""), ""))
                 seg_label = conditional_escape(str(seg.get("label", "")))
                 val = conditional_escape(seg.get("value", 0))
-                # No `style` attribute at all without a colour (#3979).
-                swatch_style = f' style="background:{color}"' if color else ""
+                # No `style` attribute at all; nothing without a colour (#3979).
+                swatch_style = style_attrs(background_color=seg.get("color"))
                 legend_items.append(
                     f'<div class="dj-meter__legend-item">'
                     f'<span class="dj-meter__legend-swatch"{swatch_style}></span>'
@@ -10264,11 +10259,14 @@ class SortableGridNode(template.Node):
             )
 
         disabled_attr = ' data-disabled="true"' if disabled else ""
-        style = f'style="grid-template-columns:repeat({cols},1fr);gap:{e_gap}"'
+        style = style_attrs(
+            grid_template_columns=f"repeat({cols},1fr)",
+            gap=style_value("gap", kw.get("gap", "0.75rem")) or "0.75rem",
+        )
 
         return mark_safe(
             f'<div class="{class_str}" dj-hook="SortableGrid" '
-            f'data-move-event="{e_event}" data-columns="{cols}" '
+            f'data-move-event="{e_event}" data-columns="{cols}"'
             f'{style} role="grid"{disabled_attr}>{"".join(items_html)}</div>'
         )
 
@@ -10470,15 +10468,17 @@ class ResizablePanelNode(template.Node):
 
         e_min = conditional_escape(safe_css_length(min_size, "100px"))
         e_max = conditional_escape(safe_css_length(max_size, "none"))
-        e_initial = conditional_escape(safe_css_length(initial_size, "50%"))
 
         content = self.nodelist.render(context)
 
         size_prop = "width" if direction == "horizontal" else "height"
-        style_parts = [f"{size_prop}:{e_initial}", f"min-{size_prop}:{e_min}"]
+        extent = {
+            size_prop: style_value(size_prop, initial_size) or "50%",
+            f"min-{size_prop}": style_value(f"min-{size_prop}", min_size) or "100px",
+        }
         if e_max != "none":
-            style_parts.append(f"max-{size_prop}:{e_max}")
-        style = f'style="{";".join(style_parts)}"'
+            extent[f"max-{size_prop}"] = style_value(f"max-{size_prop}", max_size)
+        style = style_attrs(extent)
 
         disabled_attr = ' data-disabled="true"' if disabled else ""
         event_attr = (
@@ -10488,7 +10488,7 @@ class ResizablePanelNode(template.Node):
         return mark_safe(
             f'<div class="{class_str}" dj-hook="ResizablePanel" '
             f'data-direction="{direction}" '
-            f'data-min-size="{e_min}" data-max-size="{e_max}"{event_attr} '
+            f'data-min-size="{e_min}" data-max-size="{e_max}"{event_attr}'
             f"{style}{disabled_attr}>"
             f'<div class="dj-resizable-panel__content">{content}</div>'
             f'<div class="dj-resizable-panel__handle" role="separator" '
@@ -10634,7 +10634,6 @@ class DashboardGridNode(template.Node):
         e_move = conditional_escape(str(move_event))
         e_resize = conditional_escape(str(resize_event))
         e_gap = conditional_escape(str(gap))
-        e_row_height = conditional_escape(safe_css_length(row_height, "200px"))
         e_class = conditional_escape(str(custom_class))
 
         classes = ["dj-dashboard-grid"]
@@ -10671,11 +10670,11 @@ class DashboardGridNode(template.Node):
                 cols, _whole("col"), _whole("row"), _whole("width"), _whole("height")
             )
 
-            style = f"grid-column:{col}/span {w};grid-row:{row}/span {h}"
+            cell = style_attrs(grid_column=f"{col}/span {w}", grid_row=f"{row}/span {h}")
 
             panels_html.append(
-                f'<div class="dj-dashboard-grid__panel" data-panel-id="{pid}" '
-                f'style="{style}" draggable="true">'
+                f'<div class="dj-dashboard-grid__panel" data-panel-id="{pid}"'
+                f'{cell} draggable="true">'
                 f'<div class="dj-dashboard-grid__panel-header">'
                 f'<span class="dj-dashboard-grid__panel-title">{title}</span>'
                 f'<span class="dj-dashboard-grid__panel-drag" aria-hidden="true">&#x2630;</span>'
@@ -10685,9 +10684,11 @@ class DashboardGridNode(template.Node):
                 f"</div>"
             )
 
-        grid_style = (
-            f'style="display:grid;grid-template-columns:repeat({cols},1fr);'
-            f'grid-auto-rows:minmax({e_row_height},auto);gap:{e_gap}"'
+        grid_style = style_attrs(
+            display="grid",
+            grid_template_columns=f"repeat({cols},1fr)",
+            grid_auto_rows=f"minmax({style_value('height', row_height) or '200px'},auto)",
+            gap=style_value("gap", kw.get("gap", "1rem")) or "1rem",
         )
 
         inner = "".join(panels_html) + child_content
@@ -10695,7 +10696,7 @@ class DashboardGridNode(template.Node):
         return mark_safe(
             f'<div class="{class_str}" dj-hook="DashboardGrid" '
             f'data-move-event="{e_move}" data-resize-event="{e_resize}" '
-            f'data-columns="{cols}" {grid_style}>{inner}</div>'
+            f'data-columns="{cols}"{grid_style}>{inner}</div>'
         )
 
 

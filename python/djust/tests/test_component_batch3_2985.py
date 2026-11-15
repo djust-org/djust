@@ -134,7 +134,7 @@ class TestTerminalMarkup:
             assert 'class="dj-terminal__title"' in html, path
             assert '<span class="dj-terminal__line-num">1</span>' in html, path
             assert '<span class="dj-terminal__text">$ ls</span>' in html, path
-            assert '<span style="color:#2ecc71">ok</span>' in html, path
+            assert '<span data-dj-style-color="#2ecc71">ok</span>' in html, path
 
     def test_the_three_render_paths_agree(self):
         paths = _terminal_paths(show_line_numbers=True, max_lines=100)

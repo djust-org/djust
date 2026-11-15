@@ -102,7 +102,8 @@ class TestCursorsOverlayMarkup:
             assert 'class="dj-cursors"' in html and 'role="group"' in html, path
             assert 'aria-label="2 cursors"' in html, path
             assert html.count('class="dj-cursors__cursor"') == 2, path
-            assert 'style="left:120px;top:340px"' in html, path  # the hook reads px from here
+            # the hook reads px from here (#3979: data attributes, not a style a strict CSP refuses)
+            assert 'data-dj-style-left="120px" data-dj-style-top="340px"' in html, path
             assert 'data-user="Alice"' in html and 'data-user="Bob"' in html, path
             assert html.count('<span class="dj-cursors__label"') == 2, path
 
@@ -153,7 +154,7 @@ class TestCollabSelectionMarkup:
             assert 'data-user="Alice" data-start="0" data-end="5"' in html, path
             assert '<span class="dj-collab-sel__highlight">Hello</span>' in html, path
             assert '<span class="dj-collab-sel__label"' in html, path
-            assert "--dj-collab-sel-color:#3b82f6" in html, path
+            assert 'data-dj-style---dj-collab-sel-color="#3b82f6"' in html, path
 
     def test_a_non_integer_offset_renders_as_zero(self):
         users = [{"name": "A", "start": "x", "end": None, "text": "t"}]
@@ -210,8 +211,12 @@ class TestDashboardGridMarkup:
             assert 'data-columns="4"' in html, path
             assert 'data-panel-id="chart"' in html and 'data-panel-id="stats"' in html, path
             # the hook reads the cells from here
-            assert 'style="grid-column:1/span 2;grid-row:1/span 1"' in html, path
-            assert 'style="grid-column:3/span 1;grid-row:1/span 2"' in html, path
+            assert (
+                'data-dj-style-grid-column="1/span 2" data-dj-style-grid-row="1/span 1"' in html
+            ), path
+            assert (
+                'data-dj-style-grid-column="3/span 1" data-dj-style-grid-row="1/span 2"' in html
+            ), path
             for cls in (
                 "dj-dashboard-grid__panel-header",
                 "dj-dashboard-grid__panel-title",
@@ -245,7 +250,7 @@ class TestDashboardGridMarkup:
         panels = [{"id": "p", "title": "t", "col": "x", "row": None, "width": "y", "height": 0.5}]
         html = _tag("{% dashboard_grid panels=panels %}{% enddashboard_grid %}", panels=panels)
         # a height of 0.5 used to render ``span 0`` (not a placement at all); it is one cell now
-        assert 'style="grid-column:1/span 1;grid-row:1/span 1"' in html
+        assert 'data-dj-style-grid-column="1/span 1" data-dj-style-grid-row="1/span 1"' in html
 
 
 class TestDashboardGridBounds:
@@ -264,33 +269,39 @@ class TestDashboardGridBounds:
     def test_rows_and_heights_are_capped_on_every_path(self):
         panels = [{"id": "p", "col": 1, "row": 10**9, "width": 1, "height": 10**9}]
         for path, html in self._render_all(panels).items():
-            assert "grid-row:100/span 1" in html, path
+            assert 'data-dj-style-grid-row="100/span 1"' in html, path
         panels = [{"id": "p", "col": 1, "row": 3, "width": 1, "height": 10**9}]
         for path, html in self._render_all(panels).items():
-            assert "grid-row:3/span 98" in html, path  # rows 3..100
+            assert 'data-dj-style-grid-row="3/span 98"' in html, path  # rows 3..100
 
     def test_columns_are_capped_and_a_panel_stays_inside_them(self):
         for path, html in self._render_all(
             [{"id": "p", "col": 10**9, "row": 1, "width": 10**9, "height": 1}], columns=10**9
         ).items():
             assert 'data-columns="48"' in html and "repeat(48,1fr)" in html, path
-            assert "grid-column:48/span 1" in html, path
+            assert 'data-dj-style-grid-column="48/span 1"' in html, path
         for path, html in self._render_all(
             [{"id": "p", "col": 3, "row": 1, "width": 9, "height": 1}], columns=4
         ).items():
-            assert "grid-column:3/span 2" in html, path
+            assert 'data-dj-style-grid-column="3/span 2"' in html, path
 
     def test_zero_and_negative_numbers_are_one(self):
         for path, html in self._render_all(
             [{"id": "p", "col": 0, "row": -4, "width": 0, "height": -1}], columns=0
         ).items():
             assert 'data-columns="1"' in html, path
-            assert 'style="grid-column:1/span 1;grid-row:1/span 1"' in html, path
+            assert (
+                'data-dj-style-grid-column="1/span 1" data-dj-style-grid-row="1/span 1"' in html
+            ), path
 
     def test_in_range_values_are_untouched(self):
         for path, html in _dashboard_paths().items():
-            assert 'style="grid-column:1/span 2;grid-row:1/span 1"' in html, path
-            assert 'style="grid-column:3/span 1;grid-row:1/span 2"' in html, path
+            assert (
+                'data-dj-style-grid-column="1/span 2" data-dj-style-grid-row="1/span 1"' in html
+            ), path
+            assert (
+                'data-dj-style-grid-column="3/span 1" data-dj-style-grid-row="1/span 2"' in html
+            ), path
 
     def test_the_helper_the_docstring_handlers_use_clamps_every_field(self):
         from djust.components.components.dashboard_grid import MAX_COLUMNS, MAX_ROWS, clamp_cells

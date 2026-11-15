@@ -69,7 +69,7 @@ djust/
 │   ├── templatetags/       # Django template tags
 │   ├── tenants/            # Multi-tenant support
 │   ├── backends/           # Presence backends (memory, redis)
-│   └── static/djust/       # Client JS — shipped client.min.js.gz is ~83 KB
+│   └── static/djust/       # Client JS — shipped client.min.js.gz is ~87 KB
 ├── crates/
 │   ├── djust_live/         # PyO3 bindings — the entry point
 │   │                       #   (pyproject `manifest-path`; module `djust._rust`)

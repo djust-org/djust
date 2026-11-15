@@ -7,7 +7,7 @@ Similar to shadcn/ui components - framework-agnostic with customizable styles.
 
 from typing import Dict, Any, Optional
 from ..base import LiveComponent
-from ..utils import data_url_attr, attr_text
+from ..utils import data_url_attr, attr_text, style_attrs
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 from ...config import config
@@ -133,8 +133,11 @@ class NavbarComponent(LiveComponent):
         logo_html = ""
         if self.brand_logo:
             alt_text = self.brand_name or "Logo"
-            margin_style = " margin-right: 0.5rem;" if self.brand_name else ""
-            logo_html = f'<img src="{data_url_attr(self.brand_logo, image=True)}" alt="{attr_text(alt_text)}" height="{attr_text(self.logo_height)}" style="width: auto;{margin_style}">'
+            # Applied by the client, not a `style=` a strict CSP refuses (#3979).
+            logo_style = style_attrs(
+                width="auto", margin_right="0.5rem" if self.brand_name else None
+            )
+            logo_html = f'<img src="{data_url_attr(self.brand_logo, image=True)}" alt="{attr_text(alt_text)}" height="{attr_text(self.logo_height)}"{logo_style}>'
 
         # Navigation items
         nav_items_html = ""

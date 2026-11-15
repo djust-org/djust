@@ -34,7 +34,7 @@ Template usage:
     <div class="presence-bar">
       {{ presence_count }} users online
       {% for p in presences %}
-        <span class="avatar" style="background: {{ p.meta.color }}">{{ p.meta.name.0 }}</span>
+        <span class="avatar" data-dj-style-background-color="{{ p.meta.color }}">{{ p.meta.name.0 }}</span>
       {% endfor %}
     </div>
 

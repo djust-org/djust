@@ -12,6 +12,8 @@ from ...decorators import event_handler
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
+from ..utils import style_attrs
+
 
 class ForeignKeySelect(LiveComponent):
     """
@@ -537,7 +539,10 @@ class ManyToManySelect(LiveComponent):
         if self.searchable:
             html += f'<input type="text" class="form-control form-control-sm mb-2" placeholder="Search..." value="{conditional_escape(self.search_query)}" dj-input="search(value)" data-component-id="{conditional_escape(self.component_id)}">'
 
-        html += '<div class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">'
+        # Applied by the client, not a `style=` a strict CSP refuses (#3979).
+        html += (
+            f'<div class="border rounded p-2"{style_attrs(max_height="200px", overflow_y="auto")}>'
+        )
 
         for opt in options:
             checked = "checked" if opt["selected"] else ""

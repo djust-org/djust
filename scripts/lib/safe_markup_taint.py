@@ -241,7 +241,15 @@ CALENDAR_DIGIT_METHODS = frozenset(
 #: Origins (in the project) whose result is clean for ANY argument; each is pinned by a
 #: hostile-payload test in ``python/tests/test_safe_markup_guard_3820.py`` (#3847).
 #: ``interpolate_color`` returns ``f"#{r:02x}{g:02x}{b:02x}"`` of ``int()``s, or raises.
-CLEAN_PROJECT_ORIGINS = frozenset({"djust.components.utils.interpolate_color"})
+#: ``style_attrs`` returns `` data-dj-style-<name>="<value>"`` pairs: each name is a key of the
+#: fixed ``STYLE_PROPERTIES`` table (any other raises), each value passed its property's check and
+#: is ``django.utils.html.escape``d (#3979).
+CLEAN_PROJECT_ORIGINS = frozenset(
+    {
+        "djust.components.utils.interpolate_color",
+        "djust.components.utils.style_attrs",
+    }
+)
 #: Escapers with a ``quote`` switch (and its position): only clean when it is left on.
 QUOTE_ESCAPERS = {"html.escape": 1}
 #: Calls that apply their FIRST argument to the rest: ``map(mark_safe, items)``,

@@ -5,6 +5,7 @@ from django.utils.html import conditional_escape
 from typing import Any, Optional
 
 from djust import Component
+from djust.components.utils import style_attrs
 
 
 class MasonryGrid(Component):
@@ -102,6 +103,8 @@ class MasonryGrid(Component):
                 item_cards.append(f'<div class="dj-masonry__item{extra}">{content}</div>')
             col_html.append(f'<div class="dj-masonry__col">{"".join(item_cards)}</div>')
 
-        style = f"--dj-masonry-columns: {self.columns}; --dj-masonry-gap: {self.gap}px"
+        style = style_attrs(
+            {"--dj-masonry-columns": self.columns, "--dj-masonry-gap": f"{self.gap}px"}
+        )
 
-        return f'<div class="{class_str}" style="{style}" role="list">{"".join(col_html)}</div>'
+        return f'<div class="{class_str}"{style} role="list">{"".join(col_html)}</div>'

@@ -50,7 +50,8 @@ def _terminal_converters():
 
 
 def _reference_ansi_to_html(text: str) -> str:
-    """The conversion as it was before the caps (one span per style, no limit)."""
+    """The conversion as it was before the caps (one span per style, no limit), its styles
+    written as ``data-dj-style-*`` since #3979."""
     import html as _html
 
     colors = {
@@ -71,10 +72,10 @@ def _reference_ansi_to_html(text: str) -> str:
                 result.append("</span>" * open_spans)
                 open_spans = 0
             elif code == "1":
-                result.append('<span style="font-weight:bold">')
+                result.append('<span data-dj-style-font-weight="bold">')
                 open_spans += 1
             elif code in colors:
-                result.append(f'<span style="color:{colors[code]}">')
+                result.append(f'<span data-dj-style-color="{colors[code]}">')
                 open_spans += 1
     result.append(_html.escape(text[last_end:]))
     result.append("</span>" * open_spans)
@@ -141,8 +142,8 @@ def test_a_reset_closes_the_spans_and_styles_work_again():
     cap = convert.__self__.MAX_OPEN_SPANS
     line = "\x1b[1m" * (cap + 10) + "a\x1b[0m\x1b[31mb\x1b[0m"
     out = convert(line)
-    assert out.count('<span style="font-weight:bold">') == cap
-    assert out.endswith('<span style="color:#e74c3c">b</span>')
+    assert out.count('<span data-dj-style-font-weight="bold">') == cap
+    assert out.endswith('<span data-dj-style-color="#e74c3c">b</span>')
 
 
 def test_the_parameter_cap_matches_the_client_hook():
@@ -168,4 +169,4 @@ def test_a_reset_past_the_parameter_cap_still_closes_the_spans():
 def test_a_run_of_resets_is_cheap_and_leaves_nothing_open():
     convert = _terminal_converters()["component"]
     out = convert("\x1b[1m\x1b[" + ";" * 100_000 + "mx")
-    assert out == '<span style="font-weight:bold"></span>x'
+    assert out == '<span data-dj-style-font-weight="bold"></span>x'

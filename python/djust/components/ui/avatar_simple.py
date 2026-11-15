@@ -33,7 +33,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-from djust.components.utils import data_url_attr, attr_text
+from djust.components.utils import data_url_attr, attr_text, style_attrs
 
 from djust._rust import RustAvatar
 
@@ -116,19 +116,15 @@ class Avatar(Component):
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 avatar"""
         # Size mapping (Bootstrap uses rem)
-        size_map = {
-            "xs": "width: 1.5rem; height: 1.5rem;",
-            "sm": "width: 2rem; height: 2rem;",
-            "md": "width: 3rem; height: 3rem;",
-            "lg": "width: 4rem; height: 4rem;",
-            "xl": "width: 6rem; height: 6rem;",
-        }
-        size_style = size_map.get(self.size, size_map["md"])
+        size_map = {"xs": "1.5rem", "sm": "2rem", "md": "3rem", "lg": "4rem", "xl": "6rem"}
+        size = size_map.get(self.size, size_map["md"])
+        # Applied by the client, not a `style=` a strict CSP refuses (#3979).
+        size_style = style_attrs(width=size, height=size)
 
         # Shape
         shape_class = "rounded-circle" if self.shape == "circle" else "rounded"
 
-        parts = [f'<div class="position-relative d-inline-block" style="{size_style}">']
+        parts = [f'<div class="position-relative d-inline-block"{size_style}>']
 
         if self.src:
             parts.append(

@@ -38,13 +38,12 @@ impl RustAvatar {
     /// Render avatar to HTML string (Bootstrap 5)
     pub fn render(&self) -> String {
         // Size mapping
-        let size_style = match self.size.as_str() {
-            "xs" => "width: 1.5rem; height: 1.5rem;",
-            "sm" => "width: 2rem; height: 2rem;",
-            "md" => "width: 3rem; height: 3rem;",
-            "lg" => "width: 4rem; height: 4rem;",
-            "xl" => "width: 6rem; height: 6rem;",
-            _ => "width: 3rem; height: 3rem;",
+        let size = match self.size.as_str() {
+            "xs" => "1.5rem",
+            "sm" => "2rem",
+            "lg" => "4rem",
+            "xl" => "6rem",
+            _ => "3rem",
         };
 
         // Shape class
@@ -54,8 +53,9 @@ impl RustAvatar {
             "rounded"
         };
 
-        let mut html =
-            format!(r#"<div class="position-relative d-inline-block" style="{size_style}">"#);
+        let mut html = format!(
+            r#"<div class="position-relative d-inline-block" data-dj-style-width="{size}" data-dj-style-height="{size}">"#
+        );
 
         // Image or initials
         if let Some(ref src) = self.src {

@@ -5,6 +5,7 @@ import html
 from djust import Component
 from typing import Any, Optional
 from djust.components.utils import safe_css_color
+from djust.components.utils import style_attrs
 
 
 class ColorPicker(Component):
@@ -68,11 +69,11 @@ class ColorPicker(Component):
         for sw in swatches:
             e_sw = html.escape(safe_css_color(sw, "transparent"))
             active_cls = " color-swatch-active" if sw == self.value else ""
-            swatch_html += f'<button class="color-swatch{active_cls}" style="background:{e_sw}" {self.event_attrs(event, value=sw)}></button>'
+            swatch_html += f'<button class="color-swatch{active_cls}"{style_attrs(background_color=e_sw)} {self.event_attrs(event, value=sw)}></button>'
         return (
             f'<div class="form-group">{label_html}'
             f'<div class="{cls}">'
-            f'<div class="color-preview" style="background:{e_preview}"></div>'
+            f'<div class="color-preview"{style_attrs(background_color=e_preview)}></div>'
             f'<div class="color-swatches">{swatch_html}</div>'
             f'<input class="color-hex-input form-input" type="text" '
             f'name="{e_name}" value="{e_value}" {self.event_attrs(event, trigger="input")}>'

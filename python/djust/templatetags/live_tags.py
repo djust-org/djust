@@ -1138,31 +1138,12 @@ def do_colocated_hook(parser: Parser, token: Token) -> "ColocatedHookNode":
     return ColocatedHookNode(name, nodelist, force_global)
 
 
-# Shimmer CSS emitted once per render. Small enough to inline; deduped via
-# ``context.render_context`` so a page that calls ``{% djust_skeleton %}`` in
-# a {% for %} loop still only writes one <style> block to the DOM.
+# The shimmer rules (a ``@keyframes`` block and the ``.djust-skeleton`` classes) used to
+# be an inline ``<style>`` block, which a ``style-src`` without 'unsafe-inline' refuses. The
+# client module ``54-dj-style.js`` now adds them through the CSSOM when it meets
+# ``data-dj-css="skeleton"`` (#3979). The marker is written once per render (deduped via
+# ``context.render_context``), as the ``<style>`` block was.
 _SKELETON_STYLE_KEY = "_djust_skeleton_style_emitted"
-_SKELETON_STYLE_BLOCK = (
-    "<style>"
-    "@keyframes djust-skeleton-shimmer{"
-    "from{background-position:200% 0}"
-    "to{background-position:-200% 0}"
-    "}"
-    ".djust-skeleton{"
-    "display:inline-block;"
-    "background:linear-gradient(90deg,#e5e7eb 25%,#f3f4f6 50%,#e5e7eb 75%);"
-    "background-size:200% 100%;"
-    "animation:djust-skeleton-shimmer 1.5s ease-in-out infinite;"
-    "border-radius:4px;"
-    "vertical-align:middle;"
-    "}"
-    ".djust-skeleton-line{display:block;margin-bottom:0.5em}"
-    ".djust-skeleton-circle{border-radius:50%}"
-    "@media (prefers-reduced-motion: reduce){"
-    ".djust-skeleton{animation:none}"
-    "}"
-    "</style>"
-)
 
 # Deterministic small width variation for stacked line skeletons: it looks
 # more like real copy than a column of identical 100 %-wide bars while
@@ -1178,23 +1159,13 @@ _SKELETON_SHAPE_DEFAULTS = {
     "rect": ("100%", "120px"),
 }
 
-# CSS length whitelist for skeleton width/height. ``build_tag`` already
-# HTML-escapes attribute values, so a value like ``100%;background:red``
-# cannot break out of the ``style="..."`` attribute — but it DOES compose
-# freely into the inline CSS, letting a caller stuff arbitrary declarations
-# into the emitted ``style=`` string. The whitelist rejects anything that
-# isn't a single CSS length literal (digits, optional decimal, optional
-# unit suffix), falling back to the shape default.
-_SKELETON_SIZE_RE = re.compile(r"^[0-9]+(?:\.[0-9]+)?(?:px|em|rem|%|vh|vw|ch)?$")
 
+def _validate_skeleton_size(value: Any, default: str, prop: str) -> str:
+    """``value`` if it passes the check every ``data-dj-style-*`` value passes
+    (:func:`djust.components.utils.style_value`), else ``default``."""
+    from djust.components.utils import style_value
 
-def _validate_skeleton_size(value: Any, default: str) -> str:
-    """Return ``value`` if it matches the CSS length whitelist, else ``default``."""
-    if value is None:
-        return default
-    if not isinstance(value, str):
-        value = str(value)
-    return value if _SKELETON_SIZE_RE.match(value) else default
+    return style_value(prop, value) or default
 
 
 @register.simple_tag(takes_context=True)
@@ -1210,8 +1181,10 @@ def djust_skeleton(
 
     Phoenix / Vercel / Shadcn-ui parity for loading placeholders. Renders
     a ``<div>`` (or several, when ``shape="line"`` and ``count > 1``) with
-    a shimmering background gradient keyed off a single inline
-    ``@keyframes`` block that is deduped via Django's ``render_context``.
+    a shimmering background gradient. The width and height are
+    ``data-dj-style-*`` attributes and the shimmer rules are added by the
+    client through the CSSOM (``data-dj-css="skeleton"``, written once per
+    render), so nothing is inline and a strict CSP allows it (#3979).
 
     All attribute values pass through :func:`._html.build_tag`, which
     HTML-escapes every value, so caller-controlled ``width`` / ``height`` /
@@ -1232,9 +1205,8 @@ def djust_skeleton(
             ``djust-skeleton djust-skeleton-<shape>`` classes.
 
     Returns:
-        Marked-safe HTML string containing the skeleton block(s) plus
-        (on the first call within a single render) the shimmer
-        ``<style>`` block.
+        Marked-safe HTML string containing the skeleton block(s); the first
+        call within a single render also carries ``data-dj-css="skeleton"``.
 
     Examples:
         ``{% djust_skeleton %}`` — single 100 %-wide text line.
@@ -1255,26 +1227,24 @@ def djust_skeleton(
         count_int = 1
     count_int = max(1, min(100, count_int))
 
-    # Resolve per-shape default dimensions. ``width`` and ``height`` are
-    # run through a CSS-length whitelist so a caller can't smuggle extra
-    # declarations (e.g. ``100%;background:red``) into the inline
-    # ``style=`` string. Unsafe / non-matching values silently fall back
-    # to the shape default.
+    # Resolve per-shape default dimensions. ``width`` and ``height`` pass the
+    # ``data-dj-style-*`` check; a value that fails (e.g. ``100%;background:red``)
+    # falls back to the shape default.
     default_w, default_h = _SKELETON_SHAPE_DEFAULTS[shape]
-    resolved_w = _validate_skeleton_size(width, default_w)
-    resolved_h = _validate_skeleton_size(height, default_h)
+    resolved_w = _validate_skeleton_size(width, default_w, "width")
+    resolved_h = _validate_skeleton_size(height, default_h, "height")
 
     # Class string: default classes + any user-supplied class.
     base_class = f"djust-skeleton djust-skeleton-{shape}"
     css_class = f"{base_class} {class_}" if class_ else base_class
 
-    # Dedupe the shimmer <style> block across repeated invocations in the
+    # Dedupe the shimmer-rules marker across repeated invocations in the
     # same render. Django's render_context is a ChainMap-based per-render
     # scratch space and is the idiomatic home for this kind of dedupe.
-    style_prefix = ""
+    css_marker = False
     if not context.render_context.get(_SKELETON_STYLE_KEY):
         context.render_context[_SKELETON_STYLE_KEY] = True
-        style_prefix = _SKELETON_STYLE_BLOCK
+        css_marker = True
 
     blocks = []
     # ``count`` is line-only: circle / rect always render one block.
@@ -1286,22 +1256,15 @@ def djust_skeleton(
             w = _SKELETON_LINE_WIDTHS[i % len(_SKELETON_LINE_WIDTHS)]
         else:
             w = resolved_w
-        style = f"width:{w};height:{resolved_h}"
-        if shape == "circle":
-            style += ";border-radius:50%"
-        blocks.append(
-            build_tag(
-                "div",
-                {
-                    "class": css_class,
-                    "style": style,
-                    "aria-hidden": "true",
-                },
-                content="",
-                content_is_safe=True,
-            )
-        )
-    return mark_safe(style_prefix + "".join(blocks))
+        # The circle's radius is the ``.djust-skeleton-circle`` rule.
+        attrs = {"class": css_class}
+        if css_marker and i == 0:
+            attrs["data-dj-css"] = "skeleton"
+        attrs["data-dj-style-width"] = w
+        attrs["data-dj-style-height"] = resolved_h
+        attrs["aria-hidden"] = "true"
+        blocks.append(build_tag("div", attrs, content="", content_is_safe=True))
+    return mark_safe("".join(blocks))
 
 
 @register.simple_tag

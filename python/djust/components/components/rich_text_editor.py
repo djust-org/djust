@@ -6,6 +6,7 @@ from ..utils import rich_html
 from djust import Component
 from typing import Any
 from djust.components.utils import safe_css_length
+from djust.components.utils import style_attrs
 
 
 class RichTextEditor(Component):
@@ -66,8 +67,8 @@ class RichTextEditor(Component):
             f'<button class="rte-btn" type="button" title="Italic">I</button>'
             f'<button class="rte-btn" type="button" title="Underline">U</button>'
             f"</div>"
-            f'<div class="rte-editor" contenteditable="true" '
-            f'style="min-height:{e_height}" data-placeholder="{e_placeholder}" '
+            f'<div class="rte-editor" contenteditable="true"'
+            f'{style_attrs(min_height=e_height)} data-placeholder="{e_placeholder}" '
             f"{self.event_attrs(self.event, trigger='input')}>{rich_html(self.value)}</div>"
             f'<input type="hidden" name="{e_name}">'
             f"</div></div>"

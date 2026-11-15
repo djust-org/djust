@@ -5,6 +5,7 @@ from typing import Any, List, Optional, Union
 
 from djust import Component
 from djust.components.utils import safe_css_color
+from djust.components.utils import style_attrs
 
 
 class CursorsOverlay(Component):
@@ -108,12 +109,12 @@ class CursorsOverlay(Component):
             )
 
             parts.append(
-                f'<div class="dj-cursors__cursor" '
-                f'style="left:{px}px;top:{py}px" '
+                f'<div class="dj-cursors__cursor"'
+                f"{style_attrs(left=f'{px}px', top=f'{py}px')} "
                 f'data-user="{e_name}">'
                 f"{cursor_svg}"
-                f'<span class="dj-cursors__label" '
-                f'style="background:{e_color}">{e_name}</span>'
+                f'<span class="dj-cursors__label"'
+                f"{style_attrs(background_color=e_color)}>{e_name}</span>"
                 f"</div>"
             )
 

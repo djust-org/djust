@@ -1,12 +1,14 @@
-"""Colours, lengths and ratios that components write into ``style`` attributes.
+"""Colours, lengths and ratios that components write as free-form style values.
 
 A component that takes a CSS value from its caller (a user's colour in
-``CursorsOverlay``, a column width, a gap) writes it into an inline ``style``
-attribute. HTML escaping keeps the value inside the attribute but not inside
-its declaration, so each value is checked against the shapes the component
-documents (``djust.components.utils.safe_css_color`` / ``safe_css_length`` /
-``safe_css_ratio`` / ``safe_css_number``) and anything else is replaced by the
-component's default. A value that passes is written exactly as given.
+``CursorsOverlay``, a column width, a gap) writes it as a
+``data-dj-style-<property>`` attribute that the client applies through the
+CSSOM; a ``style=`` attribute is refused by a strict CSP (#3979). Each value is
+checked against the shapes the component documents
+(``djust.components.utils.safe_css_color`` / ``safe_css_length`` /
+``safe_css_ratio`` / ``safe_css_number``, through ``style_attrs``) and anything
+else is replaced by the component's default. A value that passes is written
+exactly as given.
 
 Every render path is covered: the component class, the Django template tag,
 and the Rust template engine (which renders the tag's own node, one render
@@ -140,14 +142,27 @@ def _engine(source: str, **context: Any) -> str:
 
 
 def _style_attrs(markup: str) -> list[str]:
-    return re.findall(r'style="([^"]*)"', markup)
+    """Every free-form style value written, as ``property:value`` (#3979)."""
+    return [f"{p}:{v}" for p, v in re.findall(r'data-dj-style-([a-z-]+)="([^"]*)"', markup)]
+
+
+#: Constant inline styles some components still write next to a free-form value (a hidden
+#: trigger button, a clickable row's cursor): no caller's value reaches them (#3979).
+CONSTANT_STYLES = {"display:none", "cursor:pointer"}
+
+
+def _dj(prop: str, value: str) -> str:
+    return f'data-dj-style-{prop}="{_html.escape(value)}"'
 
 
 def _assert_absent(markup: str, value: str) -> None:
-    """``value`` reaches no style attribute (a data attribute may carry it)."""
+    """``value`` reaches no style value, and no free-form value is an inline ``style=``
+    (#3979): the only inline styles left are the constant ones of :data:`CONSTANT_STYLES`."""
+    for inline in re.findall(r'\sstyle="([^"]*)"', markup):
+        assert inline.replace(" ", "").rstrip(";") in CONSTANT_STYLES, markup
     for style in _style_attrs(markup):
         assert value not in style and _html.escape(value) not in style
-        assert ";position" not in style
+        assert ";" not in style
         assert "url(" not in style and "expression(" not in style and "/*" not in style
         assert "\\" not in style
 
@@ -244,14 +259,14 @@ class TestCursorsOverlay:
     def test_valid_colour_written_as_given(self, path, color):
         out = _cursor_paths()[path](color)
         assert f'fill="{color}"' in out
-        assert f'style="background:{color}"' in out
+        assert _dj("background-color", color) in out
 
     @pytest.mark.parametrize("path", PATHS)
     @pytest.mark.parametrize("color", REFUSED_COLORS)
     def test_other_values_become_the_palette_colour(self, path, color):
         out = _cursor_paths()[path](color)
         assert 'fill="#3b82f6"' in out
-        assert 'style="background:#3b82f6"' in out
+        assert _dj("background-color", "#3b82f6") in out
         _assert_absent(out, color)
 
     def test_palette_follows_position(self):
@@ -263,7 +278,8 @@ class TestCursorsOverlay:
             lambda: _tag("{% cursors users=users %}", users=users),
             lambda: _engine("{% cursors users=users %}", users=users),
         ):
-            assert _style_attrs(render())[1::2] == ["background:#111111", "background:#ef4444"]
+            colours = [s for s in _style_attrs(render()) if s.startswith("background-color:")]
+            assert colours == ["background-color:#111111", "background-color:#ef4444"]
 
     @pytest.mark.parametrize("color", VALID_COLORS[:4] + REFUSED_COLORS[:4])
     def test_paths_agree(self, color):
@@ -277,15 +293,15 @@ class TestCollabSelection:
     @pytest.mark.parametrize("color", VALID_COLORS)
     def test_valid_colour_written_as_given(self, path, color):
         out = _selection_paths()[path](color)
-        assert f'style="--dj-collab-sel-color:{color}"' in out
-        assert f'style="background:{color}"' in out
+        assert _dj("--dj-collab-sel-color", color) in out
+        assert _dj("background-color", color) in out
 
     @pytest.mark.parametrize("path", PATHS)
     @pytest.mark.parametrize("color", REFUSED_COLORS)
     def test_other_values_become_the_palette_colour(self, path, color):
         out = _selection_paths()[path](color)
-        assert 'style="--dj-collab-sel-color:#3b82f6"' in out
-        assert 'style="background:#3b82f6"' in out
+        assert _dj("--dj-collab-sel-color", "#3b82f6") in out
+        assert _dj("background-color", "#3b82f6") in out
         _assert_absent(out, color)
 
     @pytest.mark.parametrize("color", VALID_COLORS[:4] + REFUSED_COLORS[:4])
@@ -353,25 +369,33 @@ COLOUR_CASES = [
     (
         "calendar",
         _calendar_paths,
-        ['style="--dj-calendar-event-color: {v}"'],
-        'style="--dj-calendar-event-color: #3b82f6"',
+        ['data-dj-style---dj-calendar-event-color="{v}"'],
+        'data-dj-style---dj-calendar-event-color="#3b82f6"',
     ),
     # The segment and the legend swatch: since #3979 the segment's width is a
-    # class, so the colour is the whole of both style attributes.
+    # class, so the colour is the only free-form value on either.
     (
         "meter",
         _meter_paths,
-        ['" style="background:{v}" role="meter"', 'swatch" style="background:{v}"'],
+        [
+            '" data-dj-style-background-color="{v}" role="meter"',
+            'swatch" data-dj-style-background-color="{v}"',
+        ],
         None,
     ),
     (
         "color_picker",
         _color_picker_paths,
-        ['style="background:{v}"'],
-        'style="background:transparent"',
+        ['data-dj-style-background-color="{v}"'],
+        'data-dj-style-background-color="transparent"',
     ),
     # A refused colour gives the header no colour of its own, and no style (#4120).
-    ("kanban", _kanban_paths, ['style="border-top-color:{v}"'], '<div class="kanban-col-header">'),
+    (
+        "kanban",
+        _kanban_paths,
+        ['data-dj-style-border-top-color="{v}"'],
+        '<div class="kanban-col-header">',
+    ),
 ]
 
 
@@ -387,14 +411,14 @@ class TestOtherColours:
     def test_valid_colour_written_as_given(self, factory, path, frags, default, color):
         out = factory()[path](color)
         for frag in frags:
-            assert frag.format(v=color) in out, out
+            assert frag.format(v=_html.escape(color)) in out, out
 
     @pytest.mark.parametrize("factory,path,frags,default", list(_expand(COLOUR_CASES)))
     @pytest.mark.parametrize("color", REFUSED_COLORS)
     def test_other_values_become_the_default(self, factory, path, frags, default, color):
         out = factory()[path](color)
         if default is None:
-            assert "background:" not in out, out
+            assert "data-dj-style-background-color" not in out, out
         else:
             assert default in out, out
         _assert_absent(out, color)
@@ -416,11 +440,11 @@ class TestDataTableTwin:
                 )
             )
 
-        assert 'style="background-color:#abcdef"' in render(["#abcdef"])
+        assert _dj("background-color", "#abcdef") in render(["#abcdef"])
         out = render(["red;position:fixed"])
         assert "background-color" not in out
         _assert_absent(out, "red;position:fixed")
-        assert 'style="background-color:#7f7f00"' in render(["#ff0000", "#00ff00"])
+        assert _dj("background-color", "#7f7f00") in render(["#ff0000", "#00ff00"])
 
 
 # ---------------------------------------------------------------------------
@@ -540,17 +564,37 @@ def _skeleton_paths() -> dict[str, Callable[[Any], str]]:
 
 
 LENGTH_CASES = [
-    ("map_picker", _map_paths, 'style="height:{v}"', 'style="height:400px"'),
-    ("rich_text_editor", _rte_paths, 'style="min-height:{v}"', 'style="min-height:200px"'),
-    ("scroll_area", _scroll_paths, "max-height: {v};", "max-height: 400px;"),
-    ("sticky_header", _sticky_paths, "top: {v};", "top: 0;"),
-    ("data_grid", _data_grid_paths, 'style="width:{v}', "<th"),
-    ("data_table", _data_table_paths, 'style="width:{v}"', "<th"),
-    ("resizable_panel", _resizable_paths, "min-width:{v}", "min-width:100px"),
-    ("sortable_grid", _sortable_paths, 'gap:{v}"', 'gap:0.75rem"'),
-    ("dashboard_grid", _dashboard_paths, "minmax({v},auto)", "minmax(200px,auto)"),
-    ("progress", _progress_paths, 'style="height: {v}', "progress"),
-    ("skeleton", _skeleton_paths, "width: {v};", "width: 100%;"),
+    ("map_picker", _map_paths, 'data-dj-style-height="{v}"', 'data-dj-style-height="400px"'),
+    (
+        "rich_text_editor",
+        _rte_paths,
+        'data-dj-style-min-height="{v}"',
+        'data-dj-style-min-height="200px"',
+    ),
+    (
+        "scroll_area",
+        _scroll_paths,
+        'data-dj-style-max-height="{v}"',
+        'data-dj-style-max-height="400px"',
+    ),
+    ("sticky_header", _sticky_paths, 'data-dj-style-top="{v}"', 'data-dj-style-top="0"'),
+    ("data_grid", _data_grid_paths, 'data-dj-style-width="{v}"', "<th"),
+    ("data_table", _data_table_paths, 'data-dj-style-width="{v}"', "<th"),
+    (
+        "resizable_panel",
+        _resizable_paths,
+        'data-dj-style-min-width="{v}"',
+        'data-dj-style-min-width="100px"',
+    ),
+    ("sortable_grid", _sortable_paths, 'data-dj-style-gap="{v}"', 'data-dj-style-gap="0.75rem"'),
+    (
+        "dashboard_grid",
+        _dashboard_paths,
+        'data-dj-style-grid-auto-rows="minmax({v},auto)"',
+        'data-dj-style-grid-auto-rows="minmax(200px,auto)"',
+    ),
+    ("progress", _progress_paths, 'data-dj-style-height="{v}"', "progress"),
+    ("skeleton", _skeleton_paths, 'data-dj-style-width="{v}"', 'data-dj-style-width="100%"'),
 ]
 
 
@@ -598,19 +642,19 @@ class TestRatiosAndNumbers:
     @pytest.mark.parametrize("path", ["class", "tag"])
     @pytest.mark.parametrize("value", VALID_RATIOS)
     def test_aspect_ratio_valid(self, path, value):
-        assert f"aspect-ratio: {value};" in _aspect_paths()[path](value)
+        assert _dj("aspect-ratio", value) in _aspect_paths()[path](value)
 
     @pytest.mark.parametrize("path", ["class", "tag"])
     @pytest.mark.parametrize("value", REFUSED_RATIOS)
     def test_aspect_ratio_refused(self, path, value):
         out = _aspect_paths()[path](value)
-        assert "aspect-ratio: 16/9;" in out
+        assert _dj("aspect-ratio", "16/9") in out
         _assert_absent(out, value)
 
     @pytest.mark.parametrize("path", ["class", "tag", "engine"])
     @pytest.mark.parametrize("value", VALID_RATIOS)
     def test_responsive_image_valid(self, path, value):
-        assert f'style="aspect-ratio:{value}"' in _image_paths()[path](value)
+        assert _dj("aspect-ratio", value) in _image_paths()[path](value)
 
     @pytest.mark.parametrize("path", ["class", "tag", "engine"])
     @pytest.mark.parametrize("value", REFUSED_RATIOS)
@@ -627,10 +671,10 @@ class TestRatiosAndNumbers:
             lambda v: SplitPane(left="a", right="b", initial=v).render(),
             lambda v: _tag(src, i=v),
         ):
-            assert "width:30%" in render(30)
-            assert "width:33.5%" in render("33.5")
+            assert _dj("width", "30%") in render(30)
+            assert _dj("width", "33.5%") in render("33.5")
             out = render("30%;position:fixed")
-            assert "width:50%" in out
+            assert _dj("width", "50%") in out
             _assert_absent(out, "30%;position:fixed")
 
     def test_sticky_header_z_index(self):
@@ -641,7 +685,7 @@ class TestRatiosAndNumbers:
             lambda v: StickyHeader(content="x", z_index=v).render(),
             lambda v: _tag(src, z=v),
         ):
-            assert "z-index: 20;" in render("20")
+            assert _dj("z-index", "20") in render("20")
             out = render("20;position:fixed")
-            assert "z-index: 10;" in out
+            assert _dj("z-index", "10") in out
             _assert_absent(out, "20;position:fixed")
