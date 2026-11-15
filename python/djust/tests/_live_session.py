@@ -133,9 +133,9 @@ async def amount_on_runtime(
     logged in as ``user`` (anonymous when ``None``).
 
     The transport is given what a live transport supplies: ``build_request``
-    (the mount request, the SSE shape) and ``explicit_event_request`` (the
-    per-event re-read of that session, as the socket does), unless it already
-    has them. The mount's frames are cleared, so the test sees only what its
+    (the mount request, the SSE shape; it replaces the transport's own) and
+    ``explicit_event_request`` (the per-event re-read of that session, as the
+    socket does) unless it has one. The mount's frames are cleared, so the test sees only what its
     own turns send. Needs ``django_db(transaction=True)``. Returns the mount
     request.
     """
@@ -149,8 +149,7 @@ async def amount_on_runtime(
     request = RequestFactory().get(url)
     with_live_session(request, user)
     transport = runtime.transport
-    if getattr(transport, "build_request", None) is None:
-        transport.build_request = lambda: request
+    transport.build_request = lambda: request
     if getattr(transport, "explicit_event_request", None) is None:
 
         async def explicit_event_request(owner: Any) -> Any:
