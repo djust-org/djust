@@ -140,7 +140,7 @@ class CalendarView(Component):
                     )
                     ev_html += (
                         f'<div class="dj-calendar__event"'
-                        f"{style_attrs({'--dj-calendar-event-color': color})}>"
+                        f"{style_attrs({'--dj-calendar-event-color': color}, css='--dj-calendar-event-color: {}')}>"
                         f"{title}</div>"
                     )
                 if len(day_events) > 3:

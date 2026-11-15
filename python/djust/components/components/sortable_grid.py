@@ -126,7 +126,11 @@ class SortableGrid(Component):
             )
 
         disabled_attr = ' data-disabled="true"' if self.disabled else ""
-        style = style_attrs(grid_template_columns=f"repeat({int(self.columns)},1fr)", gap=e_gap)
+        style = style_attrs(
+            grid_template_columns=f"repeat({int(self.columns)},1fr)",
+            gap=e_gap,
+            css="grid-template-columns:{};gap:{}",
+        )
 
         return (
             f'<div class="{class_str}" dj-hook="SortableGrid" '

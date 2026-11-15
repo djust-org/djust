@@ -51,7 +51,7 @@ def test_each_theme_colour_has_a_rule_in_the_stylesheet(name):
 def test_a_custom_css_colour_still_renders_as_given():
     cols = [{"id": "x", "title": "X", "color": "#123456", "cards": []}]
     out = _render("{% kanban_board columns=cols %}", {"cols": cols})
-    assert 'data-dj-style-border-top-color="#123456"' in out
+    assert 'style="border-top-color:#123456"' in out
 
 
 def test_add_card_button_by_default():

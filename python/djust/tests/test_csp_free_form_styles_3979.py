@@ -1,31 +1,37 @@
-"""Free-form style values reach the page without an inline ``style`` (#3979).
+"""Free-form style values: an inline style by default, ``data-dj-style-*`` under a strict CSP (#3979).
 
 A ``style-src`` without ``'unsafe-inline'`` refuses every ``style="..."`` attribute and every
-inline ``<style>`` block. Percent fills and the gauge box already draw with classes (#3969,
-#3979, ``test_progress_widths_csp_3979.py``). What is left is a value no class can stand for: a
-column width, a user's colour, an item height. Each such site now writes
-``data-dj-style-<property>="<value>"`` through ONE helper
-(:func:`djust.components.utils.style_attrs`, its check :func:`~djust.components.utils.style_value`),
-and the client module ``54-dj-style.js`` applies it with ``element.style.setProperty`` (the CSSOM,
-which a strict CSP allows; ``tests/js/dj_style.test.js``).
+inline ``<style>`` block. Every value a component writes that no class can stand for (a column
+width, a user's colour, an item height) goes through ONE helper,
+:func:`djust.components.utils.style_attrs` (its check for one value is
+:func:`~djust.components.utils.style_value`; the Rust components take ``strict_styles``):
 
-* ``TestTheHelper``: the property table, each kind's check, hostile values dropped (never
-  written) with one warning per property, a marked-safe value judged as plain text, an unknown
-  property refused.
+* by default (``LIVEVIEW_CONFIG["csp_strict_styles"]`` off) it is the inline ``style`` the site
+  has always written, byte for byte, now from a checked value: there at first paint and with
+  JavaScript off;
+* with the switch on it is ``data-dj-style`` plus ``data-dj-style-<property>="<value>"``, the page
+  head carries ``<meta name="djust-styles" content="attrs">`` and the client module
+  ``54-dj-style.js`` applies the values through the CSSOM (``tests/js/dj_style.test.js``).
+
+Percent fills are a ``dj-progress-w-N`` class in both modes (and, by default, also their old
+inline width).
+
+* ``TestTheHelper``: the property table, each kind's check, hostile values dropped in both modes
+  with one warning per property, the escaping of what is written, the two modes.
 * ``TestTheClientAndServerAgree``: the client applies exactly the server's properties.
-* ``TestEverySite``: one row per converted site, on every render path it has (component class,
-  template tag on Django's engine, the same tag on the Rust engine, the native handler, the Rust
-  component). Each asserts that no free-form value is an inline ``style`` and no ``<style>``
-  block is written, and that the value is the ``data-dj-style-*`` attribute instead. The
-  colours, lengths and ratios with a hostile caller value are in ``test_component_css_values.py``.
-* ``TestDjustSkeleton``: ``{% djust_skeleton %}`` writes no ``<style>`` block; it asks for the
-  shimmer rules with ``data-dj-css="skeleton"``, once per render, on both engines.
+* ``TestEverySite``: one row per site and render path (component class, Django tag, the same tag
+  on the Rust engine, the native handler, the Rust component), in both modes: by default the
+  site's old inline style, byte for byte, and no ``data-dj-style``; in strict mode no inline
+  style for a free-form value, no ``<style>`` block, the ``data-dj-style-*`` attributes.
+* ``TestThePageMarker``: the meta is in a strict page's head and nowhere else.
+* ``TestDjustSkeleton``: ``{% djust_skeleton %}`` in both modes.
 * ``TestBothEnginesWriteTheSameAttributes``: ``{% data_table %}`` (the Django tag and its native
-  handler) write the same width attribute.
+  handler) write the same width attribute, in both modes.
 """
 
 from __future__ import annotations
 
+import html as _html
 import logging
 import re
 from pathlib import Path
@@ -36,7 +42,16 @@ from django.template import Context, Engine
 from django.utils.safestring import mark_safe
 
 from djust.components import rust_handlers as rh
-from djust.components.utils import STYLE_PROPERTIES, style_attrs, style_value
+from djust.components.utils import (
+    STYLE_PROPERTIES,
+    STYLE_PROPERTY_NAMES,
+    STYLES_META,
+    progress_fill,
+    strict_styles,
+    style_attrs,
+    style_value,
+)
+from djust.config import config
 
 _COMPONENTS = Path(rh.__file__).resolve().parent
 _ENGINE = Engine(
@@ -49,6 +64,26 @@ _ENGINE = Engine(
         "djust_assets": "djust.templatetags.djust_assets",
     },
 )
+
+
+@pytest.fixture(params=["default", "strict"])
+def mode(request):
+    before = config.get("csp_strict_styles", False)
+    config.set("csp_strict_styles", request.param == "strict")
+    try:
+        yield request.param
+    finally:
+        config.set("csp_strict_styles", before)
+
+
+@pytest.fixture
+def strict():
+    before = config.get("csp_strict_styles", False)
+    config.set("csp_strict_styles", True)
+    try:
+        yield
+    finally:
+        config.set("csp_strict_styles", before)
 
 
 def _tag(source: str, **context: Any) -> str:
@@ -67,9 +102,8 @@ def _engine(source: str, **context: Any) -> str:
     return render_template(source, context)
 
 
-#: Constant inline styles a converted component still writes elsewhere in its markup (a hidden
-#: trigger, a pointer cursor, the Bootstrap navbar's forced flex). No caller's value reaches
-#: them; they are not free-form values and are left for a follow-up (#3979).
+#: Constant inline styles a component still writes elsewhere in its markup (a hidden trigger, a
+#: pointer cursor, the Bootstrap navbar's forced flex). No caller's value reaches them.
 CONSTANT_STYLES = {"display:none", "cursor:pointer", "display:flex!important"}
 
 
@@ -101,14 +135,27 @@ HOSTILE = [
 
 
 class TestTheHelper:
-    def test_writes_data_attributes_in_order(self):
+    def test_default_mode_writes_an_inline_style(self):
         assert style_attrs(width="240px", min_width="10rem") == (
-            ' data-dj-style-width="240px" data-dj-style-min-width="10rem"'
+            ' style="width:240px;min-width:10rem"'
+        )
+        assert style_attrs(height="1rem", css="height: {};") == ' style="height: 1rem;"'
+
+    def test_a_dropped_value_writes_the_pairs_not_the_template(self):
+        out = style_attrs(width="1px", height="url(x)", css="width: {}; height: {};")
+        assert out == ' style="width:1px"'
+
+    def test_strict_mode_writes_data_attributes_and_the_marker(self, strict):
+        assert style_attrs(width="240px", min_width="10rem", css="ignored {} {}") == (
+            ' data-dj-style data-dj-style-width="240px" data-dj-style-min-width="10rem"'
         )
 
-    def test_a_mapping_names_hyphenated_and_custom_properties(self):
+    def test_a_mapping_names_hyphenated_and_custom_properties(self, strict):
         out = style_attrs({"--dj-masonry-columns": 3, "-webkit-line-clamp": 2})
-        assert out == ' data-dj-style---dj-masonry-columns="3" data-dj-style--webkit-line-clamp="2"'
+        assert out == (
+            ' data-dj-style data-dj-style---dj-masonry-columns="3"'
+            ' data-dj-style--webkit-line-clamp="2"'
+        )
 
     @pytest.mark.parametrize(
         "prop,value",
@@ -118,12 +165,14 @@ class TestTheHelper:
             ("background-color", "hsl(var(--primary))"),
             ("color", "#abc"),
             ("z-index", "-1"),
+            ("z-index", "9999"),
             ("aspect-ratio", "16 / 9"),
             ("animation-delay", "150ms"),
             ("grid-column", "2/span 3"),
             ("grid-template-columns", "repeat(4,1fr)"),
             ("grid-auto-rows", "minmax(calc(10vh + 1rem),auto)"),
             ("position", "sticky"),
+            ("position", "relative"),
             ("display", "-webkit-box"),
             ("overflow-y", "auto"),
             ("font-weight", "bold"),
@@ -134,7 +183,7 @@ class TestTheHelper:
 
     @pytest.mark.parametrize("prop", sorted(STYLE_PROPERTIES))
     @pytest.mark.parametrize("value", HOSTILE)
-    def test_a_hostile_value_is_never_written(self, prop, value):
+    def test_a_hostile_value_is_never_written(self, prop, value, mode):
         assert style_value(prop, value) == ""
         assert style_attrs({prop: value}) == ""
         assert style_attrs({prop: mark_safe(value)}) == ""
@@ -143,7 +192,12 @@ class TestTheHelper:
         "prop,value",
         [
             ("display", "none"),  # only the two layouts the sites use
+            ("position", "fixed"),  # nothing that can cover the page
+            ("position", "absolute"),
             ("position", "absolute;top:0"),
+            ("z-index", "10000"),  # bounded stacking
+            ("z-index", "-2147483647"),
+            ("z-index", "auto"),
             ("z-index", "1.5"),
             ("color", "notacolour"),
             ("grid-template-columns", "repeat(a,1fr)"),
@@ -154,14 +208,15 @@ class TestTheHelper:
     def test_a_value_of_the_wrong_kind_is_dropped(self, prop, value):
         assert style_attrs({prop: value}) == ""
 
-    def test_nothing_for_an_absent_value(self):
+    def test_nothing_for_an_absent_value(self, mode):
         assert style_attrs(width=None, height="", color="  ", z_index=False) == ""
 
-    def test_an_unknown_property_is_a_programming_error(self):
+    @pytest.mark.parametrize("name", ["cursor", "inset", "margin", "behavior"])
+    def test_an_unknown_property_is_a_programming_error(self, name):
         with pytest.raises(ValueError):
-            style_attrs(cursor="pointer")
+            style_attrs({name: "1px"})
         with pytest.raises(ValueError):
-            style_value("behavior", "url(x.htc)")
+            style_value(name, "1px")
 
     def test_one_warning_per_property(self, caplog, monkeypatch):
         from djust.components import utils
@@ -177,9 +232,36 @@ class TestTheHelper:
         # The value itself is never logged.
         assert not any("url(" in m or "x:y" in m for m in messages)
 
-    def test_the_output_is_escaped_for_a_quoted_attribute(self):
-        out = style_attrs(width="1px")
-        assert '"' not in out.split("=", 1)[1][1:-1]
+    @pytest.mark.parametrize("css", [None, "width: {}"])
+    def test_what_is_written_is_escaped_for_a_quoted_attribute(self, monkeypatch, mode, css):
+        """Every check refuses a quote; this proves the escaping behind them on its own: a check
+        that let one through still leaves one well-formed attribute."""
+        from djust.components import utils
+
+        evil = '1px" onclick="x()" data-x="<b>&'
+        monkeypatch.setitem(utils.STYLE_PROPERTIES, "width", lambda v: evil)
+        out = style_attrs(width="1px", css=css)
+        assert '"' not in out.split('="', 1)[-1].rsplit('"', 1)[0].replace("&quot;", "")
+        assert "<" not in out and 'onclick="' not in out
+        assert _html.escape(evil) in out
+        assert re.fullmatch(r'( data-dj-style)?( [-a-z]+="[^"]*")+', out), out
+
+    def test_the_switch_is_the_one_config_key(self):
+        assert strict_styles() is False  # the default
+        config.set("csp_strict_styles", True)
+        try:
+            assert strict_styles() is True
+        finally:
+            config.set("csp_strict_styles", False)
+
+    def test_progress_fill(self, mode):
+        cls, style = progress_fill(12.5, css="width: {}%")
+        assert cls == "dj-progress-w-13"  # half up, as the Rust component
+        assert style == ("" if mode == "strict" else ' style="width: 12.5%"')
+        assert progress_fill(250)[0] == "dj-progress-w-100"
+        assert progress_fill(-3)[0] == "dj-progress-w-0"
+        assert progress_fill("nope")[0] == "dj-progress-w-0"
+        assert progress_fill(float("inf"))[0] == "dj-progress-w-0"
 
 
 class TestTheClientAndServerAgree:
@@ -187,18 +269,19 @@ class TestTheClientAndServerAgree:
         js = (_COMPONENTS.parent / "static" / "djust" / "src" / "54-dj-style.js").read_text()
         listed = re.search(r"const _DJ_STYLE_PROPS = \((.*?)\)\.split", js, re.S).group(1)
         props = set("".join(re.findall(r"'([^']*)'", listed)).split())
-        assert props == set(STYLE_PROPERTIES)
+        assert props == set(STYLE_PROPERTY_NAMES) == set(STYLE_PROPERTIES)
+        assert len(STYLE_PROPERTY_NAMES) == len(set(STYLE_PROPERTY_NAMES))
+        assert not {"inset", "margin"} & props
 
 
 # ---------------------------------------------------------------------------
-# Every converted site
+# Every site, both modes
 # ---------------------------------------------------------------------------
 
 
 def _ui_progress(framework: str, **kw: Any) -> Callable[[], str]:
     def render() -> str:
         from djust.components.ui.progress import ProgressComponent
-        from djust.config import config
 
         before = config.get("css_framework", "bootstrap5")
         config.set("css_framework", framework)
@@ -248,7 +331,6 @@ def _navbar() -> str:
 def _spinner(size: str, type_: str = "border", framework: str = "bootstrap5") -> Callable[[], str]:
     def render() -> str:
         from djust.components.ui.spinner import SpinnerComponent
-        from djust.config import config
 
         before = config.get("css_framework", "bootstrap5")
         config.set("css_framework", framework)
@@ -288,283 +370,590 @@ def _dropdown() -> str:
 
 def _ttyd() -> str:
     return _ENGINE.get_template("djust_components/ttyd_terminal.html").render(
-        Context({"ttyd_url": "ws://localhost/x", "rows": 30, "cols": 80, "theme_json": "{}"})
+        Context(
+            {
+                "ttyd_url": "ws://localhost/x",
+                "rows": 30,
+                "cols": 80,
+                "theme_json": "{}",
+                "strict_styles": strict_styles(),
+            }
+        )
     )
 
 
+def _cls(module: str, cls_name: str, /, **kw: Any) -> Callable[[], str]:
+    def render() -> str:
+        import importlib
+
+        return str(getattr(importlib.import_module(module), cls_name)(**kw).render())
+
+    return render
+
+
+def _theme_skeleton() -> str:
+    return _ENGINE.from_string(
+        '{% load theme_components %}{% theme_skeleton width="10rem" height="2rem" %}'
+    ).render(Context({}))
+
+
+def _colour_scale() -> str:
+    return str(
+        rh.DataTableHandler().render(
+            ["rows=rows", "columns=cols", "conditional_formatting=cf"],
+            {
+                "rows": [{"id": 1, "n": 50}],
+                "cols": [{"key": "n", "label": "N"}],
+                "cf": [{"column": "n", "type": "color_scale", "colors": ["#abcdef"]}],
+            },
+        )
+    )
+
+
+_C = "djust.components.components."
 _TREE = [{"id": "a", "label": "A", "expanded": True, "children": [{"id": "b", "label": "B"}]}]
 _FILES = [{"name": "src", "type": "folder", "expanded": True, "children": [{"name": "a.py"}]}]
 _ANSI = ["\x1b[31mred\x1b[0m \x1b[1mbold\x1b[0m"]
 _USERS = [{"name": "Ann Lee"}, {"name": "Bo Diaz"}]
 _MASONRY = [{"content": "a"}, {"content": "b"}]
 _CARDS = [{"title": "A", "category": "x"}]
+_CURSOR = [{"name": "A", "color": "#123", "x": 1, "y": 2}]
+_SELECTION = [{"name": "A", "color": "#123", "start": 0, "end": 5, "text": "Hello"}]
+_EVENTS = [{"date": "2026-03-25", "title": "Standup", "color": "#123"}]
+_SEGMENTS = [{"value": 30, "color": "#ff0000", "label": "a"}]
+_PANELS = [{"id": "p", "col": 2, "width": 2}]
+
+_DASH_DEFAULT = [
+    'style="grid-column:2/span 2;grid-row:1/span 1"',
+    'style="display:grid;grid-template-columns:repeat(4,1fr);grid-auto-rows:minmax(200px,auto);gap:1rem"',
+]
+_DASH_STRICT = [
+    ("display", "grid"),
+    ("grid-template-columns", "repeat(4,1fr)"),
+    ("grid-column", "2/span 2"),
+    ("grid-row", "1/span 1"),
+]
 
 
-def _cls(module: str, name: str, **kw: Any) -> Callable[[], str]:
-    def render() -> str:
-        import importlib
-
-        return str(getattr(importlib.import_module(module), name)(**kw).render())
-
-    return render
-
-
-_C = "djust.components.components."
-
-#: id -> (render, the attributes it must carry). One row per site and render path.
-SITES: dict[str, tuple[Callable[[], str], list[str]]] = {
+#: id -> (render, main's inline styles, byte for byte (default mode), the data attributes (strict
+#: mode), anything else each mode must hold). One row per site and render path.
+SITES: dict[
+    str, tuple[Callable[[], str], list[str], list[tuple[str, str]], dict[str, list[str]]]
+] = {
     "ui.Progress bootstrap": (
         _ui_progress("bootstrap5"),
-        [_dj("height", "12px"), _dj("width", "40%")],
+        ['style="height: 12px;"', 'style="width: 40%"'],
+        [("height", "12px")],
+        {"both": ["dj-progress-w-40"]},
     ),
-    "ui.Progress tailwind": (
+    "ui.Progress tailwind animated": (
         _ui_progress("tailwind", animated=True),
-        [_dj("height", "12px"), _dj("width", "40%"), 'data-dj-css="shimmer"'],
+        ['style="height: 12px"', 'style="width: 40%"'],
+        [("height", "12px")],
+        {
+            "both": ["dj-progress-w-40"],
+            "default": ["<style>@keyframes shimmer {0% {background-position: -100% 0;}"],
+            "strict": ['data-dj-css="shimmer"'],
+        },
     ),
-    "ui.Progress plain": (_ui_progress("plain"), [_dj("height", "12px"), _dj("width", "40%")]),
+    "ui.Progress plain": (
+        _ui_progress("plain"),
+        ['style="height: 12px;"', 'style="width: 40%"'],
+        [("height", "12px")],
+        {"both": ["dj-progress-w-40"]},
+    ),
     "progress_simple python": (
         _progress_simple("python"),
-        [_dj("height", "12px"), _dj("width", "40.0%")],
+        ['style="height: 12px"', 'style="width: 40.0%"'],
+        [("height", "12px")],
+        {"both": ["dj-progress-w-40"]},
     ),
     "progress_simple template": (
         _progress_simple("template"),
-        [_dj("height", "12px"), _dj("width", "40.0%")],
+        ['style="height: 12px"', 'style="width: 40.0%"'],
+        [("height", "12px")],
+        {"both": ["dj-progress-w-40"]},
     ),
-    "RustProgress": (_progress_simple("rust"), [_dj("height", "12px"), _dj("width", "40.0%")]),
-    "avatar_simple python": (_avatar_simple(False), [_dj("width", "4rem"), _dj("height", "4rem")]),
-    "RustAvatar": (_avatar_simple(True), [_dj("width", "4rem"), _dj("height", "4rem")]),
-    "navbar logo": (_navbar, [_dj("width", "auto"), _dj("margin-right", "0.5rem")]),
-    "spinner lg": (_spinner("lg"), [_dj("width", "3rem"), _dj("height", "3rem")]),
-    "spinner xl": (_spinner("xl"), [_dj("width", "5rem"), _dj("height", "5rem")]),
+    "RustProgress": (
+        _progress_simple("rust"),
+        ['style="height: 12px"', 'style="width: 40.0%"'],
+        [("height", "12px")],
+        {"both": ["dj-progress-w-40"]},
+    ),
+    "avatar_simple python": (
+        _avatar_simple(False),
+        ['style="width: 4rem; height: 4rem;"'],
+        [("width", "4rem"), ("height", "4rem")],
+        {},
+    ),
+    "RustAvatar": (
+        _avatar_simple(True),
+        ['style="width: 4rem; height: 4rem;"'],
+        [("width", "4rem"), ("height", "4rem")],
+        {},
+    ),
+    "navbar logo": (
+        _navbar,
+        ['style="width: auto; margin-right: 0.5rem;"'],
+        [("width", "auto"), ("margin-right", "0.5rem")],
+        {},
+    ),
+    "spinner lg": (
+        _spinner("lg"),
+        ['style="width: 3rem; height: 3rem;"'],
+        [("width", "3rem"), ("height", "3rem")],
+        {},
+    ),
+    "spinner xl": (
+        _spinner("xl"),
+        ['style="width: 5rem; height: 5rem;"'],
+        [("width", "5rem"), ("height", "5rem")],
+        {},
+    ),
     "spinner dots": (
         _spinner("md", "dots", "tailwind"),
-        [_dj("animation-delay", "150ms"), _dj("animation-delay", "300ms")],
+        [
+            'animate-bounce" style=""',
+            'style="animation-delay: 150ms;"',
+            'style="animation-delay: 300ms;"',
+        ],
+        [("animation-delay", "150ms"), ("animation-delay", "300ms")],
+        {},
     ),
     "foreign_key checkboxes": (
         _foreign_key,
-        [_dj("max-height", "200px"), _dj("overflow-y", "auto")],
+        ['style="max-height: 200px; overflow-y: auto;"'],
+        [("max-height", "200px"), ("overflow-y", "auto")],
+        {},
     ),
     "dropdown popover": (
         _dropdown,
-        [_dj("position", "fixed"), _dj("inset", "0"), _dj("margin", "auto")],
+        ['style="position:fixed;inset:0;margin:auto;width:max-content;height:max-content"'],
+        [],
+        {"strict": ["dj-dropdown-menu__content--popover"]},
     ),
     "ttyd terminal": (
         _ttyd,
-        [_dj("min-height", "calc(30 * 1.2em)"), _dj("background-color", "#1e1e2e")],
+        ['style="width: 100%; height: 100%; min-height: calc(30 * 1.2em); background: #1e1e2e;"'],
+        [("width", "100%"), ("min-height", "calc(30 * 1.2em)"), ("background-color", "#1e1e2e")],
+        {},
     ),
     "virtual_list tag": (
         lambda: _tag("{% virtual_list items=i item_height=60 %}", i=[{"label": "a"}, "b"]),
-        [_dj("height", "60px")],
+        ['style="height:60px"'],
+        [("height", "60px")],
+        {},
     ),
     "table_of_contents tag": (
         lambda: _tag("{% table_of_contents items=i %}", i=[{"id": "s", "label": "S", "level": 2}]),
-        [_dj("padding-left", "1.75rem")],
+        ['style="padding-left:1.75rem"'],
+        [("padding-left", "1.75rem")],
+        {},
     ),
     "tree_view class": (
         _cls(_C + "tree_view", "TreeView", nodes=_TREE),
-        [_dj("padding-left", "0.0rem")],
+        ['style="padding-left:0.0rem"'],
+        [("padding-left", "0.0rem")],
+        {},
     ),
     "tree_view tag": (
         lambda: _tag("{% tree_view nodes=n %}", n=_TREE),
-        [_dj("padding-left", "0.0rem")],
+        ['style="padding-left:0.0rem"'],
+        [("padding-left", "0.0rem")],
+        {},
     ),
     "file_tree class": (
         _cls(_C + "file_tree", "FileTree", nodes=_FILES),
-        [_dj("padding-left", "0.0rem"), _dj("padding-left", "1.25rem")],
+        ['style="padding-left:0.0rem"', 'style="padding-left:1.25rem"'],
+        [("padding-left", "0.0rem"), ("padding-left", "1.25rem")],
+        {},
     ),
     "file_tree tag": (
         lambda: _tag("{% file_tree nodes=n %}", n=_FILES),
-        [_dj("padding-left", "0.0rem"), _dj("padding-left", "1.25rem")],
+        ['style="padding-left:0.0rem"', 'style="padding-left:1.25rem"'],
+        [("padding-left", "0.0rem"), ("padding-left", "1.25rem")],
+        {},
     ),
     "terminal class": (
         _cls(_C + "terminal", "Terminal", output=_ANSI),
-        [_dj("color", "#e74c3c"), _dj("font-weight", "bold")],
+        ['<span style="color:#e74c3c">', '<span style="font-weight:bold">'],
+        [("color", "#e74c3c"), ("font-weight", "bold")],
+        {},
     ),
     "terminal tag": (
         lambda: _tag("{% terminal output=o %}", o=_ANSI),
-        [_dj("color", "#e74c3c"), _dj("font-weight", "bold")],
+        ['<span style="color:#e74c3c">', '<span style="font-weight:bold">'],
+        [("color", "#e74c3c"), ("font-weight", "bold")],
+        {},
     ),
     "avatar_group class": (
         _cls(_C + "avatar_group", "AvatarGroup", users=_USERS),
-        [_dj("z-index", "2")],
+        ['style="z-index:2"'],
+        [("z-index", "2")],
+        {},
     ),
     "avatar_group tag": (
         lambda: _tag("{% avatar_group users=u %}", u=_USERS),
-        [_dj("z-index", "2")],
+        ['style="z-index:2"'],
+        [("z-index", "2")],
+        {},
     ),
     "presence_avatars class": (
         _cls(_C + "presence_avatars", "PresenceAvatars", users=_USERS),
-        [_dj("z-index", "2")],
+        ['style="z-index:2"'],
+        [("z-index", "2")],
+        {},
     ),
     "presence_avatars tag": (
         lambda: _tag("{% presence_avatars users=u %}", u=_USERS),
-        [_dj("z-index", "2")],
+        ['style="z-index:2"'],
+        [("z-index", "2")],
+        {},
     ),
     "expandable_text class": (
         _cls(_C + "expandable_text", "ExpandableText", text="x", max_lines=4),
-        [_dj("-webkit-line-clamp", "4"), _dj("display", "-webkit-box"), _dj("overflow", "hidden")],
+        [
+            'style="-webkit-line-clamp:4;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden"'
+        ],
+        [("-webkit-line-clamp", "4"), ("display", "-webkit-box"), ("overflow", "hidden")],
+        {},
     ),
     "expandable_text tag": (
         lambda: _tag("{% expandable_text max_lines=4 %}x{% endexpandable_text %}"),
-        [_dj("-webkit-line-clamp", "4"), _dj("display", "-webkit-box"), _dj("overflow", "hidden")],
+        [
+            'style="-webkit-line-clamp:4;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden"'
+        ],
+        [("-webkit-line-clamp", "4"), ("display", "-webkit-box"), ("overflow", "hidden")],
+        {},
     ),
     "progress_circle class": (
         _cls(_C + "progress_circle", "ProgressCircle", value=40, size="lg"),
-        [_dj("font-size", "1.5rem")],
+        ['style="font-size:1.5rem"'],
+        [("font-size", "1.5rem")],
+        {},
     ),
     "progress_circle tag": (
         lambda: _tag('{% progress_circle value=40 size="lg" %}'),
-        [_dj("font-size", "1.5rem")],
+        ['style="font-size:1.5rem"'],
+        [("font-size", "1.5rem")],
+        {},
     ),
     "masonry_grid class": (
         _cls(_C + "masonry_grid", "MasonryGrid", items=_MASONRY, columns=2, gap=8),
-        [_dj("--dj-masonry-columns", "2"), _dj("--dj-masonry-gap", "8px")],
+        ['style="--dj-masonry-columns: 2; --dj-masonry-gap: 8px"'],
+        [("--dj-masonry-columns", "2"), ("--dj-masonry-gap", "8px")],
+        {},
     ),
     "masonry_grid tag": (
         lambda: _tag("{% masonry_grid items=i columns=2 gap=8 %}", i=_MASONRY),
-        [_dj("--dj-masonry-columns", "2"), _dj("--dj-masonry-gap", "8px")],
+        ['style="--dj-masonry-columns: 2; --dj-masonry-gap: 8px"'],
+        [("--dj-masonry-columns", "2"), ("--dj-masonry-gap", "8px")],
+        {},
     ),
     "data_card_grid class": (
         _cls(_C + "data_card_grid", "DataCardGrid", items=_CARDS, columns=4),
-        [_dj("--dj-data-card-grid-cols", "4")],
+        ['style="--dj-data-card-grid-cols:4"'],
+        [("--dj-data-card-grid-cols", "4")],
+        {},
     ),
     "data_card_grid tag": (
         lambda: _tag("{% data_card_grid items=i columns=4 %}", i=_CARDS),
-        [_dj("--dj-data-card-grid-cols", "4")],
+        ['style="--dj-data-card-grid-cols:4"'],
+        [("--dj-data-card-grid-cols", "4")],
+        {},
     ),
     "split_pane class": (
         _cls(_C + "split_pane", "SplitPane", left="a", right="b", initial=30),
-        [_dj("width", "30%"), _dj("flex", "1")],
+        ['style="width:30%"', 'style="flex:1"'],
+        [("width", "30%"), ("flex", "1")],
+        {},
     ),
     "split_pane tag": (
         lambda: _tag("{% split_pane initial=30 %}a{% pane %}b{% endsplit_pane %}"),
-        [_dj("width", "30%"), _dj("flex", "1")],
+        ['style="width:30%"', 'style="flex:1"'],
+        [("width", "30%"), ("flex", "1")],
+        {},
     ),
     "dashboard_grid class": (
-        _cls(_C + "dashboard_grid", "DashboardGrid", panels=[{"id": "p", "col": 2, "width": 2}]),
-        [
-            _dj("display", "grid"),
-            _dj("grid-template-columns", "repeat(4,1fr)"),
-            _dj("grid-column", "2/span 2"),
-            _dj("grid-row", "1/span 1"),
-        ],
+        _cls(_C + "dashboard_grid", "DashboardGrid", panels=_PANELS),
+        _DASH_DEFAULT,
+        _DASH_STRICT,
+        {},
     ),
     "dashboard_grid tag": (
-        lambda: _tag(
-            "{% dashboard_grid panels=p %}{% enddashboard_grid %}",
-            p=[{"id": "p", "col": 2, "width": 2}],
-        ),
-        [
-            _dj("display", "grid"),
-            _dj("grid-template-columns", "repeat(4,1fr)"),
-            _dj("grid-column", "2/span 2"),
-            _dj("grid-row", "1/span 1"),
-        ],
+        lambda: _tag("{% dashboard_grid panels=p %}{% enddashboard_grid %}", p=_PANELS),
+        _DASH_DEFAULT,
+        _DASH_STRICT,
+        {},
     ),
     "sortable_grid class": (
         _cls(_C + "sortable_grid", "SortableGrid", items=[{"id": "a", "label": "A"}], columns=2),
-        [_dj("grid-template-columns", "repeat(2,1fr)")],
+        ['style="grid-template-columns:repeat(2,1fr);gap:0.75rem"'],
+        [("grid-template-columns", "repeat(2,1fr)"), ("gap", "0.75rem")],
+        {},
     ),
     "sortable_grid tag": (
         lambda: _tag("{% sortable_grid items=i columns=2 %}", i=[{"id": "a", "label": "A"}]),
-        [_dj("grid-template-columns", "repeat(2,1fr)")],
+        ['style="grid-template-columns:repeat(2,1fr);gap:0.75rem"'],
+        [("grid-template-columns", "repeat(2,1fr)"), ("gap", "0.75rem")],
+        {},
     ),
     "resizable_panel class": (
         _cls(_C + "resizable_panel", "ResizablePanel", content="x", max_size="80%"),
-        [_dj("width", "50%"), _dj("min-width", "100px"), _dj("max-width", "80%")],
+        ['style="width:50%;min-width:100px;max-width:80%"'],
+        [("width", "50%"), ("min-width", "100px"), ("max-width", "80%")],
+        {},
     ),
     "resizable_panel tag": (
         lambda: _tag('{% resizable_panel max_size="80%" %}x{% endresizable_panel %}'),
-        [_dj("width", "50%"), _dj("min-width", "100px"), _dj("max-width", "80%")],
+        ['style="width:50%;min-width:100px;max-width:80%"'],
+        [("width", "50%"), ("min-width", "100px"), ("max-width", "80%")],
+        {},
     ),
     "scroll_area class": (
         _cls(_C + "scroll_area", "ScrollArea", content="x"),
-        [_dj("max-height", "400px"), _dj("overflow-y", "auto")],
+        ['style="max-height: 400px; overflow-y: auto;"'],
+        [("max-height", "400px"), ("overflow-y", "auto")],
+        {},
     ),
     "scroll_area tag": (
         lambda: _tag("{% scroll_area %}x{% endscroll_area %}"),
-        [_dj("max-height", "400px"), _dj("overflow-y", "auto")],
+        [
+            'style="--dj-scroll-area-max-height: 400px; '
+            'max-height: var(--dj-scroll-area-max-height); overflow-y: auto;"'
+        ],
+        [("max-height", "400px"), ("overflow-y", "auto")],
+        {},
     ),
     "sticky_header class": (
         _cls(_C + "sticky_header", "StickyHeader", content="x"),
-        [_dj("position", "sticky"), _dj("top", "0"), _dj("z-index", "10")],
+        ['style="position: sticky; top: 0; z-index: 10;"'],
+        [("position", "sticky"), ("top", "0"), ("z-index", "10")],
+        {},
     ),
     "sticky_header tag": (
         lambda: _tag("{% sticky_header %}x{% endsticky_header %}"),
-        [_dj("position", "sticky"), _dj("top", "0"), _dj("z-index", "10")],
+        ['style="position: sticky; top: 0; z-index: 10;"'],
+        [("position", "sticky"), ("top", "0"), ("z-index", "10")],
+        {},
     ),
     "data_grid tag": (
         lambda: _tag(
             "{% data_grid columns=c rows=r %}", c=[{"key": "a", "width": "9rem"}], r=[{"id": 1}]
         ),
-        [_dj("width", "9rem"), _dj("min-width", "9rem")],
+        ['style="width:9rem;min-width:9rem"'],
+        [("width", "9rem"), ("min-width", "9rem")],
+        {},
     ),
     "data_grid class": (
         _cls(
             _C + "data_grid", "DataGrid", columns=[{"key": "a", "width": "9rem"}], rows=[{"id": 1}]
         ),
-        [_dj("width", "9rem")],
+        ['style="width:9rem"'],
+        [("width", "9rem")],
+        {},
+    ),
+    "data_table colour scale (native)": (
+        _colour_scale,
+        ['style="background-color:#abcdef"'],
+        [("background-color", "#abcdef")],
+        {},
     ),
     "kanban tag": (
         lambda: _tag(
             "{% kanban_board columns=c %}", c=[{"id": "t", "title": "T", "color": "#123456"}]
         ),
-        [_dj("border-top-color", "#123456")],
+        ['style="border-top-color:#123456"'],
+        [("border-top-color", "#123456")],
+        {},
     ),
     "meter class": (
-        _cls(_C + "meter", "Meter", segments=[{"value": 30, "color": "#ff0000", "label": "a"}]),
-        [_dj("background-color", "#ff0000")],
+        _cls(_C + "meter", "Meter", segments=_SEGMENTS),
+        ['style="background:#ff0000"'],
+        [("background-color", "#ff0000")],
+        {},
     ),
     "meter tag": (
-        lambda: _tag("{% meter segments=s %}", s=[{"value": 30, "color": "#ff0000", "label": "a"}]),
-        [_dj("background-color", "#ff0000")],
+        lambda: _tag("{% meter segments=s %}", s=_SEGMENTS),
+        ['style="background:#ff0000"'],
+        [("background-color", "#ff0000")],
+        {},
+    ),
+    "calendar class": (
+        _cls(_C + "calendar_view", "CalendarView", events=_EVENTS, month=3, year=2026),
+        ['style="--dj-calendar-event-color: #123"'],
+        [("--dj-calendar-event-color", "#123")],
+        {},
+    ),
+    "calendar tag": (
+        lambda: _tag("{% calendar events=e month=3 year=2026 %}", e=_EVENTS),
+        ['style="--dj-calendar-event-color: #123"'],
+        [("--dj-calendar-event-color", "#123")],
+        {},
+    ),
+    "cursors class": (
+        _cls(_C + "cursors_overlay", "CursorsOverlay", users=_CURSOR),
+        ['style="left:1px;top:2px"', 'style="background:#123"'],
+        [("left", "1px"), ("top", "2px"), ("background-color", "#123")],
+        {},
+    ),
+    "cursors tag": (
+        lambda: _tag("{% cursors users=u %}", u=_CURSOR),
+        ['style="left:1px;top:2px"', 'style="background:#123"'],
+        [("left", "1px"), ("top", "2px"), ("background-color", "#123")],
+        {},
+    ),
+    "collab_selection class": (
+        _cls(_C + "collab_selection", "CollabSelection", users=_SELECTION),
+        ['style="--dj-collab-sel-color:#123"', 'style="background:#123"'],
+        [("--dj-collab-sel-color", "#123"), ("background-color", "#123")],
+        {},
+    ),
+    "collab_selection tag": (
+        lambda: _tag("{% collab_selection users=u %}", u=_SELECTION),
+        ['style="--dj-collab-sel-color:#123"', 'style="background:#123"'],
+        [("--dj-collab-sel-color", "#123"), ("background-color", "#123")],
+        {},
+    ),
+    "color_picker class": (
+        _cls(_C + "color_picker", "ColorPicker", name="c", value="#123456", swatches=["#123456"]),
+        ['style="background:#123456"'],
+        [("background-color", "#123456")],
+        {},
+    ),
+    "color_picker tag": (
+        lambda: _tag('{% color_picker name="c" value=v swatches=s %}', v="#123456", s=["#123456"]),
+        ['style="background:#123456"'],
+        [("background-color", "#123456")],
+        {},
+    ),
+    "aspect_ratio class": (
+        _cls(_C + "aspect_ratio", "AspectRatio", content="x", ratio="4/3"),
+        ['style="aspect-ratio: 4/3;"'],
+        [("aspect-ratio", "4/3")],
+        {},
+    ),
+    "aspect_ratio tag": (
+        lambda: _tag('{% aspect_ratio ratio="4/3" %}x{% endaspect_ratio %}'),
+        ['style="aspect-ratio: 4/3;"'],
+        [("aspect-ratio", "4/3")],
+        {},
+    ),
+    "responsive_image class": (
+        _cls(_C + "responsive_image", "ResponsiveImage", src="/a.png", aspect_ratio="4/3"),
+        ['style="aspect-ratio:4/3"'],
+        [("aspect-ratio", "4/3")],
+        {},
+    ),
+    "responsive_image tag": (
+        lambda: _tag('{% responsive_image src="/a.png" aspect_ratio="4/3" %}'),
+        ['style="aspect-ratio:4/3"'],
+        [("aspect-ratio", "4/3")],
+        {},
+    ),
+    "map_picker class": (
+        _cls(_C + "map_picker", "MapPicker", height="300px"),
+        ['style="height:300px"'],
+        [("height", "300px")],
+        {},
+    ),
+    "map_picker tag": (
+        lambda: _tag('{% map_picker height="300px" %}'),
+        ['style="height:300px"'],
+        [("height", "300px")],
+        {},
+    ),
+    "rich_text_editor class": (
+        _cls(_C + "rich_text_editor", "RichTextEditor", height="150px"),
+        ['style="min-height:150px"'],
+        [("min-height", "150px")],
+        {},
+    ),
+    "rich_text_editor tag": (
+        lambda: _tag('{% rich_text_editor height="150px" %}'),
+        ['style="min-height:150px"'],
+        [("min-height", "150px")],
+        {},
     ),
     "theme_skeleton": (
-        lambda: _ENGINE.from_string(
-            '{% load theme_components %}{% theme_skeleton width="10rem" height="2rem" %}'
-        ).render(Context({})),
-        [_dj("width", "10rem"), _dj("height", "2rem")],
+        _theme_skeleton,
+        ['style="width: 10rem; height: 2rem"'],
+        [("width", "10rem"), ("height", "2rem")],
+        {},
+    ),
+    "djust_skeleton": (
+        lambda: _ENGINE.from_string('{% load live_tags %}{% djust_skeleton width="5rem" %}').render(
+            Context({})
+        ),
+        ['style="width:5rem;height:1em"'],
+        [("width", "5rem"), ("height", "1em")],
+        {"default": ["@keyframes djust-skeleton-shimmer"], "strict": ['data-dj-css="skeleton"']},
     ),
 }
 
 
-def _engine_rows() -> dict[str, tuple[Callable[[], str], list[str]]]:
+def _engine_rows() -> dict[str, Any]:
     """The same tags through the Rust engine (``render_template``)."""
-    rows: dict[str, tuple[Callable[[], str], list[str]]] = {}
-    for name, src, ctx, frags in (
+    rows: dict[str, Any] = {}
+    for name, src, ctx, default, attrs in (
         (
             "cursors",
             "{% cursors users=u %}",
-            {"u": [{"name": "A", "color": "#123", "x": 1, "y": 2}]},
-            [_dj("left", "1px"), _dj("top", "2px"), _dj("background-color", "#123")],
+            {"u": _CURSOR},
+            ['style="left:1px;top:2px"', 'style="background:#123"'],
+            [("left", "1px"), ("top", "2px"), ("background-color", "#123")],
         ),
         (
             "virtual_list",
             "{% virtual_list items=i item_height=60 %}",
             {"i": ["a"]},
-            [_dj("height", "60px")],
+            ['style="height:60px"'],
+            [("height", "60px")],
         ),
         (
             "expandable_text",
             "{% expandable_text max_lines=4 %}x{% endexpandable_text %}",
             {},
-            [_dj("-webkit-line-clamp", "4")],
+            ['style="-webkit-line-clamp:4;'],
+            [("-webkit-line-clamp", "4")],
         ),
         (
             "masonry_grid",
             "{% masonry_grid items=i columns=2 gap=8 %}",
             {"i": _MASONRY},
-            [_dj("--dj-masonry-gap", "8px")],
+            ['style="--dj-masonry-columns: 2; --dj-masonry-gap: 8px"'],
+            [("--dj-masonry-gap", "8px")],
         ),
-        ("terminal", "{% terminal output=o %}", {"o": _ANSI}, [_dj("color", "#e74c3c")]),
+        (
+            "terminal",
+            "{% terminal output=o %}",
+            {"o": _ANSI},
+            ['<span style="color:#e74c3c">'],
+            [("color", "#e74c3c")],
+        ),
+        (
+            "dashboard_grid",
+            "{% dashboard_grid panels=p %}{% enddashboard_grid %}",
+            {"p": _PANELS},
+            _DASH_DEFAULT,
+            _DASH_STRICT,
+        ),
+        (
+            "responsive_image",
+            '{% responsive_image src="/a.png" aspect_ratio="4/3" %}',
+            {},
+            ['style="aspect-ratio:4/3"'],
+            [("aspect-ratio", "4/3")],
+        ),
         (
             "djust_skeleton",
             '{% load live_tags %}{% djust_skeleton width="5rem" %}',
             {},
-            [_dj("width", "5rem"), 'data-dj-css="skeleton"'],
+            ['style="width:5rem;height:1em"'],
+            [("width", "5rem")],
         ),
     ):
-        rows[f"{name} engine"] = (lambda s=src, c=ctx: _engine(s, **c), frags)
+        rows[f"{name} engine"] = (lambda s=src, c=ctx: _engine(s, **c), default, attrs, {})
     return rows
 
 
@@ -573,12 +962,51 @@ SITES.update(_engine_rows())
 
 class TestEverySite:
     @pytest.mark.parametrize("site", sorted(SITES))
-    def test_the_value_is_a_data_attribute_not_an_inline_style(self, site):
-        render, frags = SITES[site]
+    def test_both_modes(self, site, mode):
+        render, main_styles, attrs, extra = SITES[site]
         markup = render()
-        _assert_no_free_form_inline_style(markup)
-        for frag in frags:
+        for frag in extra.get("both", []) + extra.get(mode, []):
             assert frag in markup, (frag, markup)
+        if mode == "default":
+            # The site's own inline style, byte for byte, and nothing for the client.
+            for style in main_styles:
+                assert style in markup, (style, markup)
+            assert "data-dj-style" not in markup, markup
+        else:
+            _assert_no_free_form_inline_style(markup)
+            assert "data-dj-style" in markup or not attrs, markup
+            for prop, value in attrs:
+                assert _dj(prop, value) in markup, (prop, value, markup)
+
+
+# ---------------------------------------------------------------------------
+# The page marker
+# ---------------------------------------------------------------------------
+
+
+class TestThePageMarker:
+    def test_the_client_config_tag_writes_it_only_in_strict_mode(self, mode):
+        from djust.templatetags.live_tags import _client_config_html
+
+        assert (STYLES_META in str(_client_config_html())) == (mode == "strict")
+
+    @pytest.mark.django_db
+    def test_a_liveview_page_carries_it_in_its_head_only_in_strict_mode(self, mode, rf):
+        from djust import LiveView
+
+        class V(LiveView):
+            exposure_policy = "explicit"
+            template = "<html><head><title>t</title></head><body><div dj-root>x</div></body></html>"
+
+        request = rf.get("/")
+        from django.contrib.sessions.backends.signed_cookies import SessionStore
+
+        request.session = SessionStore()
+        response = V.as_view()(request)
+        html = response.content.decode() if hasattr(response, "content") else str(response)
+        head = html.split("</head>")[0]
+        assert (STYLES_META in head) == (mode == "strict"), head
+        assert html.count(STYLES_META) == (1 if mode == "strict" else 0)
 
 
 # ---------------------------------------------------------------------------
@@ -591,17 +1019,20 @@ def _skeleton(source: str) -> str:
 
 
 class TestDjustSkeleton:
-    def test_no_style_block_and_the_rules_are_asked_for_once_per_render(self):
+    def test_default_mode_is_unchanged(self):
+        out = _skeleton('{% djust_skeleton %}{% djust_skeleton shape="circle" %}')
+        assert out.count("<style>") == 1
+        assert 'style="width:40px;height:40px;border-radius:50%"' in out
+        assert "data-dj-" not in out
+
+    def test_strict_mode_asks_for_the_rules_once_per_render(self, strict):
         out = _skeleton('{% djust_skeleton %}{% djust_skeleton shape="circle" %}')
         _assert_no_free_form_inline_style(out)
         assert out.count('data-dj-css="skeleton"') == 1
         assert _dj("width", "40px") in out and _dj("height", "40px") in out
-
-    def test_each_render_asks_again(self):
-        assert _skeleton("{% djust_skeleton %}").count('data-dj-css="skeleton"') == 1
         assert _skeleton("{% djust_skeleton %}").count('data-dj-css="skeleton"') == 1
 
-    def test_the_rules_the_client_adds_are_the_ones_the_block_had(self):
+    def test_the_rules_the_client_adds_are_the_ones_the_block_has(self):
         js = (_COMPONENTS.parent / "static" / "djust" / "src" / "54-dj-style.js").read_text()
         for rule in (
             "@keyframes djust-skeleton-shimmer",
@@ -617,12 +1048,32 @@ class TestDjustSkeleton:
 
 
 class TestBothEnginesWriteTheSameAttributes:
-    def test_data_table_column_width(self):
+    def test_data_table_column_width(self, mode):
         cols = [{"key": "a", "label": "A", "width": "12rem"}]
         rows = [{"id": 1, "a": "x"}]
         django = _tag("{% data_table rows=r columns=c %}", c=cols, r=rows)
         native = str(rh.DataTableHandler().render(["rows=r", "columns=c"], {"c": cols, "r": rows}))
-        for markup in (django, native):
-            _assert_no_free_form_inline_style(markup)
-        width = re.compile(r'<th[^>]*data-dj-style-width="([^"]*)"')
-        assert width.findall(django) == width.findall(native) == ["12rem"]
+        attr = (
+            r'<th[^>]*( data-dj-style data-dj-style-width="[^"]*")'
+            if mode == "strict"
+            else r'<th[^>]*( style="width:[^"]*")'
+        )
+        assert re.findall(attr, django) == re.findall(attr, native) != []
+
+
+# ---------------------------------------------------------------------------
+# The stylesheet reads the custom properties only in longhands
+# ---------------------------------------------------------------------------
+
+
+def test_no_custom_property_a_component_writes_feeds_a_shorthand_that_takes_url():
+    """A ``--dj-*`` value read by ``background:`` (a shorthand that accepts ``url()``) would load a
+    URL a hostile value names; the rules read them as ``background-color`` (#3979)."""
+    css = (_COMPONENTS / "static" / "djust_components" / "components.css").read_text()
+    custom = [p for p in STYLE_PROPERTY_NAMES if p.startswith("--")]
+    shorthand = re.compile(
+        r"(?<![-\w])(background|border-image|list-style|mask|content|cursor)\s*:[^;}]*var\(\s*(%s)"
+        % "|".join(map(re.escape, custom))
+    )
+    assert not shorthand.findall(css), shorthand.findall(css)
+    assert "background-color: var(--dj-calendar-event-color" in css

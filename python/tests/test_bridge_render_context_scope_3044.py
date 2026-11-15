@@ -1,7 +1,7 @@
 """Only djust's own bridged tags share the per-render ``RenderContext`` (#3044).
 
-``library_render_scope`` gives ``{% djust_skeleton %}`` Django's once-per-render
-behaviour (its shimmer-rules marker; an inline ``<style>`` block before #3979). The #3053 review found the first version shared the
+``library_render_scope`` gives ``{% djust_skeleton %}`` Django's one-``<style>``
+-per-render behaviour. The #3053 review found the first version shared the
 context with EVERY bridged node: the bridge caches one node per argument
 tuple, so a third-party tag keeping state in ``render_context[self]`` merged
 the state of two sites with the same arguments and of every loop iteration

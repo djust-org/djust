@@ -4,10 +4,7 @@
  * still wins.
  *
  * The markup is what the components render (python/djust/tests/
- * test_component_batch4_2985.py pins it on every render path): since #3979
- * the free-form positions and colours are data-dj-style-* attributes, which
- * the client (54-dj-style.js) applies through the CSSOM. The hooks read the
- * element's style as before, so these fixtures also prove the two compose.
+ * test_component_batch4_2985.py pins it on every render path).
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -63,17 +60,17 @@ const frame = (env) => new Promise((resolve) => env.window.requestAnimationFrame
 // ---------------------------------------------------------------------------
 
 const CURSOR = (name, x, y, color = '#3b82f6') =>
-    `<div class="dj-cursors__cursor" data-dj-style-left="${x}px" data-dj-style-top="${y}px" data-user="${name}">` +
+    `<div class="dj-cursors__cursor" style="left:${x}px;top:${y}px" data-user="${name}">` +
     `<svg class="dj-cursors__arrow" width="16" height="20" viewBox="0 0 16 20" fill="${color}"><path d="M0 0L16 12L8 12L12 20L8 18L4 12L0 16Z"/></svg>` +
-    `<span class="dj-cursors__label" data-dj-style-background-color="${color}">${name}</span></div>`;
+    `<span class="dj-cursors__label" style="background:${color}">${name}</span></div>`;
 const CURSORS = (users = [['Alice', 120, 340], ['Bob', 450, 200]]) =>
     `<div class="dj-cursors" role="group" aria-label="${users.length} cursor${users.length === 1 ? '' : 's'}" dj-hook="CursorsOverlay">` +
     users.map((u) => CURSOR(...u)).join('') + '</div>';
 
 
 const COLLAB_RANGE = (name, start, end, text, color = '#3b82f6') =>
-    `<span class="dj-collab-sel__range" data-dj-style---dj-collab-sel-color="${color}" data-user="${name}" data-start="${start}" data-end="${end}">` +
-    `<span class="dj-collab-sel__highlight">${text}</span><span class="dj-collab-sel__label" data-dj-style-background-color="${color}">${name}</span></span>`;
+    `<span class="dj-collab-sel__range" style="--dj-collab-sel-color:${color}" data-user="${name}" data-start="${start}" data-end="${end}">` +
+    `<span class="dj-collab-sel__highlight">${text}</span><span class="dj-collab-sel__label" style="background:${color}">${name}</span></span>`;
 const COLLAB = (users = [['Alice', 0, 5, 'Hello'], ['Bob', 6, 11, 'brave']], target = '') =>
     `<div class="dj-collab-sel" role="group" aria-label="${users.length} selections" dj-hook="CollabSelection"${target ? ` data-target="${target}"` : ''}>` +
     users.map((u) => COLLAB_RANGE(...u)).join('') + '</div>';
@@ -90,13 +87,13 @@ const MENTIONS = (users = USERS, { disabled = false, attrs = 'dj-keydown.enter="
     '</ul></div>';
 
 const PANEL = (id, title, col, row, w, h, body = '<p>content</p>') =>
-    `<div class="dj-dashboard-grid__panel" data-panel-id="${id}" data-dj-style-grid-column="${col}/span ${w}" data-dj-style-grid-row="${row}/span ${h}" draggable="true">` +
+    `<div class="dj-dashboard-grid__panel" data-panel-id="${id}" style="grid-column:${col}/span ${w};grid-row:${row}/span ${h}" draggable="true">` +
     `<div class="dj-dashboard-grid__panel-header"><span class="dj-dashboard-grid__panel-title">${title}</span><span class="dj-dashboard-grid__panel-drag" aria-hidden="true">&#x2630;</span></div>` +
     `<div class="dj-dashboard-grid__panel-body">${body}</div><div class="dj-dashboard-grid__panel-resize" role="separator"></div></div>`;
 const PANELS = [['a', 'Revenue', 1, 1, 2, 1], ['b', 'Users', 3, 1, 1, 1], ['c', 'Errors', 1, 2, 1, 1]];
 const DASH = (panels = PANELS, columns = 4) =>
     `<div class="dj-dashboard-grid" dj-hook="DashboardGrid" data-move-event="dashboard_move" data-resize-event="dashboard_resize" data-columns="${columns}" ` +
-    `data-dj-style-display="grid" data-dj-style-grid-template-columns="repeat(${columns},1fr)" data-dj-style-grid-auto-rows="minmax(200px,auto)" data-dj-style-gap="1rem">` +
+    `style="display:grid;grid-template-columns:repeat(${columns},1fr);grid-auto-rows:minmax(200px,auto);gap:1rem">` +
     panels.map((p) => PANEL(...p)).join('') + '</div>';
 
 describe('the shipped hooks never replace an app hook (#2985 batch 4)', () => {
@@ -207,8 +204,7 @@ describe('CursorsOverlay', () => {
         const c = env.window.document.createElement('div');
         c.className = 'dj-cursors__cursor';
         c.setAttribute('data-user', evil);
-        c.setAttribute('data-dj-style-left', '1px');
-        c.setAttribute('data-dj-style-top', '1px');
+        c.setAttribute('style', 'left:1px;top:1px');
         root.appendChild(c);
         env.window.djust.updateHooks();
         expect(env.live()).toBe(`${evil} joined`);
@@ -288,8 +284,7 @@ describe('CursorsOverlay', () => {
             const root = env.$$('.dj-cursors')[0];
             const first = root.children[0];
             first.setAttribute('data-user', 'Bob');
-            first.setAttribute('data-dj-style-left', '50px');
-            first.setAttribute('data-dj-style-top', '50px');
+            first.setAttribute('style', 'left:50px;top:50px');
             root.removeChild(root.children[1]);
             env.window.djust.updateHooks();
             await frame(env);
@@ -1430,10 +1425,10 @@ describe('MentionsInput', () => {
 describe('DashboardGrid', () => {
     // 4 columns of 100px, rows of 100px, a 10px gap: cell (c, r) starts at ((c-1) * 110, (r-1) * 110).
     const CELL = 110;
-    // What the server wrote (data-dj-style-*, #3979).
     const cellsOf = (el) => {
-        const c = /(\d+)\/span (\d+)/.exec(el.getAttribute('data-dj-style-grid-column') || '');
-        const r = /(\d+)\/span (\d+)/.exec(el.getAttribute('data-dj-style-grid-row') || '');
+        const st = el.getAttribute('style') || '';
+        const c = /grid-column:(\d+)\/span (\d+)/.exec(st);
+        const r = /grid-row:(\d+)\/span (\d+)/.exec(st);
         return { col: +c[1], w: +c[2], row: +r[1], h: +r[2] };
     };
     const setup = (panels = PANELS, columns = 4, { rtl = false, scale = 1, left = 0 } = {}) => {
@@ -1540,8 +1535,7 @@ describe('DashboardGrid', () => {
         it('the panel itself is not moved: the server decides', () => {
             const env = setup();
             env.drag('b', 340, 10, 230, 120);
-            expect(env.panel('b').getAttribute('data-dj-style-grid-column')).toBe('3/span 1');
-            expect(env.panel('b').getAttribute('data-dj-style-grid-row')).toBe('1/span 1');
+            expect(env.panel('b').getAttribute('style')).toBe('grid-column:3/span 1;grid-row:1/span 1');
         });
 
         it('keeps a wide panel inside the columns, and puts nothing above or left of the grid', () => {
@@ -1962,11 +1956,9 @@ describe('DashboardGrid', () => {
             // the server drops Revenue: the nodes shift up, so node 0 now is Users
             const [n0, n1, n2] = env.$$('.dj-dashboard-grid__panel');
             n0.setAttribute('data-panel-id', 'b');
-            n0.setAttribute('data-dj-style-grid-column', '3/span 1');
-            n0.setAttribute('data-dj-style-grid-row', '1/span 1');
+            n0.setAttribute('style', 'grid-column:3/span 1;grid-row:1/span 1');
             n1.setAttribute('data-panel-id', 'c');
-            n1.setAttribute('data-dj-style-grid-column', '1/span 1');
-            n1.setAttribute('data-dj-style-grid-row', '2/span 1');
+            n1.setAttribute('style', 'grid-column:1/span 1;grid-row:2/span 1');
             env.root.removeChild(n2);
             env.window.djust.updateHooks();
             expect(env.$$('.dj-dashboard-grid__panel--dragging').map((p) => p.getAttribute('data-panel-id'))).toEqual(['b']);
@@ -2025,8 +2017,6 @@ describe('DashboardGrid', () => {
 
         it('a panel with no readable position is treated as column 1, row 1, one cell (nothing throws)', () => {
             const env = setup([['a', 'A', 1, 1, 1, 1]]);
-            env.panel('a').removeAttribute('data-dj-style-grid-column');
-            env.panel('a').removeAttribute('data-dj-style-grid-row');
             env.panel('a').setAttribute('style', 'color:red');
             env.panel('a').getBoundingClientRect = () => ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 });
             env.drag('a', 10, 10, 340, 10);

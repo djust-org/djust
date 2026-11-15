@@ -9,7 +9,7 @@ from ..base import Component
 
 from django.utils.html import conditional_escape
 
-from djust.components.utils import safe_css_length, style_attrs, style_value
+from djust.components.utils import progress_fill, safe_css_length, strict_styles, style_attrs
 
 from djust._rust import RustProgress
 
@@ -42,12 +42,13 @@ class Progress(Component):
 
     _rust_impl_class = RustProgress
 
-    # No `style=` attribute anywhere (a strict CSP refuses it): the client applies the
-    # `data-dj-style-*` values (#3979).
-    template = """<div class="progress"{% if style_height %} data-dj-style-height="{{ style_height }}"{% endif %}>
-    <div class="progress-bar{% if striped %} progress-bar-striped{% endif %}{% if animated %} progress-bar-animated{% endif %} bg-{{ variant }}"
-         role="progressbar"
-         data-dj-style-width="{{ style_width }}"
+    # The fill is a `dj-progress-w-N` class. By default the height and the width are also the
+    # inline style they have always been; with LIVEVIEW_CONFIG["csp_strict_styles"] (a strict
+    # CSP refuses `style=`) the height is a `data-dj-style-height` the client applies (#3979).
+    template = """<div class="progress"{% if height %}{% if strict_styles %} data-dj-style data-dj-style-height="{{ height }}"{% else %} style="height: {{ height }}"{% endif %}{% endif %}>
+    <div class="progress-bar{% if striped %} progress-bar-striped{% endif %}{% if animated %} progress-bar-animated{% endif %} bg-{{ variant }} {{ fill_class }}"
+         role="progressbar"{% if not strict_styles %}
+         style="width: {{ percentage }}%"{% endif %}
          aria-valuenow="{{ value }}"
          aria-valuemin="{{ min_value }}"
          aria-valuemax="{{ max_value }}">{% if show_label or label %}{{ label_text }}{% endif %}</div>
@@ -120,9 +121,13 @@ class Progress(Component):
             "max_value": self.max_value,
             "percentage": self.percentage,
             "label_text": self.label_text,
-            "style_height": style_value("height", self.height),
-            "style_width": style_value("width", f"{self.percentage}%"),
+            "strict_styles": strict_styles(),
+            "fill_class": progress_fill(self.percentage)[0],
         }
+
+    def _create_rust_instance(self, **props: Any) -> None:
+        """The Rust instance writes the project's style mode too (#3979)."""
+        super()._create_rust_instance(**props, strict_styles=strict_styles())
 
     def _render_custom(self) -> str:
         """Pure Python fallback (f-string rendering)."""
@@ -133,17 +138,18 @@ class Progress(Component):
         if self.animated:
             classes.append("progress-bar-animated")
         classes.append(f"bg-{conditional_escape(self.variant)}")
+        classes.append(progress_fill(self.percentage)[0])
 
         # Build outer style
-        outer_style = style_attrs(height=self.height)
+        outer_style = style_attrs(height=self.height, css="height: {}")
+        width_line = "" if strict_styles() else f'\n         style="width: {self.percentage:.1f}%"'
 
         # Build label
         label_html = conditional_escape(self.label_text) if (self.show_label or self.label) else ""
 
         return f"""<div class="progress"{outer_style}>
     <div class="{" ".join(classes)}"
-         role="progressbar"
-        {style_attrs(width=f"{self.percentage:.1f}%")}
+         role="progressbar"{width_line}
          aria-valuenow="{self.value}"
          aria-valuemin="{self.min_value}"
          aria-valuemax="{self.max_value}">{label_html}</div>

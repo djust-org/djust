@@ -154,15 +154,11 @@ def test_the_meter_segment_widths_are_classes(render):
 
 
 @pytest.mark.parametrize("render", [_meter_class, _meter_tag], ids=["class", "tag"])
-def test_a_meter_segment_colour_is_a_data_attribute(render):
-    """A custom colour has no class to stand for it: the client applies it (#3979)."""
+def test_a_meter_segment_colour_is_the_only_style_left(render):
+    """A custom colour has no class to stand for it (left for an owner decision)."""
     html = render([{"value": 50, "color": "#ff0000"}], 100)
-    # The segment and its legend swatch: colour only, no width, nothing inline.
-    assert "style=" not in html, html
-    assert (
-        re.findall(r'data-dj-style-([a-z-]+)="([^"]*)"', html)
-        == [("background-color", "#ff0000")] * 2
-    ), html
+    # The segment and its legend swatch: colour only, no width.
+    assert re.findall(r'style="([^"]*)"', html) == ["background:#ff0000"] * 2, html
     assert _width_classes(html) == [50]
 
 

@@ -806,17 +806,28 @@ def _checked_column_widths(columns: Any) -> Any:
 
 @register.filter
 def table_width(value: Any) -> Any:
-    """``col.width`` as a CSS length for ``data-dj-style-width="..."``, or ``""``.
+    """``col.width`` as a CSS length, or ``""``.
 
     Checked HERE, in the template, so it holds whatever the columns are (a list of dicts, of
     objects, any other iterable) and whatever the width is marked as: the value is judged as the
-    plain text it prints (:func:`~djust.components.utils.style_value`, the check every
-    ``data-dj-style-*`` passes) and escaped, so a marked-safe width cannot leave the attribute
-    (#3894). The client applies it; a ``style=`` attribute is refused by a strict CSP (#3979).
+    plain text it prints (:func:`~djust.components.utils.style_value`, the free-form style check)
+    and escaped, so a marked-safe width cannot leave the attribute (#3894).
     ``_checked_column_widths`` only reaches dicts in a list or tuple."""
     if not value:
         return ""
     return mark_safe(conditional_escape(style_value("width", str(value))))
+
+
+@register.filter
+def table_width_attrs(value: Any) -> Any:
+    """``col.width`` as the header's width attribute(s), or ``""`` (#3979).
+
+    ``' style="width:..."'`` by default; with ``LIVEVIEW_CONFIG["csp_strict_styles"]`` the
+    ``data-dj-style-*`` attributes the client applies. The value passes the same check as
+    :func:`table_width`."""
+    if not value:
+        return ""
+    return mark_safe(style_attrs(width=str(value), css="width:{}"))
 
 
 @register.filter
@@ -3328,7 +3339,7 @@ def color_picker(
         active_cls = " color-swatch-active" if sw == value else ""
         swatch_html += (
             f'<button class="color-swatch{active_cls}"'
-            f"{style_attrs(background_color=style_value('background-color', sw) or 'transparent')}"
+            f"{style_attrs(background_color=style_value('background-color', sw) or 'transparent', css='background:{}')}"
             f' title="{e_sw}" '
             f'dj-click="{e_event}" data-value="{e_sw}"></button>'
         )
@@ -3337,7 +3348,7 @@ def color_picker(
         f'<div class="form-group">'
         f"{label_html}"
         f'<div class="color-picker">'
-        f'<div class="color-preview"{style_attrs(background_color=style_value("background-color", value) or "transparent")}></div>'
+        f'<div class="color-preview"{style_attrs(background_color=style_value("background-color", value) or "transparent", css="background:{}")}></div>'
         f'<div class="color-swatches">{swatch_html}</div>'
         f'<input class="color-hex-input form-input" type="text" '
         f'name="{e_name}" value="{e_value}" placeholder="#000000" '
@@ -4921,9 +4932,15 @@ class ScrollAreaNode(template.Node):
 
         return mark_safe(
             f'<div class="{cls}" role="region" aria-label="{e_label}" tabindex="0"'
-            f"{style_attrs(max_height=style_value('max-height', max_height) or '400px', overflow_y='auto')}>"
+            f"{style_attrs(max_height=style_value('max-height', max_height) or '400px', overflow_y='auto', css=_SCROLL_AREA_CSS)}>"
             f"{content}</div>"
         )
+
+
+#: ``{% scroll_area %}``'s inline style, as it has always been written (#3979: default mode).
+_SCROLL_AREA_CSS = (
+    "--dj-scroll-area-max-height: {}; max-height: var(--dj-scroll-area-max-height); overflow-y: {};"
+)
 
 
 @register.tag("scroll_area")
@@ -5026,7 +5043,7 @@ class AspectRatioNode(template.Node):
             cls += f" {e_custom_class}"
 
         return mark_safe(
-            f'<div class="{cls}"{style_attrs(aspect_ratio=style_value("aspect-ratio", ratio) or "16/9")}>{content}</div>'
+            f'<div class="{cls}"{style_attrs(aspect_ratio=style_value("aspect-ratio", ratio) or "16/9", css="aspect-ratio: {};")}>{content}</div>'
         )
 
 
@@ -5113,6 +5130,7 @@ class StickyHeaderNode(template.Node):
             position="sticky",
             top=style_value("top", offset) or "0",
             z_index=style_value("z-index", z_index) or "10",
+            css="position: {}; top: {}; z-index: {};",
         )
         return mark_safe(f'<div class="{cls}"{sticky}>{content}</div>')
 
@@ -9767,7 +9785,7 @@ class MeterNode(template.Node):
             # The width is a class, as `{% progress %}` draws it (#3969, #3979). A
             # segment's own colour has no class to stand for it: a `data-dj-style-*`
             # the client applies, and only when one is given (#3979).
-            style_attr = style_attrs(background_color=seg.get("color"))
+            style_attr = style_attrs(background_color=seg.get("color"), css="background:{}")
             bar_parts.append(
                 f'<div class="dj-meter__segment dj-progress-w-{round(pct)}"{style_attr} '
                 f'role="meter" aria-valuenow="{int(val)}" '
@@ -9786,7 +9804,7 @@ class MeterNode(template.Node):
                 seg_label = conditional_escape(str(seg.get("label", "")))
                 val = conditional_escape(seg.get("value", 0))
                 # No `style` attribute at all; nothing without a colour (#3979).
-                swatch_style = style_attrs(background_color=seg.get("color"))
+                swatch_style = style_attrs(background_color=seg.get("color"), css="background:{}")
                 legend_items.append(
                     f'<div class="dj-meter__legend-item">'
                     f'<span class="dj-meter__legend-swatch"{swatch_style}></span>'

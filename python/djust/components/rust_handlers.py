@@ -1048,7 +1048,7 @@ class DataTableHandler:
                 frozen_cls = " data-table-frozen-right"
 
             # The width, applied by the client: a `style=` is refused by a strict CSP (#3979).
-            width_attr = style_attrs(width=width)
+            width_attr = style_attrs(width=width, css="width:{}")
 
             # Resize / reorder attributes
             extra_attrs = ""
@@ -1429,7 +1429,9 @@ class DataTableHandler:
                             cf_colors = cf_preset.get("colors", ["#ff0000", "#00ff00"])
                             cf_color = _interpolate_color_simple(cf_colors, cf_ratio)
                             td_classes.append("data-table-cf-color-scale")
-                            cf_html = style_attrs(background_color=cf_color)
+                            cf_html = style_attrs(
+                                background_color=cf_color, css="background-color:{}"
+                            )
                         elif cf_type == "icon_set":
                             cf_icons = cf_preset.get("icons", ["\u25bc", "\u25b6", "\u25b2"])
                             cf_thresholds = cf_preset.get("thresholds", [])

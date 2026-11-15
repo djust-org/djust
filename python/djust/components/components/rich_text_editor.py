@@ -68,7 +68,7 @@ class RichTextEditor(Component):
             f'<button class="rte-btn" type="button" title="Underline">U</button>'
             f"</div>"
             f'<div class="rte-editor" contenteditable="true"'
-            f'{style_attrs(min_height=e_height)} data-placeholder="{e_placeholder}" '
+            f'{style_attrs(min_height=e_height, css="min-height:{}")} data-placeholder="{e_placeholder}" '
             f"{self.event_attrs(self.event, trigger='input')}>{rich_html(self.value)}</div>"
             f'<input type="hidden" name="{e_name}">'
             f"</div></div>"

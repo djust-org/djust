@@ -120,7 +120,7 @@ class DataGrid(Component):
             col_key = html.escape(str(col.get("key", "")))
             col_label = html.escape(str(col.get("label", col.get("key", ""))))
             width = col.get("width", "")
-            style = style_attrs(width=width)
+            style = style_attrs(width=width, css="width:{}")
             frozen_cls = ""
             if idx < self.frozen_left:
                 frozen_cls = " data-grid-frozen-left"

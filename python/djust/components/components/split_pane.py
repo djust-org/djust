@@ -50,8 +50,8 @@ class SplitPane(Component):
         pane1 = f"{safe_css_number(self.initial, '50')}%"
         return (
             f'<div class="{cls}">'
-            f'<div class="sp-pane sp-pane-1"{style_attrs({size_prop: pane1})}>{conditional_escape(self.left)}</div>'
+            f'<div class="sp-pane sp-pane-1"{style_attrs({size_prop: pane1}, css=size_prop + ":{}")}>{conditional_escape(self.left)}</div>'
             f'<div class="sp-handle sp-handle-{e_dir}"></div>'
-            f'<div class="sp-pane sp-pane-2"{style_attrs(flex="1")}>{conditional_escape(self.right)}</div>'
+            f'<div class="sp-pane sp-pane-2"{style_attrs(flex="1", css="flex:{}")}>{conditional_escape(self.right)}</div>'
             f"</div>"
         )

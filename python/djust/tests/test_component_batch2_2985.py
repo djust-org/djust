@@ -135,10 +135,7 @@ class TestTheStructureTheScriptsRead:
         for path, html in _panel_paths().items():
             assert 'dj-hook="ResizablePanel"' in html, path
             assert 'data-direction="horizontal"' in html, path
-            assert (
-                'data-dj-style-width="300px" data-dj-style-min-width="100px" '
-                'data-dj-style-max-width="600px"'
-            ) in html, path
+            assert "width:300px;min-width:100px;max-width:600px" in html, path
             assert re.search(r'<div class="dj-resizable-panel__handle" role="separator"', html), (
                 path
             )

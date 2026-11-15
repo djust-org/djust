@@ -550,6 +550,15 @@ class PostProcessingMixin:
                 head_inject += digest_meta
             else:
                 full_script = digest_meta + full_script
+        # #3979: free-form style values are data-dj-style-* attributes under a strict CSP;
+        # the client applies them only on a page that says so.
+        from ..components.utils import STYLES_META, strict_styles
+
+        if strict_styles():
+            if head_close >= 0:
+                head_inject += STYLES_META
+            else:
+                full_script = STYLES_META + full_script
         if debug_css_link and head_close >= 0:
             head_inject += debug_css_link
         # #3036: what this page's shell loads, so a live navigation to a page

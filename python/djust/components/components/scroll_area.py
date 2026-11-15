@@ -45,6 +45,6 @@ class ScrollArea(Component):
         e_max = html.escape(safe_css_length(self.max_height, "400px"))
         return (
             f'<div class="{cls}" role="region" aria-label="{e_label}"'
-            f"{style_attrs(max_height=e_max, overflow_y='auto')}>"
+            f"{style_attrs(max_height=e_max, overflow_y='auto', css='max-height: {}; overflow-y: {};')}>"
             f"{conditional_escape(self.content)}</div>"
         )

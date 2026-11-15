@@ -89,7 +89,7 @@ class ResponsiveImage(Component):
         style = ""
         aspect_ratio = safe_css_ratio(self.aspect_ratio, "") if self.aspect_ratio else ""
         if aspect_ratio:
-            style = style_attrs(aspect_ratio=aspect_ratio)
+            style = style_attrs(aspect_ratio=aspect_ratio, css="aspect-ratio:{}")
 
         img_attrs = [f'src="{e_src}"', f'alt="{e_alt}"']
 

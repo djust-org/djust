@@ -99,7 +99,7 @@ class PresenceAvatars(Component):
 
             parts.append(
                 f'<span class="dj-presence__item" title="{e_name}"'
-                f"{style_attrs(z_index=z)}>"
+                f"{style_attrs(z_index=z, css='z-index:{}')}>"
                 f"{avatar_inner}{dot}"
                 f"</span>"
             )

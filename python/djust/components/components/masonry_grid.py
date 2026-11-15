@@ -104,7 +104,8 @@ class MasonryGrid(Component):
             col_html.append(f'<div class="dj-masonry__col">{"".join(item_cards)}</div>')
 
         style = style_attrs(
-            {"--dj-masonry-columns": self.columns, "--dj-masonry-gap": f"{self.gap}px"}
+            {"--dj-masonry-columns": self.columns, "--dj-masonry-gap": f"{self.gap}px"},
+            css="--dj-masonry-columns: {}; --dj-masonry-gap: {}",
         )
 
         return f'<div class="{class_str}"{style} role="list">{"".join(col_html)}</div>'

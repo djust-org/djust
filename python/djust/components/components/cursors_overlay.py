@@ -110,11 +110,11 @@ class CursorsOverlay(Component):
 
             parts.append(
                 f'<div class="dj-cursors__cursor"'
-                f"{style_attrs(left=f'{px}px', top=f'{py}px')} "
+                f"{style_attrs(left=f'{px}px', top=f'{py}px', css='left:{};top:{}')} "
                 f'data-user="{e_name}">'
                 f"{cursor_svg}"
                 f'<span class="dj-cursors__label"'
-                f"{style_attrs(background_color=e_color)}>{e_name}</span>"
+                f"{style_attrs(background_color=e_color, css='background:{}')}>{e_name}</span>"
                 f"</div>"
             )
 

@@ -241,9 +241,10 @@ CALENDAR_DIGIT_METHODS = frozenset(
 #: Origins (in the project) whose result is clean for ANY argument; each is pinned by a
 #: hostile-payload test in ``python/tests/test_safe_markup_guard_3820.py`` (#3847).
 #: ``interpolate_color`` returns ``f"#{r:02x}{g:02x}{b:02x}"`` of ``int()``s, or raises.
-#: ``style_attrs`` returns `` data-dj-style-<name>="<value>"`` pairs: each name is a key of the
-#: fixed ``STYLE_PROPERTIES`` table (any other raises), each value passed its property's check and
-#: is ``django.utils.html.escape``d (#3979).
+#: ``style_attrs`` returns `` style="<declarations>"`` or `` data-dj-style`` plus
+#: `` data-dj-style-<name>="<value>"`` pairs: each name is a key of the fixed ``STYLE_PROPERTIES``
+#: table (any other raises), each value passed its property's check, and every attribute value
+#: (the ``css`` template included) is ``django.utils.html.escape``d (#3979).
 CLEAN_PROJECT_ORIGINS = frozenset(
     {
         "djust.components.utils.interpolate_color",

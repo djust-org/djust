@@ -34,7 +34,7 @@ HOSTILE = "<img src=x onerror=alert(1)>\"'&<"
 # The four attributes the markup always had, in their original order.
 LEGACY = (
     '<div class="dj-map-picker" dj-hook="MapPicker" data-lat="40.7128" data-lng="-74.006" '
-    'data-zoom="13" data-pick-event="set_location"{extra} data-dj-style-height="400px" '
+    'data-zoom="13" data-pick-event="set_location"{extra} style="height:400px" '
     'role="application" aria-label="Map picker"><div class="dj-map-picker__map"></div></div>'
 )
 ADDED = re.compile(r' data-(tile-url|attribution|attribution-url|max-zoom|leaflet)="[^"]*"')

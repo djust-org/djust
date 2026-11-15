@@ -132,7 +132,7 @@ class ResizablePanel(Component):
         return (
             f'<div class="{class_str}" dj-hook="ResizablePanel" '
             f'data-direction="{direction}" '
-            f'data-min-size="{e_min}" data-max-size="{e_max}"{event_attr} '
+            f'data-min-size="{e_min}" data-max-size="{e_max}"{event_attr}'
             f"{style}{disabled_attr}>"
             f'<div class="dj-resizable-panel__content">{conditional_escape(self.content)}</div>'
             f'<div class="dj-resizable-panel__handle" role="separator" '

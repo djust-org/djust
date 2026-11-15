@@ -540,9 +540,7 @@ class ManyToManySelect(LiveComponent):
             html += f'<input type="text" class="form-control form-control-sm mb-2" placeholder="Search..." value="{conditional_escape(self.search_query)}" dj-input="search(value)" data-component-id="{conditional_escape(self.component_id)}">'
 
         # Applied by the client, not a `style=` a strict CSP refuses (#3979).
-        html += (
-            f'<div class="border rounded p-2"{style_attrs(max_height="200px", overflow_y="auto")}>'
-        )
+        html += f'<div class="border rounded p-2"{style_attrs(max_height="200px", overflow_y="auto", css="max-height: {}; overflow-y: {};")}>'
 
         for opt in options:
             checked = "checked" if opt["selected"] else ""

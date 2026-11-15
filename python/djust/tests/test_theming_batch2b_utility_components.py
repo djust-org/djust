@@ -503,16 +503,16 @@ class TestSkeletonRendering(ComponentTestCase):
 
     def test_custom_width(self):
         html = self.render_component("skeleton", width="200px")
-        self.assert_contains(html, 'data-dj-style-width="200px"')
+        self.assert_contains(html, "width: 200px")
 
     def test_custom_height(self):
         html = self.render_component("skeleton", height="2rem")
-        self.assert_contains(html, 'data-dj-style-height="2rem"')
+        self.assert_contains(html, "height: 2rem")
 
     def test_default_dimensions(self):
         html = self.render_component("skeleton")
-        self.assert_contains(html, 'data-dj-style-width="100%"')
-        self.assert_contains(html, 'data-dj-style-height="1rem"')
+        self.assert_contains(html, "width: 100%")
+        self.assert_contains(html, "height: 1rem")
 
     def test_contract_validation(self):
         html = self.render_component("skeleton")

@@ -1925,6 +1925,9 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-dropdown-menu { position: relative; display: inline-block; }
 .dj-dropdown-menu__trigger { padding: 0.375rem 0.75rem; border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 0.25rem; background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 222 47% 11%)); font-size: 0.875rem; cursor: pointer; font-family: inherit; }
 .dj-dropdown-menu__content { position: absolute; top: 100%; margin-top: 0.25rem; min-width: 10rem; background: hsl(var(--popover, 0 0% 100%)); border: var(--border-width, 1px) solid hsl(var(--border, 214 32% 91%)); border-radius: 0.375rem; color: hsl(var(--popover-foreground, var(--foreground, 222 47% 11%))); box-shadow: var(--shadow-lg, 0 4px 6px -1px rgba(0,0,0,0.1)); z-index: 50; padding: 0.25rem; animation: dj-slide-in-up var(--duration-fast, 0.15s) var(--ease-in-out, ease); }
+/* The native (popover) dropdown under a strict CSP: the placement its inline style gives it
+   otherwise, as a class (#3979). */
+.dj-dropdown-menu__content--popover { position: fixed; inset: 0; margin: auto; width: max-content; height: max-content; }
 .dj-dropdown-menu--left { left: 0; }
 .dj-dropdown-menu--right { right: 0; }
 .dj-dropdown-menu__item { display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.375rem 0.5rem; border: none; background: none; color: inherit; font: inherit; font-size: 0.875rem; text-decoration: none; box-sizing: border-box; cursor: pointer; border-radius: 0.25rem; text-align: left; }
@@ -2260,7 +2263,7 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-calendar__day:hover { background: var(--dj-calendar-hover-bg, rgba(59,130,246,0.05)); }
 .dj-calendar__day--empty { background: var(--dj-calendar-empty-bg, hsl(var(--muted, 210 40% 98%))); cursor: default; }
 .dj-calendar__daynum { font-size: 0.8125rem; font-weight: 500; }
-.dj-calendar__event { font-size: 0.6875rem; padding: 0.125rem 0.25rem; border-radius: 0.25rem; margin-top: 0.125rem; background: var(--dj-calendar-event-color, hsl(var(--primary, 222 47% 51%))); color: hsl(var(--primary-foreground, 210 40% 98%)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dj-calendar__event { font-size: 0.6875rem; padding: 0.125rem 0.25rem; border-radius: 0.25rem; margin-top: 0.125rem; background-color: var(--dj-calendar-event-color, hsl(var(--primary, 222 47% 51%))); color: hsl(var(--primary-foreground, 210 40% 98%)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dj-calendar__more { font-size: 0.625rem; color: hsl(var(--muted-foreground, 220 9% 46%)); margin-top: 0.125rem; }
 
 /* --- Gantt Chart --- */
@@ -2356,7 +2359,7 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 /* --- Collaborative Selection --- */
 .dj-collab-sel { position: relative; }
 .dj-collab-sel__range { position: relative; display: inline; }
-.dj-collab-sel__highlight { background: color-mix(in srgb, var(--dj-collab-sel-color, hsl(var(--primary, 222 47% 51%))) var(--dj-collab-sel-opacity-pct, 25%), transparent); border-bottom: 2px solid var(--dj-collab-sel-color, hsl(var(--primary, 222 47% 51%))); }
+.dj-collab-sel__highlight { background-color: color-mix(in srgb, var(--dj-collab-sel-color, hsl(var(--primary, 222 47% 51%))) var(--dj-collab-sel-opacity-pct, 25%), transparent); border-bottom: 2px solid var(--dj-collab-sel-color, hsl(var(--primary, 222 47% 51%))); }
 .dj-collab-sel__label { position: absolute; top: -1.25rem; left: 0; padding: 0.0625rem 0.25rem; border-radius: 0.1875rem; color: #fff; font-size: var(--dj-collab-sel-label-size, 0.6875rem); font-weight: 500; white-space: nowrap; line-height: 1.2; }
 .dj-collab-sel--anchored .dj-collab-sel__highlight { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; background: none; border: 0; }
 .dj-collab-sel--anchored .dj-collab-sel__label { z-index: 1000; pointer-events: none; }

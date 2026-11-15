@@ -131,7 +131,7 @@ class DataCardGrid(Component):
                 f"</div></div>"
             )
 
-        style = style_attrs({"--dj-data-card-grid-cols": cols})
+        style = style_attrs({"--dj-data-card-grid-cols": cols}, css="--dj-data-card-grid-cols:{}")
 
         return (
             f'<div class="{cls}"{style}>'

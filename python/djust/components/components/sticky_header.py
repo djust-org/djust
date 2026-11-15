@@ -44,6 +44,6 @@ class StickyHeader(Component):
         e_offset = html.escape(safe_css_length(self.offset, "0"))
         e_z = html.escape(safe_css_number(self.z_index, "10", integer=True))
         return (
-            f'<div class="{cls}"{style_attrs(position="sticky", top=e_offset, z_index=e_z)}>'
+            f'<div class="{cls}"{style_attrs(position="sticky", top=e_offset, z_index=e_z, css="position: {}; top: {}; z-index: {};")}>'
             f"{conditional_escape(self.content)}</div>"
         )

@@ -87,7 +87,7 @@ class ProgressCircle(Component):
                 f'<text x="{dim / 2}" y="{dim / 2}" '
                 f'class="dj-progress-circle__value" '
                 f'text-anchor="middle" dominant-baseline="central"'
-                f"{style_attrs(font_size=fs)}>"
+                f"{style_attrs(font_size=fs, css='font-size:{}')}>"
                 f"{self.value}%</text>"
             )
 

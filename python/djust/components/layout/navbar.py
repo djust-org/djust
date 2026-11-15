@@ -133,10 +133,14 @@ class NavbarComponent(LiveComponent):
         logo_html = ""
         if self.brand_logo:
             alt_text = self.brand_name or "Logo"
-            # Applied by the client, not a `style=` a strict CSP refuses (#3979).
-            logo_style = style_attrs(
-                width="auto", margin_right="0.5rem" if self.brand_name else None
-            )
+            # Through `style_attrs`: an inline style, or under a strict CSP `data-dj-style-*`
+            # the client applies (#3979).
+            if self.brand_name:
+                logo_style = style_attrs(
+                    width="auto", margin_right="0.5rem", css="width: {}; margin-right: {};"
+                )
+            else:
+                logo_style = style_attrs(width="auto", css="width: {};")
             logo_html = f'<img src="{data_url_attr(self.brand_logo, image=True)}" alt="{attr_text(alt_text)}" height="{attr_text(self.logo_height)}"{logo_style}>'
 
         # Navigation items

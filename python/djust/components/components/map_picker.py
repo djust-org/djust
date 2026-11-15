@@ -323,7 +323,7 @@ class MapPicker(Component):
             f'<div class="{cls}" dj-hook="MapPicker" '
             f'data-lat="{lat}" data-lng="{lng}" '
             f'data-zoom="{zoom}" data-pick-event="{e_event}"{extra}'
-            f"{style_attrs(height=e_height)} "
+            f"{style_attrs(height=e_height, css='height:{}')} "
             f'role="application" aria-label="{e_label}">'
             f'<div class="dj-map-picker__map"></div>'
             f"</div>"

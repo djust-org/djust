@@ -92,7 +92,7 @@ class AvatarGroup(Component):
             if e_src:
                 parts.append(
                     f'<span class="dj-avatar-group__item" title="{e_name}"'
-                    f"{style_attrs(z_index=z)}>"
+                    f"{style_attrs(z_index=z, css='z-index:{}')}>"
                     f'<img src="{data_url_attr(src, image=True)}" alt="{e_name}" '
                     f'class="dj-avatar-group__img"></span>'
                 )
@@ -100,7 +100,7 @@ class AvatarGroup(Component):
                 parts.append(
                     f'<span class="dj-avatar-group__item '
                     f'dj-avatar-group__initials" title="{e_name}"'
-                    f"{style_attrs(z_index=z)}>{initials}</span>"
+                    f"{style_attrs(z_index=z, css='z-index:{}')}>{initials}</span>"
                 )
 
         if overflow > 0:

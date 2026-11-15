@@ -2600,24 +2600,39 @@ class TestCleanProjectOrigins:
             with pytest.raises((ValueError, IndexError)):
                 interpolate_color(hostile, "#000000", 0.5)
 
-    def test_style_attrs_prints_only_named_data_attributes_or_raises(self):
+    @pytest.mark.parametrize("strict", [False, True])
+    def test_style_attrs_prints_only_named_attributes_or_raises(self, strict):
         import re
 
         from django.utils.safestring import mark_safe
 
         from djust.components.utils import STYLE_PROPERTIES, style_attrs
+        from djust.config import config
 
-        # #3979: `` data-dj-style-<a table name>="<a checked value>"`` pairs and nothing else
-        pair = re.compile(r' data-dj-style-([-a-z]+)="([^"<>&\'`;{}\\]*)"')
+        # #3979: `` style="<escaped>"`` (default) or `` data-dj-style`` and
+        # `` data-dj-style-<a table name>="<a checked value>"`` pairs, and nothing else
+        value = r'"([^"<>&\'`;{}\\]*)"'
+        shape = (
+            re.compile(r"( data-dj-style)?( data-dj-style-([-a-z]+)=" + value + r")*")
+            if strict
+            else re.compile(r'( style="[^"<>]*")?')
+        )
         hostile = ('"><script>alert(1)</script>', "1px;color:red", "x' onclick='1", "}</style>")
-        for prop in STYLE_PROPERTIES:
-            for value in (*hostile, *(mark_safe(h) for h in hostile), "10px", "#fff", 3):
-                out = style_attrs({prop: value})
-                assert pair.sub("", out) == "", (prop, value, out)
-                assert all(name in STYLE_PROPERTIES for name, _ in pair.findall(out))
-        for name in ('x" onclick="1', "on-click", "style"):
-            with pytest.raises(ValueError):
-                style_attrs({name: "1px"})
+        before = config.get("csp_strict_styles", False)
+        config.set("csp_strict_styles", strict)
+        try:
+            for prop in STYLE_PROPERTIES:
+                for v in (*hostile, *(mark_safe(h) for h in hostile), "10px", "#fff", 3):
+                    out = style_attrs({prop: v})
+                    assert shape.fullmatch(out), (prop, v, out)
+                    for css in (None, '{}"><script>', "{}"):
+                        out = style_attrs({prop: v}, css=css)
+                        assert "<script" not in out and "onclick=" not in out, out
+            for name in ('x" onclick="1', "on-click", "style"):
+                with pytest.raises(ValueError):
+                    style_attrs({name: "1px"})
+        finally:
+            config.set("csp_strict_styles", before)
 
     def test_the_date_constructors_exist(self):
         import datetime

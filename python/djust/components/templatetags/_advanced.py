@@ -228,7 +228,7 @@ class CalendarViewNode(template.Node):
                     )
                     ev_html += (
                         f'<div class="dj-calendar__event"'
-                        f"{style_attrs({'--dj-calendar-event-color': color})}>{title}</div>"
+                        f"{style_attrs({'--dj-calendar-event-color': color}, css='--dj-calendar-event-color: {}')}>{title}</div>"
                     )
                 if len(day_events) > 3:
                     ev_html += f'<div class="dj-calendar__more">+{len(day_events) - 3} more</div>'
@@ -995,7 +995,10 @@ class MasonryGridNode(template.Node):
                 item_cards.append(f'<div class="dj-masonry__item{extra}">{content}</div>')
             col_html.append(f'<div class="dj-masonry__col">{"".join(item_cards)}</div>')
 
-        style = style_attrs({"--dj-masonry-columns": columns, "--dj-masonry-gap": f"{gap}px"})
+        style = style_attrs(
+            {"--dj-masonry-columns": columns, "--dj-masonry-gap": f"{gap}px"},
+            css="--dj-masonry-columns: {}; --dj-masonry-gap: {}",
+        )
 
         return mark_safe(f'<div class="{class_str}"{style} role="list">{"".join(col_html)}</div>')
 
@@ -1077,7 +1080,7 @@ class CursorsOverlayNode(template.Node):
                 f'data-user="{a_name}">'
                 f"{cursor_svg}"
                 f'<span class="dj-cursors__label"'
-                f"{style_attrs(background_color=style_value('background-color', color) or palette)}>{e_name}</span>"
+                f"{style_attrs(background_color=style_value('background-color', color) or palette, css='background:{}')}>{e_name}</span>"
                 f"</div>"
             )
 
@@ -1239,11 +1242,11 @@ class CollabSelectionNode(template.Node):
 
             parts.append(
                 f'<span class="dj-collab-sel__range"'
-                f"{style_attrs({'--dj-collab-sel-color': style_value('--dj-collab-sel-color', color) or palette})} "
+                f"{style_attrs({'--dj-collab-sel-color': style_value('--dj-collab-sel-color', color) or palette}, css='--dj-collab-sel-color:{}')} "
                 f'data-user="{a_name}" data-start="{s}" data-end="{e}">'
                 f'<span class="dj-collab-sel__highlight">{e_text}</span>'
                 f'<span class="dj-collab-sel__label"'
-                f"{style_attrs(background_color=style_value('background-color', color) or palette)}>{e_name}</span>"
+                f"{style_attrs(background_color=style_value('background-color', color) or palette, css='background:{}')}>{e_name}</span>"
                 f"</span>"
             )
 
@@ -1495,7 +1498,7 @@ class MapPickerNode(template.Node):
             f'<div class="{cls}" dj-hook="MapPicker" '
             f'data-lat="{lat}" data-lng="{lng}" '
             f'data-zoom="{zoom}" data-pick-event="{e_event}"{extra}'
-            f"{style_attrs(height=style_value('height', height) or '400px')} "
+            f"{style_attrs(height=style_value('height', height) or '400px', css='height:{}')} "
             f'role="application" aria-label="{e_label}">'
             f'<div class="dj-map-picker__map"></div>'
             f"</div>"
