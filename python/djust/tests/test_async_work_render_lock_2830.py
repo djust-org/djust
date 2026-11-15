@@ -28,13 +28,12 @@ import asyncio
 from unittest.mock import MagicMock
 
 import pytest
-from asgiref.sync import sync_to_async
 
 from djust import LiveView
 
 
 class _AsyncView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>{{ n }}</div>"
 
     def mount(self, request, **kwargs):
@@ -44,37 +43,64 @@ class _AsyncView(LiveView):
         return {"n": self.n}
 
 
-async def _make_consumer(view):
+async def _make_consumer(view_class):
     """A real consumer with only frame capture stubbed, mirroring the harness in
-    ``test_live_redirect_skip_render_1643.py``."""
+    ``test_live_redirect_skip_render_1643.py``. The view is mounted through the
+    real ``handle_mount`` (whose render establishes the VDOM baseline): an
+    explicit view's background work is authorized by the runtime that mounted
+    it."""
+    from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer
 
-    await sync_to_async(view.mount)(request=None)
-    await sync_to_async(view.render_with_diff)()  # establish the VDOM baseline
-
     consumer = LiveViewConsumer()
-    consumer.scope = {"session": None}
-    consumer.session_id = "s1"
-    consumer.view_instance = view
-    consumer._view_path = f"djust.tests.x.{type(view).__name__}"
-    rate_limiter = MagicMock()
-    rate_limiter.check.return_value = True
-    consumer._rate_limiter = rate_limiter
-
     sent = []
 
     async def _send_json(msg):
         sent.append(msg)
 
     consumer.send_json = _send_json
+    await amount_on_consumer(consumer, f"{__name__}.{view_class.__name__}")
+    sent.clear()
+    rate_limiter = MagicMock()
+    rate_limiter.check.return_value = True
+    consumer._rate_limiter = rate_limiter
     return consumer, sent
 
 
-@pytest.mark.django_db
+async def _run_with_lock_held_from_callback_start(consumer, callback):
+    """Start ``_run_async_work`` and take ``_render_lock`` once the callback runs.
+
+    An explicit view's async turn is authorized under ``_render_lock`` BEFORE
+    the callback starts, so a lock taken before the task starts would stall
+    that authorization and never reach the render under test. Holding it from
+    the moment the callback runs leaves exactly the result render to contend
+    for it, as an in-flight event-path render would. Returns the task and the
+    event that lets the callback finish.
+    """
+    import threading
+
+    started = threading.Event()
+    proceed = threading.Event()
+
+    def gated():
+        started.set()
+        proceed.wait(5)
+        return callback()
+
+    task = asyncio.ensure_future(consumer._run_async_work("t", gated, (), {}))
+    for _ in range(1000):
+        if started.is_set():
+            break
+        await asyncio.sleep(0.005)
+    assert started.is_set(), "the async callback never started"
+    return task, proceed
+
+
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_the_async_render_waits_for_the_render_lock():
-    view = _AsyncView()
-    consumer, _sent = await _make_consumer(view)
+    consumer, _sent = await _make_consumer(_AsyncView)
+    view = consumer.view_instance
 
     # Count the renders this path performs. The baseline render above is already
     # done, so anything counted here comes from _run_async_work.
@@ -87,10 +113,11 @@ async def test_the_async_render_waits_for_the_render_lock():
 
     view.render_with_diff = counting_render
 
+    task, proceed = await _run_with_lock_held_from_callback_start(consumer, lambda: None)
     # Hold the lock, exactly as an in-flight event-path render would.
     await consumer._render_lock.acquire()
     try:
-        task = asyncio.ensure_future(consumer._run_async_work("t", lambda: None, (), {}))
+        proceed.set()
         # Let the task run as far as it can. 0.1s is a SETTLE window, not a
         # threshold: if the path ignores the lock it will have rendered within
         # milliseconds, and if it respects the lock it can never render here.
@@ -113,7 +140,7 @@ class _ErrorAsyncView(LiveView):
     """The documented error-state pattern: a callback that raises, plus
     ``handle_async_result`` to render the error."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>{{ n }}</div>"
 
     def mount(self, request, **kwargs):
@@ -126,13 +153,13 @@ class _ErrorAsyncView(LiveView):
         return {"n": self.n}
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_the_ERROR_arm_render_also_waits_for_the_render_lock():
     """The error arm re-renders through the same helper, so it must hold the
     same lock — it was the arm the first version of this fix missed."""
-    view = _ErrorAsyncView()
-    consumer, _sent = await _make_consumer(view)
+    consumer, _sent = await _make_consumer(_ErrorAsyncView)
+    view = consumer.view_instance
 
     renders: list[int] = []
     real_render = view.render_with_diff
@@ -146,9 +173,10 @@ async def test_the_ERROR_arm_render_also_waits_for_the_render_lock():
     def _boom():
         raise RuntimeError("callback failed")
 
+    task, proceed = await _run_with_lock_held_from_callback_start(consumer, _boom)
     await consumer._render_lock.acquire()
     try:
-        task = asyncio.ensure_future(consumer._run_async_work("t", _boom, (), {}))
+        proceed.set()
         await asyncio.sleep(0.1)
         rendered_while_locked = len(renders)
     finally:

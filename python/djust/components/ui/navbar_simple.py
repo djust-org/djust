@@ -6,12 +6,15 @@ This is a stateless Component optimized for performance.
 For interactive navbars with event handlers, use them in LiveView event handlers.
 """
 
+import logging
 from typing import Any, Dict, List, Optional, Union
 from ..base import Component
 
 from django.utils.html import conditional_escape
 
-from djust.components.utils import data_url_attr, attr_text
+from djust.components.utils import attr_text, csp_strict, data_url_attr
+
+logger = logging.getLogger(__name__)
 
 # Characters rewritten when a value is placed inside a single-quoted JS string
 # in an inline handler attribute. Letters, digits, "-" and "_" are unchanged.
@@ -33,6 +36,54 @@ _JS_STR_TRANSLATION.update((c, "\\u%04X" % c) for c in range(32))
 def _js_str(value: Any) -> str:
     """Return ``value`` for use inside a single-quoted JS string in an HTML attribute."""
     return str(value).translate(_JS_STR_TRANSLATION)
+
+
+#: The toggle module of NavBar's strict-CSP mode (#4146). By default the menu toggles are the
+#: inline ``onclick`` they have always been; under ``LIVEVIEW_CONFIG["csp_strict"]`` (a
+#: ``script-src`` without ``'unsafe-inline'`` refuses an inline handler) the button carries
+#: ``data-navbar-toggle`` (the menu's id) and ``data-navbar-toggle-class`` (the class to toggle)
+#: and this module does the same ``classList.toggle`` from a listener on ``document``. The navbar
+#: renders a ``<script src defer>`` for it (with ``NavBar(nonce=...)``'s nonce), and a
+#: LiveView page in strict mode loads it with the client (``mixins/post_processing.py``), so a
+#: navbar a later patch inserts is covered too.
+NAVBAR_TOGGLE_SCRIPT = "djust_components/navbar-toggle.js"
+
+
+#: The strict-mode marker of the navbar root: ``navbar-toggle.js`` acts only on a menu inside it.
+_ROOT_MARKER = " data-djust-navbar"
+
+_STATIC_WARNED: list[bool] = []
+
+
+def _toggle_script_tag(nonce: str) -> str:
+    """The ``<script>`` that loads :data:`NAVBAR_TOGGLE_SCRIPT` (``defer``; it runs once per page).
+
+    ``""`` when the static storage cannot name the file (a manifest storage it was not collected
+    into): the render does not fail, and a strict LiveView page loads the file with the client.
+    """
+    from django.templatetags.static import static
+
+    try:
+        url = static(NAVBAR_TOGGLE_SCRIPT)
+    except ValueError:
+        if not _STATIC_WARNED:
+            _STATIC_WARNED.append(True)
+            logger.warning(
+                "NavBar: %s is not in the static files manifest; the strict-mode menu toggle "
+                "needs it (run collectstatic).",
+                NAVBAR_TOGGLE_SCRIPT,
+            )
+        return ""
+    nonce_attr = ' nonce="%s"' % attr_text(nonce) if nonce else ""
+    return '<script src="%s" defer%s></script>' % (attr_text(url), nonce_attr)
+
+
+def _toggle_attrs(target_id: str, css_class: str) -> str:
+    """The strict-mode marker attributes of a menu toggle: which element, which class."""
+    return 'data-navbar-toggle="%s" data-navbar-toggle-class="%s"' % (
+        attr_text(target_id),
+        attr_text(css_class),
+    )
 
 
 class NavBar(Component):
@@ -62,6 +113,7 @@ class NavBar(Component):
         container: Container type (container, fluid)
         expand: Breakpoint for expansion (sm, md, lg, xl, xxl)
         id: Navbar ID for JavaScript control (auto-generated if not provided)
+        nonce: CSP nonce for the menu toggle's script under csp_strict (#4146)
 
     Examples:
         # Simple navbar
@@ -140,6 +192,7 @@ class NavBar(Component):
         container: str = "fluid",
         expand: str = "lg",
         id: Optional[str] = None,
+        nonce: str = "",
     ) -> None:
         """
         Initialize navbar component.
@@ -152,6 +205,11 @@ class NavBar(Component):
             container: Container type (container, fluid)
             expand: Breakpoint for expansion (sm, md, lg, xl, xxl)
             id: Navbar ID (auto-generated if not provided)
+            nonce: CSP nonce for the menu toggle's ``<script>`` under
+                ``LIVEVIEW_CONFIG["csp_strict"]``: pass ``request.csp_nonce``
+                for a nonce-only policy (a strict LiveView page also loads the
+                file with the client, with the request's nonce). Unused by
+                default (#4146).
         """
         super().__init__(
             items=items,
@@ -170,6 +228,7 @@ class NavBar(Component):
         self.sticky = sticky
         self.container = container
         self.expand = expand
+        self.nonce = nonce
 
     def get_context_data(self) -> dict[str, Any]:
         """Context for hybrid rendering (if Rust template engine supports loops in future)"""
@@ -302,6 +361,7 @@ class NavBar(Component):
 
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS navbar"""
+        strict = csp_strict()
         # Determine navbar classes
         sticky_class = ""
         if self.sticky == "top":
@@ -324,7 +384,8 @@ class NavBar(Component):
             "max-w-full px-4" if self.container == "fluid" else "container mx-auto px-4"
         )
 
-        parts = [f'<nav class="{bg_class}{sticky_class}">']
+        root_marker = _ROOT_MARKER if strict else ""
+        parts = [f'<nav class="{bg_class}{sticky_class}"{root_marker}>']
         parts.append(f'    <div class="{container_class}">')
         parts.append('        <div class="flex justify-between items-center h-16">')
 
@@ -413,7 +474,9 @@ class NavBar(Component):
         # Mobile menu button
         parts.append('            <div class="md:hidden">')
         parts.append(
-            f'                <button type="button" class="{link_class} p-2 rounded-md" onclick="document.getElementById(\'{_js_str(self.id)}-mobile\').classList.toggle(\'hidden\')">'
+            f'                <button type="button" class="{link_class} p-2 rounded-md" {_toggle_attrs(f"{self.id}-mobile", "hidden")}>'
+            if strict
+            else f'                <button type="button" class="{link_class} p-2 rounded-md" onclick="document.getElementById(\'{_js_str(self.id)}-mobile\').classList.toggle(\'hidden\')">'
         )
         parts.append(
             '                    <svg class="h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">'
@@ -474,15 +537,23 @@ class NavBar(Component):
         parts.append("        </div>")
 
         parts.append("    </div>")
+        tag = _toggle_script_tag(self.nonce) if strict else ""
+        if tag:
+            # Inside the <nav>, so the component keeps one root element.
+            parts.append(tag)
         parts.append("</nav>")
 
         return "\n".join(parts)
 
     def _render_plain(self) -> str:
         """Render plain HTML navbar"""
+        strict = csp_strict()
         sticky_class = f" navbar-sticky-{attr_text(self.sticky)}" if self.sticky else ""
 
-        parts = [f'<nav class="navbar navbar-{attr_text(self.variant)}{sticky_class}">']
+        root_marker = _ROOT_MARKER if strict else ""
+        parts = [
+            f'<nav class="navbar navbar-{attr_text(self.variant)}{sticky_class}"{root_marker}>'
+        ]
         parts.append(f'    <div class="navbar-container-{attr_text(self.container)}">')
 
         # Brand
@@ -501,7 +572,9 @@ class NavBar(Component):
 
         # Toggle button
         parts.append(
-            f"        <button class=\"navbar-toggler\" onclick=\"document.getElementById('{_js_str(self.id)}-menu').classList.toggle('show')\">☰</button>"
+            f'        <button class="navbar-toggler" {_toggle_attrs(f"{self.id}-menu", "show")}>☰</button>'
+            if strict
+            else f"        <button class=\"navbar-toggler\" onclick=\"document.getElementById('{_js_str(self.id)}-menu').classList.toggle('show')\">☰</button>"
         )
 
         # Nav items
@@ -552,6 +625,9 @@ class NavBar(Component):
         parts.append("            </ul>")
         parts.append("        </div>")
         parts.append("    </div>")
+        tag = _toggle_script_tag(self.nonce) if strict else ""
+        if tag:
+            parts.append(tag)
         parts.append("</nav>")
 
         return "\n".join(parts)

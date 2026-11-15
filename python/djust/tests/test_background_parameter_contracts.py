@@ -10,8 +10,18 @@ from asgiref.sync import sync_to_async
 
 from djust import event_handler
 from djust.runtime import ViewRuntime, WSConsumerTransport
-from djust.tests.test_background_html_fallback import BackgroundView
+from djust.tests.test_background_html_fallback import BackgroundView as _ExplicitBackgroundView
 from djust.websocket import LiveViewConsumer
+
+
+class BackgroundView(_ExplicitBackgroundView):
+    """The view this file drives without a real mount, so on the legacy policy it always had.
+
+    It inherited ``legacy`` from test_background_html_fallback's view until #4082's second pass
+    ran that one as explicit (with real mounts); the policy is stated here now.
+    """
+
+    exposure_policy = "legacy"
 
 
 class ContractView(BackgroundView):

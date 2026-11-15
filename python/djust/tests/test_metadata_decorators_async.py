@@ -69,7 +69,7 @@ _RAN: list[str] = []
 
 
 class _AsyncHandlersView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-view="djust.tests.test_metadata_decorators_async._AsyncHandlersView" dj-id="0">{{ n }}</div>'
 
     def mount(self, request, **kwargs):
@@ -91,19 +91,6 @@ class _AsyncHandlersView(LiveView):
 setattr(sys.modules[__name__], "_AsyncHandlersView", _AsyncHandlersView)
 
 
-class _Superuser:
-    is_authenticated = True
-    is_active = True
-    is_anonymous = False
-    is_superuser = True
-
-    def has_perm(self, perm, obj=None):
-        return True
-
-    def has_perms(self, perms, obj=None):
-        return True
-
-
 async def _event(communicator, name):
     await communicator.send_json_to({"type": "event", "event": name, "params": {}})
     for _ in range(6):
@@ -115,25 +102,25 @@ async def _event(communicator, name):
     raise AssertionError("no reply to the event")
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_decorated_async_handlers_run_over_the_socket(settings):
     pytest.importorskip("channels")
+    from asgiref.sync import sync_to_async
     from channels.testing import WebsocketCommunicator
+    from django.contrib.auth import get_user_model
 
+    from djust.tests._live_session import with_live_session
     from djust.websocket import LiveViewConsumer
 
     settings.LIVEVIEW_ALLOWED_MODULES = [__name__]
     _RAN.clear()
-    inner = LiveViewConsumer.as_asgi()
-
-    async def app(scope, receive, send):
-        scope = dict(scope)
-        scope["user"] = _Superuser()
-        scope.setdefault("session", {})
-        return await inner(scope, receive, send)
-
-    communicator = WebsocketCommunicator(app, "/ws/")
-    connected, _ = await communicator.connect()
+    # A saved superuser logged into a live session: an explicit view re-reads the
+    # user from the session on every turn, so a stub scope user would be anonymous.
+    superuser = await sync_to_async(get_user_model().objects.create_superuser)(
+        username="meta-async", password="pw-meta-async-x"
+    )
+    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    connected, _ = await with_live_session(communicator, superuser).connect()
     assert connected
     await communicator.receive_json_from()
     await communicator.send_json_to({"type": "mount", "view": f"{__name__}._AsyncHandlersView"})

@@ -47,7 +47,7 @@ WRAPPED = []
 
 
 class PushPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><b id='n'>{{ n }}</b><i id='t'>{{ transport }}</i></div>"
 
     def mount(self, request, **kwargs):
@@ -104,7 +104,7 @@ class PushPage(LiveView):
 class GuardedPage(LiveView):
     """``trusted_update`` trusts its payload: only the server may call it (#3002)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><b>{{ got }}</b></div>"
 
     def mount(self, request, **kwargs):
@@ -127,7 +127,7 @@ class _StepForm(forms.Form):
 class ResumeWizardPage(WizardMixin, LiveView):
     """``resume_wizard`` resets the wizard's answers: server code only (#4011)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ wizard_step_index }}</div>"
     wizard_steps = [
         {"name": "a", "title": "A", "form_class": _StepForm},
@@ -141,7 +141,7 @@ class ResumeWizardPage(WizardMixin, LiveView):
 class BoomPage(LiveView):
     """Renders fine until ``n == 2``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><b>{{ n }}</b></div>"
 
     def mount(self, request, **kwargs):
@@ -159,7 +159,7 @@ class BoomPage(LiveView):
 
 
 class AuthTickPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = True
     tick_interval = 10
     template = "<div dj-root><b>{{ ticks }}</b></div>"
@@ -179,7 +179,7 @@ class AuthPushPage(PushPage):
 
 
 class KickTickPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><b>{{ ticks }}</b></div>"
     tick_interval = 10
 
@@ -206,7 +206,7 @@ class OverridePage(GuardedPage):
 
 
 class LongTickPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>x</div>"
     tick_interval = 30000
 
@@ -215,7 +215,7 @@ class LongTickPage(LiveView):
 
 
 class TickPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><b id='t'>{{ ticks }}</b></div>"
     tick_interval = 10
 
@@ -240,7 +240,7 @@ class QuietTickPage(TickPage):
 class NoTickPage(LiveView):
     """Sets ``tick_interval`` but does not override ``handle_tick``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>x</div>"
     tick_interval = 10
 
@@ -1012,7 +1012,10 @@ def test_the_push_method_is_refused_by_function_not_only_by_name():
 # -- F2: a render error in a push turn is logged, never raised ---------------
 
 
-async def test_a_render_error_in_a_push_is_logged_and_the_follower_carries_on(caplog):
+async def test_a_render_error_in_a_push_is_logged_and_the_follower_carries_on(caplog, settings):
+    # An explicit view's failures are logged with their message under DEBUG
+    # only (production logs a value-free line, D-a).
+    settings.DEBUG = True
     session, _key = await _sse(MOD + "BoomPage", "/boom/")
     view = session.view_instance
     assert await view.server_push("handle_set", {"n": 2}) is True  # no exception
@@ -1022,7 +1025,10 @@ async def test_a_render_error_in_a_push_is_logged_and_the_follower_carries_on(ca
     await _sse_frames(session, _shows(3))
 
 
-async def test_a_render_error_in_a_deferred_batch_does_not_kill_the_drain(caplog):
+async def test_a_render_error_in_a_deferred_batch_does_not_kill_the_drain(caplog, settings):
+    # An explicit view's failures are logged with their message under DEBUG
+    # only (production logs a value-free line, D-a).
+    settings.DEBUG = True
     session, _key = await _sse(MOD + "BoomPage", "/boom/")
     view, runtime = session.view_instance, session.runtime
     await session._render_lock.acquire()

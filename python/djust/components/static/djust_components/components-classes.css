@@ -853,7 +853,7 @@
    ============================================================================
    ``Badge`` / ``Navbar`` / ``Table`` / ``DataTable`` (``djust.components.ui``,
    ``layout``, ``data``) keep their inline style by default; under
-   LIVEVIEW_CONFIG["csp_strict_styles"] they write these classes, as strong as
+   LIVEVIEW_CONFIG["csp_strict"] they write these classes, as strong as
    the inline style was (also in components.css). */
 .dj-badge-close { font-size: 0.65em !important; padding: 0.1em 0.25em !important; }
 .dj-navbar-link--external { color: #667eea !important; font-weight: 600 !important; }

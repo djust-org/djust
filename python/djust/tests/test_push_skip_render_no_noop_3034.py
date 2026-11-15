@@ -12,13 +12,13 @@ from __future__ import annotations
 import pytest
 
 from djust import LiveView
-from djust.tests.test_skip_render_force_parity_2834 import _consumer_with_view
+from djust.tests.test_skip_render_force_parity_2834 import _mounted_consumer
 
 _ALLOWED = "djust.tests.test_push_skip_render_no_noop_3034"
 
 
 class QuietPushView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.QuietPushView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -39,15 +39,22 @@ class QuietPushView(LiveView):
         self._skip_render = True
 
 
+class QuietPushLegacyView(QuietPushView):
+    exposure_policy = "legacy"  # legacy subject: push turns are offloaded for legacy views only
+    template = (
+        f'<div dj-root dj-view="{_ALLOWED}.QuietPushLegacyView" dj-id="0">c={{{{ c }}}}</div>'
+    )
+
+
 def _types(sent):
     return [f.get("type") for f in sent]
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestPushSkipRenderSendsNoNoop:
     async def test_server_push_skip_sends_no_noop_but_flushes_side_effects(self):
-        consumer = _consumer_with_view(QuietPushView)
+        consumer = await _mounted_consumer(QuietPushView)
 
         await consumer.server_push({"handler": "handle_skip", "payload": {}})
 
@@ -58,7 +65,7 @@ class TestPushSkipRenderSendsNoNoop:
 
     async def test_server_push_that_changes_state_still_renders(self):
         """Gate-off sibling: only the skip arm lost its frame."""
-        consumer = _consumer_with_view(QuietPushView)
+        consumer = await _mounted_consumer(QuietPushView)
 
         await consumer.server_push({"handler": "handle_change", "payload": {}})
 
@@ -68,8 +75,7 @@ class TestPushSkipRenderSendsNoNoop:
         from djust import worker_pool
 
         monkeypatch.setattr(worker_pool, "offload_enabled", lambda: True)
-        consumer = _consumer_with_view(QuietPushView)
-        consumer.view_instance.exposure_policy = "legacy"
+        consumer = await _mounted_consumer(QuietPushLegacyView)
         taken = []
         offloaded = consumer._run_server_push_turn_offloaded
 
@@ -87,7 +93,7 @@ class TestPushSkipRenderSendsNoNoop:
         assert not consumer._render_lock.locked()
 
     async def test_db_notify_skip_sends_no_noop_but_flushes_side_effects(self):
-        consumer = _consumer_with_view(QuietPushView)
+        consumer = await _mounted_consumer(QuietPushView)
 
         await consumer.db_notify({"channel": "orders", "payload": {}})
 

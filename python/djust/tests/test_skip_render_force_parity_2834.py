@@ -47,7 +47,8 @@ import pytest
 
 from djust import LiveView
 from djust.decorators import event_handler
-from djust.tests.test_transport_behavioral_parity import _event_runtime_with_view
+from djust.tests._live_session import amount_on_consumer
+from djust.tests.test_transport_behavioral_parity import _mounted_event_runtime
 
 _ALLOWED = "djust.tests.test_skip_render_force_parity_2834"
 
@@ -80,6 +81,28 @@ def _consumer_with_view(view_class):
     return consumer
 
 
+async def _mounted_consumer(view_class):
+    """A ``LiveViewConsumer`` that MOUNTED ``view_class``, its sends captured.
+
+    The explicit-policy counterpart of :func:`_consumer_with_view`: an explicit
+    view's server-originated turns (push, notify, tick) are authorized by the
+    runtime that mounted it, against its live session, so the view is mounted
+    through the real ``handle_mount`` (whose render establishes the diff
+    baseline) rather than installed. Needs ``django_db(transaction=True)``.
+    """
+    from djust.websocket import LiveViewConsumer
+
+    consumer = LiveViewConsumer()
+    consumer.sent = []
+
+    async def _capture(payload):
+        consumer.sent.append(payload)
+
+    consumer.send_json = _capture
+    await amount_on_consumer(consumer, f"{view_class.__module__}.{view_class.__name__}")
+    return consumer
+
+
 def _updates(sent):
     return [f for f in sent if f.get("type") in ("patch", "html_update")]
 
@@ -104,7 +127,7 @@ class _CollisionHandler:
 class CollisionEventView(_CollisionHandler, LiveView):
     """Event path (runtime.dispatch_event): handler sets BOTH flags."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.CollisionEventView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -121,7 +144,7 @@ class CollisionEventView(_CollisionHandler, LiveView):
 class SkipOnlyEventView(LiveView):
     """Gate-off sibling: ``_skip_render`` only — must still skip (noop)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.SkipOnlyEventView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -138,7 +161,7 @@ class SkipOnlyEventView(LiveView):
 class CollisionPushView(_CollisionHandler, LiveView):
     """server_push path: the channel-layer handler sets BOTH flags."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = f'<div dj-root dj-view="{_ALLOWED}.CollisionPushView" dj-id="0">c={{{{ c }}}}</div>'
 
     def mount(self, request, **kwargs):
@@ -158,7 +181,7 @@ class CollisionNotifyView(_CollisionHandler, LiveView):
     """db_notify path: ``handle_info`` sets BOTH flags (or skip-only, per the
     payload's ``mode`` — one view covers both arms of this path)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.CollisionNotifyView" dj-id="0">c={{{{ c }}}}</div>'
     )
@@ -186,7 +209,7 @@ class CollisionDeferredView(_CollisionHandler, LiveView):
     decorated, exactly like the live ``dispatch_event`` view's.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.CollisionDeferredView" dj-id="0">c={{{{ c }}}}</div>'
     )
@@ -211,13 +234,13 @@ class CollisionDeferredView(_CollisionHandler, LiveView):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestSkipRenderForceParity2834:
     # ---- runtime.dispatch_event (the live event spine) --------------------
 
     async def test_dispatch_event_force_wins_over_skip_render(self):
-        runtime, transport = _event_runtime_with_view(CollisionEventView())
+        runtime, transport = await _mounted_event_runtime(CollisionEventView())
         runtime.view_instance.mount(None)
 
         await runtime.dispatch_event({"type": "event", "event": "collide", "params": {}})
@@ -236,7 +259,7 @@ class TestSkipRenderForceParity2834:
         """GATE-OFF sibling (#1468): without the force flag, the explicit skip
         must still suppress the render — the collision fix may not weaken the
         plain skip."""
-        runtime, transport = _event_runtime_with_view(SkipOnlyEventView())
+        runtime, transport = await _mounted_event_runtime(SkipOnlyEventView())
         runtime.view_instance.mount(None)
 
         await runtime.dispatch_event({"type": "event", "event": "skip_only", "params": {}})
@@ -251,7 +274,7 @@ class TestSkipRenderForceParity2834:
     # ---- websocket.server_push ---------------------------------------------
 
     async def test_server_push_force_wins_over_skip_render(self):
-        consumer = _consumer_with_view(CollisionPushView)
+        consumer = await _mounted_consumer(CollisionPushView)
 
         await consumer.server_push({"handler": "handle_push", "payload": {}})
 
@@ -265,7 +288,7 @@ class TestSkipRenderForceParity2834:
 
     async def test_server_push_skip_only_still_skips(self):
         """GATE-OFF sibling (#1468): skip-only must still suppress the render."""
-        consumer = _consumer_with_view(CollisionPushView)
+        consumer = await _mounted_consumer(CollisionPushView)
 
         await consumer.server_push({"handler": "handle_skip_only", "payload": {}})
 
@@ -280,7 +303,7 @@ class TestSkipRenderForceParity2834:
     # ---- websocket.db_notify ------------------------------------------------
 
     async def test_db_notify_force_wins_over_skip_render(self):
-        consumer = _consumer_with_view(CollisionNotifyView)
+        consumer = await _mounted_consumer(CollisionNotifyView)
 
         await consumer.db_notify({"channel": "test", "payload": {}})
 
@@ -294,7 +317,7 @@ class TestSkipRenderForceParity2834:
 
     async def test_db_notify_skip_only_still_skips(self):
         """GATE-OFF sibling (#1468): skip-only must still suppress the render."""
-        consumer = _consumer_with_view(CollisionNotifyView)
+        consumer = await _mounted_consumer(CollisionNotifyView)
 
         await consumer.db_notify({"channel": "test", "payload": {"mode": "skip_only"}})
 
@@ -311,7 +334,7 @@ class TestSkipRenderForceParity2834:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestDispatchSingleEventParity2847:
     """Both ``_dispatch_single_event`` twins (runtime + WS consumer).
@@ -326,9 +349,11 @@ class TestDispatchSingleEventParity2847:
     # ---- ViewRuntime._dispatch_single_event --------------------------------
 
     async def test_runtime_single_event_force_wins_over_skip_render(self):
-        runtime, transport = _event_runtime_with_view(CollisionDeferredView())
+        runtime, transport = await _mounted_event_runtime(CollisionDeferredView())
         view = runtime.view_instance
-        view.mount(None)
+        # The flush runs inside an authorized event turn; an explicit view's
+        # commit needs that turn's fresh request.
+        await runtime.authorize_explicit_turn(view)
 
         await runtime._dispatch_single_event(view, "collide", {})
 
@@ -345,9 +370,11 @@ class TestDispatchSingleEventParity2847:
 
     async def test_runtime_single_event_skip_only_still_skips(self):
         """GATE-OFF sibling (#1468): skip-only must still noop on the twin."""
-        runtime, transport = _event_runtime_with_view(CollisionDeferredView())
+        runtime, transport = await _mounted_event_runtime(CollisionDeferredView())
         view = runtime.view_instance
-        view.mount(None)
+        # The flush runs inside an authorized event turn; an explicit view's
+        # commit needs that turn's fresh request.
+        await runtime.authorize_explicit_turn(view)
 
         await runtime._dispatch_single_event(view, "skip_only", {})
 
@@ -360,20 +387,20 @@ class TestDispatchSingleEventParity2847:
 
     # ---- LiveViewConsumer._dispatch_single_event ---------------------------
 
-    def _ws_consumer_for_twin(self):
+    async def _ws_consumer_for_twin(self):
         """The shared consumer harness + the per-connection rate limiter the
         bare consumer only creates at ``connect()`` (a MagicMock suffices: the
         parity handlers carry no ``@rate_limit``, so it is never consulted)."""
         from unittest.mock import MagicMock
 
-        consumer = _consumer_with_view(CollisionDeferredView)
+        consumer = await _mounted_consumer(CollisionDeferredView)
         rate_limiter = MagicMock()
         rate_limiter.check.return_value = True
         consumer._rate_limiter = rate_limiter
         return consumer
 
     async def test_ws_single_event_force_wins_over_skip_render(self):
-        consumer = self._ws_consumer_for_twin()
+        consumer = await self._ws_consumer_for_twin()
         view = consumer.view_instance
 
         async with consumer._render_lock:  # the twin's documented caller contract
@@ -390,7 +417,7 @@ class TestDispatchSingleEventParity2847:
 
     async def test_ws_single_event_skip_only_still_skips(self):
         """GATE-OFF sibling (#1468): skip-only must still noop on the WS twin."""
-        consumer = self._ws_consumer_for_twin()
+        consumer = await self._ws_consumer_for_twin()
         view = consumer.view_instance
 
         async with consumer._render_lock:

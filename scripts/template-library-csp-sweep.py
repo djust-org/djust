@@ -3,7 +3,7 @@
 
 Renders every tag of djust's template libraries (the parity harness's calls) through Django's
 engine and ``DjustTemplateBackend``, and every component class under each ``css_framework``, with
-``LIVEVIEW_CONFIG["csp_strict_styles"]`` off and on and a request carrying a CSP nonce, and reports
+``LIVEVIEW_CONFIG["csp_strict"]`` off and on and a request carrying a CSP nonce, and reports
 every ``style`` attribute, every ``<style>`` and every executable inline ``<script>`` without that
 nonce. See ``scripts/lib/template_library_parity/csp_sweep.py``.
 

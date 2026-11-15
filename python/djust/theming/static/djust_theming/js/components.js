@@ -1,7 +1,8 @@
 /**
  * djust_theming - Component behavior layer
  *
- * Thin behavior layer for interactive components (modals, dropdowns, tabs).
+ * Thin behavior layer for interactive components (modals, dropdowns, tabs,
+ * the alert's and the toast's dismiss button).
  * Uses data-attribute hooks. No dependencies. ~4KB unminified.
  *
  * Open and closed are the ``hidden`` attribute the templates render, not an
@@ -302,6 +303,33 @@
     }
 
     // =========================================================================
+    // Dismiss (alert, toast)
+    // =========================================================================
+
+    // Under LIVEVIEW_CONFIG["csp_strict"] the alert's and the toast's close
+    // button carries `data-theme-dismiss` and its component root
+    // `data-theme-dismiss-root`, where by default the button is
+    // `onclick="this.parentElement.remove()"`, which a script-src without
+    // 'unsafe-inline' refuses (#4146). This is that handler, delegated on
+    // `document`, so it also covers a button a LiveView patch inserts later.
+    // It removes only a marked root whose direct child is the button (the
+    // inline handler's `parentElement`): a marker without its root, or a
+    // button nested deeper, does nothing, so markup that carries the
+    // attribute cannot remove an arbitrary container. In default mode
+    // nothing is marked and this is inert. Unlike the modal and dropdown
+    // bindings it does not stand down on a LiveView page: the button carries
+    // no `dj-click`, so nothing on the server would do it.
+    function handleDismissClick(e) {
+        var target = e.target;
+        if (!target || typeof target.closest !== 'function') return;
+        var btn = target.closest('[data-theme-dismiss]');
+        if (!btn) return;
+        var root = btn.parentElement;
+        if (!root || !root.hasAttribute('data-theme-dismiss-root')) return;
+        root.remove();
+    }
+
+    // =========================================================================
     // Initialization
     // =========================================================================
 
@@ -344,6 +372,7 @@
     // Global event listeners (only bind once)
     document.addEventListener('keydown', handleModalEsc);
     document.addEventListener('click', handleDropdownClickOutside);
+    document.addEventListener('click', handleDismissClick);
 
     // Re-init when djust LiveView updates the DOM
     window.addEventListener('djust:dom-update', function() {

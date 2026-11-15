@@ -391,7 +391,7 @@ def safe_css_number(value: Any, default: str = "", *, integer: bool = False) -> 
 # item height) writes it through ``style_attrs``. The value is validated HERE, by the kind of
 # the property; a value that fails is dropped. By default it is an inline ``style``. A
 # ``style-src`` without 'unsafe-inline' refuses every ``style="..."`` attribute, so with
-# ``LIVEVIEW_CONFIG["csp_strict_styles"]`` on it is ``data-dj-style-<property>="<value>"``
+# ``LIVEVIEW_CONFIG["csp_strict"]`` on it is ``data-dj-style-<property>="<value>"``
 # instead, and the client module ``54-dj-style.js`` applies it with
 # ``element.style.setProperty`` (the CSSOM, which a strict CSP allows).
 
@@ -563,15 +563,26 @@ _STYLE_WARNED: set[str] = set()
 STYLES_META = '<meta name="djust-styles" content="attrs">'
 
 
-def strict_styles() -> bool:
-    """Whether free-form style values are written for a strict CSP (#3979).
+def csp_strict() -> bool:
+    """Whether djust writes its output for a strict Content-Security-Policy (#3979, #4146).
 
-    ``LIVEVIEW_CONFIG["csp_strict_styles"]``, off by default. The one switch
-    :func:`style_attrs` (and the Rust components' ``strict_styles`` argument) follow.
+    ``LIVEVIEW_CONFIG["csp_strict"]``, off by default; ``csp_strict_styles`` (the name it
+    shipped with) is the same switch, and either on means on. The one switch :func:`style_attrs`
+    (and the Rust components' ``strict_styles`` argument, a wire name kept), the constant styles
+    of #4139 and the inline handlers of #4146 follow.
     """
     from djust.config import config
 
-    return bool(config.get("csp_strict_styles", False))
+    return bool(config.get("csp_strict", False) or config.get(_CSP_STRICT_ALIAS, False))
+
+
+#: The name ``LIVEVIEW_CONFIG["csp_strict"]`` shipped with (#3979). A constant, not a literal in
+#: the ``get`` above: the template-library parity harness counts each literal key a tag's code
+#: reads as a parameter of that tag, and a config key is not one.
+_CSP_STRICT_ALIAS = "csp_strict_styles"
+
+#: The name :func:`csp_strict` had while it covered styles only (#3979).
+strict_styles = csp_strict
 
 
 def style_attrs(props: Any = None, /, *, css: str | None = None, **kwargs: Any) -> str:
@@ -592,7 +603,7 @@ def style_attrs(props: Any = None, /, *, css: str | None = None, **kwargs: Any) 
       declaration text with one ``{}`` per property in order (a site keeps its exact markup:
       ``css="height: {};"``); without it, ``prop:value`` pairs joined by ``;``. When a value
       was dropped the pairs are written instead.
-    * with ``LIVEVIEW_CONFIG["csp_strict_styles"]`` on (a ``style-src`` without
+    * with ``LIVEVIEW_CONFIG["csp_strict"]`` on (a ``style-src`` without
       'unsafe-inline'), as ``' data-dj-style data-dj-style-width="240px"'``, which the client
       module ``54-dj-style.js`` applies with ``element.style.setProperty`` (the CSSOM, which a
       strict CSP allows). The bare ``data-dj-style`` marks the element for the client.
@@ -606,7 +617,7 @@ def style_attrs(props: Any = None, /, *, css: str | None = None, **kwargs: Any) 
     kept = [(prop, text) for prop, text in pairs if text]
     if not kept:
         return ""
-    if strict_styles():
+    if csp_strict():
         return " data-dj-style" + "".join(
             f' {_STYLE_ATTR_PREFIX}{prop}="{escape(text)}"' for prop, text in kept
         )
@@ -619,14 +630,14 @@ def style_attrs(props: Any = None, /, *, css: str | None = None, **kwargs: Any) 
 
 #: A clickable data-table row's pointer cursor (#4139). By default the inline style it has always
 #: carried: the ``data-table-row-clickable`` rule lives only in ``components.css``, which a page
-#: may not load. Under ``LIVEVIEW_CONFIG["csp_strict_styles"]`` (a strict CSP refuses the inline
+#: may not load. Under ``LIVEVIEW_CONFIG["csp_strict"]`` (a strict CSP refuses the inline
 #: style) nothing, and the class carries it.
 _ROW_POINTER_STYLE = ' style="cursor:pointer"'
 
 
 def row_pointer_style() -> str:
     """The clickable row's inline pointer cursor by default, ``""`` in strict mode (#4139)."""
-    return "" if strict_styles() else _ROW_POINTER_STYLE
+    return "" if csp_strict() else _ROW_POINTER_STYLE
 
 
 def progress_fill(percent: Any, *, css: str = "width: {}%") -> tuple[str, str]:
@@ -636,7 +647,7 @@ def progress_fill(percent: Any, *, css: str = "width: {}%") -> tuple[str, str]:
     the components stylesheets: no JavaScript and no first-paint jump. By default the style is
     also the inline width the bar has always carried (``css`` with the percent as written), so a
     page without those stylesheets draws it as before; with
-    ``LIVEVIEW_CONFIG["csp_strict_styles"]`` on there is no style, only the class.
+    ``LIVEVIEW_CONFIG["csp_strict"]`` on there is no style, only the class.
     """
     try:
         number = float(percent)
@@ -646,7 +657,7 @@ def progress_fill(percent: Any, *, css: str = "width: {}%") -> tuple[str, str]:
     clamped = max(0.0, min(100.0, number)) if finite else 0.0
     # Half up, as the Rust components round (``f64::round``): one bar, one class.
     whole = int(clamped + 0.5)
-    if strict_styles():
+    if csp_strict():
         return f"dj-progress-w-{whole}", ""
     # A number already in range is written as given (the bar's old markup); anything else
     # (out of range, not a number, text) as the clamped number.
