@@ -48,6 +48,10 @@ REMAINING_4082: dict[str, str] = {
     "python/djust/tests/test_async_result_render_lock_2840.py": (
         "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount"
     ),
+    "python/djust/tests/test_background_parameter_contracts.py": (
+        "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount; it "
+        "inherited legacy from test_background_html_fallback's view, which pass 2 made explicit"
+    ),
     "python/djust/tests/test_component_scoped_render_2917.py": (
         "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
     ),
