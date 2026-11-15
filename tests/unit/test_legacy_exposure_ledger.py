@@ -24,7 +24,7 @@ TEST_ROOTS = ("python/djust/tests", "python/tests", "tests")
 LEGACY = re.compile(
     r"""exposure_policy\s*=\s*["']legacy["']|["']exposure_policy["']\s*:\s*["']legacy["']"""
 )
-REASON = re.compile(r"#\s*(legacy subject:|gap #4082:)")
+REASON = re.compile(r"#\s*(legacy subject:|gap #\d+:)")
 #: The ledger and this test quote the statement; neither defines a view.
 SELF = {"tests/legacy_exposure_ledger.py", "tests/unit/test_legacy_exposure_ledger.py"}
 
@@ -51,7 +51,7 @@ def test_the_scan_finds_what_it_claims_to_find():
     assert LEGACY.search('{"exposure_policy": "legacy", "template": "x"}')
     assert not LEGACY.search('    exposure_policy = "explicit"')
     assert REASON.search('exposure_policy = "legacy"  # legacy subject: why')
-    assert REASON.search('exposure_policy = "legacy"  # gap #4082: why')
+    assert REASON.search('exposure_policy = "legacy"  # gap #4149: why')
     assert not REASON.search('exposure_policy = "legacy"  # why')
     # The scan reaches every test root (a root it missed would read as clean).
     found = _tree_files_stating_legacy()

@@ -299,7 +299,7 @@ class PlainNoExtrasView(LiveView):
 class StickyChild(LiveView):
     """Sticky child embedded via ``{% live_render sticky=True %}``."""
 
-    exposure_policy = "legacy"  # gap #4082: an explicit sticky child cannot survive live_redirect
+    exposure_policy = "legacy"  # gap #4149: an explicit sticky child cannot survive live_redirect
     sticky = True
     sticky_id = "sticky-widget"
     template = "<div>track={{ track }}</div>"
@@ -314,7 +314,7 @@ class StickyChild(LiveView):
 class StickyParentView(LiveView):
     """Parent embedding the sticky child (the live_redirect SOURCE)."""
 
-    exposure_policy = "legacy"  # gap #4082: an explicit sticky child cannot survive live_redirect
+    exposure_policy = "legacy"  # gap #4149: an explicit sticky child cannot survive live_redirect
     template = (
         "{% load live_tags %}"
         f'<div dj-root dj-view="{_ALLOWED}.StickyParentView" dj-id="0">'
@@ -334,7 +334,7 @@ class DestinationWithSlotView(LiveView):
     """live_redirect DESTINATION carrying a matching ``[dj-sticky-slot]`` so the
     survivor reattaches and appears in the sticky_hold ``views`` list."""
 
-    exposure_policy = "legacy"  # gap #4082: an explicit sticky child cannot survive live_redirect
+    exposure_policy = "legacy"  # gap #4149: an explicit sticky child cannot survive live_redirect
     template = (
         f'<div dj-root dj-view="{_ALLOWED}.DestinationWithSlotView" dj-id="0">'
         '<h1>Dest B</h1><div dj-sticky-slot="sticky-widget"></div></div>'

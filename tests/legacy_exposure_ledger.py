@@ -9,7 +9,7 @@ fails it until it is removed, so the list shrinks on purpose and cannot grow
 silently.
 
 A file whose views are only partly legacy marks each remaining statement with
-a ``# legacy subject:`` or ``# gap #4082:`` comment on the same line.
+a ``# legacy subject:`` or ``# gap #<issue>:`` comment on the same line.
 """
 
 from __future__ import annotations
@@ -151,7 +151,7 @@ REMAINING_4082: dict[str, str] = {
         "not migrated yet (#4082 category 3): request, SSE stream or socket without a live session"
     ),
     "python/djust/tests/test_ws_mount_flip_parity_1911.py": (
-        "migrated; the sticky_hold cases stay legacy: product gap, an explicit sticky child cannot survive live_redirect to another page"
+        "migrated; the sticky_hold cases stay legacy: product gap #4149, an explicit sticky child cannot survive live_redirect to another page"
     ),
     "python/djust/tests/test_ws_transport_hardening_f21_f17.py": (
         "not migrated yet (#4082 category 2): hand-built consumer or transport with no mount"
