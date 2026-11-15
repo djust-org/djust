@@ -47,6 +47,7 @@ ALLOWLIST_PACKAGE = frozenset(
     {
         "djust",
         "djust._html",
+        "djust._mapping",  # the serialization walkers' mapping helper (#4134); stdlib only
         "djust._rust",
         "djust.render_env",
         "djust.template_libraries",
@@ -73,7 +74,7 @@ ALLOWLIST_PACKAGE = frozenset(
 HAS_CSP_NONCE_TAG = "csp_nonce_attr" in django_default_tags.tags
 if HAS_CSP_NONCE_TAG:
     ALLOWLIST_PACKAGE |= {"djust.template_tags.csp_nonce_attr"}
-assert len(ALLOWLIST_PACKAGE) == 23 + HAS_CSP_NONCE_TAG
+assert len(ALLOWLIST_PACKAGE) == 24 + HAS_CSP_NONCE_TAG
 
 ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
     {
@@ -93,7 +94,7 @@ ALLOWLIST_BACKEND = ALLOWLIST_PACKAGE | frozenset(
         "djust.template.serialization",
     }
 )
-assert len(ALLOWLIST_BACKEND) == 35 + HAS_CSP_NONCE_TAG
+assert len(ALLOWLIST_BACKEND) == 36 + HAS_CSP_NONCE_TAG
 
 
 # After ``django.setup()`` on a templates-only project: ``DjustConfig.ready()``
@@ -140,7 +141,7 @@ ALLOWLIST_SETUP = (
         }
     )
 )
-assert len(ALLOWLIST_SETUP) == 68 + HAS_CSP_NONCE_TAG
+assert len(ALLOWLIST_SETUP) == 69 + HAS_CSP_NONCE_TAG
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).

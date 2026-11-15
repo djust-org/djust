@@ -140,6 +140,7 @@ NON_EVENT_ATTRIBUTES = frozenset(
         "dj-copy-feedback",
         "dj-debounce",
         "dj-dialog",
+        "dj-dialog-no-close",
         "dj-disable-with",
         "dj-flip",
         "dj-force-value",

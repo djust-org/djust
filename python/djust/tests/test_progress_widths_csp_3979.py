@@ -85,6 +85,7 @@ from django.template import Context as _Context  # noqa: E402
 from django.template import Engine as _Engine  # noqa: E402
 
 from djust.components import rust_handlers as _rh  # noqa: E402
+from djust.tests.native_call import native_render as _native_render  # noqa: E402
 
 _STATIC = _Path(_rh.__file__).resolve().parent / "static" / "djust_components"
 _CATALOG_CSS = (_STATIC / "components.css").read_text()
@@ -188,15 +189,16 @@ def test_the_skeleton_text_lines_keep_their_width_palette():
 
 
 def _data_table(cf):
-    return str(
-        _rh.DataTableHandler().render(
-            ["rows=rows", "columns=cols", "conditional_formatting=cf"],
-            {
-                "rows": [{"id": 1, "n": 25}],
-                "cols": [{"key": "n", "label": "N"}],
-                "cf": cf,
-            },
-        )
+    # As the engine hands a native handler its operands: resolved, not as names to look up
+    # (#3882). A raw ``rows=rows`` call would draw a table of the text "rows".
+    return _native_render(
+        _rh.DataTableHandler(),
+        ["rows=rows", "columns=cols", "conditional_formatting=cf"],
+        {
+            "rows": [{"id": 1, "n": 25}],
+            "cols": [{"key": "n", "label": "N"}],
+            "cf": cf,
+        },
     )
 
 
@@ -208,11 +210,10 @@ def test_the_data_table_data_bar_width_is_a_class():
 
 
 def test_the_data_table_loading_skeleton_has_no_inline_style():
-    html = str(
-        _rh.DataTableHandler().render(
-            ["rows=rows", "columns=cols", "loading=True"],
-            {"rows": [], "cols": [{"key": "n", "label": "N"}]},
-        )
+    html = _native_render(
+        _rh.DataTableHandler(),
+        ["rows=rows", "columns=cols", "loading=True"],
+        {"rows": [], "cols": [{"key": "n", "label": "N"}]},
     )
     assert "skeleton-line" in html
     assert "style=" not in html, html

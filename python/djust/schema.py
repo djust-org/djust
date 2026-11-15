@@ -599,10 +599,13 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "'close'/'open' calls showModal()/close() on the element.",
         "value": "'open' | 'close'",
         "example": '<dialog id="settings" dj-dialog="{{ show_settings|yesno:\'open,close\' }}">...</dialog>',
-        "related_attributes": ["dj-dialog-close-event"],
+        "related_attributes": ["dj-dialog-close-event", "dj-dialog-no-close"],
         "related_attribute_details": {
             "dj-dialog-close-event": "Server event fired when the user closes the dialog client-side "
             "(Escape, backdrop click), keeping server state in sync.",
+            "dj-dialog-no-close": "Written by {% modal native=True %} when the close control is off; "
+            "the client then keeps the dialog open on Escape and backdrop click. Not meant to be "
+            "written by hand.",
         },
     },
     {
