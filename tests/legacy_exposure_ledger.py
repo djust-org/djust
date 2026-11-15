@@ -83,7 +83,7 @@ REMAINING_4082: dict[str, str] = {
         "migrated; the post()-only event refusal cases stay legacy: a legacy view refuses the event and stays mounted"
     ),
     "python/djust/tests/test_live_auth_event_holders_and_user_checks.py": (
-        "not migrated yet (#4082 category 1): stub user, not a saved user logged into the session"
+        "migrated; the upload-resume case stays legacy: an explicit view does not resume an upload across a reconnect (ADR-038 D-g)"
     ),
     "python/djust/tests/test_model_form_object_recheck_3967.py": (
         "migrated; the record-reuse cases stay legacy: gap, the explicit render leaves _djust_prop_cache on the record and ModelFormMixin._fingerprint never matches"
@@ -442,4 +442,5 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_live_auth_denials_and_wrappers.py",
     "python/djust/tests/test_model_form_object_recheck_3967.py",
     "tests/unit/test_layout_switching.py",
+    "python/djust/tests/test_live_auth_event_holders_and_user_checks.py",
 )
