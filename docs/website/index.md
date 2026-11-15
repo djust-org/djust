@@ -97,6 +97,7 @@ How to build specific features.
 | **[djust-deploy CLI](guides/djust-deploy.md)**            | Deploy to djustlive.com from the command line      |
 | **[What Survives a Second Process](guides/state-survival.md)** | Tested table: what a view keeps across a reconnect, a restart and another process |
 | **[The State Store](state/state-store.md)** | Keep saved view state out of the plain session: the sealed store, or your own |
+| **[How Often State Is Saved](state/save-frequency.md)** | `DJUST_STATE_SAVE_INTERVAL`: answer a socket turn first, save its state soon after |
 | **[Template Cheat Sheet](guides/template-cheatsheet.md)** | Quick reference for all directives and filters     |
 | **[PWA](guides/pwa.md)**                                  | Build offline-first Progressive Web Apps           |
 | **[Service Worker](guides/service-worker.md)**            | Instant page shell + WebSocket reconnection bridge |

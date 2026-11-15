@@ -300,6 +300,20 @@ def _carry_save_ordering(old_runtime: Any, new_runtime: Any) -> None:
         new_runtime._explicit_save_pending = pending
 
 
+async def _flush_session_states(session: "SSESession", reason: str) -> None:
+    """Write what the session's views' deferred turns left unsaved (design:
+    save frequency): the page view's and each view beside it. Never raises."""
+    runtimes = [session.runtime, *(slot.runtime for slot in list(session._slots.values()))]
+    for runtime in runtimes:
+        flush = getattr(runtime, "flush_state", None)
+        if flush is None:
+            continue
+        try:
+            await flush(reason=reason)
+        except Exception:  # noqa: BLE001 — teardown goes ahead whatever storage does
+            logger.warning("SSE: view state flush at %s failed", reason)
+
+
 async def _linger() -> None:
     """The closed stream's grace period for in-flight event POSTs."""
     await asyncio.sleep(_SESSION_LINGER_S)
@@ -340,6 +354,8 @@ async def _shutdown_closed_session(session: "SSESession") -> None:
                     sanitize_for_log(session.session_id),
                     _CLOSE_DISPATCH_WAIT_S,
                 )
+        # A POST that arrived during the linger may have changed state again.
+        await _flush_session_states(session, "disconnect")
         session.shutdown()
     except Exception:  # noqa: BLE001 — view hooks are app code; values stay out of logs
         logger.warning(
@@ -672,6 +688,11 @@ class SSESession:
         slot = self._slots.get(target_id)
         if frame_type == "unmount":
             if slot is not None:
+                # What its deferred turns left unsaved first (the flush takes
+                # the render lock itself; design: save frequency).
+                flush = getattr(slot.runtime, "flush_state", None)
+                if flush is not None:
+                    await flush(reason="navigation")
                 # After the turns of that view that are running or queued.
                 async with slot.dispatch_lock, slot.session._render_lock:
                     if self._slots.get(target_id) is slot:
@@ -830,6 +851,10 @@ class SSESession:
         # target instance yet) each restrict. A failure escaping this scope
         # for a nonlegacy owner stays restricted in the POST's scope, which
         # answers with a value-free 500.
+        # What the outgoing views' deferred turns left unsaved is written
+        # before they go (Back mounts the page again from the store), and
+        # before the render lock, which the flush takes itself.
+        await _flush_session_states(self, "navigation")
         with diagnostic_scope():
             restrict_diagnostics(view_class)
             restrict_diagnostics(self.view_instance)
@@ -1596,6 +1621,9 @@ class DjustSSEStreamView(View):
                 # Closing: another owner may now take this id (#3164).
                 session._stream_closed = True
                 if mounted:
+                    # Saved now, not after the linger: a reconnect in the
+                    # linger reads the store (design: save frequency).
+                    await _flush_session_states(session, "disconnect")
                     try:
                         # Linger briefly so in-flight event POSTs can still find
                         # the session (only meaningful for registered sessions).

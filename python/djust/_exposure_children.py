@@ -102,6 +102,57 @@ def record_child_mount_inputs(child: Any, mount_inputs: dict[str, Any]) -> None:
     child._explicit_child_schema = ExposureContract.from_view_class(type(child)).schema
 
 
+def rebind_child_state(
+    child: Any, parent: Any, request: Any, slot: str, mount_inputs: dict[str, Any]
+) -> "tuple[Any, ServerStateSession, dict[str, Any]] | None":
+    """Prepare moving a reattached sticky child's server state to its new scope (#4149).
+
+    A child carried across ``live_redirect`` keeps its live values, but its
+    storage scope includes the route and ancestry, so later saves and events
+    would be checked against the page it left. Captures the child's current
+    declared server state for the new scope, without writing anything: the
+    caller writes every move of the carried subtree at once with
+    :func:`commit_child_state_moves`. ``None`` for a child without
+    server-persisted state, or one whose scope is unchanged.
+    """
+    adapter = child_state_adapter(child, parent, request, slot, mount_inputs, create=True)
+    if adapter is None:
+        return None
+    if adapter.binding == getattr(child, "_explicit_child_mount_binding", None):
+        return None
+    return child, adapter, adapter._capture(adapter.contract.project_view(child, "server"))
+
+
+def commit_child_state_moves(
+    moves: "list[tuple[Any, ServerStateSession, dict[str, Any]] | None]",
+) -> None:
+    """Write the prepared state moves of a carried subtree in one session save (#4149).
+
+    All or nothing: every envelope is staged on the one session and stored by a
+    single save; if that save fails the session's in-memory entries are put
+    back (``staged_updates``) and no child's binding changes, so the
+    destination never holds part of the subtree's state.
+    """
+    from ._child_state_index import staged_updates
+    from ._session_merge import save_merged
+
+    prepared = [move for move in moves if move is not None]
+    if not prepared:
+        return
+    session = prepared[0][1].session
+    session.get(prepared[0][1].key)  # force a lazy load before checking the binding
+    updates = {}
+    for _child, adapter, envelope in prepared:
+        if adapter.session is not session:
+            raise ExposureError("Child state session changed")
+        adapter._check_session()
+        updates[adapter.key] = envelope
+    with staged_updates(session, updates, set()) as staged:
+        save_merged(staged, staged.session_key)
+    for child, adapter, _envelope in prepared:
+        child._explicit_child_mount_binding = adapter.binding
+
+
 def child_event_adapter(
     child: Any, root: Any, request: Any, *, require_delivered: bool = False
 ) -> "ChildStateSession | None":

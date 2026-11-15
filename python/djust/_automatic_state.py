@@ -66,7 +66,9 @@ _VERSION = 8
 _KEY_PREFIX = "_djust_auto_"
 _MISSING: Any = object()
 #: Public names a transport sets per connection, and this module's own settings.
-_NOT_STATE = frozenset({"client_timezone", "automatic_state_max_kb", "automatic_state"})
+_NOT_STATE = frozenset(
+    {"client_timezone", "automatic_state_max_kb", "automatic_state", "state_save_interval"}
+)
 #: The switch (#4128). Project: ``DJUST_AUTOMATIC_STATE`` (default on). View:
 #: the class attribute ``automatic_state`` (None: the project's value).
 SETTING = "DJUST_AUTOMATIC_STATE"
@@ -1169,16 +1171,25 @@ def _log_store_failure(view: Any, exc: BaseException, level: str, what: str, *ar
 class _Pending:
     """A store write staged by :func:`stage`, run by :func:`write_pending`."""
 
-    __slots__ = ("state_store", "store", "payload", "expires", "removed")
+    __slots__ = ("state_store", "store", "payload", "expires", "removed", "fence")
 
     def __init__(
-        self, state_store: Any, store: _Store, payload: bytes, expires: int, removed: list
+        self,
+        state_store: Any,
+        store: _Store,
+        payload: bytes,
+        expires: int,
+        removed: list,
+        fence: Optional[Tuple[str, str]] = None,
     ) -> None:
         self.state_store = state_store
         self.store = store
         self.payload = payload
         self.expires = expires
         self.removed = removed
+        # (holder record key, token) to check against the session's holder
+        # record before the store is written (None: not checked).
+        self.fence = fence
 
 
 class _StagedForStore:
@@ -1284,6 +1295,8 @@ def write_pending(view: Any, staged: Any, *, page_load: bool = False) -> None:
         return
     pending, staged.pending = staged.pending, None
     store, state_store = pending.store, pending.state_store
+    if pending.fence is not None:
+        _check_fence_before_store(view, staged, pending)
     try:
         _store_call(
             view, state_store.save, store.state_key(), pending.payload, expires=pending.expires
@@ -1294,6 +1307,54 @@ def write_pending(view: Any, staged: Any, *, page_load: bool = False) -> None:
         _store_failed(view, store, exc, page_load)
         return
     _delete_from_store(view, store.session.session_key, [entry for _key, entry in pending.removed])
+
+
+def _check_fence_before_store(view: Any, staged: "_StagedForStore", pending: _Pending) -> None:
+    """The holder fence, for a state store (design: save frequency).
+
+    The store is written before the session's index entry, so the merge's
+    fence would come too late: a holder that was superseded would already
+    have replaced the newer holder's bytes, which that holder's index stamp
+    then refuses (its state is lost). Here the session's holder record is
+    read fresh, and a writer that is not the current holder is refused before
+    the store is touched. One session read, only for a socket holder of a view
+    whose saves may be deferred. Not atomic with the store write: a claim
+    between the two still loses to the merge, which then keeps the newer
+    index entry.
+    """
+    from ._late_save import _stored_session
+    from ._session_merge import holder_refuses, put_back_unrecorded
+
+    holder, token = pending.fence  # type: ignore[misc]
+    store = pending.store
+    session = store.session
+    fresh = _stored_session(type(session), session.session_key)
+    stored = fresh if isinstance(fresh, dict) else {}
+    if not holder_refuses(stored.get(holder), token):
+        return
+    # Nothing of ours was written: the live session takes what is stored back
+    # (unrecorded), and the entries this save evicted go back too.
+    staged._undo()
+    for key in (store.key, holder):
+        _take_stored(session, key, stored)
+    for key, removed in pending.removed:
+        put_back_unrecorded(session, key, removed)
+    _supersede(view)
+    from .state_store import StateSuperseded
+
+    raise StateSuperseded("A newer holder claimed this state")
+
+
+def _take_stored(session: Any, key: str, stored: Dict[str, Any]) -> None:
+    """The live session holds what the store holds under ``key``, unrecorded."""
+    from ._session_merge import TrackedSessionData, put_back_unrecorded
+
+    if key in stored:
+        put_back_unrecorded(session, key, stored[key])
+        return
+    data = getattr(session, "_session_cache", None)
+    if type(data) is TrackedSessionData:
+        data.discard_unrecorded(key)
 
 
 def _delete_from_store(view: Any, session_key: Any, entries: Any) -> None:
@@ -1656,7 +1717,138 @@ def _basis(view: Any) -> Optional[_Basis]:
     return basis if isinstance(basis, _Basis) else None
 
 
-def saved(view: Any, request: Any) -> Optional[Saved]:
+#: The holder record of a tab: ``{"token": ..., "expires": ...}`` under this
+#: prefix and the tab's own hash (design: save frequency).
+_HOLDER_PREFIX = "_djust_hold_"
+#: Holder records kept per session; the oldest go first. Dropping one can
+#: only refuse a writer (its token is no longer the holder's), never let an
+#: older one through.
+MAX_HOLDERS = 4 * MAX_TABS
+
+
+def holder_key(store: "_Store") -> str:
+    return _HOLDER_PREFIX + store.key[len(_KEY_PREFIX) :]
+
+
+def _holder_token(view: Any) -> Optional[str]:
+    """The token of the tab this view holds as a socket holder, or None."""
+    token = view.__dict__.get("_djust_auto_holder")
+    return token if type(token) is str else None
+
+
+def _fence(session: Any, key: str, holder: str, token: Optional[str]) -> None:
+    """Have the next merged save write ``key`` only while ``token`` holds the
+    tab (None: not checked). A session that is not tracked is saved whole and
+    checked by nothing."""
+    from ._session_merge import TrackedSessionData
+
+    data = getattr(session, "_session_cache", None)
+    if type(data) is TrackedSessionData:
+        data.fence(key, holder, token)
+
+
+def _holder_record(token: str, max_age: int) -> Dict[str, Any]:
+    return {"token": token, "expires": int(time.time()) + max_age}
+
+
+def _prune_holders(session: Any, keep: str) -> None:
+    """Drop expired holder records, and the oldest past :data:`MAX_HOLDERS`."""
+    now = int(time.time())
+    records = []
+    for key in list(session.keys()):
+        if type(key) is not str or not key.startswith(_HOLDER_PREFIX) or key == keep:
+            continue
+        record = session.get(key)
+        expires = record.get("expires") if type(record) is dict else None
+        if type(expires) is not int or expires <= now:
+            del session[key]
+            continue
+        records.append((expires, key))
+    records.sort(reverse=True)
+    for _expires, key in records[MAX_HOLDERS - 1 :]:
+        del session[key]
+
+
+def _supersede(view: Any) -> None:
+    """This view lost its tab's state to a newer holder: it never writes it
+    again (every later save of it is refused, :func:`stage`)."""
+    if not view.__dict__.get("_djust_auto_superseded"):
+        owner = type(view)
+        logger.info(
+            "djust: a newer connection or request holds the saved state of this tab of "
+            "%s.%s; this one stops saving it.",
+            owner.__module__,
+            owner.__qualname__,
+        )
+    view.__dict__["_djust_auto_superseded"] = True
+
+
+def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
+    """Take the tab, when this view's saves may be deferred (design: save
+    frequency): a new holder record (a random token) in the session.
+
+    Every taker records one, found state or not: a socket that restores the
+    tab, one that starts from ``mount()`` because nothing (or nothing
+    readable) is stored, and an HTTP fallback request. ``write``: save it now
+    (a restoring socket mount, which makes no save of its own); otherwise it
+    rides on the save the mount or request makes anyway.
+
+    Only a socket holds a token afterwards (``socket``): it keeps the view and
+    may write after its last turn. A fallback request takes the tab (so an
+    older socket is fenced out) but writes within its own request, as before,
+    and is not fenced against another fallback request.
+
+    The rule (:func:`djust._session_merge.holder_refuses`): a socket's save
+    is refused only when a DIFFERENT, unexpired token is stored. No record
+    means the writer is the holder: it writes and records its token again.
+
+    ==============================================  ===========================
+    Case                                            Older socket A's late write
+    ==============================================  ===========================
+    B restores the tab (socket or fallback)         refused (B's token stored)
+    B starts from ``mount()``, nothing stored       refused: B records a token
+    (the finding-1 bypass)                          too
+    A's state evicted / cleared / expired, then B   refused (B's token stored)
+    takes the tab
+    A's record wiped (a plain Django request        accepted: A is the holder,
+    saved its whole old session), nobody else       re-records its token
+    A's record wiped AFTER B took the tab           accepted (residual: needs a
+                                                    takeover and a wipe inside
+                                                    one interval; the wipe
+                                                    usually removed B's state)
+    A idle past the lifetime (its record expired)   accepted, record refreshed
+    B's record expired (B idle past the lifetime)   accepted (an expired record
+                                                    only lets others through)
+    A is the oldest of 33 tabs (record dropped)     accepted, re-recorded
+    two fresh sockets A then B                      A refused (last taker holds)
+    a fallback request after A                      A refused; the fallback
+                                                    itself is never refused
+    A superseded, then its record is wiped          refused: A's in-memory
+                                                    superseded flag wins
+    ==============================================  ===========================
+    """
+    import secrets
+
+    from . import _save_policy
+    from ._session_merge import save_merged, track_session
+
+    view.__dict__.pop("_djust_auto_holder", None)
+    if not _save_policy.holder_claims(view):
+        return
+    session = store.session
+    if not track_session(session):
+        return  # saved whole: nothing to fence with
+    token = secrets.token_urlsafe(12)
+    key = holder_key(store)
+    session[key] = _holder_record(token, store.max_age)
+    _prune_holders(session, key)
+    if write:
+        save_merged(session, session.session_key)
+    if socket:
+        view.__dict__["_djust_auto_holder"] = token
+
+
+def saved(view: Any, request: Any, *, socket: bool = False) -> Optional[Saved]:
     """What the store holds for this view, before deciding whether to mount.
 
     Records it as the view's basis, so a save that would write the same thing
@@ -1669,6 +1861,11 @@ def saved(view: Any, request: Any) -> Optional[Saved]:
     if store is not None:
         _purge_foreign_entries(view, store)
     found = _read(view, store) if store is not None else None
+    if store is not None:
+        # A restoring socket mount makes no save of its own: its record is
+        # written now. Otherwise the record rides on the save that follows
+        # (the socket mount's with nothing stored, the fallback request's).
+        _hold(view, store, socket=socket, write=socket and found is not None)
     # The query the state was saved under, for ``note_url`` to compare with.
     view.__dict__["_djust_auto_saved_url"] = found.url if found is not None else None
     if found is not None:
@@ -1748,7 +1945,7 @@ def load(view: Any, request: Any) -> Optional[Dict[str, Any]]:
             for name in _present(view) - settled.names:
                 vars(view).pop(name, None)
         return restored
-    found = saved(view, request)
+    found = saved(view, request, socket=True)
     if found is None:
         if first:
             # A mount with nothing stored (a socket opened without the page
@@ -2026,6 +2223,26 @@ def _still_fresh(basis: _Basis, now: int) -> bool:
     return bool(now - basis.created < max_age // 2)
 
 
+def turn_changed_state(view: Any) -> bool:
+    """For a turn whose save is deferred (design: save frequency): whether
+    the view now holds something its next save must write. Consumes the
+    turn's change hint, as :func:`stage` would have.
+
+    True when the turn changed a saved attribute, when that is not known (no
+    hint: pushes, background results, ticks), and when the stored state is
+    past half its lifetime (:func:`_still_fresh`), so a live page's state
+    does not expire under it. No walk, no encode: the flush projects once.
+    """
+    if _not_saved(view):
+        return False
+    hint = view.__dict__.get("_djust_auto_changed")
+    view.__dict__["_djust_auto_changed"] = None
+    if hint is None or hint:
+        return True
+    basis = _basis(view)
+    return basis is None or not _still_fresh(basis, int(time.time()))
+
+
 def stage(
     view: Any, request: Any, *, create: bool = True, page_load: bool = False
 ) -> Optional[Callable[[], None]]:
@@ -2050,6 +2267,12 @@ def stage(
     """
     if _not_saved(view):
         return None
+    if view.__dict__.get("_djust_auto_superseded"):
+        from .state_store import StateSuperseded
+
+        # Another holder claimed this tab's state: nothing of this view may
+        # replace it, changed or not (``_hold``).
+        raise StateSuperseded("A newer holder claimed this state")
     hint = view.__dict__.get("_djust_auto_changed")
     if hint is not None:
         view.__dict__["_djust_auto_changed"] = None  # one turn's answer, used once
@@ -2143,6 +2366,19 @@ def stage(
         session[store.key] = entry
         removed = []
     _evict_old_tabs(session, store, limits_for(view)[0], now, removed)
+    # The holder fence (design: save frequency). A socket holder's save is
+    # refused only when another taker's token is stored, and it records its
+    # own token again, refreshing its lifetime (whatever was stored). A page
+    # load starts a tab (its id is new) and records nothing: a record it left
+    # behind could be put back by a plain Django request's whole-session save
+    # and refuse the tab's only holder.
+    token = _holder_token(view)
+    holder = holder_key(store)
+    if token is not None and not page_load:
+        session[holder] = _holder_record(token, store.max_age)
+        _fence(session, store.key, holder, token)
+    else:
+        _fence(session, store.key, holder, None)
     view.__dict__["_djust_auto_basis"] = _Basis(
         now_digest,
         now,
@@ -2168,8 +2404,10 @@ def stage(
         # The store write this save still owes (``write_pending``). It rides
         # on the undo the caller holds, never on the view: a save that is
         # still being written must not have it taken by the next turn's.
+        fence = (holder, token) if token is not None and not page_load else None
         return _StagedForStore(
-            undo, _Pending(state_store, store, payload, envelope["expires"], removed or [])
+            undo,
+            _Pending(state_store, store, payload, envelope["expires"], removed or [], fence),
         )
     return undo
 

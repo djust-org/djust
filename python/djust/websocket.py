@@ -190,6 +190,29 @@ _IMMUTABLE_TYPES = (str, int, float, bool, type(None), bytes, tuple, frozenset)
 _SERVER_TURN_LOCK_WAIT_S = 0.1
 
 
+async def _flush_states_of(consumers: List[Any], *, reason: str = "disconnect") -> None:
+    """Flush the deferred save of each consumer's view, then forget it.
+
+    Never raises: a socket closing or a view being replaced goes ahead
+    whatever storage does (``ViewRuntime.flush_state`` logs its failures).
+    """
+    for consumer in consumers:
+        runtime = getattr(consumer, "_runtime", None)
+        if runtime is None or getattr(consumer, "view_instance", None) is None:
+            continue
+        flush = getattr(runtime, "flush_state", None)
+        if flush is None:
+            continue
+        try:
+            await flush(reason=reason)
+        except Exception:  # noqa: BLE001 — teardown goes ahead whatever storage does
+            logger.warning("djust: view state flush at %s failed", reason)
+        finally:
+            forget = getattr(runtime, "_forget_state_flush", None)
+            if callable(forget):
+                forget()
+
+
 async def _acquire_render_lock(lock: asyncio.Lock, timeout: float) -> None:
     """``await asyncio.wait_for(lock.acquire(), timeout)``, without the timer
     when the lock is free (#3095).
@@ -2570,6 +2593,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         self._aborted_uploads = {}
         for lane in lanes:
             await lane.quiesce()
+        # A deferred save (``_save_policy``) writes what the views' last turns
+        # changed, before ``disconnected()`` and the release: a clean close or
+        # a graceful shutdown that closes the socket loses nothing.
+        await _flush_states_of([self, *(slot.facade for slot in self._slot_map().values())])
 
         # Clear the tenant ContextVar bound at mount (Finding #6) so the
         # consumer task doesn't carry a stale tenant if the executor/context is
@@ -4642,6 +4669,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         lane = getattr(consumer, "_lane", None)
         if lane is not None:
             await lane.quiesce()
+        # What its last turns changed is saved before it goes (a deferred save,
+        # ``_save_policy``): Back to it restores that from the store.
+        await _flush_states_of([consumer], reason="navigation")
         self._forget_uploads_of(consumer)
         await leave_consumer_view_groups(consumer)
         # Presence waits for the replacement mount (#3254): see
@@ -4860,6 +4890,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 )
             finally:
                 self._live_redirect_mounting = False
+            if self.view_instance is None and self._sticky_preserved:
+                # The destination did not mount (refused, or its render
+                # failed and was answered with an error frame): no page owns
+                # the staged children, so no later mount may pick them up.
+                for child in list(self._sticky_preserved.values()):
+                    discard_sticky_child(child)
+                self._sticky_preserved = {}
             self._queue_destination_title(
                 getattr(getattr(self, "_runtime", None), "mount_document_title", None)
             )

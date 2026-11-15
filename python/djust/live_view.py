@@ -1608,6 +1608,22 @@ class LiveView(
         """Override for periodic server-side updates. Called every tick_interval ms."""
         pass
 
+    def save_state(self) -> None:
+        """Save this view's state before the current turn's reply.
+
+        With ``DJUST_STATE_SAVE_INTERVAL`` (or the view's
+        ``state_save_interval``) set, a WebSocket or SSE turn's state may be
+        written up to that many seconds after its reply. Call this from a
+        handler, a background callback or ``handle_tick()`` when this turn's
+        state must be in storage before the page shows it (a step another
+        system relies on, say). With no interval set every turn is saved
+        before its reply anyway, and this changes nothing. The same as
+        ``@event_handler(save=True)`` for one turn.
+        """
+        from ._save_policy import request_save
+
+        request_save(self)
+
     def handle_restore(self, request: Any) -> None:
         """Called after the view's saved state was put back on a new instance.
 
