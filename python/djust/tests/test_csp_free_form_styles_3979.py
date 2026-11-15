@@ -103,15 +103,12 @@ def _engine(source: str, **context: Any) -> str:
     return render_template(source, context)
 
 
-#: Constant inline styles a component still writes elsewhere in its markup (a hidden trigger, a
-#: pointer cursor, the Bootstrap navbar's forced flex). No caller's value reaches them.
-CONSTANT_STYLES = {"display:none", "cursor:pointer", "display:flex!important"}
-
-
 def _assert_no_free_form_inline_style(markup: str) -> None:
+    """No inline style at all: the constant ones these sites also wrote (a hidden trigger, a pointer
+    cursor, the Bootstrap navbar's forced flex) are the ``hidden`` attribute or a class since #4139
+    (``test_csp_constant_styles_4139.py``)."""
     assert "<style" not in markup, markup
-    for inline in re.findall(r'\sstyle="([^"]*)"', markup):
-        assert inline.replace(" ", "").rstrip(";") in CONSTANT_STYLES, markup
+    assert not re.findall(r'\sstyle="([^"]*)"', markup), markup
 
 
 def _dj(prop: str, value: str) -> str:

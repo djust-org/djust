@@ -3,6 +3,10 @@
  *
  * Shows/hides a floating button based on scroll position and scrolls to
  * top on click.  Uses MutationObserver for LiveView compatibility.
+ *
+ * The server renders the button with the ``hidden`` attribute, not an inline
+ * style (a strict Content-Security-Policy refuses one, #4139); the first scroll
+ * past the threshold removes it, and the visible class fades it in and out.
  */
 (function () {
   "use strict";
@@ -21,7 +25,7 @@
 
     function onScroll() {
       if (window.scrollY > threshold) {
-        btn.style.display = "";
+        btn.hidden = false;
         btn.classList.add("dj-scroll-to-top--visible");
       } else {
         btn.classList.remove("dj-scroll-to-top--visible");

@@ -1,7 +1,8 @@
 {% comment %}
 Server-driven dropdown. The trigger dispatches `toggle_dropdown`; openness is
 the host LiveView's `is_open`, and every open/closed artefact is rendered from
-it — the menu's `display`, `aria-expanded`, and the `data-open` attribute the
+it — the menu's `hidden` attribute (#4139: not an inline `display`, which a
+strict Content-Security-Policy refuses), `aria-expanded`, and the `data-open` attribute the
 chevron rotation is keyed on (`theming/css/components.css`), which
 `51-keyboard-nav.js` also reads to decide whether the menu is open.
 
@@ -46,7 +47,7 @@ deciding whether the contract should be enforced on caller-supplied markup.
          id="{{ id }}-menu"
          role="menu"
          {% if is_open %}data-open="true"{% endif %}
-         {% if not is_open %}style="display:none;"{% endif %}>
+         {% if not is_open %}hidden{% endif %}>
         {% if slot_menu %}{{ slot_menu }}{% endif %}
     </div>
 </div>

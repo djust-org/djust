@@ -11,9 +11,5 @@
      {% if strict_styles %}data-dj-style data-dj-style-width="100%" data-dj-style-height="100%" data-dj-style-min-height="calc({{ rows }} * 1.2em)" data-dj-style-background-color="#1e1e2e"{% else %}style="width: 100%; height: 100%; min-height: calc({{ rows }} * 1.2em); background: #1e1e2e;"{% endif %}>
 </div>
 
-<script type="module">
-  import { TtydTerminalHook } from "{% static 'djust_components/ttyd/ttyd_terminal.js' %}";
-  window.djust = window.djust || {};
-  window.djust.hooks = window.djust.hooks || {};
-  window.djust.hooks.TtydTerminal = TtydTerminalHook;
-</script>
+{# The hook registers from a static module, not an inline script a strict CSP refuses (#4139). #}
+<script type="module" src="{% static 'djust_components/ttyd/register.js' %}"></script>

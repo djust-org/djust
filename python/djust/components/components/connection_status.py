@@ -67,7 +67,7 @@ class ConnectionStatus(Component):
             f'<div class="{cls}" '
             f'data-reconnecting-text="{e_reconnecting}" '
             f'data-connected-text="{e_connected}" '
-            f'role="status" aria-live="polite" style="display:none">'
+            f'role="status" aria-live="polite" hidden>'
             f'<span class="dj-connection-status__text">{e_reconnecting}</span>'
             f"</div>"
         )

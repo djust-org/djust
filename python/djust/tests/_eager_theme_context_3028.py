@@ -8,8 +8,12 @@ Do not "fix" it: its job is to stay the old behaviour.
 
 One deliberate exception (maintainer's decision, 2026-10-22): the theme switcher's
 ``.theme-mode-btn`` and ``.theme-preset-select`` rules carry ``font-family: inherit``
-here as in the live processor, so the switcher uses the page font. Every other byte
-is still the copy at ``b44f7905a``.
+here as in the live processor, so the switcher uses the page font. A second one
+(#4139): the switcher's ``onclick`` / ``onchange`` handlers are the
+``data-theme-mode`` / ``data-theme-preset-select`` attributes ``theme.js`` handles,
+as in the live processor (a strict Content-Security-Policy refuses inline handlers),
+and its ``<style>`` carries the request's nonce.
+Every other byte is still the copy at ``b44f7905a``.
 """
 
 import logging
@@ -181,6 +185,12 @@ def theme_context(request: HttpRequest) -> dict:
         state.layout,
         presets_key,
     )
+    # #4139 (the second exception above): the request's CSP nonce on the switcher's <style>.
+    from djust.theming.templatetags.theme_tags import _nonce_attr
+
+    _switcher_nonce = _nonce_attr(request)
+    if _switcher_nonce:
+        theme_switcher = theme_switcher.replace("<style>", "<style%s>" % _switcher_nonce, 1)
 
     # Pre-render every tag's output by calling the existing simple_tag
     # bodies once. The work runs once per request instead of once per
@@ -305,7 +315,7 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
         mode_buttons += f"""
         <button type="button"
                 class="theme-mode-btn {active}"
-                onclick="window.djustTheme && window.djustTheme.setMode('{mode}')"
+                data-theme-mode="{mode}"
                 aria-label="{label} mode"
                 title="{label} mode">
             {icon}
@@ -324,7 +334,7 @@ def _render_theme_switcher(state: ThemeState, presets: list[dict]) -> str:
         {mode_buttons}
     </div>
     <select class="theme-preset-select"
-            onchange="window.djustTheme && window.djustTheme.setPreset(this.value)"
+            data-theme-preset-select
             aria-label="Select theme">
         {preset_options}
     </select>

@@ -519,6 +519,44 @@ Two behaviours to know in strict mode:
   It is one config key, and every full page render (with or without a
   `<head>` in the template) and `{% djust_client_config %}` carry the meta.
 
+### Constant styles and inline scripts
+
+What a component hides or styles with a constant needs neither the setting
+nor the client module, so it is the same in every mode, with JavaScript off
+and at first paint. A hidden trigger button, a collapsed tree node, an
+inactive tab pane, the connection-status bar, the scroll-to-top button and the
+theme modal and dropdown are the `hidden` attribute, and the scripts that show
+them toggle that attribute. The stylesheets that give one of these elements a
+`display` (`components.css`, the theming `components.css` and `scaffold.css`)
+carry a `[hidden]` rule with `!important`, so the attribute wins. A clickable
+data-table row's pointer cursor is the `data-table-row-clickable` class; the
+Bootstrap modal is shown by `d-block` and the Bootstrap navbar's menu by
+`d-flex`. The ttyd terminal registers its hook from a static module
+(`djust_components/ttyd/register.js`, loaded with
+`<script type="module" src=...>`), which `script-src 'self'` runs without a
+nonce. `{% djust_pwa_head %}` and the theme context processor's
+`theme_switcher` put the request's nonce on their `<style>` and `<script>`
+(django-csp's `request.csp_nonce`), as the other PWA and theme tags do, and the
+switcher's buttons use `data-theme-mode` instead of an `onclick`.
+
+Three Bootstrap-only constants have no Bootstrap utility: the dismissible
+badge's close-button size, the navbar's external-link colour and the pointer
+cursor of a sortable table header (`Table` and `TableComponent`). A Bootstrap
+page may load no djust stylesheet, so they stay inline by default; with
+`csp_strict_styles` they are the classes `dj-badge-close`,
+`dj-navbar-link--external` and `dj-sortable-th`, defined in both
+`components.css` and `components-classes.css`, so load one of those on such a
+page.
+
+`djust new` projects link their own `<app>/static/<app>/app.css` from
+`base.html` instead of an inline `<style>` and inline `style` attributes.
+
+`scripts/template-library-csp-sweep.py` renders every tag of djust's template
+libraries on both engines and every component class, in both modes, with a
+request that carries a nonce, and reports each `style` attribute, `<style>` and
+executable inline `<script>` without the nonce; its test is
+`python/djust/tests/test_csp_constant_styles_4139.py`.
+
 What strict mode costs:
 
 - **JavaScript.** With it off (or before the deferred bundle runs) a

@@ -192,13 +192,17 @@ class RowClickAffordanceTest(SimpleTestCase):
         rows = [{"id": 1, "name": "A"}]
         columns = [{"key": "name", "label": "Name"}]
         out = _render(_base_ctx(rows, columns, row_click_event="open"))
-        self.assertIn("cursor:pointer", out)
+        # The class carries the pointer cursor (components.css), not an inline style (#4139).
+        self.assertIn('class="data-table-row-clickable"', out)
+        self.assertNotIn("cursor:pointer", out)
 
     def test_cursor_pointer_present_for_url_path(self):
         rows = [{"claim_url": "/c/1/", "name": "C"}]
         columns = [{"key": "name", "label": "Name"}]
         out = _render(_base_ctx(rows, columns, row_url="claim_url"))
-        self.assertIn("cursor:pointer", out)
+        # The class carries the pointer cursor (components.css), not an inline style (#4139).
+        self.assertIn('class="data-table-row-clickable"', out)
+        self.assertNotIn("cursor:pointer", out)
 
 
 # ---------------------------------------------------------------------------

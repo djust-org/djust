@@ -569,7 +569,9 @@ _ROW_CLICK_SCRIPT = '<script src="/static/djust_components/data-table-row-click.
 
 
 #: What makes a clickable row reachable by keyboard and announced as a control (``table.html``).
-_ROW_NAV_A11Y = 'role="button" tabindex="0" style="cursor:pointer"'
+#: Its pointer cursor is the ``data-table-row-clickable`` class of components.css (#4139): a
+#: constant inline style is refused by a strict CSP.
+_ROW_NAV_A11Y = 'role="button" tabindex="0"'
 
 
 _ABSENT = object()
@@ -1012,7 +1014,7 @@ class DataTableHandler:
             toolbar_parts.append(
                 f'<div class="data-table-import">'
                 f"{import_btns}"
-                f'<input type="file" class="data-table-import-file" style="display:none"'
+                f'<input type="file" class="data-table-import-file" hidden'
                 f' accept=".csv,.json">'
                 f"</div>"
             )
@@ -1829,37 +1831,35 @@ class DataTableHandler:
         triggers_html = ""
         if reorderable:
             triggers_html += (
-                f'<button class="data-table-reorder-trigger" style="display:none"'
+                f'<button class="data-table-reorder-trigger" hidden'
                 f' dj-click="{reorder_event}"></button>'
             )
         if editable_columns:
             triggers_html += (
-                f'<button class="data-table-edit-trigger" style="display:none"'
-                f' dj-click="{edit_event}"></button>'
+                f'<button class="data-table-edit-trigger" hidden dj-click="{edit_event}"></button>'
             )
         if column_visibility:
             triggers_html += (
-                f'<button class="data-table-visibility-trigger" style="display:none"'
+                f'<button class="data-table-visibility-trigger" hidden'
                 f' dj-click="{visibility_event}"></button>'
             )
         if row_drag:
             triggers_html += (
-                f'<button class="data-table-drag-trigger" style="display:none"'
+                f'<button class="data-table-drag-trigger" hidden'
                 f' dj-click="{row_drag_event}"></button>'
             )
         if copyable:
             triggers_html += (
-                f'<button class="data-table-copy-trigger" style="display:none"'
-                f' dj-click="{copy_event}"></button>'
+                f'<button class="data-table-copy-trigger" hidden dj-click="{copy_event}"></button>'
             )
         if importable:
             triggers_html += (
-                f'<button class="data-table-import-trigger" style="display:none"'
+                f'<button class="data-table-import-trigger" hidden'
                 f' dj-click="{import_event}"></button>'
             )
         if column_expressions:
             triggers_html += (
-                f'<button class="data-table-expression-trigger" style="display:none"'
+                f'<button class="data-table-expression-trigger" hidden'
                 f' dj-click="{expression_event}"></button>'
             )
 

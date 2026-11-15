@@ -122,8 +122,10 @@ class RowClickEventStructureTest(TestCase):
         columns = [{"key": "name", "label": "Name"}]
         out = render_table(_base_ctx(rows, columns, row_click_event="open_user"))
         self.assertIn('dj-click="open_user"', out)
-        # cursor:pointer style is part of the affordance
-        self.assertIn("cursor:pointer", out)
+        # The pointer cursor is part of the affordance: the class's (components.css), not an
+        # inline style a strict CSP refuses (#4139).
+        self.assertIn('class="data-table-row-clickable"', out)
+        self.assertNotIn("cursor:pointer", out)
 
     def test_row_click_event_appears_on_every_tr(self):
         """One per row — count occurrences match row count."""
@@ -160,15 +162,15 @@ class RowUrlStructureTest(TestCase):
         component module ``data-table-row-click.js`` for CSP-strict
         compatibility, so the inline handler is gone — the marker class
         ``data-table-row-clickable`` is the new hook the JS module
-        binds against. ``data-href`` and ``cursor:pointer`` are still
-        emitted on the <tr>."""
+        binds against. ``data-href`` is still emitted on the <tr>; the pointer cursor is
+        the class's (components.css, #4139)."""
         rows = [{"claim_url": "/claims/1/", "name": "Claim 1"}]
         columns = [{"key": "name", "label": "Name"}]
         out = render_table(_base_ctx(rows, columns, row_url="claim_url"))
         # data-href attribute is present; we just assert the wiring is in place.
         self.assertIn("data-href=", out)
         self.assertIn("data-table-row-clickable", out)
-        self.assertIn("cursor:pointer", out)
+        self.assertNotIn("cursor:pointer", out)
 
     def test_row_click_event_takes_precedence_over_row_url(self):
         """Both set → dj-click wins, data-href is NOT rendered."""

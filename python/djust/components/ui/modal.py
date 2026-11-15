@@ -129,12 +129,18 @@ class ModalComponent(LiveComponent):
             return mark_safe(self._render_plain())
 
     def _render_bootstrap(self) -> str:
-        """Render Bootstrap 5 modal"""
+        """Render Bootstrap 5 modal
+
+        Shown by Bootstrap's ``d-block`` (``display: block !important``), not an inline style a
+        strict Content-Security-Policy refuses (#4139). The plain modal carries it too: a page
+        that loads Bootstrap (whose ``.modal`` is ``display: none``) shows it, and without
+        Bootstrap a ``div`` is a block anyway.
+        """
         size_map = {"sm": "modal-sm", "md": "", "lg": "modal-lg", "xl": "modal-xl"}
         size_class = size_map.get(self.size, "")
 
         html = f"""
-        <div class="modal fade show" id="{conditional_escape(self.component_id)}" style="display: block;" tabindex="-1">
+        <div class="modal fade show d-block" id="{conditional_escape(self.component_id)}" tabindex="-1">
             <div class="modal-dialog {size_class}">
                 <div class="modal-content">
                     <div class="modal-header">
@@ -192,7 +198,7 @@ class ModalComponent(LiveComponent):
     def _render_plain(self) -> str:
         """Render plain HTML modal"""
         html = f"""
-        <div class="modal" id="{conditional_escape(self.component_id)}" style="display: block;">
+        <div class="modal d-block" id="{conditional_escape(self.component_id)}">
             <div class="modal-dialog">
                 <div class="modal-content">
                     <div class="modal-header">

@@ -8,6 +8,7 @@ For interactive tables with event handlers, use them in LiveView event handlers.
 
 from typing import List, Dict, Any
 from ..base import Component
+from ..utils import strict_styles
 
 from django.utils.html import conditional_escape
 
@@ -187,9 +188,14 @@ class Table(Component):
             sortable = col.get("sortable", False)
             if sortable:
                 # Add sortable styling (but @click must be added by parent)
-                parts.append(
-                    f'            <th scope="col" class="sortable" style="cursor: pointer;">{label}</th>'
+                # Bootstrap has no cursor utility: the inline style by default, the
+                # `dj-sortable-th` class under a strict CSP, which refuses it (#4139).
+                sortable_attrs = (
+                    'class="sortable dj-sortable-th"'
+                    if strict_styles()
+                    else 'class="sortable" style="cursor: pointer;"'
                 )
+                parts.append(f'            <th scope="col" {sortable_attrs}>{label}</th>')
             else:
                 parts.append(f'            <th scope="col">{label}</th>')
         parts.append("        </tr>")

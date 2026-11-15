@@ -5,6 +5,9 @@
  * - Hidden when connected
  * - Yellow "Reconnecting..." when disconnected
  * - Green "Reconnected" flash on recovery
+ *
+ * Hidden is the ``hidden`` attribute the server renders, not an inline style
+ * (a strict Content-Security-Policy refuses one, #4139).
  */
 (function () {
   "use strict";
@@ -17,7 +20,7 @@
 
     function showReconnecting() {
       if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
-      el.style.display = "";
+      el.hidden = false;
       el.classList.remove("dj-connection-status--connected");
       el.classList.add("dj-connection-status--reconnecting");
       if (textEl) textEl.textContent = reconnectingText;
@@ -29,8 +32,8 @@
       if (textEl) textEl.textContent = connectedText;
       // Flash then hide after 2 seconds
       hideTimeout = setTimeout(function () {
-        el.style.display = "none";
         el.classList.remove("dj-connection-status--connected");
+        el.hidden = true;
         hideTimeout = null;
       }, 2000);
     }

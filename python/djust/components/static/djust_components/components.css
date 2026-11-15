@@ -1303,7 +1303,7 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 
 /* Scroll to Top */
 .dj-scroll-to-top { position: fixed; bottom: var(--space-6, 1.5rem); right: var(--space-6, 1.5rem); z-index: 40; width: var(--dj-scroll-top-size, 2.5rem); height: var(--dj-scroll-top-size, 2.5rem); border-radius: var(--dj-scroll-top-radius, var(--radius-full, 9999px)); background: var(--dj-scroll-top-bg, hsl(var(--primary, 222 47% 11%))); color: var(--dj-scroll-top-fg, hsl(var(--primary-foreground, 0 0% 100%))); border: 1px solid hsl(var(--border, 214 32% 91%) / 0.3); box-shadow: var(--shadow-md, 0 4px 6px -1px rgba(0,0,0,.1)); cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; transition: opacity var(--duration-normal, 0.2s) var(--ease-in-out, ease), transform var(--duration-normal, 0.2s) var(--ease-in-out, ease); opacity: 0; pointer-events: none; }
-.dj-scroll-to-top[style*="display:none"] { opacity: 0; pointer-events: none; }
+.dj-scroll-to-top[hidden] { opacity: 0; pointer-events: none; }
 .dj-scroll-to-top.dj-scroll-to-top--visible { display: flex !important; opacity: 1; pointer-events: auto; }
 .dj-scroll-to-top:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg, 0 10px 15px -3px rgba(0,0,0,.1)); }
 
@@ -2919,3 +2919,33 @@ button.rating-star:hover ~ .rating-star { color: hsl(var(--muted-foreground)); }
 .dj-toast__dismiss:hover, .dj-toast-dismiss:hover { color: hsl(var(--accent-foreground)); background: hsl(var(--accent)); }
 .dj-toast__dismiss:focus-visible, .dj-toast-dismiss:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .dj-toast { animation: none; } }
+
+/* --- Constant presentation, as classes and the `hidden` attribute (#4139) ---
+   A strict Content-Security-Policy refuses every inline `style` attribute,
+   constant or not, so the components write none of these as one: a hidden
+   trigger, a collapsed node or a status bar that waits for the client is the
+   `hidden` attribute, a pointer cursor is a class. An author `display` (the
+   scroll button's `flex`, an open status bar's `block`) beats the UA's
+   `[hidden] { display: none }`; these rules make the attribute win, as the
+   theming stylesheet's `[hidden]` guard does (#3290). `:where()` keeps each
+   selector at one class, so an app's own rule loaded later still wins (#3161). */
+.data-table-row-clickable { cursor: pointer; font-family: inherit; }
+.dj-sortable-th { cursor: pointer; font-family: inherit; }
+/* The Bootstrap variants of the Python UI classes keep their inline style by default (a Bootstrap
+   page may load no djust stylesheet, and Bootstrap has no utility for these); under
+   LIVEVIEW_CONFIG["csp_strict_styles"] they are these classes, as strong as the inline style. */
+.dj-badge-close { font-size: 0.65em !important; padding: 0.1em 0.25em !important; }
+.dj-navbar-link--external { color: #667eea !important; font-weight: 600 !important; }
+.dj-scroll-to-top:where([hidden]),
+.dj-connection-status:where([hidden]),
+.dj-file-tree__children:where([hidden]),
+.data-table-import-file:where([hidden]),
+.data-table-reorder-trigger:where([hidden]),
+.data-table-edit-trigger:where([hidden]),
+.data-table-visibility-trigger:where([hidden]),
+.data-table-drag-trigger:where([hidden]),
+.data-table-copy-trigger:where([hidden]),
+.data-table-import-trigger:where([hidden]),
+.data-table-expression-trigger:where([hidden]),
+.data-grid-edit-trigger:where([hidden]),
+.tab-pane:where([hidden]) { display: none !important; }

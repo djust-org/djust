@@ -692,6 +692,12 @@ a:hover {
   animation: fadeIn var(--duration-fast) var(--ease-out);
 }
 
+/* The theme modal is closed by the `hidden` attribute (#4139), and the
+   `display: flex` above would beat the UA's `[hidden] { display: none }`. */
+.modal-backdrop[hidden] {
+  display: none !important;
+}
+
 .modal {
   background: hsl(var(--card));
   border: 1px solid hsl(var(--border));

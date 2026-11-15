@@ -62,7 +62,7 @@ class ScrollToTop(Component):
             f'data-threshold="{e_threshold}" '
             f'aria-label="{e_label}" '
             f'title="{e_label}" '
-            f'style="display:none">'
+            f"hidden>"
             f'<svg width="20" height="20" viewBox="0 0 20 20" fill="none" '
             f'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
             f'stroke-linejoin="round">'

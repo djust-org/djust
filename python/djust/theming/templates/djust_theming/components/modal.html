@@ -2,14 +2,12 @@
 Server-driven modal. `is_open` comes from the host LiveView's `Modal`
 descriptor, and the close control dispatches `toggle_modal`.
 
-Visibility is an inline `display`, and it was forced to be: `.modal-backdrop` is
-`display: flex` in BOTH `theming/css/components.css` and `scaffold.css`, and an
-author rule beats the UA's `[hidden] { display: none }`, so `hidden` here would
-have rendered the dialog permanently visible. `components.css` now carries a
-`[hidden]` guard with `!important` (#3290), so the attribute would work for a
-page that links it. The inline style stays anyway: it is what the retired JS
-did, and it keeps working for a page that loads `scaffold.css` without
-`components.css`.
+Visibility is the `hidden` attribute (#4139), not an inline `display`, which a
+strict Content-Security-Policy refuses. `.modal-backdrop` is `display: flex` in
+BOTH `theming/css/components.css` and `scaffold.css`, and an author rule beats
+the UA's `[hidden] { display: none }`, so each of them carries a `[hidden]`
+guard with `!important` (#3290 for `components.css`, #4139 for `scaffold.css`):
+the dialog stays hidden for a page that links either, or neither.
 
 Escape-to-close now works through the framework rather than `components.js`:
 `51-keyboard-nav.js:_closeModal` dispatches the dialog's explicit close control,
@@ -35,7 +33,7 @@ rather than as a side effect of this one.
 {% endcomment %}
 <div class="{{ css_prefix }}modal-backdrop"
      data-theme-modal="{{ id }}"
-     {% if is_open %}data-open="true"{% else %}style="display:none;"{% endif %}>
+     {% if is_open %}data-open="true"{% else %}hidden{% endif %}>
     <div class="{{ css_prefix }}modal {{ css_prefix }}modal-{{ size }} {% if attrs.class %}{{ attrs.class }}{% endif %}"
          role="dialog"
          aria-modal="true"

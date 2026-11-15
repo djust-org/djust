@@ -6059,8 +6059,7 @@ def data_grid(
 
     # Hidden triggers for edit events
     trigger_html = (
-        f'<button class="data-grid-edit-trigger" style="display:none" '
-        f'dj-click="{e_edit_event}"></button>'
+        f'<button class="data-grid-edit-trigger" hidden dj-click="{e_edit_event}"></button>'
     )
 
     return mark_safe(
@@ -6154,7 +6153,7 @@ class ConnectionStatusNode(template.Node):
             f'<div class="{cls}" '
             f'data-reconnecting-text="{e_reconnecting_text}" '
             f'data-connected-text="{e_connected_text}" '
-            f'role="status" aria-live="polite" style="display:none">'
+            f'role="status" aria-live="polite" hidden>'
             f'<span class="dj-connection-status__text">{e_reconnecting_text}</span>'
             f"</div>"
         )
@@ -6296,7 +6295,7 @@ def scroll_to_top(
         f'data-threshold="{e_threshold}" '
         f'aria-label="{e_label}" '
         f'title="{e_label}" '
-        f'style="display:none">'
+        f"hidden>"
         f'<svg width="20" height="20" viewBox="0 0 20 20" fill="none" '
         f'stroke="currentColor" stroke-width="2" stroke-linecap="round" '
         f'stroke-linejoin="round">'

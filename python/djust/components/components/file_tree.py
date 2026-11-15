@@ -180,7 +180,8 @@ class FileTree(Component):
             children_html = []
             for child in children:
                 children_html.append(self._render_node(child, depth + 1))
-            child_display = ' style="display:none"' if not expanded else ""
+            # Collapsed: the `hidden` attribute, not an inline style a strict CSP refuses (#4139).
+            child_display = " hidden" if not expanded else ""
             return (
                 f'<div class="dj-file-tree__node{type_cls}{selected_cls}{expand_cls}"'
                 f'{indent_style} data-name="{e_name}" data-type="{html.escape(node_type)}">'
