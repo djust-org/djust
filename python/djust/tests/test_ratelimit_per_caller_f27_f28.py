@@ -68,7 +68,7 @@ def _clear_shared_store():
 class _RateLimitedView(LiveView):
     """A view with a per-handler @rate_limit(rate=5, burst=5) handler."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-view="djust.tests.test_ratelimit_per_caller_f27_f28._RateLimitedView" '
         'dj-id="0">x</div>'
@@ -91,7 +91,7 @@ class _SlowRefillView(LiveView):
     meaningful refill happens within an end-to-end WS test window — keeping the
     accepted-count assertion deterministic regardless of round-trip timing."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-view="djust.tests.test_ratelimit_per_caller_f27_f28._SlowRefillView" '
         'dj-id="0">x</div>'
@@ -212,7 +212,7 @@ async def test_f27_distinct_callers_get_independent_budgets():
     )
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @override_settings(
     LIVEVIEW_ALLOWED_MODULES=[__name__],
     # Raise max_warnings so the GLOBAL per-connection abuse-disconnect (#17)
@@ -240,20 +240,21 @@ async def test_f27_two_websocket_connections_combined_limit():
     # cannot grant an extra call — the accepted count is deterministic at burst.
     view_path = f"{__name__}._SlowRefillView"
 
-    def _scope_user_mw(app, user):
-        async def mw(scope, receive, send):
-            scope = dict(scope)
-            scope["user"] = user
-            scope.setdefault("session", {})
-            return await app(scope, receive, send)
+    from asgiref.sync import sync_to_async
+    from django.contrib.auth import get_user_model
 
-        return mw
+    from djust.tests._live_session import live_session
 
-    shared_user = _AuthedUser(pk=777)
+    # One caller: a saved user logged into ONE live session that both sockets
+    # present (an explicit view re-reads its user from that session per turn).
+    shared_user = await sync_to_async(get_user_model().objects.create_user)(
+        username="f27-shared", password="pw-f27-shared-x"
+    )
+    shared_session = await sync_to_async(live_session)(shared_user)
 
     async def _connect():
-        app = _scope_user_mw(LiveViewConsumer.as_asgi(), shared_user)
-        comm = WebsocketCommunicator(app, "/ws/")
+        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm.scope.update(session=shared_session, user=shared_user)
         connected, _ = await comm.connect()
         assert connected
         await comm.receive_json_from()  # connect ack
