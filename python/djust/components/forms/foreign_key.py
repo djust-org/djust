@@ -199,7 +199,7 @@ class ForeignKeySelect(LiveComponent):
     def _render_bootstrap(self) -> str:
         """Render Bootstrap 5 select."""
         options = self.get_options()
-        select_id = f"id_{conditional_escape(self.name)}"
+        select_id = f"id_{self.name}"  # text; escaped once where written (#4009)
 
         html = f'<div class="mb-3" id="{attr_text(self.component_id)}">'
 
@@ -272,7 +272,7 @@ class ForeignKeySelect(LiveComponent):
     def _render_tailwind(self) -> str:
         """Render Tailwind CSS select."""
         options = self.get_options()
-        select_id = f"id_{conditional_escape(self.name)}"
+        select_id = f"id_{self.name}"  # text; escaped once where written (#4009)
 
         html = f'<div class="mb-4" id="{attr_text(self.component_id)}">'
 
@@ -617,7 +617,7 @@ class ManyToManySelect(LiveComponent):
     def _render_select_bootstrap(self) -> str:
         """Render as Bootstrap 5 multi-select."""
         options = self.get_options()
-        select_id = f"id_{conditional_escape(self.name)}"
+        select_id = f"id_{self.name}"  # text; escaped once where written (#4009)
 
         html = f'<div class="mb-3" id="{attr_text(self.component_id)}">'
 
@@ -658,7 +658,7 @@ class ManyToManySelect(LiveComponent):
     def _render_select_tailwind(self) -> str:
         """Render as Tailwind multi-select."""
         options = self.get_options()
-        select_id = f"id_{conditional_escape(self.name)}"
+        select_id = f"id_{self.name}"  # text; escaped once where written (#4009)
 
         html = f'<div class="mb-4" id="{attr_text(self.component_id)}">'
 

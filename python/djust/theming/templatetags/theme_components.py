@@ -128,15 +128,8 @@ def theme_button(
     # templates only ever read as `attrs.class` / `attrs.id`, so a
     # caller-supplied slot rendered as nothing at all.
     slots, remaining_attrs = _extract_slots(attrs)
-    if remaining_attrs.get("onclick"):
-        # The caller's handler is written into ``onclick="..."`` by every pack's button.html as
-        # ``{{ attrs.onclick }}``, which leaves a marked-safe value alone, and a template literal
-        # is marked safe: ``onclick='go("a")'`` closed the attribute at its first ``"`` (#4146).
-        # ``escape`` (not ``conditional_escape``), as ``_passthrough_attrs`` does for every other
-        # attribute: the browser decodes it back to exactly the caller's text.
-        from django.utils.html import escape
-
-        remaining_attrs = {**remaining_attrs, "onclick": escape(remaining_attrs["onclick"])}
+    # A caller's ``onclick`` (and ``class`` / ``id`` / ``type``) is written by every pack's
+    # button.html through ``|force_escape``: escaped once, there, marked safe or not (#4146, #4009).
     ctx = {
         "text": text,
         "variant": variant,

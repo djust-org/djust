@@ -16,6 +16,9 @@ through its template by Django's engine, one marked-safe argument at a time.
 
 from __future__ import annotations
 
+import contextlib
+import html
+
 from django.utils.safestring import mark_safe
 
 import payload_sweep_3774 as sweep
@@ -205,6 +208,13 @@ def _shaped(shape: str, value: object, keys) -> object:
     return rows if shape == "list_dict" else tuple(rows)
 
 
+def _plain_items(keys) -> list:
+    """One item of plain text under every key a tag reads (numbers where it counts)."""
+    from scripts.lib.template_library_parity import variants
+
+    return [{k: (3 if variants.kind_of(k) == "num" else "x") for k in sorted(keys)}]
+
+
 def _tag_infos() -> dict:
     """The parity inventory over the URL sweep's five libraries plus ``live_tags`` and
     ``djust_pwa`` (the CSP sweep's set), less the tags that draw another view's markup."""
@@ -257,7 +267,9 @@ def _django_render(src: str, ctx: dict) -> str:
 RENDERERS = (("django", _django_render), ("rust", _rust_render))
 
 
-def tag_findings(only=None, value=None, on_output=None) -> tuple[dict, dict]:
+def tag_findings(
+    only=None, value=None, on_output=None, shapes=None, companions=()
+) -> tuple[dict, dict]:
     """``({(renderer, "<lib>:<tag>", param, shape): [finding, ...]}, {renderer: {tag rendered}})``
     for the tags in ``only`` (all of them when ``None``)."""
     import dataclasses
@@ -280,7 +292,7 @@ def tag_findings(only=None, value=None, on_output=None) -> tuple[dict, dict]:
             )  # fmt: skip
         names = list(variants.passed_names(info))
         if url_sweep.takes_varkw(info):
-            names += [n for n in ("class", "id", "title", "data_x", "aria_label") if n not in names]
+            names += [n for n in PASSTHROUGH if n not in names]
         if not names:
             continue
         keys = url_sweep.keys_read(info, _fn_of(info)) | set(url_sweep.COMMON_KEYS)
@@ -289,24 +301,85 @@ def tag_findings(only=None, value=None, on_output=None) -> tuple[dict, dict]:
         parent_args = "open=True" if parent_info and "open" in parent_info.readable() else ""
         for param in names:
             args = url_sweep.typical_args(info, param)
+            # parameters that make the tag draw more (a description, a helper text): given a
+            # plain value, so the element an id names is drawn too
+            args += ['%s="x"' % c for c in companions if c in names and c != param]
+            # a list parameter not under test gets one plain item, so the loop that draws it runs
+            # (``{% theme_tabs id=... %}`` writes its ids inside ``{% for tab in tabs %}``)
+            lists = [n for n in names if n != param and variants.kind_of(n) == "list"]
+            lists = [n for n in lists if not any(a.startswith(n + "=") for a in args)]
+            bare = url_sweep.wrap(info, " ".join([*args, "%s=p_" % param]), parent, parent_args)
+            args += ["%s=p_items_" % n for n in lists]
             src = url_sweep.wrap(info, " ".join([*args, "%s=p_" % param]), parent, parent_args)
             if param == "form":
                 continue  # a bound form, not a string (``dj_form``'s fields are swept by #3898)
-            for shape in ATTR_SHAPES:
-                ctx = {"p_": _shaped(shape, value, keys)}
-                for renderer, render in RENDERERS:
-                    harness.reset_ids()
-                    try:
-                        out = render(src, dict(ctx))
-                    except Exception:  # noqa: BLE001 - a call the tag rejects draws nothing
-                        continue
-                    rendered[renderer].add(key)
-                    if on_output is not None:
-                        on_output((renderer, key, param, shape), out)
-                    hits = attr_findings(out)
-                    if hits:
-                        found[(renderer, key, param, shape)] = hits
+            for shape in shapes or ATTR_SHAPES:
+                ctx = {"p_": _shaped(shape, value, keys), "p_items_": _plain_items(keys)}
+                for pack in packs_for(info.lib):
+                    for renderer, render in RENDERERS:
+                        name = renderer if pack is None else f"{renderer}@{pack}"
+                        harness.reset_ids()
+                        try:
+                            with theme_pack(pack):
+                                try:
+                                    out = render(src, dict(ctx))
+                                except Exception:  # noqa: BLE001 - the items may be what it rejects
+                                    harness.reset_ids()
+                                    out = render(bare, dict(ctx))
+                        except Exception:  # noqa: BLE001 - a call the tag rejects draws nothing
+                            continue
+                        rendered.setdefault(name, set()).add(key)
+                        if on_output is not None:
+                            on_output((name, key, param, shape), out)
+                        hits = attr_findings(out)
+                        if hits:
+                            found[(name, key, param, shape)] = hits
     return found, rendered
+
+
+#: What a ``**attrs`` tag is given besides its named parameters: the attributes a caller passes
+#: through (an event handler included: ``{% theme_button "T" onclick=... %}``).
+PASSTHROUGH = (
+    "class", "id", "title", "onclick", "type", "name", "value", "placeholder", "role",
+    "data_x", "aria_label", "dj_click", "style",
+)  # fmt: skip
+
+
+def theme_packs() -> tuple[str, ...]:
+    """Every theme pack that ships its own component templates, plus ``"base"`` (the shared
+    ``djust_theming/components/*.html`` every other component falls back to)."""
+    from pathlib import Path
+
+    import djust.theming
+
+    root = Path(djust.theming.__file__).parent / "templates" / "djust_theming" / "themes"
+    return ("base", *sorted(p.name for p in root.iterdir() if (p / "components").is_dir()))
+
+
+def packs_for(lib: str) -> tuple:
+    """A theming library is swept under every pack; any other library once, as configured."""
+    return theme_packs() if lib.startswith("theme_") else (None,)
+
+
+@contextlib.contextmanager
+def theme_pack(pack):
+    """Resolve theming templates as if ``pack`` were the active theme (``"base"``: no pack, so
+    every template is the shared one)."""
+    if pack is None:
+        yield
+        return
+    from djust.theming import template_resolver as tr
+
+    names = [n for n in vars(tr) if n.startswith("_get_") and n.endswith("_candidates")]
+    saved = {n: getattr(tr, n) for n in names}
+    forced = "__no_pack__" if pack == "base" else pack
+    try:
+        for n, fn in saved.items():
+            setattr(tr, n, (lambda f: lambda _theme, name: f(forced, name))(fn))
+        yield
+    finally:
+        for n, fn in saved.items():
+            setattr(tr, n, fn)
 
 
 def class_units() -> list[str]:
@@ -315,7 +388,7 @@ def class_units() -> list[str]:
     return list(url_sweep.component_classes())
 
 
-def class_findings(only=None, value=None, on_output=None) -> tuple[dict, set]:
+def class_findings(only=None, value=None, on_output=None, shapes=None) -> tuple[dict, set]:
     """``({("class:<framework>", "<module>.<Class>", param, shape): [finding]}, {rendered})``."""
     from scripts.lib.template_library_parity import harness, url_sweep
 
@@ -332,7 +405,7 @@ def class_findings(only=None, value=None, on_output=None) -> tuple[dict, set]:
         required = {**required, **_CLASS_REQUIRED.get(key, {})}
         frameworks = url_sweep.FRAMEWORKS
         for param in names:
-            for shape in ATTR_SHAPES:
+            for shape in shapes or ATTR_SHAPES:
                 kwargs = {**required, param: _shaped(shape, value, keys)}
                 for fw in frameworks:
                     before = config.get("css_framework", "bootstrap5")
@@ -413,4 +486,142 @@ def rust_component_findings(only=None, value=None, on_output=None) -> tuple[dict
             hits = attr_findings(out)
             if hits:
                 found[("rust-component", name, param, "scalar")] = hits
+    return found, rendered
+
+
+# --------------------------------------------------------------------------- #
+# An id and the references to it are escaped exactly once, and so match (#4009)
+
+#: An id that needs every escape an attribute has.
+PAIR_ID = 'a&b"c<d'
+#: Attributes that name an element by id (``data-bs-target`` / ``href`` may carry ``#``).
+REFERENCE_ATTRS = frozenset(
+    {"for", "aria-controls", "aria-labelledby", "aria-describedby", "aria-owns",
+     "aria-activedescendant", "data-bs-target", "list", "form"}
+)  # fmt: skip
+#: Parameters that make a tag draw the element an id names (``description=`` draws the
+#: ``<p id="<id>-desc">`` that ``aria-describedby`` points at).
+COMPANIONS = ("title", "label", "description", "helper", "help_text", "error", "hint", "content")
+#: Parameters that are themselves a reference to an id the caller owns (not one the tag draws).
+_REFERENCE_PARAMS = ("describedby", "labelledby", "controls", "target", "for", "for_", "form")
+
+
+class _Ids(sweep.HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.ids: set[str] = set()
+        self.refs: list[tuple[str, str]] = []
+
+    def handle_starttag(self, tag, attrs):
+        for name, value in attrs:
+            if value is None:
+                continue
+            if name == "id":
+                self.ids.add(value)
+            elif name in REFERENCE_ATTRS:
+                self.refs += [(name, v.lstrip("#")) for v in value.split()]
+
+    handle_startendtag = handle_starttag
+
+
+def pairing_problems(markup: object, value: str = PAIR_ID) -> list[str]:
+    """Each id or reference built from ``value`` that is not ``value`` decoded exactly once, and
+    each such reference that names no id of ``markup``."""
+    text = str(markup)
+    if "a&amp;b" not in text and "a&amp;amp;b" not in text:
+        return []
+    parser = _Ids()
+    parser.feed(text)
+    parser.close()
+    out = []
+    for i in parser.ids:
+        if "a&amp;b" in i or ("a&b" in i and value not in i):
+            out.append(f"id {i!r} is not the value escaped once")
+    for name, ref in parser.refs:
+        if "a&amp;b" in ref or ("a&b" in ref and value not in ref):
+            out.append(f"{name} {ref!r} is not the value escaped once")
+        elif ref not in parser.ids and any(
+            html.unescape(i) == ref or i == html.unescape(ref) for i in parser.ids
+        ):
+            # the reference and the id it names were escaped a different number of times (a
+            # reference to an element the call does not draw at all is not an escaping question)
+            out.append(f"{name} {ref!r} does not match the id it names")
+    return sorted(set(out))
+
+
+def pairing_findings(tags=None, classes=None) -> dict:
+    """``{cell: problems}`` with :data:`PAIR_ID` in each scalar argument of each tag (both engines,
+    every theme pack) and each component class."""
+    found: dict = {}
+
+    def check(cell, out):
+        if cell[3] != "scalar" or cell[2].endswith(_REFERENCE_PARAMS):
+            return
+        problems = pairing_problems(out)
+        if problems:
+            found[cell] = problems
+
+    tag_findings(only=tags, value=PAIR_ID, on_output=check, shapes=("scalar",))
+    tag_findings(
+        only=tags, value=PAIR_ID, on_output=check, shapes=("scalar",), companions=COMPANIONS
+    )
+    class_findings(only=classes, value=PAIR_ID, on_output=check, shapes=("scalar",))
+    return found
+
+
+# --------------------------------------------------------------------------- #
+# The kept native handlers, called directly (#4009)
+
+
+def native_handler_units() -> list[str]:
+    """``"<tag>"`` of each native handler ``djust.components.rust_handlers`` registers."""
+    from djust.components import rust_handlers as rh
+
+    return [t for t, _h in rh.NATIVE_INLINE_HANDLERS] + [
+        t for t, _e, _h in rh.NATIVE_BLOCK_HANDLERS
+    ]
+
+
+def native_handler_findings(only=None, value=None) -> tuple[dict, set]:
+    """``({("native", tag, key, shape): [finding]}, {rendered})``: each handler called the way the
+    engine calls it, with its operands handed over AS GIVEN (``_parse_args`` replaced for the call).
+
+    Through the engine an operand never reaches a handler marked safe: ``_parse_args`` makes each
+    one plain text (``plain_operand``). This drives the handler's own writing with a marked-safe
+    operand, the only way one can arrive, so a handler that relies on ``conditional_escape`` for an
+    attribute is seen, not only the guard's count of its sinks."""
+    from unittest.mock import patch
+
+    from scripts.lib.template_library_parity import harness, url_sweep
+
+    from djust.components import rust_handlers as rh
+
+    value = attr_payload() if value is None else value
+    handlers = [(t, h, False) for t, h in rh.NATIVE_INLINE_HANDLERS]
+    handlers += [(t, h, True) for t, _e, h in rh.NATIVE_BLOCK_HANDLERS]
+    found: dict = {}
+    rendered: set = set()
+    for tag, handler, block in handlers:
+        if only is not None and tag not in only:
+            continue
+        inner = getattr(handler, "_handler", handler)
+        keys_, params = harness.discover(type(inner))
+        keys = sorted((keys_ | params | set(url_sweep.COMMON_KEYS)) - {"self", "args", "context"})
+        for key in keys:
+            for shape in ("scalar", "list_dict", "tuple_dict"):
+                kw = {key: _shaped(shape, value, keys)}
+                harness.reset_ids()
+                with patch.object(rh, "_parse_args", lambda _args, _ctx, kw=kw: dict(kw)):
+                    try:
+                        out = (
+                            handler.render([], mark_safe("BODY"), {})
+                            if block
+                            else handler.render([], {})
+                        )
+                    except Exception:  # noqa: BLE001 - a value the handler rejects draws nothing
+                        continue
+                rendered.add(tag)
+                hits = attr_findings(out)
+                if hits:
+                    found[("native", tag, key, shape)] = hits
     return found, rendered

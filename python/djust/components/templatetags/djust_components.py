@@ -202,7 +202,10 @@ def render_modal(kw: Any, content: Any) -> SafeString:
     # ARIA: derive a stable id for the title so aria-labelledby can
     # point at it. Derived deterministically from the existing `id`
     # kwarg (or "modal" default) → VDOM dj-id stable, no randomness.
-    modal_id = attr_text(kw.get("id", "modal"))
+    # The ids are kept as TEXT and escaped once, where each is written (#4009): the description's
+    # ``id`` and the ``aria-describedby`` that names it must be the same value.
+    raw_id = str(kw.get("id", "modal"))
+    modal_id = attr_text(raw_id)
     title_id = f"{modal_id}-title"
     labelledby = f' aria-labelledby="{title_id}"' if title else ""
     role = "alertdialog" if str(kw.get("role", "")) == "alertdialog" else "dialog"
@@ -213,7 +216,8 @@ def render_modal(kw: Any, content: Any) -> SafeString:
     if not 2 <= level <= 6:
         level = 3
     description = kw.get("description", "")
-    desc_id = f"{modal_id}-desc"
+    raw_desc_id = f"{raw_id}-desc"
+    desc_id = attr_text(raw_desc_id)
     marked = f"{_MODAL_DESCRIPTION_MARKER}{_MODAL_DESCRIPTION_OPEN}"
     has_slot = not description and marked in str(content)
     if has_slot:
@@ -224,7 +228,7 @@ def render_modal(kw: Any, content: Any) -> SafeString:
     # No marker may reach the page: a second block, a block beside a description=, or a block
     # outside any modal leaves it behind otherwise.
     content = str(content).replace(_MODAL_DESCRIPTION_MARKER, "")
-    described_ids = ([desc_id] if description or has_slot else []) + str(
+    described_ids = ([raw_desc_id] if description or has_slot else []) + str(
         kw.get("describedby", "") or ""
     ).split()
     describedby = (
@@ -2797,7 +2801,8 @@ def combobox(
     helper_html = (
         f'<span class="form-helper" id="{id_prefix}-helper">{e_helper}</span>' if helper else ""
     )
-    aria = field_aria_attrs(str(id_prefix), error, helper, describedby, invalid)
+    # the text of the prefix: field_aria_attrs escapes the ids it joins, once (#4009)
+    aria = field_aria_attrs(str(id or name), error, helper, describedby, invalid)
     req = " required" if required else ""
     free_text_attr = " data-allow-free-text" if _truthy_flag(allow_free_text) else ""
     if search_event:
@@ -5827,7 +5832,8 @@ def rich_select(
     # triggers inside ``.rich-select--disabled``.
     tabindex = "-1" if disabled else "0"
     aria_disabled = ' aria-disabled="true"' if disabled else ""
-    aria_field = field_aria_attrs(str(uid), error, helper, describedby, invalid)
+    # the text of the prefix: field_aria_attrs escapes the ids it joins, once (#4009)
+    aria_field = field_aria_attrs(str(id or f"rs-{name}"), error, helper, describedby, invalid)
     helper_html = (
         f'<span class="form-helper" id="{uid}-helper">{conditional_escape(helper)}</span>'
         if helper

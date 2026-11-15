@@ -120,6 +120,8 @@ class TestEveryTag:
         )
         found, _rendered = safe_sweep.tag_findings(only={tag})
         assert _judged(found, "tag") == []
+        # an id and every reference to it, escaped exactly once, so they match
+        assert safe_sweep.pairing_findings(tags={tag}, classes=set()) == {}
 
     @pytest.mark.pr_tier
     def test_the_inventory_is_the_libraries(self):
@@ -143,11 +145,14 @@ class TestEveryTag:
 
         def seen(cell, out):
             if safe_sweep.reaches_an_attribute(out):
-                reached[cell[0]].add(cell[1])
+                reached[cell[0].split("@")[0]].add(cell[1])
 
         found, rendered = safe_sweep.tag_findings(only=sample, on_output=seen)
         assert found == {}
-        assert rendered["django"] == sample and rendered["rust"] == sample
+        engines: dict[str, set] = {"django": set(), "rust": set()}
+        for name, keys in rendered.items():  # "django@ios" is the Django engine under a pack
+            engines[name.split("@")[0]] |= keys
+        assert engines["django"] == sample and engines["rust"] == sample
         assert reached["rust"] == sample
         # the Django engine draws ``data_table`` through its inclusion template, which needs
         # rows and columns the per-argument call does not give it (swept by the inclusion test)
@@ -188,6 +193,7 @@ class TestEveryClass:
         )
         found, _rendered = safe_sweep.class_findings(only={key})
         assert _judged(found, "class") == []
+        assert safe_sweep.pairing_findings(tags=set(), classes={key}) == {}
 
     @pytest.mark.pr_tier
     def test_the_sweep_finds_a_raw_attribute(self, monkeypatch):
@@ -208,6 +214,123 @@ class TestEveryRustComponent:
         found, rendered = safe_sweep.rust_component_findings()
         assert found == {}
         assert rendered == set(RUST_COMPONENTS) and len(RUST_COMPONENTS) >= 15
+
+
+class TestEveryThemePack:
+    """A theming tag draws through the active pack's template, else the shared one: each pack
+    is swept, and the shared (``base``) templates too, whichever pack a project runs."""
+
+    @pytest.mark.pr_tier
+    def test_every_pack_is_swept(self):
+        assert safe_sweep.theme_packs() == (
+            "base", "fluent", "ios", "material", "neo_brutalist", "playful",
+        )  # fmt: skip
+
+    @pytest.mark.pr_tier
+    def test_each_pack_draws_its_own_template(self):
+        """``theme_pack`` reaches the template it names: a pack's own button differs from the
+        shared one (a sweep that rendered one pack six times would pass for nothing)."""
+        outs = {}
+        for pack in safe_sweep.theme_packs():
+            with safe_sweep.theme_pack(pack):
+                outs[pack] = safe_sweep._django_render(
+                    '{% load theme_components %}{% theme_button "T" %}', {}
+                )
+        assert len(set(outs.values())) == len(outs), outs
+
+    @pytest.mark.pr_tier
+    @pytest.mark.parametrize(
+        "pack", ["base", "fluent", "ios", "material", "neo_brutalist", "playful"]
+    )
+    def test_a_caller_onclick_is_escaped_once_on_both_engines(self, pack):
+        """#4146 + #4009: the button's ``onclick`` is escaped exactly once, in the template, marked
+        safe or not; the browser decodes it to the caller's text (a second escape broke it)."""
+        src = '{% load theme_components %}{% theme_button "T" onclick=v %}'
+        for v in ('go("a&b")', mark_safe('go("a&b")')):
+            for name, render in safe_sweep.RENDERERS:
+                with safe_sweep.theme_pack(pack):
+                    out = render(src, {"v": v})
+                assert 'onclick="go(&quot;a&amp;b&quot;)"' in out, (name, pack, out)
+
+
+class TestTheNativeHandlers:
+    """The kept native handlers, called directly with a marked-safe operand (the engine hands
+    them plain text, ``plain_operand``; this is the only way one reaches them)."""
+
+    @pytest.mark.pr_tier
+    def test_no_operand_leaves_an_attribute(self):
+        found, rendered = safe_sweep.native_handler_findings()
+        assert found == {}
+        assert rendered == set(safe_sweep.native_handler_units())
+
+    @pytest.mark.pr_tier
+    def test_a_conditional_escape_in_a_handler_is_found(self, monkeypatch):
+        """Gate-off: with ``attr_text`` / ``escape`` in the handlers' module made
+        ``conditional_escape`` (what they used), the direct calls find the leaks again."""
+        from django.utils.html import conditional_escape
+
+        import djust.components.rust_handlers as rh
+
+        monkeypatch.setattr(rh, "attr_text", conditional_escape)
+        monkeypatch.setattr(rh, "escape", conditional_escape)
+        found, _ = safe_sweep.native_handler_findings()
+        assert {k[1] for k in found} >= {
+            "accordion",
+            "badge",
+            "data_table",
+            "pagination",
+            "sidebar",
+        }
+
+
+class TestIdsAndReferences:
+    """An id and every reference to it (``for``, ``aria-*``, ``data-bs-target``) carry the same
+    value, escaped exactly once (#4009): the per-unit sweeps above run this for every tag and class;
+    these pin the sites a double escape was found and fixed at."""
+
+    ID = safe_sweep.PAIR_ID
+
+    def _both(self, src: str, ctx: dict) -> list[str]:
+        return [render(src, ctx) for _n, render in safe_sweep.RENDERERS]
+
+    @pytest.mark.parametrize(
+        "src",
+        [
+            '{% load djust_components %}{% modal id=v open=True description="d" title="t" %}b{% endmodal %}',
+            "{% load djust_components %}{% combobox name=v helper='h' error='e' %}",
+            "{% load djust_components %}{% combobox name='n' id=v helper='h' error='e' %}",
+            "{% load djust_components %}{% rich_select name=v helper='h' error='e' %}",
+        ],
+    )
+    def test_a_tag_s_ids_match_on_both_engines(self, src):
+        for out in self._both(src, {"v": self.ID}):
+            assert "a&amp;b" in out, out  # the call drew the value
+            assert safe_sweep.pairing_problems(out) == [], out
+            assert "a&amp;amp;b" not in out, out
+
+    def test_the_modal_description_is_named_by_its_own_id(self):
+        for out in self._both(
+            '{% load djust_components %}{% modal id=v open=True description="d" %}b{% endmodal %}',
+            {"v": self.ID},
+        ):
+            assert 'id="a&amp;b&quot;c&lt;d-desc"' in out
+            assert 'aria-describedby="a&amp;b&quot;c&lt;d-desc"' in out
+
+    @pytest.mark.parametrize("framework", ["bootstrap5", "tailwind", "plain"])
+    @pytest.mark.parametrize("cls_name", ["ForeignKeySelect", "ManyToManySelect"])
+    def test_the_relation_selects_write_id_name_once(self, cls_name, framework):
+        import djust.components.forms.foreign_key as fk
+
+        from djust.config import config
+
+        before = config.get("css_framework", "bootstrap5")
+        config.set("css_framework", framework)
+        try:
+            out = str(getattr(fk, cls_name)(name=self.ID, label="L").render())
+        finally:
+            config.set("css_framework", before)
+        assert safe_sweep.pairing_problems(out) == [], out
+        assert 'id="id_a&amp;b&quot;c&lt;d"' in out, out
 
 
 @pytest.mark.slow
