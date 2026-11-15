@@ -90,7 +90,7 @@ class MockTransport:
 class _SymmetryView:
     """A minimal LiveView-shaped object used to compare outputs."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def __init__(self):
         self.kwargs_received: Optional[Dict[str, Any]] = None
@@ -133,6 +133,22 @@ class _SymmetryView:
 # ------------------------------------------------------------------ #
 
 
+async def _mount(runtime, view):
+    """Mount ``view`` on ``runtime`` on a live session (only the auth seam and
+    URL kwargs stubbed): an explicit view's url_change is authorized against
+    its mount binding. The path only has to pass the shape and allowlist gate;
+    the view lookup itself is stubbed."""
+    from djust.tests._live_session import amount_on_runtime
+
+    runtime._check_auth = AsyncMock(return_value=None)
+    runtime._resolve_url_kwargs = MagicMock(return_value={})
+    await amount_on_runtime(
+        runtime, view, url="/list/", view_path="djust.tests.symmetry.SymmetryView"
+    )
+    view.handle_params_calls.clear()  # the mount's own handle_params call
+
+
+@pytest.mark.django_db(transaction=True)
 class TestUrlChangeSymmetry:
     @pytest.mark.asyncio
     async def test_runtime_dispatch_url_change_shared_with_ws(self):
@@ -144,8 +160,8 @@ class TestUrlChangeSymmetry:
         ws_transport = MockTransport()
         ws_runtime = ViewRuntime(ws_transport)
         ws_view = _SymmetryView()
+        await _mount(ws_runtime, ws_view)
         ws_view.assigns["count"] = 5
-        ws_runtime.view_instance = ws_view
 
         await ws_runtime.dispatch_url_change(
             {"params": {"sort": "name"}, "uri": "/list/?sort=name"}
@@ -155,8 +171,8 @@ class TestUrlChangeSymmetry:
         sse_transport = MockTransport()
         sse_runtime = ViewRuntime(sse_transport)
         sse_view = _SymmetryView()
+        await _mount(sse_runtime, sse_view)
         sse_view.assigns["count"] = 5
-        sse_runtime.view_instance = sse_view
 
         await sse_runtime.dispatch_url_change(
             {"params": {"sort": "name"}, "uri": "/list/?sort=name"}
@@ -186,26 +202,18 @@ class TestUrlChangeSymmetry:
 # ------------------------------------------------------------------ #
 
 
+@pytest.mark.django_db(transaction=True)
 class TestRuntimeSequenceSymmetry:
     @pytest.mark.asyncio
     async def test_same_sequence_yields_same_assigns_and_message_types(self):
         from djust.runtime import ViewRuntime
 
         async def drive(transport, runtime, view):
-            # mount frame: short-circuit instantiate + auth so the test
-            # exercises only the dispatch-level plumbing.
-            runtime._instantiate_view = MagicMock(return_value=view)
-            runtime._check_auth = AsyncMock(return_value=None)
-            runtime._resolve_url_kwargs = MagicMock(return_value={})
-
-            await runtime.dispatch_message(
-                {
-                    "type": "mount",
-                    "view": "any.path.SymmetryView",
-                    "params": {},
-                    "url": "/list/",
-                }
-            )
+            # mount: short-circuit instantiate + auth so the test exercises
+            # only the dispatch-level plumbing, on a live session. The path
+            # used to be "any.path.SymmetryView", which the allowlist refuses:
+            # both sides answered "View not found" and compared equal.
+            await _mount(runtime, view)
 
             # url_change
             await runtime.dispatch_message(
@@ -232,6 +240,9 @@ class TestRuntimeSequenceSymmetry:
         ws_types = [m["type"] for m in ws_transport.sent]
         sse_types = [m["type"] for m in sse_transport.sent]
         assert ws_types == sse_types
+        # Equal error frames are not successful transport parity.
+        assert "error" not in ws_types, ws_transport.sent
+        assert ws_view.handle_params_calls == [({"page": "2"}, "/list/?page=2")]
 
         # Identical handle_params receipts
         assert ws_view.handle_params_calls == sse_view.handle_params_calls

@@ -46,7 +46,7 @@ _BORROW_MARKERS = (
 class _TablePage(LiveView):
     """Big enough that a render takes a while (the race window)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<div dj-root><h1>{{ title }}</h1><ul>"
         "{% for r in rows %}<li class=\"{% cycle 'a' 'b' %}\">{{ r.name|title }} "
@@ -199,7 +199,7 @@ def test_a_read_of_the_key_while_its_saver_renders_succeeds(caplog):
 
 
 class _CachedCounter(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p>{{ count }}</p></div>"
 
     def mount(self, request, **kwargs):
@@ -221,11 +221,15 @@ async def test_a_render_failure_at_mount_answers_with_an_error_frame(workers, mo
     from djust import worker_pool
     from djust.websocket import LiveViewConsumer
 
+    from djust.tests._live_session import with_live_session
+
     monkeypatch.setitem(djust_config._config, "worker_threads", workers)
     monkeypatch.setattr(worker_pool, "_pool", [])
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
         comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-        assert (await comm.connect(timeout=_SOCKET_TIMEOUT))[0]
+        # A live session, so the mount reaches the render that fails: without
+        # one an explicit view is refused earlier, with the same generic error.
+        assert (await with_live_session(comm).connect(timeout=_SOCKET_TIMEOUT))[0]
         try:
             await comm.receive_json_from(timeout=10)
             await comm.send_json_to(
