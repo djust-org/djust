@@ -228,7 +228,7 @@ async def test_context_set_by_middleware_reaches_handler_sync_code_and_tasks():
 
 
 class _View:
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
     login_required = True
 
 
