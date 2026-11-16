@@ -121,6 +121,38 @@ describe('dj-auto-recover, strict handler', () => {
     });
 });
 
+describe('dj-auto-recover inside a component or an embedded child view', () => {
+    // The event carries no owner context, so the server routes it to the page's
+    // view: the client must use the page view's contract, not the nearest owner's
+    // (which does not list the handler and would fall back to the envelope).
+    const owned = {version: 1, owners: [
+        {view_id: null, component_id: null, handlers},
+        {view_id: null, component_id: 'cmp1', handlers: {both: {policy: 'legacy'}}},
+        {view_id: 'child1', component_id: null, handlers: {other: strict()}},
+    ]};
+
+    it('sends strict values from a component wrapper', async () => {
+        const {dom, recover, sent} = setup(
+            `<div data-component-id="cmp1"><form dj-auto-recover="both" data-step="2">${FORM}</form></div>`, owned);
+        try {
+            await recover();
+            expect(sent()).toEqual([{event: 'both', params: {
+                form_values: FORM_VALUES, data_attrs: {step: '2'}}}]);
+        } finally { dom.window.close(); }
+    });
+
+    it('sends strict values from an embedded child view', async () => {
+        const {dom, recover, sent} = setup(
+            `<div dj-view="app.Child" data-djust-embedded="child1">` +
+            `<form dj-auto-recover="both" data-step="2">${FORM}</form></div>`, owned);
+        try {
+            await recover();
+            expect(sent()).toEqual([{event: 'both', params: {
+                form_values: FORM_VALUES, data_attrs: {step: '2'}}}]);
+        } finally { dom.window.close(); }
+    });
+});
+
 describe('dj-auto-recover, legacy or unlisted handler', () => {
     it('keeps the 1.x envelope for a legacy handler', async () => {
         const {dom, recover, sent} = setup(`<form dj-auto-recover="old" data-step="2">${FORM}</form>`);

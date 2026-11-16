@@ -2529,10 +2529,11 @@ function _processAutoRecover() {
             }
         }
 
-        // Recovery events reach the page's view (no owner context), as
-        // dj-viewport-top does (30-infinite-scroll.js).
+        // Recovery events carry no owner context, so the server routes them
+        // to the page's view even from inside a component or an embedded
+        // child view: resolve the page view's contract, not the nearest owner's.
         const strictParams = _strictBinding(container, handlerName,
-            {form_values: formValues, data_attrs: dataAttrs}, []);
+            {form_values: formValues, data_attrs: dataAttrs}, [], null, true);
         if (strictParams === false) return;
         const params = strictParams || {
             _form_values: formValues,

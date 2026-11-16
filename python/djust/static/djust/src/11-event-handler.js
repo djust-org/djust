@@ -212,8 +212,10 @@ function _mirrorPageParameterContracts(manifest, viewPath) {
 // delivered and every strict handler is listed. Binders keep legacy collection
 // and the server stays authoritative. A mount whose strict snapshot is invalid
 // or missing (recorded as invalid on receipt) throws: callers fail closed
-// rather than guess (ADR-036 Q1).
-function _resolveParameterContract(element, eventName) {
+// rather than guess (ADR-036 Q1). `pageOwner` is for a binding the client sends
+// without owner context (dj-auto-recover): the server routes it to the page's
+// view wherever the element sits, so its contract is the page view's.
+function _resolveParameterContract(element, eventName, pageOwner = false) {
     const transport = _eventContractTransport();
     const container = (element && element.closest &&
         element.closest('[dj-view]:not([data-djust-embedded])')) || findPageViewContainer();
@@ -223,8 +225,8 @@ function _resolveParameterContract(element, eventName) {
     const owners = mounts.get(path);
     if (owners === null) return {policy: 'legacy', transport};
     if (owners === false) throw new Error('Invalid public parameter contracts');
-    const viewId = (element && getEmbeddedViewId(element)) || null;
-    const componentId = viewId ? null : ((element && getComponentId(element)) || null);
+    const viewId = (!pageOwner && element && getEmbeddedViewId(element)) || null;
+    const componentId = (viewId || pageOwner) ? null : ((element && getComponentId(element)) || null);
     const handlers = owners.get(JSON.stringify([viewId, componentId]));
     if (!handlers || !handlers.has(eventName)) return {policy: 'unknown', transport};
     const contract = handlers.get(eventName);
@@ -243,10 +245,12 @@ const _WIRE_HINT_TYPES = {int: 'int float Decimal', integer: 'int float Decimal'
 // `contextElement` when given: dj-value-* arguments (strict literals) plus only
 // the generated values the handler declares, or all of them for a ** catch-all
 // (Q1); _target is never generated (Q2). A rejected binding is reported
-// value-free (N1) and returns false: the caller must stop.
-function _strictBinding(element, eventName, generated = {}, positional = [], contextElement = null) {
+// value-free (N1) and returns false: the caller must stop. `pageOwner`: see
+// _resolveParameterContract.
+function _strictBinding(element, eventName, generated = {}, positional = [], contextElement = null,
+    pageOwner = false) {
     try {
-        const resolved = _resolveParameterContract(element, eventName);
+        const resolved = _resolveParameterContract(element, eventName, pageOwner);
         if (resolved.policy !== 'strict') return null;
         const parameters = resolved.contract.parameters;
         const named = new Map();

@@ -35,6 +35,7 @@ from django.core.checks import ERROR, WARNING
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView, state
+from djust.components.descriptors.base import LiveComponent, TypedState
 from djust._parameter_contract import ContractError, ParameterContract, ParameterError
 from djust.decorators import event_handler
 from djust.websocket import LiveViewConsumer
@@ -177,7 +178,12 @@ def _page(view_class: type) -> tuple[str, SessionStore]:
     return response.content.decode(), session
 
 
-async def _recover(transport: str, view_class: type) -> tuple[dict, str, Browser]:
+async def _recover(
+    transport: str,
+    view_class: type,
+    type_into: str = TYPE_INTO_FORM,
+    read: str = READ_RESTORED,
+) -> tuple[dict, str, Browser]:
     """Type into the page, lose the connection, reconnect.
 
     Returns the recovery event's params as the client sent them, the restored
@@ -188,7 +194,7 @@ async def _recover(transport: str, view_class: type) -> tuple[dict, str, Browser
     try:
         if transport == "ws":
             socket_id, socket = await ws_connect(browser, session, LiveViewConsumer)
-            await browser.eval(TYPE_INTO_FORM)
+            await browser.eval(type_into)
             await browser.eval("window.djust.liveViewInstance.reconnectDelay = 1; null")
             # The server side goes away; the client reconnects on its timer.
             await socket.disconnect()
@@ -206,7 +212,7 @@ async def _recover(transport: str, view_class: type) -> tuple[dict, str, Browser
             try:
                 await server.open_stream()
                 await server.answer_posts(lambda body: body.get("type") == "mount")
-                await browser.eval(TYPE_INTO_FORM)
+                await browser.eval(type_into)
                 # The stream drops; the page's EventSource opens it again.
                 await server.drop()
                 await server.open_stream()
@@ -217,14 +223,14 @@ async def _recover(transport: str, view_class: type) -> tuple[dict, str, Browser
         else:
             # The page POST has no reconnect, so the client never runs
             # recovery on it; fire it as a reconnect would.
-            await browser.eval(TYPE_INTO_FORM)
+            await browser.eval(type_into)
             await browser.eval(
                 "window.djust._isReconnect = true; window.djust._processAutoRecover(); null"
             )
             fetch = await http_answer(browser, view_class, session)
             assert fetch["headers"]["X-Djust-Event"] == "restore"
             params = json.loads(fetch["body"])
-        return params, await browser.eval(READ_RESTORED), browser
+        return params, await browser.eval(read), browser
     except BaseException:
         await browser.close()
         raise
@@ -308,6 +314,68 @@ async def test_a_legacy_recovery_handler_keeps_the_envelope(transport):
         }
         assert CALLS == [("legacy", EXPECTED_FORM, EXPECTED_DATA, {})]
         assert text == RESTORED
+    finally:
+        await browser.close()
+
+
+# --- a recovery container inside a LiveComponent ------------------------------
+
+
+class RecoveryEditor(LiveComponent):
+    """A component whose own markup holds the recovery container."""
+
+    class State(TypedState):
+        label: str = "editor"
+
+    template = '<form dj-auto-recover="restore" data-step="2"><input name="title" value=""></form>'
+
+    @event_handler()
+    def rename(self, value: str = "", **kwargs: Any) -> None:
+        self.state.label = value
+
+
+class StrictRecoveryInComponent(LiveView):
+    """The page's strict handler; the container sits in the component's wrapper."""
+
+    exposure_policy = "explicit"
+    login_required = False
+    template = '<div dj-root>{{ editor }}<p id="restored">{{ title }}|{{ step }}</p></div>'
+    editor = RecoveryEditor()
+    title = state("")
+    step = state("")
+
+    @event_handler(parameter_policy="strict")
+    def restore(self, form_values: dict[str, Any], data_attrs: dict[str, str]) -> None:
+        CALLS.append(("component", form_values, data_attrs))
+        self.title = form_values.get("title", "")
+        self.step = data_attrs.get("step", "")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["ws", "sse"])
+async def test_a_recovery_container_inside_a_component_reaches_the_page_handler(transport):
+    """The event carries no component context, so the server routes it to the
+    page's view; the client sends the strict values that view's contract takes,
+    not the 1.x envelope the component's (unlisting) contract would imply."""
+    html, _session = await sync_to_async(_page)(StrictRecoveryInComponent)
+    assert "data-component-id" in html  # the component's real wrapper markup
+    params, text, browser = await _recover(
+        transport,
+        StrictRecoveryInComponent,
+        type_into="document.querySelector('[name=title]').value = 'Draft'; null",
+    )
+    try:
+        assert await browser.eval(
+            "!!document.querySelector('[dj-auto-recover]').closest('[data-component-id]')"
+        )
+        assert _application(params) == {
+            "form_values": {"title": "Draft"},
+            "data_attrs": {"step": "2"},
+        }
+        assert CALLS == [("component", {"title": "Draft"}, {"step": "2"})]
+        assert text == "Draft|2"
+        assert not _errors(browser)
     finally:
         await browser.close()
 
