@@ -579,7 +579,7 @@ A form handler that takes whatever fields the form has keeps a typed
 catch-all: `def save(self, title: str, **fields: str)`.
 
 The accepted annotations are `str`, `int`, `float`, `bool`, `Decimal`, `UUID`,
-`date`, `Optional[T]`, `list[T]` and `Any`. The exact rules for each are in
+`date`, `Optional[T]`, `list[T]`, `dict[str, T]` and `Any`. The exact rules for each are in
 [Typed event parameters](../core-concepts/events.md#typed-event-parameters-strict-policy).
 
 ### Switching the whole project
@@ -621,8 +621,27 @@ lines, so also read the bindings of each strict handler you convert.
 `data-component-id` and `data-value` on an element that calls a
 [component's event](#python-names) are not affected.
 
-Handlers named by a `dj-auto-recover` attribute always run under the legacy
-policy for now; `djust.V019` warns if you mark one strict.
+A handler named by a `dj-auto-recover` attribute declares the recovered
+values instead of reading `_form_values` / `_data_attrs`, which a strict
+signature cannot declare. It follows the same policy as any other handler:
+
+```python
+# 1.3
+@event_handler()
+def restore(self, _form_values=None, _data_attrs=None, **kwargs):
+    title = (_form_values or {}).get("title", "")
+
+# 2.0
+@event_handler(parameter_policy="strict")
+def restore(self, form_values: dict[str, Any], data_attrs: dict[str, str]):
+    title = form_values.get("title", "")
+```
+
+The browser sends only the dictionaries the handler declares.
+`djust.V031` reports a recovery handler that still reads the 1.3 names (a
+warning under the legacy policy, an error under strict) and one that declares
+the 2.0 names while it runs under the legacy policy. The values and their
+limits are in [Reconnection](reconnection.md#custom-recovery-with-dj-auto-recover).
 
 ## 3. Replace removed names and settings
 
@@ -955,4 +974,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 8c87cee5d3b0 -->
+<!-- generated-doc prose-sha256: 37184dead219 -->

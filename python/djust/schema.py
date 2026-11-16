@@ -678,9 +678,10 @@ DIRECTIVES: List[Dict[str, Any]] = [
     {
         "name": "dj-auto-recover",
         "category": "recovery",
-        "description": "After a WebSocket reconnect, serialize this container's form "
-        "field values and data-* attributes and fire the named event so the server can "
-        "restore client-only state that didn't round-trip through the view.",
+        "description": "After a WebSocket or SSE reconnect, serialize this container's "
+        "form field values and data-* attributes and fire the named event so the server "
+        "can restore client-only state that didn't round-trip through the view. A strict "
+        "handler declares form_values: dict[str, Any] and/or data_attrs: dict[str, str].",
         "value": "handler_name",
         "example": '<div dj-auto-recover="restore_draft">...</div>',
         "related_attributes": ["dj-no-recover"],
