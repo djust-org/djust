@@ -277,15 +277,19 @@ Not the render itself, nor authorization checks.
   schema prefix, no alias, no second table). `save()`, `update()`,
   `delete()` and each cascaded delete, `bulk_*`, many-to-many `add()` /
   `remove()` (the through table) all do. Any other statement that is not a
-  read (raw SQL with unquoted names, `TRUNCATE`, `MERGE`, `WITH`, DDL, several
-  statements at once) writes UNKNOWN tables.
-- **R**, the tables the view read: the `SELECT` statements its own code and its
-  renders ran, including the queries a render runs by itself (a foreign key
-  followed lazily, a `prefetch_related()`, a count per row). A read djust
-  cannot follow (a function or `ONLY` in `FROM`, a schema-qualified name) makes
-  R UNKNOWN. So does a cached value or held rows that were not filled by a
-  recorded render, and a restored state, until the view renders again.
-  djust's own per-turn checks (the session and the user) do not count.
+  read (raw SQL with unquoted names, `TRUNCATE`, `MERGE`, a `WITH` with a
+  write in it, DDL, several statements at once) writes UNKNOWN tables.
+- **R**, the tables the view read: the `SELECT` statements (and `WITH` queries
+  whose every part is a `SELECT`) its own code and its renders ran, including
+  the queries a render runs by itself (a foreign key followed lazily, a
+  `prefetch_related()`, a count per row). A read djust cannot follow (a
+  function, `ONLY`, `TABLE` or a parenthesised join in `FROM`, a
+  schema-qualified name) makes R UNKNOWN. So does a QuerySet or cached value
+  the view holds that was filled outside the view's own steps and renders (a
+  QuerySet notes which view's step filled it; a cached value computed in
+  `mount()` or a handler counts as the view's), and a restored state, until
+  the view re-reads. djust's own per-turn checks (the session and the user) do
+  not count.
 
 When W and R are both known and share no table, nothing is read again and a
 handler that changed nothing on the view still answers `noop`: a click that
@@ -302,7 +306,9 @@ of the same name are one name here, which can only re-read more than needed.
 Writes to Django's and djust's own bookkeeping never count: `django_session`
 (the session, and djust's default state store) and every `DatabaseCache` table
 in `CACHES`. Add your own (a heartbeat or audit table) with
-`DJUST_IGNORED_WRITE_TABLES = ["app_heartbeat"]`.
+`DJUST_IGNORED_WRITE_TABLES = ["app_heartbeat"]`. The other side of this: a
+view that lists rows of an ignored table (an admin page of sessions, say) is
+not re-read when a step writes to it; call `self.rows_changed()` there.
 
 **What stays a snapshot, on every transport:**
 
@@ -358,12 +364,17 @@ combined reads. Each re-reads at its own next render: when a sticky child
 writes, the child shows the new rows at once and its parent shows them on its
 next render (the parent is not rendered for the child's event).
 
-For very large views: the walk looks at most 10,000 values in containers. A
-container whose first eight items are plain values (numbers, strings, dates,
-`None`) is skipped in one step, so chart data and lists of records cost
-nothing; past the limit, QuerySets nested in containers are not re-read and
-djust logs one warning for the view class. QuerySets held directly as
-attributes are always re-read.
+**Cost.** A turn that wrote nothing does no walking: each render and step
+looks only at the view's cached properties. A turn that wrote looks at
+everything the view holds, every item of every container three levels deep,
+with no limit, so that no QuerySet is missed: measured on an M-series laptop,
+about 1 ms for a list of 5,000 model instances and about 7 ms for 5,000 plain
+dicts, once per writing turn.
+
+**Databases.** Measured with SQLite and with PostgreSQL 15 (psycopg 3): the
+statement classification and complete event turns over WebSocket, SSE and the
+HTTP fallback. Other backends have not been run; a statement whose shape
+djust does not recognise only makes the decision "read everything again".
 
 ---
 
