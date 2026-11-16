@@ -12,6 +12,7 @@ import threading
 from html import escape as _html_escape
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING, cast
 
+from .._held_rows import recorded_render
 from .._child_rendering import reconcile_child_render
 from ..template_libraries import library_render_scope
 from ..utils import get_template_dirs
@@ -949,6 +950,7 @@ class TemplateMixin:
             cache[key] = normalized
         return normalized
 
+    @recorded_render
     def render(self, request: Optional["HttpRequest"] = None) -> str:
         """
         Render the view to HTML.
@@ -1885,6 +1887,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         return html[:start_pos] + stripped_div + html[close_end:]
 
     @reconcile_child_render(whole_page=True)
+    @recorded_render
     def render_full_template(
         self,
         request: Optional["HttpRequest"] = None,
@@ -2315,6 +2318,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             )
 
     @reconcile_child_render()
+    @recorded_render
     def render_with_diff(
         self,
         request: Optional["HttpRequest"] = None,

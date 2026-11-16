@@ -249,6 +249,137 @@ def get_context_data(self, **kwargs):
     return context
 ```
 
+### Rows after a handler writes
+
+A QuerySet kept on the view is evaluated by the first render and then read from
+its result cache. When a step of the view writes to a table the view shows,
+djust empties what the view holds before its next render, so the page shows
+the rows as they are now, on every transport (WebSocket, SSE and the HTTP
+fallback):
+
+```python
+@event_handler
+def delete_product(self, pk: int, **kwargs):
+    Product.objects.filter(pk=pk).delete()  # nothing else to do: the list re-reads
+```
+
+**What counts as a step:** an event handler (`async def` or not, its own
+`sync_to_async` calls included), `mount()`, `handle_params()`, `start_async` /
+`@background` work and `handle_async_result()`, `handle_tick()`, a server push
+or `handle_info()`, `connected()` / `disconnected()`, and a component's handler.
+Not the render itself, nor authorization checks.
+
+**The rule.** djust records two sets of table names:
+
+- **W**, the tables a step wrote. A write names its table only when it is one
+  of the single-table statements Django's ORM emits: `INSERT INTO "t" ...`,
+  `UPDATE "t" SET ...`, `DELETE FROM "t" ...` (with the backend's quoting, no
+  schema prefix, no alias, no second table). `save()`, `update()`,
+  `delete()` and each cascaded delete, `bulk_*`, many-to-many `add()` /
+  `remove()` (the through table) all do. Any other statement that is not a
+  read (raw SQL with unquoted names, `TRUNCATE`, `MERGE`, a `WITH` with a
+  write in it, DDL, several statements at once) writes UNKNOWN tables.
+- **R**, the tables the view read: the `SELECT` statements (and `WITH` queries
+  whose every part is a `SELECT`) its own code and its renders ran, including
+  the queries a render runs by itself (a foreign key followed lazily, a
+  `prefetch_related()`, a count per row). A read djust cannot follow (a
+  function, `ONLY`, `TABLE` or a parenthesised join in `FROM`, a
+  schema-qualified name) makes R UNKNOWN. So does a QuerySet or cached value
+  the view holds that was filled outside the view's own steps and renders (a
+  QuerySet notes which view's step filled it, and a copied or unpickled one
+  counts as filled elsewhere; a cached value computed in `mount()` or a
+  handler counts as the view's), and a restored state, until
+  the view re-reads. djust's own per-turn checks (the session and the user) do
+  not count.
+
+When W and R are both known and share no table, nothing is read again and a
+handler that changed nothing on the view still answers `noop`: a click that
+writes an audit row costs what it did before. **Otherwise everything the view
+holds is read again before its next render**: every held QuerySet (public or
+private, and in the dicts, lists, tuples and sets it holds, at any depth;
+its `prefetch_related()` runs again with it) and every `cached_property`. The
+turn renders even if the handler changed nothing else. Each such decision made
+because W or R was UNKNOWN is logged at DEBUG level by `djust._held_rows`.
+
+Table names are compared without schema, case-folded. Two schemas with a table
+of the same name are one name here, which can only re-read more than needed.
+
+Writes to Django's and djust's own bookkeeping never count: `django_session`
+(the session, and djust's default state store) and every `DatabaseCache` table
+in `CACHES`. Add your own (a heartbeat or audit table) with
+`DJUST_IGNORED_WRITE_TABLES = ["app_heartbeat"]`. The other side of this: a
+view that lists rows of an ignored table (an admin page of sessions, say) is
+not re-read when a step writes to it; call `self.rows_changed()` there.
+
+**What stays a snapshot, on every transport:**
+
+- a model instance held on the view, *including the relations it was loaded
+  with* by `prefetch_related()` or `select_related()`. Read it again in the
+  handler: fetch it again with the same `prefetch_related()`, or call
+  `self.order.refresh_from_db()` (which drops its prefetched relations, so each
+  later render queries them); or hold a QuerySet instead;
+- a list of rows (`list(qs)`, with or without `prefetch_related`), a `Paginator`
+  or `Page`, a `deque`, a QuerySet inside a custom object or a dataclass, a
+  QuerySet set on the class rather than in `mount()`, and the result of an
+  `lru_cache` method;
+- a QuerySet built with `select_for_update()` (outside its transaction it would
+  raise).
+
+To keep a QuerySet or a `cached_property` exactly as first read (an audit view
+of what was there at mount, an expensive cached computation), name it in
+`frozen_rows`:
+
+```python
+class OrderAudit(LiveView):
+    frozen_rows = ("_orders_at_mount", "exchange_rates")
+```
+
+**Writes djust cannot see:**
+
+- writes the database makes by itself: a trigger (`AFTER INSERT` writing
+  another table), `ON DELETE CASCADE` done by the database (and Django's
+  `DB_*` `on_delete` options), a model over a database view or another
+  unmanaged table, rules and partitions that route a write elsewhere. The
+  statement djust sees names one table; the database changes another;
+- a `SELECT` with side effects (`nextval()`, a function that writes,
+  `SELECT ... INTO`), and `cursor.callproc()` (it bypasses Django's execute
+  wrappers);
+- any write made outside the view's steps: in a thread or an `asyncio` task
+  the handler starts and that finishes later, in an `on_commit` callback, or by
+  another process.
+
+For the first group, set `DJUST_REFRESH_ON_ANY_WRITE = True`: every write a
+view's step makes then re-reads everything it holds, whatever its table (the
+system check `djust.C042` points at unmanaged models and `DB_*` cascades when
+this is off). For the others, call `self.rows_changed()` after the write, with
+the models or tables written (`self.rows_changed(Order)`; with none, the
+written tables are UNKNOWN). It marks the view; the view re-reads at its next
+render. Nothing is sent by itself in between: a write that lands after the
+turn has answered shows on the next event, or push to the view (see
+[Push updates from outside the view](#push-updates-from-outside-the-view)) and
+call `rows_changed()` in its push handler.
+
+**Several views on one page:** a write marks the view that made it, the views
+above it and every view and component below the topmost, and R is their
+combined reads. Each re-reads at its own next render: when a sticky child
+writes, the child shows the new rows at once and its parent shows them on its
+next render (the parent is not rendered for the child's event).
+
+**Cost.** A turn that wrote nothing does no walking: each render and step
+looks only at the view's cached properties. A write to a table the view reads
+is decided without a walk; the reset then walks. A write to a table it does not
+read walks once to confirm that every held QuerySet was filled by the view's
+own steps: everything the view holds, every item of every container at any
+depth, with no limit (plain values such as numbers and strings are skipped by
+type), so that no QuerySet is missed. Measured on an M-series laptop: about
+1 ms for a list of 5,000 model instances or of 100,000 numbers, and about 3 ms
+for 5,000 record dicts.
+
+**Databases.** Measured with SQLite and with PostgreSQL 15 (psycopg 3): the
+statement classification and complete event turns over WebSocket, SSE and the
+HTTP fallback. Other backends have not been run; a statement whose shape
+djust does not recognise only makes the decision "read everything again".
+
 ---
 
 ## Event Handlers
@@ -1662,6 +1793,7 @@ When building a djust LiveView:
 - [ ] Declare the parameters each binding sends (`manage.py check` reports `djust.T020`); keep `**kwargs` on legacy `dj-input`/`dj-change`/`dj-submit` handlers, or declare `field`/`_target`
 - [ ] Use `value` as the parameter name for `dj-input`/`dj-change`
 - [ ] Store QuerySets in private variables (`self._items`)
+- [ ] Keep the QuerySet, not `list(qs)`, when the rows can change: a held QuerySet is read again after a write; a list is a snapshot
 - [ ] Assign to public in `get_context_data()` for JIT serialization
 - [ ] Call `super().get_context_data()` to trigger Rust serialization
 - [ ] Never convert QuerySets to lists

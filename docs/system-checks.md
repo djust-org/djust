@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 128 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 129 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -52,6 +52,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C039 | Config | Error | `csp_strict` and `csp_strict_styles` set to different values |
 | C040 | Config | Error | `DJUST_STATE_SAVE_INTERVAL` or a view's `state_save_interval` cannot be used |
 | C041 | Config | Info | A state save interval is set while `DJUST_STATE_STORE_STRICT` is on |
+| C042 | Config | Info | A model's rows may be changed by the database itself (an unmanaged model, a `DB_*` cascade) while `DJUST_REFRESH_ON_ANY_WRITE` is off |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -88,7 +89,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
 | V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
 | V029 | LiveView | Warning | An explicit view's event handler reads and then changes a `state()` field declared `persist=False`, so the change is not saved between requests |
-| V030 | LiveView | Warning | A view or mixin defines or assigns `skip_render`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, replacing djust's method of that name |
+| V030 | LiveView | Warning | A view or mixin defines or assigns `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, replacing djust's method of that name |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -394,6 +395,13 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C041"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C041"]`
 - **False positives**: None: the interval is ignored as reported.
 
+### C042 — the database may change rows djust does not see written
+- **Severity**: Info
+- **Method**: Model inspection (`Meta.managed`, the `on_delete` of every relation) and the `DJUST_REFRESH_ON_ANY_WRITE` setting
+- **What it detects**: a model with `Meta.managed = False` (a database view, a table another system owns) or a relation whose `on_delete` is named `DB_*` (the database performs it), while `DJUST_REFRESH_ON_ANY_WRITE` is off. After a step of a view writes, djust re-reads what the view holds only when the written table is one the view read (#4112). A change the database makes by itself (a trigger, a cascade, a view over the written table) is not a statement djust sees, so a view holding those rows keeps showing them as they were.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C042"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C042"]`
+- **False positives**: an unmanaged model whose rows change only through your own Django statements (then the refresh is exact and the message can be suppressed). A trigger on a managed table is not detected.
+
 <!-- END GENERATED check-sections:C -->
 
 ---
@@ -649,7 +657,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### V030 — a view attribute replaces one of djust's view methods
 - **Severity**: Warning
 - **Method**: Runtime (class inspection and the source of the classes' methods).
-- **What it detects**: a LiveView, or a mixin of one, that defines one of `skip_render`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state` (#4129) in its class body, or assigns `self.<name>` in one of its methods. The attribute replaces djust's method with no error: if it is an `@event_handler`, a client can call it, and the view's own `self.skip_render()` runs the handler instead of skipping the render. Reported once per class and name, on the class that defines it. djust's own classes are not checked.
+- **What it detects**: a LiveView, or a mixin of one, that defines one of `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state` (#4129) in its class body, or assigns `self.<name>` in one of its methods. The attribute replaces djust's method with no error: if it is an `@event_handler`, a client can call it, and the view's own `self.skip_render()` runs the handler instead of skipping the render. Reported once per class and name, on the class that defines it. djust's own classes are not checked.
 - **Fix**: rename the attribute.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V030"]`
 

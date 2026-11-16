@@ -66,6 +66,12 @@ class DjustConfig(AppConfig):
         # Import checks module so @register() decorators are executed
         import djust.checks  # noqa: F401
 
+        # Rows a view holds are read again after a step of it wrote (#4112):
+        # the write recorder goes on every database connection.
+        from djust._held_rows import install_everywhere
+
+        install_everywhere()
+
         # Asset registry and integrity caches follow override_settings (ADR-040).
         from django.core.signals import setting_changed
 

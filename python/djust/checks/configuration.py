@@ -930,6 +930,57 @@ def _check_automatic_state_switch(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_database_side_writes(errors: list[CheckMessage]) -> None:
+    """C042 — models whose rows the database may change by itself (#4112).
+
+    After a step of a view writes, djust re-reads what the view holds only when
+    the written table is one the view read. A write the database makes by
+    itself is not a statement djust sees: a model over a database view or
+    another unmanaged table (``Meta.managed = False``), and a foreign key whose
+    deletion the database performs (an ``on_delete`` named ``DB_*``). Info, once,
+    when such models exist and ``DJUST_REFRESH_ON_ANY_WRITE`` is off.
+    """
+    from django.apps import apps
+    from django.conf import settings
+
+    from djust._held_rows import ANY_WRITE_SETTING
+
+    if getattr(settings, ANY_WRITE_SETTING, False) or _is_check_suppressed("djust.C042"):
+        return
+    found: list[str] = []
+    for model in apps.get_models():
+        meta = model._meta
+        if meta.proxy:
+            continue
+        if not meta.managed:
+            found.append("%s (managed = False)" % meta.label)
+            continue
+        for field in meta.get_fields():
+            on_delete = getattr(getattr(field, "remote_field", None), "on_delete", None)
+            action = str(getattr(on_delete, "__name__", ""))
+            if action.startswith("DB_"):
+                found.append("%s.%s (%s)" % (meta.label, field.name, action))
+    if not found:
+        return
+    errors.append(
+        DjustInfo(
+            "The database may change rows of %s by itself; a view holding them is "
+            "not refreshed by those changes." % _shown(sorted(found)),
+            hint=(
+                "djust re-reads what a view holds after a write to a table the view read. "
+                "A database view, a trigger or a cascade done by the database changes "
+                "rows no statement named."
+            ),
+            id="djust.C042",
+            fix_hint=(
+                "Set `DJUST_REFRESH_ON_ANY_WRITE = True` to re-read after every write, "
+                "or call `self.rows_changed(Model)` after the write; suppress C042 if "
+                "these tables only change through your own statements."
+            ),
+        )
+    )
+
+
 def _check_state_save_interval(errors: list[CheckMessage]) -> None:
     """C040 / C041 — the save interval (design: save frequency).
 
@@ -1997,6 +2048,7 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C040 / C041 -- the state save interval (design: save frequency)
     _check_state_save_interval(errors)
+    _check_database_side_writes(errors)
 
     # C031 -- the session store is a cache local to one process (#4103)
     _check_process_local_session_cache(errors)

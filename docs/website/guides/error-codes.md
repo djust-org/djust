@@ -488,6 +488,14 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 **Fix**: Informational. Remove the interval, or turn `DJUST_STATE_STORE_STRICT` off to let turns be saved after their reply.
 
+### C042: the database may change rows djust does not see written
+
+**Severity**: Info
+
+**What causes it**: A model with `Meta.managed = False`, or a foreign key with a `DB_*` `on_delete`, while `DJUST_REFRESH_ON_ANY_WRITE` is off. Message: "The database may change rows of app.Model (managed = False) by itself; a view holding them is not refreshed by those changes."
+
+**Fix**: Set `DJUST_REFRESH_ON_ANY_WRITE = True` (every write a view's step makes re-reads everything it holds), or call `self.rows_changed(Model)` after the write. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C042"]}` when those tables only change through your own statements.
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
@@ -969,7 +977,7 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Severity**: Warning
 
-**What causes it**: A view or one of its mixins defines `skip_render`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, or assigns `self.<name>`. These are djust's view methods; the attribute replaces the method of that name, and an `@event_handler` of that name can be called by the client. Message: "<view> defines skip_render, which replaces djust's skip_render() method on the view."
+**What causes it**: A view or one of its mixins defines `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, or assigns `self.<name>`. These are djust's view methods; the attribute replaces the method of that name, and an `@event_handler` of that name can be called by the client. Message: "<view> defines skip_render, which replaces djust's skip_render() method on the view."
 
 **Fix**: Rename the attribute or handler. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V030"]}`.
 

@@ -51,8 +51,11 @@ def restore_public_state(view: Any, saved_state: Mapping[str, Any]) -> Dict[str,
     Skips private keys and callable values (as every caller did before), and a
     key that names a method (logged) or property of the view's class.
     """
+    from ._held_rows import reads_unknown
     from .security import safe_setattr
 
+    # What the view now holds was not read by its renders (#4112).
+    reads_unknown(view)
     cls = type(view)
     applied: Dict[str, Any] = {}
     for key, value in saved_state.items():

@@ -56,6 +56,16 @@ import functools
 import logging
 from typing import Any, Callable, ContextManager, Optional, Tuple, TypeVar
 
+from ._held_rows import (
+    RECORDED_STEPS,
+    attributed,
+    is_marked,
+    mark_generation,
+    reading,
+    refresh_for_render,
+    unmark,
+    writes_by,
+)
 from ._query_budget import budgeted, hop
 
 logger = logging.getLogger(__name__)
@@ -168,7 +178,29 @@ def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **
     A view that declares a ``query_budget`` also has the hop's queries counted
     here (``djust._query_budget``), inside the wrapper so a transaction the
     wrapper opens is not charged to the step.
+
+    A step that writes to the database marks the view, and its reads (and a
+    ``"render"`` step's) enter the view's read set. The view's next
+    ``"render"`` step first decides whether to empty everything it holds; the
+    mark is cleared when that render returns (only if no newer mark was made
+    meanwhile), and kept when it raises (``djust._held_rows``, #4112).
     """
+    if step == "render":
+        with reading(view):
+            if not is_marked(view):
+                return _run_step(view, step, fn, *args, **kwargs)
+            generation = mark_generation(view)
+            refresh_for_render(view)
+            result = _run_step(view, step, fn, *args, **kwargs)
+            unmark(view, generation)
+            return result
+    if step in RECORDED_STEPS and view is not None and not _is_async(fn):
+        with writes_by(view):
+            return _run_step(view, step, fn, *args, **kwargs)
+    return _run_step(view, step, fn, *args, **kwargs)
+
+
+def _run_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
     wrapper = _wrapper()
     meter = _meter(view, step, fn)
     if (wrapper is None and meter is None) or _active_step.get() is not None or _is_async(fn):
@@ -193,10 +225,24 @@ def sync_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """``fn`` as a callable that runs inside the wrapper (for ``sync_to_async``).
 
     Returns ``fn`` itself when no wrapper is configured and ``view`` declares no
-    ``query_budget``, and when ``fn`` is an ``async def`` (not a sync step;
-    ``sync_to_async`` then refuses it exactly as it does with no wrapper).
+    ``query_budget`` (for a step that may write, ``fn`` with its statements
+    attributed to ``view``, ``djust._held_rows``), and when ``fn`` is an
+    ``async def`` (not a sync step; ``sync_to_async`` then refuses it exactly as
+    it does with no wrapper).
     """
-    if (_wrapper() is None and not budgeted(view)) or _is_async(fn):
+    if _is_async(fn):
+        return fn
+    if step == "render" and view is not None:
+        # The render's reads enter the view's read set, and a marked view is
+        # reset first: both in ``run_sync_step`` (#4112).
+        @functools.wraps(fn)
+        def rendering(*args: Any, **kwargs: Any) -> _T:
+            return run_sync_step(view, step, fn, *args, **kwargs)
+
+        return rendering
+    if _wrapper() is None and not budgeted(view):
+        if step in RECORDED_STEPS:
+            return attributed(view, fn)
         return fn
 
     @functools.wraps(fn)

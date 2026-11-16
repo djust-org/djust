@@ -16,6 +16,7 @@ from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from ._view_hooks import call_async_result, call_hook, call_tick, is_async_hook
+from ._held_rows import rows_written
 from ._background_render import (
     BackgroundRender,
     _discard_baseline,
@@ -2303,7 +2304,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         force_html = getattr(view, "_force_full_html", False)
         if not skip_render and not force_html:
             post_assigns = _snapshot_assigns(view)
-            if pre_assigns == post_assigns:
+            if pre_assigns == post_assigns and not rows_written(view):
                 skip_render = True
             else:
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
@@ -6852,7 +6853,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                             return True, False, None
                         if getattr(tick_view, "_force_full_html", False):
                             return False, False, None
-                        return False, before == _snapshot_assigns(tick_view), None
+                        unchanged = before == _snapshot_assigns(tick_view)
+                        return False, unchanged and not rows_written(tick_view), None
                     except Exception as exc:  # noqa: BLE001 - re-raised on the loop
                         return False, False, exc
 
@@ -6907,7 +6909,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             else:
                 force_full_html = getattr(self.view_instance, "_force_full_html", False)
                 post_assigns = _snapshot_assigns(self.view_instance)
-                unchanged = pre_assigns == post_assigns and not force_full_html
+                unchanged = (
+                    pre_assigns == post_assigns
+                    and not force_full_html
+                    and not rows_written(self.view_instance)
+                )
             if unchanged:
                 logger.debug(
                     "[djust] Tick on %s produced no state changes, skipping render",

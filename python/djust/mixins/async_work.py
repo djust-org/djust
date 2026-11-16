@@ -106,7 +106,11 @@ async def run_async_callback(
         raise asyncio.CancelledError
     try:
         if iscoroutinefunction(callback):
-            result = await callback(*args, **(kwargs or {}))
+            from .._held_rows import writes_by
+
+            # A coroutine callback's writes mark its view, as a sync one's do (#4112).
+            with writes_by(owner):
+                result = await callback(*args, **(kwargs or {}))
         else:
             from ..sync_turn import sync_step
 
