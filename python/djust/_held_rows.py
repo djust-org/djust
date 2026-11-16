@@ -937,7 +937,7 @@ def install_fill_stamps() -> None:
         return
 
     @functools.wraps(original)
-    def _fetch_all(self: Any) -> None:
+    def _fetch_all(self: Any) -> None:  # noqa: dead-method-allowed (installed on QuerySet)
         filling = self._result_cache is None
         original(self)
         if filling:
