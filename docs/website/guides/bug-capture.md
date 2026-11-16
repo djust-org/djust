@@ -13,7 +13,7 @@ description: "Encode state_before + state_after + vdom_patches into a URL fragme
 
 > **Status.** Iter A added the data shape, encoder/decoder, and PII-scrub hook; Iter B ([#1562](https://github.com/djust-org/djust/issues/1562)) added the read-only replay viewer at `/__djust__/replay/<blob>`; Iter C ([#1561](https://github.com/djust-org/djust/issues/1561)) added the snapshot store for large payloads and the `djust replay` CLI. All are documented below.
 >
-> **Changed in 2.0 (#4184).** Time-travel debugging was removed, and with it everything here that read its per-view buffer: `encode_view_state()`, the debug panel's Share button, `time_travel_excluded_fields` and `LIVEVIEW_CONFIG['bug_capture_default_scrub']`. A capture is now built from the states you supply, as in the quick start below.
+> **Changed in 2.0 (#4184).** Time-travel debugging was removed, and with it what read its per-view buffer: `encode_view_state()` and `time_travel_excluded_fields`. The Share button moved to the debug panel's **State** tab and now builds the capture in the browser, with the event's real patches; see [Share from the debug panel](#share-from-the-debug-panel). From code, build a capture from the states you supply, as in the quick start below.
 
 ## When to use this
 
@@ -194,6 +194,36 @@ A malformed blob returns `400` (as `text/plain`, never `text/html`, so a crafted
 - Dispatch an event handler (`event_name` is display-only — never resolved to a callable).
 - Mutate any application state (no writes anywhere in the view).
 - Scope a database query by the captured `tenant_id` (the view issues zero database queries; a captured `tenant_id` is shown like any other state key and nothing more).
+
+## Share from the debug panel
+
+Under `DEBUG`, the debug panel's **State** tab lists each event with the view's
+state after it. Its **Share latest** button, and the **Share** button inside each
+expanded entry, copy a `djbug1.` blob to the clipboard (or show it in a prompt
+when the clipboard is unavailable):
+
+- `event_name` is the entry's event;
+- `state_after` is that entry's state and `state_before` the entry before it
+  (empty for the oldest one);
+- `vdom_patches` are the patches that event's response carried, the ones the
+  client actually applied;
+- the names in `LIVEVIEW_CONFIG['bug_capture_default_scrub']` are removed from
+  both states first and listed in `scrubbed_fields`.
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    "bug_capture_default_scrub": ["password", "ssn", "credit_card"],
+}
+```
+
+The blob is built entirely in the browser; nothing is sent to the server. It
+contains only what the panel already shows you: for an explicit view that is
+the redacted debug projection (a server-only field appears as `"[redacted]"`),
+and each value is the panel's display form, cut at 100 characters. Paste it
+into the [replay viewer](#browser-based-replay-iter-b) or `djust replay`. It is
+always the inline form: the snapshot store below is used only by
+`BugCapture.encode()` on the server.
 
 ## Snapshot store for large captures (iter C)
 

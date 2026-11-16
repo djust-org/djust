@@ -248,9 +248,9 @@ revised): under DEBUG a failure shows its exception and traceback, as Django's
 own development output does; in production it is value-free.
 
 > **Superseded in part, 2026-11-15 (#4184).** Time-travel debugging was
-> removed in 2.0, so its projection no longer exists; the bug-capture Share
-> button that read it went too. The debug panel's projection and the rule above
-> stand.
+> removed in 2.0, so its projection no longer exists. The debug panel's
+> projection and the rule above stand, and bug-capture Share now encodes, in the
+> browser, only what the debug panel's State tab already holds.
 Explicit application API responses and push messages still need their own review;
 this is not a general data-loss-prevention system.
 
@@ -438,7 +438,7 @@ This amendment records direction the project owner settled for 2.0. The decision
 - Keep the reduced reserved-name protection and the serialization sensitive-name floor that deliberate rendering still needs. Step R's written-account clause covers both (see the [exposure flip plan](../plans/2.0-exposure-flip.md) §5 G1, G2).
 - Declared reconnect and back-navigation state stays, with fresh authorization and explicit persistence and browser grants.
 - **Retained features are ported:** `lazy=True` children and resumable uploads move to explicit, shared-state, HTTP-compatible designs. Redacted, read-only debug history stays. Executable time-travel restore and replay are removed.
-  - **Superseded 2026-11-15 (owner decision, #4184).** Time-travel debugging is dropped entirely in 2.0, not ported: the read-only history goes with the restore and replay, with the debug panel's Time Travel tab, the bug-capture Share button that read its buffer, and the `reset_view_state` / `eval_handler` endpoints. Per-event state changes are followed in the debug panel's State tab.
+  - **Superseded 2026-11-15 (owner decision, #4184).** Time-travel debugging is dropped in 2.0, not ported. Correction to the record above: recording and Share worked on explicit views too (a redacted, read-only history); only the jump, the component restore and forward replay were legacy-only. Lost: stepping back, restoring one component, forward replay with edited parameters. Kept: the per-event history, which is now the debug panel's State tab (each event with the redacted state after it and what changed), the Events tab's "Replay this event", and Share, which moved to the State tab and builds the capture in the browser with the event's real patches. Separately, the `reset_view_state` / `eval_handler` endpoints and the MCP tools `eval_handler` and `reset_view_state` worked only on views that state `exposure_policy = "legacy"` (409 otherwise) and leave with the legacy policy.
 - Actors (D-o) are removed in this order: a downstream `use_actors` inventory, the exposure changes, the Python actor integration, then the Rust actor crate.
   - **Amended 2026-11-11.** On 2026-11-11 the owner chose to remove actors ahead of the default flip. Both removals were done in one PR (#4029): the Python integration and the Rust crate `crates/djust_live/src/actors/`. The I1/M2 usage inventory was not run beyond the survey in [2.0-exposure-flip.md](../plans/2.0-exposure-flip.md) §4.3.
 
