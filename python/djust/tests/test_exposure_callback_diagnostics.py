@@ -239,7 +239,9 @@ async def test_component_waiter_failure_is_protected_without_losing_injection(
             {"type": "event", "event": "click", "params": {"component_id": "probe", "value": 7}}
         )
     assert component.received == 7
-    assert called == [("click", {"component_id": "probe", "value": 7})]
+    # Waiters receive the component's own component_id, not the id the event named (#4046;
+    # registered under "probe", the component's own id differs here).
+    assert called == [("click", {"component_id": component.component_id, "value": 7})]
     assert ("COMPONENT_WAITER_SENTINEL" in caplog.text) == (initial == final == "legacy" or debug)
     assert "COMPONENT_WAITER_SENTINEL" not in json.dumps(transport.sent)
 

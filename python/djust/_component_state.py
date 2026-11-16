@@ -109,7 +109,11 @@ def warn_rows_left_out(view: Any, reason: str) -> None:
     leaves out rows other tabs (or removals) left in it: those rows start from
     ``mount()`` when a tab builds them again, and a removed row forgotten this
     way answers to its old id again."""
-    owner = "%s.%s" % (type(view).__module__, type(view).__qualname__)
+    # Read through getattr (#2488): a bare module read can raise while building this message.
+    owner = "%s.%s" % (
+        getattr(type(view), "__module__", ""),
+        getattr(type(view), "__qualname__", type(view).__name__),
+    )
     if (owner, reason) in _WARNED_ROWS_LEFT_OUT:
         return
     _WARNED_ROWS_LEFT_OUT.add((owner, reason))
