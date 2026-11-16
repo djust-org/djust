@@ -1,1 +1,0 @@
-- Classify explicit child ownership using the same HTML5 root rules as VDOM parsing, including non-div roots and foster-parented markup, while retaining inert-content and nested-child exclusions.

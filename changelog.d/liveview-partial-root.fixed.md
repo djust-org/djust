@@ -1,1 +1,0 @@
-- **Django partials:** Support authenticated LiveView roots rendered by partials, including caller context and inherited templates.
