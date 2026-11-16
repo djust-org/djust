@@ -430,6 +430,7 @@ async def run_websocket(script=SCRIPT, key: str | None = None) -> List[Tuple[int
 
 #: The error texts the ``run_sse`` calls received, in order.
 SSE_ERRORS: List[Any] = []
+SSE_ERROR_FRAMES: List[Any] = []  # whole error frames, for the DEBUG-detail checks
 
 
 async def run_sse(
@@ -487,6 +488,7 @@ async def run_sse(
             await DjustSSEMessageView().post(posted, session_id=sid)
             frames = _drain(session)
             SSE_ERRORS.extend(f.get("error") for f in frames if f.get("type") == "error")
+            SSE_ERROR_FRAMES.extend(f for f in frames if f.get("type") == "error")
             status = 400 if any(f.get("type") == "error" for f in frames) else 200
             for frame in frames:
                 if frame.get("html"):
@@ -1482,6 +1484,49 @@ async def test_a_selection_that_is_not_an_item_is_a_refused_event_over_sse(route
     assert [s for s, _ in steps] == [400, 200]
     assert SSE_ERRORS == ["Event rejected"]
     assert picked(steps[-1][1]) == "edit|"
+
+
+# The refusal's own text ("Unknown or disabled dropdown selection") is DEBUG detail that only a
+# legacy owner may receive (ADR-038; tests/test_log_exposure_pin.py): an explicit view answers the
+# generic message on every transport, DEBUG or not.
+REFUSAL_DETAIL = "Unknown or disabled dropdown selection"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_an_explicit_view_never_gets_the_refusal_detail_on_the_fallback_in_debug(routes):
+    with override_settings(DEBUG=True):
+        page = FallbackPage()
+        assert page.event("select", 0, value="nope") == 400
+    assert page.last == {"error": "Event rejected"}
+    assert REFUSAL_DETAIL not in str(page.last)
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_an_explicit_view_never_gets_the_refusal_detail_on_the_socket_in_debug(routes):
+    with override_settings(DEBUG=True):
+        key = await sync_to_async(harness.new_session_key)()
+        comm, mount = await harness.mount_view(Menus, key)
+        menu = ids(mount["html"])[0]
+        try:
+            frame = await ws_event(comm, "select", {"component_id": menu, "value": "nope"})
+        finally:
+            await comm.disconnect()
+    assert frame == {"type": "error", "error": "Event rejected"}, frame
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_an_explicit_view_never_gets_the_refusal_detail_over_sse_in_debug(routes):
+    SSE_ERRORS.clear()
+    SSE_ERROR_FRAMES.clear()
+    with override_settings(DEBUG=True):
+        steps = await run_sse([("select", 0, {"value": "nope"})])
+    assert [s for s, _ in steps] == [400]
+    assert SSE_ERRORS == ["Event rejected"]
+    # Not in a DEBUG field either (the traceback would carry the refusal's text).
+    assert SSE_ERROR_FRAMES and all(REFUSAL_DETAIL not in str(f) for f in SSE_ERROR_FRAMES)
+    assert all("traceback" not in f for f in SSE_ERROR_FRAMES), SSE_ERROR_FRAMES
 
 
 @pytest.mark.django_db(transaction=True)

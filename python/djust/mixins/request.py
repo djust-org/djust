@@ -2142,9 +2142,13 @@ class RequestMixin:
                         sanitize_for_log(event_name),
                         type(owner).__name__,
                     )
-                    return JsonResponse(
-                        {"error": _safe_error(str(refused), "Event rejected")}, status=400
-                    )
+                    # ADR-038: the refusal's text (in DEBUG) only to a legacy
+                    # owner; an explicit view always answers the generic message.
+                    if uses_legacy_exposure(child_view if child_view is not None else self):
+                        return JsonResponse(
+                            {"error": _safe_error(str(refused), "Event rejected")}, status=400
+                        )
+                    return JsonResponse({"error": "Event rejected"}, status=400)
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
                 # The handler's ``start_async`` / ``@background`` work runs here,
                 # before the render, so the one answer carries its result (#3624).

@@ -1281,7 +1281,12 @@ CLIENT_FRAME_LEGACY_GATED = {
             "inside `if uses_legacy_exposure(view) or isinstance(exc, ExposureError)`"
         ),
     },
-    "runtime.py": {},
+    "runtime.py": {
+        ("_dispatch_component_event", "send_error"): (
+            "a component's EventRefused text: inside `if uses_legacy_exposure(view)`, "
+            "else the generic 'Event rejected' (#4046)"
+        ),
+    },
 }
 
 

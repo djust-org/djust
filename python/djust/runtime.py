@@ -5463,7 +5463,15 @@ class ViewRuntime(RuntimeTurnPort):
                     sanitize_for_log(event_name),
                     type(component).__name__,
                 )
-                await self.transport.send_error(_safe_error(str(refused), "Event rejected"))
+                # ADR-038: the refusal's text (in DEBUG) only to a legacy owner;
+                # an explicit view always answers the generic message.
+                from ._exposure import uses_legacy_exposure
+
+                if uses_legacy_exposure(view):
+                    await self.transport.send_error(_safe_error(str(refused), "Event rejected"))
+                else:
+                    # No DEBUG traceback either: it would carry the refusal's text.
+                    await self.transport.send_error("Event rejected", _exc_info=(None, None, None))
                 return True
             except Exception as exc:
                 _tt_error = str(exc)[:200]
