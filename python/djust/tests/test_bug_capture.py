@@ -299,6 +299,7 @@ def test_encode_view_state_import_names_the_removal_and_the_replacement():
     message = str(refused.value)
     assert "removed in djust 2.0" in message
     assert "BugCapture(state_before=" in message
+    assert "State tab" in message
 
 
 @override_settings(DEBUG=True)

@@ -21,9 +21,13 @@ A capture is built from the states the caller supplies::
         event_name="next_step",
     ).encode(scrub=scrub_fields("password"))
 
-djust 2.0 removed ``encode_view_state()``, the debug panel's Share button and
-``time_travel_excluded_fields`` with time-travel debugging (#4184): they read
-the per-view time-travel buffer, which no longer exists.
+The debug panel's State tab has a Share button that builds the same blob in the
+browser from the history it keeps: the selected event's state, the state before
+it and the patches that event's response carried, with the names in
+``LIVEVIEW_CONFIG['bug_capture_default_scrub']`` left out (#4184). djust 2.0
+removed ``encode_view_state()`` and ``time_travel_excluded_fields`` with
+time-travel debugging: they read the per-view time-travel buffer, which no
+longer exists.
 
 Security model (READ THIS BEFORE USING)
 ---------------------------------------

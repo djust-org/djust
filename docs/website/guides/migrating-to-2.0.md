@@ -657,7 +657,8 @@ Every replacement works on 1.3.x, so make the change there.
 | `sign_snapshot`, `unsign_snapshot` and `SNAPSHOT_SALT` from `djust.security`, the `djust.security.state_snapshot` module, and the `LiveView._restore_snapshot()` override | `state(..., persist="client", client=True)` fields. djust signs and verifies their token itself (example below). Importing one of the three names raises `ImportError` with this advice, and so does reading it as an attribute: `hasattr(djust.security, "sign_snapshot")` raises instead of returning `False`, so a compatibility shim must catch `ImportError`. A class that defines `_restore_snapshot()` is refused with `ImproperlyConfigured`; move what it did after restoring into `handle_restore()`. |
 | `enable_state_snapshot = True`, on a view or a mixin | `state(..., persist="server")` on each field that must survive a reconnect, and `persist="client", client=True` for one the browser may hold across Back (example below). A view that still sets it is refused with `ImproperlyConfigured` when the class is created, or when it mounts if the value is set on the instance or later. `False` is accepted. |
 | `PersistentLiveView` (`djust.PersistentLiveView`, `djust.live_view.PersistentLiveView`) | `LiveView`, with the fields to keep declared as above. Importing it raises `ImportError` with this advice. |
-| Time-travel debugging: `time_travel_enabled = True`, `time_travel_excluded_fields`, the `djust.time_travel` module, `djust.bug_capture.encode_view_state()`, the debug panel's Time Travel tab and Share button, the `time_travel_jump` / `time_travel_component_jump` / `forward_replay` / `bug_capture_share` frames, and the `reset_view_state` / `eval_handler` observability endpoints and MCP tools | Delete the attributes; a view that sets either to a true value is refused with `ImproperlyConfigured` when the class is created, or when it mounts if the value is set on the instance or later. To follow state changes event by event, open the debug panel's **State** tab (with `DEBUG = True`), which lists each event with the state after it and what changed. To share a capture, build one from the states you choose: `BugCapture(state_before=..., state_after=..., vdom_patches=...).encode(scrub=scrub_fields(...))`. See [What does not survive](#5-what-does-not-survive). |
+| Time-travel debugging: `time_travel_enabled = True`, `time_travel_excluded_fields`, the `djust.time_travel` module (`TimeTravelBuffer`, `EventSnapshot`), `djust.bug_capture.encode_view_state()`, the debug panel's Time Travel tab, and the `time_travel_jump` / `time_travel_component_jump` / `forward_replay` / `bug_capture_share` frames | Delete the attributes; a view that sets either to a true value is refused with `ImproperlyConfigured` when the class is created, or when it mounts if the value is set on the instance or later. To follow state changes event by event, open the debug panel's **State** tab (with `DEBUG = True`); its **Share** button copies a bug capture with the event's real patches, leaving out `LIVEVIEW_CONFIG['bug_capture_default_scrub']`. From code: `BugCapture(state_before=..., state_after=..., vdom_patches=...).encode(scrub=scrub_fields(...))`. See [What does not survive](#5-what-does-not-survive). |
+| The observability endpoints `reset_view_state/` and `eval_handler/`, `djust.observability.dry_run` (`DryRunContext`, `DryRunViolation`), and the MCP tools `eval_handler` and `reset_view_state` | Nothing replaces them. They worked only on views that state `exposure_policy = "legacy"` (every other view got `409`), so they leave with the legacy policy. Drive a handler through the live page, or through `LiveViewTestClient.send_event()` in a test. The read-only endpoints (`view_assigns/`, `last_traceback/`, `log/`, `handler_timings/`, `turn_timings/`, `sql_queries/`) and their MCP tools stay. |
 | System check `djust.V011` (sticky child and parent snapshot opt-in) | Remove it from `SILENCED_SYSTEM_CHECKS`; nothing reports it. `djust.C304` now warns about a `client=True` field with a credential-like name. |
 | `NonPersistableStateError`, and the `strict=` argument of `LiveView._capture_snapshot_state()` | Nothing. A client field has to be JSON, and a model or `Decimal` is refused when the token is built. |
 
@@ -782,7 +783,7 @@ To open or close from your own handler, set the state:
 | `template_auto_call`, `virtual_keyed_ops`, `django_value_repr` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. What each one could switch off is always on. |
 | `view_state_in_session` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. A view's state is saved in the server-side session by default. To save nothing, as `view_state_in_session = False` did, set `DJUST_AUTOMATIC_STATE = False` in settings (the whole project) or `automatic_state = False` on a view ([Switching saving off](state-survival.md#switching-saving-off)). System check `djust.C027`, which validated the old key, is retired. |
 | `event_security` set to `"open"` or `"warn"` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Put `@event_handler` on every method a template binds (`dj-click`, `dj-submit`, ...), then delete the key. Only decorated methods are client events, on every transport (WebSocket, SSE, the page-POST fallback, components and the test client); startup refuses the two modes (any case) with this hint and any other value except `"strict"` as unknown (#4101). `"strict"` is accepted and does nothing. |
-| `time_travel_enabled`, `time_travel_max_events` and `bug_capture_default_scrub` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the keys; djust refuses them with `ImproperlyConfigured` at startup. Time-travel debugging and the bug-capture Share button that read them were removed (#4184). System checks `djust.C501`, `djust.C502` and `djust.V014` are retired. |
+| `time_travel_enabled` and `time_travel_max_events` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the keys; djust refuses them with `ImproperlyConfigured` at startup. Time-travel debugging was removed (#4184). System checks `djust.C501`, `djust.C502` and `djust.V014` are retired. `bug_capture_default_scrub` stays: the State tab's Share button applies it. |
 
 <!-- END GENERATED removed-table:settings -->
 
@@ -922,8 +923,8 @@ the only behaviour, before 2.0.0 is released, so finish with them on 1.3.x:
 
 ## 5. What does not survive
 
-Three features have no equivalent in 2.0. Plan for their absence instead of
-looking for a replacement.
+These features have no full equivalent in 2.0. Plan for their absence instead
+of looking for a replacement.
 
 - **Actors (`use_actors = True`).** The actor system was experimental, worked
   only over WebSocket and cannot run under explicit exposure. Remove the
@@ -935,14 +936,19 @@ looking for a replacement.
   state. Declare the fields worth keeping with
   `state(..., persist=...)`, and rebuild the rest in `mount()` and
   `handle_restore()`.
-- **Time-travel debugging (`time_travel_enabled = True`).** Recording each
-  event's state, jumping back to a past state, restoring one component and
-  replaying events from it are all removed, with the debug panel's Time
-  Travel tab and its bug-capture Share button (#4184). Delete
-  `time_travel_enabled` and `time_travel_excluded_fields`; a view that still
-  sets either is refused when the class is created. To follow state changes
-  event by event, open the debug panel's **State** tab under `DEBUG`: it lists
-  each event with the state after it and what changed from the event before.
+- **Time-travel debugging (`time_travel_enabled = True`).** Removed with the
+  debug panel's Time Travel tab (#4184). Recording and Share worked on
+  explicit views (as a redacted, read-only history); jumping back, restoring
+  one component and forward replay worked only on legacy views. **Lost:**
+  stepping the view back to an earlier state, restoring one component, and
+  replaying an event forward with edited parameters. **Kept:** the per-event
+  history in the debug panel's **State** tab (each event with the state after
+  it and what changed), the Events tab's "Replay this event", and Share, now
+  on the State tab, which copies a bug capture with the event's real patches.
+  Delete `time_travel_enabled` and `time_travel_excluded_fields`; a view that
+  still sets either is refused when the class is created.
+- **The `reset_view_state` and `eval_handler` debug endpoints** and their MCP
+  tools. They worked only on views that state `exposure_policy = "legacy"`.
 
 ## 6. Finish
 
@@ -960,4 +966,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: b1dabc6ec4e7 -->
+<!-- generated-doc prose-sha256: 790488f54e97 -->

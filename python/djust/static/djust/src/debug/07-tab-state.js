@@ -87,6 +87,9 @@
                             <span>State Timeline</span>
                             <span class="state-count">${countLabel} change${this.stateHistory.length === 1 ? '' : 's'}</span>
                         </div>
+                        <button class="clear-state-btn share-state-btn" title="Copy a bug capture of the latest event" onclick="window.djustDebugPanel.shareStateEntry(0)">
+                            Share latest
+                        </button>
                         <button class="clear-state-btn" onclick="window.djustDebugPanel.clearStateHistory()">
                             Clear History
                         </button>
@@ -149,6 +152,7 @@
                                             <div class="state-section-title">Full State Snapshot</div>
                                             <pre class="state-snapshot-content">${this.formatStateValue(entry.state)}</pre>
                                         </div>
+                                        <button class="clear-state-btn share-state-btn" title="Copy a bug capture of this event" onclick="event.stopPropagation(); window.djustDebugPanel.shareStateEntry(${origIndex})">Share</button>
                                     </div>
                                 </div>
                             `;
@@ -158,7 +162,7 @@
             `;
         }
 
-        captureState(trigger, eventName = null, state = null) {
+        captureState(trigger, eventName = null, state = null, patches = null) {
             // Capture current state from variables if not provided
             const currentState = state || (this.variables ? { ...this.variables } : {});
             const now = Date.now();
@@ -169,6 +173,9 @@
                 const lastEntry = this.stateHistory[0];
                 const timeDiff = now - lastEntry.timestamp;
                 if (timeDiff < 100 && lastEntry.eventName === eventName && lastEntry.trigger === trigger) {
+                    if (Array.isArray(patches) && !lastEntry.patches) {
+                        lastEntry.patches = this.cloneState(patches);
+                    }
                     return; // Skip duplicate
                 }
             }
@@ -177,6 +184,9 @@
                 trigger: trigger,
                 eventName: eventName,
                 state: this.cloneState(currentState),
+                // The patches this event's response carried (``_debug.patches``),
+                // so the Share button can put the real patches in a capture.
+                patches: Array.isArray(patches) ? this.cloneState(patches) : null,
                 timestamp: now,
                 _expanded: false
             };
@@ -302,6 +312,87 @@
                 this.stateHistory[index]._expanded = !this.stateHistory[index]._expanded;
                 this.renderTabContent();
             }
+        }
+
+        // Bug capture (#4184): the Share button encodes a ``djbug1.`` blob from
+        // the history this tab already holds, entirely in the browser. The
+        // states are the debug panel's own variables (the redacted debug
+        // projection for an explicit view), reduced to their displayed values;
+        // the patches are the ones the event's response carried. The format is
+        // the one ``djust.bug_capture.BugCapture.decode``, the replay viewer and
+        // ``djust replay`` read.
+        buildBugCapture(index) {
+            // eslint-disable-next-line security/detect-object-injection
+            const entry = this.stateHistory[index];
+            if (!entry) return null;
+            const plain = (state) => {
+                const out = {};
+                for (const [name, desc] of Object.entries(state || {})) {
+                    // eslint-disable-next-line security/detect-object-injection
+                    out[name] = (desc && typeof desc === 'object' && 'value' in desc) ? desc.value : desc;
+                }
+                return out;
+            };
+            const before = plain(this.stateHistory[index + 1]?.state);
+            const after = plain(entry.state);
+            const cfg = (window.DJUST_DEBUG_INFO && window.DJUST_DEBUG_INFO.config) || {};
+            const scrub = Array.isArray(cfg.bugCaptureScrub) ? cfg.bugCaptureScrub : [];
+            const scrubbed = [];
+            for (const name of scrub) {
+                if (typeof name !== 'string') continue;
+                if (Object.prototype.hasOwnProperty.call(before, name) ||
+                    Object.prototype.hasOwnProperty.call(after, name)) {
+                    // eslint-disable-next-line security/detect-object-injection
+                    delete before[name];
+                    // eslint-disable-next-line security/detect-object-injection
+                    delete after[name];
+                    scrubbed.push(name);
+                }
+            }
+            return {
+                event_name: entry.eventName || '',
+                scrubbed_fields: scrubbed,
+                state_after: after,
+                state_before: before,
+                v: 'djbug1',
+                vdom_patches: Array.isArray(entry.patches) ? entry.patches : [],
+            };
+        }
+
+        encodeBugCapture(capture) {
+            // Keys sorted at every level, as BugCapture.encode does, so the
+            // same capture gives the same blob on either side.
+            const sorted = (value) => {
+                if (Array.isArray(value)) return value.map(sorted);
+                if (value && typeof value === 'object') {
+                    const out = {};
+                    // eslint-disable-next-line security/detect-object-injection
+                    for (const key of Object.keys(value).sort()) out[key] = sorted(value[key]);
+                    return out;
+                }
+                return value;
+            };
+            const bytes = new TextEncoder().encode(JSON.stringify(sorted(capture)));
+            let binary = '';
+            for (const b of bytes) binary += String.fromCharCode(b);
+            const b64 = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+            return 'djbug1.' + b64;
+        }
+
+        shareStateEntry(index) {
+            const capture = this.buildBugCapture(index);
+            if (!capture) return null;
+            const blob = this.encodeBugCapture(capture);
+            this.lastBugCapture = blob;
+            const clipboard = typeof navigator !== 'undefined' ? navigator.clipboard : null;
+            if (clipboard && typeof clipboard.writeText === 'function') {
+                clipboard.writeText(blob).catch(() => {
+                    window.prompt('Copy this bug capture:', blob);
+                });
+            } else {
+                window.prompt('Copy this bug capture:', blob);
+            }
+            return blob;
         }
 
         clearStateHistory() {

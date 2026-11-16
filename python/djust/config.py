@@ -267,6 +267,10 @@ class LiveViewConfig:
         # Hot View Replacement (v0.6.1) — state-preserving Python code
         # reload in dev. Gated on DEBUG=True AND hot_reload=True.
         "hvr_enabled": True,
+        # Field names the debug panel's State tab removes from both states
+        # before it encodes a bug capture with its Share button (#4184), e.g.
+        # ``LIVEVIEW_CONFIG['bug_capture_default_scrub'] = ["password"]``.
+        "bug_capture_default_scrub": [],
         # JIT Serialization (Phase 5)
         "jit_serialization": True,  # False skips JIT auto-serialization (#2984)
         "jit_debug": False,  # Debug logging for JIT serialization

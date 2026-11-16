@@ -85,7 +85,7 @@ def test_time_travel_excluded_fields_is_refused_when_the_class_is_created():
 
     message = str(refused.value)
     assert "time_travel_excluded_fields" in message
-    assert "BugCapture(state_before=" in message
+    assert "bug_capture_default_scrub" in message
 
 
 def test_the_attributes_turned_off_are_accepted_and_the_base_class_has_neither():
@@ -108,9 +108,7 @@ def test_the_attributes_turned_off_are_accepted_and_the_base_class_has_neither()
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "key", ["time_travel_enabled", "time_travel_max_events", "bug_capture_default_scrub"]
-)
+@pytest.mark.parametrize("key", ["time_travel_enabled", "time_travel_max_events"])
 @pytest.mark.parametrize("setting", ["LIVEVIEW_CONFIG", "DJUST_CONFIG"])
 def test_a_removed_config_key_is_refused_at_startup(key, setting):
     from djust._removed_settings import reject_removed_settings
@@ -126,8 +124,10 @@ def test_a_removed_config_key_is_refused_at_startup(key, setting):
 def test_the_config_defaults_no_longer_carry_the_keys():
     from djust.config import config
 
-    for key in ("time_travel_enabled", "time_travel_max_events", "bug_capture_default_scrub"):
+    for key in ("time_travel_enabled", "time_travel_max_events"):
         assert config.get(key) is None, key
+    # Kept: the State tab's Share applies it (#4184).
+    assert config.get("bug_capture_default_scrub") == []
 
 
 # --------------------------------------------------------------------------

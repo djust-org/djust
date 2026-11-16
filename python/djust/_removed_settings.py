@@ -64,10 +64,6 @@ REMOVED_CONFIG_KEYS: dict[str, str] = {
     # #4184: time-travel debugging was removed, with its buffer size.
     "time_travel_enabled": "time-travel debugging was removed; " + TIME_TRAVEL_REPLACEMENT,
     "time_travel_max_events": "time-travel debugging was removed; " + TIME_TRAVEL_REPLACEMENT,
-    "bug_capture_default_scrub": (
-        "the debug panel's bug-capture Share button that read it was removed with "
-        "time-travel debugging; pass scrub=scrub_fields(...) to BugCapture.encode()"
-    ),
 }
 
 #: Keys that are top-level Django settings, never keys of ``LIVEVIEW_CONFIG`` /
@@ -149,11 +145,10 @@ REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
     "time_travel_enabled": "time-travel debugging was removed; delete the attribute and, "
     + TIME_TRAVEL_REPLACEMENT,
     "time_travel_excluded_fields": (
-        "it named the fields the debug panel's bug-capture Share button left out, and "
-        "that button read the time-travel buffer, which was removed; delete the "
-        "attribute. To share a capture, build one from the states you choose: "
-        "BugCapture(state_before=..., state_after=..., vdom_patches=...).encode("
-        "scrub=scrub_fields(...))"
+        "it named the fields the time-travel Share button left out, and that button "
+        "read the time-travel buffer, which was removed; delete the attribute. The "
+        "debug panel's State tab now has the Share button: list the fields it must "
+        "leave out in LIVEVIEW_CONFIG['bug_capture_default_scrub']"
     ),
 }
 
@@ -191,9 +186,9 @@ _INERT_CLIENT_STATE = (
 _TIME_TRAVEL = "time-travel debugging was removed (#4184); " + TIME_TRAVEL_REPLACEMENT
 _ENCODE_VIEW_STATE = (
     "it read the time-travel buffer, which was removed with time-travel debugging "
-    "(#4184). Build the capture from the states you choose: "
-    "BugCapture(state_before=..., state_after=..., vdom_patches=...).encode("
-    "scrub=scrub_fields(...))"
+    "(#4184). Use the Share button on the debug panel's State tab, or build the "
+    "capture from the states you choose: BugCapture(state_before=..., "
+    "state_after=..., vdom_patches=...).encode(scrub=scrub_fields(...))"
 )
 
 REMOVED_NAMES: dict[tuple[str, str], str] = {
