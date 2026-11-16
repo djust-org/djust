@@ -607,17 +607,43 @@ async def test_a_terminal_subclass_that_lists_nothing_renders_its_own_names_empt
     assert "[True]" not in json.dumps(frame), frame
 
 
-def test_the_system_check_names_what_a_terminal_subclass_does_not_list():
-    """djust.T027 reports the subclass's own names its template reads."""
+class BareTerminal(TtydTerminalView):
+    """A subclass that only overrides a default: the base's own template and
+    ``get_context_data()`` supply every name the template reads."""
+
+    rows = 40
+
+
+def _t027_names(view_class) -> set[str]:
     from djust.checks.templates import check_unsupplied_template_names
 
-    label = MODULE + ".LoggingTerminal --"
-    reported = {
+    label = "%s.%s --" % (MODULE, view_class.__qualname__)
+    return {
         re.search(r"reads '(\w+)'", str(message.msg)).group(1)
         for message in check_unsupplied_template_names(None)
         if str(message.msg).startswith(label) and message.id == "djust.T027"
     }
-    assert {"terminal_connected", "session_log"} <= reported, reported
+
+
+@pytest.mark.parametrize(
+    "view_class, expected",
+    [
+        # Exactly its own two names: the terminal's (rows, ttyd_url) come from
+        # the base's get_context_data(), which writes them as ctx["rows"] = ...
+        (LoggingTerminal, {"terminal_connected", "session_log"}),
+        # Its own names are passed to super().get_context_data(name=...).
+        (ExplicitTerminal, set()),
+        # The base's template, every name supplied by the base (#4185 review).
+        (BareTerminal, set()),
+    ],
+    ids=["lists-nothing", "lists-its-names", "bare-subclass"],
+)
+def test_the_system_check_names_exactly_what_a_terminal_subclass_does_not_list(
+    view_class, expected
+):
+    """djust.T027 reports the subclass's own names its template reads, and
+    nothing the terminal base supplies."""
+    assert _t027_names(view_class) == expected
 
 
 # --------------------------------------------------------------------------
