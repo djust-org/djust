@@ -106,6 +106,7 @@ ALLOWLIST_SETUP = (
     | frozenset(
         {
             "djust._framework_code",  # which modules are djust's own, for the checks (#4094); stdlib only
+            "djust._held_rows",  # the #4112 write recorder, installed on every connection by ready(); stdlib only
             "djust._removed_settings",  # 2.0 removed-settings startup guard (#3500)
             "djust.apps",
             "djust.assets",  # ADR-040 asset registry (setting_changed receiver)
@@ -141,7 +142,7 @@ ALLOWLIST_SETUP = (
         }
     )
 )
-assert len(ALLOWLIST_SETUP) == 69 + HAS_CSP_NONCE_TAG
+assert len(ALLOWLIST_SETUP) == 70 + HAS_CSP_NONCE_TAG
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).

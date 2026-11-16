@@ -1202,8 +1202,8 @@ def _fallback(reason: str, view: Any) -> None:
     logger.debug(
         "djust: %s; %s.%s re-reads everything it holds (#4112)",
         reason,
-        type(view).__module__,
-        type(view).__qualname__,
+        getattr(type(view), "__module__", ""),  # read through getattr (#2488)
+        getattr(type(view), "__qualname__", type(view).__name__),
     )
 
 
