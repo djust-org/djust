@@ -20,6 +20,7 @@ contract on the WebSocket.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from typing import Any, Dict, List, Tuple
@@ -1486,24 +1487,34 @@ async def test_a_selection_that_is_not_an_item_is_a_refused_event_over_sse(route
     assert picked(steps[-1][1]) == "edit|"
 
 
-# The refusal's own text ("Unknown or disabled dropdown selection") is DEBUG detail that only a
-# legacy owner may receive (ADR-038; tests/test_log_exposure_pin.py): an explicit view answers the
-# generic message on every transport, DEBUG or not.
+# The refusal's own text ("Unknown or disabled dropdown selection") never reaches the client, on
+# any transport and for any view, DEBUG or not: it goes to the server log through log_failure_for
+# (CodeQL "information exposure through an exception"; tests/test_log_exposure_pin.py). The
+# answer is the generic message; the code path does not depend on the exposure policy.
 REFUSAL_DETAIL = "Unknown or disabled dropdown selection"
 
 
+def _logged(caplog) -> str:
+    return "\n".join(r.getMessage() for r in caplog.records)
+
+
 @pytest.mark.django_db(transaction=True)
-def test_an_explicit_view_never_gets_the_refusal_detail_on_the_fallback_in_debug(routes):
+def test_an_explicit_view_never_gets_the_refusal_detail_on_the_fallback_in_debug(routes, caplog):
+    caplog.set_level(logging.WARNING)
     with override_settings(DEBUG=True):
         page = FallbackPage()
         assert page.event("select", 0, value="nope") == 400
     assert page.last == {"error": "Event rejected"}
     assert REFUSAL_DETAIL not in str(page.last)
+    assert REFUSAL_DETAIL in _logged(caplog)  # the detail is in the server log
 
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-async def test_an_explicit_view_never_gets_the_refusal_detail_on_the_socket_in_debug(routes):
+async def test_an_explicit_view_never_gets_the_refusal_detail_on_the_socket_in_debug(
+    routes, caplog
+):
+    caplog.set_level(logging.WARNING)
     with override_settings(DEBUG=True):
         key = await sync_to_async(harness.new_session_key)()
         comm, mount = await harness.mount_view(Menus, key)
@@ -1513,11 +1524,13 @@ async def test_an_explicit_view_never_gets_the_refusal_detail_on_the_socket_in_d
         finally:
             await comm.disconnect()
     assert frame == {"type": "error", "error": "Event rejected"}, frame
+    assert REFUSAL_DETAIL in _logged(caplog)  # the detail is in the server log
 
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-async def test_an_explicit_view_never_gets_the_refusal_detail_over_sse_in_debug(routes):
+async def test_an_explicit_view_never_gets_the_refusal_detail_over_sse_in_debug(routes, caplog):
+    caplog.set_level(logging.WARNING)
     SSE_ERRORS.clear()
     SSE_ERROR_FRAMES.clear()
     with override_settings(DEBUG=True):
@@ -1527,6 +1540,7 @@ async def test_an_explicit_view_never_gets_the_refusal_detail_over_sse_in_debug(
     # Not in a DEBUG field either (the traceback would carry the refusal's text).
     assert SSE_ERROR_FRAMES and all(REFUSAL_DETAIL not in str(f) for f in SSE_ERROR_FRAMES)
     assert all("traceback" not in f for f in SSE_ERROR_FRAMES), SSE_ERROR_FRAMES
+    assert REFUSAL_DETAIL in _logged(caplog)  # the detail is in the server log
 
 
 @pytest.mark.django_db(transaction=True)

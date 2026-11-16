@@ -2135,19 +2135,20 @@ class RequestMixin:
                     # disabled selection, ...) before changing anything: a
                     # refused event, as on the WebSocket and SSE (#4046), not
                     # a 500. Nothing is saved; this request's view is dropped.
-                    from ..websocket_utils import _safe_error
+                    # The refusal's text goes to the server log only, never to
+                    # the client: every view answers the generic message.
+                    from .._exposure_diagnostics import log_failure_for
 
-                    logger.warning(
-                        "HTTP POST event %s refused by %s",
+                    log_failure_for(
+                        logger,
+                        (child_view if child_view is not None else self,),
+                        refused,
+                        "HTTP POST event %s refused by %s: %s",
                         sanitize_for_log(event_name),
                         type(owner).__name__,
+                        sanitize_for_log(str(refused)),
+                        level="warning",
                     )
-                    # ADR-038: the refusal's text (in DEBUG) only to a legacy
-                    # owner; an explicit view always answers the generic message.
-                    if uses_legacy_exposure(child_view if child_view is not None else self):
-                        return JsonResponse(
-                            {"error": _safe_error(str(refused), "Event rejected")}, status=400
-                        )
                     return JsonResponse({"error": "Event rejected"}, status=400)
                 t_handler_ms = (time.perf_counter() - t0_handler) * 1000
                 # The handler's ``start_async`` / ``@background`` work runs here,

@@ -5454,24 +5454,26 @@ class ViewRuntime(RuntimeTurnPort):
         try:
             try:
                 await _call_handler(handler, call_kwargs or None, positional_args=call_args)
-            except EventRefused as refused:
+            except EventRefused as refusal:
                 # The component refused the event's input before changing
                 # anything (#4046): a refused event, as on the HTTP fallback.
                 _tt_error = "refused"
-                logger.warning(
-                    "Runtime: event %s refused by %s",
+                # The refusal's text goes to the server log only (the project's
+                # logging rule), never to the client: every view answers the
+                # generic message, with no DEBUG traceback (it carries the text).
+                from ._exposure_diagnostics import log_failure_for
+
+                log_failure_for(
+                    logger,
+                    (view,),
+                    refusal,
+                    "Runtime: event %s refused by %s: %s",
                     sanitize_for_log(event_name),
                     type(component).__name__,
+                    sanitize_for_log(str(refusal)),
+                    level="warning",
                 )
-                # ADR-038: the refusal's text (in DEBUG) only to a legacy owner;
-                # an explicit view always answers the generic message.
-                from ._exposure import uses_legacy_exposure
-
-                if uses_legacy_exposure(view):
-                    await self.transport.send_error(_safe_error(str(refused), "Event rejected"))
-                else:
-                    # No DEBUG traceback either: it would carry the refusal's text.
-                    await self.transport.send_error("Event rejected", _exc_info=(None, None, None))
+                await self.transport.send_error("Event rejected", _exc_info=(None, None, None))
                 return True
             except Exception as exc:
                 _tt_error = str(exc)[:200]
