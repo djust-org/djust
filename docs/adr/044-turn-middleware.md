@@ -127,7 +127,7 @@ under it.
 **Not turns** (no view code runs and no view data is sent): ping, cursor and
 presence heartbeats, upload register/chunk/resume frames (their completion
 handlers run inside the event turn that consumes them), hot reload (DEBUG only),
-`forward_replay` (DEBUG only time travel).
+`forward_replay` (DEBUG only time travel; removed in 2.0 with time travel, #4184).
 
 ### D4. Ordering
 

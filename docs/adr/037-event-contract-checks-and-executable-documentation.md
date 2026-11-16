@@ -358,7 +358,7 @@ They consume the runtime contract rather than deriving it:
 - `python/djust/websocket_utils.py` (event security and coercion of the resolved handler)
 - `python/djust/mixins/request.py` (the HTTP fallback's resolved handler)
 - `python/djust/runtime.py` (`@cache` and decorator metadata of the dispatched method)
-- `python/djust/time_travel.py` (whether a replayed handler is an event handler)
+- `python/djust/time_travel.py` (whether a replayed handler is an event handler; removed in 2.0 with time-travel debugging, #4184)
 
 ## D1 decisions (2026-09-25)
 
