@@ -139,7 +139,7 @@ class Invalid(LiveView):
         pass
 
     @event_handler(parameter_policy="strict")
-    def mapping(self, value: dict[str, int]):
+    def mapping(self, value: dict[int, str]):
         pass
 
     @event_handler(parameter_policy="strict")
@@ -243,7 +243,7 @@ EXPECTED_INVALID = {
         "djust.V016",
         "strict event parameter contract is invalid: Parameter 'value': Unsupported "
         "annotation; use str, int, float, bool, Decimal, UUID, date, Optional[T], "
-        "list[T] or explicit Any.",
+        "list[T], dict[str, T] or explicit Any.",
     ),
     "unannotated": (
         "djust.V016",
@@ -345,7 +345,7 @@ def test_invalid_matrix_reports_exactly_one_expected_message_each(fixture_module
             "djust.V016",
             "other.selected output callback contract is invalid: Parameter 'value': "
             "Unsupported annotation; use str, int, float, bool, Decimal, UUID, date, "
-            "Optional[T], list[T] or explicit Any.",
+            "Optional[T], list[T], dict[str, T] or explicit Any.",
         )
     ]
     found.pop(

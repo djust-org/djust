@@ -3330,7 +3330,7 @@ class LiveViewSSE {
                 if (globalThis.djustDebug) console.log('[SSE] Connection acknowledged, session:', data.session_id);
                 break;
 
-            case 'mount':
+            case 'mount': {
                 this.viewMounted = true;
                 this._freshIdRetried = false; // #3164: a new mount re-arms the retry
                 if (typeof data.view === 'string') this.primaryViewPath = data.view;
@@ -3356,6 +3356,12 @@ class LiveViewSSE {
                     clientVdomVersion = data.version;
                 }
                 installMountEventConfig(data);
+                // A reconnect's mount replaces the page's markup: keep what the
+                // user had typed for form recovery and dj-auto-recover, as the
+                // WebSocket mount does (03-websocket.js, #4178).
+                const formRecoverySnapshot = window.djust._isReconnect
+                    && typeof window.djust._captureFormRecovery === 'function'
+                    ? window.djust._captureFormRecovery() : null;
 
                 if (data.html) {
                     // #2632: the PAGE container — a sticky/embedded root
@@ -3371,10 +3377,11 @@ class LiveViewSSE {
                             // against the mount HTML, as the WebSocket mount
                             // does (#1610), so mount-time state such as
                             // ADR-034 component identities reaches the DOM.
-                            _morphPrerenderedMount(container, data.html, null, undefined, data.owned_children);
+                            _morphPrerenderedMount(container, data.html, formRecoverySnapshot, undefined, data.owned_children);
                         } else {
                             // codeql[js/xss] -- html is server-rendered by the trusted Django/Rust template engine
                             replaceContainerHtml(container, data.html);
+                            if (formRecoverySnapshot) window.djust._restoreFormRecovery(formRecoverySnapshot);
                             // #2058: the SSE mount path never calls
                             // _runInsertedScripts() (WS-only fix) — a classic
                             // <script> is silently dead here exactly like
@@ -3407,6 +3414,7 @@ class LiveViewSSE {
                     }
                 }
                 break;
+            }
 
             case 'patch':
             case 'html_update': {
@@ -8073,10 +8081,15 @@ function reinitAfterDOMUpdate(scope) {
 }
 
 /**
- * Process dj-auto-recover elements after a WebSocket reconnect.
+ * Process dj-auto-recover elements after a WebSocket or SSE reconnect.
  * Scans for [dj-auto-recover] elements, serializes their DOM state
  * (form values + data-* attributes), and fires the named event.
  * Only fires when _isReconnect flag is set; clears the flag after processing.
+ *
+ * #4178: `form_values` and `data_attrs` are generated values (ADR-036 Q1). A
+ * strict handler receives the ones it declares, plus the container's
+ * dj-value-* arguments, validated by its contract like any event argument.
+ * A legacy handler keeps the 1.x `_form_values` / `_data_attrs` envelope.
  */
 function _processAutoRecover() {
     if (!window.djust._isReconnect) return;
@@ -8103,7 +8116,12 @@ function _processAutoRecover() {
             }
         }
 
-        const params = {
+        // Recovery events reach the page's view (no owner context), as
+        // dj-viewport-top does (30-infinite-scroll.js).
+        const strictParams = _strictBinding(container, handlerName,
+            {form_values: formValues, data_attrs: dataAttrs}, []);
+        if (strictParams === false) return;
+        const params = strictParams || {
             _form_values: formValues,
             _data_attrs: dataAttrs
         };

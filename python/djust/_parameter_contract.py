@@ -86,9 +86,13 @@ def _compile_type(annotation: Any, depth: int = 0) -> _Type:
     if origin is list and len(args) == 1:
         child = _compile_type(args[0], depth + 1)
         return _Type(list, f"list[{child.label}]", child)
+    if origin is dict and len(args) == 2 and args[0] is str:
+        # A JSON object: string keys, each value converted like a list item.
+        child = _compile_type(args[1], depth + 1)
+        return _Type(dict, f"dict[str, {child.label}]", child)
     raise ContractError(
         "Unsupported annotation; use str, int, float, bool, Decimal, UUID, date, "
-        "Optional[T], list[T] or explicit Any."
+        "Optional[T], list[T], dict[str, T] or explicit Any."
     )
 
 
@@ -209,6 +213,11 @@ def _convert(value: Any, spec: _Type, coerce: bool) -> Any:
             raise ValueError
         assert spec.child is not None
         return [_convert(item, spec.child, coerce) for item in value]
+    if kind is dict:
+        if type(value) is not dict or any(type(key) is not str for key in value):
+            raise ValueError
+        assert spec.child is not None
+        return {key: _convert(item, spec.child, coerce) for key, item in value.items()}
     if type(value) is kind:
         if kind is float and not math.isfinite(value):
             raise ValueError

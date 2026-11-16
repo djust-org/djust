@@ -2494,10 +2494,15 @@ function reinitAfterDOMUpdate(scope) {
 }
 
 /**
- * Process dj-auto-recover elements after a WebSocket reconnect.
+ * Process dj-auto-recover elements after a WebSocket or SSE reconnect.
  * Scans for [dj-auto-recover] elements, serializes their DOM state
  * (form values + data-* attributes), and fires the named event.
  * Only fires when _isReconnect flag is set; clears the flag after processing.
+ *
+ * #4178: `form_values` and `data_attrs` are generated values (ADR-036 Q1). A
+ * strict handler receives the ones it declares, plus the container's
+ * dj-value-* arguments, validated by its contract like any event argument.
+ * A legacy handler keeps the 1.x `_form_values` / `_data_attrs` envelope.
  */
 function _processAutoRecover() {
     if (!window.djust._isReconnect) return;
@@ -2524,7 +2529,12 @@ function _processAutoRecover() {
             }
         }
 
-        const params = {
+        // Recovery events reach the page's view (no owner context), as
+        // dj-viewport-top does (30-infinite-scroll.js).
+        const strictParams = _strictBinding(container, handlerName,
+            {form_values: formValues, data_attrs: dataAttrs}, []);
+        if (strictParams === false) return;
+        const params = strictParams || {
             _form_values: formValues,
             _data_attrs: dataAttrs
         };

@@ -78,7 +78,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V016 | LiveView | Error | Strict-policy handler declaration that strict dispatch rejects (ADR-036) |
 | V017 | LiveView | Retired | Retired in 2.0 with the actor system: async strict event handler on an actor view. Never emitted; the ID is not reused |
 | V018 | LiveView | Warning | `@event_handler(params=[...])` disagrees with a strict handler's signature |
-| V019 | LiveView | Warning | A `dj-auto-recover` handler declares `parameter_policy="strict"`; recovery always runs under legacy policy |
+| V019 | LiveView | Retired | Retired in 2.0 with the legacy downgrade of `dj-auto-recover` handlers (ADR-036 R1). Never emitted; the ID is not reused |
 | V020 | LiveView | Retired | Retired in 2.0 with the actor system: interactive component declared on an actor view. Never emitted; the ID is not reused |
 | V021 | LiveView | Info / Warning | A subclass overrides a `@push_handler` method without the marker (Info; still push-only), or gives the override `@event_handler` (Warning; browsers are still refused) |
 | V022 | LiveView | Warning | View code assigns an attribute djust's `LiveView` keeps its own state under (`self._streams = ...`) |
@@ -90,6 +90,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
 | V029 | LiveView | Warning | An explicit view's event handler reads and then changes a `state()` field declared `persist=False`, so the change is not saved between requests |
 | V030 | LiveView | Warning | A view or mixin defines or assigns `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, replacing djust's method of that name |
+| V031 | LiveView | Warning / Error | A `dj-auto-recover` handler reads `_form_values` / `_data_attrs`, or declares `form_values` / `data_attrs` under the legacy parameter policy |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -582,12 +583,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: `@event_handler(params=[...])` names a different set of parameters from the strict handler's signature. Under the strict policy the signature is the contract; the explicit list is ignored by validation and misleads tooling that reads it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V018"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V018"]`
 
-### V019 — Strict declaration on a `dj-auto-recover` handler
-- **Severity**: Warning
-- **Method**: Runtime (literal `dj-auto-recover="name"` in the view's own `template` / `template_name` source; dispatch additionally uses the HTML each render produced)
-- **What it detects**: a handler that a `dj-auto-recover` binding targets and that declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` / `_data_attrs` dictionaries, so dispatch always runs them under the legacy policy (ADR-036 decision R1), whatever the declaration or project policy. Recovery targets are not otherwise checked by V016.
-- **Limitation**: this startup check sees only the view's own template source. A binding in an included or parent template, or with a dynamic value, is not reported here, but dispatch still treats the handler as legacy once a render contains it.
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V019"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V019"]`
+### V019 — Retired
+- **Retired in**: 2.0 (#4178)
+- **What it did**: warned that a `dj-auto-recover` handler declaring `parameter_policy="strict"` would still run under the legacy policy, because recovery delivered its values as `_form_values` / `_data_attrs` (ADR-036 decision R1)
+- **Why it was retired**: recovery handlers are no longer forced to the legacy policy. A strict handler declares `form_values: dict[str, Any]` and `data_attrs: dict[str, str]`, and `djust.V031` reports a handler that still reads the 1.x names
+- **Migration**: remove `"V019"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### V020 — Retired
 - **Retired in**: 2.0 (the actor system was removed)
@@ -660,6 +660,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: a LiveView, or a mixin of one, that defines one of `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state` (#4129) in its class body, or assigns `self.<name>` in one of its methods. The attribute replaces djust's method with no error: if it is an `@event_handler`, a client can call it, and the view's own `self.skip_render()` runs the handler instead of skipping the render. Reported once per class and name, on the class that defines it. djust's own classes are not checked.
 - **Fix**: rename the attribute.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V030"]`
+
+### V031 — a `dj-auto-recover` handler that cannot receive its values
+- **Severity**: Error when the handler runs under the strict parameter policy, or declares the 2.0 parameters under the legacy policy; Warning when it reads the 1.x names under the legacy policy (it works until the legacy policy is removed)
+- **Method**: Runtime. A handler that declares a `_form_values` or `_data_attrs` parameter is reported wherever it is. A handler that a literal `dj-auto-recover="name"` in the view's template targets (the template scan follows `{% include %}` and `{% extends %}`) is also reported when its source reads either name (`kwargs.get("_form_values")`), or when it declares `form_values` / `data_attrs` but resolves to the legacy policy.
+- **What it detects**: a recovery handler written for the 1.x `_form_values` / `_data_attrs` envelope. Under the strict policy the browser sends the values as `form_values` and `data_attrs`, and only to a handler that declares them; the `_` names are never sent and cannot be declared. The reverse also fails: a handler that declares `form_values` / `data_attrs` but runs under the legacy policy is sent only the `_` names, and the event is refused.
+- **Fix**: `def restore(self, form_values: dict[str, Any], data_attrs: dict[str, str])` under the strict policy (`@event_handler(parameter_policy="strict")`, or `LIVEVIEW_CONFIG["event_parameter_policy"] = "strict"`). Declare only the dictionary you use.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V031"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V031"]`
 
 <!-- END GENERATED check-sections:V -->
 
