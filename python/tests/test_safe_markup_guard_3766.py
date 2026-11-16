@@ -45,6 +45,8 @@ PRELUDE = (
 )
 
 #: label -> (dirty source, clean twin). The twin differs only in how the raw value reaches the string.
+#: An escaped twin sits in a quoted value: ``<a {escape(x)}>`` puts it where a space starts a new
+#: attribute (``x onmouseover=1``), which the guard reports since #3864.
 SHAPES = {
     "dict-get-the-3766-shape": (
         'def f(name, size):\n    icons = {"a": f\'<svg width="{size}">\'}\n'
@@ -62,7 +64,7 @@ SHAPES = {
     ),
     "augmented-assignment": (
         'def f(x):\n    s = "<a "\n    s += x\n    return mark_safe(s)\n',
-        'def f(x):\n    s = "<a "\n    s += escape(x)\n    return mark_safe(s)\n',
+        'def f(x):\n    s = "<p>"\n    s += escape(x)\n    return mark_safe(s)\n',
     ),
     "join-of-a-list-literal": (
         'def f(x, y):\n    return mark_safe("".join([x, y]))\n',
@@ -74,15 +76,15 @@ SHAPES = {
     ),
     "format-bound-to-a-variable": (
         'def f(x):\n    t = "<a {}>".format(x)\n    return mark_safe(t)\n',
-        'def f(x):\n    t = "<a {}>".format(escape(x))\n    return mark_safe(t)\n',
+        "def f(x):\n    t = \"<a title='{}'>\".format(escape(x))\n    return mark_safe(t)\n",
     ),
     "format-in-place": (
         'def f(x):\n    return mark_safe("<a {}>".format(x))\n',
-        'def f(x):\n    return mark_safe("<a {}>".format(escape(x)))\n',
+        "def f(x):\n    return mark_safe(\"<a title='{}'>\".format(escape(x)))\n",
     ),
     "percent": (
         'def f(x):\n    return mark_safe("<a %s>" % x)\n',
-        'def f(x):\n    return mark_safe("<a %s>" % escape(x))\n',
+        "def f(x):\n    return mark_safe(\"<a title='%s'>\" % escape(x))\n",
     ),
     "concatenation": (
         'def f(x):\n    return mark_safe("<b>" + x + "</b>")\n',
@@ -90,33 +92,33 @@ SHAPES = {
     ),
     "keyword-argument": (
         'def f(x):\n    return mark_safe(s=f"<a {x}>")\n',
-        'def f(x):\n    return mark_safe(s=f"<a {escape(x)}>")\n',
+        "def f(x):\n    return mark_safe(s=f\"<a title='{escape(x)}'>\")\n",
     ),
     "import-alias": (
         "from django.utils.safestring import mark_safe as ms\n"
         'def f(x):\n    return ms(f"<a {x}>")\n',
         "from django.utils.safestring import mark_safe as ms\n"
-        'def f(x):\n    return ms(f"<a {escape(x)}>")\n',
+        "def f(x):\n    return ms(f\"<a title='{escape(x)}'>\")\n",
     ),
     "assignment-alias": (
         'ms = mark_safe\ndef f(x):\n    return ms(f"<a {x}>")\n',
-        'ms = mark_safe\ndef f(x):\n    return ms(f"<a {escape(x)}>")\n',
+        "ms = mark_safe\ndef f(x):\n    return ms(f\"<a title='{escape(x)}'>\")\n",
     ),
     "alias-of-an-alias": (
         'a = mark_safe\nb = a\ndef f(x):\n    return b(f"<a {x}>")\n',
-        'a = mark_safe\nb = a\ndef f(x):\n    return b(f"<a {escape(x)}>")\n',
+        "a = mark_safe\nb = a\ndef f(x):\n    return b(f\"<a title='{escape(x)}'>\")\n",
     ),
     "SafeString": (
         'def f(x):\n    return SafeString(f"<a {x}>")\n',
-        'def f(x):\n    return SafeString(f"<a {escape(x)}>")\n',
+        "def f(x):\n    return SafeString(f\"<a title='{escape(x)}'>\")\n",
     ),
     "SafeText": (
         'def f(x):\n    return SafeText(f"<a {x}>")\n',
-        'def f(x):\n    return SafeText(f"<a {escape(x)}>")\n',
+        "def f(x):\n    return SafeText(f\"<a title='{escape(x)}'>\")\n",
     ),
     "attribute-call": (
         'from django.utils import safestring\ndef f(x):\n    return safestring.mark_safe(f"<a {x}>")\n',
-        'from django.utils import safestring\ndef f(x):\n    return safestring.mark_safe(f"<a {escape(x)}>")\n',
+        "from django.utils import safestring\ndef f(x):\n    return safestring.mark_safe(f\"<a title='{escape(x)}'>\")\n",
     ),
     "list-append-then-join-the-theme_form-shape": (
         "def f(field_id):\n    lines = []\n    lines.append(f'<label for=\"{field_id}\">')\n"
@@ -145,15 +147,15 @@ SHAPES = {
     ),
     "conditional-expression": (
         'def f(x, c):\n    return mark_safe("<br>" if c else f"<a {x}>")\n',
-        'def f(x, c):\n    return mark_safe("<br>" if c else f"<a {escape(x)}>")\n',
+        'def f(x, c):\n    return mark_safe("<br>" if c else f"<a title=\'{escape(x)}\'>")\n',
     ),
     "through-str": (
         'def f(x):\n    return mark_safe(str(f"<a {x}>"))\n',
-        'def f(x):\n    return mark_safe(str(f"<a {escape(x)}>"))\n',
+        "def f(x):\n    return mark_safe(str(f\"<a title='{escape(x)}'>\"))\n",
     ),
     "through-an-unknown-call": (
         'def f(x):\n    return mark_safe(dedent(f"<a {x}>"))\n',
-        'def f(x):\n    return mark_safe(dedent(f"<a {escape(x)}>"))\n',
+        "def f(x):\n    return mark_safe(dedent(f\"<a title='{escape(x)}'>\"))\n",
     ),
     "closure": (
         'def f(x):\n    s = f"<a {x}>"\n    def g():\n        return mark_safe(s)\n    return g\n',
@@ -323,11 +325,11 @@ SHAPES.update(
         ),
         "rule-walrus": (
             'def f(x):\n    return mark_safe((s := f"<a {x}>"))\n',
-            'def f(x):\n    return mark_safe((s := f"<a {escape(x)}>"))\n',
+            "def f(x):\n    return mark_safe((s := f\"<a title='{escape(x)}'>\"))\n",
         ),
         "rule-walrus-then-name": (
             'def f(x):\n    if (s := f"<a {x}>"):\n        return mark_safe(s)\n',
-            'def f(x):\n    if (s := f"<a {escape(x)}>"):\n        return mark_safe(s)\n',
+            "def f(x):\n    if (s := f\"<a title='{escape(x)}'>\"):\n        return mark_safe(s)\n",
         ),
         "rule-dict-comprehension": (
             'def f(xs):\n    d = {k: f"<i>{k}</i>" for k in xs}\n    return mark_safe(d["a"])\n',
@@ -402,7 +404,7 @@ CLEAN.update(
         "rule-slice-of-clean-text": (
             'def f():\n    s = "<i>hello</i>"\n    return mark_safe(s[:3])\n'
         ),
-        "rule-walrus-of-clean": 'def f(x):\n    return mark_safe((s := f"<a {escape(x)}>"))\n',
+        "rule-walrus-of-clean": "def f(x):\n    return mark_safe((s := f\"<a title='{escape(x)}'>\"))\n",
         "rule-comprehension-of-literals": (
             'def f():\n    return mark_safe("".join([f"<i>{k}</i>" for k in ("a", "b")]))\n'
         ),

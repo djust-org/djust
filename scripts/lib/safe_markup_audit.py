@@ -401,6 +401,33 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "_layout_body_part",
         ),
     ),
+    # --- three handlers that rewrite the rendered block body at an offset only their own code
+    # finds (#3864): the guard reads `content` as markup that starts and ends in element text, and
+    # a slice of it, or a replacement inside it, at a position it cannot read is reported rather
+    # than assumed. Escaped data cannot hold `<`, so each literal these search for is markup the
+    # engine or a sibling handler wrote. ---
+    (RH, "AccordionHandler.render"): S(
+        1,
+        "the id is attr_text; `content` is the rendered block body (a SafeString, see `_root_layout_html`), into which component_id_attr's output (one whole data-component-id attribute, value through attr_text, or '') is inserted at each offset `_accordion_trigger_ends` returns: the end of a literal `<button class=\"accordion-trigger\"` that AccordionItemHandler wrote, i.e. between that tag's attributes; nested accordions are skipped and only offsets come back (#4134)",
+        (RH, 'accordion_id = attr_text(kw.get("id", "accordion"))'),
+        (RH, 'cid_attr = component_id_attr(kw.get("component_id"))'),
+        (RH, "content = content[:end] + cid_attr + content[end:]"),
+        (RH, "for match in _ACCORDION_TOKEN.finditer(content):", "_accordion_trigger_ends"),
+    ),
+    (RH, "NavMenuHandler.render"): S(
+        1,
+        "class, id and toggle event escaped (attr_text / escape in an attribute); brand and hamburger built from escaped values and component_id_attr; `content` is the rendered block body, in which the marker NavItemHandler writes right after an item's `<li class=\"...` is replaced by literal text (`\">` or ` dj-nav__item--active\">`); the marker carries conditional_escape of a hex key and starts with `<!--`, which escaped data cannot spell",
+        (RH, "for key in _nav_active_keys(content):"),
+        (RH, "' dj-nav__item--active\">' if hit else '\">',"),
+        (RH, "return payload.encode(\"utf-8\").hex()", "_nav_active_key"),
+    ),
+    (RH, "PageHeaderHandler.render"): S(
+        1,
+        "title, subtitle and description through conditional_escape (text), the class through attr_text; `content` (the rendered block body) is cut at the first literal `<div class=\"dj-page-header__actions\">` (the wrapper page_header_actions renders), so each half starts or ends at that tag and escaped data cannot spell it",
+        (RH, "actions_marker = '<div class=\"dj-page-header__actions\">'"),
+        (RH, "breadcrumb_content = content[:idx]"),
+        (RH, "e_custom_class = attr_text(str(custom_class))"),
+    ),
     (RH, "DataTableHandler.render"): S(
         1,
         "everything the guard cannot see through is the row URL: _row_href(row, key) is str(url_attr(_row_text(row, key), honor_safe=False)) (the one URL rule every component uses, #3887/#3894), placed only inside the quoted data-href / href of a row or a link cell; the guard judges an escaper's output returned through a helper again where it lands and does not follow str() of it. The nested _dbtn(val, label) (density toggle) is proved since #3845 (its only call sites pass literals); the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is escaped (attr_text / escape in an attribute, conditional_escape in text: #4009) or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",

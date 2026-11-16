@@ -156,12 +156,12 @@ class TestThePositionReader:
 # ---------------------------------------------------------------------------
 
 HTML_ONLY = ("escape", "cond_escape", "attr_text")
-#: Unsafe when run and still cleared (the same on ``main``): where the guard does not read. An HTML
-#: escaper between attributes, as an attribute or tag name (flagging the position flagged correct
-#: sites of the tree: a comment, a slot sentinel, the nav handlers), and anything in a ``style``
-#: attribute (CSS: eleven sites of the tree put an escaped value there; ``safe_css_*`` is the rule).
+#: Unsafe when run and still cleared (the same on ``main``): anything in a ``style`` attribute (CSS:
+#: eleven sites of the tree put an escaped value there; ``safe_css_*`` is the rule). An HTML escaper
+#: between attributes, as an attribute or a tag name is reported since the position walk
+#: (``_walk``, #3864): it reads comments and data blocks, which is what made the position flag
+#: correct sites of the tree before.
 REMAINING = {
-    *((s, p) for s in ("escape", "cond_escape") for p in ("between", "attr_name", "tag_name")),
     *((s, "style_attr") for s in ("escape", "attr_text", "url")),
 }
 #: Flagged although no payload of the fuzz gets through: an escaped value inside a quoted JS string
@@ -176,6 +176,8 @@ CONSERVATIVE = {
     # ``TestMarkedSafeInAnAttribute`` runs that payload)
     ("cond_escape", "quoted"),
     ("cond_escape", "single_quoted"),
+    # ... and in a comment: a marked-safe ``-->`` closes it (``TestMarkedSafeInAnAttribute``)
+    ("cond_escape", "comment"),
 }
 MATRIX = [(s, p) for s in (*HTML_ONLY, "url", "digits", "literal") for p in fuzz.PLACEMENTS]
 
@@ -206,6 +208,12 @@ class TestEveryPlacement:
         # ``conditional_escape`` in any quoted value (#4009)
         expected |= {("cond_escape", p) for p in ("quoted", "single_quoted", "style_attr")}
         expected |= {("url", p) for p in code}
+        # the position walk (#3864): an HTML escaper's output where a space starts an attribute,
+        # and a value that honours mark_safe in a comment
+        expected |= {
+            (s, p) for s in ("escape", "cond_escape") for p in ("between", "attr_name", "tag_name")
+        }
+        expected |= {("cond_escape", "comment")}
         assert new == expected
 
 
@@ -397,7 +405,9 @@ class TestTheGateOffListApplies:
 
         root = Path(__file__).resolve().parents[2]
         spec = json.loads((root / "scripts/safe-markup-html-context-gateoff.json").read_text())
-        assert len(spec["mutations"]) >= 30
+        # 35 until #3864 moved the per-builder checks to the position walk, whose mechanisms are
+        # turned off by ``scripts/safe-markup-position-gateoff.json``
+        assert len(spec["mutations"]) >= 19
         for mutation in spec["mutations"]:
             text = (root / mutation["file"]).read_text()
             assert text.count(mutation["old"]) == 1, mutation["label"]
@@ -424,6 +434,13 @@ class TestMarkedSafeInAnAttribute:
         "mark_safe(f'<b title=\"{attr_text(x)}\">b</b>')": (False, False),
         "mark_safe(f'<b>{conditional_escape(x)}</b>')": (False, False),
     }
+    #: the same in a comment, which ends at ``-->``: a marked-safe value can hold one (#3864)
+    COMMENT_ROWS = {
+        "mark_safe(f'<!-- {conditional_escape(x)} -->')": (True, True),
+        "mark_safe(f'<!-- {escape(x)} -->')": (False, False),
+        # a context-sensitive escaper in a comment: flagged by ``main`` too (``CONSERVATIVE``)
+        "mark_safe(f'<!-- {attr_text(x)} -->')": (False, True),
+    }
 
     @staticmethod
     def _gets_out(markup: str) -> bool:
@@ -449,6 +466,18 @@ class TestMarkedSafeInAnAttribute:
         exec(compile(source, "<case>", "exec"), namespace)  # noqa: S102 - written here
         out = str(namespace["f"](mark_safe("x\" onmouseover=\"a' onmouseover='a")))
         gets_out, is_flagged = self.ROWS[body]
+        assert self._gets_out(out) is gets_out, out
+        assert flagged(source) is is_flagged, body
+
+    @pytest.mark.parametrize("body", sorted(COMMENT_ROWS))
+    def test_a_comment_is_the_same(self, body):
+        from django.utils.safestring import mark_safe
+
+        source = fuzz.HEADER + "def f(x):\n    return " + body + "\n"
+        namespace: dict = {"__name__": "marked_safe_case"}
+        exec(compile(source, "<case>", "exec"), namespace)  # noqa: S102 - written here
+        out = str(namespace["f"](mark_safe("--><b onmouseover=a>")))
+        gets_out, is_flagged = self.COMMENT_ROWS[body]
         assert self._gets_out(out) is gets_out, out
         assert flagged(source) is is_flagged, body
 

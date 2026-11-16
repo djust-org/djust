@@ -1,0 +1,209 @@
+{
+  "_comment": "Each mechanism of the safe-markup guard's position walk (#3864: a part is placed by text the guard read, or reported) and of its in-file monkeypatch check, turned off in turn: every mutation must turn a real row red (the tests that pin the mutation lists are deselected, since they fail for every mutation). Run: .venv/bin/python scripts/gate_off.py scripts/safe-markup-position-gateoff.json",
+  "root": ".",
+  "command": [
+    "env",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "{python}",
+    "-m",
+    "pytest",
+    "-q",
+    "-x",
+    "-p",
+    "no:cacheprovider",
+    "python/tests/test_safe_markup_position_3864.py",
+    "python/tests/test_safe_markup_html_context_3864.py",
+    "python/tests/test_safe_markup_misplaced_memo_4145.py",
+    "python/tests/test_safe_markup_guard_3766.py",
+    "-m",
+    "not slow",
+    "--deselect",
+    "python/tests/test_safe_markup_position_3864.py::TestTheGateOffListApplies::test_every_mutation_text_still_applies",
+    "--deselect",
+    "python/tests/test_safe_markup_html_context_3864.py::TestTheGateOffListApplies::test_every_mutation_text_still_applies"
+  ],
+  "deadline": 300,
+  "rss_mb": 4096,
+  "mutations": [
+    {
+      "label": "the walk is never asked (the whole mechanism)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        return self.call_binding and not _walk(self._text_b(e, sc))[0]",
+      "new": "        return False"
+    },
+    {
+      "label": "a part it cannot class leaves the position known",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            elif ch == SYM_UNKNOWN:\n                state = \"unknown\"",
+      "new": "            elif ch == SYM_UNKNOWN:\n                pass"
+    },
+    {
+      "label": "an escaped value fits a tag",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    allowed = state in (\"text\", \"quoted\", \"comment\", \"raw\") and where is None",
+      "new": "                    allowed = state in (\"text\", \"quoted\", \"comment\", \"raw\", \"tag\") and where in (None, \"unquoted\")"
+    },
+    {
+      "label": "a value escaper fits an unquoted value",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                        state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\")",
+      "new": "                        state in (\"text\", \"quoted\", \"comment\", \"tag\") and where in (None, \"url\", \"unquoted\")"
+    },
+    {
+      "label": "markup fits a quoted value or a comment",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    allowed = state in (\"text\", \"raw\") and where is None",
+      "new": "                    allowed = state in (\"text\", \"raw\", \"quoted\", \"comment\")"
+    },
+    {
+      "label": "whole attributes fit a quoted value",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    allowed = state in (\"text\", \"tag\") and where is None",
+      "new": "                    allowed = True"
+    },
+    {
+      "label": "a tag's name may be an escaped value",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    ok = ok and nxt not in _POSITIONED - {SYM_WORDS}",
+      "new": "                    ok = ok"
+    },
+    {
+      "label": "a word between attributes leaves the names known",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                loose = True  # (digits cannot spell a name, and an empty one is mapped away)",
+      "new": "                loose = False"
+    },
+    {
+      "label": "a value that may be empty hides the start of a URL",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        .replace(SYM_VALUE, \"\")\n        .replace(SYM_ESCAPED, \"\")",
+      "new": "        .replace(SYM_VALUE, \"x\")\n        .replace(SYM_ESCAPED, \"x\")"
+    },
+    {
+      "label": "several spellings are read as their class",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    if not repeated and sum(_spelling_count(t) for t in distinct) <= _SPELLINGS:",
+      "new": "    if False:"
+    },
+    {
+      "label": "pieces in no known order are trusted",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        return SYM_REFUSED\n",
+      "new": "        return joined\n"
+    },
+    {
+      "label": "only a helper's last return is read",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "[SYM_DIGITS if v is None else self._text_b(v, fscope, d) for v in values]",
+      "new": "[SYM_DIGITS if v is None else self._text_b(v, fscope, d) for v in values[-1:]]"
+    },
+    {
+      "label": "a constant table's keys are read for its values",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            items = e.keys if iterate else e.values",
+      "new": "            items = e.keys"
+    },
+    {
+      "label": "a narrowed name is read as the empty string",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if id(e) in self._narrowed_values:",
+      "new": "        if False:"
+    },
+    {
+      "label": "an unpacking loop reads whole rows",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "unpack=e.unpacked, index=e.index)",
+      "new": "unpack=False, index=None)"
+    },
+    {
+      "label": "a call's arguments are not bound while its text is read",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            binding = self._binding(local, e, sc)\n            self._site_bindings[site] = binding",
+      "new": "            binding = None\n            self._site_bindings[site] = binding"
+    },
+    {
+      "label": "an open format_html is read as markup",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                return spelled.replace(SYM_DIGITS, SYM_VALUE)",
+      "new": "                return SYM_MARKUP"
+    },
+    {
+      "label": "conditional_escape always escapes",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                return SYM_MARKUP  # a marked-safe value comes out as it went in",
+      "new": "                return SYM_ESCAPED"
+    },
+    {
+      "label": "an HTML escaper around a checked URL is not a checked URL",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                return SYM_VALUE  # ``conditional_escape(safe_url(x))``: a checked URL",
+      "new": "                return SYM_ESCAPED"
+    },
+    {
+      "label": "the rendered body of a block tag is read as written",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if id(e) in self._engine_values:",
+      "new": "        if False:"
+    },
+    {
+      "label": "a recursion's promise is never checked",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if key in self._texts_recursed and _text_class(text) not in _FITS_MARKUP:",
+      "new": "            if False:"
+    },
+    {
+      "label": "a function the file replaces is followed",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        return self.call_binding and (self.patched_all or name in self.patched_names)",
+      "new": "        return False"
+    },
+    {
+      "label": "no module object is recognised",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        def module_like(e: ast.AST) -> bool:\n            if isinstance(e, ast.Subscript):",
+      "new": "        def module_like(e: ast.AST) -> bool:\n            return False\n            if isinstance(e, ast.Subscript):"
+    },
+    {
+      "label": "a function's replaced code is not a replacement",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if node.attr in _CODE_ATTRS:",
+      "new": "                if False:"
+    },
+    {
+      "label": "str() of an escaper's output is read as digits",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                return T(e.args[0], sc, d)",
+      "new": "                return SYM_DIGITS"
+    },
+    {
+      "label": "a function of the file named like a builtin is the builtin",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if isinstance(e.func, ast.Name) and sc.find(e.func.id) is None:",
+      "new": "        if isinstance(e.func, ast.Name):"
+    },
+    {
+      "label": "a checked URL fits a handler or a script",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                        state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\")",
+      "new": "                        state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\", \"handler\", \"script\", \"srcdoc\")"
+    },
+    {
+      "label": "a number from a math function is unknown",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if isinstance(e, (ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.IfExp)) and self._numeric(",
+      "new": "        if False and isinstance(e, (ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.IfExp)) and self._numeric("
+    },
+    {
+      "label": "a call inside a bound call is read under that binding",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if self._actuals:\n                # read inside a bound call",
+      "new": "            if False:\n                # read inside a bound call"
+    },
+    {
+      "label": "a function read while it is being read is read again",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            outer = self._fns_reading.get(id(fn))",
+      "new": "            outer = None"
+    }
+  ]
+}
