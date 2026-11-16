@@ -286,8 +286,9 @@ Not the render itself, nor authorization checks.
   function, `ONLY`, `TABLE` or a parenthesised join in `FROM`, a
   schema-qualified name) makes R UNKNOWN. So does a QuerySet or cached value
   the view holds that was filled outside the view's own steps and renders (a
-  QuerySet notes which view's step filled it; a cached value computed in
-  `mount()` or a handler counts as the view's), and a restored state, until
+  QuerySet notes which view's step filled it, and a copied or unpickled one
+  counts as filled elsewhere; a cached value computed in `mount()` or a
+  handler counts as the view's), and a restored state, until
   the view re-reads. djust's own per-turn checks (the session and the user) do
   not count.
 
@@ -295,7 +296,7 @@ When W and R are both known and share no table, nothing is read again and a
 handler that changed nothing on the view still answers `noop`: a click that
 writes an audit row costs what it did before. **Otherwise everything the view
 holds is read again before its next render**: every held QuerySet (public or
-private, and in the dicts, lists, tuples and sets it holds, three levels deep;
+private, and in the dicts, lists, tuples and sets it holds, at any depth;
 its `prefetch_related()` runs again with it) and every `cached_property`. The
 turn renders even if the handler changed nothing else. Each such decision made
 because W or R was UNKNOWN is logged at DEBUG level by `djust._held_rows`.
@@ -319,8 +320,8 @@ not re-read when a step writes to it; call `self.rows_changed()` there.
   later render queries them); or hold a QuerySet instead;
 - a list of rows (`list(qs)`, with or without `prefetch_related`), a `Paginator`
   or `Page`, a `deque`, a QuerySet inside a custom object or a dataclass, a
-  QuerySet nested more than three levels deep, a QuerySet set on the class
-  rather than in `mount()`, and the result of an `lru_cache` method;
+  QuerySet set on the class rather than in `mount()`, and the result of an
+  `lru_cache` method;
 - a QuerySet built with `select_for_update()` (outside its transaction it would
   raise).
 
@@ -365,11 +366,14 @@ writes, the child shows the new rows at once and its parent shows them on its
 next render (the parent is not rendered for the child's event).
 
 **Cost.** A turn that wrote nothing does no walking: each render and step
-looks only at the view's cached properties. A turn that wrote looks at
-everything the view holds, every item of every container three levels deep,
-with no limit, so that no QuerySet is missed: measured on an M-series laptop,
-about 1 ms for a list of 5,000 model instances and about 7 ms for 5,000 plain
-dicts, once per writing turn.
+looks only at the view's cached properties. A write to a table the view reads
+is decided without a walk; the reset then walks. A write to a table it does not
+read walks once to confirm that every held QuerySet was filled by the view's
+own steps: everything the view holds, every item of every container at any
+depth, with no limit (plain values such as numbers and strings are skipped by
+type), so that no QuerySet is missed. Measured on an M-series laptop: about
+1 ms for a list of 5,000 model instances or of 100,000 numbers, and about 3 ms
+for 5,000 record dicts.
 
 **Databases.** Measured with SQLite and with PostgreSQL 15 (psycopg 3): the
 statement classification and complete event turns over WebSocket, SSE and the
