@@ -267,22 +267,9 @@ class LiveViewConfig:
         # Hot View Replacement (v0.6.1) — state-preserving Python code
         # reload in dev. Gated on DEBUG=True AND hot_reload=True.
         "hvr_enabled": True,
-        # Time-travel debugging (v0.6.1) — dev-only. Master switch for
-        # the global default (views still opt in via
-        # ``LiveView.time_travel_enabled = True``). ``time_travel_max_events``
-        # caps per-view ring buffer size (memory-bound).
-        "time_travel_enabled": False,
-        "time_travel_max_events": 100,
-        # Bug-capture (B7 iter B, #1562) — default scrub field names applied
-        # by the debug panel's "Share" button before it calls
-        # ``encode_view_state()``. Empty by default (no default scrub); set
-        # e.g. ``LIVEVIEW_CONFIG['bug_capture_default_scrub'] = ["password"]``
-        # to redact known-sensitive top-level state keys on every share
-        # without requiring a per-call ``scrub_fields(...)`` argument. Only
-        # consulted by the WS "Share" button path
-        # (``LiveViewConsumer.handle_bug_capture_share``) — the programmatic
-        # ``encode_view_state()`` API always requires an explicit ``scrub``
-        # argument from the caller.
+        # Field names the debug panel's State tab removes from both states
+        # before it encodes a bug capture with its Share button (#4184), e.g.
+        # ``LIVEVIEW_CONFIG['bug_capture_default_scrub'] = ["password"]``.
         "bug_capture_default_scrub": [],
         # JIT Serialization (Phase 5)
         "jit_serialization": True,  # False skips JIT auto-serialization (#2984)

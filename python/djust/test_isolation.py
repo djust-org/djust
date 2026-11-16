@@ -13,8 +13,8 @@ Three such flakes surfaced in two milestones, all the same class:
 - #1875 — ``djust_hotreload`` channel-layer group pollution (fixed PR #1881)
 - #1882 — process-global wire-version drift: a stray ``djust_hotreload`` frame
   in the shared ``InMemoryChannelLayer`` re-renders on the victim consumer and
-  bumps its per-connection ``_next_version()`` counter, so a time-travel jump
-  lands at version 4 instead of 3 (``test_time_travel_jump_recovery_version_is_current``).
+  bumps its per-connection ``_next_version()`` counter, so a re-render
+  lands one wire version later than the test expected.
 
 Each was previously whack-a-moled with a per-test reset. ``reset_djust_globals``
 is the SYSTEMIC cure: one cheap function, called by an ``autouse`` fixture in

@@ -222,29 +222,6 @@ Queries from both sync and async handlers are captured (sync handlers
 run on a worker thread with its own connection; before 1.2.1 their
 queries were missed, #2961).
 
-**`reset_view_state(session_id)`** — Replay `view.mount()` on the
-registered instance. Clears public attrs and re-invokes
-`mount(stashed_request, **stashed_kwargs)`. Useful between fixture
-replays.
-
-**`eval_handler(session_id, handler_name, params=None, dry_run=False, dry_run_block=True)`** —
-Run a handler against the live view's current state. Returns
-`{before_assigns, after_assigns, delta, result}`. **`dry_run` is off by
-default: without it the handler runs for real**, with real side effects
-(database writes, email, HTTP). Pass `dry_run=True` to install a
-`DryRunContext` that blocks side effects:
-
-- `Model.save` / `delete`
-- `QuerySet.update` / `delete` / `bulk_create` / `bulk_update`
-- `send_mail` / `send_mass_mail`
-- `requests.*` and `urllib.request.urlopen`
-
-The first attempt raises `DryRunViolation`; the response surfaces
-`{"blocked_side_effect": "..."}` so the caller knows what was
-attempted. Pass `dry_run_block=False` to record violations without
-blocking (the side effects then still happen). A process-wide lock
-serializes dry-runs.
-
 **`find_handlers_for_template(template_path)`** — Cross-references a
 template file against every view or component that uses it: its own
 template is the file, or includes or extends it. Returns the `dj-*`
@@ -259,8 +236,7 @@ absolute path gets the same "Could not resolve template" answer as a missing
 file.
 
 **`seed_fixtures(fixture_paths)`** — Subprocess wrapper around
-`manage.py loaddata` for regression-fixture DB setup before a
-`reset_view_state` + `eval_handler` cycle. Every fixture path must resolve
+`manage.py loaddata` for regression-fixture DB setup. Every fixture path must resolve
 inside `BASE_DIR` (relative paths are joined to it, symlinks are followed);
 with no `BASE_DIR` set it loads nothing.
 

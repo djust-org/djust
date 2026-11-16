@@ -65,7 +65,6 @@ class UploadPage(UploadMixin, LiveView):
     exposure_policy = "explicit"
     count = state(0, persist="server")
     navigation = state("NAV", persist="client", client=True)
-    time_travel_enabled = True
     template = TEMPLATE
 
     def mount(self, request, **kwargs):
@@ -232,7 +231,7 @@ async def test_mount_frame_upload_configs_are_configuration_only(staged, monkeyp
 
 
 # ---------------------------------------------------------------------------
-# State destinations: server envelope, signed snapshot, debug, time travel.
+# State destinations: server envelope, signed snapshot, debug.
 # ---------------------------------------------------------------------------
 
 
@@ -266,8 +265,6 @@ async def test_explicit_upload_entries_never_reach_state_destinations(staged, rf
     codec = await sync_to_async(snapshot_codec)(view, request)
     assert codec.restore(token) == {"navigation": "NAV"}
     debug = json.dumps(explicit_debug_projection(view))
-    history = json.dumps([snapshot.to_dict() for snapshot in view._time_travel_buffer._buf])
-    assert history != "[]", "time travel must have recorded the event"
     with override_settings(DEBUG=True):
         register_view("exposure-upload-test", view)
         try:
@@ -284,7 +281,6 @@ async def test_explicit_upload_entries_never_reach_state_destinations(staged, rf
         assert sentinel not in stored
         assert sentinel not in token
         assert sentinel not in debug
-        assert sentinel not in history
         assert sentinel not in response.content.decode()
 
 

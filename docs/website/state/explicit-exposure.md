@@ -39,7 +39,7 @@ server memory, available to your handlers and never exported.
 | Server-side saved state (reconnect, cross-worker restore, HTTP fallback) | The view's own state: public attributes, the `_private` ones `mount()` creates, `state()` fields. Never sent to the browser |
 | Raw browser data (`get_state()`, HTTP API `assigns`) | `state(..., client=True)` fields |
 | Back-navigation snapshot | `state(..., persist="client", client=True)` fields |
-| Debug panel, time travel, bug capture | A redacted projection: names and types, not values |
+| Debug panel | A redacted projection: names and types, not values |
 
 A value you render is visible in the HTML, as with any Django template. Being
 rendered does not also put it in the state mirror, the snapshot or the debug
@@ -245,8 +245,7 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   shows its exception and traceback, as Django's development output does: the
   technical 500 page, detailed error frames and dev overlay, and full log lines.
   With `DEBUG = False` it is value-free: a generic 500 page or error frame and
-  a static log line. The debug panel, time travel and bug capture always show
-  redacted values.
+  a static log line. The debug panel always shows redacted values.
 - **Service-worker caches.** Explicit pages are never written to the worker's
   page-shell or VDOM caches. The caches are cleared when the logged-in identity
   changes.
@@ -353,9 +352,6 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   opts out. See [Interactive Components](../guides/interactive-components.md#persistence-keyboard-and-security).
 
 ## Not supported under explicit exposure
-
-- **Time-travel restore and replay.** The timeline is a redacted, read-only
-  history.
 
 - **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare a
   `LiveComponent` at class level; hold a plain component as shown under

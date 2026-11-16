@@ -84,7 +84,7 @@ def test_observer_injects_bound_source_without_assigning_visibility_or_dirtying_
     assert observations == [(menu, True)]
     assert menu.state == {"open": False, "selected": ""}
     assert not _compute_changed_keys(before, _snapshot_assigns(view))
-    assert "observation" not in json.dumps(view._capture_snapshot_state())
+    assert "observation" not in json.dumps(view.get_state(), default=str)
 
 
 def test_duplicate_reordered_and_stale_lifetime_reports_do_not_invoke_observer():

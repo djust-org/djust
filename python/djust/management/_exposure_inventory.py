@@ -37,15 +37,13 @@ from typing import Any, Iterable, Optional
 DESTINATIONS: dict[str, str] = {
     "template_context": "legacy get_context_data(): rendered into HTML and the Rust render state",
     "client_state": "get_state(): client/debug state and API assign diffs",
-    "snapshot": "_capture_snapshot_state(): time-travel history (on 1.3.x also the "
-    "signed browser snapshot of an enable_state_snapshot view)",
     "session_state": "only as a lazy=True child on the page-POST fallback: session key "
     "liveview_<path>__lazy__<id>, the context copy",
     "private_session": "only as a lazy=True child on the page-POST fallback: the same "
     "session entry's private part, _get_private_state()",
 }
 
-_PUBLIC_INSTANCE = ("template_context", "client_state", "snapshot")
+_PUBLIC_INSTANCE = ("template_context", "client_state")
 _RENDER_ONLY = ("template_context",)
 # Class-level values legacy context keeps only when JSON-serializable (#694).
 _JSON_TYPES = (str, int, float, bool, type(None), list, dict, tuple)

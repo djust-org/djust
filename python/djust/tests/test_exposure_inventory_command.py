@@ -158,7 +158,7 @@ def test_destinations_types_and_suggestions(no_construction):
     report = json.loads(run("--view", VIEW, "--json"))
     names = names_of(report, VIEW)
 
-    public = {"template_context", "client_state", "snapshot"}
+    public = {"template_context", "client_state"}
     assert set(names["count"]["destinations"]) == public
     # 2.0 writes a legacy view to the session only as a lazy=True child (#4087).
     assert names["count"]["conditional"] == ["session_state"]

@@ -63,7 +63,7 @@ def diagnostics_policy_allows(owner: Any) -> bool:
     included: errors then read like Django's own DEBUG output, with the
     exception, traceback and technical error page (decision D-a, revised
     2026-09-22). In production a nonlegacy owner's failures are value-free.
-    Debug tooling projections (debug panel, time travel, bug capture) and SQL
+    Debug tooling projections (debug panel, bug capture) and SQL
     parameter capture are not error destinations and stay redacted.
     """
     if not states_exposure_policy(owner):

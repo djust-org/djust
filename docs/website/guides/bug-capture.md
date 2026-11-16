@@ -11,7 +11,9 @@ description: "Encode state_before + state_after + vdom_patches into a URL fragme
 
 `djust.bug_capture` lets a developer encode the minimum information needed to reproduce a broken event transition — `state_before`, `state_after`, and the `vdom_patches` djust generated — into a single URL-safe string. A teammate (or a maintainer) decodes the string and sees exactly what the framework did with what state. No need to clone your repo; no template files to ship.
 
-> **Status.** Iters A–C have shipped: Iter A added the data shape, encoder/decoder, and PII-scrub hook; Iter B ([#1562](https://github.com/djust-org/djust/issues/1562)) added the read-only replay viewer at `/__djust__/replay/<blob>` and the debug panel's Share button; Iter C ([#1561](https://github.com/djust-org/djust/issues/1561)) added the snapshot store for large payloads, the `djust replay` CLI, and the framework-level `time_travel_excluded_fields` class attribute. All are documented below.
+> **Status.** Iter A added the data shape, encoder/decoder, and PII-scrub hook; Iter B ([#1562](https://github.com/djust-org/djust/issues/1562)) added the read-only replay viewer at `/__djust__/replay/<blob>`; Iter C ([#1561](https://github.com/djust-org/djust/issues/1561)) added the snapshot store for large payloads and the `djust replay` CLI. All are documented below.
+>
+> **Changed in 2.0 (#4184).** Time-travel debugging was removed, and with it what read its per-view buffer: `encode_view_state()` and `time_travel_excluded_fields`. The Share button moved to the debug panel's **State** tab and now builds the capture in the browser, with the event's real patches; see [Share from the debug panel](#share-from-the-debug-panel). From code, build a capture from the states you supply, as in the quick start below.
 
 ## When to use this
 
@@ -28,18 +30,20 @@ With bug-capture the reporter shares one URL fragment. The maintainer pastes the
 In the reporter's local dev REPL — at the moment the broken transition happens:
 
 ```python
-from djust.bug_capture import encode_view_state, scrub_fields
+import json
 
-# `my_view` is the LiveView instance with time_travel_enabled = True
-# that just emitted the broken transition. Patches come straight from
-# render_with_diff() — encode_view_state does not couple to the
-# render pipeline (the debug panel's Share button does this for you).
+from djust.bug_capture import BugCapture, scrub_fields
+
+# The states before and after the broken event, as you observed them: for
+# example copied from the debug panel's State tab, which lists each event
+# with the state after it. Patches come straight from render_with_diff().
 _html, patches, _version = my_view.render_with_diff()
-blob = encode_view_state(
-    my_view,
-    patches=patches,
-    scrub=scrub_fields("password", "ssn", "credit_card"),
-)
+blob = BugCapture(
+    state_before={"step": "claimant", "filing_for": "self"},
+    state_after={"step": "vehicle", "filing_for": "self"},
+    vdom_patches=json.loads(patches or "[]"),
+    event_name="next_step",
+).encode(scrub=scrub_fields("password", "ssn", "credit_card"))
 # blob is now a string like:
 #   "djbug1.eyJ2IjoiZGpidWcxIiwic3RhdGVfYmVmb3JlIjp7Li4ufX0..."
 # Share this string with a teammate.
@@ -103,7 +107,7 @@ Iter B's replay viewer is purely read-only for this reason. If you write your ow
 
 ### Default-off in production
 
-`BugCapture.encode()` and `encode_view_state()` raise `RuntimeError` when `settings.DEBUG` is falsy. To opt in for production:
+`BugCapture.encode()` raises `RuntimeError` when `settings.DEBUG` is falsy. To opt in for production:
 
 ```python
 # settings.py — deliberate, ugly opt-in
@@ -144,16 +148,6 @@ Encode into a `djbug1.<base64url>` string. See the security model above. When a 
 Decode a `djbug1.<base64url>` string. Raises `ValueError` on any malformed input (non-string, missing version prefix, unknown version, bad base64, bad JSON, missing required fields, wrong field types).
 
 Also accepts `djbug1.store.<opaque-id>`, resolving the id through the configured store. Raises `ValueError` for a malformed id (checked *before* the store is consulted), an id the store cannot resolve, or an indirect blob when no store is configured.
-
-### `encode_view_state(view, patches, event_name="", scrub=None) -> str`
-
-Convenience: pulls the most recent `EventSnapshot` from a view's time-travel buffer + the caller-supplied `patches`, builds a `BugCapture`, encodes it. Requires the view to have `time_travel_enabled = True` and at least one event captured.
-
-`patches` is required and must be either the JSON string `render_with_diff()` returns or an already-decoded list of patch dicts. **Why caller-supplied:** iter A intentionally does not couple to the render pipeline — djust's `render_with_diff()` returns patches into the WebSocket / SSE / runtime frame paths without stashing them on the view, so there's no framework attribute to introspect. Iter B's debug-panel Share button (below) calls `render_with_diff()` + this function in one click.
-
-Pass `event_name=...` to pick a specific past event rather than the latest.
-
-Before `scrub` runs, the view's `time_travel_excluded_fields` (a class attribute listing top-level state keys) are always removed and recorded in `scrubbed_fields`, so a missing `scrub` cannot leak them.
 
 ### `scrub_fields(*names) -> Callable[[BugCapture], BugCapture]`
 
@@ -201,15 +195,20 @@ A malformed blob returns `400` (as `text/plain`, never `text/html`, so a crafted
 - Mutate any application state (no writes anywhere in the view).
 - Scope a database query by the captured `tenant_id` (the view issues zero database queries; a captured `tenant_id` is shown like any other state key and nothing more).
 
-### Share button in the debug panel
+## Share from the debug panel
 
-When a view has `time_travel_enabled = True` and the app is running under `DEBUG=True`, the debug panel's **Time Travel** tab grows a **"📋 Share bug"** button next to the timeline header. Clicking it:
+Under `DEBUG`, the debug panel's **State** tab lists each event with the view's
+state after it. Its **Share latest** button, and the **Share** button inside each
+expanded entry, copy a `djbug1.` blob to the clipboard (or show it in a prompt
+when the clipboard is unavailable):
 
-1. Sends a `bug_capture_share` frame over the existing djust WebSocket.
-2. The server calls `render_with_diff()` (a side-effect-free re-diff, not a handler dispatch) to get the current patches, then `encode_view_state()` with the configured default scrub, and replies with the resulting blob.
-3. The client copies the blob to the clipboard via `navigator.clipboard.writeText()` — the server never touches the clipboard itself.
-
-Configure a default scrub list so the button never has to be told which fields to redact per-click:
+- `event_name` is the entry's event;
+- `state_after` is that entry's state and `state_before` the entry before it
+  (empty for the oldest one);
+- `vdom_patches` are the patches that event's response carried, the ones the
+  client actually applied;
+- the names in `LIVEVIEW_CONFIG['bug_capture_default_scrub']` are removed from
+  both states first and listed in `scrubbed_fields`.
 
 ```python
 # settings.py
@@ -218,7 +217,13 @@ LIVEVIEW_CONFIG = {
 }
 ```
 
-The Share button is dev-only plumbing on top of the same `encode_view_state()` documented above — it doesn't widen what can be captured or bypass the DEBUG / prod-opt-in gate on `BugCapture.encode()`.
+The blob is built entirely in the browser; nothing is sent to the server. It
+contains only what the panel already shows you: for an explicit view that is
+the redacted debug projection (a server-only field appears as `"[redacted]"`),
+and each value is the panel's display form, cut at 100 characters. Paste it
+into the [replay viewer](#browser-based-replay-iter-b) or `djust replay`. It is
+always the inline form: the snapshot store below is used only by
+`BugCapture.encode()` on the server.
 
 ## Snapshot store for large captures (iter C)
 
@@ -257,7 +262,7 @@ LIVEVIEW_CONFIG = {
 `<opaque-id>` is `secrets.token_urlsafe(16)` — 128 bits, not guessable. But **anyone who obtains one can fetch the snapshot in full**, from any client that can reach the store. There is no per-recipient authorization, no revocation, and no audit trail. That is what makes the blob shareable by paste, and it means:
 
 - The **TTL is the only bound on exposure.** A leaked id — from browser history, a proxy log, a screenshot, a `Referer` header, a chat backlog — is live until it expires. Pick the shortest TTL your workflow tolerates; an hour is a default, not a recommendation.
-- The store changes **where** PII lives, never **whether** it is PII. Keep using `scrub` / `time_travel_excluded_fields`, and keep the production opt-in off unless you mean it.
+- The store changes **where** PII lives, never **whether** it is PII. Keep using `scrub`, and keep the production opt-in off unless you mean it.
 - Ids are validated against the exact 22-character base64url shape *before* the store is consulted, so a crafted `djbug1.store.djust:session:abc` cannot turn the replay viewer into a reader for other keys in the same Redis. Key prefixing is a second, independent bound.
 - "Unknown id" and "expired id" produce one identical error, so a probe cannot confirm that a guessed id was ever valid.
 

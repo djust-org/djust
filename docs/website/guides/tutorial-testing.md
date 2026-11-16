@@ -393,10 +393,6 @@ correctness genuinely depends on the transport or runtime.
   renders each, and fuzzes their handlers. Catches
   "I changed an import and now half the views 500" before
   deploying.
-- **Time-travel debugging in tests:** time-travel branches live
-  in memory only; to keep one as a regression test, reproduce its
-  event sequence with `send_event`. See the [time-travel
-  guide](time-travel-debugging.md).
 - **CI integration:** point pytest at `tests/` in your CI
   config; the test client doesn't need any special setup beyond
   what `pytest-django` already provides.

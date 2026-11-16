@@ -197,9 +197,6 @@ class _Transport:
     def on_view_mounted(self, view_instance):
         pass
 
-    async def on_event_recorded(self, view, snapshot):
-        pass
-
     @contextlib.asynccontextmanager
     async def event_context(self, view):
         yield

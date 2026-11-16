@@ -1,8 +1,7 @@
 """Read-only bug-capture replay viewer (B7 iter B, #1562).
 
 ``GET /__djust__/replay/<blob>`` decodes a ``djbug1.<base64>`` blob
-(produced by ``djust.bug_capture.encode_view_state()`` /
-``BugCapture.encode()``) and displays ``state_before`` / ``state_after``
+(produced by ``BugCapture.encode()``) and displays ``state_before`` / ``state_after``
 side-by-side with a per-key diff highlight, the recorded
 ``vdom_patches``, and the ``event_name`` / ``scrubbed_fields`` headers.
 

@@ -1,12 +1,12 @@
-"""Regression tests for the observability localhost gate + eval_handler allowlist (#9).
+"""Regression tests for the observability localhost gate (#9).
 
-The `_djust/observability/` endpoints expose live cross-session state, tracebacks,
-logs, and a method-invocation endpoint. Before the fix the localhost check lived
+The `_djust/observability/` endpoints expose live cross-session state, tracebacks
+and logs (the method-invocation endpoint, `eval_handler`, was removed in 2.0
+with time-travel debugging, #4184). Before the fix the localhost check lived
 ONLY in the opt-in `LocalhostOnlyObservabilityMiddleware` (omitted from the docs,
 not auto-installed), so with `DEBUG=True` + the middleware absent they were
 reachable from any host (e.g. a 0.0.0.0-bound staging box). The fix enforces
-localhost IN every view (`views._gate`) and restricts `eval_handler` to
-@event_handler-decorated methods.
+localhost IN every view (`views._gate`).
 """
 
 import pytest
@@ -72,54 +72,9 @@ def test_all_endpoints_gate_non_localhost():
         views.log_tail,
         views.handler_timings,
         views.sql_queries,
-        views.reset_view_state,
-        views.eval_handler,
     ):
         resp = fn(req)
         assert resp.status_code == 404, f"{fn.__name__} served non-localhost"
-
-
-# --- eval_handler @event_handler allowlist ---
-
-
-@override_settings(DEBUG=True)
-def test_eval_handler_rejects_non_event_handler(monkeypatch):
-    """A public method that is NOT @event_handler must not be invocable, even
-    from localhost — eval_handler is introspection, not general RPC."""
-    import json
-
-    from djust.decorators import event_handler
-
-    class _V:
-        exposure_policy = "legacy"
-
-        def delete_account(self):  # public, NOT decorated
-            self.deleted = True
-            return "deleted"
-
-        @event_handler
-        def increment(self):
-            self.n = getattr(self, "n", 0) + 1
-
-    v = _V()
-    monkeypatch.setattr(views, "get_view_for_session", lambda sid: v)
-
-    def _post(handler):
-        return observability_request_factory().post(
-            "/_djust/observability/eval_handler/?session_id=s1",
-            data=json.dumps({"handler_name": handler}),
-            content_type="application/json",
-            REMOTE_ADDR="127.0.0.1",
-        )
-
-    resp = views.eval_handler(_post("delete_account"))
-    assert resp.status_code == 403, "eval_handler invoked a non-@event_handler method"
-    assert not getattr(v, "deleted", False)
-
-    # a real @event_handler still works
-    resp2 = views.eval_handler(_post("increment"))
-    assert resp2.status_code == 200
-    assert v.n == 1
 
 
 # --- system check A031 (defense-in-depth nudge for the outer middleware) ---
@@ -171,8 +126,6 @@ _ALL_ENDPOINTS = (
     views.log_tail,
     views.handler_timings,
     views.sql_queries,
-    views.reset_view_state,
-    views.eval_handler,
 )
 
 

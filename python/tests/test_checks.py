@@ -96,8 +96,8 @@ class TestT004CheckIntegration:
 
 class TestT004DocumentDispatchedEvents:
     """#1809: T004 must NOT flag djust: events that djust itself dispatches
-    on `document` (navigate-*, hvr-*, layout-changed, ws-reconnected,
-    time-travel-*). Those listeners are CORRECT on `document` and would
+    on `document` (navigate-*, hvr-*, layout-changed, ws-reconnected).
+    Those listeners are CORRECT on `document` and would
     BREAK if switched to `window` per the old fix_hint.
 
     The authoritative document-dispatched set is sourced from the client

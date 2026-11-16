@@ -746,7 +746,7 @@ def test_t019_reports_a_binding_to_a_push_handler(binding_module):
     assert not [m for m in found if m.startswith("'ping'")], found
 
 
-# --- tooling: test client, smoke test, eval_handler -------------------------------
+# --- tooling: test client, smoke test -------------------------------------------
 
 
 def _client(view_cls=RoomView):
@@ -779,50 +779,6 @@ def test_test_client_send_push_reaches_push_handlers_and_the_consumer_allowlist(
     assert blocked["success"] is False and "not callable by server push" in blocked["error"]
     assert client.send_push(state={"n": 5})["state_after"]["n"] == 5
     assert RAN == [("refresh_room", "a"), ("handle_marked",), ("handle_plain",)]
-
-
-class LegacyRoomView(RoomView):
-    exposure_policy = "legacy"  # legacy subject: debug eval_handler is legacy-only (409 otherwise)
-
-
-class LegacyOverrideView(OverrideView):
-    exposure_policy = "legacy"  # legacy subject: debug eval and time-travel replay are legacy-only
-
-
-def test_eval_handler_answers_a_marked_handler_like_a_missing_one():
-    from djust.observability.registry import _clear_registry, register_view
-    from djust.observability.views import eval_handler
-
-    from .conftest import observability_request_factory
-
-    def call(name):
-        request = observability_request_factory().post(
-            "/?session_id=s",
-            data=json.dumps({"handler_name": name}),
-            content_type="application/json",
-        )
-        return eval_handler(request)
-
-    _clear_registry()
-    try:
-        with override_settings(DEBUG=True):
-            room = LegacyRoomView()  # the registry holds views weakly
-            register_view("s", room)
-            for name in ("refresh_room", "handle_marked"):
-                marked = call(name)
-                missing = call("nope_" + name)
-                assert marked.status_code == missing.status_code == 404
-                assert "has no callable" in json.loads(missing.content)["error"]
-                strip = lambda r, n: json.loads(r.content)["error"].replace(n, "X")  # noqa: E731
-                assert strip(marked, name) == strip(missing, "nope_" + name)
-            override = LegacyOverrideView()
-            register_view("s", override)
-            assert call("refresh_room").status_code == 404
-            # Control: an ordinary undecorated method is the 403 it always was.
-            assert call("plain_helper").status_code == 403
-    finally:
-        _clear_registry()
-    assert RAN == []
 
 
 def _t019(owner):
@@ -982,23 +938,6 @@ def test_is_push_handler_unwraps_descriptors_on_its_own():
         assert is_push_handler(StaticView.__dict__[name]), name
     assert not is_push_handler(staticmethod(lambda: None))
     assert not is_push_handler(classmethod(lambda cls: None))
-
-
-@pytest.mark.asyncio
-async def test_time_travel_replay_refuses_an_event_handler_override_of_a_push_name():
-    from djust.time_travel import EventSnapshot, replay_event
-
-    def snapshot(name):
-        return EventSnapshot(event_name=name, params={}, ref=None, ts=0.0, state_before={})
-
-    view = LegacyOverrideView()
-    view.mount(RequestFactory().get("/"))
-    for name in ("called_form", "refresh_room", "mixin_refresh"):
-        assert await sync_to_async(replay_event)(view, snapshot(name), record_replay=False) is None
-    assert RAN == []
-    # Control: a real @event_handler still replays.
-    await sync_to_async(replay_event)(view, snapshot("ping"), record_replay=False)
-    assert RAN == [("ping",)]
 
 
 def test_v021_sees_an_unmarked_definition_on_another_base_than_the_marker():

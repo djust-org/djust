@@ -183,7 +183,7 @@ class TestDynamicImportChokepoint:
 # Concern 2 — setattr of a non-literal key onto a view/component instance.
 # --------------------------------------------------------------------------- #
 # Names that denote a HELD view/component reference an external holder (a
-# transport, time-travel restore, the function-view decorator) writes onto. The
+# transport, the function-view decorator) writes onto. The
 # drift class this net guards is "a transport writes a client-frame key onto the
 # mounted view it holds" — i.e. ``setattr(self.view_instance, key, ...)`` (attr
 # "view_instance"), ``setattr(view, key, ...)`` or ``setattr(component, key, ...)``.

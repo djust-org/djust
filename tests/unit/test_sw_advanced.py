@@ -66,7 +66,7 @@ class _SimpleCounter(LiveView):
 
 
 class _SnapshotCounter(LiveView):
-    """A legacy counter, for the ``_capture_snapshot_state`` cases."""
+    """A legacy counter with the default ``_should_restore_snapshot``."""
 
     exposure_policy = "legacy"
     template = "<div dj-root><span>count={{ count }}</span></div>"
@@ -114,33 +114,6 @@ class _PushEventOnMount(LiveView):
 
 
 class TestStateSnapshotAPI:
-    def test_capture_snapshot_includes_public_attrs(self):
-        view = _SnapshotCounter()
-        view.count = 5
-        view.name = "alice"
-        view._private = "secret"  # underscore excluded
-        snap = view._capture_snapshot_state()
-        assert snap.get("count") == 5
-        assert snap.get("name") == "alice"
-        assert "_private" not in snap
-
-    def test_capture_snapshot_excludes_framework_internals(self):
-        view = _SnapshotCounter()
-        view.count = 5
-        # Framework-internal names in _FRAMEWORK_INTERNAL_ATTRS must be
-        # filtered even if set as instance attrs.
-        view.template_name = "custom.html"  # in _FRAMEWORK_INTERNAL_ATTRS
-        snap = view._capture_snapshot_state()
-        assert "template_name" not in snap
-
-    def test_capture_snapshot_skips_non_serializable(self):
-        view = _SnapshotCounter()
-        view.count = 5
-        view.bad_value = lambda x: x  # callable — always skipped
-        snap = view._capture_snapshot_state()
-        assert "count" in snap
-        assert "bad_value" not in snap
-
     def test_should_restore_snapshot_default_true(self):
         view = _SnapshotCounter()
         assert view._should_restore_snapshot(None) is True

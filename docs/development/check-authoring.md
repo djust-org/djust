@@ -13,7 +13,7 @@ djust system checks live in two places:
   split by check family (#1822). Add a new check to the submodule matching its
   area:
   - `configuration.py` — settings / CSS-build / ASGI validation (C###)
-  - `integrations.py` — service worker, hot-view, time-travel, admin, psycopg
+  - `integrations.py` — service worker, hot-view, admin, psycopg
   - `components.py` — LiveView / sticky-child checks (V###)
   - `security.py` — AST-based security checks (S###)
   - `templates.py` — template file scanning (T###)

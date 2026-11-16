@@ -4,9 +4,8 @@
   live in per-instance ``_state_<name>`` slots.
 - #2912: they must also see a class-level component's State, which lives in a
   ``_component_<name>`` slot.
-- #2896: a captured snapshot carries ``__components__``;
-  ``restore_components_snapshot`` (the time-travel restore's dispatch) must
-  apply it, to registered components only.
+- #2896 (a snapshot's ``__components__`` applied by the time-travel restore)
+  was removed with time-travel debugging in 2.0 (#4184).
 - #2959: a legacy view must not save ``state()`` backing slots or
   ``_reactive_state`` in the private session; the public-state restore already
   carries ``state()`` values through the descriptor.
@@ -155,78 +154,6 @@ class TestDirtyClassLevelComponent2912:
         v._capture_dirty_baseline()
         v.get_context_data()  # renders read the component; no state change
         assert v.is_dirty is False
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# #2896 — restore_components_snapshot applies __components__
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _restore(view: Any, components_state: Any) -> bool:
-    from djust.live_view import restore_components_snapshot
-
-    return restore_components_snapshot(view, components_state, source="time_travel")
-
-
-class TestSnapshotRestoresComponents2896:
-    def test_class_level_component_round_trips(self):
-        src = ComponentView()
-        src.mount(None)
-        src.counter.n = 5
-        snap = json.loads(json.dumps(src._capture_snapshot_state()))
-        assert snap["__components__"]["counter"]["n"] == 5
-
-        # A fresh view, mount() skipped: the component has not been accessed yet.
-        dst = ComponentView()
-        _restore(dst, snap["__components__"])
-        assert dst.counter.n == 5
-
-    def test_unknown_component_id_is_ignored(self):
-        dst = ComponentView()
-        _restore(dst, {"nope": {"n": 1}, "counter": {"n": 2}})
-        assert not hasattr(dst, "nope")
-        assert "nope" not in dst._components
-        assert dst.counter.n == 2
-
-    def test_non_component_attribute_is_not_a_dispatch_target(self):
-        """Only registered components / declared component descriptors are
-        targets — never an arbitrary attribute named like a component id."""
-        dst = ComponentView()
-        dst.label = "keep"
-        _restore(dst, {"label": {"upper": "x"}})
-        assert dst.label == "keep"
-
-    def test_private_and_dunder_component_keys_are_blocked(self):
-        dst = ComponentView()
-        _restore(dst, {"counter": {"_secret": 1, "__class__": 2}})
-        assert "_secret" not in dst.counter.state
-        assert dst.counter.n == 0
-
-    def test_malformed_components_value_is_ignored(self):
-        dst = ComponentView()
-        _restore(dst, ["counter"])
-        _restore(dst, {"counter": "n=3"})
-        assert dst.counter.n == 0
-
-    def test_instance_component_registered_in_registry_is_restored(self):
-        from djust.components.base import LiveComponent as InstanceComponent
-
-        class Widget(InstanceComponent):
-            template = "<i>{{ n }}</i>"
-
-            def mount(self, **kwargs: Any) -> None:
-                self.n = 0
-
-        class V(LiveView):
-            exposure_policy = "legacy"
-            template = "<div dj-root>{{ w }}</div>"
-
-        dst = V()
-        w = Widget(component_id="w1")
-        dst._components["w1"] = w
-        _restore(dst, {"w1": {"n": 4, "component_id": "evil"}})
-        assert w.n == 4
-        assert w.component_id == "w1"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

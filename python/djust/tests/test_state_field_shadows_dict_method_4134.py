@@ -215,7 +215,6 @@ def _walkers() -> dict:
         "normalize_django_value(state_roundtrip)": (
             lambda s: serialization.normalize_django_value(s, state_roundtrip=True) == plain
         ),
-        "decimal_tags_to_strings": lambda s: serialization.decimal_tags_to_strings(s) == plain,
         "_protect_sidecar_tree": lambda s: serialization._protect_sidecar_tree(s) == plain,
         "_filter_floor_keys": (
             lambda s: (
@@ -264,12 +263,3 @@ def test_a_multivaluedict_keeps_its_own_items():
     data = MultiValueDict({"a": ["1", "2"]})
     assert list(mapping_items(data)) == [("a", "2")]
     assert list(mapping_values(data)) == ["2"]
-
-
-@pytest.mark.parametrize("name", NAMES)
-def test_the_legacy_component_snapshot_reads_the_state(name):
-    """``LiveView._capture_components_snapshot`` (time travel, legacy views) read a
-    bound component's State with ``state.items()``."""
-    view = VIEWS[(name, "legacy")]()
-    dict.__setitem__(view.w.state, name, [1, 2])
-    assert view._capture_components_snapshot() == {"w": {name: [1, 2]}}
