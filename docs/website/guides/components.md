@@ -1068,8 +1068,8 @@ nested interactive descendants (`<a>`, `<button>`, `<input>`,
 **never** trigger row navigation.
 
 **Option B — `row_click_event` (preferred, LiveView-idiomatic)**: each
-`<tr>` fires a djust event with `data-value=row[row_click_value_key]`.
-Your `@event_handler` receives the row's value via `**kwargs` and can
+`<tr>` fires a djust event with `dj-value-value=row[row_click_value_key]`.
+Your `@event_handler` receives the row's value as `value` (a string) and can
 use `self.live_redirect(...)` to navigate over the existing LiveView
 connection (the target must be a LiveView; for any other page, render a
 normal link instead), or do anything else:
