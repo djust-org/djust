@@ -324,8 +324,9 @@ class Writers(HeldQuerySet):
         """A write djust cannot see: the DB-API cursor under Django's wrappers."""
         connection.ensure_connection()
         cursor = connection.connection.cursor()
+        mark = "?" if connection.vendor == "sqlite" else "%s"  # the driver's own paramstyle
         cursor.execute(
-            "UPDATE auth_group SET name = ? WHERE name = ?",
+            "UPDATE auth_group SET name = %s WHERE name = %s" % (mark, mark),
             [TAG["value"] + "bob", TAG["value"] + "alice"],
         )
         cursor.close()
@@ -376,12 +377,12 @@ class ParamsWrite(HeldQuerySet):
 
 
 class BigListFirst(HeldQuerySet):
-    """Plain data set before the QuerySet: it must not spend the walk."""
+    """Large plain data held next to the QuerySet."""
 
     def mount(self, request: Any, **kwargs: Any) -> None:
         self._points = list(range(12_000))
         self._records = [{"a": i, "b": "x", "c": 1.5, "d": None, "e": True} for i in range(1_700)]
-        self._many = [{"k": i} for i in range(12_000)]  # 12,000 containers: spends the walk
+        self._many = [{"k": i} for i in range(12_000)]
         super().mount(request, **kwargs)
 
 
@@ -691,7 +692,8 @@ class UnknownRead(Unrelated):
 
     def get_context_data(self, **kwargs: Any) -> dict:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT value FROM json_each('[1, 2]')")
+            function = "json_each" if connection.vendor == "sqlite" else "json_array_elements_text"
+            cursor.execute("SELECT value FROM %s('[1, 2]') AS value" % function)
             cursor.fetchall()
         return super().get_context_data(**kwargs)
 
@@ -1045,8 +1047,8 @@ WRITES = {
     "locked_read": (0, set()),
     # Not writes: the session's own table, a read-only CTE, a commented read.
     "session_save": (0, set()),
-    # A WITH is not a shape the readers follow: everything is read again.
-    "read_cte": (1, set()),
+    # A WITH whose every part is a SELECT is a read.
+    "read_cte": (0, set()),
     "commented_read": (0, set()),
     # A write under Django's execute wrappers is not seen; rows_changed() says so.
     "unseen_write": (0, set()),
@@ -1571,28 +1573,8 @@ async def test_a_large_container_before_the_queryset_does_not_switch_the_fix_off
         await client.close()
 
 
-def test_the_walk_warns_once_per_class_when_spent(caplog):
-    class Holder:
-        pass
-
-    holder = Holder()
-    holder.__dict__["_many"] = [
-        {"k": {i}} for i in range(_held_rows._VISIT_LIMIT + 10)
-    ]  # not plain: walked
-    _held_rows._budget_warned.discard(Holder)
-    try:
-        with caplog.at_level("WARNING", logger="djust._held_rows"):
-            _held_rows.reset_held_rows(holder)
-            _held_rows.reset_held_rows(holder)
-    finally:
-        _held_rows._budget_warned.discard(Holder)
-    spent = [r.getMessage() for r in caplog.records if "Holder" in r.getMessage()]
-    assert len(spent) == 1, spent
-    assert "'k'" not in spent[0] and "10010" not in spent[0]  # it names no values
-
-
 @pytest.mark.django_db
-def test_records_of_scalars_do_not_spend_the_walk():
+def test_a_queryset_after_many_records_is_reset():
     """Rows as dicts (with a list of tags) are one probe, not one visit each."""
     _world()
 
@@ -1608,7 +1590,7 @@ def test_records_of_scalars_do_not_spend_the_walk():
 
 
 @pytest.mark.django_db
-def test_scalar_containers_do_not_spend_the_walk():
+def test_a_queryset_after_large_scalar_containers_is_reset():
     """A list of 50,000 numbers is one probe, not 50,000 visits."""
     _world()
 
@@ -1622,28 +1604,6 @@ def test_scalar_containers_do_not_spend_the_walk():
     list(late[0])
     _held_rows.reset_held_rows(holder)
     assert late[0]._result_cache is None
-
-
-@pytest.mark.django_db
-def test_depth_zero_querysets_are_reset_even_after_the_walk_is_spent():
-    _world()
-
-    class Holder:
-        pass
-
-    holder = Holder()
-    holder.__dict__["_many"] = [{"k": {i}} for i in range(12_000)]  # walked, past the 10,000 limit
-    holder.__dict__["_rows"] = rows = _rows()
-    holder.__dict__["_late"] = late = [_rows()]
-    list(rows)
-    list(late[0])
-    _held_rows._budget_warned.add(Holder)  # quiet
-    try:
-        _held_rows.reset_held_rows(holder)
-    finally:
-        _held_rows._budget_warned.discard(Holder)
-    assert rows._result_cache is None
-    assert late[0]._result_cache is not None  # past the spent walk: documented
 
 
 @pytest.mark.django_db
@@ -2046,7 +2006,34 @@ CLASSIFICATION = [
     ('TRUNCATE "a"', "write", U),
     ("WITH x AS (SELECT 1) INSERT INTO t SELECT * FROM x", "write", U),
     ("WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x", "write", U),
-    ('WITH x AS (SELECT 1) SELECT * FROM x JOIN "t" ON 1 = 1', "write", U),
+    ('WITH x AS (SELECT 1) SELECT * FROM x JOIN "t" ON 1 = 1', "read", {"t"}),
+    (
+        'WITH RECURSIVE "r"(n) AS (SELECT 1 UNION SELECT n + 1 FROM "r") SELECT * FROM "r"',
+        "read",
+        set(),
+    ),
+    (
+        'WITH a AS (SELECT * FROM "t"), b AS (SELECT * FROM a JOIN "u" ON 1 = 1) SELECT * FROM b',
+        "read",
+        {"t", "u"},
+    ),
+    ('WITH a AS (SELECT * FROM "t") SELECT * FROM a, generate_series(1, 2)', "read", U),
+    ('WITH a AS MATERIALIZED (SELECT 1) UPDATE "t" SET x = 1', "write", U),
+    # every part must start with SELECT; anything else is a write to UNKNOWN tables
+    ("WITH v AS (VALUES (1)) SELECT * FROM v", "write", U),
+    ('WITH a AS (TABLE "t") SELECT * FROM a', "write", U),
+    (
+        "WITH a AS (SELECT 1) SELECT * FROM a WHERE x IN (WITH b AS (SELECT 1) SELECT * FROM b)",
+        "read",
+        U,
+    ),
+    (
+        'UPDATE "ta" SET x = 1 WHERE id IN (WITH d AS (DELETE FROM "tb" RETURNING id) SELECT id FROM d)',
+        "write",
+        U,
+    ),
+    ('UPDATE "ta" SET x = 1 WHERE id IN (SELECT id FROM "tb" FOR UPDATE)', "write", U),
+    ('DELETE FROM "ta" WHERE id IN (SELECT 1 FROM (DELETE FROM "tb" RETURNING 1) x)', "write", U),
     ('UPDATE "a" SET x = 1; UPDATE "b" SET y = 2', "write", U),
     ('SELECT 1; DELETE FROM "t"', "write", U),
     ('BEGIN; UPDATE "t" SET x = 1; COMMIT', "write", U),
@@ -2091,6 +2078,39 @@ CLASSIFICATION = [
     ("SELECT value FROM json_each('[1]')", "read", U),
     ('SELECT * FROM "t" JOIN LATERAL (SELECT 1) x ON true', "read", U),
     ('SELECT * FROM "t" TABLESAMPLE SYSTEM (1)', "read", U),
+    ('SELECT * FROM "ta" t1 JOIN ("tb" t2 JOIN "ta" t3 ON 1 = 1) ON 1 = 1', "read", U),
+    ('SELECT * FROM ("ta" JOIN "tb" ON 1 = 1)', "read", U),
+    ('SELECT * FROM "ta" WHERE x IN (TABLE "tb")', "read", U),
+    ('SELECT x AS distinct FROM "ta"', "read", {"ta"}),
+    ('SELECT ALL x, 1 distinct FROM "ta"', "read", {"ta"}),
+    (
+        'SELECT * FROM "ta" WHERE x IN (SELECT 1 FROM "tb" WHERE (y) IN ((SELECT 2 FROM "tc")))',
+        "read",
+        {"ta", "tb", "tc"},
+    ),
+    ('SELECT * FROM "ta" WHERE (SELECT 1 FROM (DELETE FROM "tb" RETURNING 1) x) = 1', "write", U),
+    ('SELECT * FROM "ta" FOR NO KEY UPDATE', "read", {"ta"}),
+    # PostgreSQL operators, casts and literals are inert tokens
+    ('SELECT * FROM "b" WHERE "b"."title"::text ~ %s', "read", {"b"}),
+    ('SELECT * FROM "b" WHERE "b"."title"::text ~* %s', "read", {"b"}),
+    ('SELECT * FROM "a" WHERE ("a"."meta" #> %s) = %s', "read", {"a"}),
+    ('SELECT * FROM "a" WHERE "a"."meta" @> %s AND "a"."meta" <@ %s', "read", {"a"}),
+    ('SELECT ("a"."meta" -> %s), ("a"."meta" ->> %s), ("a"."meta" #>> %s) FROM "a"', "read", {"a"}),
+    (
+        'SELECT * FROM "a" WHERE "a"."meta" ? %s OR "a"."meta" ?| %s OR "a"."meta" ?& %s',
+        "read",
+        {"a"},
+    ),
+    ('SELECT * FROM "a" WHERE "a"."tags" && %s', "read", {"a"}),
+    ('SELECT to_tsvector(COALESCE("b"."t", %s)) @@ plainto_tsquery(%s) FROM "b"', "read", {"b"}),
+    ('SELECT * FROM "a" WHERE x = $1 AND y = :name AND z = %(z)s AND w = ?', "read", {"a"}),
+    ("SELECT $$ FROM \"x\" $$, $tag$ it's $tag$, E'a\\'b' FROM \"a\"", "read", {"a"}),
+    (
+        'SELECT 1 FROM "a" WHERE x = 1e-3 AND y = ~5 AND z = 2 ^ 3 AND w = 7 & 3 | 1 AND v = !!5',
+        "read",
+        {"a"},
+    ),
+    ('SELECT 1 FROM "a" WHERE x = \'unterminated', "write", U),
     # --- no rows change ---
     ('SAVEPOINT "s1"', "other", set()),
     ("RELEASE SAVEPOINT s1", "other", set()),
@@ -2353,11 +2373,22 @@ def test_writes_the_database_makes_by_itself_need_the_switch(switch):
     the database changes another. Stale by default (documented); fresh with
     ``DJUST_REFRESH_ON_ANY_WRITE``."""
     _world()
+    rename = "UPDATE auth_group SET name = name || '!' WHERE name LIKE '%alice'"
     with connection.cursor() as cursor:
-        cursor.execute(
-            "CREATE TRIGGER held_rows_4112 AFTER INSERT ON auth_permission BEGIN "
-            "UPDATE auth_group SET name = name || '!' WHERE name LIKE '%alice'; END"
-        )
+        if connection.vendor == "sqlite":
+            cursor.execute(
+                "CREATE TRIGGER held_rows_4112 AFTER INSERT ON auth_permission BEGIN %s; END"
+                % rename
+            )
+        else:
+            cursor.execute(
+                "CREATE FUNCTION held_rows_4112() RETURNS trigger LANGUAGE plpgsql AS "
+                "$$ BEGIN %s; RETURN NEW; END $$" % rename
+            )
+            cursor.execute(
+                "CREATE TRIGGER held_rows_4112 AFTER INSERT ON auth_permission "
+                "FOR EACH ROW EXECUTE FUNCTION held_rows_4112()"
+            )
     try:
         view = _Probe()
         view._rows = _rows()
@@ -2368,7 +2399,11 @@ def test_writes_the_database_makes_by_itself_need_the_switch(switch):
         assert (shown == truth) is switch, (shown, truth)
     finally:
         with connection.cursor() as cursor:
-            cursor.execute("DROP TRIGGER held_rows_4112")
+            if connection.vendor == "sqlite":
+                cursor.execute("DROP TRIGGER held_rows_4112")
+            else:
+                cursor.execute("DROP TRIGGER held_rows_4112 ON auth_permission")
+                cursor.execute("DROP FUNCTION held_rows_4112()")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2566,13 +2601,13 @@ def test_djusts_restores_make_r_unknown(restore):
 
 @pytest.mark.django_db(transaction=True)
 def test_a_statement_a_render_cannot_follow_makes_r_unknown():
-    """A ``WITH`` read in a render is not a recognised read: R becomes UNKNOWN."""
+    """A statement in a render that neither reader accepts: R becomes UNKNOWN."""
     _world()
     view = _Probe()
 
     def show():
         with connection.cursor() as cursor:
-            cursor.execute("WITH x AS (SELECT 1) SELECT * FROM x")
+            cursor.execute("VALUES (1)")  # a read no grammar here accepts
             cursor.fetchall()
         return 1
 
@@ -2627,3 +2662,470 @@ def test_a_render_step_records_the_views_reads(entry):
     else:
         sync_turn.run_sync_step(view, "render", get_context_data)
     assert "auth_group" in _held_rows._read_sets[id(view)].tables
+
+
+# ============================================================================
+# Ground-truth fuzz (the third review's, seeded and bounded): KNOWN implies
+# exactly the statement's real tables.
+# ============================================================================
+
+FUZZ_IDENT_STYLES = [
+    lambda n: '"%s"' % n,
+    lambda n: n,
+    lambda n: '"sch"."%s"' % n,
+    lambda n: "sch.%s" % n,
+    lambda n: "`%s`" % n,
+    lambda n: "[%s]" % n,
+    lambda n: '"%s"' % n.upper(),
+    lambda n: '"%s"' % (n[0] + '""' + n[1:]),  # an escaped quote inside
+]
+
+# (template, truth) -- truth: the tables the statement really writes (by the names a, b), "?" = cannot be known from text
+FUZZ_WRITE_TEMPLATES = [
+    ("UPDATE {a} SET x = 1", {"a"}),
+    ("UPDATE {a} SET x = 1 WHERE id IN (SELECT id FROM {b})", {"a"}),
+    ("UPDATE {a} SET x = (SELECT max(y) FROM {b}) WHERE 1=1 RETURNING id", {"a"}),
+    ("UPDATE {a} SET x = {b}.y FROM {b} WHERE {a}.id = {b}.id", {"a"}),
+    ("UPDATE {a}, {b} SET {a}.x = 1, {b}.y = 2", {"a", "b"}),
+    ("UPDATE {a} JOIN {b} ON 1=1 SET {b}.y = 2", {"b"}),
+    ("UPDATE {a} INNER JOIN {b} ON 1=1 SET {a}.x=1, {b}.y = 2", {"a", "b"}),
+    ("UPDATE {a} AS q SET x = 1", {"a"}),
+    ("UPDATE {a} q SET x = 1", {"a"}),
+    ("UPDATE ONLY {a} SET x = 1", {"a"}),
+    ("UPDATE LOW_PRIORITY {a} SET x = 1", {"a"}),
+    ("UPDATE OR REPLACE {a} SET x = 1", {"a"}),
+    ("UPDATE TOP (5) {a} SET x = 1", {"a"}),
+    ("INSERT INTO {a} (x) VALUES (1)", {"a"}),
+    ("INSERT INTO {a} VALUES (1), (2) RETURNING id", {"a"}),
+    ("INSERT INTO {a} DEFAULT VALUES", {"a"}),
+    ("INSERT INTO {a} (x) VALUES (1) ON CONFLICT (x) DO UPDATE SET x = EXCLUDED.x", {"a"}),
+    ("INSERT INTO {a} (x) VALUES (1) ON DUPLICATE KEY UPDATE x = 2", {"a"}),
+    ("INSERT OR IGNORE INTO {a} (x) VALUES (1)", {"a"}),
+    ("INSERT IGNORE INTO {a} (x) VALUES (1)", {"a"}),
+    ("INSERT OR REPLACE INTO {a} (x) VALUES (1)", {"a"}),
+    ("INSERT LOW_PRIORITY INTO {a} VALUES (1)", {"a"}),
+    ("INSERT {a} VALUES (1)", {"a"}),
+    ("INSERT INTO {a} AS q (x) VALUES (1)", {"a"}),
+    ("INSERT INTO {a} (x) SELECT y FROM {b}", {"a"}),
+    ("INSERT INTO {a} (x) SELECT * FROM UNNEST(%s)", {"a"}),
+    ("INSERT INTO {a} (x) VALUES ((SELECT max(y) FROM {b}))", {"a"}),
+    ("INSERT ALL INTO {a} VALUES (1) INTO {b} VALUES (2) SELECT 1 FROM dual", {"a", "b"}),
+    ("INSERT INTO {a} (x) VALUES (1); INSERT INTO {b} (y) VALUES (2)", {"a", "b"}),
+    ("INSERT INTO {a} (x) VALUES (1); DELETE FROM {b}", {"a", "b"}),
+    ("DELETE FROM {a}", {"a"}),
+    ("DELETE FROM {a} WHERE id IN (SELECT id FROM {b})", {"a"}),
+    ("DELETE FROM {a} WHERE id = 1 RETURNING id", {"a"}),
+    ("DELETE FROM {a} USING {b} WHERE 1=1", {"a"}),
+    ("DELETE FROM {a}, {b} USING {a} JOIN {b} ON 1=1", {"a", "b"}),
+    ("DELETE {a}, {b} FROM {a} JOIN {b} ON 1=1", {"a", "b"}),
+    ("DELETE {a} FROM {a} INNER JOIN {b} ON 1=1", {"a"}),
+    ("DELETE q FROM {a} AS q WHERE 1=1", {"a"}),
+    ("DELETE FROM {a} AS q WHERE 1=1", {"a"}),
+    ("DELETE FROM {a} q WHERE 1=1", {"a"}),
+    ("DELETE FROM ONLY {a}", {"a"}),
+    ("DELETE QUICK FROM {a}", {"a"}),
+    ("DELETE {a} WHERE id=1", {"a"}),
+    ("DELETE FROM {a} ORDER BY id LIMIT 1", {"a"}),
+    ("REPLACE INTO {a} VALUES (1)", {"a"}),
+    ("MERGE INTO {a} USING {b} ON 1=1 WHEN MATCHED THEN DELETE", {"a"}),
+    ("TRUNCATE {a}, {b} CASCADE", {"?"}),
+    ("TRUNCATE {a}", {"a"}),
+    ("WITH x AS (DELETE FROM {b} RETURNING id) UPDATE {a} SET y = 1", {"a", "b"}),
+    ("WITH x AS (SELECT 1) INSERT INTO {a} SELECT * FROM x", {"a"}),
+    (
+        "UPDATE {a} SET x = 1 WHERE id IN (WITH d AS (DELETE FROM {b} RETURNING id) SELECT id FROM d)",
+        {"a", "b"},
+    ),
+    ("BEGIN; UPDATE {a} SET x = 1; COMMIT", {"a"}),
+    ("SELECT 1; DELETE FROM {a}", {"a"}),
+    ("SELECT * INTO {a} FROM {b}", {"a"}),
+    ("EXPLAIN ANALYZE DELETE FROM {a}", {"a"}),
+    ("EXPLAIN (ANALYZE) UPDATE {a} SET x=1", {"a"}),
+    ("WITH d AS (DELETE FROM {a} RETURNING id) SELECT * FROM d", {"a"}),
+    ("COPY {a} FROM STDIN", {"a"}),
+    ("CALL p({a})", {"?"}),
+    ("LOCK TABLE {a}", set()),
+    ("SAVEPOINT s", set()),
+    ("SET x = 1", set()),
+    ("UPDATE {a} SET note = 'x; DELETE FROM q' WHERE 1=1", {"a"}),
+    ("UPDATE {a} SET note = 'it''s FROM {b}'", {"a"}),
+    ("/*! UPDATE */ UPDATE {a} SET x = 1", {"a"}),
+    ("UPDATE {a} SET x = 1 /* ; DELETE FROM {b} */", {"a"}),
+    ("UPDATE {a} SET x = $$ ; $$", {"a"}),
+]
+
+
+def _fuzz_noise(rng, sql):
+    out = []
+    for part in sql.split(" "):
+        out.append(part)
+        r = rng.random()
+        out.append(
+            "\n\t " if r < 0.1 else (" /* c */ " if r < 0.15 else (" -- c\n" if r < 0.2 else " "))
+        )
+    s = "".join(out).strip()
+    if rng.random() < 0.3:
+        s = s.lower() if "{" not in s and rng.random() < 0 else s
+    if rng.random() < 0.2:
+        s += ";"
+    if rng.random() < 0.2:
+        s = "  " + s
+    return s
+
+
+FUZZ_READ_TEMPLATES = [
+    ("SELECT * FROM {a}", {"a"}),
+    ("SELECT * FROM {a} x INNER JOIN {b} y ON x.id = y.id", {"a", "b"}),
+    (
+        "SELECT * FROM {a} AS x LEFT OUTER JOIN {b} AS y ON (x.id = y.id) WHERE x.id > 0 ORDER BY 1",
+        {"a", "b"},
+    ),
+    ("SELECT * FROM {a}, {b}", {"a", "b"}),
+    ("SELECT * FROM {a} x, {b} y WHERE 1=1", {"a", "b"}),
+    ("SELECT (SELECT max(id) FROM {b}) FROM {a}", {"a", "b"}),
+    ("SELECT * FROM {a} WHERE EXISTS (SELECT 1 FROM {b} U0 WHERE U0.id = 1)", {"a", "b"}),
+    ("SELECT * FROM (SELECT * FROM {a}) s JOIN {b} ON 1=1", {"a", "b"}),
+    ("SELECT COUNT(*) FROM (SELECT DISTINCT x FROM {a}) subquery", {"a"}),
+    ("SELECT EXTRACT(YEAR FROM d) FROM {a}", {"a"}),
+    ("SELECT EXTRACT(YEAR FROM (SELECT max(d) FROM {b})) FROM {a}", {"a", "b"}),
+    ("SELECT SUBSTRING(x FROM 2), TRIM(BOTH 'x' FROM y) FROM {a}", {"a"}),
+    ("SELECT x IS DISTINCT FROM y FROM {a}", {"a"}),
+    ("SELECT x IS NOT DISTINCT FROM (SELECT max(y) FROM {b}) FROM {a}", {"a", "b"}),
+    ("SELECT DISTINCT x FROM {a}", {"a"}),
+    ("SELECT x AS distinct FROM {a}", {"a"}),
+    ("SELECT ALL x, 1 distinct FROM {a}", {"a"}),
+    ("SELECT x FROM {a} UNION SELECT y FROM {b}", {"a", "b"}),
+    ("(SELECT x FROM {a}) UNION ALL (SELECT y FROM {b})", {"a", "b"}),
+    ("SELECT * FROM {a} FOR UPDATE", {"a"}),
+    ("SELECT * FROM {a} NATURAL JOIN {b}", {"a", "b"}),
+    ("SELECT * FROM {a} CROSS JOIN {b}", {"a", "b"}),
+    ("SELECT * FROM {a} STRAIGHT_JOIN {b}", {"a", "b"}),
+    ("SELECT * FROM ONLY {a}", {"a"}),
+    ("SELECT * FROM {a} TABLESAMPLE SYSTEM (1)", {"a"}),
+    ("SELECT * FROM {a} JOIN LATERAL (SELECT * FROM {b}) z ON true", {"a", "b"}),
+    ("SELECT * FROM {a}, LATERAL (SELECT * FROM {b}) z", {"a", "b"}),
+    ("SELECT * FROM {a} WHERE x IN (TABLE {b})", {"a", "b"}),
+    ("SELECT * FROM {a} WHERE note = 'FROM zzz' AND \"from\" = 1", {"a"}),
+    (
+        "SELECT x, (y) FROM {a} WHERE c IN (1,2) GROUP BY x HAVING count(*) > 1 LIMIT 3 OFFSET 1",
+        {"a"},
+    ),
+    (
+        "SELECT ROW_NUMBER() OVER (PARTITION BY x ORDER BY y) FROM {a} WINDOW w AS (ORDER BY x)",
+        {"a"},
+    ),
+    ("SELECT * FROM {a} PARTITION (p0)", {"a"}),
+    ("SELECT * FROM {a} USE INDEX (i) JOIN {b} ON 1=1", {"a", "b"}),
+    ("SELECT * FROM {a} FINAL JOIN {b} USING (id)", {"a", "b"}),
+    ("SELECT * FROM {a} AS x (c1, c2), {b}", {"a", "b"}),
+    ("SELECT CAST(x AS int) FROM {a} LEFT JOIN {b} ON CAST({b}.y AS int) = 1", {"a", "b"}),
+    ("SELECT * FROM {a} t1 JOIN ({b} t2 JOIN {a} t3 ON 1=1) ON 1=1", {"a", "b"}),
+    ("SELECT * FROM ({a} JOIN {b} ON 1=1)", {"a", "b"}),
+]
+
+
+def _fuzz(templates, seed):
+    import random
+
+    rng = random.Random(seed)
+    for template, truth in templates:
+        for style_a in FUZZ_IDENT_STYLES:
+            for style_b in FUZZ_IDENT_STYLES[:6]:
+                for _ in range(3):
+                    sql = _fuzz_noise(rng, template)
+                    sql = sql.replace("{a}", style_a("ta")).replace("{b}", style_b("tb"))
+                    real = {"ta" if t == "a" else "tb" if t == "b" else t for t in truth}
+                    yield sql, real, _held_rows.statement_tables(sql)
+
+
+def test_write_fuzz_against_ground_truth():
+    wrong, misread, known = [], [], 0
+    for sql, real, (kind, tables) in _fuzz(FUZZ_WRITE_TEMPLATES, 4112):
+        if not real:
+            if kind == "write" and tables is not None:
+                wrong.append((sql, tables, real))
+            continue
+        if kind != "write":
+            misread.append((sql, kind))
+            continue
+        if tables is not None:
+            known += 1
+            if "?" in real or set(tables) != real:
+                wrong.append((sql, sorted(tables), sorted(real)))
+    assert not misread, misread[:5]
+    assert not wrong, wrong[:5]
+    assert known > 500  # the ORM's own shapes stay KNOWN
+
+
+def test_read_fuzz_against_ground_truth():
+    wrong, known = [], 0
+    for sql, real, (kind, tables) in _fuzz(FUZZ_READ_TEMPLATES, 41120):
+        assert kind in ("read", "write"), (sql, kind)
+        if kind == "read" and tables is not None:
+            known += 1
+            if set(tables) != real:
+                wrong.append((sql, sorted(tables), sorted(real)))
+    assert not wrong, wrong[:5]
+    assert known > 500
+
+
+# ============================================================================
+# Third review: the walk has no shortcut on a refresh; provenance by fill stamps
+# ============================================================================
+
+
+class _Shape(_Explicit):
+    @event_handler()
+    def write_only(self, **kwargs: Any) -> None:
+        Group.objects.filter(name=TAG["value"] + "alice").update(name=TAG["value"] + "bob")
+
+    @event_handler()
+    def other_table(self, **kwargs: Any) -> None:
+        _permission()
+
+
+class AfterEightInList(_Shape):
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        super().mount(request, **kwargs)
+        self._panel = ["title", 1, 2, 3, 4, 5, 6, 7, _rows()]
+
+    def rows_value(self) -> Any:
+        return self._panel[8]
+
+
+class AfterEightInDict(_Shape):
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        super().mount(request, **kwargs)
+        self._ctx = {
+            "t": "t",
+            "p": 1,
+            "per": 10,
+            "s": "pk",
+            "d": "asc",
+            "q": "",
+            "a": 1,
+            "b": 2,
+            "rows": _rows(),
+        }
+
+    def rows_value(self) -> Any:
+        return self._ctx["rows"]
+
+
+class RecordsThenRows(_Shape):
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        super().mount(request, **kwargs)
+        self._tabs = [{"id": i, "label": "tab%d" % i} for i in range(8)] + [
+            {"id": 9, "rows": _rows()}
+        ]
+
+    def rows_value(self) -> Any:
+        return self._tabs[8]["rows"]
+
+
+class EvaluatedInMount(_Shape):
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        super().mount(request, **kwargs)
+        self._rows = _rows()
+        self.total = len(self._rows)  # evaluated in mount(), a recorded step
+
+    def rows_value(self) -> Any:
+        return self._rows
+
+
+class TouchedInHandler(_Shape):
+    @cached_property
+    def names(self) -> list:
+        return [g.name for g in _rows()]
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        super().mount(request, **kwargs)
+        self._rows = _rows()
+
+    def rows_value(self) -> Any:
+        return self._rows
+
+    @event_handler()
+    def touch(self, **kwargs: Any) -> None:
+        self.k = len(self.names)  # first computed in a handler (a recorded step)
+
+
+class SessionRows(_Shape):
+    """A view listing ``django_session`` rows: a bookkeeping table (documented)."""
+
+    template = "<div dj-root><ul>{% for r in rows %}<li>{{ r.session_key }}</li>{% endfor %}</ul><p>{{ n }}</p></div>"
+
+    def mount(self, request: Any, **kwargs: Any) -> None:
+        super().mount(request, **kwargs)
+        from django.contrib.sessions.models import Session
+
+        self._rows = Session.objects.order_by("session_key")
+
+    def rows_value(self) -> Any:
+        return self._rows
+
+    @event_handler()
+    def add_session(self, **kwargs: Any) -> None:
+        import datetime
+
+        from django.contrib.sessions.models import Session
+        from django.utils import timezone
+
+        Session.objects.create(
+            session_key="zz-held-" + TAG["value"],
+            session_data="x",
+            expire_date=timezone.now() + datetime.timedelta(days=1),
+        )
+
+
+for _cls in (
+    AfterEightInList,
+    AfterEightInDict,
+    RecordsThenRows,
+    EvaluatedInMount,
+    TouchedInHandler,
+    SessionRows,
+):
+    urlpatterns.append(path("third/%s/" % _cls.__name__, _cls.as_view()))
+    URL[_cls] = "/third/%s/" % _cls.__name__
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("cls", [AfterEightInList, AfterEightInDict, RecordsThenRows])
+@pytest.mark.parametrize("transport", list(TRANSPORTS))
+async def test_a_queryset_behind_plain_items_is_refreshed(request, transport, cls, sql):
+    owner = await sync_to_async(_world)()
+    client = _client(transport, request)
+    await client.open(cls, owner)
+    try:
+        sql.clear()
+        (frame,) = await client.event("write_only")
+        assert _change(frame) == {"bob"}, frame
+        assert _row_reads(sql) == 1, sql
+        sql.clear()
+        (frame,) = await client.event("other_table")
+        assert frame.get("type") == "noop", frame  # R is known: an unrelated write costs nothing
+    finally:
+        await client.close()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", list(TRANSPORTS))
+async def test_rows_evaluated_in_mount_are_known(request, transport, sql):
+    """mount() is a recorded step: its reads are in R and its QuerySet is stamped."""
+    owner = await sync_to_async(_world)()
+    client = _client(transport, request)
+    await client.open(EvaluatedInMount, owner)
+    try:
+        for _ in range(2):
+            sql.clear()
+            (frame,) = await client.event("other_table")
+            assert frame.get("type") == "noop", frame
+            assert _row_reads(sql) == 0, sql
+        (frame,) = await client.event("write_only")
+        assert _change(frame) == {"bob"}, frame
+        sql.clear()
+        (frame,) = await client.event("other_table")
+        assert frame.get("type") == "noop" and _row_reads(sql) == 0, (
+            frame
+        )  # still known after the refresh
+    finally:
+        await client.close()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_cached_property_computed_in_a_handler_is_known():
+    owner = await sync_to_async(_world)()
+    client = _WS()
+    await client.open(TouchedInHandler, owner)
+    try:
+        await client.event("touch")
+        (frame,) = await client.event("other_table")
+        assert frame.get("type") == "noop", frame
+    finally:
+        await client.close()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_view_of_session_rows_is_not_refreshed_by_session_writes():
+    """Documented: writes to an ignored (bookkeeping) table never count."""
+    owner = await sync_to_async(_world)()
+    client = _WS()
+    await client.open(SessionRows, owner)
+    try:
+        (frame,) = await client.event("add_session")
+        assert frame.get("type") == "noop", frame
+    finally:
+        await client.close()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_r_recovers_after_a_refresh():
+    """A cached value filled while nothing recorded: R UNKNOWN, everything is read
+    again; refilled inside the recorded render, R is known again."""
+    _world()
+
+    class Cached(_Probe):
+        @cached_property
+        def names(self):
+            return [g.name for g in _rows()]
+
+    view = Cached()
+    view._rows = _rows()
+    list(view._rows)  # filled outside a recorded step: unknown too
+    view.names
+    show = lambda: (list(view.names), [g.name for g in view._rows])  # noqa: E731
+    shown = _turn(
+        view,
+        show,
+        lambda: Group.objects.filter(name=TAG["value"] + "alice").update(name=TAG["value"] + "bob"),
+    )
+    assert shown[0] == [TAG["value"] + "bob"]
+    _held_rows.mark_tree(view, frozenset({"auth_permission"}))
+    assert _held_rows.rows_written(view) is False  # known again: nothing to do
+
+
+@pytest.mark.django_db
+def test_a_queryset_filled_outside_any_step_is_unknown_wherever_it_is_held():
+    _world()
+
+    class View(_Probe):
+        pass
+
+    view = View()
+    view._show = lambda: 1
+    view.render_with_diff()  # R complete, nothing held
+    late = _rows()
+    list(late)  # filled with nothing recording
+    view._ctx = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, "g": 7, "h": 8, "rows": late}
+    _held_rows.mark_tree(view, frozenset({"auth_permission"}))
+    assert _held_rows.rows_written(view) is True
+    _held_rows.unmark(view)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_rows_filled_outside_stay_unknown_after_a_render_iterates_them():
+    """Only a fill stamps: a render reading the result cache of rows filled while
+    nothing recorded ran no query, so their table is not in R."""
+    _world()
+    view = _Probe()
+    view._rows = _rows()
+    list(view._rows)  # filled with nothing recording
+    show = lambda: [g.name for g in view._rows]  # noqa: E731
+
+    def rename_without_reading() -> None:  # one UPDATE: the step reads nothing
+        Group.objects.filter(name=TAG["value"] + "alice").update(name=TAG["value"] + "bob")
+
+    shown = _turn(view, show, rename_without_reading)
+    assert shown == [g.name for g in _rows()]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'WITH a AS (SELECT 1) SELECT * FROM a WHERE (SELECT 1 FROM (DELETE FROM "tb" RETURNING 1) x) = 1',
+        'WITH a AS (SELECT * FROM "ta" WHERE x IN (SELECT 1 FROM (DELETE FROM "tb" RETURNING 1) d)) SELECT * FROM a',
+    ],
+)
+def test_a_select_part_that_writes_makes_a_with_a_write(sql):
+    assert _held_rows.statement_tables(sql) == ("write", None)

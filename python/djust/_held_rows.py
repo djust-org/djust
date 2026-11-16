@@ -22,7 +22,9 @@ The rule, the same on every transport:
   outside the view's steps and renders and do not enter R. R is UNKNOWN until
   the view has completed one render under recording, again after a restore
   (:func:`reads_unknown`), and whenever the view holds a cached property value
-  or evaluated rows that were not there when its last recorded render ended.
+  or evaluated rows that were filled while nothing recorded (a QuerySet
+  filled outside every step and render of the view's tree, a cached property
+  not computed in one).
 * **Decision.** When W is known, R is known and they do not meet, nothing is
   reset and a handler that changed nothing answers ``noop``, as before #4112.
   Otherwise everything the view holds is read again before its next render:
@@ -43,12 +45,13 @@ seen: ``rows_changed()`` or the setting above.
 The mark a write leaves is kept until a render of the view succeeds, and a
 mark made while that render ran (another thread's write) survives it.
 
-What is walked to reset: every attribute the view's code set (not the
-framework's own, ``_framework_attrs``), then the dicts, lists, tuples and sets
-they hold, to :data:`_DEPTH_LIMIT` levels, at most :data:`_VISIT_LIMIT` values;
-a container whose first :data:`_PROBE` items are plain scalars, or records of
-them two levels deep, is not walked item by item (a QuerySet after eight such
-items is not found). Not reset: model instances, lists of rows,
+What is walked, only on a turn that wrote (to decide and to reset): every
+attribute the view's code set (not the framework's own, ``_framework_attrs``),
+then the dicts, lists, tuples and sets they hold, to :data:`_DEPTH_LIMIT`
+levels, every item. A turn that wrote nothing walks nothing: a QuerySet stamps
+itself when it fills (which view's recorded step or render it filled in, from a
+wrapper around ``QuerySet._fetch_all``) and the cached properties a step or
+render fills are noted then. Not reset: model instances, lists of rows,
 ``select_for_update()`` QuerySets, ``frozen_rows``.
 
 The recorder is one Django ``execute_wrapper`` at index 0 (the outermost) of
@@ -63,13 +66,10 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import collections
-import datetime
-import decimal
 import functools
 import logging
 import re
 import threading
-import uuid
 import weakref
 from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Set, Tuple, TypeVar
 
@@ -166,29 +166,11 @@ ANY_WRITE_SETTING = "DJUST_REFRESH_ON_ANY_WRITE"
 
 #: Nesting walked below a view attribute (``self.x`` is depth 0; ``self.x["k"][0]`` is 2).
 _DEPTH_LIMIT = 3
-#: Values looked at per walk, in containers, all attributes together.
-_VISIT_LIMIT = 10_000
-#: Items looked at to decide that a container holds plain scalars only.
-_PROBE = 8
 #: Views marked per write (the writer's tree).
 _TREE_LIMIT = 256
 #: Tables kept in a view's read set; past this the set is UNKNOWN.
 _READ_SET_LIMIT = 512
 
-_SCALARS = (
-    type(None),
-    bool,
-    int,
-    float,
-    complex,
-    str,
-    bytes,
-    decimal.Decimal,
-    datetime.date,
-    datetime.time,
-    datetime.timedelta,
-    uuid.UUID,
-)
 
 #: Every "refresh everything" decision, by reason.
 fallback_counts: "collections.Counter[str]" = collections.Counter()
@@ -220,14 +202,15 @@ _writer: contextvars.ContextVar[Optional[_Writer]] = contextvars.ContextVar(
 class _Reads:
     """What a view's own code and renders read."""
 
-    __slots__ = ("ref", "tables", "unknown", "complete", "known")
+    __slots__ = ("ref", "tables", "unknown", "complete", "known", "dropped")
 
     def __init__(self, ref: Any) -> None:
         self.ref = ref
         self.tables: Set[str] = set()
         self.unknown = False  # a read could not be followed, or the set overflowed
         self.complete = False  # one render finished under recording
-        self.known: FrozenSet[int] = frozenset()  # cached values / held rows seen then
+        self.known: FrozenSet[str] = frozenset()  # cached properties filled while recording
+        self.dropped: FrozenSet[str] = frozenset()  # emptied by a reset in this step
 
 
 #: ``id(view) -> [weakref, tables or None, generation]``: writes not yet rendered.
@@ -236,7 +219,6 @@ _marked: Dict[int, List[Any]] = {}
 _read_sets: Dict[int, _Reads] = {}
 _lock = threading.Lock()
 _generation = [0]
-_budget_warned: set = set()
 
 
 # ---------------------------------------------------------------------------
@@ -247,32 +229,52 @@ _TOKEN = re.compile(
     r"""
     (?P<space>\s+)
   | (?P<comment>--[^\n]*(?:\n|$)|/\*.*?\*/)
+  | (?P<dollar>\$(?P<tag>[A-Za-z_]\w*|)\$.*?\$(?P=tag)\$)
+  | (?P<estr>[Ee]'(?:[^'\\]|\\.|'')*')
   | (?P<str>'(?:[^']|'')*')
   | (?P<qid>"(?:[^"]|"")*")
   | (?P<bid>`(?:[^`]|``)*`)
+  | (?P<cast>::)
+  | (?P<param>%s|%\(\w+\)s|\$\d+|:[A-Za-z_]\w*)
   | (?P<word>[A-Za-z_][A-Za-z0-9_$]*)
-  | (?P<param>%s|%\(\w+\)s|\?|\$\d+|:\w+)
-  | (?P<num>\d+(?:\.\d+)?)
-  | (?P<punct><=|>=|<>|!=|\|\||::|[(),.;*=<>+\-/%\[\]])
+  | (?P<num>\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)
+  | (?P<punct>[~!@\#%^&|?<>=+\-*/(),.;\[\]{}])
   | (?P<other>.)
     """,
     re.VERBOSE | re.DOTALL,
 )
 
+#: A word that makes a statement a write wherever it appears.
+_WRITE_WORDS = frozenset({"INSERT", "DELETE", "MERGE", "TRUNCATE"})
+
 
 def _tokens(text: str) -> Optional[List[Tuple[str, str]]]:
-    """``(kind, value)`` tokens without whitespace and comments; ``None`` if unreadable."""
+    """``(kind, value)`` tokens without whitespace and comments; ``None`` if unreadable.
+
+    Kinds: ``word`` (upper-cased), ``qid`` (``"..."``), ``bid`` (backticks),
+    ``str`` / ``estr`` (``'...'``, ``E'...'``), ``dollar`` (``$tag$...$tag$``),
+    ``param`` (``%s``, ``%(name)s``, ``$1``, ``:name``), ``num``, ``cast``
+    (``::``) and ``punct``: one character each, parentheses, comma, dot,
+    semicolon, brackets and every operator character ``~ ! @ # % ^ & | ? < > =
+    + - * /``. A longer operator (``->>``, ``#>``, ``@>``, ``<@``, ``&&``,
+    ``?|``, ``?&``, ``||``, ``<=``, ``!=``...) is a run of these and names no
+    table, and ``?`` (a qmark placeholder or the jsonb operator) is one of them.
+    Any other character (an unterminated string or comment, a non-ASCII bare
+    name) makes the statement unreadable.
+    """
     out: List[Tuple[str, str]] = []
     for match in _TOKEN.finditer(text):
         kind = match.lastgroup
+        if kind == "tag":  # the inner group of a dollar-quoted string
+            kind = "dollar"
         value = match.group()
         if kind in ("space", "comment"):
             continue
         if kind == "other":
-            return None  # dollar quoting, an unterminated string or comment
+            return None
         if kind == "word":
             value = value.upper()
-        out.append((kind, value))
+        out.append((kind, value))  # type: ignore[arg-type]
     return out
 
 
@@ -348,7 +350,9 @@ def _skip_group(toks: List[Tuple[str, str]], i: int) -> int:
 
 
 def _tail_ok(toks: List[Tuple[str, str]], i: int) -> bool:
-    """No banned word outside parentheses from ``i`` to the end."""
+    """The tail of a write: no :data:`_WRITE_TAIL_BANNED` word outside parentheses,
+    and no other write (INSERT, DELETE, MERGE, TRUNCATE, WITH, INTO, or UPDATE
+    inside parentheses) at any depth."""
     depth = 0
     for kind, value in toks[i:]:
         if kind == "punct":
@@ -358,8 +362,13 @@ def _tail_ok(toks: List[Tuple[str, str]], i: int) -> bool:
                 depth -= 1
                 if depth < 0:
                     return False
-        elif kind == "word" and depth == 0 and value in _WRITE_TAIL_BANNED:
-            return False
+        elif kind == "word":
+            if depth == 0 and value in _WRITE_TAIL_BANNED:
+                return False
+            if value in _WRITE_WORDS or value in ("WITH", "INTO"):
+                return False
+            if depth > 0 and value == "UPDATE":
+                return False
     return depth == 0
 
 
@@ -373,7 +382,9 @@ def _write_table(toks: List[Tuple[str, str]]) -> Optional[str]:
 
     ``<table>`` is ONE identifier in double quotes or backticks, with no
     escaped quote and no schema part, and no alias. ``<tail>`` may not contain,
-    outside parentheses, FROM, USING, JOIN, INTO, SELECT or WITH.
+    outside parentheses, FROM, USING, JOIN, INTO, SELECT or WITH, nor at any
+    depth INSERT, DELETE, MERGE, TRUNCATE, WITH or INTO, nor UPDATE inside
+    parentheses (:func:`_tail_ok`).
     """
     if not toks or toks[0][0] != "word":
         return None
@@ -427,47 +438,59 @@ def _write_table(toks: List[Tuple[str, str]]) -> Optional[str]:
     return None
 
 
-def _read_tables(toks: List[Tuple[str, str]]) -> Optional[FrozenSet[str]]:
-    """The tables a ``SELECT`` names after FROM / JOIN, or ``None`` (UNKNOWN).
+_WRITE = object()  # what the read reader returns for a statement that writes
 
-    Every ``FROM`` and ``JOIN``, at any depth, must be followed by a derived
-    table ``( SELECT ... )`` (its own FROMs are read as the scan goes on) or by
-    ONE quoted identifier with no schema part, an optional alias, and then a
-    comma (another such table), a closing parenthesis, the end, or one of
-    :data:`_AFTER_TABLE`. A ``FROM`` inside ``EXTRACT(...)`` and friends, and
-    ``IS [NOT] DISTINCT FROM``, name no table. Anything else (a bare name,
-    ``ONLY``, a function in FROM, ``LATERAL``, ``TABLESAMPLE``) is UNKNOWN, as
-    is ``SELECT ... INTO``.
+
+def _read_tables(toks: List[Tuple[str, str]], ctes: FrozenSet[str] = frozenset()) -> Any:
+    """The tables a ``SELECT`` names after FROM / JOIN: a frozenset, ``None``
+    (UNKNOWN) or :data:`_WRITE` (it contains a write).
+
+    Every ``FROM`` and ``JOIN``, at any depth, must be followed either by a
+    subquery ``( SELECT ... )`` (its own FROMs are read as the scan goes on) or
+    by ONE quoted identifier with no schema part (or the name of one of
+    ``ctes``), an optional alias, and then a comma (another such table), a
+    closing parenthesis, the end, or one of :data:`_AFTER_TABLE`. A ``FROM``
+    inside ``EXTRACT(...)`` and friends, and ``IS [NOT] DISTINCT FROM``, name no
+    table. Anything else is UNKNOWN: a bare name, ``ONLY``, a function in FROM,
+    ``LATERAL``, ``TABLESAMPLE``, a parenthesised join group ``( "a" JOIN "b"
+    ...)``, the ``TABLE`` shorthand, ``SELECT ... INTO``, a nested ``WITH``.
+    INSERT, DELETE, MERGE or TRUNCATE anywhere, or an UPDATE not part of
+    ``FOR [NO KEY] UPDATE``, is a write.
     """
     tables: Set[str] = set()
     openers: List[str] = []
     n = len(toks)
     i = 0
-    previous = ""
+
+    def word_at(j: int) -> str:
+        return toks[j][1] if 0 <= j < n and toks[j][0] == "word" else ""
+
+    for j, (kind, value) in enumerate(toks):
+        if kind == "word" and (
+            value in _WRITE_WORDS or (value == "UPDATE" and word_at(j - 1) not in ("FOR", "KEY"))
+        ):
+            return _WRITE
     while i < n:
         kind, value = toks[i]
         if kind == "punct":
             if value == "(":
-                openers.append(previous)
+                openers.append(word_at(i - 1))
             elif value == ")" and openers:
                 openers.pop()
-            previous = ""
             i += 1
             continue
         if kind != "word":
-            previous = ""
             i += 1
             continue
-        if value == "INTO":
+        if value in ("INTO", "TABLE", "WITH"):
             return None
         if value not in ("FROM", "JOIN"):
-            previous = value
             i += 1
             continue
         if value == "FROM" and (
-            (openers and openers[-1] in _FROM_IN_ARGUMENTS) or previous == "DISTINCT"
+            (openers and openers[-1] in _FROM_IN_ARGUMENTS)
+            or (word_at(i - 1) == "DISTINCT" and word_at(i - 2) in ("IS", "NOT"))
         ):
-            previous = value
             i += 1
             continue
         i += 1
@@ -475,12 +498,24 @@ def _read_tables(toks: List[Tuple[str, str]]) -> Optional[FrozenSet[str]]:
             if i >= n:
                 return None
             if toks[i] == ("punct", "("):
-                break  # a derived table or a subquery: read on
-            table = _name(toks[i])
-            if table is None:
-                return None
+                j = i
+                while j < n and toks[j] == ("punct", "("):
+                    j += 1
+                if word_at(j) != "SELECT":
+                    return None  # a parenthesised join group or anything else
+                break  # a subquery: read on
+            token = toks[i]
+            if token[0] == "word" and token[1].lower() in ctes:
+                table = None  # a CTE of this statement
+            else:
+                table = _name(token)
+                if table is None:
+                    return None
+                if table in ctes:
+                    table = None
             i += 1
-            tables.add(table)  # a schema prefix leaves "." next: UNKNOWN below
+            if table is not None:
+                tables.add(table)  # a schema prefix leaves "." next: UNKNOWN below
             if i < n and toks[i] == ("word", "AS"):
                 i += 1
                 if i >= n or toks[i][0] not in ("word", "qid", "bid"):
@@ -499,8 +534,72 @@ def _read_tables(toks: List[Tuple[str, str]]) -> Optional[FrozenSet[str]]:
             if toks[i][0] == "word" and toks[i][1] in _AFTER_TABLE:
                 break
             return None
-        previous = ""
     return frozenset(tables)
+
+
+def _starts_select(toks: List[Tuple[str, str]]) -> bool:
+    j = 0
+    while j < len(toks) and toks[j] == ("punct", "("):
+        j += 1
+    return j < len(toks) and toks[j] == ("word", "SELECT")
+
+
+def _classify_with(toks: List[Tuple[str, str]]) -> Tuple[str, Optional[FrozenSet[str]]]:
+    """``WITH [RECURSIVE] name [(cols)] AS [[NOT] MATERIALIZED] ( SELECT ... ) [, ...]
+    SELECT ...``: a read when every part is a SELECT (each read through
+    :func:`_read_tables`, the CTE names not counted as tables); any other part
+    makes it a write to UNKNOWN tables."""
+    n = len(toks)
+    i = 1
+    if i < n and toks[i] == ("word", "RECURSIVE"):
+        i += 1
+    ctes: Set[str] = set()
+    parts: List[List[Tuple[str, str]]] = []
+    while True:
+        if i >= n:
+            return "write", None
+        kind, value = toks[i]
+        name = value.lower() if kind == "word" else _name(toks[i])
+        if not name:
+            return "write", None
+        ctes.add(name)
+        i += 1
+        if i < n and toks[i] == ("punct", "("):
+            i = _skip_group(toks, i)
+            if i < 0:
+                return "write", None
+        if i >= n or toks[i] != ("word", "AS"):
+            return "write", None
+        i += 1
+        if i < n and toks[i] == ("word", "NOT"):
+            i += 1
+        if i < n and toks[i] == ("word", "MATERIALIZED"):
+            i += 1
+        if i >= n or toks[i] != ("punct", "("):
+            return "write", None
+        end = _skip_group(toks, i)
+        if end < 0:
+            return "write", None
+        parts.append(toks[i + 1 : end - 1])
+        i = end
+        if i < n and toks[i] == ("punct", ","):
+            i += 1
+            continue
+        break
+    parts.append(toks[i:])
+    tables: Set[str] = set()
+    unknown = False
+    for part in parts:
+        if not _starts_select(part):
+            return "write", None
+        found = _read_tables(part, frozenset(ctes))
+        if found is _WRITE:
+            return "write", None
+        if found is None:
+            unknown = True
+        else:
+            tables |= found
+    return "read", None if unknown else frozenset(tables)
 
 
 def _classify(text: str) -> Tuple[str, Optional[FrozenSet[str]]]:
@@ -512,15 +611,16 @@ def _classify(text: str) -> Tuple[str, Optional[FrozenSet[str]]]:
             return "write", None  # more than one statement
     if toks[-1] == ("punct", ";"):
         toks = toks[:-1]
-    start = 0
-    while start < len(toks) and toks[start] == ("punct", "("):
-        start += 1
-    if start < len(toks) and toks[start] == ("word", "SELECT"):
+    if not toks:
+        return "write", None
+    if toks[0] == ("word", "WITH"):
+        return _classify_with(toks)
+    if _starts_select(toks):
         tables = _read_tables(toks)
-        if tables is None and any(t == ("word", "INTO") for t in toks):
+        if tables is _WRITE or (tables is None and any(t == ("word", "INTO") for t in toks)):
             return "write", None  # SELECT ... INTO creates a table
         return "read", tables
-    if start:
+    if toks[0] == ("punct", "("):
         return "write", None
     first = toks[0]
     if first[0] == "word" and first[1] in _NO_ROWS:
@@ -651,6 +751,7 @@ def install_everywhere() -> None:
     from django.db import connections
     from django.db.backends.signals import connection_created
 
+    install_fill_stamps()
     connection_created.connect(install, dispatch_uid="djust_held_rows_recorder")
     setting_changed.connect(_settings_changed, dispatch_uid="djust_held_rows_settings")
     for connection in connections.all(initialized_only=True):
@@ -669,11 +770,13 @@ def writes_by(view: Any, *, writes: bool = True) -> Iterator[None]:
     if view is None:
         yield
         return
+    before = _filled_properties(view)
     token = _writer.set(_Writer(view, writes))
     try:
         yield
     finally:
         _writer.reset(token)
+        _properties_filled(view, before)
 
 
 def attributed(view: Any, fn: Callable[..., _T], *, writes: bool = True) -> Callable[..., _T]:
@@ -710,10 +813,9 @@ def recorded_render(method: Callable[..., _T]) -> Callable[..., _T]:
         current = _writer.get()
         if current is not None and current.ref() is self:
             return method(self, *args, **kwargs)  # nested: the outer render records
-        before = frozenset(_provenance(self))
         with writes_by(self, writes=False):
             result = method(self, *args, **kwargs)
-        render_completed(self, before)
+        render_completed(self)
         return result
 
     return render
@@ -779,44 +881,91 @@ def reads_unknown(view: Any) -> None:
         entry = _read_sets.get(id(view))
         if entry is not None and entry.ref() is view:
             entry.complete = False
+            entry.known = frozenset()
 
 
-def render_completed(view: Any, before: FrozenSet[int] = frozenset()) -> None:
-    """A render of ``view`` finished under recording: R is complete.
-
-    Known afterwards: the cached values and evaluated rows the view holds that
-    were made during this render (absent from ``before``), or were known
-    already. A value that was there when the render started and is not known
-    was made while nothing recorded, and keeps R UNKNOWN.
-    """
-    now = frozenset(_provenance(view))
+def render_completed(view: Any) -> None:
+    """A render of ``view`` finished under recording: R is complete."""
     with _lock:
         entry = _reads_entry(view)
         if entry is not None:
             entry.complete = True
-            entry.known = (now - before) | (now & entry.known)
 
 
-def _provenance(view: Any) -> Iterator[int]:
+def _filled_properties(view: Any) -> FrozenSet[str]:
+    """The cached properties ``view`` holds a value for now (O(its cached properties))."""
+    names = _cached_property_names(type(view))
+    if not names:
+        return frozenset()
     state = getattr(view, "__dict__", None)
     if not isinstance(state, dict):
+        return frozenset()
+    return frozenset(name for name in names if name in state)
+
+
+def _properties_filled(view: Any, before: FrozenSet[str]) -> None:
+    """After a recorded step or render: the cached properties computed inside it are
+    known to have been read with recording on; one dropped since is forgotten."""
+    now = _filled_properties(view)
+    if not now and not before:
         return
-    frozen = frozen_names(view)
-    for name in _cached_property_names(type(view)) - frozen:
-        if name in state:
-            yield id(state[name])
-    for queryset in _held_querysets(view, warn=False):
-        yield id(queryset)
+    with _lock:
+        entry = _reads_entry(view)
+        if entry is not None:
+            # Filled inside: new since the step began, or emptied by a reset in
+            # it (a reset inside a render: the render refilled it).
+            filled = (now - before) | (now & entry.dropped)
+            entry.known = filled | (now & entry.known)
+            entry.dropped = frozenset()
 
 
-def _view_reads(view: Any) -> Tuple[FrozenSet[str], bool]:
+def _stamp_fill(queryset: Any) -> None:
+    """A QuerySet just filled its result cache: record which view's recorded step or
+    render it was filled in (``0``: none), so held rows filled while nothing
+    recorded are found without walking the view on every render."""
+    writer = _writer.get()
+    view = writer.ref() if writer is not None else None
+    queryset.__dict__["_djust_filled_by"] = id(view) if view is not None else 0
+
+
+def install_fill_stamps() -> None:
+    """Wrap ``QuerySet._fetch_all`` once to call :func:`_stamp_fill` when it fills."""
+    from django.db.models.query import QuerySet
+
+    original = QuerySet._fetch_all
+    if getattr(original, "_djust_held_rows", False):
+        return
+
+    @functools.wraps(original)
+    def _fetch_all(self: Any) -> None:
+        filling = self._result_cache is None
+        original(self)
+        if filling:
+            _stamp_fill(self)
+
+    _fetch_all._djust_held_rows = True  # type: ignore[attr-defined]
+    QuerySet._fetch_all = _fetch_all  # type: ignore[method-assign]
+
+
+def _unrecorded(view: Any, tree_ids: FrozenSet[int], known: FrozenSet[str]) -> bool:
+    """Whether ``view`` holds a cached value or evaluated rows filled while nothing
+    recorded: a cached property not in ``known``, or a QuerySet whose fill stamp
+    is not a view of this tree."""
+    if _filled_properties(view) - frozen_names(view) - known:
+        return True
+    for queryset in _held_querysets(view):
+        if queryset.__dict__.get("_djust_filled_by", 0) not in tree_ids:
+            return True
+    return False
+
+
+def _view_reads(view: Any, tree_ids: FrozenSet[int]) -> Tuple[FrozenSet[str], bool]:
     """``(tables, unknown)`` for one node of the tree."""
     entry = _read_sets.get(id(view))
     if entry is None or entry.ref() is not view:
         # Nothing it read was recorded: known (and empty) only if it holds
         # nothing from the database and is not a view still to render.
-        unknown = _renders_itself(view) or any(True for _ in _provenance(view))
-        return frozenset(), unknown
+        return frozenset(), _renders_itself(view) or _unrecorded(view, tree_ids, frozenset())
     with _lock:
         tables, unknown, complete, known = (
             frozenset(entry.tables),
@@ -826,8 +975,8 @@ def _view_reads(view: Any) -> Tuple[FrozenSet[str], bool]:
         )
     if unknown or (_renders_itself(view) and not complete):
         return frozenset(), True
-    if any(value not in known for value in _provenance(view)):
-        return frozenset(), True  # held values read while nothing recorded
+    if _unrecorded(view, tree_ids, known):
+        return frozenset(), True
     return tables, False
 
 
@@ -839,8 +988,10 @@ def _renders_itself(view: Any) -> bool:
 def read_set(view: Any) -> Tuple[FrozenSet[str], bool]:
     """``(tables, unknown)`` read by ``view`` and the views it shares a page with."""
     tables: Set[str] = set()
-    for node in _tree(view):
-        node_tables, unknown = _view_reads(node)
+    nodes = _tree(view)
+    tree_ids = frozenset(id(node) for node in nodes)
+    for node in nodes:
+        node_tables, unknown = _view_reads(node, tree_ids)
         if unknown:
             return frozenset(), True
         tables |= node_tables
@@ -1056,97 +1207,37 @@ def _evaluated(queryset: Any) -> bool:
     return queryset._result_cache is not None and not queryset.query.select_for_update
 
 
-def _plain(item: Any, depth: int = 2) -> bool:
-    """A plain scalar, or (to ``depth`` levels) a record of them: a dict / list /
-    tuple whose first :data:`_PROBE` items are plain (a row as a dict with a
-    list of tags, a chart point)."""
-    if isinstance(item, _SCALARS):
-        return True
-    if depth <= 0:
-        return False
-    if isinstance(item, dict):
-        values = list(item.values())[:_PROBE] if len(item) > _PROBE else item.values()
-        return all(_plain(value, depth - 1) for value in values)
-    if isinstance(item, (list, tuple)):
-        return all(_plain(value, depth - 1) for value in item[:_PROBE])
-    return False
-
-
-def _only_scalars(items: List[Any]) -> bool:
-    """A container is not walked item by item when its first :data:`_PROBE` items
-    are plain: scalars, or records of scalars two levels deep (rows as dicts,
-    chart points).
-    The rest is assumed alike; a QuerySet placed after eight such items is not
-    found (documented)."""
-    return all(_plain(item) for item in items[:_PROBE])
-
-
-def _warn_budget(view: Any) -> None:
-    kind = type(view)
-    if kind in _budget_warned:
-        return
-    _budget_warned.add(kind)
-    logger.warning(
-        "djust: %s.%s holds more than %d values in containers; QuerySets nested past "
-        "that point were not read again after a write (#4112). Keep such a QuerySet "
-        "in an attribute of its own, or call rows_changed() and read it in "
-        "get_context_data().",
-        kind.__module__,
-        kind.__qualname__,
-        _VISIT_LIMIT,
-    )
-
-
-def _held_querysets(view: Any, warn: bool = True) -> Iterator[Any]:
-    """The evaluated QuerySets held on ``view`` (see the module docstring for the walk)."""
+def _held_querysets(view: Any) -> Iterator[Any]:
+    """The evaluated QuerySets ``view`` holds: in the attributes its code set, and
+    in the dicts, lists, tuples and sets they hold, to :data:`_DEPTH_LIMIT`
+    levels. Every item is looked at (no shortcut and no limit): this runs only
+    on a turn that wrote, to decide and to reset."""
     from django.db.models import QuerySet
 
     state = getattr(view, "__dict__", None)
     if not isinstance(state, dict):
         return
     # The framework's own attributes (set before mount(), ``_framework_attrs``)
-    # hold no application rows; skipping them keeps the walk to what the view's
-    # code set.
+    # hold no application rows.
     skip = frozen_names(view) | _framework_names(view)
-    containers = []
-    for name, value in list(state.items()):
-        if name in skip:
-            continue
+    pending = [(value, 0) for name, value in list(state.items()) if name not in skip]
+    containers = (dict, list, tuple, set, frozenset)
+    while pending:
+        value, depth = pending.pop()
         if isinstance(value, QuerySet):
             if _evaluated(value):
                 yield value
-        elif isinstance(value, (dict, list, tuple, set, frozenset)):
-            containers.append(value)
-
-    budget = [_VISIT_LIMIT]
-
-    def walk(container: Any, depth: int) -> Iterator[Any]:
-        items = list(container.values()) if isinstance(container, dict) else list(container)
-        if _only_scalars(items):
-            return
-        for item in items:
-            if budget[0] <= 0:
-                return
-            budget[0] -= 1
-            if isinstance(item, QuerySet):
-                if _evaluated(item):
-                    yield item
-            elif depth < _DEPTH_LIMIT and isinstance(item, (dict, list, tuple, set, frozenset)):
-                yield from walk(item, depth + 1)
-
-    for container in containers:
-        if budget[0] <= 0:
-            if warn:
-                _warn_budget(view)
-            return
-        yield from walk(container, 1)
-    if budget[0] <= 0 and warn:
-        _warn_budget(view)
+        elif depth < _DEPTH_LIMIT and isinstance(value, containers):
+            items = value.values() if isinstance(value, dict) else value
+            pending.extend((item, depth + 1) for item in items)
 
 
 def _framework_names(view: Any) -> FrozenSet[str]:
     names = getattr(view, "__dict__", {}).get("_framework_attrs")
     return names if isinstance(names, frozenset) else frozenset()
+
+
+_MISSING = object()
 
 
 def _empty(queryset: Any) -> None:
@@ -1159,7 +1250,16 @@ def reset_held_rows(view: Any) -> None:
     state = getattr(view, "__dict__", None)
     if not isinstance(state, dict):
         return
+    dropped = set()
     for name in _cached_property_names(type(view)) - frozen_names(view):
-        state.pop(name, None)
+        if state.pop(name, _MISSING) is not _MISSING:
+            dropped.add(name)
+    if dropped:
+        with _lock:
+            entry = _reads_entry(view)
+            if entry is not None:
+                # Refilled inside this render: known again at its end
+                # (:func:`_properties_filled`); not refilled: gone from ``now``.
+                entry.dropped = entry.dropped | dropped
     for queryset in list(_held_querysets(view)):
         _empty(queryset)
