@@ -61,6 +61,8 @@ ROW_NAMES = (("42", "Alpha"), ("87", "Beta"))
 class Menus(LiveView):
     """A fixed menu and a keyed collection, explicit exposure (the default)."""
 
+    exposure_policy = "explicit"
+
     template = PAGE % BODY
     login_required = False
 
@@ -86,6 +88,8 @@ class Menus(LiveView):
 class OtherMenus(LiveView):
     """The same declaration on another view class: another id."""
 
+    exposure_policy = "explicit"
+
     template = PAGE % BODY
     login_required = False
     project_menu = DropdownMenu(label="Project", items=ITEMS)
@@ -97,6 +101,8 @@ class OtherMenus(LiveView):
 class Transient(LiveView):
     """``persist=False``: the menu's state is not saved (#4046 opt-out)."""
 
+    exposure_policy = "explicit"
+
     template = PAGE % "{{ project_menu }}"
     login_required = False
     project_menu = DropdownMenu(label="Project", items=ITEMS, persist=False)
@@ -107,6 +113,7 @@ ROWS: List[str] = ["42", "87"]
 
 
 class Rows(LiveView):
+    exposure_policy = "explicit"
     template = PAGE % "<ul>{% for menu in rows.values %}<li>{{ menu }}</li>{% endfor %}</ul>"
     login_required = False
     rows = DropdownMenu.collection()
@@ -130,6 +137,8 @@ class Rows(LiveView):
 class Huge(LiveView):
     """A collection whose record does not fit the saved state's budget."""
 
+    exposure_policy = "explicit"
+
     template = PAGE % '{{ project_menu }}<p id="picked">{{ selected_action }}|</p>'
     login_required = False
     project_menu = DropdownMenu(label="Project", items=ITEMS)
@@ -150,6 +159,7 @@ class Huge(LiveView):
 
 
 class LoggedIn(LiveView):
+    exposure_policy = "explicit"
     template = PAGE % "{{ project_menu }}"
     login_required = True
     project_menu = DropdownMenu(label="Project", items=ITEMS)
@@ -157,6 +167,8 @@ class LoggedIn(LiveView):
 
 class Owned(LiveView):
     """Object permission on a real ORM row: the signed-in user's own record."""
+
+    exposure_policy = "explicit"
 
     template = PAGE % '{{ project_menu }}<p id="picked">{{ selected_action }}|</p>'
     login_required = True
@@ -176,6 +188,8 @@ class Owned(LiveView):
 
 class Paged(LiveView):
     """Rows chosen by ``?page``: two tabs on one route can show different rows."""
+
+    exposure_policy = "explicit"
 
     template = PAGE % "<ul>{% for menu in rows.values %}<li>{{ menu }}</li>{% endfor %}</ul>"
     login_required = False
@@ -219,6 +233,8 @@ class LongPaged(LiveView):
     """40 rows a page with 128-character keys: other pages' rows fill the
     saved state's budget before the 512-row cap."""
 
+    exposure_policy = "explicit"
+
     template = PAGE % "<ul>{% for menu in rows.values %}<li>{{ menu }}</li>{% endfor %}</ul>"
     login_required = False
     rows = DropdownMenu.collection()
@@ -231,6 +247,8 @@ class LongPaged(LiveView):
 
 class Closing(LiveView):
     """``handle_params()`` closes the menu when the URL says so."""
+
+    exposure_policy = "explicit"
 
     template = PAGE % "{{ project_menu }}"
     login_required = False
