@@ -346,12 +346,14 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 - **Invalidation.** Change detection is unchanged. After mutating an object in
   place, call `self.set_changed_keys()` (or pass the changed context keys) to
   force a re-render.
+- **Interactive components** (`DropdownMenu`, keyed collections) are part of the
+  view's contract: each has an id derived from its declaration, and its own
+  state is saved with the view's `persist="server"` state, so it works the same
+  over WebSocket, SSE and the HTTP fallback. `persist=False` on the declaration
+  opts out. See [Interactive Components](../guides/interactive-components.md#persistence-keyboard-and-security).
 
 ## Not supported under explicit exposure
 
-- **Interactive components without a connection.** A component's state lives
-  with its view, so on the HTTP fallback, where each request builds a new view,
-  a component event is refused. They work over WebSocket and SSE.
 - **Time-travel restore and replay.** The timeline is a redacted, read-only
   history.
 

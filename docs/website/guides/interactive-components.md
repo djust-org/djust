@@ -254,6 +254,10 @@ class ProjectListView(LiveView):
         self.projects = [{"id": 42, "name": "Alpha"}, {"id": 87, "name": "Beta"}]
         self._sync_menus()
 
+    def handle_restore(self, request):
+        # self.projects came back after mount(): rebuild the rows from it.
+        self._sync_menus()
+
     def _sync_menus(self):
         self.row_menus.sync(
             [
@@ -302,8 +306,9 @@ it, so you can reuse one for many keys. On every `sync()`:
   and items. A selection the new items no longer allow is cleared, without an
   output.
 - **Reordering** moves rows, never their state.
-- **A dropped key** is gone: later events for it are refused. Adding the key
-  back gives a new row that starts closed.
+- **A dropped key** is gone: later events for it reach no row (on the HTTP
+  fallback the answer is the current page, so the client replaces the menu).
+  Adding the key back gives a new row, with a new id, that starts closed.
 - **Duplicate keys** or a bad pair raise an error before anything changes.
 
 You may call `sync()` anywhere your view's code runs, including a row's own
@@ -320,21 +325,55 @@ still need pagination or virtualization.
 ## Persistence, keyboard and security
 
 - **Persistence.**
-  - A menu's `open` and `selected` live with the view on its WebSocket or SSE
-    connection. They are not saved. After a reconnect or a new page load the
-    menu starts closed, and `mount()` (and `sync()`, for a collection)
-    supplies it again. Callbacks and configuration are never saved either:
-    they come from your code.
-  - A menu needs that connection. On the HTTP fallback every request builds a
-    new view, so a menu's event does not reach the menu that was rendered and
-    the request is refused.
+  - A menu works the same over a WebSocket, SSE and the
+    [HTTP fallback](http-only-mode.md). Its `open`, `selected` and (for a
+    client-owned menu) its observation cursor are saved with the view's
+    declared `persist="server"` state: in the same server-side session entry,
+    under the same session, user, tenant and route, the same expiry
+    (`DJUST_SERVER_STATE_MAX_AGE`) and the same size limit. A fallback request,
+    and a reconnect, find the menu as the last event left it.
+  - The state is per session and route, not per browser tab: two tabs on the
+    same page share it, as they share every `persist="server"` field. A save
+    writes the rows its page holds and keeps the stored copy of the others.
+    When two tabs hold the same row, the last one to save wins for that row's
+    `open` and `selected`, as for any shared field.
+  - Callbacks and configuration (`label`, `items`, `visibility`) are never
+    saved; they come from your code. Nor is membership: a collection's rows
+    come only from `sync()`, so call `sync()` in `mount()` on every request,
+    and again in `handle_restore()` when the rows come from state that is put
+    back after `mount()` (as `ProjectListView` above does). A saved row that
+    this request does not build (another tab's page, or a row that left your
+    data) is kept as it is, so two tabs showing different rows of one route
+    do not disturb each other.
+  - `DropdownMenu(..., persist=False)` and `DropdownMenu.collection(persist=False)`
+    opt out: the menu starts from `mount()` on every fallback request and
+    every reconnect. Persistence needs a server-side session store
+    (`SESSION_ENGINE` db, cached_db, cache or file); with another store a
+    menu works but is not saved.
+  - When the saved state is missing, expired or not valid any more, the menus
+    start from `mount()` and the event still reaches its menu. When a large
+    collection's state does not fit the size limit, the view's own fields are
+    saved without it (logged once) and the rows start from `mount()` on the
+    next request; paginate the rows, or opt out. Rows of other pages that the
+    record keeps are left out the same way when they do not fit, or beyond
+    512 of them (also logged once).
   - A view that states `exposure_policy = "legacy"` (deprecated, see
-    [explicit exposure](../state/explicit-exposure.md)) saves a server-owned
-    menu's `open` and `selected` with the view's session state instead. They
-    then come back on every HTTP-fallback request. A reconnect or Back
-    navigation mounts such a view fresh (2.0 removed `enable_state_snapshot`,
-    which restored them there), so `sync()` supplies the current rows and a
-    removed row cannot come back.
+    [explicit exposure](../state/explicit-exposure.md)) keeps its menus'
+    random ids and saves nothing: on the HTTP fallback their events are
+    refused.
+- **Upgrading from an earlier 2.0 pre-release.**
+  - A view that declares an interactive component runs `mount()` on every
+    HTTP-fallback POST, also for an event on the view itself and for a request
+    that is refused: a collection's rows come from `mount()`'s `sync()`.
+  - On a view with explicit exposure a menu's `component_id` is no longer
+    random, and an event must carry the id the page rendered
+    (`data-component-id`), which contains a `.` between the id and its tag.
+    The bare `menu.component_id` is refused. When you build a CSS selector
+    from it, escape it (`CSS.escape(id)` in JavaScript); `getElementById()`,
+    `popovertarget` and attribute selectors in quotes take it as it is.
+  - A collection whose state is saved takes keys of at most 128 characters
+    (`persist=False`, and a view with `exposure_policy = "legacy"`, keep no
+    limit).
 - **Keyboard and focus.**
   - A server-owned menu's trigger and items are ordinary buttons: Tab to
     them, and press Enter or Space.
@@ -347,6 +386,31 @@ still need pagination or virtualization.
   - Outputs are not browser-callable: a client can't invoke
     `on_project_menu_selected` directly, and an unknown or stale component
     identity is refused.
+  - A menu's id is derived from its declaration (the view class, the attribute
+    name and, for a row, its key), so every request and every server builds
+    the same one. The id the page carries also has a tag, an HMAC under
+    `SECRET_KEY` (and `SECRET_KEY_FALLBACKS`) bound to the session, user,
+    tenant, route and tab: an id from another session, user, tenant, route or
+    tab, a bare id without its tag and a malformed tag are all refused alike.
+  - A row's id also names its generation, which goes up when `sync()` removes
+    that key, so the removed row's old id reaches no row while the removal is
+    what is saved; on the HTTP fallback such an id (genuine, only out of date)
+    is answered with the current page, with no action run. That is not a
+    lasting guarantee: a page load saves the rows it builds at generation 0,
+    a tab that still held the row saves it back when it next saves, and a row
+    that left your data without a `sync()` removal is the same row to djust.
+    After any of these, an old id of that key answers again.
+  - What an old id can do is bounded all the same: only the menu's own
+    actions (`toggle`, `close`, `select` of an enabled item, a visibility
+    report), on whichever row has that key now, in the same session, for the
+    same user, route and tab that the page was rendered for, and every check
+    below still runs. So when a key can come back meaning another record,
+    authorize in your callback what the value means for the row's current
+    record, as any event handler must, or key rows by something that is never
+    reused, such as a primary key.
+  - A menu's event passes the same checks as any event on the view: its
+    `login_required` and permissions, the action's parameter contract and the
+    rate limit.
   - But the browser can still target any visible menu and send any value, so
     the component validates values against its own `items`. Your callback
     must still authorize what the value means for the underlying record, as

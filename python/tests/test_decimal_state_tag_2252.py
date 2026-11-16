@@ -738,35 +738,13 @@ def _decode_call_sites():
     return found
 
 
-def _explicit_child_json_assignments(tree):
-    """Only the exact gated child JSON-primitives restore is not a Decimal sink."""
-    expected = ast.parse(
-        "if explicit_values is not None:\n"
-        "    for name, value in explicit_values.items():\n"
-        "        safe_setattr(child, name, value, allow_private=False, raise_on_blocked=True)\n"
-    ).body[0]
-    matches = [
-        node
-        for function in tree.body
-        if isinstance(function, ast.FunctionDef) and function.name == "live_render"
-        for node in ast.walk(function)
-        if ast.dump(node) == ast.dump(expected)
-    ]
-    assert len(matches) == 1, "Review the explicit child restore codec boundary"
-    return {
-        node
-        for node in ast.walk(matches[0])
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "safe_setattr"
-    }
-
-
-def _explicit_root_json_assignments(tree):
-    """``runtime.py``'s one restore site: ``apply_restored_state``, which the
-    reconnect mount and the over-limit rollback (#4095) both call. It assigns
-    declared fields from the explicit codecs, which accept JSON primitives only
-    and are never tagged. Identified by function AND call shape, exactly once."""
+def _explicit_shared_json_assignments(tree):
+    """``_component_state.apply_declared_state``: the one restore of explicit
+    declared state (#4046), called by the HTTP fallback, ``runtime.py``'s
+    ``apply_restored_state`` (the socket mount and the over-limit rollback) and
+    an embedded child (``live_render``). It assigns declared fields from the
+    explicit codecs, which accept JSON primitives only and are never tagged.
+    Identified by function AND call shape, exactly once."""
     expected = (
         ast.parse("safe_setattr(view, key, value, allow_private=False, raise_on_blocked=True)")
         .body[0]
@@ -775,15 +753,15 @@ def _explicit_root_json_assignments(tree):
     functions = [
         node
         for node in tree.body
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "apply_restored_state"
+        if isinstance(node, ast.FunctionDef) and node.name == "apply_declared_state"
     ]
-    assert len(functions) == 1, "Review runtime.py's explicit restore codec boundary"
+    assert len(functions) == 1, "Review the shared explicit restore codec boundary"
     calls = {
         node
         for node in ast.walk(functions[0])
         if isinstance(node, ast.Call) and ast.dump(node) == ast.dump(expected)
     }
-    assert len(calls) == 1, "Review runtime.py's explicit restore codec boundary"
+    assert len(calls) == 1, "Review the shared explicit restore codec boundary"
     return calls
 
 
@@ -835,10 +813,11 @@ class TestTheDecodeSiteInventory:
                 "_state_restore.py",
             ):
                 continue
-            if rel == "templatetags/live_tags.py":
-                # ADR-038's explicit codec accepts JSON primitives only. Running
-                # the legacy decoder here would corrupt ordinary tag-shaped
-                # dictionaries. Exempt the exact assignment block, not the module.
+            if rel == "_component_state.py":
+                # The one restore of explicit declared state (#4046): JSON
+                # primitives from the explicit codecs, exempted by exact call
+                # shape. ``runtime.py`` and ``templatetags/live_tags.py`` call
+                # it and no longer assign restored state themselves.
                 tree = ast.parse(src)
                 calls = {
                     node
@@ -847,21 +826,7 @@ class TestTheDecodeSiteInventory:
                     and isinstance(node.func, ast.Name)
                     and node.func.id == "safe_setattr"
                 }
-                if calls == _explicit_child_json_assignments(tree):
-                    continue
-            if rel == "runtime.py":
-                # The legacy session restore (which decoded) was removed in
-                # 2.0. What is left assigns the explicit codecs' JSON
-                # primitives; the same exemption, by exact call shape.
-                tree = ast.parse(src)
-                calls = {
-                    node
-                    for node in ast.walk(tree)
-                    if isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == "safe_setattr"
-                }
-                if calls and calls == _explicit_root_json_assignments(tree):
+                if calls and calls == _explicit_shared_json_assignments(tree):
                     continue
             if rel == "mixins/request.py":
                 # The page-POST fallback's legacy session restore (which
@@ -891,10 +856,10 @@ class TestTheDecodeSiteInventory:
         decoding = {module for module, _ in _decode_call_sites()}
         assert not restoring <= decoding
 
-    def test_child_codec_exception_does_not_hide_an_added_assignment(self) -> None:
-        source = (_PKG / "templatetags/live_tags.py").read_text()
-        tree = ast.parse(source + "\nsafe_setattr(child, key, restored_value)\n")
-        exempt = _explicit_child_json_assignments(tree)
+    def test_shared_codec_exception_does_not_hide_an_added_assignment(self) -> None:
+        source = (_PKG / "_component_state.py").read_text()
+        tree = ast.parse(source + "\nsafe_setattr(view, key, restored_value)\n")
+        exempt = _explicit_shared_json_assignments(tree)
         calls = {
             node
             for node in ast.walk(tree)

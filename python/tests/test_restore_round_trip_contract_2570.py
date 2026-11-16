@@ -304,7 +304,11 @@ def test_the_snapshot_restore_twin_forces_a_full_html_render() -> None:
         "the branch applies the restored values"
     )
     assert "run_restore_hook = True" in body, "the branch arms the deferred handle_restore"
-    assert "safe_setattr(" in inspect.getsource(runtime.apply_restored_state)
+    # It assigns them through the restore every transport shares (#4046).
+    from djust import _component_state
+
+    assert "apply_declared_state(view, restored)" in inspect.getsource(runtime.apply_restored_state)
+    assert "safe_setattr(" in inspect.getsource(_component_state.apply_declared_state)
     assert "view_instance._force_full_html = True" in body, (
         "dispatch_mount must set _force_full_html on a restore mount"
     )

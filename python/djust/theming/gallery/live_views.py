@@ -1381,12 +1381,7 @@ class InteractiveDropdownCatalogueView(
     """The interactive DropdownMenu's catalogue page: the canonical example,
     served as-is inside the catalogue chrome (ADR-037 D2)."""
 
-    # Pinned to the legacy policy with the example it serves
-    # (``DropdownMenuExample``; see the note in ``test_exposure_framework_views``):
-    # an interactive component is addressed by a per-instance id, and only the
-    # legacy HTTP fallback carries the component registry from one request to
-    # the next, so an explicit view cannot answer the menu's event there yet.
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "djust_theming/catalogue/interactive_detail.html"
     login_required = False
     component_name = "interactive_dropdown_menu"

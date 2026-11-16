@@ -195,15 +195,11 @@ def test_the_http_fallback_routes_component_id_once_the_saved_state_is_restored(
     assert (view.left.collapsed, view.right.collapsed) == (False, True)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#4046 (on hold): a fallback POST that mounts the view afresh (nothing saved for "
-    "the tab) answers a component_id-routed event with 400 'Component not found': the "
-    "declared components are not bound yet when the HTTP path looks them up. The socket "
-    "and SSE route it.",
-)
 @pytest.mark.django_db
 def test_the_http_fallback_routes_component_id_on_a_fresh_mount():
+    """#4046: an ADR-031 descriptor nothing has materialized falls through to
+    the view's own alias on the fallback too (one shared lookup), as the
+    socket and SSE route it."""
     view, response = _post_right(TwoSidebarsNoSavePage)
     assert response.status_code == 200, response.content
     assert (view.left.collapsed, view.right.collapsed) == (False, True)

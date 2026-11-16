@@ -28,6 +28,7 @@ from djust.decorators import state
 from djust.runtime import ViewRuntime
 from djust.tests.test_exposure_runtime import RuntimeView, make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
+from djust._component_state import wire_id
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -142,13 +143,18 @@ async def test_component_declaration_event_commits_explicit_state():
         {
             "type": "event",
             "event": "select",
-            "params": {"component_id": view.menu.component_id, "value": "edit"},
+            "params": {"component_id": wire_id(view.menu), "value": "edit"},
         }
     )
 
     assert not transport.errors, transport.errors
     assert view.result == "picked:edit"
-    assert await stored(view, request.session.session_key) == {"result": "picked:edit"}
+    # The menu's own record is saved with the declared state (#4046):
+    # [open, selected, lifetime, sequence].
+    assert await stored(view, request.session.session_key) == {
+        "result": "picked:edit",
+        "menu": [False, "edit", "", 0],
+    }
 
 
 async def test_component_declaration_failed_save_is_not_acked(failing_store):
@@ -159,7 +165,7 @@ async def test_component_declaration_failed_save_is_not_acked(failing_store):
         {
             "type": "event",
             "event": "select",
-            "params": {"component_id": view.menu.component_id, "value": "edit"},
+            "params": {"component_id": wire_id(view.menu), "value": "edit"},
         }
     )
 
@@ -246,7 +252,7 @@ async def test_waiters_see_a_component_event_whose_save_fails(failing_store):
         {
             "type": "event",
             "event": "select",
-            "params": {"component_id": view.menu.component_id, "value": "edit"},
+            "params": {"component_id": wire_id(view.menu), "value": "edit"},
         }
     )
     assert transport.errors and transport.errors[0]["code"] == "state_error"
