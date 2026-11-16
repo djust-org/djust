@@ -1099,7 +1099,8 @@ def _children_of(node: Any) -> List[Any]:
     for name in ("_child_views", "_components"):
         registry = state.get(name)
         if isinstance(registry, dict):
-            found.extend(value for value in registry.values() if _is_view_like(value))
+            # A copy (#3151): a child may register or unregister on another thread meanwhile.
+            found.extend(value for value in dict.copy(registry).values() if _is_view_like(value))
     return found
 
 
@@ -1238,9 +1239,13 @@ def refresh_for_render(view: Any) -> None:
 def _cached_property_names(cls: type) -> FrozenSet[str]:
     from django.utils.functional import cached_property
 
+    from ._class_snapshot import namespace
+
     names = set()
     for klass in cls.__mro__:
-        for name, attr in vars(klass).items():
+        # A snapshot, not the live class dict: another thread may set a class attribute
+        # while this runs on a free-threaded build (#3151).
+        for name, attr in namespace(klass).items():
             if isinstance(attr, (cached_property, functools.cached_property)):
                 names.add(getattr(attr, "attrname", None) or getattr(attr, "name", None) or name)
     return frozenset(names)
@@ -1276,16 +1281,25 @@ def _held_querysets(view: Any) -> Iterator[Any]:
     # The framework's own attributes (set before mount(), ``_framework_attrs``)
     # hold no application rows.
     skip = frozen_names(view) | _framework_names(view)
-    pending = [value for name, value in list(state.items()) if name not in skip]
+    # A snapshot of the view's namespace (#3151): a background thread may assign to the view
+    # while this walks it on a free-threaded build.
+    from ._class_snapshot import namespace
+
+    pending = [value for name, value in namespace(view).items() if name not in skip]
     push, pop = pending.append, pending.pop
     seen: Set[int] = set()
     items: Any
     while pending:
         value = pop()
         kind = type(value)
+        # Each container is read from a copy (#3151): another thread may change it meanwhile.
         if kind is dict:
-            items = value.values()
-        elif kind is list or kind is tuple or kind is set or kind is frozenset:
+            items = dict.copy(value).values()
+        elif kind is list:
+            items = list.copy(value)
+        elif kind is set:
+            items = set.copy(value)
+        elif kind is tuple or kind is frozenset:
             items = value
         elif kind in _SCALARS:
             continue
@@ -1294,7 +1308,7 @@ def _held_querysets(view: Any) -> Iterator[Any]:
                 yield value
             continue
         elif isinstance(value, dict):
-            items = value.values()
+            items = value.values()  # a subclass keeps its own values(); list() below snapshots
         elif isinstance(value, (list, tuple, set, frozenset)):
             items = value
         else:
