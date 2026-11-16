@@ -2,7 +2,7 @@
 
 * Picking a combobox or rich_select option sent ``validate_field`` without the
   field's name (other inputs send it as ``field``), so per-field validation
-  never ran for it. Options now carry ``data-field`` when the component is a
+  never ran for it. Options now carry ``dj-value-field`` (#4186; ``data-field`` before) when the component is a
   form field (``field=``) or sends ``validate_field``.
 * The combobox always wired a ``<name>_search`` handler, which ordinary Django
   forms do not have. Search is now opt-in (``search_event=``); without it the
@@ -49,7 +49,7 @@ class TestOptionsCarryTheFieldName:
         assert len(opts) == 2
         for opt in opts:
             assert 'dj-click="validate_field"' in opt
-            assert 'data-field="city"' in opt
+            assert 'dj-value-field="city"' in opt
 
     @pytest.mark.parametrize("tag", ["combobox", "rich_select"])
     def test_bound_field_options_carry_the_html_name(self, tag):
@@ -59,7 +59,7 @@ class TestOptionsCarryTheFieldName:
             {"f": f, "opts": OPTIONS},
         )
         for opt in _options(out):
-            assert 'data-field="run-city"' in opt
+            assert 'dj-value-field="run-city"' in opt
 
     @pytest.mark.parametrize("engine", ["django", "rust"])
     @pytest.mark.parametrize("tag", ["combobox", "rich_select"])
@@ -69,7 +69,7 @@ class TestOptionsCarryTheFieldName:
             "{% " + tag + ' name="city" options=opts event="pick_city" %}', {"opts": OPTIONS}
         )
         for opt in _options(out):
-            assert "data-field" not in opt
+            assert "dj-value-field" not in opt
 
     def test_multiple_mode_options_carry_the_field(self):
         out = _django(
@@ -77,7 +77,7 @@ class TestOptionsCarryTheFieldName:
             {"opts": OPTIONS},
         )
         for opt in _options(out):
-            assert 'data-field="tags"' in opt
+            assert 'dj-value-field="tags"' in opt
 
 
 class TestComboboxSearchIsOptIn:
@@ -191,7 +191,8 @@ class TestTheDescriptionMarkerCannotBeForgedByEscapedText:
         for engine, out in _both(self.SRC, {"n": native, "v": self.FORGED}).items():
             assert 'aria-describedby="m-desc"' in out, engine
             assert re.search(
-                r'<div class="dj-modal__description" id="m-desc">Approvers are notified\.</div>', out
+                r'<div class="dj-modal__description" id="m-desc">Approvers are notified\.</div>',
+                out,
             ), (engine, out)
 
     @pytest.mark.parametrize("native", [False, True])

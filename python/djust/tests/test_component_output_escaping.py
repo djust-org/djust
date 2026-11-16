@@ -114,7 +114,7 @@ def test_dropdown_data_key_outside_attribute_name_charset_is_skipped(framework):
     )
     html = _render(component, framework)
     assert "onclick" not in html
-    assert 'data-item-id="2"' in html
+    assert 'dj-value-item-id="2"' in html
 
 
 @pytest.mark.parametrize("framework", FRAMEWORKS)

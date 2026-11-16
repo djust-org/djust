@@ -622,8 +622,16 @@ grep -rnE 'data-[a-z-]+=[^>]*dj-(click|change|input|submit|blur|keydown)' --incl
 
 A line search misses an element whose attributes are spread over several
 lines, so also read the bindings of each strict handler you convert.
-`data-component-id` and `data-value` on an element that calls a
-[component's event](#python-names) are not affected.
+`data-component-id` on an element that calls a
+[component's event](#python-names) is routing, not an argument, and stays;
+pass the event's argument as `dj-value-value`.
+
+djust's own component tags and templates already send their arguments as
+`dj-value-*` (#4186): a `{% data_table %}` header fires
+`dj-click="on_table_sort" dj-value-value="name"` where 1.3 wrote
+`data-value="name"`. If your CSS, JavaScript or tests select a framework
+element by `data-value`, `data-column`, `data-mode`, `data-tab` or another
+argument attribute, select the `dj-value-*` attribute instead.
 
 Handlers named by a `dj-auto-recover` attribute always run under the legacy
 policy for now; `djust.V019` warns if you mark one strict.
@@ -679,7 +687,7 @@ from djust.components.descriptors import Tabs
 
 class DocsView(LiveView):
     template = """<div dj-root>
-        <button dj-click="set_tab" data-component-id="nav" data-value="api">API</button>
+        <button dj-click="set_tab" data-component-id="nav" dj-value-value="api">API</button>
         <p>Showing {{ nav.active }}</p>
     </div>"""
 
@@ -970,5 +978,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 15b0f7ed3d3d -->
-<!-- generated-doc prose-sha256: 790488f54e97 -->
+<!-- generated-doc prose-sha256: 014a12d56e13 -->

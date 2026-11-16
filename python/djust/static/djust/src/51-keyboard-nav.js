@@ -165,7 +165,7 @@
             dialog.querySelector('[data-dj-close][dj-click]');
         if (closer) {
             // Press it, so the event carries exactly what a click on it sends
-            // (its data-value / dj-value-* arguments, strict-handler binding,
+            // (its dj-value-* arguments, strict-handler binding,
             // dj-confirm, locks); a bare handleEvent(name) sent none of that.
             closer.click();
             return true;

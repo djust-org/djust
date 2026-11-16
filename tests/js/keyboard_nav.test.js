@@ -679,7 +679,7 @@ describe('keyboard-nav — Esc and Tab in a dialog with other dj-click controls'
         const dom = createDom(`
           <div role="dialog" aria-modal="true">
             <button id="del" dj-click="delete_everything">Delete</button>
-            <button id="next" dj-click="tour" data-value="next">Next</button>
+            <button id="next" dj-click="tour" dj-value-value="next">Next</button>
           </div>`);
         installHandleEventSpy(dom);
         const del = dom.window.document.getElementById('del');
@@ -834,7 +834,7 @@ describe('keyboard-nav — roving keeps working after an earlier preventDefault'
 
 describe('keyboard-nav — data-dj-close is a marker, not an event argument', () => {
     it('a click on a marked control sends its own arguments and no `close`', () => {
-        const dom = createDom(`<button id="c" data-dj-close dj-click="tour" data-value="skip">Skip</button>`);
+        const dom = createDom(`<button id="c" data-dj-close dj-click="tour" dj-value-value="skip">Skip</button>`);
         const params = dom.window.djust.extractTypedParams(dom.window.document.getElementById('c'));
         expect(Object.keys(params)).toEqual(['value']);
         expect(params.value).toBe('skip');
@@ -843,11 +843,11 @@ describe('keyboard-nav — data-dj-close is a marker, not an event argument', ()
     it('Escape presses the marked control, so the event carries the control\'s own value', () => {
         const dom = createDom(`
           <div role="dialog" aria-modal="true">
-            <button id="next" dj-click="tour" data-value="next">Next</button>
-            <button id="skip" data-dj-close dj-click="tour" data-value="skip">Skip</button>
+            <button id="next" dj-click="tour" dj-value-value="next">Next</button>
+            <button id="skip" data-dj-close dj-click="tour" dj-value-value="skip">Skip</button>
           </div>`);
         let pressed = null;
-        dom.window.document.getElementById('skip').addEventListener('click', (e) => { pressed = e.target.getAttribute('data-value'); });
+        dom.window.document.getElementById('skip').addEventListener('click', (e) => { pressed = e.target.getAttribute('dj-value-value'); });
         const next = dom.window.document.getElementById('next');
         next.focus();
         press(dom, next, 'Escape');

@@ -35,7 +35,7 @@ deciding whether the contract should be enforced on caller-supplied markup.
             aria-expanded="{% if is_open %}true{% else %}false{% endif %}"
             aria-controls="{{ id|force_escape }}-menu"
             dj-click="toggle_dropdown"
-            data-value="{{ id|force_escape }}"
+            dj-value-value="{{ id|force_escape }}"
             {% if component_id %}data-component-id="{{ component_id|force_escape }}"{% endif %}>
         {{ label }}
         <svg class="{{ css_prefix }}dropdown-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

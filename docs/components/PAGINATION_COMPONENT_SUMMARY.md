@@ -175,37 +175,37 @@ Open `repo-root/test_pagination_visual.html` in a browser to see:
 <nav aria-label="Page navigation">
   <ul class="pagination">
     <li class="page-item">
-      <a class="page-link" href="#" data-page="4">Previous</a>
+      <a class="page-link" href="#" dj-value-page="4">Previous</a>
     </li>
     <li class="page-item">
-      <a class="page-link" href="#" data-page="1">1</a>
+      <a class="page-link" href="#" dj-value-page="1">1</a>
     </li>
     <li class="page-item disabled">
       <span class="page-link">...</span>
     </li>
     <li class="page-item">
-      <a class="page-link" href="#" data-page="3">3</a>
+      <a class="page-link" href="#" dj-value-page="3">3</a>
     </li>
     <li class="page-item">
-      <a class="page-link" href="#" data-page="4">4</a>
+      <a class="page-link" href="#" dj-value-page="4">4</a>
     </li>
     <li class="page-item active">
-      <a class="page-link" href="#" data-page="5" aria-current="page">5</a>
+      <a class="page-link" href="#" dj-value-page="5" aria-current="page">5</a>
     </li>
     <li class="page-item">
-      <a class="page-link" href="#" data-page="6">6</a>
+      <a class="page-link" href="#" dj-value-page="6">6</a>
     </li>
     <li class="page-item">
-      <a class="page-link" href="#" data-page="7">7</a>
+      <a class="page-link" href="#" dj-value-page="7">7</a>
     </li>
     <li class="page-item disabled">
       <span class="page-link">...</span>
     </li>
     <li class="page-item">
-      <a class="page-link" href="#" data-page="20">20</a>
+      <a class="page-link" href="#" dj-value-page="20">20</a>
     </li>
     <li class="page-item">
-      <a class="page-link" href="#" data-page="6">Next</a>
+      <a class="page-link" href="#" dj-value-page="6">Next</a>
     </li>
   </ul>
 </nav>

@@ -113,8 +113,8 @@ class ThemeMixin:
     and also makes it state, as any assignment does.
 
     For reactive theme changes (no page reload):
-        - Use dj-click="set_theme_mode" with data-dj-mode="dark"
-        - Use dj-click="set_theme_preset" with data-dj-preset="blue"
+        - Use dj-click="set_theme_mode" with dj-value-mode="dark"
+        - Use dj-click="set_theme_preset" with dj-value-preset="blue"
         - The mixin will push CSS updates to the client via push_event
     """
 
@@ -385,9 +385,9 @@ class ThemeMixin:
             Set theme mode to light, dark, or system.
 
             Usage in template:
-                <button dj-click="set_theme_mode" data-dj-mode="dark">Dark Mode</button>
+                <button dj-click="set_theme_mode" dj-value-mode="dark">Dark Mode</button>
             """
-            # Support both data-dj-mode (dj-click) and value (dj-change)
+            # Support both dj-value-mode (dj-click) and value (dj-change)
             mode = mode or value or "system"
             if mode not in ("light", "dark", "system"):
                 return
@@ -409,7 +409,7 @@ class ThemeMixin:
             Set theme preset.
 
             Usage in template (button):
-                <button dj-click="set_theme_preset" data-dj-preset="blue">Blue</button>
+                <button dj-click="set_theme_preset" dj-value-preset="blue">Blue</button>
 
             Usage in template (select):
                 <select dj-change="set_theme_preset">
@@ -417,7 +417,7 @@ class ThemeMixin:
                     <option value="blue">Blue</option>
                 </select>
             """
-            # Support both data-dj-preset (dj-click) and value (dj-change)
+            # Support both dj-value-preset (dj-click) and value (dj-change)
             preset = preset or value or "default"
             if preset not in THEME_PRESETS:
                 return

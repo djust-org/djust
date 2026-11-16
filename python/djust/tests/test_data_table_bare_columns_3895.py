@@ -140,7 +140,7 @@ def test_an_object_column_is_read_through_its_attributes_in_python(name: str) ->
         {"rows": [{"id": 1, "name": "v"}], "cols": [OBJECT_COLUMNS[name]]},
     )
     assert _labels(html) == ["N"], html
-    assert 'data-value="name"' in html and 'style="width:10px"' in html, html
+    assert 'dj-value-value="name"' in html and 'style="width:10px"' in html, html
     assert ">v<" in _body(html), html
 
 
@@ -153,5 +153,5 @@ def test_an_object_column_natively_is_read_through_its_attributes(name: str) -> 
         "{% data_table rows=rows columns=cols %}", {"rows": [{"id": 1, "name": "v"}], "cols": [col]}
     )
     assert _labels(html) == ["N"], html
-    assert 'data-value="name"' in html and 'style="width:10px"' in html, html
+    assert 'dj-value-value="name"' in html and 'style="width:10px"' in html, html
     assert ">v<" in _body(html), html

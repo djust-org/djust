@@ -44,7 +44,7 @@ rather than as a side effect of this one.
         {% else %}
         <button class="{{ css_prefix }}modal-close" aria-label="Close"
                 data-theme-modal-close data-dj-close
-                dj-click="toggle_modal" data-value="{{ id|force_escape }}"
+                dj-click="toggle_modal" dj-value-value="{{ id|force_escape }}"
                 {% if component_id %}data-component-id="{{ component_id|force_escape }}"{% endif %}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>

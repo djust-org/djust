@@ -101,7 +101,7 @@
         if (save && newValue !== currentValue && editEvent) {
           var trigger = wrapper.querySelector(".data-grid-edit-trigger");
           if (trigger) {
-            trigger.setAttribute("data-value", JSON.stringify({
+            trigger.setAttribute("dj-value-value", JSON.stringify({
               row_key: rowKey,
               column: colKey,
               value: newValue

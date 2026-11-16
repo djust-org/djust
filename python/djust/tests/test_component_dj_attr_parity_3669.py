@@ -636,7 +636,7 @@ def test_the_pager_draws_the_pages_the_python_tag_does() -> None:
     assert pagination_pages(1, 3) == [1, 2, 3]
     src = "{% pagination page=10 total_pages=30 %}"
     for html in (_django(src, CTX), _rust(src, CTX)):
-        shown = [int(m) for m in re.findall(r'data-value="(\d+)"', html)]
+        shown = [int(m) for m in re.findall(r'dj-value-value="(\d+)"', html)]
         assert shown == [1, 8, 9, 10, 11, 12, 30], html
 
 
@@ -680,11 +680,11 @@ def test_a_false_condition_leaves_a_plain_item_on_both_engines() -> None:
 
 
 def test_the_row_click_carries_the_rows_value_on_both_engines() -> None:
-    """Not ``dj-*``, so outside the matrix. The Python template used to render ``data-value=""``
+    """Not ``dj-*``, so outside the matrix. The Python template used to render ``dj-value-value=""``
     for every row (its ``dictsort`` over a dict, #3870); both engines send the row's value."""
     src = '{% data_table rows=rows columns=tcols row_click_event="rc" %}'
     for html in (_django(src, CTX), _rust(src, CTX)):
-        assert re.findall(r'<tr[^>]*data-value="([^"]*)"', html) == ["1", "2"], html
+        assert re.findall(r'<tr[^>]*dj-value-value="([^"]*)"', html) == ["1", "2"], html
 
 
 def test_both_bars_keep_other_content_in_the_bar() -> None:

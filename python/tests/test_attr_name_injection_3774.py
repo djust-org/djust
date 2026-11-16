@@ -183,10 +183,10 @@ class TestOtherAttributeNameWriters:
         with pytest.raises(ValueError):
             PaginationComponent(total_pages=3)._click("go", **{BAD_KEY: "1"})
 
-    def test_pagination_click_still_writes_a_data_key(self):
+    def test_pagination_click_still_writes_a_value_key(self):
         from djust.components.data.pagination import PaginationComponent
 
-        assert ' data-page="2"' in PaginationComponent(total_pages=3)._click("go", page=2)
+        assert ' dj-value-page="2"' in PaginationComponent(total_pages=3)._click("go", page=2)
 
     def test_event_attrs_refuses_a_hostile_value_key_and_trigger(self):
         from djust.components.components.button import Button

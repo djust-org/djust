@@ -1623,7 +1623,7 @@ def theme_nav_group(
         "icon": icon,
         "expanded": expanded,
         # A count on the heading, and an optional server event the heading
-        # click also sends (``data-value`` = the label) so the expanded state
+        # click also sends (``dj-value-value`` = the label) so the expanded state
         # can live on the server and survive a re-render.
         "badge": badge,
         "toggle_event": toggle_event,

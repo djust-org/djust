@@ -1,0 +1,316 @@
+{
+  "elements": [
+    {
+      "id": "data_table.sort",
+      "event": "on_table_sort",
+      "params": {
+        "value": "name"
+      },
+      "tag": "th",
+      "attrs": [
+        [
+          "dj-click",
+          "on_table_sort"
+        ],
+        [
+          "dj-value-value",
+          "name"
+        ]
+      ]
+    },
+    {
+      "id": "data_table.row_click",
+      "event": "open_row",
+      "params": {
+        "value": "Ann",
+        "row_key": "1"
+      },
+      "tag": "tr",
+      "attrs": [
+        [
+          "dj-click",
+          "open_row"
+        ],
+        [
+          "dj-value-value",
+          "Ann"
+        ],
+        [
+          "dj-value-row-key",
+          "1"
+        ]
+      ]
+    },
+    {
+      "id": "data_table.select",
+      "event": "on_table_select",
+      "params": {
+        "value": "__all__"
+      },
+      "tag": "input",
+      "attrs": [
+        [
+          "dj-click",
+          "on_table_select"
+        ],
+        [
+          "dj-value-value",
+          "__all__"
+        ]
+      ]
+    },
+    {
+      "id": "data_table.page",
+      "event": "on_table_page",
+      "params": {
+        "value": "1"
+      },
+      "tag": "button",
+      "attrs": [
+        [
+          "dj-click",
+          "on_table_page"
+        ],
+        [
+          "dj-value-value",
+          "1"
+        ]
+      ]
+    },
+    {
+      "id": "data_table.filter",
+      "event": "on_table_filter",
+      "params": {
+        "column": "name"
+      },
+      "form_value": "Ann",
+      "tag": "input",
+      "attrs": [
+        [
+          "dj-input",
+          "on_table_filter"
+        ],
+        [
+          "dj-value-column",
+          "name"
+        ]
+      ]
+    },
+    {
+      "id": "pagination",
+      "event": "go",
+      "params": {
+        "value": "1"
+      },
+      "tag": "button",
+      "attrs": [
+        [
+          "dj-click",
+          "go"
+        ],
+        [
+          "dj-value-value",
+          "1"
+        ]
+      ]
+    },
+    {
+      "id": "toast_container",
+      "event": "dismiss",
+      "params": {
+        "value": "t1"
+      },
+      "tag": "button",
+      "attrs": [
+        [
+          "dj-click",
+          "dismiss"
+        ],
+        [
+          "dj-value-value",
+          "t1"
+        ]
+      ]
+    },
+    {
+      "id": "combobox",
+      "event": "validate_field",
+      "params": {
+        "value": "a",
+        "field": "color"
+      },
+      "tag": "div",
+      "attrs": [
+        [
+          "dj-click",
+          "validate_field"
+        ],
+        [
+          "dj-value-value",
+          "a"
+        ],
+        [
+          "dj-value-field",
+          "color"
+        ]
+      ]
+    },
+    {
+      "id": "inline_edit",
+      "event": "inline_edit_start",
+      "params": {
+        "field": "title"
+      },
+      "tag": "span",
+      "attrs": [
+        [
+          "dj-click",
+          "inline_edit_start"
+        ],
+        [
+          "dj-value-field",
+          "title"
+        ]
+      ]
+    },
+    {
+      "id": "markdown_textarea",
+      "event": "set_mode",
+      "params": {
+        "mode": "write"
+      },
+      "tag": "button",
+      "attrs": [
+        [
+          "dj-click",
+          "set_mode"
+        ],
+        [
+          "dj-value-mode",
+          "write"
+        ]
+      ]
+    },
+    {
+      "id": "notification_popover",
+      "event": "mark_read",
+      "params": {
+        "id": "n1"
+      },
+      "tag": "div",
+      "attrs": [
+        [
+          "dj-click",
+          "mark_read"
+        ],
+        [
+          "dj-value-id",
+          "n1"
+        ]
+      ]
+    },
+    {
+      "id": "toggle_group",
+      "event": "pick",
+      "params": {
+        "value": "a",
+        "name": "grp"
+      },
+      "tag": "button",
+      "attrs": [
+        [
+          "dj-value-name",
+          "grp"
+        ],
+        [
+          "dj-click",
+          "pick"
+        ],
+        [
+          "dj-value-value",
+          "a"
+        ]
+      ]
+    },
+    {
+      "id": "file_tree",
+      "event": "open_file",
+      "params": {
+        "name": "a.py",
+        "type": "file"
+      },
+      "tag": "div",
+      "attrs": [
+        [
+          "data-name",
+          "a.py"
+        ],
+        [
+          "dj-value-name",
+          "a.py"
+        ],
+        [
+          "dj-value-type",
+          "file"
+        ],
+        [
+          "dj-click",
+          "open_file"
+        ]
+      ]
+    },
+    {
+      "id": "data_card_grid",
+      "event": "open_card",
+      "params": {
+        "title": "Alpha",
+        "category": "news"
+      },
+      "tag": "div",
+      "attrs": [
+        [
+          "data-category",
+          "news"
+        ],
+        [
+          "dj-click",
+          "open_card"
+        ],
+        [
+          "dj-value-title",
+          "Alpha"
+        ],
+        [
+          "dj-value-category",
+          "news"
+        ]
+      ]
+    },
+    {
+      "id": "tour",
+      "event": "tour",
+      "params": {
+        "value": "prev"
+      },
+      "tag": "button",
+      "attrs": [
+        [
+          "dj-click",
+          "tour"
+        ],
+        [
+          "dj-value-value",
+          "prev"
+        ]
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "id": "data_table.visibility",
+      "template": "{% data_table rows=rows columns=columns column_visibility=True %}",
+      "event": "on_table_visibility",
+      "html": "<div class=\"data-table-wrapper data-table-container\" role=\"grid\" aria-label=\"Data table\" data-visibility-event=\"on_table_visibility\"><div class=\"data-table-toolbar\"><div class=\"data-table-visibility-dropdown\"><button type=\"button\" class=\"data-table-visibility-btn\">&#9776; Columns</button><div class=\"data-table-visibility-menu\"><label class=\"data-table-visibility-item\"><input type=\"checkbox\" checked data-col-key=\"name\"> Name</label><label class=\"data-table-visibility-item\"><input type=\"checkbox\" checked data-col-key=\"role\"> Role</label></div></div></div><table class=\"data-table\"><thead><tr><th class=\"sortable\" role=\"columnheader\" aria-sort=\"none\" dj-click=\"on_table_sort\" dj-value-value=\"name\" data-col-key=\"name\">Name</th><th class=\"sortable\" role=\"columnheader\" aria-sort=\"none\" dj-click=\"on_table_sort\" dj-value-value=\"role\" data-col-key=\"role\">Role</th></tr><tr><th><input type=\"text\" class=\"data-table-filter\" aria-label=\"Filter Name\" placeholder=\"Filter...\" value=\"\" dj-input=\"on_table_filter\" dj-value-column=\"name\"></th><th><select class=\"data-table-filter\" aria-label=\"Filter Role\" dj-input=\"on_table_filter\" dj-value-column=\"role\"><option value=\"\">All</option><option value=\"admin\">admin</option><option value=\"user\">user</option></select></th></tr></thead><tbody><tr data-row-key=\"1\"><td>Ann</td><td>admin</td></tr><tr data-row-key=\"2\"><td>Bob</td><td>user</td></tr></tbody></table><button class=\"data-table-visibility-trigger\" hidden dj-click=\"on_table_visibility\"></button></div>"
+    }
+  ]
+}

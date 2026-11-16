@@ -167,7 +167,7 @@ class DropdownComponent(LiveComponent):
                 click_attr = f' dj-click="{action}"' if action else ""
                 variant_class = f" text-{item_variant}" if item_variant else ""
 
-                # Add data-* attributes for event parameters
+                # Add dj-value-* attributes for event parameters (#4186)
                 data_attrs = ""
                 if data:
                     import json
@@ -180,7 +180,7 @@ class DropdownComponent(LiveComponent):
                             value_str = attr_text(json.dumps(value))  # a plain str: always escaped
                         else:
                             value_str = attr_text(value)
-                        data_attrs += f' data-{key}="{value_str}"'
+                        data_attrs += f' dj-value-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text
                 html += f'<li><a class="dropdown-item{variant_class}" href="#"{click_attr}{data_attrs}>{content}</a></li>'
@@ -233,7 +233,7 @@ class DropdownComponent(LiveComponent):
                 )
                 variant_class = " text-red-600" if item_variant == "danger" else " text-gray-700"
 
-                # Add data-* attributes for event parameters
+                # Add dj-value-* attributes for event parameters (#4186)
                 data_attrs = ""
                 if data:
                     import json
@@ -245,7 +245,7 @@ class DropdownComponent(LiveComponent):
                             value_str = attr_text(json.dumps(value))  # a plain str: always escaped
                         else:
                             value_str = attr_text(value)
-                        data_attrs += f' data-{key}="{value_str}"'
+                        data_attrs += f' dj-value-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text
                 html += f'<a href="#" class="block px-4 py-2 text-sm{variant_class} hover:bg-gray-100"{click_attr}{data_attrs}>{content}</a>'
@@ -270,7 +270,7 @@ class DropdownComponent(LiveComponent):
 
                 click_attr = f' dj-click="{action}"' if action else ""
 
-                # Add data-* attributes for event parameters
+                # Add dj-value-* attributes for event parameters (#4186)
                 data_attrs = ""
                 if data:
                     import json
@@ -282,7 +282,7 @@ class DropdownComponent(LiveComponent):
                             value_str = attr_text(json.dumps(value))  # a plain str: always escaped
                         else:
                             value_str = attr_text(value)
-                        data_attrs += f' data-{key}="{value_str}"'
+                        data_attrs += f' dj-value-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text
                 html += f'<a href="#" class="dropdown-item"{click_attr}{data_attrs}>{content}</a>'

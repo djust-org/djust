@@ -25,9 +25,9 @@ const COMBOBOX = `
     <input class="combobox-input form-input" type="text" id="id_city" placeholder="Search" value="Alpha"
            role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="id_city-listbox" autocomplete="off">
     <div class="combobox-dropdown" id="id_city-listbox" role="listbox">
-      <div class="combobox-option combobox-option-selected" id="id_city-option-0" role="option" aria-selected="true" dj-click="pick_city" data-value="a" data-field="city">Alpha</div>
-      <div class="combobox-option" id="id_city-option-1" role="option" aria-selected="false" dj-click="pick_city" data-value="b" data-field="city">Beta</div>
-      <div class="combobox-option" id="id_city-option-2" role="option" aria-selected="false" dj-click="pick_city" data-value="c" data-field="city">Gamma</div>
+      <div class="combobox-option combobox-option-selected" id="id_city-option-0" role="option" aria-selected="true" dj-click="pick_city" dj-value-value="a" dj-value-field="city">Alpha</div>
+      <div class="combobox-option" id="id_city-option-1" role="option" aria-selected="false" dj-click="pick_city" dj-value-value="b" dj-value-field="city">Beta</div>
+      <div class="combobox-option" id="id_city-option-2" role="option" aria-selected="false" dj-click="pick_city" dj-value-value="c" dj-value-field="city">Gamma</div>
     </div>
   </div>
 </div>

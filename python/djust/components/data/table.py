@@ -161,14 +161,14 @@ class TableComponent(LiveComponent):
 
     def _column_filter_attr(self, col: Dict[str, Any]) -> str:
         """Routing half of a column filter input: ``dj-input="filter_column"``
-        with ``data-component-id`` and ``data-column`` carrying the key the
+        with ``data-component-id`` and ``dj-value-column`` carrying the key the
         handler takes as ``column`` (the ``{% data_table %}`` filter-row shape)."""
         key = col["key"]
         return (
             f'aria-label="Filter {escape(str(col.get("label", key)))}" placeholder="Filter..." '
             f'value="{escape(self.column_filters.get(key, ""))}" '
             f'dj-input="filter_column" dj-debounce="300" '
-            f'data-component-id="{conditional_escape(self.component_id)}" data-column="{escape(str(key))}"'
+            f'data-component-id="{conditional_escape(self.component_id)}" dj-value-column="{escape(str(key))}"'
         )
 
     @event_handler()
@@ -183,7 +183,7 @@ class TableComponent(LiveComponent):
     @event_handler()
     def filter_column(self, value: str = "", column: str = "", **kwargs: Any) -> None:
         """Set one column's filter (#2782): ``column`` is the input's
-        ``data-column``; an empty ``value`` removes the filter, as
+        ``dj-value-column``; an empty ``value`` removes the filter, as
         ``DataTableMixin.on_table_filter`` pops the key."""
         column = str(column)
         value = str(value or "")
@@ -311,8 +311,8 @@ class TableComponent(LiveComponent):
         with ``data-component-id`` so the click is dispatched to THIS component
         rather than the parent view (#2776 — the parent has no ``sort_by``, so
         without it the click raised ``No handler found for event: sort_by``),
-        and ``data-column`` carrying the key the handler takes as ``column``."""
-        return f'dj-click="sort_by" data-component-id="{conditional_escape(self.component_id)}" data-column="{attr_text(key)}"'
+        and ``dj-value-column`` carrying the key the handler takes as ``column``."""
+        return f'dj-click="sort_by" data-component-id="{conditional_escape(self.component_id)}" dj-value-column="{attr_text(key)}"'
 
     @event_handler()
     def sort_by(self, column: str = "", **kwargs: Any) -> None:
@@ -320,7 +320,7 @@ class TableComponent(LiveComponent):
 
         The handler every framework branch's sortable header targets. Decorated
         because only @event_handler methods are client events (#2776); the parameter is
-        named ``column`` because the header sends ``data-column``.
+        named ``column`` because the header sends ``dj-value-column``.
         """
         column_key = column
         if self.sort_column == column_key:

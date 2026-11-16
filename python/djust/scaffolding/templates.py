@@ -1345,7 +1345,7 @@ SCHEMA_LIST_HTML = """\
 %(list_item_fields)s\
             </div>
             <button dj-click="delete"
-                    data-item_id:int="{{ item.id }}"
+                    dj-value-item-id:int="{{ item.id }}"
                     dj-confirm="Delete this %(model_display_singular_lower)s?"
                     class="btn btn-ghost app-danger">
                 Delete
