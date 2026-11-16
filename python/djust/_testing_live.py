@@ -30,6 +30,7 @@ see the testing guide ("Real sessions and transports").
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import re
 import sys
@@ -673,6 +674,33 @@ def open_live_page(url: str, *, user: Any = None, client: Any = None, **extra: A
 # --------------------------------------------------------------------------- #
 
 
+#: Frames a connection may hold unread before its reader stops with an error:
+#: a test that never reads a flood of pushes fails clearly instead of
+#: exhausting memory. ``frames`` keeps as many of the latest frames.
+_MAX_UNREAD_FRAMES = 10_000
+
+
+class _Overflow(Exception):
+    pass
+
+
+def _deliver(frame: Dict[str, Any], frames: Any, queue: "asyncio.Queue[Any]") -> None:
+    """Record ``frame`` and queue it for reading, within the unread cap."""
+    if queue.qsize() >= _MAX_UNREAD_FRAMES:
+        raise _Overflow(
+            "more than %d frames arrived without being read; read them with "
+            "receive() (or assert on frames) as they come" % _MAX_UNREAD_FRAMES
+        )
+    frames.append(frame)
+    queue.put_nowait(frame)
+
+
+def _reader_failure(exc: BaseException) -> str:
+    if isinstance(exc, _Overflow):
+        return str(exc)
+    return "the frame reader failed: %r" % (exc,)
+
+
 class _Closed:
     """Queued once the connection ended; every later read sees it."""
 
@@ -744,8 +772,11 @@ class _Transport:
         self.timeout = timeout
         #: The mount answer (``{"type": "mount", ...}`` on success).
         self.mount: Dict[str, Any] = {}
-        #: Every frame received so far, in order.
-        self.frames: List[Dict[str, Any]] = []
+        #: Every frame received so far, in order (the latest
+        #: ``_MAX_UNREAD_FRAMES`` of them).
+        self.frames: "collections.deque[Dict[str, Any]]" = collections.deque(
+            maxlen=_MAX_UNREAD_FRAMES
+        )
         self._queue: "asyncio.Queue[Any]" = asyncio.Queue()
         self._unread: List[Any] = []
         self._pump: "Optional[asyncio.Future[Any]]" = None
@@ -846,9 +877,12 @@ class _Transport:
         """Send ``event`` and return the frame that answers it.
 
         The event frame carries a ``ref``; the answer is the first frame that
-        echoes it (``patch``, ``html_update``, ``noop``, ...) or an ``error``.
-        Frames that arrive before it (push events, for example) stay unread
-        for :meth:`receive`, and are in :attr:`frames`.
+        echoes it (``patch``, ``html_update``, ``noop``, ``error``, ...). An
+        ``error`` with no ``ref`` (a refusal the server could not tie to an
+        event) is also taken as the answer, since nothing else will come; an
+        ``error`` that names another event's ``ref`` is not. Frames that arrive
+        before the answer (push events, for example) stay unread for
+        :meth:`receive`, and are in :attr:`frames`.
 
         Args:
             event: The handler name.
@@ -870,7 +904,9 @@ class _Transport:
                 if remaining <= 0 and not self._unread:
                     raise asyncio.TimeoutError("no answer to %r within %ss" % (event, wait))
                 frame = await self._next(max(remaining, 0))
-                if frame.get("ref") == ref or frame.get("type") == "error":
+                if frame.get("ref") == ref:
+                    return frame
+                if frame.get("type") == "error" and frame.get("ref") is None:
                     return frame
                 skipped.append(frame)
         finally:
@@ -894,9 +930,7 @@ class _Transport:
             await self._close_after(exc)
 
 
-async def _pump_socket(
-    communicator: Any, frames: List[Dict[str, Any]], queue: "asyncio.Queue[Any]"
-) -> None:
+async def _pump_socket(communicator: Any, frames: Any, queue: "asyncio.Queue[Any]") -> None:
     """Read the application's output into ``queue`` without ever timing out
     (a ``receive_output`` timeout cancels the application)."""
     reason = "the application finished"
@@ -920,10 +954,21 @@ async def _pump_socket(
             if message.get("type") == "websocket.close":
                 reason = "the server closed the socket (code %s)" % message.get("code", 1000)
                 return
-            if message.get("type") == "websocket.send" and message.get("text") is not None:
-                frame = json.loads(message["text"])
-                frames.append(frame)
-                queue.put_nowait(frame)
+            if message.get("type") != "websocket.send":
+                continue
+            if message.get("text") is not None:
+                try:
+                    frame = json.loads(message["text"])
+                except ValueError as exc:
+                    raise ValueError(
+                        "a text frame that is not JSON: %r" % message["text"][:200]
+                    ) from exc
+                _deliver(frame, frames, queue)
+            elif message.get("bytes") is not None:
+                # djust's binary frames (uploads) are frames too: never dropped.
+                _deliver({"type": "binary", "bytes": message["bytes"]}, frames, queue)
+    except Exception as exc:
+        reason = _reader_failure(exc)
     finally:
         if getter is not None and not getter.done():
             getter.cancel()
@@ -999,9 +1044,7 @@ class LiveSocket(_Transport):
         return self
 
 
-async def _pump_sse(
-    response: Any, frames: List[Dict[str, Any]], queue: "asyncio.Queue[Any]"
-) -> None:
+async def _pump_sse(response: Any, frames: Any, queue: "asyncio.Queue[Any]") -> None:
     """Read the stream response into ``queue``; cancelling this task is a
     browser going away (the stream's own teardown runs)."""
     reason = "the stream ended"
@@ -1012,14 +1055,18 @@ async def _pump_sse(
             data = [line[6:] for line in text.splitlines() if line.startswith("data: ")]
             if not data:
                 continue  # a keepalive comment
-            frame = json.loads("\n".join(data))
+            try:
+                frame = json.loads("\n".join(data))
+            except ValueError as exc:
+                raise ValueError("an SSE event that is not JSON: %r" % text[:200]) from exc
             if frame.get("type") == "sse_connect":
                 continue
-            frames.append(frame)
-            queue.put_nowait(frame)
+            _deliver(frame, frames, queue)
     except asyncio.CancelledError:
         reason = "the stream was closed"
         raise
+    except Exception as exc:
+        reason = _reader_failure(exc)
     finally:
         queue.put_nowait(_Closed(reason))
 

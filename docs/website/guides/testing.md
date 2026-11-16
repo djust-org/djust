@@ -288,17 +288,23 @@ production would refuse:
 - `LiveSocket` and `LiveSSE` share one interface:
   - `mount` is the mount answer (`{"type": "mount", ...}` on success).
   - `await send_event(event, params=None, **fields)` returns the frame that
-    answers the event: it carries the event's `ref`, or it is an `error`.
+    answers the event: the frame that carries the event's `ref`, or an
+    `error` with no `ref` (an error naming another event is not the answer).
   - `await receive(types=None, *, timeout=None)` returns the next frame of
     those types.
   - `await receive_nothing(types=None, *, within=0.5)` asserts that no such
     frame arrives in that time.
-  - `frames` lists every frame received.
+  - `frames` lists the frames received (the latest 10,000). A binary
+    frame is `{"type": "binary", "bytes": ...}`.
 
   A background task reads frames as they arrive. A `receive()` that times out
   only stops waiting: the connection, and frames that arrive later, are
-  untouched. Both are async context managers: leaving the block disconnects
-  the socket, or closes the stream and runs its teardown. If closing fails
+  untouched. A connection holds at most 10,000 unread frames: past that,
+  reading fails with a clear error instead of growing without bound, so read
+  a flood of pushes as it arrives. A frame the reader cannot parse ends the
+  connection, and the error says why. Both are async context managers:
+  leaving the block disconnects the socket, or closes the stream and runs its
+  teardown. If closing fails
   after your test has already failed, your test's own error is raised, with
   the close failure as a note.
 - `live_session(user=None, *, store=None, backend=None)` returns a new saved
@@ -314,12 +320,22 @@ production would refuse:
   `conftest.py`: `from djust.testing import djust_live_pages`. In a
   `django.test` case, call `self.addCleanup(close_live_pages)` in `setUp()`.
 
-These need no djust setting beyond what `djust new` writes. That means
+The fallback and socket tests need nothing beyond what `djust new` writes:
 `SessionMiddleware` and `AuthenticationMiddleware`, a server-side
-`SESSION_ENGINE`, `ASGI_APPLICATION` and the SSE URLs, if you test SSE. The
-default database session store works. A socket or SSE test runs the view on
-other threads, so with pytest-django mark it
-`@pytest.mark.django_db(transaction=True)`.
+`SESSION_ENGINE` (the default database store works) and `ASGI_APPLICATION`.
+SSE tests also need djust's SSE views routed, which `djust new` does not do.
+Add them to your URLconf, as the browser's SSE client needs them too:
+
+```python
+from django.urls import include, path
+
+from djust.sse import sse_urlpatterns
+
+urlpatterns += [path("djust/", include(sse_urlpatterns))]
+```
+
+A socket or SSE test runs the view on other threads, so with pytest-django
+mark it `@pytest.mark.django_db(transaction=True)`.
 
 With Django's own runner, plain `TestCase` runs each test inside a transaction
 that other database connections cannot see. With the database session store,

@@ -521,6 +521,93 @@ async def test_sse_resumes_the_tabs_saved_state_after_a_socket():
 
 
 # --------------------------------------------------------------------------- #
+# The frame reader, against a raw application
+# --------------------------------------------------------------------------- #
+
+
+def _raw_app(on_connect=(), on_frame=lambda frame: ()):
+    """An ASGI WebSocket application that sends ``on_connect`` after accepting,
+    and ``on_frame(frame)`` for each JSON frame the client sends."""
+
+    async def app(scope, receive, send):
+        await receive()  # websocket.connect
+        await send({"type": "websocket.accept"})
+        for message in on_connect:
+            await send(message)
+        while True:
+            message = await receive()
+            if message["type"] == "websocket.disconnect":
+                return
+            for reply in on_frame(json.loads(message["text"])):
+                await send(reply)
+
+    return app
+
+
+async def _raw_socket(app) -> LiveSocket:
+    from channels.testing import WebsocketCommunicator
+
+    communicator = WebsocketCommunicator(app, "/ws/live/")
+    assert (await communicator.connect())[0]
+    return LiveSocket(communicator, timeout=5)
+
+
+def _text(frame: dict) -> dict:
+    return {"type": "websocket.send", "text": json.dumps(frame)}
+
+
+async def test_a_frame_that_is_not_json_is_the_reason_the_socket_ended():
+    socket = await _raw_socket(_raw_app([{"type": "websocket.send", "text": "<not json>"}]))
+    with pytest.raises(AssertionError, match="not JSON: '<not json>'"):
+        await socket.receive()
+    await socket.disconnect()
+
+
+async def test_a_binary_frame_is_a_frame():
+    app = _raw_app([{"type": "websocket.send", "bytes": b"\x00\x01"}, _text({"type": "after"})])
+    socket = await _raw_socket(app)
+    assert await socket.receive() == {"type": "binary", "bytes": b"\x00\x01"}
+    assert (await socket.receive())["type"] == "after"
+    await socket.disconnect()
+
+
+async def test_unread_frames_are_capped_with_a_clear_failure(monkeypatch):
+    from djust import _testing_live
+
+    monkeypatch.setattr(_testing_live, "_MAX_UNREAD_FRAMES", 5)
+    socket = await _raw_socket(_raw_app([_text({"type": "push", "n": n}) for n in range(20)]))
+    # Nothing is read while the 20 frames arrive: the reader stops at the cap.
+    socket._start()
+    await asyncio.wait({socket._pump}, timeout=5)
+    assert socket._pump.done()
+    got = []
+    with pytest.raises(AssertionError, match="more than 5 frames arrived without being read"):
+        while True:
+            got.append((await socket.receive())["n"])
+    assert got == [0, 1, 2, 3, 4]
+    await socket.disconnect()
+
+
+async def test_send_event_takes_only_its_own_or_a_refless_error():
+    """An error naming another event's ref is not this event's answer; an
+    error with no ref is."""
+
+    def answer(frame):
+        if frame["event"] == "other":
+            yield _text({"type": "error", "ref": frame["ref"] + 99, "error": "not yours"})
+            yield _text({"type": "noop", "ref": frame["ref"]})
+        else:
+            yield _text({"type": "error", "error": "refused"})
+
+    socket = await _raw_socket(_raw_app(on_frame=answer))
+    answered = await socket.send_event("other")
+    assert answered == {"type": "noop", "ref": 1}, answered
+    assert (await socket.receive(("error",)))["error"] == "not yours"
+    assert (await socket.send_event("refused"))["error"] == "refused"
+    await socket.disconnect()
+
+
+# --------------------------------------------------------------------------- #
 # with_live_session / live_session on hand-built targets
 # --------------------------------------------------------------------------- #
 
