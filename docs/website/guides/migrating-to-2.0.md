@@ -56,12 +56,16 @@ not supply. `python manage.py check` reports the same statically as
 `djust.T027`. A field declared with `state()` is supplied: it renders without
 a `get_context_data()` ([#4050](https://github.com/djust-org/djust/issues/4050)).
 
-> **Where 2.0 is today.** There is no 2.0 release yet. On the development line
-> (`2.0.0.dev0`) the removals listed under [Removed names](#3-replace-removed-names-and-settings)
+> **Where 2.0 is today.** 2.0.0rc1 is a release candidate. Install it with
+> `pip install --pre djust` (a plain `pip install djust` still installs 1.3.x).
+> In 2.0.0rc1 the removals listed under [Removed names](#3-replace-removed-names-and-settings)
 > have landed, and explicit exposure is the default: a view that states no
-> policy is explicit, and a view that states `exposure_policy = "legacy"` still
-> works and raises a `DeprecationWarning`. Strict event parameters are still an
-> opt-in there. 2.0.0 final makes both the only behaviour. [What is still to be removed](#4-still-to-be-removed-before-the-final-release)
+> policy is explicit. The legacy modes are still present in rc1: a view that
+> states `exposure_policy = "legacy"` still works and raises a
+> `DeprecationWarning`, and strict event parameters are still an opt-in. They
+> are removed before 2.0.0 final, which makes explicit exposure and strict
+> parameters the only behaviour ([#4171](https://github.com/djust-org/djust/issues/4171)).
+> [What is still to be removed](#4-still-to-be-removed-before-the-final-release)
 > lists the rest.
 
 ## Before you start
@@ -974,4 +978,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 37184dead219 -->
+<!-- generated-doc prose-sha256: 85ac42aff0b2 -->
