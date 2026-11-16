@@ -583,7 +583,7 @@ def _recheck_world():
 async def _recheck_socket(policy, user, record):
     from channels.testing import WebsocketCommunicator
 
-    from djust.tests._live_session import live_session
+    from djust.testing import live_session
     from djust.websocket import LiveViewConsumer
 
     session = await sync_to_async(live_session)(user)

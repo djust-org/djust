@@ -503,7 +503,7 @@ async def _mount_stream(view_path, *, query=""):
     from asgiref.sync import sync_to_async
     from django.contrib.auth.models import AnonymousUser
 
-    from djust.tests._live_session import live_session
+    from djust.testing import live_session
     from django.test import RequestFactory
 
     from djust.sse import DjustSSEStreamView, _sse_sessions

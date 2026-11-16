@@ -221,7 +221,7 @@ async def test_a_render_failure_at_mount_answers_with_an_error_frame(workers, mo
     from djust import worker_pool
     from djust.websocket import LiveViewConsumer
 
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
 
     monkeypatch.setitem(djust_config._config, "worker_threads", workers)
     monkeypatch.setattr(worker_pool, "_pool", [])

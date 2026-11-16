@@ -109,7 +109,7 @@ async def test_decorated_async_handlers_run_over_the_socket(settings):
     from channels.testing import WebsocketCommunicator
     from django.contrib.auth import get_user_model
 
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
     settings.LIVEVIEW_ALLOWED_MODULES = [__name__]

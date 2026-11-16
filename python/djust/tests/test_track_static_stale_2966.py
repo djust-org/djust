@@ -19,7 +19,7 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust._track_static import MAX_TRACKED_URLS, stale_static_urls
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 _MOD = "djust.tests.test_track_static_stale_2966"
 OLD = "/static/js/app.0123456789ab.js"

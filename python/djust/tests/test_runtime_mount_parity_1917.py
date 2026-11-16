@@ -49,7 +49,7 @@ from djust.runtime import ViewRuntime, WSConsumerTransport
 
 from ._ws_frames import drain_extra, has_type, receive_until
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 _ALLOWED = "djust.tests.test_runtime_mount_parity_1917"
 _ALLOWLIST = override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED])

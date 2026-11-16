@@ -82,7 +82,7 @@ async def _mount_html(cookie_header: str, *, app=None, live_session: bool = Fals
     it sends carry none (an explicit view's mount binds to one)."""
     from channels.testing import WebsocketCommunicator
 
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
 
     socket = WebsocketCommunicator(
         app or _socket_app(),

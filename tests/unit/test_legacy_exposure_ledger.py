@@ -13,6 +13,7 @@ from pathlib import Path
 
 from tests.legacy_exposure_ledger import (
     MIGRATED_4082,
+    MIGRATED_STEP3,
     OTHER_LEGACY_FILES,
     REASONED_INLINE,
     REMAINING_4082,
@@ -73,7 +74,7 @@ def test_every_file_stating_legacy_is_in_the_ledger_and_no_more():
     assert not stopped, (
         "These ledger entries no longer state the legacy policy: "
         f"{stopped}. Remove them from tests/legacy_exposure_ledger.py "
-        "(a #4082 file moves to MIGRATED_4082)."
+        "(a #4082 file moves to MIGRATED_4082, a step-3 file to MIGRATED_STEP3)."
     )
 
 
@@ -84,6 +85,17 @@ def test_migrated_4082_files_state_no_legacy_policy():
     assert not set(MIGRATED_4082) & set(REMAINING_4082)
     assert not set(MIGRATED_4082) & set(OTHER_LEGACY_FILES)
     assert not set(REMAINING_4082) & set(OTHER_LEGACY_FILES)
+
+
+def test_migrated_step3_files_state_no_legacy_policy():
+    """A file the step-3 migration (#4171) ran as explicit stays explicit, and is
+    recorded once."""
+    for path in MIGRATED_STEP3:
+        assert (ROOT / path).is_file(), path
+        assert not _legacy_lines(path), f"{path} was migrated to explicit (#4171 step 3)"
+    assert len(set(MIGRATED_STEP3)) == len(MIGRATED_STEP3)
+    others = set(MIGRATED_4082) | set(REMAINING_4082) | set(OTHER_LEGACY_FILES)
+    assert not set(MIGRATED_STEP3) & others
 
 
 def test_every_remaining_4082_file_has_a_reason():

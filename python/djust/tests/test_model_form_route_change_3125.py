@@ -16,7 +16,7 @@ from asgiref.sync import sync_to_async
 from django.contrib.auth.models import Group
 
 from djust.tests import test_model_form_acceptance_adr035 as acc
-from djust.tests._live_session import live_session
+from djust.testing import live_session
 from djust.tests._ws_frames import has_type, receive_until
 
 

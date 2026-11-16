@@ -661,7 +661,7 @@ async def _connect_and_mount(view_path: str, url: str = "/2917/"):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
 
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")

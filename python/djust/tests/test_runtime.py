@@ -230,7 +230,7 @@ def _live_mount_request(transport, url):
     saved server session, which an explicit view's mount binds to."""
     from django.test import RequestFactory
 
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
 
     request = with_live_session(RequestFactory().get(url))
     transport.build_request = lambda: request

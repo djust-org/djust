@@ -243,7 +243,7 @@ async def test_f27_two_websocket_connections_combined_limit():
     from asgiref.sync import sync_to_async
     from django.contrib.auth import get_user_model
 
-    from djust.tests._live_session import live_session
+    from djust.testing import live_session
 
     # One caller: a saved user logged into ONE live session that both sockets
     # present (an explicit view re-reads its user from that session per turn).

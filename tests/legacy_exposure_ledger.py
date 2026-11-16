@@ -70,6 +70,11 @@ MIGRATED_4082: tuple[str, ...] = (
     "tests/integration/test_sw_advanced_flow.py",
 )
 
+#: Files the legacy removal's test migration (#4171 step 3) ran as explicit:
+#: their views get a real session and user from ``djust.testing``'s
+#: live-session helpers (#4191). They state no legacy policy any more.
+MIGRATED_STEP3: tuple[str, ...] = ("python/djust/tests/test_stream_only_handlers_3639.py",)
+
 #: The #4082 files that still state the legacy policy, each with its reason.
 REMAINING_4082: dict[str, str] = {
     "python/djust/tests/test_async_check_permissions.py": (
@@ -293,7 +298,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_sticky_child_event_noop_1802.py",
         "python/djust/tests/test_sticky_child_recovery_1813.py",
         "python/djust/tests/test_sticky_update_hook_2919.py",
-        "python/djust/tests/test_stream_only_handlers_3639.py",
         "python/djust/tests/test_sync_turn_inside_audit_3646.py",
         "python/djust/tests/test_sync_turn_lifecycle_gaps_3646.py",
         "python/djust/tests/test_tab_meta_and_page_save_4107.py",

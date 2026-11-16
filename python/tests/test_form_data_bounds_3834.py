@@ -32,7 +32,7 @@ from djust import LiveView, _form_data_bounds
 from djust.config import config as djust_config
 from djust.forms import FormMixin
 from djust.wizard import WizardMixin
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 

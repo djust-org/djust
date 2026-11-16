@@ -82,7 +82,7 @@ def give_live_request(session: SSESession, path: str = "/") -> None:
     the GET stream does: an explicit view's mount binds to that session."""
     from django.contrib.auth.models import AnonymousUser
 
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
 
     session._request = with_live_session(RequestFactory().get(path), AnonymousUser())
 

@@ -283,7 +283,7 @@ def _runtime_with_view(view, url="/"):
 
     from django.test import RequestFactory
 
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
 
     transport = MockTransport()
     # The mount request a live transport supplies: a saved server session, which

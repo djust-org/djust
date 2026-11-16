@@ -759,6 +759,12 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         _RENDER, _GET_TEMPLATE
     ),
     ("testing.py", "_call_hook", "context.run"): plumbing(_RENDER),
+    # djust.testing's live-session helpers (#4191): the test's own session save
+    # and session/user read, off the event loop; they call no view hook.
+    ("_testing_live.py", "_live_session_from_any_context", "live_session"): plumbing(_SESSION),
+    ("_testing_live.py", "LivePage.connect", "_page_session_and_user"): plumbing(_SESSION),
+    ("_testing_live.py", "LivePage.connect_sse", "_page_session_and_user"): plumbing(_SESSION),
+    ("_testing_live.py", "LiveSSE._send", "_page_session_and_user"): plumbing(_SESSION),
     ("updates.py", "check_in_background", "run"): plumbing(_RENDER),
     ("websocket.py", "LiveViewConsumer._queue_on_lane", "consumer._run_lane_item"): outside(_LANE),
     ("websocket.py", "LiveViewConsumer.handle_unmount", "self._unmount_slot"): outside(_LANE),

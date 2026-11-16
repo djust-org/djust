@@ -32,7 +32,7 @@ from django.test import override_settings
 from djust import LiveView
 from djust.forms import FormMixin
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytestmark = [pytest.mark.django_db]
 

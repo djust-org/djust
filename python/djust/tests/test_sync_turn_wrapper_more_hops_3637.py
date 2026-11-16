@@ -38,7 +38,7 @@ from djust.hooks import on_mount
 from djust.presence import PresenceMixin
 from djust.tests._ws_frames import drain_extra, has_type, receive_until
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytest.importorskip("channels")
 
