@@ -1334,16 +1334,11 @@ def recovery_scan(cls: type) -> tuple[frozenset[str], bool]:
     return names, complete
 
 
-def recovery_targets(cls: type) -> frozenset[str]:
-    """Handlers a literal ``dj-auto-recover`` in the class's template targets,
-    including its includes and parents (ADR-037 row 18)."""
-    return recovery_bindings(cls)[0]
-
-
 def recovery_bindings(cls: type) -> tuple[frozenset[str], bool]:
-    """The literal ``dj-auto-recover`` targets of the class's template (as
-    :func:`recovery_targets`), and whether the template also has a computed one
-    (``dj-auto-recover="{{ handler }}"``), whose target the scan cannot name."""
+    """The handlers a literal ``dj-auto-recover`` in the class's template
+    targets, including its includes and parents (ADR-037 row 18), and whether
+    the template also has a computed one (``dj-auto-recover="{{ handler }}"``),
+    whose target the scan cannot name. Used by check ``djust.V031``."""
     engine = django_engine()
     if engine is None:
         return frozenset(), False
