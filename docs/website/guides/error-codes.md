@@ -982,7 +982,7 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Severity**: Error under the strict parameter policy; Warning for the 1.x names under the legacy policy
 
-**What causes it**: A handler named by `dj-auto-recover` reads the 1.x `_form_values` / `_data_attrs` names (as parameters or from `**kwargs`), which strict dispatch never delivers; or it declares the 2.0 `form_values` / `data_attrs` parameters but runs under the legacy policy, which sends only the `_` names. Message: "<view>.restore(): reads the dj-auto-recover values as _form_values / _data_attrs, which strict dispatch never delivers."
+**What causes it**: A handler named by `dj-auto-recover` takes the 1.x `_form_values` / `_data_attrs` names (as parameters or from `**kwargs`), which strict dispatch never delivers; or it declares the 2.0 `form_values` / `data_attrs` parameters positional-only, or under the legacy policy, which sends only the `_` names. Message: "<view>.restore(): this dj-auto-recover handler declares _form_values / _data_attrs, which strict dispatch never delivers, so the event is refused."
 
 **Fix**: Declare `form_values: dict[str, Any]` and `data_attrs: dict[str, str]` and run the handler under the strict policy. See the [reconnection guide](reconnection.md#custom-recovery-with-dj-auto-recover). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V031"]}`.
 

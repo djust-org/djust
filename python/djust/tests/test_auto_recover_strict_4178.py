@@ -578,6 +578,163 @@ def test_v031_ignores_a_read_in_a_handler_no_recovery_binding_targets(monkeypatc
     assert _check(other, event_parameter_policy="strict") == []
 
 
+def _check_module(source: str, monkeypatch, **liveview_config: Any) -> list:
+    """V016 / V031 messages about the classes ``source`` defines (its own module)."""
+    from djust.checks.parameters import check_event_parameter_contracts
+
+    _source_for(monkeypatch, source)
+    name = "djust_4178_module_%d" % id(source)
+    module = types.ModuleType(name)
+    module.__file__ = __file__
+    sys.modules[name] = module
+    try:
+        exec(compile(source, "<4178>", "exec"), module.__dict__)  # noqa: S102
+        with override_settings(LIVEVIEW_CONFIG=liveview_config):
+            messages = check_event_parameter_contracts(None)
+    finally:
+        del sys.modules[name]
+        for value in list(module.__dict__.values()):
+            if isinstance(value, type) and value.__module__ == name:
+                value.abstract = True  # out of later checks' subclass walk
+    return [
+        (m.id, m.level, m.msg)
+        for m in messages
+        if m.id in ("djust.V016", "djust.V031") and name in m.msg
+    ]
+
+
+_HEAD = """
+from typing import Any
+from djust import LiveView
+from djust.components.descriptors.base import LiveComponent, TypedState
+from djust.decorators import event_handler
+"""
+
+COMPUTED = (
+    _HEAD
+    + """
+class Page(LiveView):
+    exposure_policy = "explicit"
+    template = '<div dj-root><form dj-auto-recover="{{ handler }}"></form></div>'
+
+    @event_handler()
+    def restore(self, **kwargs):
+        values = kwargs.get("_form_values", {})
+"""
+)
+
+
+@pytest.mark.parametrize(
+    "config, level", [({}, WARNING), ({"event_parameter_policy": "strict"}, ERROR)]
+)
+def test_v031_reports_a_computed_target_that_reads_the_envelope(config, level, monkeypatch):
+    """dj-auto-recover="{{ handler }}" cannot be resolved statically; a handler
+    reading _form_values from **kwargs is a recovery handler by that read."""
+    found = _check_module(COMPUTED, monkeypatch, **config)
+    assert [(i, lvl) for i, lvl, _ in found] == [("djust.V031", level)]
+    assert "possible target of a computed dj-auto-recover" in found[0][2]
+    assert "reads _form_values from **kwargs" in found[0][2]
+
+
+def test_v031_ignores_a_handler_a_computed_target_may_name_but_that_reads_nothing(monkeypatch):
+    source = COMPUTED.replace('values = kwargs.get("_form_values", {})', "pass")
+    assert _check_module(source, monkeypatch, event_parameter_policy="strict") == []
+
+
+POSITIONAL = (
+    _HEAD
+    + """
+class Page(LiveView):
+    exposure_policy = "explicit"
+    template = '<div dj-root><form dj-auto-recover="restore"></form></div>'
+
+    @event_handler(parameter_policy="strict")
+    def restore(self, form_values: dict[str, Any], /, data_attrs: dict[str, str]):
+        pass
+"""
+)
+
+
+def test_v031_reports_positional_only_recovery_parameters_under_strict(monkeypatch):
+    """The browser sends the values by name, so a positional-only one never binds."""
+    found = _check_module(POSITIONAL, monkeypatch)
+    assert [(i, lvl) for i, lvl, _ in found] == [("djust.V031", ERROR)]
+    assert "declares form_values positional-only" in found[0][2]
+
+
+INHERITED = (
+    _HEAD
+    + """
+class Base(LiveView):
+    exposure_policy = "explicit"
+    template = '<div dj-root></div>'
+
+    @event_handler()
+    def restore(self, _form_values=None, **kwargs):
+        pass
+
+class First(Base):
+    template = '<div dj-root><form dj-auto-recover="restore"></form></div>'
+
+class Second(Base):
+    template = '<div dj-root><form dj-auto-recover="restore"></form></div>'
+"""
+)
+
+
+@pytest.mark.parametrize("config", [{}, {"event_parameter_policy": "strict"}])
+def test_v031_reports_an_inherited_handler_once(config, monkeypatch):
+    """One message per declaration, not one per view whose template targets it,
+    and no V016 for its "_" names under any of them."""
+    found = _check_module(INHERITED, monkeypatch, **config)
+    assert [i for i, _lvl, _msg in found] == ["djust.V031"]
+    assert "this dj-auto-recover handler declares _form_values" in found[0][2]
+
+
+NOT_A_TARGET = (
+    _HEAD
+    + """
+class Page(LiveView):
+    exposure_policy = "explicit"
+    template = '<div dj-root><form dj-auto-recover="restore"></form></div>'
+
+    @event_handler()
+    def restore(self, form_values: dict[str, Any], data_attrs: dict[str, str]):
+        pass
+
+    @event_handler()
+    def other(self, _form_values=None, **kwargs):
+        pass
+
+class Editor(LiveComponent):
+    class State(TypedState):
+        label: str = ""
+
+    template = '<form dj-auto-recover="save"></form>'
+
+    @event_handler()
+    def save(self, _form_values=None, **kwargs):
+        pass
+"""
+)
+
+
+def test_v031_leaves_untargeted_and_component_handlers_to_v016(monkeypatch):
+    """A "_" parameter on a handler no recovery binding targets, or on a
+    LiveComponent (recovery events reach the page's view), is V016's reserved
+    name under strict, and nothing under legacy."""
+    strict = _check_module(NOT_A_TARGET, monkeypatch, event_parameter_policy="strict")
+    # "<module>.Page.other(): ..." -> "Page.other"
+    assert sorted((i, m.split("(")[0].split(".", 1)[1]) for i, _lvl, m in strict) == [
+        ("djust.V016", "Editor.save"),
+        ("djust.V016", "Page.other"),
+    ]
+    legacy = _check_module(NOT_A_TARGET, monkeypatch)
+    # Only the 2.0 spelling under legacy, on the real target.
+    assert [(i, lvl) for i, lvl, _ in legacy] == [("djust.V031", ERROR)]
+    assert ".restore()" in legacy[0][2]
+
+
 def test_v019_is_never_emitted():
     """The R1 downgrade it reported is gone (#4178); the ID is retired."""
     strict_old = OLD_DECLARED.replace(

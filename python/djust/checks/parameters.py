@@ -76,6 +76,7 @@ def _handler_messages(
     function: types.FunctionType,
     project_policy_valid: bool,
     first_report: bool,
+    recovery: Optional["_Recovery"] = None,
 ) -> list[CheckMessage]:
     from djust._parameter_contract import ContractError
     from djust.validation import get_handler_parameter_policy, get_strict_handler_contract
@@ -87,16 +88,14 @@ def _handler_messages(
     own_policy = decorators.get("event_handler", decorators.get("server_function", {})).get(
         "parameter_policy"
     )
-    recovery = _recovery_target(cls, name)
-    envelope = _envelope_names(function, recovery)
-    if envelope or (recovery and _declares_recovery_parameters(function)):
-        if not _is_check_suppressed("djust.V031"):
-            message = _v031(cls, name, function, label, envelope, project_policy_valid)
+    if recovery is not None:
+        if recovery.report_here(cls, name) and not _is_check_suppressed("djust.V031"):
+            message = _v031(recovery, function, label, project_policy_valid)
             if message is not None:
                 messages.append(message)
-        if envelope:
+        if recovery.envelope:
             # The "_" names are also a V016 reserved-name error under strict;
-            # V031 names the replacement, so it is reported once, here.
+            # V031 names the replacement, so the declaration is reported once.
             return messages
     if own_policy is None and not project_policy_valid:
         return messages  # djust.C022 reports the project value once.
@@ -157,85 +156,125 @@ _RECOVERY_ENVELOPE = ("_form_values", "_data_attrs")
 _RECOVERY_PARAMETERS = ("form_values", "data_attrs")
 _RECOVERY_SIGNATURE = "form_values: dict[str, Any], data_attrs: dict[str, str]"
 
+#: One template scan per class per check run (cleared at the start of each run).
+_RECOVERY_BINDINGS: "weakref.WeakKeyDictionary[type, tuple[frozenset[str], bool]]" = (
+    weakref.WeakKeyDictionary()
+)
 
-def _recovery_target(cls: type, name: str) -> bool:
-    """Whether a literal dj-auto-recover in the view's template targets it.
+
+def _recovery_bindings(cls: type) -> tuple[frozenset[str], bool]:
+    """A LiveView's literal dj-auto-recover targets, and whether it has a computed one.
 
     The template binding scan follows ``{% include %}`` and ``{% extends %}``
-    (ADR-037 row 18). Recovery events always reach the page's view, so only a
-    LiveView can be a target.
+    (ADR-037 row 18). Recovery events always reach the page's view, so a
+    LiveComponent's handler is never a target.
     """
-    from djust._template_bindings import recovery_targets
+    from djust._template_bindings import recovery_bindings
     from djust.live_view import LiveView
 
     if not issubclass(cls, LiveView):
-        return False
-    targets = _RECOVERY_TARGETS.get(cls)
-    if targets is None:
-        targets = _RECOVERY_TARGETS[cls] = recovery_targets(cls)
-    return name in targets
+        return frozenset(), False
+    found = _RECOVERY_BINDINGS.get(cls)
+    if found is None:
+        found = _RECOVERY_BINDINGS[cls] = recovery_bindings(cls)
+    return found
 
 
-#: One template scan per class per check run (cleared at the start of each run).
-_RECOVERY_TARGETS: "weakref.WeakKeyDictionary[type, frozenset[str]]" = weakref.WeakKeyDictionary()
+class _Recovery:
+    """What ``djust.V031`` knows about one handler declaration (#4178).
+
+    ``entries`` are the (class, name) pairs whose template targets it, a
+    literal target first; the message is reported once, under the first.
+    """
+
+    def __init__(self, declared: list[str], read: list[str], literal: bool) -> None:
+        self.declared = declared  # envelope names in the signature
+        self.read = read  # envelope names read from **kwargs
+        self.literal = literal  # a literal dj-auto-recover names it
+        self.entries: list[tuple[type, str]] = []
+
+    @property
+    def envelope(self) -> list[str]:
+        return [n for n in _RECOVERY_ENVELOPE if n in self.declared or n in self.read]
+
+    def report_here(self, cls: type, name: str) -> bool:
+        return bool(self.entries) and self.entries[0] == (cls, name)
 
 
-def _envelope_names(function: Any, recovery_target: bool) -> list[str]:
-    """The 1.x envelope names the handler declares, or reads as a recovery target.
+def _recovery_for(cls: type, name: str, function: Any) -> Optional[_Recovery]:
+    """The handler as a dj-auto-recover target of ``cls``, or None.
 
-    A declared parameter is found from the signature for every handler. The
-    ``**kwargs`` form (``kwargs.get("_form_values")``) is found in the source,
-    only for handlers a template binding targets: that read means nothing on
-    any other handler.
+    A literal ``dj-auto-recover="name"`` makes it one. A computed
+    ``dj-auto-recover="{{ handler }}"`` cannot be resolved statically, so then
+    a handler counts only when it declares or reads the 1.x envelope: those
+    names mean nothing outside recovery.
+    """
+    literals, computed = _recovery_bindings(cls)
+    literal = name in literals
+    if not literal and not computed:
+        return None
+    declared, read = _envelope_names(function)
+    if not literal and not (declared or read):
+        return None
+    if literal and not (declared or read) and not _recovery_parameters(function):
+        return None
+    return _Recovery(declared, read, literal)
+
+
+def _envelope_names(function: Any) -> tuple[list[str], list[str]]:
+    """The 1.x envelope names the handler declares, and those it reads.
+
+    A declared parameter comes from the signature. The ``**kwargs`` form
+    (``kwargs.get("_form_values")``) is found in the source.
     """
     origin = inspect.unwrap(function)
     try:
-        declared = inspect.signature(origin).parameters
+        signature = inspect.signature(origin).parameters
     except (TypeError, ValueError):
-        declared = {}  # type: ignore[assignment]
-    found = [name for name in _RECOVERY_ENVELOPE if name in declared]
-    if found or not recovery_target:
-        return found
+        signature = {}  # type: ignore[assignment]
+    declared = [name for name in _RECOVERY_ENVELOPE if name in signature]
+    if declared:
+        return declared, []
     try:
         source = textwrap.dedent(inspect.getsource(origin))
     except (OSError, TypeError):
-        return []  # No source (generated or C-level): the signature is all there is.
+        return [], []  # No source (generated or C-level): the signature is all there is.
     if not any(name in source for name in _RECOVERY_ENVELOPE):
-        return []
+        return [], []
     try:
         tree = ast.parse(source)
     except SyntaxError:
-        return []
+        return [], []
     read = {
         node.value
         for node in ast.walk(tree)
         if isinstance(node, ast.Constant) and node.value in _RECOVERY_ENVELOPE
     }
-    return [name for name in _RECOVERY_ENVELOPE if name in read]
+    return [], [name for name in _RECOVERY_ENVELOPE if name in read]
 
 
-def _declares_recovery_parameters(function: Any) -> bool:
+def _recovery_parameters(function: Any) -> list[inspect.Parameter]:
+    """The ``form_values`` / ``data_attrs`` parameters the handler declares."""
     try:
         declared = inspect.signature(inspect.unwrap(function)).parameters
     except (TypeError, ValueError):
-        return False
-    return any(name in declared for name in _RECOVERY_PARAMETERS)
+        return []
+    return [p for name, p in declared.items() if name in _RECOVERY_PARAMETERS]
 
 
 def _v031(
-    cls: type,
-    name: str,
+    recovery: _Recovery,
     function: Any,
     label: str,
-    envelope: list[str],
     project_policy_valid: bool,
 ) -> Optional[CheckMessage]:
     """``djust.V031``: a dj-auto-recover handler that cannot receive its values.
 
-    Either it still reads the 1.x ``_form_values`` / ``_data_attrs`` envelope,
+    Either it still takes the 1.x ``_form_values`` / ``_data_attrs`` envelope,
     which strict dispatch never delivers (an error under strict, a warning
-    under legacy, which 2.0 removes), or it declares the 2.0 parameters but
-    runs under the legacy policy, which sends only the envelope.
+    under legacy, which 2.0 removes); or it declares the 2.0 parameters in a
+    way the browser cannot fill: positional-only (the browser sends them by
+    name), or under the legacy policy (which sends only the envelope).
     """
     from djust._parameter_contract import ContractError
     from djust.validation import get_handler_parameter_policy
@@ -247,14 +286,27 @@ def _v031(
         except ContractError:
             policy = None  # djust.C022 reports the project value.
     file_path, line_number = _location(function)
+    name = inspect.unwrap(function).__name__
+    target = (
+        "this dj-auto-recover handler"
+        if recovery.literal
+        else "this handler, a possible target of a computed dj-auto-recover,"
+    )
+    envelope = recovery.envelope
     if envelope:
         strict = policy == "strict"
+        how = []
+        if recovery.declared:
+            how.append("declares %s" % " / ".join(recovery.declared))
+        if recovery.read:
+            how.append("reads %s from **kwargs" % " / ".join(recovery.read))
         return (DjustError if strict else DjustWarning)(
-            "%s: reads the dj-auto-recover values as %s, which %s."
+            "%s: %s %s, which %s."
             % (
                 label,
-                " / ".join(envelope),
-                "strict dispatch never delivers"
+                target,
+                " and ".join(how),
+                "strict dispatch never delivers, so the event is refused"
                 if strict
                 else "only the legacy parameter policy delivers, and 2.0 removes it",
             ),
@@ -273,12 +325,29 @@ def _v031(
             file_path=file_path,
             line_number=line_number,
         )
+    parameters = _recovery_parameters(function)
+    if policy == "strict":
+        positional = [p.name for p in parameters if p.kind is inspect.Parameter.POSITIONAL_ONLY]
+        if not positional:
+            return None
+        return DjustError(
+            "%s: %s declares %s positional-only, but the browser sends the recovery "
+            "values by name; the event is refused." % (label, target, " / ".join(positional)),
+            hint=(
+                "Move the parameters after the '/' (or drop the '/') so they can be "
+                "passed by name: def %s(self, %s)." % (name, _RECOVERY_SIGNATURE)
+            ),
+            id="djust.V031",
+            fix_hint="Make %s keyword-passable on `%s`." % (", ".join(positional), label),
+            file_path=file_path,
+            line_number=line_number,
+        )
     if policy != "legacy":
         return None
     return DjustError(
-        "%s: declares form_values / data_attrs for dj-auto-recover but runs under the "
-        "legacy parameter policy, which sends them only as _form_values / _data_attrs; "
-        "the event is refused." % label,
+        "%s: %s declares %s but runs under the legacy parameter policy, which sends "
+        "the values only as _form_values / _data_attrs; the event is refused."
+        % (label, target, " / ".join(p.name for p in parameters)),
         hint=(
             "Recovery values arrive as declared parameters only under the strict "
             "policy. Add parameter_policy='strict' to the handler's @event_handler, "
@@ -335,7 +404,7 @@ def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[Che
     from djust._parameter_metadata import declared_handlers
     from djust.validation import get_project_parameter_policy
 
-    _RECOVERY_TARGETS.clear()
+    _RECOVERY_BINDINGS.clear()
     try:
         get_project_parameter_policy()
         project_policy_valid = True
@@ -356,6 +425,22 @@ def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[Che
             vars(cls).get(name) is member and vars(current).get(name) is not member
         ):
             primary[function] = cls
+    # V031 is about a declaration: one message per handler function, under a
+    # class whose template literally targets it when there is one (#4178).
+    recovery: dict[Any, _Recovery] = {}
+    for cls, name, member, function in entries:
+        found = _recovery_for(cls, name, function)
+        if found is None:
+            continue
+        current = recovery.get(function)
+        if current is None:
+            current = recovery[function] = found
+        elif found.literal and not current.literal:
+            # The first literal target reports it; the computed ones follow.
+            current.literal = True
+            current.entries.insert(0, (cls, name))
+            continue
+        current.entries.append((cls, name))
     messages: list[CheckMessage] = []
     for cls, name, member, function in entries:
         messages.extend(
@@ -366,6 +451,7 @@ def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[Che
                 function,
                 project_policy_valid,
                 primary[function] is cls,
+                recovery.get(function),
             )
         )
     checked: set[Any] = set()
