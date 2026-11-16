@@ -52,7 +52,7 @@
         holds the class's rule, may not be loaded) and the class alone
         under csp_strict (#4139).
       {% endcomment %}
-      <tr{% if selectable %} aria-selected="{% if row.id|stringformat:'s' in selected_rows %}true{% else %}false{% endif %}"{% endif %}{% if row_click_event %} class="data-table-row-clickable" dj-click="{{ row_click_event|force_escape }}" dj-value-value="{{ row|table_cell:row_click_value_key|force_escape }}" role="button" tabindex="0"{% if not row_pointer_class_only %} style="cursor:pointer"{% endif %}{% elif row_url and row|table_has_href:row_url %} class="data-table-row-clickable" data-href="{{ row|table_href:row_url }}" role="button" tabindex="0"{% if not row_pointer_class_only %} style="cursor:pointer"{% endif %}{% endif %}>
+      <tr{% if selectable %} aria-selected="{% if row.id|stringformat:'s' in selected_rows %}true{% else %}false{% endif %}"{% endif %}{% if row_click_event %} class="data-table-row-clickable" dj-click="{{ row_click_event|force_escape }}" dj-value-value="{{ row|table_cell:row_click_value_key|force_escape }}" dj-value-row-key="{{ row|table_cell:row_key|force_escape }}" role="button" tabindex="0"{% if not row_pointer_class_only %} style="cursor:pointer"{% endif %}{% elif row_url and row|table_has_href:row_url %} class="data-table-row-clickable" data-href="{{ row|table_href:row_url }}" role="button" tabindex="0"{% if not row_pointer_class_only %} style="cursor:pointer"{% endif %}{% endif %}>
         {% if selectable %}
         <td>
           <input type="checkbox" class="data-table-checkbox"

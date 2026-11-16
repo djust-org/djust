@@ -23,8 +23,8 @@ const MENU = `
   <button type="button" class="dj-dropdown-menu__trigger" dj-click="toggle_menu" aria-expanded="true" aria-haspopup="menu">View</button>
   <div class="dj-dropdown-menu__content dj-dropdown-menu--left" role="menu">
     <div class="dj-dropdown-menu__heading" role="presentation">Theme</div>
-    <button type="button" class="dj-dropdown-menu__item" role="menuitemradio" aria-checked="true" dj-click="m" data-value="light">Light</button>
-    <button type="button" class="dj-dropdown-menu__item" role="menuitemradio" aria-checked="false" dj-click="m" data-value="dark">Dark</button>
+    <button type="button" class="dj-dropdown-menu__item" role="menuitemradio" aria-checked="true" dj-click="m" dj-value-value="light">Light</button>
+    <button type="button" class="dj-dropdown-menu__item" role="menuitemradio" aria-checked="false" dj-click="m" dj-value-value="dark">Dark</button>
     <hr class="dj-dropdown-menu__divider" role="separator">
     <button type="button" class="dj-dropdown-menu__item dj-dropdown-menu__item--disabled" role="menuitem" aria-disabled="true" disabled>Off</button>
     <button type="button" class="dj-dropdown-menu__item" role="menuitemcheckbox" aria-checked="false" dj-click="t">Details</button>

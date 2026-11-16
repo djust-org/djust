@@ -22,7 +22,8 @@
       "id": "data_table.row_click",
       "event": "open_row",
       "params": {
-        "value": "1"
+        "value": "Ann",
+        "row_key": "1"
       },
       "tag": "tr",
       "attrs": [
@@ -32,6 +33,10 @@
         ],
         [
           "dj-value-value",
+          "Ann"
+        ],
+        [
+          "dj-value-row-key",
           "1"
         ]
       ]
@@ -251,6 +256,33 @@
         [
           "dj-click",
           "open_file"
+        ]
+      ]
+    },
+    {
+      "id": "data_card_grid",
+      "event": "open_card",
+      "params": {
+        "title": "Alpha",
+        "category": "news"
+      },
+      "tag": "div",
+      "attrs": [
+        [
+          "data-category",
+          "news"
+        ],
+        [
+          "dj-click",
+          "open_card"
+        ],
+        [
+          "dj-value-title",
+          "Alpha"
+        ],
+        [
+          "dj-value-category",
+          "news"
         ]
       ]
     },

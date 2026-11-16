@@ -2170,7 +2170,7 @@ class DataCardGridNode(template.Node):
                 continue
             title = conditional_escape(str(it.get("title", "")))
             desc = conditional_escape(str(it.get("description", "")))
-            cat = attr_text(it.get(fk, ""))  # only in data-category=
+            cat = attr_text(it.get(fk, ""))  # only in data-category= / dj-value-category=
             image = it.get("image", "")
 
             img_html = ""
@@ -2185,6 +2185,7 @@ class DataCardGridNode(template.Node):
             if e_event:
                 click_attr = (
                     f' dj-click="{e_event}" dj-value-title="{attr_text(it.get("title", ""))}"'
+                    f' dj-value-category="{cat}"'
                 )
 
             cards.append(

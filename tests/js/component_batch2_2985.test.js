@@ -66,10 +66,10 @@ const LIGHTBOX = ({ active = 1, total = 3 } = {}) => {
     return '<div class="dj-lightbox" dj-hook="ImageLightbox" data-close-event="close_lightbox" data-navigate-event="lightbox_navigate" role="dialog" aria-modal="true">' +
         '<div class="dj-lightbox__backdrop" dj-click="close_lightbox"></div>' +
         '<button class="dj-lightbox__close" dj-click="close_lightbox" aria-label="Close">&times;</button>' +
-        (total > 1 ? `<button class="dj-lightbox__prev" dj-click="lightbox_navigate" data-value="${active - 1}" aria-label="Previous">&#8249;</button>` : '') +
+        (total > 1 ? `<button class="dj-lightbox__prev" dj-click="lightbox_navigate" dj-value-value="${active - 1}" aria-label="Previous">&#8249;</button>` : '') +
         `<div class="dj-lightbox__stage"><img class="dj-lightbox__image" src="/${name}.jpg" alt="${name.toUpperCase()}">` +
         (caption ? `<p class="dj-lightbox__caption">${caption}</p>` : '') + '</div>' +
-        (total > 1 ? `<button class="dj-lightbox__next" dj-click="lightbox_navigate" data-value="${active + 1}" aria-label="Next">&#8250;</button>` : '') +
+        (total > 1 ? `<button class="dj-lightbox__next" dj-click="lightbox_navigate" dj-value-value="${active + 1}" aria-label="Next">&#8250;</button>` : '') +
         (total > 1 ? `<span class="dj-lightbox__counter">${active + 1} of ${total}</span>` : '') + '</div>';
 };
 
@@ -84,7 +84,7 @@ const node = ({ name, type = 'file', depth = 0, selected = false, expanded = tru
             `<span class="dj-file-tree__name">${name}</span></div>` +
             `<div class="dj-file-tree__children"${expanded ? '' : ' hidden'}>${children.map((c) => node({ ...c, depth: depth + 1 })).join('')}</div>`;
     }
-    return `<div class="dj-file-tree__node dj-file-tree__node--${type}${sel}" ${pad} data-name="${name}" data-type="${type}" dj-click="select_file" role="treeitem" tabindex="0">` +
+    return `<div class="dj-file-tree__node dj-file-tree__node--${type}${sel}" ${pad} data-name="${name}" dj-value-name="${name}" dj-value-type="${type}" dj-click="select_file" role="treeitem" tabindex="0">` +
         `<span class="dj-file-tree__icon" aria-hidden="true">&#x1F4C4;</span><span class="dj-file-tree__name">${name}</span></div>`;
 };
 

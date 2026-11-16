@@ -86,10 +86,10 @@ NON_ARGUMENTS: Dict[str, Tuple[str, Optional[Tuple[str, ...]]]] = {
         "read by theme-toggle.js; the argument is dj-value-value",
         ("components/templatetags/djust_components.py",),
     ),
-    "data-row-key": (
-        "read by data-table.js / data-grid.js for a cell edit; a row click's argument "
-        "is dj-value-value",
-        ("components/rust_handlers.py", "components/templatetags/djust_components.py"),
+    "data-theme-modal-close": (
+        "the theming modal's close control, which theming components.js closes on the "
+        "client when no server event does; its argument is dj-value-value",
+        ("theming/templates/djust_theming/components/modal.html",),
     ),
     "data-col-key": (
         "column key read by data-table.js for reorder and visibility; a sortable "
@@ -104,10 +104,6 @@ NON_ARGUMENTS: Dict[str, Tuple[str, Optional[Tuple[str, ...]]]] = {
     "data-date": (
         "calendar day marker; the day is sent as dj-value-value",
         ("components/templatetags/_advanced.py", "components/components/calendar_view.py"),
-    ),
-    "data-category": (
-        "card filter marker; the card's arguments are its dj-value-* (ADR-033)",
-        ("components/templatetags/_advanced.py", "components/components/data_card_grid.py"),
     ),
     # On a form-field binding, which collects no data-* under either policy.
     "data-parent": (
@@ -238,6 +234,7 @@ _EVENT_HEAVY_CONTEXT: Dict[str, Any] = {
     "options": [{"value": "a", "label": "A"}, {"value": "b", "label": "B"}],
     "notes": [{"id": "n1", "title": "Hello", "body": "World", "read": False}],
     "nodes": [{"name": "a.py", "type": "file"}],
+    "cards": [{"title": "Alpha", "category": "news"}],
 }
 
 
@@ -269,6 +266,41 @@ def _rendered_sources() -> Iterator[Tuple[str, str]]:
         yield f"{name} (django)", _render_django(src, _EVENT_HEAVY_CONTEXT)
         yield f"{name} (rust)", _render_rust(src, _EVENT_HEAVY_CONTEXT)
     yield from _rendered_component_instances()
+    yield from _rendered_theming()
+
+
+def _rendered_theming() -> Iterator[Tuple[str, str]]:
+    """The theming components: every catalogue example through its own tag, and the
+    tags with their events switched on (the examples leave most of them off)."""
+    from django.template import RequestContext
+
+    from djust.theming.contracts import COMPONENT_CONTRACTS
+    from djust.theming.gallery.catalogue import _render_template_examples
+    from djust.theming.gallery.context import _EXAMPLE_BUILDERS
+    from djust.theming.templatetags import theme_components as tc
+
+    for name in COMPONENT_CONTRACTS:
+        builder = _EXAMPLE_BUILDERS.get(name)
+        for example in _render_template_examples(name, builder() if builder else []):
+            yield f"theme_{name}", example["html"]
+    ctx = RequestContext({})
+    yield (
+        "theme_modal",
+        str(tc.theme_modal(ctx, id="m1", title="T", is_open=True, component_id="m")),
+    )
+    yield "theme_dropdown", str(tc.theme_dropdown(ctx, id="d1", label="L", component_id="d"))
+    yield (
+        "theme_tabs",
+        str(tc.theme_tabs(ctx, id="t1", tabs=[{"label": "A"}, {"label": "B"}], component_id="t")),
+    )
+    yield (
+        "theme_nav_group",
+        str(
+            tc.theme_nav_group(
+                ctx, label="G", items=[{"label": "a", "url": "/a/"}], toggle_event="tog"
+            )
+        ),
+    )
 
 
 def _rendered_component_instances() -> Iterator[Tuple[str, str]]:
@@ -281,6 +313,12 @@ def _rendered_component_instances() -> Iterator[Tuple[str, str]]:
 
     yield "Button", str(Button(label="Save", action="save", data={"form_id": "1"}).render())
     yield "Card", str(Card(content="x", action="open", data={"card_id": "1"}).render())
+    from djust.components.components import DataCardGrid
+
+    yield (
+        "DataCardGrid",
+        str(DataCardGrid(items=[{"title": "A", "category": "news"}], event="open").render()),
+    )
     yield (
         "PaginationComponent",
         str(PaginationComponent(component_id="p1", current_page=2, total_pages=5).render()),
@@ -315,7 +353,11 @@ def _rendered_component_instances() -> Iterator[Tuple[str, str]]:
 # --------------------------------------------------------------------------- #
 
 _TAG = re.compile(r"<[a-zA-Z][\w-]*\b[^<>]*>", re.S)
-_ATTR_NAME = re.compile(r"(?<![\w-])((?:dj|data)-[a-zA-Z0-9_:.-]+)(?==)")
+# An attribute name, with or without a value (``data-x="..."`` or a bare ``data-x``).
+# Values are blanked out first (``_VALUES``), so a class like ``data-table-row`` is not
+# read as an attribute.
+_ATTR_NAME = re.compile(r"(?<![\w-])((?:dj|data)-[a-zA-Z0-9_:.-]*[a-zA-Z0-9])(?=[\s=>/'\"{]|$)")
+_VALUES = re.compile(r"""=\s*(?:"[^"]*"|'[^']*')""")
 
 
 def _framework_sources() -> List[Path]:
@@ -341,7 +383,7 @@ def _source_violations(path: Path, rel: Optional[str] = None) -> List[str]:
     rel = rel or str(path.relative_to(PACKAGE))
     found = []
     for line, span in _source_spans(path.read_text()):
-        attrs = [(name, None) for name in _ATTR_NAME.findall(span)]
+        attrs = [(name, None) for name in _ATTR_NAME.findall(_VALUES.sub("=", span))]
         for name in _violations(attrs, rel):
             found.append(f"{rel}:{line} {name}")
     return sorted(set(found))
@@ -408,6 +450,7 @@ class TestNoDataArguments:
             '<input dj-input="filter" data-column="name">',
             '<span dj-click="start" data-field="title">x</span>',
             '<tr dj-click="pick" data-row-id="7">x</tr>',
+            '<button dj-click="pick" data-qux>x</button>',
         ],
     )
     def test_the_rendered_check_flags_a_data_argument(self, markup):
@@ -417,10 +460,15 @@ class TestNoDataArguments:
 
     def test_the_source_check_flags_a_data_argument(self, tmp_path):
         probe = tmp_path / "probe.py"
-        text = 'attr = f\' dj-click="{e}" data-value="{v}"\'\nx = \'<th dj-click="s"\n data-column="k">\'\n'
+        text = (
+            'attr = f\' dj-click="{e}" data-value="{v}"\'\n'
+            'x = \'<th dj-click="s"\n data-column="k">\'\n'
+            'y = \'<b dj-click="t" class="data-table-x" data-qux>\'\n'
+        )
         probe.write_text(text)
         found = _source_violations(probe, "components/templatetags/probe.py")
-        assert [v.split()[-1] for v in found] == ["data-value", "data-column"], found
+        # A valueless name is caught; a class value that merely looks like one is not.
+        assert [v.split()[-1] for v in found] == ["data-value", "data-column", "data-qux"], found
 
 
 # --------------------------------------------------------------------------- #
@@ -438,9 +486,13 @@ CASES: List[Dict[str, Any]] = [
     },
     {
         "id": "data_table.row_click",
-        "template": '{% data_table rows=rows columns=columns row_click_event="open_row" %}',
+        # ``value`` is the row_click_value_key column; ``row_key`` is the row's key.
+        "template": (
+            '{% data_table rows=rows columns=columns row_click_event="open_row" '
+            'row_click_value_key="name" %}'
+        ),
         "event": "open_row",
-        "params": {"value": "1"},
+        "params": {"value": "Ann", "row_key": "1"},
     },
     {
         "id": "data_table.select",
@@ -509,6 +561,12 @@ CASES: List[Dict[str, Any]] = [
         "template": '{% file_tree nodes=nodes event="open_file" %}',
         "event": "open_file",
         "params": {"name": "a.py", "type": "file"},
+    },
+    {
+        "id": "data_card_grid",
+        "template": '{% data_card_grid items=cards event="open_card" %}',
+        "event": "open_card",
+        "params": {"title": "Alpha", "category": "news"},
     },
     {
         "id": "tour",
@@ -632,8 +690,8 @@ class _UserHandlers(LiveView):
     template = "<div dj-root></div>"
 
     @event_handler()
-    def open_row(self, value: int) -> Any:
-        return value
+    def open_row(self, value: str, row_key: int) -> Any:
+        return (value, row_key)
 
     @event_handler()
     def go(self, value: int) -> Any:
@@ -667,9 +725,13 @@ class _UserHandlers(LiveView):
     def tour(self, value: str) -> Any:
         return value
 
+    @event_handler()
+    def open_card(self, title: str, category: str) -> Any:
+        return (title, category)
+
 
 _EXPECTED_USER_RESULTS = {
-    "data_table.row_click": 1,
+    "data_table.row_click": ("Ann", 1),
     "pagination": 1,
     "toast_container": "t1",
     "inline_edit": "title",
@@ -678,6 +740,7 @@ _EXPECTED_USER_RESULTS = {
     "toggle_group": ("a", "grp"),
     "file_tree": ("a.py", "file"),
     "tour": "prev",
+    "data_card_grid": ("Alpha", "news"),
 }
 
 

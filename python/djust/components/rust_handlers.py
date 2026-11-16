@@ -1372,6 +1372,9 @@ class DataTableHandler:
                 row_attrs += (
                     f' dj-click="{row_click_event}"'
                     f' dj-value-value="{escape(str(row.get(row_click_value_key, "")))}"'
+                    # The row's key, which differs from ``value`` when ``row_click_value_key``
+                    # is not the key; ``data-row-key`` stays for data-table.js (#4186).
+                    f' dj-value-row-key="{escape(row_id)}"'
                     f" {_ROW_NAV_A11Y}{row_pointer_style()}"
                 )
             elif row_url and _has_row_href(row, row_url):
