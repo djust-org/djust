@@ -40,7 +40,7 @@ Event handlers available to templates via dj-click / dj-submit:
     next_step               — merge the fields the step's form posted, validate the
                               current step, advance if valid
     prev_step               — go back one step (no validation)
-    go_to_step              — jump to a completed step (data-step_index=N)
+    go_to_step              — jump to a completed step (dj-value-step-index:int=N)
     update_step_field       — update a single field value (data-field=name)
     validate_field          — bridge for as_live_field() dj-change events: stores the
                               value and validates that one field

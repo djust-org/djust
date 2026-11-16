@@ -183,7 +183,7 @@ def test_a_marked_safe_link_class_stays_inside_the_class_attribute(
     assert "<b>" not in html and "<script>" not in html and "<img" not in html, html
 
 
-# --- the row id written into the selection checkbox's data-value -------------------------------
+# --- the row id written into the selection checkbox's dj-value-value -------------------------------
 
 
 @pytest.mark.parametrize("claim", sorted(CLAIMS))
@@ -195,7 +195,7 @@ def test_a_marked_safe_row_id_stays_inside_the_checkbox_value(claim: str, payloa
     )
     p = page(html)
     assert p.handlers == [], html
-    assert [c["data-value"] for c in p.checkboxes] == [payload], html
+    assert [c["dj-value-value"] for c in p.checkboxes] == [payload], html
 
 
 @pytest.mark.parametrize("claim", sorted(CLAIMS))
@@ -208,18 +208,18 @@ def test_a_marked_safe_row_click_value_stays_inside_data_value(claim: str, paylo
     )
     p = page(html)
     assert p.handlers == [], html
-    assert p.rows[0]["data-value"] == payload, html
+    assert p.rows[0]["dj-value-value"] == payload, html
 
 
 @pytest.mark.parametrize("claim", sorted(CLAIMS))
 @pytest.mark.parametrize("payload", BREAKOUTS)
 def test_a_marked_safe_column_key_stays_inside_the_sort_value(claim: str, payload: str) -> None:
-    """The header's ``data-value`` is the column key: the same attribute rule (a folded-in sink)."""
+    """The header's ``dj-value-value`` is the column key: the same attribute rule (a folded-in sink)."""
     cols = [{"key": CLAIMS[claim](payload), "label": "N"}]
     html = render({"id": 1}, cols, args="")
     p = page(html)
     assert p.handlers == [], html
-    assert [t["data-value"] for t in p.sortable] == [payload], html
+    assert [t["dj-value-value"] for t in p.sortable] == [payload], html
 
 
 # --- the TEXT cell keeps what the developer marked safe (the legitimate use) -------------------
@@ -268,7 +268,9 @@ def test_both_engines_agree_on_a_marked_safe_row_id_in_the_checkbox(
     ctx = {"rows": [{"id": CLAIMS[claim](payload), "name": "N"}], "cols": COLS, "sel": []}
     src = "{% data_table rows=rows columns=cols selectable=True selected_rows=sel %}"
     py, rs = page(_django(src, ctx)), page(_rust(src, ctx))
-    assert [c["data-value"] for c in py.checkboxes] == [c["data-value"] for c in rs.checkboxes]
+    assert [c["dj-value-value"] for c in py.checkboxes] == [
+        c["dj-value-value"] for c in rs.checkboxes
+    ]
     assert py.handlers == rs.handlers == []
 
 

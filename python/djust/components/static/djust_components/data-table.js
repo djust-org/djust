@@ -121,7 +121,7 @@
           // Use djust pushEvent if available via dj-click simulation
           var hiddenBtn = wrapper.querySelector(".data-table-reorder-trigger");
           if (hiddenBtn) {
-            hiddenBtn.setAttribute("data-value", newOrder);
+            hiddenBtn.setAttribute("dj-value-value", newOrder);
             hiddenBtn.click();
           }
         }
@@ -198,7 +198,7 @@
           });
           var trigger = wrapper.querySelector(".data-table-visibility-trigger");
           if (trigger) {
-            trigger.setAttribute("data-value", visible.join(","));
+            trigger.setAttribute("dj-value-value", visible.join(","));
             trigger.click();
           }
         }
@@ -272,7 +272,7 @@
           // Fire edit event via hidden trigger
           var trigger = wrapper.querySelector(".data-table-edit-trigger");
           if (trigger) {
-            trigger.setAttribute("data-value", JSON.stringify({
+            trigger.setAttribute("dj-value-value", JSON.stringify({
               row_key: rowKey,
               column: colKey,
               value: newValue

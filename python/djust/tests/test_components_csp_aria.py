@@ -130,7 +130,7 @@ class TestThemeToggle:
         render = _django if engine == "django" else _rust
         out = render('{% theme_toggle event="set_theme" %}')
         assert out.count('dj-click="set_theme"') == 3
-        assert 'data-value="dark"' in out
+        assert 'dj-value-value="dark"' in out
 
     def test_engines_agree(self):
         out = _both('{% theme_toggle current="light" event="set_theme" %}')
@@ -171,7 +171,7 @@ class TestRichSelect:
         listbox = re.search(r'<div class="rich-select-dropdown" role="listbox" id="([^"]+)"', out)
         assert listbox, out
         assert f'aria-controls="{listbox.group(1)}"' in out
-        assert re.search(r'data-value="b"[^>]*aria-selected="true"', out)
+        assert re.search(r'dj-value-value="b"[^>]*aria-selected="true"', out)
 
 
 class TestCombobox:
@@ -197,7 +197,8 @@ class TestCombobox:
         assert 'id="city-listbox" role="listbox"' in out
         assert out.count('role="option"') == 2
         assert re.search(
-            r'aria-selected="true"[^>]*data-value="a"|data-value="a"[^>]*aria-selected="true"', out
+            r'aria-selected="true"[^>]*dj-value-value="a"|dj-value-value="a"[^>]*aria-selected="true"',
+            out,
         )
 
 
@@ -258,10 +259,12 @@ class TestDropdownMenu:
     def test_radio_and_checkbox_items(self, engine):
         out = self._render(engine)
         assert re.search(
-            r'role="menuitemradio" aria-checked="true"[^>]*dj-click="set_mode" data-value="light"',
+            r'role="menuitemradio" aria-checked="true"[^>]*dj-click="set_mode" dj-value-value="light"',
             out,
         ), out
-        assert re.search(r'role="menuitemradio" aria-checked="false"[^>]*data-value="dark"', out)
+        assert re.search(
+            r'role="menuitemradio" aria-checked="false"[^>]*dj-value-value="dark"', out
+        )
         assert re.search(
             r'role="menuitemcheckbox" aria-checked="true"[^>]*dj-click="toggle_details"', out
         )

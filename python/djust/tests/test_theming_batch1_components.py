@@ -446,7 +446,7 @@ class TestTabsComponent(ComponentTestCase):
 
         self.assert_contains(html, 'dj-click="set_tab"')
         for index in range(3):
-            self.assert_contains(html, f'data-value="{index}"')
+            self.assert_contains(html, f'dj-value-value="{index}"')
         # The client fallback stays alongside it. A plain page — the theme
         # gallery, the theme editor — has no server to dispatch to, and the
         # gallery cannot become a LiveView (its 25 `theme_*` tags are

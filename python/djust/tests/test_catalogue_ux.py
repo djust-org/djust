@@ -300,7 +300,7 @@ async def _mount(component_name: str):
 async def test_a_playground_chip_patches_only_the_preview():
     communicator, mounted = await _mount("button")
     try:
-        assert 'data-value="variant:ghost"' in mounted.get("html", "")
+        assert 'dj-value-value="variant:ghost"' in mounted.get("html", "")
         await communicator.send_json_to(
             {
                 "type": "event",

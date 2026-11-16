@@ -9,7 +9,7 @@
  *
  * The template tag emits one of two row shapes when row navigation is
  * enabled:
- *   1. `dj-click="<event>" data-value="<row_key>"` (Option B, preferred):
+ *   1. `dj-click="<event>" dj-value-value="<row_key>"` (Option B, preferred):
  *      djust's existing event binder fires the LiveView event on
  *      bubble-phase click. This module's job is purely defensive —
  *      cancel the click in the capture phase when the target is a

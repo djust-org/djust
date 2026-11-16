@@ -165,7 +165,7 @@
         const hidden = box.querySelector('.combobox-value');
         if (!hidden) return null;
         const current = _comboboxOptions(box).filter(function (opt) {
-            return opt.getAttribute('data-value') === hidden.value;
+            return opt.getAttribute('dj-value-value') === hidden.value;
         })[0];
         return current ? current.textContent.trim() : '';
     }
@@ -177,7 +177,7 @@
         const hidden = box.querySelector('.combobox-value');
         const input = _comboboxInput(box);
         const label = option.textContent.trim();
-        if (hidden && input && hidden.value === option.getAttribute('data-value')) {
+        if (hidden && input && hidden.value === option.getAttribute('dj-value-value')) {
             input.value = label;
             _setComboboxOpen(box, false);
             return;
@@ -197,14 +197,14 @@
         const hidden = box.querySelector('.combobox-value');
         const input = box.querySelector('.combobox-input');
         if (!hidden || !input) return;  // multiple mode: the server renders the tags
-        hidden.value = option.getAttribute('data-value') || '';
+        hidden.value = option.getAttribute('dj-value-value') || '';
         input.value = option.textContent.trim();
         _markSelected(_comboboxOptions(box), option, 'combobox-option-selected');
     }
 
     function _pickRichSelectOption(root, option) {
         const hidden = root.querySelector('input[type=hidden]');
-        if (hidden) hidden.value = option.getAttribute('data-value') || '';
+        if (hidden) hidden.value = option.getAttribute('dj-value-value') || '';
         const trigger = root.querySelector('.rich-select-trigger');
         const chevron = trigger && trigger.querySelector('.rich-select-chevron');
         if (trigger && chevron) {
@@ -277,7 +277,7 @@
             const target = activeOption || _exactComboboxMatch(box, input.value);
             const hidden = box.querySelector('.combobox-value');
             if (target && (activeOption || !hidden ||
-                           hidden.value !== target.getAttribute('data-value'))) {
+                           hidden.value !== target.getAttribute('dj-value-value'))) {
                 e.preventDefault();
                 _commitComboboxOption(box, target);
             } else if (hidden) {
@@ -695,7 +695,7 @@
             _markSelected(options, null, 'combobox-option-selected');
         } else {
             const current = options.filter(function (opt) {
-                return opt.getAttribute('data-value') === hidden.value;
+                return opt.getAttribute('dj-value-value') === hidden.value;
             })[0];
             input.value = current ? current.textContent.trim() : '';
         }

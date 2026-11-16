@@ -731,6 +731,9 @@ def test_every_attribute_the_client_reads_is_classified():
     source = _client_sources()
     read = set(re.findall(r"""(?:get|has)Attribute\(\s*['"](dj-[a-z-]+)['"]""", source))
     read |= set(re.findall(r"\[(dj-[a-z-]+)\]", source))
+    # dj-value-* is the argument family, not a directive: component behaviours
+    # read an option's dj-value-value (#4186).
+    read = {name for name in read if not name.startswith("dj-value-")}
     unclassified = sorted(read - set(DIRECTIVES) - NON_EVENT_ATTRIBUTES)
     assert unclassified == [], "classify these client attributes: %s" % unclassified
     assert not set(DIRECTIVES) & NON_EVENT_ATTRIBUTES

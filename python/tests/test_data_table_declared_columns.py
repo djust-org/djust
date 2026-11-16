@@ -71,7 +71,7 @@ def test_filter_pipeline_skips_undeclared_keys_set_directly(view):
 
 
 def test_filter_accepts_data_column_kwarg(view):
-    view.on_table_filter(value="oth", **{"data-column": "name"})
+    view.on_table_filter(value="oth", column="name")
     assert _names(view) == ["others"]
 
 

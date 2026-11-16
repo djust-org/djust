@@ -424,7 +424,7 @@ class AccordionItemHandler:
         return _safe(
             f'<div class="accordion-item {open_cls}">'
             f'<button class="accordion-trigger" aria-expanded="{expanded}" '
-            f'dj-click="{event}" data-value="{item_id}">'
+            f'dj-click="{event}" dj-value-value="{item_id}">'
             f'<span class="accordion-title">{title}</span>'
             f'<svg class="accordion-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
             f'<polyline points="6 9 12 15 18 9"></polyline></svg>'
@@ -508,7 +508,7 @@ class PaginationHandler:
         prev_disabled = " disabled" if page <= 1 else ""
         next_disabled = " disabled" if page >= total_pages else ""
         # One button per page number, wired like the Python tag's: ``next_event`` carrying the
-        # page number as ``data-value`` (that is the event the Python template fires for a
+        # page number as ``dj-value-value`` (that is the event the Python template fires for a
         # number, and the native markup had no numbered buttons at all, #3669).
         numbered = ""
         for p in shown:
@@ -521,7 +521,7 @@ class PaginationHandler:
             a_number = attr_text(p)
             numbered += (
                 f'<button class="pagination-btn{active}"{current} '
-                f'dj-click="{next_event}" data-value="{a_number}">{number}</button>'
+                f'dj-click="{next_event}" dj-value-value="{a_number}">{number}</button>'
             )
         return _safe(
             f'<div class="pagination">'
@@ -969,7 +969,7 @@ class DataTableHandler:
                 return (
                     f'<button type="button" class="data-table-density-btn{active}"'
                     f' data-density="{val}"'
-                    f' dj-click="{density_event}" data-value="{val}">{label}</button>'
+                    f' dj-click="{density_event}" dj-value-value="{val}">{label}</button>'
                 )
 
             toolbar_parts.append(
@@ -987,7 +987,7 @@ class DataTableHandler:
                 label = fmt_esc.upper()
                 export_btns += (
                     f'<button type="button" class="data-table-export-btn"'
-                    f' dj-click="{export_event}" data-value="{fmt_esc}">'
+                    f' dj-click="{export_event}" dj-value-value="{fmt_esc}">'
                     f"Export {label}</button>"
                 )
             toolbar_parts.append(f'<div class="data-table-export">{export_btns}</div>')
@@ -996,7 +996,7 @@ class DataTableHandler:
             toolbar_parts.append(
                 f'<div class="data-table-copy">'
                 f'<button type="button" class="data-table-copy-btn"'
-                f' dj-click="{copy_event}" data-value="selected">'
+                f' dj-click="{copy_event}" dj-value-value="selected">'
                 f"Copy</button>"
                 f"</div>"
             )
@@ -1031,7 +1031,7 @@ class DataTableHandler:
                     ba_key = ba_label = escape(str(ba))
                 ba_btns += (
                     f'<button type="button" class="data-table-bulk-btn"'
-                    f' dj-click="{bulk_action_event}" data-value="{ba_key}">'
+                    f' dj-click="{bulk_action_event}" dj-value-value="{ba_key}">'
                     f"{ba_label}</button>"
                 )
             count = len(selected_rows)
@@ -1140,7 +1140,7 @@ class DataTableHandler:
                 header_cells.append(
                     f'<th class="sortable{active}{frozen_cls}" role="columnheader"'
                     f' aria-sort="{aria_sort}"'
-                    f' dj-click="{sort_event}" data-value="{key}"{width_attr}{extra_attrs}>'
+                    f' dj-click="{sort_event}" dj-value-value="{key}"{width_attr}{extra_attrs}>'
                     f"{col_label}{arrow}</th>"
                 )
             else:
@@ -1167,7 +1167,7 @@ class DataTableHandler:
                         filter_cells.append(
                             f'<th{frozen_f}><select class="data-table-filter"'
                             f' aria-label="Filter {col_label_attr}"'
-                            f' dj-input="{filter_event}" data-column="{key}">'
+                            f' dj-input="{filter_event}" dj-value-column="{key}">'
                             f"{opts_html}"
                             f"</select></th>"
                         )
@@ -1177,7 +1177,7 @@ class DataTableHandler:
                             f' aria-label="Filter {col_label_attr}"'
                             f' placeholder="Filter..."'
                             f' value="{filter_val}"'
-                            f' dj-input="{filter_event}" data-column="{key}">'
+                            f' dj-input="{filter_event}" dj-value-column="{key}">'
                             f"</th>"
                         )
                 else:
@@ -1214,7 +1214,7 @@ class DataTableHandler:
                         f' aria-label="Expression filter {key_esc}"'
                         f' placeholder="{placeholder}"'
                         f' value="{expr_val}"'
-                        f' data-column="{key_esc}"'
+                        f' dj-value-column="{key_esc}"'
                         f' dj-input="{expression_event}"'
                         f' dj-debounce="500">'
                         f"</th>"
@@ -1239,7 +1239,7 @@ class DataTableHandler:
                 0,
                 f'<th><input type="checkbox" class="data-table-select-all"'
                 f' aria-label="Select all rows"'
-                f' dj-click="{select_event}" data-value="__all__"></th>',
+                f' dj-click="{select_event}" dj-value-value="__all__"></th>',
             )
             if has_filters:
                 filter_cells.insert(0, "<th></th>")
@@ -1371,7 +1371,7 @@ class DataTableHandler:
                 row_classes.append("data-table-row-clickable")
                 row_attrs += (
                     f' dj-click="{row_click_event}"'
-                    f' data-value="{escape(str(row.get(row_click_value_key, "")))}"'
+                    f' dj-value-value="{escape(str(row.get(row_click_value_key, "")))}"'
                     f" {_ROW_NAV_A11Y}{row_pointer_style()}"
                 )
             elif row_url and _has_row_href(row, row_url):
@@ -1399,7 +1399,7 @@ class DataTableHandler:
                     f'<button type="button" class="data-table-expand-btn"'
                     f' aria-label="Expand row" aria-expanded="{"true" if is_expanded else "false"}"'
                     f' dj-click="{expand_event}"'
-                    f' data-value="{escape(row_id)}">{exp_icon}</button>'
+                    f' dj-value-value="{escape(row_id)}">{exp_icon}</button>'
                     f"</td>"
                 )
 
@@ -1410,7 +1410,7 @@ class DataTableHandler:
                     f' aria-label="Select row"'
                     f"{checked}"
                     f' dj-click="{select_event}"'
-                    f' data-value="{escape(row_id)}"></td>'
+                    f' dj-value-value="{escape(row_id)}"></td>'
                 )
 
             # Phase 5: cell merge data for this row
@@ -1609,17 +1609,17 @@ class DataTableHandler:
                         f'<td class="data-table-row-actions">'
                         f'<button class="save-btn"'
                         f' dj-click="{save_row_event}"'
-                        f' data-value="{escape(row_id)}">Save</button>'
+                        f' dj-value-value="{escape(row_id)}">Save</button>'
                         f' <button class="cancel-btn"'
                         f' dj-click="{cancel_row_event}"'
-                        f' data-value="{escape(row_id)}">Cancel</button>'
+                        f' dj-value-value="{escape(row_id)}">Cancel</button>'
                         f"</td>"
                     )
                 else:
                     cells += (
                         f'<td class="data-table-row-actions">'
                         f'<button dj-click="{edit_row_event}"'
-                        f' data-value="{escape(row_id)}">Edit</button>'
+                        f' dj-value-value="{escape(row_id)}">Edit</button>'
                         f"</td>"
                     )
 
@@ -1666,7 +1666,7 @@ class DataTableHandler:
                     is_collapsed = gval in collapsed_group_set
                     toggle_attr = ""
                     if collapsible_groups:
-                        toggle_attr = f' dj-click="{group_toggle_event}" data-value="{g_esc}"'
+                        toggle_attr = f' dj-click="{group_toggle_event}" dj-value-value="{g_esc}"'
                     collapse_icon = "&#9654;" if is_collapsed else "&#9660;"
                     group_cls = "data-table-group-header"
                     if is_collapsed:
@@ -1809,10 +1809,10 @@ class DataTableHandler:
                 f'<div class="data-table-pagination" role="navigation"'
                 f' aria-label="Table pagination">'
                 f'<button class="pagination-btn"{prev_disabled}'
-                f' dj-click="{page_event}" data-value="{prev_page}">&#8592;</button>'
+                f' dj-click="{page_event}" dj-value-value="{prev_page}">&#8592;</button>'
                 f'<span class="pagination-info">Page {page} of {total_pages}</span>'
                 f'<button class="pagination-btn"{next_disabled}'
-                f' dj-click="{page_event}" data-value="{next_page}">&#8594;</button>'
+                f' dj-click="{page_event}" dj-value-value="{next_page}">&#8594;</button>'
                 f"</div>"
             )
         elif total_pages > 1:
@@ -1880,10 +1880,10 @@ class DataTableHandler:
                     f"{preview_count} rows ready to import</span>"
                     f'<button type="button" class="data-table-import-confirm"'
                     f' dj-click="{import_event}"'
-                    f" data-value='{{\"confirm\":true}}'>Confirm Import</button>"
+                    f" dj-value-value='{{\"confirm\":true}}'>Confirm Import</button>"
                     f'<button type="button" class="data-table-import-cancel"'
                     f' dj-click="{import_event}"'
-                    f" data-value='{{\"cancel\":true}}'>Cancel</button>"
+                    f" dj-value-value='{{\"cancel\":true}}'>Cancel</button>"
                     f"</div>"
                 )
 
@@ -2595,7 +2595,7 @@ class FormArrayHandler:
             if can_remove:
                 remove_html = (
                     f'<button class="dj-form-array__remove" type="button" '
-                    f'dj-click="{e_remove_event}" data-value="{i}" '
+                    f'dj-click="{e_remove_event}" dj-value-value="{i}" '
                     f'aria-label="Remove row {i + 1}">&times;</button>'
                 )
             rows_html.append(

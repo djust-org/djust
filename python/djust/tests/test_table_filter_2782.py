@@ -19,10 +19,11 @@ do not drift (#1646):
 - controls: the tag's search box is ``dj-input`` + ``dj-debounce="300"`` with
   ``role="searchbox" aria-label="Search table"``; its filter row is a second
   ``<thead>`` row of ``aria-label="Filter {label}"`` inputs carrying
-  ``data-column`` (``rust_handlers.py`` search bar / ``filter_cells``).
+  ``dj-value-column`` (``rust_handlers.py`` search bar / ``filter_cells``; it was
+  ``data-column``, which a form-field binding never sends, until #4186).
 
 The reproducers send exactly what the client builds from the RENDERED input
-(``dj-input`` → ``{value, <data-*>}``, ``data-component-id`` → ``component_id``)
+(``dj-input`` → ``{value, <dj-value-*>}``, ``data-component-id`` → ``component_id``)
 over a real ``WebsocketCommunicator``. Harness lifted from
 ``test_table_selection_2779.py``.
 """
@@ -147,24 +148,23 @@ def _global_input(html: str) -> str:
 
 def _column_input(html: str, key: str) -> str:
     for t in _inputs(html, "filter_column"):
-        if _attrs(t).get("data-column") == key:
+        if _attrs(t).get("dj-value-column") == key:
             return t
     raise AssertionError(f"no column filter input for {key!r} in: {html}")
 
 
 def _client_input_params(tag: str, typed: str) -> Dict[str, Any]:
     """The params the client sends for a ``dj-input`` on ``tag`` after the user
-    typed ``typed``: every ``data-*`` as a snake_case key, ``data-component-id``
+    typed ``typed``: every ``dj-value-*`` as a snake_case key (``buildFormEventParams``
+    collects no ``data-*`` under either policy, #4186), ``data-component-id``
     → ``component_id``, and ``value`` = the input's text (``09-event-binding.js``
     ``value: e.target.value``)."""
     params: Dict[str, Any] = {}
     for name, value in _attrs(tag).items():
-        if not name.startswith("data-"):
-            continue
         if name == "data-component-id":
             params["component_id"] = value
-            continue
-        params[name[5:].replace("-", "_")] = value
+        elif name.startswith("dj-value-"):
+            params[name[len("dj-value-") :].split(":")[0].replace("-", "_")] = value
     params["value"] = typed
     return params
 
@@ -466,7 +466,7 @@ class TestFilterState:
 class TestRenderedFilterControlsCarryTheirRouting:
     """Every branch (#1646): the global input and each column input are
     ``dj-input`` controls routed to the table, debounced, labelled, and carrying
-    the ``data-column`` their handler takes as ``column``."""
+    the ``dj-value-column`` their handler takes as ``column``."""
 
     @pytest.mark.parametrize("framework", _FRAMEWORKS)
     def test_global_input(self, framework):
@@ -485,12 +485,12 @@ class TestRenderedFilterControlsCarryTheirRouting:
     def test_column_inputs(self, framework):
         html = _render_under(_table(column_filters={"email": "<x>"}), framework)
         cols = _inputs(html, "filter_column")
-        assert [_attrs(t)["data-column"] for t in cols] == ["name", "email"], html
+        assert [_attrs(t)["dj-value-column"] for t in cols] == ["name", "email"], html
         for t in cols:
             a = _attrs(t)
             assert a["data-component-id"] == "t1", t
             assert a["dj-debounce"] == "300", t
-            assert a["aria-label"] == f"Filter {a['data-column'].capitalize()}", t
+            assert a["aria-label"] == f"Filter {a['dj-value-column'].capitalize()}", t
         assert _attrs(_column_input(html, "email"))["value"] == "&lt;x&gt;"
         # A second <thead> row: one cell per column plus the checkbox column.
         thead = html[html.index("<thead") : html.index("</thead>")]

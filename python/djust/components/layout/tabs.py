@@ -113,14 +113,14 @@ class TabsComponent(LiveComponent):
         attrs = f'dj-click="{conditional_escape(self.action)}"'
         if self.action == "activate_tab":
             attrs += f' data-component-id="{conditional_escape(self.component_id)}"'
-        return f'{attrs} data-tab="{attr_text(tab_id)}"'
+        return f'{attrs} dj-value-tab="{attr_text(tab_id)}"'
 
     @event_handler()
     def activate_tab(self, tab: str = "", **kwargs: Any) -> None:
         """Switch to a different tab.
 
         Decorated because only @event_handler methods are client events (#2776); the
-        parameter is ``tab`` because the button sends ``data-tab``.
+        parameter is ``tab`` because the button sends ``dj-value-tab``.
         """
         self.active = tab
         self.trigger_update()

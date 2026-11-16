@@ -1,6 +1,6 @@
 {% comment %}
 Server-driven tabs. Each tab button carries `dj-click="set_tab"` with its index
-as `data-value`, so the active tab lives in the host LiveView's state and the
+as `dj-value-value`, so the active tab lives in the host LiveView's state and the
 markup below is re-rendered from it.
 
 The `data-theme-*` attributes below are the client fallback, not the primary
@@ -36,7 +36,7 @@ moves.
                 aria-selected="{% if forloop.counter0|stringformat:'s' == active|stringformat:'s' %}true{% else %}false{% endif %}"
                 aria-controls="{{ id|force_escape }}-panel-{{ forloop.counter0 }}"
                 dj-click="set_tab"
-                data-value="{{ forloop.counter0 }}"
+                dj-value-value="{{ forloop.counter0 }}"
                 {% if component_id %}data-component-id="{{ component_id|force_escape }}"{% endif %}
                 {% if forloop.counter0|stringformat:'s' != active|stringformat:'s' %}tabindex="-1"{% endif %}>
             {{ tab.label }}

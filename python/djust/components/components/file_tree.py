@@ -191,10 +191,16 @@ class FileTree(Component):
                 f"{''.join(children_html)}</div>"
             )
 
+        # The row's arguments are its name and type (#4186): ``data-name`` stays
+        # for the FileTree hook, which reads it. An identity ``name`` the instance
+        # was given wins, as it did over the row's ``data-name`` before.
+        row: dict[str, Any] = {"type": node_type}
+        if not self.__dict__.get("_identity"):
+            row["name"] = name
         return (
             f'<div class="dj-file-tree__node{type_cls}{selected_cls}"'
-            f'{indent_style} data-name="{e_name}" data-type="{html.escape(node_type)}" '
-            f'{self.event_attrs(self.event)} role="treeitem" tabindex="0">'
+            f'{indent_style} data-name="{e_name}" '
+            f'{self.event_attrs(self.event, **row)} role="treeitem" tabindex="0">'
             f'{icon_html}<span class="dj-file-tree__name">{e_name}</span></div>'
         )
 

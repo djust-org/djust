@@ -582,7 +582,7 @@ class FileTreeNode(template.Node):
 
         return (
             f'<div class="dj-file-tree__node{type_cls}{selected_cls}"'
-            f'{indent_style} data-name="{a_name}" data-type="{e_type}" '
+            f'{indent_style} data-name="{a_name}" dj-value-name="{a_name}" dj-value-type="{e_type}" '
             f'dj-click="{e_event}" role="treeitem" tabindex="0">'
             f'{icon_html}<span class="dj-file-tree__name">{e_name}</span></div>'
         )

@@ -13,7 +13,7 @@ where the reference is wrong (#3870) the reference is fixed.
 * #3872 - ``_parse_args`` stripped the whitespace of a resolved value. The Django tag keeps it.
 * #3870 - ``table.html`` read a cell as ``{{ row|dictsort:col.key|first }}``: over a dict row that
   is the first KEY, resolved against the key, i.e. ``""``. Every cell was empty, the clickable
-  row's ``data-value`` was empty, and ``sortable: False`` was read as True.
+  row's ``dj-value-value`` was empty, and ``sortable: False`` was read as True.
 
 Each case renders the same template through BOTH engines.
 """
@@ -274,7 +274,7 @@ def cells(markup: str) -> list[list[str]]:
 
 
 def row_values(markup: str) -> list[str]:
-    return re.findall(r'<tr[^>]*\bdata-value="([^"]*)"', markup)
+    return re.findall(r'<tr[^>]*\bdj-value-value="([^"]*)"', markup)
 
 
 def test_a_dict_row_renders_its_cells_on_both_engines() -> None:
@@ -491,12 +491,12 @@ def test_an_operand_the_engine_resolves_through_an_object_is_not_emptied(
         assert ("button", "dj-click", expected) in dj_attrs(html), (expr, html)
 
 
-# -- the #3884 review: the row's data-value is escaped even for a mark_safe value; the block wrapper ----
+# -- the #3884 review: the row's dj-value-value is escaped even for a mark_safe value; the block wrapper ----
 
 
 def test_a_marked_safe_row_value_cannot_leave_the_data_value_attribute() -> None:
     """``table_cell`` returns a ``mark_safe`` string as it is (a cell may carry markup); the row's
-    ``data-value`` is an ATTRIBUTE, so the template force-escapes that read (the review of #3884:
+    ``dj-value-value`` is an ATTRIBUTE, so the template force-escapes that read (the review of #3884:
     a row id of ``mark_safe('a" onmouseover="alert(1)" x="')`` rendered a live handler)."""
     from django.utils.safestring import mark_safe
 
@@ -505,14 +505,14 @@ def test_a_marked_safe_row_value_cannot_leave_the_data_value_attribute() -> None
     ctx = {"rows": [{"id": hostile, "name": "A"}], "cols": [{"key": "name", "label": "Name"}]}
     out = _django(src, ctx)
     assert 'onmouseover="alert' not in out, out
-    assert "data-value=" in out and "&quot;" in out, out
+    assert "dj-value-value=" in out and "&quot;" in out, out
 
 
 def test_a_plain_string_row_value_is_escaped_once() -> None:
     src = '{% data_table rows=rows columns=cols row_click_event="rc" %}'
     ctx = {"rows": [{"id": 'a"<b>&', "name": "A"}], "cols": [{"key": "name", "label": "Name"}]}
     out = _django(src, ctx)
-    assert 'data-value="a&quot;&lt;b&gt;&amp;"' in out, out
+    assert 'dj-value-value="a&quot;&lt;b&gt;&amp;"' in out, out
 
 
 class _Recorder:

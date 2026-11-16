@@ -390,9 +390,9 @@ class TestRenderedCheckboxesCarryTheirRouting:
 
 def _th(html: str, key: str) -> str:
     for t in _TAG.findall(html):
-        if t.startswith("<th") and _attrs(t).get("data-column") == key:
+        if t.startswith("<th") and _attrs(t).get("dj-value-column") == key:
             return t
-    raise AssertionError(f"no <th data-column={key!r}> in: {html}")
+    raise AssertionError(f"no <th dj-value-column={key!r}> in: {html}")
 
 
 def _th_inner(html: str, key: str) -> str:

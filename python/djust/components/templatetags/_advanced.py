@@ -82,21 +82,21 @@ class TourNode(template.Node):
         if idx > 0:
             prev_btn = (
                 f'<button class="dj-tour__prev" type="button" '
-                f'dj-click="{e_event}" data-value="prev">Back</button>'
+                f'dj-click="{e_event}" dj-value-value="prev">Back</button>'
             )
 
         next_label = "Finish" if idx == total - 1 else "Next"
         next_action = "finish" if idx == total - 1 else "next"
         next_btn = (
             f'<button class="dj-tour__next" type="button" '
-            f'dj-click="{e_event}" data-value="{next_action}">{next_label}</button>'
+            f'dj-click="{e_event}" dj-value-value="{next_action}">{next_label}</button>'
         )
 
         skip_btn = ""
         if show_skip and idx < total - 1:
             skip_btn = (
                 f'<button class="dj-tour__skip" data-dj-close type="button" '
-                f'dj-click="{e_event}" data-value="skip">Skip tour</button>'
+                f'dj-click="{e_event}" dj-value-value="skip">Skip tour</button>'
             )
 
         step_label = f'<span class="dj-tour__step-label">Step {idx + 1} of {total}</span>'
@@ -237,7 +237,7 @@ class CalendarViewNode(template.Node):
 
                 click_attr = ""
                 if e_event:
-                    click_attr = f' dj-click="{e_event}" data-value="{date_str}"'
+                    click_attr = f' dj-click="{e_event}" dj-value-value="{date_str}"'
 
                 cells.append(
                     f'<div class="dj-calendar__day" data-date="{date_str}"{click_attr}>'
@@ -747,7 +747,7 @@ class OrgChartNode(template.Node):
 
         click_attr = ""
         if e_event:
-            click_attr = f' dj-click="{e_event}" data-value="{attr_text(nid)}"'
+            click_attr = f' dj-click="{e_event}" dj-value-value="{attr_text(nid)}"'
 
         if avatar:
             avatar_html = (
@@ -885,14 +885,14 @@ class ComparisonTableNode(template.Node):
             if not isinstance(plan, dict):
                 continue
             name = conditional_escape(str(plan.get("name", "")))
-            a_name = attr_text(plan.get("name", ""))  # the data-value= attribute (#3904)
+            a_name = attr_text(plan.get("name", ""))  # the dj-value-value= attribute (#3904)
             price = conditional_escape(str(plan.get("price", "")))
             highlighted = plan.get("highlighted", False)
             hl_class = " dj-compare__plan--highlighted" if highlighted else ""
 
             click_attr = ""
             if e_event:
-                click_attr = f' dj-click="{e_event}" data-value="{a_name}"'
+                click_attr = f' dj-click="{e_event}" dj-value-value="{a_name}"'
 
             price_html = f'<div class="dj-compare__price">{price}</div>' if price else ""
             header_cells.append(

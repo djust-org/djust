@@ -680,7 +680,7 @@ def test_a_nested_native_accordion_keeps_its_own_component_id():
 #: ``main`` renders it (cf89695e5): nothing of #4134 may reach a standalone item.
 _STANDALONE_ITEM = (
     '<div class="accordion-item "><button class="accordion-trigger" aria-expanded="false" '
-    'dj-click="accordion_toggle" data-value="q"><span class="accordion-title">Q</span>'
+    'dj-click="accordion_toggle" dj-value-value="q"><span class="accordion-title">Q</span>'
     '<svg class="accordion-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" '
     'stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline>'
     '</svg></button><div class="accordion-panel" hidden>x</div></div>'
