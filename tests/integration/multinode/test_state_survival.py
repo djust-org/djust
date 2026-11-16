@@ -618,9 +618,9 @@ def test_components(db_cluster, survival):
         "state",
         "dropdown",
         "ws",
-        "lost: closed, with a new component id"
-        if moved["menu_open"] is False and moved["menu_id"] != probe["menu_id"]
-        else "?",
+        "restored: open, with the same component id"
+        if moved["menu_open"] is True and moved["menu_id"] == probe["menu_id"]
+        else "? %r" % (moved,),
     )
     socket_b.close()
 
@@ -635,6 +635,11 @@ def test_components(db_cluster, survival):
             outcome = "event refused (Component not found)"
         elif row == "component" and status == 200 and probe_of(payload["html"])["n"] == 3:
             outcome = "kept: the event reaches the component and its state carries"
+        elif (
+            row == "dropdown" and status == 200 and probe_of(payload["html"])["menu_open"] is False
+        ):
+            # It was open: the fallback request reached it and toggled it shut (#4046).
+            outcome = "kept: the event reaches the menu and its state carries"
         else:
             outcome = "? %s %r" % (status, payload)
         survival.observe("state", row, "http", outcome)

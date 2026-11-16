@@ -953,10 +953,9 @@ declares one component of that type. With two (`confirm = Modal()` and
 takes `component_id=`, as do `{% tooltip %}` and `{% collapsible %}`. Only the controls the component
 answers carry it; a control that sends your view's event (a search, a menu item,
 a picked date) does not, so that event still reaches your handler. Over the
-page-POST fallback (no socket and no SSE), an event carrying `component_id` is
-refused when the POST mounts the view afresh (nothing saved for the tab); with
-two components of one type, write the handler yourself if that case must work
-(tracked in #4046).
+page-POST fallback (no socket and no SSE) an event carrying `component_id` is
+routed the same way, including when the POST mounts the view afresh (nothing
+saved for the tab yet).
 
 `Carousel` needs `total`, the number of slides: declare `Carousel(total=5)` or
 set `self.slides.total = len(images)` in `mount()`. Without it previous, next

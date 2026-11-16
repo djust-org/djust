@@ -31,6 +31,7 @@ from djust.decorators import state
 from djust.runtime import ViewRuntime
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
+from djust._component_state import wire_id
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -217,10 +218,10 @@ async def test_interactive_binding_renders_and_dispatches_under_explicit(
     assert "dj-dropdown-menu" in html and "Actions" in html, html
     binding = view.menu
     assert binding is not MenuPage.__dict__["menu"]
-    assert f'data-component-id="{binding.component_id}"' in html
+    assert f'data-component-id="{wire_id(binding)}"' in html
 
-    await event(runtime, "toggle", component_id=binding.component_id)
-    await event(runtime, "select", component_id=binding.component_id, value="edit")
+    await event(runtime, "toggle", component_id=wire_id(binding))
+    await event(runtime, "select", component_id=wire_id(binding), value="edit")
     assert not transport.errors, transport.errors
     assert view.result == "picked:edit"
     assert binding.selected == "edit"

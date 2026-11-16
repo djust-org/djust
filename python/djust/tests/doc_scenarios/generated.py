@@ -166,17 +166,21 @@ def scaffold_model_form_edit(example):
 
 @scenario("catalogue-dropdown")
 def catalogue_dropdown(example):
-    # One connection, as the guide's other interactive examples run
-    # (adr034.py): 2.0 keeps no component between page-POST fallback
-    # requests, so an interactive component is reachable only on the
-    # connection that rendered it (until #4046).
-    page = H.LivePage(H.load(example))
-    project, alpha, beta = page.ids()
-    # Each menu's choice reaches only its own callback.
-    assert page.event("select", component_id=beta, value="details") == 200
-    assert (page.view.row_selection, page.view.selected_action) == ("87:details", "")
-    assert page.event("select", component_id=project, value="edit") == 200
-    assert (page.view.selected_action, page.view.row_selection) == ("edit", "87:details")
-    # The disabled item and an unknown value are refused before any callback.
-    assert page.event("select", component_id=project, value="delete") >= 400
-    assert page.event("select", component_id=alpha, value="nope") >= 400
+    # Through a page GET and HTTP-fallback POSTs, and on one connection, as the
+    # guide's other interactive examples run (adr034.py, #4046).
+    for driver in (H.Page, H.LivePage):
+        page = driver(H.load(example))
+        project, alpha, beta = page.ids()
+        # Each menu's choice reaches only its own callback.
+        assert page.event("select", component_id=beta, value="details") == 200
+        assert (page.view.row_selection, page.view.selected_action) == ("87:details", "")
+        assert page.event("select", component_id=project, value="edit") == 200
+        assert (page.view.selected_action, page.view.row_selection) == ("edit", "87:details")
+        # The disabled item and an unknown value are refused before any callback.
+        assert page.event("select", component_id=project, value="delete") >= 400
+        assert page.event("select", component_id=alpha, value="nope") >= 400
+        # A menu opened by one request is still open on the next.
+        assert page.event("toggle", component_id=alpha) == 200
+        assert page.event("select", component_id=beta, value="rename") == 200
+        assert page.view.row_menus.get("42").open
+        assert page.view.row_selection == "87:rename"

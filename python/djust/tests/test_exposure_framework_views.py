@@ -69,9 +69,11 @@ EXPLICIT = {
     "components/gallery/live_views.py:NavGalleryView",
     "components/gallery/live_views.py:OverlayGalleryView",
     "components/gallery/live_views.py:TypographyGalleryView",
+    "components/interactive_examples.py:DropdownMenuExample",
     "theming/gallery/live_views.py:ComponentsCategoryView",
     "theming/gallery/live_views.py:ComponentsDetailView",
     "theming/gallery/live_views.py:ComponentsIndexView",
+    "theming/gallery/live_views.py:InteractiveDropdownCatalogueView",
 }
 
 #: Shipped views pinned to the legacy policy (``exposure_policy = "legacy"`` in
@@ -99,15 +101,6 @@ LEGACY = {
         "Embeds the ModelAdmin's change_form_widgets with {% live_render %}; see ModelListView."
     ),
     "admin_ext/views.py:ModelCreateView": "A ModelDetailView; see ModelListView.",
-    "components/interactive_examples.py:DropdownMenuExample": (
-        "Its menus are interactive components addressed by a per-instance id. Only "
-        "the legacy HTTP POST fallback carries the component registry from one "
-        "request to the next, so the executable documentation scenario "
-        "(catalogue-dropdown) cannot reach a menu on an explicit view."
-    ),
-    "theming/gallery/live_views.py:InteractiveDropdownCatalogueView": (
-        "A DropdownMenuExample inside the catalogue chrome; see DropdownMenuExample."
-    ),
 }
 
 

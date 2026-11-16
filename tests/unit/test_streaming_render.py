@@ -167,6 +167,11 @@ class TestStreamingRenderEnabled:
         from djust import _automatic_state
 
         monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: "tab-streaming-1")
+        # The page's head carries the CSRF token meta (#2987), and Django masks the token anew on
+        # every get_token() call: one value for both renders, as for the tab id.
+        import django.middleware.csrf
+
+        monkeypatch.setattr(django.middleware.csrf, "get_token", lambda request: "csrf-streaming-1")
 
         # Build the streamed response through the streaming iterator.
         streaming_view = _StreamingView()

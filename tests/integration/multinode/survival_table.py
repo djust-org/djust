@@ -179,7 +179,8 @@ STATE_ROWS = (
     Row(
         "dropdown",
         "Interactive component (ADR-034 `DropdownMenu`) open state",
-        "Nothing; a reconnect closes it. No HTTP-fallback support yet (#4046).",
+        "Nothing: its state is saved with the view's declared server state; "
+        "`persist=False` on the declaration opts out.",
     ),
     Row(
         "async",
@@ -341,8 +342,10 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
     ("component", WS): Cell("restored", _T + "components"),
     ("component", RESTART): NA("same mount path as the reconnect to another process"),
     ("dropdown", SAME): Cell("kept", _T + "components"),
-    ("dropdown", HTTP): Cell("event refused (Component not found)", _T + "components"),
-    ("dropdown", WS): Cell("lost: closed, with a new component id", _T + "components"),
+    ("dropdown", HTTP): Cell(
+        "kept: the event reaches the menu and its state carries", _T + "components"
+    ),
+    ("dropdown", WS): Cell("restored: open, with the same component id", _T + "components"),
     ("dropdown", RESTART): NA("same mount path as the reconnect to another process"),
     ("async", SAME): Cell("result delivered", _T + "async_work_in_flight"),
     ("async", HTTP): NA("the HTTP fallback waits for the work inside the request"),

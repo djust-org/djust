@@ -69,6 +69,36 @@ _SELECTED = OutputContract("selected", (("value", str),))
 _TOGGLED = OutputContract("toggled", (("open", bool),))
 _SOURCE = frozenset({SOURCE_PARAMETER})
 
+#: The longest collection key ``sync()`` accepts (#4046): keys are saved with
+#: the view's state, so they are bounded like a child slot's.
+MAX_KEY_LENGTH = 128
+
+#: How many keys a collection's record remembers besides its live members
+#: (#4046): rows other tabs show and removed rows. The oldest go first; a
+#: removed row forgotten this way answers to its old id again if it returns.
+MAX_REMEMBERED = 512
+
+
+class EventRefused(ValueError):
+    """A component refused an event's input: not an error of the application.
+
+    Raised by a component's own action (an unknown or disabled selection, a
+    toggle of a browser-owned menu, an invalid visibility report) before it
+    changes anything. Every transport answers it as a refused event: 400
+    ``{"error": "Event rejected"}`` on the HTTP fallback, an error frame on the
+    WebSocket and SSE (#4046). A ``ValueError``, so existing callers that catch
+    one still do.
+    """
+
+
+def _check_persist(persist: object) -> None:
+    """``"server"`` (the default: saved with the view) or ``False`` (#4046)."""
+    if persist is not False and (type(persist) is not str or persist != "server"):
+        raise TypeError(
+            'An interactive component\'s persist is "server" (the default) or False; '
+            "its state is never kept by the browser"
+        )
+
 
 class Outputs:
     def __init__(self, source: ComponentDeclaration) -> None:
@@ -95,9 +125,11 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         label: str,
         items: list[ActionItem | SeparatorItem],
         visibility: Literal["server", "client"] = "server",
+        persist: Literal["server", False] = "server",
     ) -> None:
         if visibility not in ("server", "client"):
             raise ValueError("Dropdown visibility must be server or client")
+        _check_persist(persist)
         if type(label) is not str:
             raise TypeError("Dropdown label must be a string")
         values: set[str] = set()
@@ -129,23 +161,31 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         self._observation_sequence = 0
         self._observation_registered = False
         self._declaration: DropdownMenu | None = None
+        #: Whether the declaration's state is saved with the view (#4046).
+        self._persist: Literal["server", False] = persist
+        #: Whether ``component_id`` is derived from the declaration (an
+        #: explicit-exposure owner) rather than random (#4046).
+        self._derived_id = False
         # Keyed-collection membership (ADR-034 C3). A member is created by
         # its bound collection's ``sync()``, never by a class declaration.
         self._collection: DropdownMenuCollection | None = None
         self._member_key = ""
+        #: The member's lifetime within its collection key (#4046).
+        self._born = 0
         self.on = Outputs(self)
 
     @classmethod
-    def collection(cls) -> DropdownMenuCollection:
+    def collection(cls, *, persist: Literal["server", False] = "server") -> DropdownMenuCollection:
         """Declare a keyed collection of dropdowns (ADR-034 D5, owner decision Q6).
 
         Members are supplied by ``self.<name>.sync([(key, DropdownMenu(...)), ...])``;
         ``@<name>.on.selected`` receives whichever member emitted, whose
-        ``component.key`` is its collection key.
+        ``component.key`` is its collection key. ``persist=False``: the
+        members' state is not saved with the view (#4046).
         """
         if cls is not DropdownMenu:
             raise TypeError("DropdownMenu.collection() must be called on DropdownMenu itself")
-        return DropdownMenuCollection()
+        return DropdownMenuCollection(persist=persist)
 
     def __get__(self: D, obj: LiveView | None, objtype: type[LiveView] | None = None) -> D:
         if obj is None:
@@ -159,6 +199,10 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
             return existing
         bound = type(self)(label=self.label, items=self.items, visibility=self.visibility)
         bound._declaration = self
+        bound._persist = self._persist
+        from djust._component_state import derive_identity
+
+        derive_identity(obj, bound, self._name, None, 0)
         bound.set_parent(obj)
         obj._component_bindings[self._name] = bound
         obj._register_component(bound, attr_name=self._name)
@@ -248,16 +292,16 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         """Report a client-owned popover's visibility; emits ``toggled`` if observed."""
         self._bound_owner()
         if self.visibility != "client":
-            raise ValueError("Visibility observations require client-owned mode")
+            raise EventRefused("Visibility observations require client-owned mode")
         if not self._observes_toggle():
-            raise ValueError("Visibility observation has no declared subscription")
+            raise EventRefused("Visibility observation has no declared subscription")
         if (
             type(open) is not bool
             or type(sequence) is not int
             or not 1 <= sequence <= 2**53 - 1
             or type(lifetime) is not str
         ):
-            raise ValueError("Invalid visibility observation")
+            raise EventRefused("Invalid visibility observation")
         if lifetime != self._observation_lifetime or sequence <= self._observation_sequence:
             return
         from asgiref.sync import sync_to_async
@@ -339,6 +383,8 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
     async def toggle(self) -> None:
         """Open or close a server-owned menu; emits ``toggled``."""
         self._bound_owner()
+        if self.visibility == "client":
+            raise EventRefused("Visibility is client-owned")
         self.open = not self.open
         await self._emit(_TOGGLED, {"open": self.open})
 
@@ -346,6 +392,8 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
     async def close(self) -> None:
         """Close an open server-owned menu; emits ``toggled``."""
         self._bound_owner()
+        if self.visibility == "client":
+            raise EventRefused("Visibility is client-owned")
         if self.open:
             self.open = False
             await self._emit(_TOGGLED, {"open": False})
@@ -360,9 +408,9 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         """Choose an enabled item: validate it, record it, close; emits ``selected``."""
         self._bound_owner()
         if type(value) is not str:
-            raise TypeError("Selection must be a string")
+            raise EventRefused("Selection must be a string")
         if not self._allowed(value):
-            raise ValueError("Unknown or disabled dropdown selection")
+            raise EventRefused("Unknown or disabled dropdown selection")
         self._selected, self._open = value, False
         await self._emit(_SELECTED, {"value": value})
 
@@ -380,10 +428,44 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         self._open = opened if self.visibility == "server" else False
         self._selected = selected if self._allowed(selected) else ""
 
+    # -- the saved record (#4046) ---------------------------------------------
+    # Only what the component owns: open, the selection and, for a client-owned
+    # menu, the observation cursor that the rendered page carries. Never its
+    # configuration, callbacks or identity (code and the declaration own them).
+
+    def _record(self) -> list[object]:
+        """``[open, selected, lifetime, sequence]``: JSON primitives only."""
+        client = self.visibility == "client"
+        return [
+            False if client else self._open,
+            self._selected,
+            self._observation_lifetime if client else "",
+            self._observation_sequence if client else 0,
+        ]
+
+    def _restore_record(self, record: list[object]) -> None:
+        """Put a validated record back; emits nothing, runs no callback."""
+        opened, selected, lifetime, sequence = record
+        self._restore_state({"open": opened, "selected": selected})
+        if (
+            self.visibility == "client"
+            and type(lifetime) is str
+            and lifetime
+            and type(sequence) is int
+        ):
+            # The lifetime the page that sent this event carries, so its
+            # reports still match; the ledger stays the sequence's authority.
+            self._observation_lifetime = lifetime
+            self._observation_sequence = sequence
+            self._observation_registered = False
+
     def render(self) -> str:
         self._bound_owner()
+        from djust._component_state import wire_id
+
         client_owned = self.visibility == "client"
-        popover_id = "popover-" + self.component_id
+        component_id = wire_id(self)
+        popover_id = "popover-" + component_id
         trigger = (
             format_html(
                 '<button type="button" class="dj-dropdown-menu__trigger" popovertarget="{}">{}</button>',
@@ -450,7 +532,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
         rendered: str = format_html(
             '<div class="dj-dropdown-menu{}" data-component-id="{}">{}{}</div>',
             " dj-dropdown-menu--open" if not client_owned and self.open else "",
-            self.component_id,
+            component_id,
             trigger,
             content,
         )
@@ -475,12 +557,24 @@ class DropdownMenuCollection(ComponentDeclaration):
     #: Renders as a context value and persists as one session record.
     _djust_component_collection = True
 
-    def __init__(self) -> None:
+    def __init__(self, *, persist: Literal["server", False] = "server") -> None:
+        _check_persist(persist)
         ComponentDeclaration.__init__(self, DropdownMenu, (_SELECTED, _TOGGLED))
         self._declaration: DropdownMenuCollection | None = None
         self._view: LiveView | None = None
         self._members: dict[str, DropdownMenu] = {}
         self._order: list[str] = []
+        self._persist: Literal["server", False] = persist
+        #: Saved entries for keys this view does not hold as members now
+        #: (#4046): rows another tab of the route shows, rows that stopped being
+        #: built, and rows ``sync()`` removed (their generation one higher, so
+        #: the key's next member gets a new identity). Carried in the record so
+        #: a request that does not build a row never changes that row's id.
+        #: key -> [generation, client, open, selected, lifetime, sequence].
+        self._known: dict[str, list[object]] = {}
+        #: Keys this view removed with ``sync()``: its save writes their new
+        #: generation even over a newer stored copy (#4046).
+        self._removed: set[str] = set()
         self.on = Outputs(self)
 
     def __get__(self: C, obj: LiveView | None, objtype: type[LiveView] | None = None) -> C:
@@ -493,7 +587,7 @@ class DropdownMenuCollection(ComponentDeclaration):
             if not isinstance(existing, type(self)) or existing._declaration is not self:
                 raise RuntimeError("Interactive binding no longer matches its declaration")
             return existing
-        bound = type(self)()
+        bound = type(self)(persist=self._persist)
         bound._declaration = self
         bound._view = obj
         obj._component_bindings[self._name] = bound
@@ -560,6 +654,11 @@ class DropdownMenuCollection(ComponentDeclaration):
             key, declaration = pair
             if type(key) is not str or not key:
                 raise TypeError("Collection keys must be nonempty strings")
+            if len(key) > MAX_KEY_LENGTH and self._saves(view):
+                raise ValueError(
+                    "Collection keys are at most %d characters when the collection's state "
+                    "is saved (persist=False lifts the limit)" % MAX_KEY_LENGTH
+                )
             if key in seen:
                 raise ValueError("Duplicate collection key in sync()")
             if not isinstance(declaration, DropdownMenu):
@@ -581,14 +680,22 @@ class DropdownMenuCollection(ComponentDeclaration):
         for key, member in self._members.items():
             if members.get(key) is not member:
                 self._retire(view, member)
+                # A removal this view observed: the key's next member is a
+                # new generation, so this member's ids stay refused (#4046).
+                self._remember(
+                    key, [member._born + 1, member.visibility == "client", False, "", "", 0]
+                )
+                self._removed.add(key)
         for member, label, items in updates:
             member._label, member._items = label, items
             if not member._allowed(member._selected):
                 member._selected = ""
-        for member in created:
-            self._install(view, member)
+        adopted = [(member, self._install(view, member)) for member in created]
         self._members = members
         self._order = [key for key, *_ in plan]
+        for member, saved in adopted:
+            if saved is not None:
+                member._restore_record(saved)
 
     # -- members -----------------------------------------------------------------
 
@@ -604,17 +711,81 @@ class DropdownMenuCollection(ComponentDeclaration):
         member._member_key = key
         return member
 
-    def _install(self, view: LiveView, member: DropdownMenu) -> None:
+    def _install(self, view: LiveView, member: DropdownMenu) -> list[object] | None:
+        """Register a new member; return the saved state it adopts, if any
+        (applied by the caller once the member is in ``_members``)."""
+        from djust._component_state import derive_identity
+
+        name = self._declaration._name if self._declaration is not None else ""
+        member._persist = self._persist
+        saved = self._known.pop(member._member_key, None)
+        self._removed.discard(member._member_key)
+        adopt = saved is not None and saved[1] == (member.visibility == "client")
+        if saved is None:
+            member._born = 0
+        else:
+            # Another visibility is another member: a new generation.
+            member._born = saved[0] if adopt else saved[0] + 1  # type: ignore[assignment,operator]
+        derive_identity(view, member, name, member._member_key, member._born)
         if view._components.get(member.component_id) is not None:
             raise ValueError("Interactive component identity collision")
         member.set_parent(view)
-        declaration = self._declaration
-        view._register_component(member, attr_name=declaration._name if declaration else None)
+        view._register_component(member, attr_name=name or None)
+        return saved[2:] if adopt else None  # type: ignore[index]
 
     def _retire(self, view: LiveView, member: DropdownMenu) -> None:
         if view._components.get(member.component_id) is member:
             view._components.pop(member.component_id)
         LiveComponent.unmount(member)
+
+    # -- the saved record (#4046) ---------------------------------------------
+
+    def _saves(self, view: LiveView) -> bool:
+        """Whether this collection's record is saved with ``view``'s state."""
+        from djust._exposure import uses_legacy_exposure
+
+        return self._persist == "server" and not uses_legacy_exposure(view)
+
+    def _remember(self, key: str, entry: list[object]) -> None:
+        self._known.pop(key, None)
+        self._known[key] = entry
+        while len(self._known) > MAX_REMEMBERED:
+            self._known.pop(next(iter(self._known)))
+
+    def _record(self) -> dict[str, object]:
+        """``{"members": {key: [generation, client, open, selected, lifetime,
+        sequence]}}``: every live member, then the remembered keys (rows this
+        request did not build, and removed rows). Never the configuration
+        (``sync()`` supplies it)."""
+        members: dict[str, object] = {
+            key: [m._born, m.visibility == "client", *m._record()]
+            for key, m in ((key, self._members[key]) for key in self._order)
+        }
+        for key, entry in self._known.items():
+            members.setdefault(key, list(entry))
+        return {"members": members}
+
+    def _restore_record(self, record: dict[str, object]) -> None:
+        """Put a validated record back over the members ``mount()`` built.
+
+        A live member whose key the record holds takes its saved generation
+        and, with the same visibility, its state. The other saved keys are
+        remembered: a later ``sync()`` that builds one adopts it, and the next
+        save carries it on unchanged. A record never creates a member.
+        """
+        view = self._bound_owner()
+        made_by_mount = self._known
+        self._known = {key: list(entry) for key, entry in record["members"].items()}  # type: ignore[attr-defined]
+        for key, entry in made_by_mount.items():
+            self._known.setdefault(key, entry)
+        for key in list(self._order):
+            member = self._members[key]
+            self._retire(view, member)
+            fresh = self._new_member(key, member.label, member._items, member.visibility)
+            saved = self._install(view, fresh)
+            self._members[key] = fresh
+            if saved is not None:
+                fresh._restore_record(saved)
 
     @property
     def state(self) -> dict[str, object]:

@@ -6,14 +6,12 @@ source (``djust.tests.doc_scenarios.generated``). One source, so the example
 a reader copies is the example that is tested.
 """
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.components.interactive import DropdownMenu
 
 
 class DropdownMenuExample(LiveView):
-    # The legacy policy: without a WebSocket a menu's event reaches its menu
-    # only on a legacy view (the component registry is kept between requests).
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "djust_theming/catalogue/examples/interactive_dropdown_menu_page.html"
     login_required = False  # a public demo: it holds no user data
 
@@ -27,10 +25,10 @@ class DropdownMenuExample(LiveView):
         ],
     )
     row_menus = DropdownMenu.collection()
+    selected_action = state("")
+    row_selection = state("")
 
     def mount(self, request, **kwargs):
-        self.selected_action = ""
-        self.row_selection = ""
         self.rows = [{"id": 42, "name": "Alpha"}, {"id": 87, "name": "Beta"}]
         self.row_menus.sync(
             [
