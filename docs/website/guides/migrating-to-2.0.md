@@ -475,6 +475,15 @@ object for every event, rebuilt from its saved state as in 1.3.
   warns about it (`djust.V026`), because a legacy view renders it to every
   user.
 - **Actors** (`use_actors = True`). See [What does not survive](#5-what-does-not-survive).
+- **A legacy widget on an admin page.** The admin change list and change
+  form are explicit, and an explicit page cannot embed a view that states
+  `"legacy"`: a `change_list_widgets` / `change_form_widgets` view that
+  still does makes the page fail. Migrate the widget first.
+- **Undeclared names in a `TtydTerminalView` subclass.** The terminal base
+  class is explicit. Its own names (`ttyd_url`, `rows`, `cols`,
+  `theme_json`) come from `super().get_context_data()`; a subclass whose
+  template reads its own attributes (`session_log`, `terminal_connected`)
+  lists them there, or they render empty (`djust.T027` names each one).
 - **A `state()` grant on a legacy view.** `state(0, persist="server")` on a
   view that is still `"legacy"` raises when the view is created, so a grant
   never looks like protection it does not give. Add the grant and the policy
@@ -955,4 +964,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 8c87cee5d3b0 -->
+<!-- generated-doc prose-sha256: aa0f6a712c76 -->

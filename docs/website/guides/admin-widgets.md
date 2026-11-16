@@ -77,6 +77,12 @@ That's it.  Open `/admin/myapp/order/42/change/` and the widget renders
 above the form, receives `object_id=42`, and behaves exactly like any
 other LiveView.
 
+The change list and change form use explicit exposure, like every djust
+view, so a widget does too: its template reads its declared `state()`
+fields and what its `get_context_data()` returns. An explicit page cannot
+embed a widget that still states `exposure_policy = "legacy"` (the page
+fails to render); `manage.py check` lists such a class (`djust.V028`).
+
 ### `change_list_widgets`
 
 Same deal, but on the list page. Widgets registered here receive no
