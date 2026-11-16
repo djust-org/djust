@@ -196,7 +196,7 @@ async def _signed_in():
     from asgiref.sync import sync_to_async
     from django.contrib.auth import get_user_model
 
-    from djust.tests._live_session import live_session
+    from djust.testing import live_session
 
     def make():
         user = get_user_model().objects.create_user("turns" + uuid.uuid4().hex[:8], password="x")

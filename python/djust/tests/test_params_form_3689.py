@@ -38,7 +38,7 @@ from djust import LiveView
 from djust.decorators import event_handler, state
 
 from ._ws_frames import drain_extra, receive_until
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytestmark = pytest.mark.django_db
 

@@ -395,6 +395,7 @@ module = [
     "djust.formsets",
     "djust.simple_live_view",
     "djust.testing",
+    "djust._testing_live",
     "djust.react",
     "djust.frameworks",
     "djust.js",

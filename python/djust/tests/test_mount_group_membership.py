@@ -122,7 +122,7 @@ async def _connect():
 
     from djust.websocket import LiveViewConsumer
 
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     # A live server session: an explicit mount binds to one, so a refusal
@@ -362,7 +362,7 @@ async def test_handler_forwards_event_with_mounted_view(handler, frame_type):
 def _sse_session(path: str):
     from djust.sse import SSESession
 
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
 
     session = SSESession("22222222-2222-2222-2222-222222222222")
     request = with_live_session(RequestFactory().get(path), AnonymousUser())

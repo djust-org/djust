@@ -498,6 +498,10 @@ class SSESession:
         # Set once shutdown() queued the close sentinel: the stream reads
         # nothing after it, so later pushes are dropped (#3232).
         self._closed_sentinel_queued = False
+        # The closing stream waits ``_SESSION_LINGER_S`` for event POSTs still
+        # in flight; a client that knows it has none (djust.testing's LiveSSE,
+        # whose every POST was answered) skips the wait for this session only.
+        self._skip_close_linger = False
         # True while a live_redirect_mount mounts its destination (#3036).
         self._replacing_view = False
         # True when this session's stream GET re-opened a known id (an
@@ -1627,7 +1631,8 @@ class DjustSSEStreamView(View):
                     try:
                         # Linger briefly so in-flight event POSTs can still find
                         # the session (only meaningful for registered sessions).
-                        await _linger()
+                        if not session._skip_close_linger:
+                            await _linger()
                     finally:
                         # Only our own session: a same-owner reconnect may have
                         # replaced it under this id (#3164).

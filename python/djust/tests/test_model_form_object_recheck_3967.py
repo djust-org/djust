@@ -208,7 +208,7 @@ def _kinds(*kinds):
 
 async def _open(view_class, user, url, params=None):
     from channels.testing import WebsocketCommunicator
-    from djust.tests._live_session import live_session
+    from djust.testing import live_session
     from djust.websocket import LiveViewConsumer
 
     # The user logged into the session the socket presents: an explicit view
@@ -904,7 +904,7 @@ async def _restore(view_class, url_path, user, session, selected, typed_for):
 async def test_a_restored_view_does_not_bind_one_records_input_to_another():
     """The saved state is keyed by path, so the same session holds whichever record was open
     last. Input typed for A, then a restore with B selected: B starts from B's own values."""
-    from djust.tests._live_session import live_session
+    from djust.testing import live_session
 
     alice, a, _ = await sync_to_async(_world)()
     b = await sync_to_async(Group.objects.create)(name="Bee " + uuid.uuid4().hex[:6])

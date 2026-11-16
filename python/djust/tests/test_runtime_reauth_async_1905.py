@@ -518,7 +518,7 @@ class TestAsyncSourceReconcile:
         SSE transport."""
         from asgiref.sync import sync_to_async
 
-        from djust.tests._live_session import live_session
+        from djust.testing import live_session
 
         path = _register(_CounterSSEView)
         # One live server session for the stream and the event POST: an explicit

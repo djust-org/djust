@@ -37,7 +37,7 @@ from djust import LiveView
 from djust import _held_rows
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import background, event_handler, state
-from djust.tests._live_session import live_session
+from djust.testing import live_session
 
 TAG = {"value": ""}
 TEMPLATE = (

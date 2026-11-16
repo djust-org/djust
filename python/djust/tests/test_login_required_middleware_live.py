@@ -493,7 +493,7 @@ def _login(user):
     from django.contrib.auth import get_user_model
     from django.contrib.auth.models import AnonymousUser
 
-    from djust.tests._live_session import live_session
+    from djust.testing import live_session
 
     if not user.is_authenticated:
         return AnonymousUser(), live_session(None)

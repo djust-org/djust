@@ -19,7 +19,7 @@ from djust.decorators import event_handler, rate_limit
 from djust.rate_limit import reset_handler_buckets
 from djust.tests._ws_frames import receive_until
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 #: Handler runs, by name: a dropped event must not reach the handler.
 RAN: list = []

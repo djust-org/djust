@@ -130,7 +130,7 @@ def _allow_flow_module(settings):
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 async def test_multi_lazy_mount_flows_as_batch(_allow_flow_module):
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
 
     consumer = _FakeConsumer()
     # A live server session on the socket scope: an explicit view's mount

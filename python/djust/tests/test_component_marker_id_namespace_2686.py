@@ -34,7 +34,7 @@ from djust.decorators import event_handler
 from djust.testing import LiveViewTestClient
 from djust.utils import clear_template_dirs_cache
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytestmark = [pytest.mark.django_db]
 
