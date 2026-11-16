@@ -47,11 +47,13 @@ mark made while that render ran (another thread's write) survives it.
 
 What is walked, only on a turn that wrote (to decide and to reset): every
 attribute the view's code set (not the framework's own, ``_framework_attrs``),
-then the dicts, lists, tuples and sets they hold, to :data:`_DEPTH_LIMIT`
-levels, every item. A turn that wrote nothing walks nothing: a QuerySet stamps
-itself when it fills (which view's recorded step or render it filled in, from a
-wrapper around ``QuerySet._fetch_all``) and the cached properties a step or
-render fills are noted then. Not reset: model instances, lists of rows,
+then the dicts, lists, tuples and sets they hold, at any depth (each container
+once), every item but plain values. A turn that wrote nothing walks nothing,
+and a write whose tables meet the read set needs no walk to decide: a QuerySet
+is stamped when it fills (with a token of the view whose recorded step or
+render filled it, never reused in the process, from a wrapper around
+``QuerySet._fetch_all``; a copy or an unpickled QuerySet has no stamp) and the
+cached properties a step or render fills are noted then. Not reset: model instances, lists of rows,
 ``select_for_update()`` QuerySets, ``frozen_rows``.
 
 The recorder is one Django ``execute_wrapper`` at index 0 (the outermost) of
@@ -66,10 +68,14 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import collections
+import datetime
+import decimal
 import functools
+import itertools
 import logging
 import re
 import threading
+import uuid
 import weakref
 from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Set, Tuple, TypeVar
 
@@ -164,8 +170,24 @@ IGNORED_TABLES_SETTING = "DJUST_IGNORED_WRITE_TABLES"
 #: The project setting: every recorded write refreshes everything (round-1 rule).
 ANY_WRITE_SETTING = "DJUST_REFRESH_ON_ANY_WRITE"
 
-#: Nesting walked below a view attribute (``self.x`` is depth 0; ``self.x["k"][0]`` is 2).
-_DEPTH_LIMIT = 3
+#: Values the walk never looks into (exact types; a subclass is looked at).
+_SCALARS = frozenset(
+    {
+        int,
+        float,
+        complex,
+        bool,
+        str,
+        bytes,
+        type(None),
+        decimal.Decimal,
+        datetime.date,
+        datetime.datetime,
+        datetime.time,
+        datetime.timedelta,
+        uuid.UUID,
+    }
+)
 #: Views marked per write (the writer's tree).
 _TREE_LIMIT = 256
 #: Tables kept in a view's read set; past this the set is UNKNOWN.
@@ -202,10 +224,11 @@ _writer: contextvars.ContextVar[Optional[_Writer]] = contextvars.ContextVar(
 class _Reads:
     """What a view's own code and renders read."""
 
-    __slots__ = ("ref", "tables", "unknown", "complete", "known", "dropped")
+    __slots__ = ("ref", "token", "tables", "unknown", "complete", "known", "dropped")
 
     def __init__(self, ref: Any) -> None:
         self.ref = ref
+        self.token = next(_token_counter)  # stamps the QuerySets its view fills; never reused
         self.tables: Set[str] = set()
         self.unknown = False  # a read could not be followed, or the set overflowed
         self.complete = False  # one render finished under recording
@@ -219,6 +242,12 @@ _marked: Dict[int, List[Any]] = {}
 _read_sets: Dict[int, _Reads] = {}
 _lock = threading.Lock()
 _generation = [0]
+#: Read-set tokens, process-wide and never reused (``0`` means "no view").
+_token_counter = itertools.count(1)
+#: ``QuerySet -> token`` of the view whose recorded step or render filled it.
+#: Keyed by the object itself (weakly): a copy, a clone or an unpickled
+#: QuerySet is another object and has no stamp.
+_fill_tokens: "weakref.WeakKeyDictionary[Any, int]" = weakref.WeakKeyDictionary()
 
 
 # ---------------------------------------------------------------------------
@@ -925,7 +954,16 @@ def _stamp_fill(queryset: Any) -> None:
     recorded are found without walking the view on every render."""
     writer = _writer.get()
     view = writer.ref() if writer is not None else None
-    queryset.__dict__["_djust_filled_by"] = id(view) if view is not None else 0
+    token = 0
+    if view is not None:
+        with _lock:
+            entry = _reads_entry(view)
+            if entry is not None:
+                token = entry.token
+    try:
+        _fill_tokens[queryset] = token  # 0 overwrites an older stamp: filled again outside
+    except TypeError:
+        pass  # not weakly referable: no stamp, so it reads as filled outside
 
 
 def install_fill_stamps() -> None:
@@ -947,37 +985,38 @@ def install_fill_stamps() -> None:
     QuerySet._fetch_all = _fetch_all  # type: ignore[method-assign]
 
 
-def _unrecorded(view: Any, tree_ids: FrozenSet[int], known: FrozenSet[str]) -> bool:
-    """Whether ``view`` holds a cached value or evaluated rows filled while nothing
-    recorded: a cached property not in ``known``, or a QuerySet whose fill stamp
-    is not a view of this tree."""
-    if _filled_properties(view) - frozen_names(view) - known:
-        return True
+def _unrecorded_properties(view: Any, known: FrozenSet[str]) -> bool:
+    """A cached property ``view`` holds that was not filled while recording."""
+    return bool(_filled_properties(view) - frozen_names(view) - known)
+
+
+def _unrecorded_rows(view: Any, tokens: FrozenSet[int]) -> bool:
+    """Evaluated rows ``view`` holds whose fill stamp is not a view of this tree
+    (filled while nothing recorded, by another view, or copied). Walks."""
     for queryset in _held_querysets(view):
-        if queryset.__dict__.get("_djust_filled_by", 0) not in tree_ids:
+        if _fill_tokens.get(queryset, 0) not in tokens:
             return True
     return False
 
 
-def _view_reads(view: Any, tree_ids: FrozenSet[int]) -> Tuple[FrozenSet[str], bool]:
-    """``(tables, unknown)`` for one node of the tree."""
+def _view_reads(view: Any) -> Tuple[FrozenSet[str], bool, FrozenSet[str], int]:
+    """``(tables, unknown, known properties, token)`` recorded for one node; no walk."""
     entry = _read_sets.get(id(view))
     if entry is None or entry.ref() is not view:
         # Nothing it read was recorded: known (and empty) only if it holds
         # nothing from the database and is not a view still to render.
-        return frozenset(), _renders_itself(view) or _unrecorded(view, tree_ids, frozenset())
+        return frozenset(), _renders_itself(view), frozenset(), 0
     with _lock:
-        tables, unknown, complete, known = (
+        tables, unknown, complete, known, token = (
             frozenset(entry.tables),
             entry.unknown,
             entry.complete,
             entry.known,
+            entry.token,
         )
     if unknown or (_renders_itself(view) and not complete):
-        return frozenset(), True
-    if _unrecorded(view, tree_ids, known):
-        return frozenset(), True
-    return tables, False
+        return frozenset(), True, known, token
+    return tables, False, known, token
 
 
 def _renders_itself(view: Any) -> bool:
@@ -985,16 +1024,25 @@ def _renders_itself(view: Any) -> bool:
     return callable(getattr(type(view), "render_with_diff", None))
 
 
-def read_set(view: Any) -> Tuple[FrozenSet[str], bool]:
-    """``(tables, unknown)`` read by ``view`` and the views it shares a page with."""
+def read_set(view: Any, rows: bool = True) -> Tuple[FrozenSet[str], bool]:
+    """``(tables, unknown)`` read by ``view`` and the views it shares a page with.
+
+    With ``rows`` false the held QuerySets are not walked: what is returned as
+    known holds only if :func:`_unrecorded_rows` finds nothing for each node.
+    """
     tables: Set[str] = set()
     nodes = _tree(view)
-    tree_ids = frozenset(id(node) for node in nodes)
+    found = []
     for node in nodes:
-        node_tables, unknown = _view_reads(node, tree_ids)
-        if unknown:
+        node_tables, unknown, known, token = _view_reads(node)
+        if unknown or _unrecorded_properties(node, known):
             return frozenset(), True
         tables |= node_tables
+        found.append(token)
+    if rows:
+        tokens = frozenset(token for token in found if token)
+        if any(_unrecorded_rows(node, tokens) for node in nodes):
+            return frozenset(), True
     return frozenset(tables), False
 
 
@@ -1136,11 +1184,17 @@ def _refresh_needed(view: Any) -> bool:
     if written is None:
         _fallback("a write whose table is UNKNOWN", view)
         return True
-    reads, unknown = read_set(view)
+    reads, unknown = read_set(view, rows=False)
     if unknown:
         _fallback("a read set that is UNKNOWN", view)
         return True
-    return bool(written & reads)
+    if written & reads:
+        return True  # no walk to decide; the reset walks
+    # W and R look disjoint: only true if no held rows came from elsewhere.
+    if read_set(view)[1]:
+        _fallback("held rows filled outside the view's steps", view)
+        return True
+    return False
 
 
 def _fallback(reason: str, view: Any) -> None:
@@ -1209,9 +1263,11 @@ def _evaluated(queryset: Any) -> bool:
 
 def _held_querysets(view: Any) -> Iterator[Any]:
     """The evaluated QuerySets ``view`` holds: in the attributes its code set, and
-    in the dicts, lists, tuples and sets they hold, to :data:`_DEPTH_LIMIT`
-    levels. Every item is looked at (no shortcut and no limit): this runs only
-    on a turn that wrote, to decide and to reset."""
+    in the dicts, lists, tuples and sets they hold, at any depth, each container
+    once (a cycle is walked once). Every item is looked at except values of
+    :data:`_SCALARS`, skipped by type: there is no shortcut and no limit. This
+    runs only on a turn that wrote, and only when W and R are disjoint (to
+    confirm R) or to reset."""
     from django.db.models import QuerySet
 
     state = getattr(view, "__dict__", None)
@@ -1220,16 +1276,38 @@ def _held_querysets(view: Any) -> Iterator[Any]:
     # The framework's own attributes (set before mount(), ``_framework_attrs``)
     # hold no application rows.
     skip = frozen_names(view) | _framework_names(view)
-    pending = [(value, 0) for name, value in list(state.items()) if name not in skip]
-    containers = (dict, list, tuple, set, frozenset)
+    pending = [value for name, value in list(state.items()) if name not in skip]
+    push, pop = pending.append, pending.pop
+    seen: Set[int] = set()
+    items: Any
     while pending:
-        value, depth = pending.pop()
-        if isinstance(value, QuerySet):
+        value = pop()
+        kind = type(value)
+        if kind is dict:
+            items = value.values()
+        elif kind is list or kind is tuple or kind is set or kind is frozenset:
+            items = value
+        elif kind in _SCALARS:
+            continue
+        elif isinstance(value, QuerySet):
             if _evaluated(value):
                 yield value
-        elif depth < _DEPTH_LIMIT and isinstance(value, containers):
-            items = value.values() if isinstance(value, dict) else value
-            pending.extend((item, depth + 1) for item in items)
+            continue
+        elif isinstance(value, dict):
+            items = value.values()
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            items = value
+        else:
+            continue
+        if id(value) in seen:
+            continue  # a cycle, or one container held twice
+        seen.add(id(value))
+        items = list(items)
+        if len(items) > 16 and set(map(type, items)) <= _SCALARS:
+            continue  # every item is a plain value (checked, not sampled)
+        for item in items:
+            if type(item) not in _SCALARS:
+                push(item)
 
 
 def _framework_names(view: Any) -> FrozenSet[str]:

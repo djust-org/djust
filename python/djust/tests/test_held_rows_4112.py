@@ -13,7 +13,10 @@ Real rows throughout (``auth.Group``); nothing is stubbed.
 from __future__ import annotations
 
 import asyncio
+import copy
+import gc
 import json
+import pickle
 import re
 import threading
 import uuid
@@ -1335,19 +1338,25 @@ def test_reset_bounds_and_exclusions():
     holder.__dict__.update(
         shallow=shallow,
         nested=[{"rows": (deep,)}],  # depth 3: list -> dict -> tuple -> QuerySet
-        too_deep=[[[[_rows()]]]],  # depth 4: not reached
+        too_deep=[[[[[[_rows()]]]]], 1, "x"],  # depth 6: no depth bound
         listed=list(_rows()),
     )
-    too_deep = holder.too_deep[0][0][0][0]
+    too_deep = holder.too_deep[0][0][0][0][0][0]
+    cycle: list = [1, 2]
+    cycle.append(cycle)  # walked once, not forever
+    cycle.append({"loop": cycle, "rows": _rows()})
+    holder.__dict__["cycle"] = cycle
+    in_cycle = cycle[3]["rows"]
     with transaction.atomic():
-        for qs in (shallow, deep, too_deep, locked):
+        for qs in (shallow, deep, too_deep, locked, in_cycle):
             list(qs)
         holder.__dict__["locked"] = locked
         snapshot = holder.listed
         _held_rows.reset_held_rows(holder)
         assert shallow._result_cache is None
         assert deep._result_cache is None
-        assert too_deep._result_cache is not None
+        assert too_deep._result_cache is None
+        assert in_cycle._result_cache is None
         assert locked._result_cache is not None
         assert holder.listed is snapshot and len(snapshot) == 1
 
@@ -3129,3 +3138,117 @@ def test_rows_filled_outside_stay_unknown_after_a_render_iterates_them():
 )
 def test_a_select_part_that_writes_makes_a_with_a_write(sql):
     assert _held_rows.statement_tables(sql) == ("write", None)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_view_at_a_reused_address_does_not_inherit_the_old_views_rows():
+    """Fourth review item 1: the stamp is a token never reused, not ``id(view)``."""
+    _world()
+    reused = ignored = 0
+    for _ in range(300):
+        a = _Probe()
+        rows = _rows()
+        with _held_rows.writes_by(a):
+            list(rows)
+        old = id(a)
+        del a
+        gc.collect()
+        b = _Probe()
+        if id(b) != old:
+            continue
+        reused += 1
+        b._rows = rows  # rows b did not read
+        b._show = lambda: 1
+        b.render_with_diff()  # its render ran no SELECT
+        _held_rows.mark_tree(b, frozenset({"auth_group"}))
+        if not _held_rows.rows_written(b):
+            ignored += 1
+        _held_rows.unmark(b)
+    assert ignored == 0, (ignored, reused)
+
+
+def test_tokens_are_never_reused():
+    first = _held_rows._Reads(lambda: None).token
+    second = _held_rows._Reads(lambda: None).token
+    assert 0 < first < second
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("how", ["pickle", "deepcopy"])
+def test_a_copied_queryset_reads_as_filled_outside(how):
+    """Fourth review item 1: a restored or copied QuerySet carries no stamp."""
+    _world()
+    view = _Probe()
+    view._show = lambda: 1
+    view.render_with_diff()
+    rows = _rows()
+    with _held_rows.writes_by(view, writes=False):
+        list(rows)
+    assert _held_rows.read_set(view) == (frozenset({"auth_group"}), False)
+    copied = pickle.loads(pickle.dumps(rows)) if how == "pickle" else copy.deepcopy(rows)
+    list(copied)  # deepcopy drops the cache: filled again, outside
+    view._rows = copied
+    assert _held_rows.read_set(view)[1] is True
+
+
+@pytest.mark.django_db(transaction=True)
+def test_a_queryset_held_deep_is_refreshed():
+    """Fourth review item 2: no depth bound; a cycle is walked once."""
+    _world()
+    view = _Probe()
+    loop: list = []
+    loop.append(loop)
+    view._box = [[[[{"rows": (_rows(),), "loop": loop}]]]]
+    show = lambda: [g.name for g in view._box[0][0][0][0]["rows"][0]]  # noqa: E731
+
+    def rename_without_reading() -> None:
+        Group.objects.filter(name=TAG["value"] + "alice").update(name=TAG["value"] + "bob")
+
+    shown = _turn(view, show, rename_without_reading)
+    assert shown == [g.name for g in _rows()]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("written, walks", [("auth_group", False), ("auth_permission", True)])
+def test_the_decision_walks_only_when_w_and_r_look_disjoint(monkeypatch, written, walks):
+    """Fourth review item 3: a write meeting R refreshes without a walk to decide."""
+    _world()
+    view = _Probe()
+    view._rows = _rows()
+    view._show = lambda: [g.name for g in view._rows]
+    view.render_with_diff()
+    calls = []
+    original = _held_rows._held_querysets
+    monkeypatch.setattr(_held_rows, "_held_querysets", lambda v: calls.append(v) or original(v))
+    _held_rows.mark_tree(view, frozenset({written}))
+    assert _held_rows.rows_written(view) is (not walks)
+    assert bool(calls) is walks
+    _held_rows.unmark(view)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "shape", ["ordered-dict", "default-dict", "long-mixed-list", "int-subclass"]
+)
+def test_held_rows_in_other_containers_are_found(shape):
+    """The walk follows dict and list subclasses and checks every item of a long list."""
+    import collections as stdlib_collections
+
+    class Count(int):
+        pass
+
+    _world()
+    view = _Probe()
+    rows = _rows()
+    if shape == "ordered-dict":
+        view._box = stdlib_collections.OrderedDict(a=1, rows=rows)
+    elif shape == "default-dict":
+        view._box = stdlib_collections.defaultdict(list, rows=rows)
+    elif shape == "long-mixed-list":
+        view._box = list(range(40)) + [{"rows": rows}] + list(range(40))
+    else:
+        view._box = [Count(1)] * 40 + [rows]
+    list(rows)  # filled with nothing recording: only a walk that finds it can tell
+    view._show = lambda: 1
+    view.render_with_diff()
+    assert _held_rows.read_set(view)[1] is True
