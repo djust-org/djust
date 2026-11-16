@@ -247,13 +247,27 @@ ROWS: dict[str, tuple[str, bool]] = {
 }
 
 KNOWN_GAPS: dict[str, tuple[str]] = {
-    "a helper's whole attributes with an escaped value in a URL attribute": (
-        "S = ['']\ndef w():\n    return f' href=\"{escape(S[0])}\"'\ndef f(x):\n    S[0] = x\n    return mark_safe(f'<a{w()}>l</a>')\n",
-    ),
-    "a zero-argument helper's markup, placed in a quoted attribute": (
-        "S = ['']\ndef w():\n    return f'<i title=\"{escape(S[0])}\">'\ndef f(x):\n    S[0] = x\n    return mark_safe(f'<div title=\"{w()}\">d</div>')\n",
+    # CSS: an escaped value in a ``style`` attribute (``safe_css_*`` is the rule for CSS; eleven
+    # sites of the tree put an escaped value there, see ``REMAINING`` of the HTML-context test)
+    "a helper's style attribute with an escaped value": (
+        "def css(u):\n    return f'<b style=\"color:{u}\">b</b>'\ndef f(x):\n    return mark_safe(css(escape(x)))\n",
     ),
 }
+
+#: Known gaps until the position walk (#3864): the result of a helper placed in a larger string is
+#: read where it lands (``_Module._misplaces``), so an escaper inside it is placed too.
+ROWS.update(
+    {
+        "a helper's whole attributes with an escaped value in a URL attribute": (
+            "S = ['']\ndef w():\n    return f' href=\"{escape(S[0])}\"'\ndef f(x):\n    S[0] = x\n    return mark_safe(f'<a{w()}>l</a>')\n",
+            True,
+        ),
+        "a zero-argument helper's markup, placed in a quoted attribute": (
+            "S = ['']\ndef w():\n    return f'<i title=\"{escape(S[0])}\">'\ndef f(x):\n    S[0] = x\n    return mark_safe(f'<div title=\"{w()}\">d</div>')\n",
+            True,
+        ),
+    }
+)
 
 #: Known gaps until #3864 taught the guard where HTML escaping is not enough (a URL attribute, an
 #: event handler, a script or style body): flagged now, and each is unsafe when run.
@@ -457,11 +471,9 @@ class TestTheRowsAreTrue:
 
 
 class TestKnownGaps:
-    """Unsafe when run and cleared, here AND by the guard of ``main``: an HTML escaper where HTML
-    escaping is not enough, inside the result of a helper that is placed in a larger string (the
-    guard does not look inside a call's result there). Written in place, held by a name or handed
-    to a helper as an argument it is flagged since #3864
-    (``test_safe_markup_html_context_3864.py``)."""
+    """Unsafe when run and cleared, here AND by the guard of ``main``: an escaped value in CSS. The
+    result of a helper placed in a larger string is read where it lands since the position walk
+    (#3864); what is left is the context the walk does not model (a ``style`` attribute)."""
 
     @pytest.mark.parametrize("label", sorted(KNOWN_GAPS))
     def test_the_gap_is_real(self, label):

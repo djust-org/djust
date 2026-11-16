@@ -6,6 +6,7 @@ Used at the top of every page for navigation and context.
 """
 
 from djust.components.base import Component
+from djust.components.utils import attr_text, safe_url
 from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 from typing import List, Dict, Optional
@@ -50,10 +51,10 @@ class PageHeader(Component):
     def render(self) -> str:
         """Render the page header component."""
 
-        # Icon HTML (framework-controlled, safe)
+        # Icon HTML (the icon name escaped for the attribute)
         icon_html = ""
         if self.icon:
-            icon_html = f'<i data-lucide="{self.icon}" class="w-10 h-10 text-primary mr-3"></i>'
+            icon_html = f'<i data-lucide="{attr_text(self.icon)}" class="w-10 h-10 text-primary mr-3"></i>'
 
         # Subtitle HTML - use format_html to escape user content
         subtitle_html = ""
@@ -81,14 +82,16 @@ class PageHeader(Component):
                 else:  # primary
                     btn_class = "bg-primary text-primary-foreground hover:bg-primary/90"
 
-                # Escape user-provided label and URL
+                # format_html escapes the label and the classes; escaping alone does not stop a
+                # ``javascript:`` URL, so the href goes through safe_url (a disallowed scheme
+                # becomes "#")
                 buttons.append(
                     format_html(
                         '<a href="{}" data-djust-navigate class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors {}">'
                         '<i data-lucide="{}" class="w-4 h-4"></i>'
                         '<span>{}</span>'
                         '</a>',
-                        url,
+                        safe_url(url),
                         btn_class,
                         icon,
                         label

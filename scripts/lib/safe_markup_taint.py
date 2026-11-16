@@ -146,36 +146,73 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   literal, a call of a function of this file that always returns one, or passed as a literal argument
   counts; a trailing ``<`` is a tag name). A string BUILT from such an output (``'' + safe_url(x)``,
   ``'%s' % ..``, a helper that returns one, a ``join`` or container of it) is judged again where it is
-  placed. The exception is a BALANCED fragment: EVERY part the guard cannot read sits inside a quote
-  the builder itself opens (the literal text before each such part leaves a quote open, as in
-  ``' style="' + safe_css_length(x)``; a second output after the quote closed, ``' title="' +
-  safe_url(x) + '" z=' + safe_url(x)``, does not qualify since #3864) and the builder's whole literal
-  text leaves no quote open. A plain ``<`` or an unclosed quote does not qualify. Such a fragment is placed UNCHECKED: between
-  attributes, which is its purpose, but also inside a quoted value or as an unquoted value, where it
-  would be wrong and the guard does not see it (#3864). A bare output anywhere nobody checked
-  (``join`` of bare outputs, an argument) is not clean. AN ESCAPER THAT ONLY HTML-ESCAPES
-  (``escape`` / ``conditional_escape`` / ``html.escape`` / ``attr_text``) is clean as text and in an
-  ordinary quoted value (``conditional_escape`` as text only: it leaves a marked-safe value as it is,
-  so in ANY quoted value it is flagged, #4009), and since #3864 flagged where that is not enough, by the same literal text
-  in front of it (``_html_context``): at the START of a URL attribute's value (``href="{escape(x)}"``:
-  ``javascript:`` has nothing to escape; ``data-href`` counts, the client follows it; an escaper
-  around a URL escaper's output does not), in an ``on*`` handler, a ``<script>`` or ``<style>`` body,
-  ``srcdoc`` and an unquoted value. A URL escaper's output is flagged in the handler, script, style
-  and ``srcdoc`` positions too. A ``<script>`` whose literal ``type`` is a JSON data block
-  (``application/json`` / ``ld+json``) is not a script body. Seen where the output is written in
-  place, held by a name, or bound to a parameter of a judged call; NOT inside the result of a helper
-  placed in a larger string, in a ``join`` or a container, after a part of the value the guard cannot
-  read, between attributes or as an attribute or tag name, or in a ``style`` ATTRIBUTE (escaped
-  values sit there in eleven functions of the tree; ``safe_css_*`` is the rule for CSS). What that check still cannot see (#3850,
-  #3864): a prefix the guard cannot read (any unknown earlier part is assumed position-neutral;
-  treating markup-carrying parts as unknown flagged over a hundred correct sites in the tree, so it
-  was not done), a function that takes the output as a PARAMETER and builds the tag (the helper is
-  judged with its parameter raw, and a call of it with clean arguments is not a built string), a
-  lambda that does the same, ``format_map`` (flagged, not cleared), and a module attribute replaced
-  from outside the file (``sys.modules[__name__].helper = ...``, ``setattr`` on an imported module).
-  A metaclass data descriptor of a class attribute's name is no longer missed: ``cls.X`` / ``C.X`` of
-  a class with a metaclass (or any class keyword) is not trusted (``self.X`` is, since an instance
-  lookup never reaches the metaclass).
+  placed. The exception (pass A) is a BALANCED fragment: EVERY part the guard cannot read sits
+  inside a quote the builder itself opens (``' style="' + safe_css_length(x)``; a second output after
+  the quote closed, ``' title="' + safe_url(x) + '" z=' + safe_url(x)``, does not qualify since
+  #3864) and the builder's whole literal text leaves no quote open; pass A places such a fragment
+  unchecked, pass B where it lands (below). A bare output anywhere nobody checked (``join`` of bare
+  outputs, an argument) is not clean. AN ESCAPER THAT ONLY HTML-ESCAPES (``escape`` /
+  ``conditional_escape`` / ``html.escape`` / ``attr_text``) is clean as text and in an ordinary
+  quoted value (``conditional_escape`` as text only: it leaves a marked-safe value as it is, so in
+  ANY quoted value, and in a comment, it is flagged, #4009) and flagged where that is not enough: at
+  the START of a URL attribute's value (``href="{escape(x)}"``: ``javascript:`` has nothing to
+  escape; ``data-href`` counts, the client follows it; an escaper around a URL escaper's output does
+  not), in an ``on*`` handler, a ``<script>`` or ``<style>`` body, ``srcdoc``, an unquoted value,
+  between attributes and as an attribute or tag name (a space in the value starts an attribute). A
+  URL escaper's output is flagged in the handler, script, style and ``srcdoc`` positions too. A
+  ``<script>`` whose literal ``type`` is a JSON data block (``application/json`` / ``ld+json``) is not
+  a script body (``_html_context`` reads the positions).
+* THE POSITION WALK (pass B, #3864): every part of a string a sink is handed is placed by text the
+  guard READ, or reported. ``_Module._misplaces`` reads the whole string (``_text_b``): literal text
+  wherever it is spelled out (every spelling of a name, a branch, a constant table or ``dict.get``,
+  a tuple, a narrowed name, ``str`` / ``strip`` / ``replace`` / a slice of a literal, a class
+  attribute, a ``%`` / ``.format`` / f-string field, a ``join`` of a display, a function or lambda of
+  this file with ITS call's arguments bound; a call read inside such a call is read with its
+  parameters unknown, so a helper is read once per call site, not once per path) and, for a part
+  it cannot spell out, a SYMBOL of what that part can do there (``SYM_*``): an escaped value keeps the position (text, a quoted value or a
+  comment), digits and words fit almost anywhere, markup (``format_html``, ``render()``, a rendered
+  block body, a string that starts and ends in element text) fits element text only, whole
+  attributes fit between attributes, and a part it cannot class (``SYM_UNKNOWN``) may sit in element
+  text only, where an arbitrary escaped string would be safe; everywhere else it is reported, and
+  every positioned part after it is reported too, since its effect on the position is not known. A
+  transformation of an escaper's output keeps the class only where it provably cannot add ``"'<>&``
+  (padding and alignment with a plain fill, case changes, ``strip``, a slice: a character
+  reference it cuts decodes to a character of the value, never to markup); ``!r`` / ``%r`` are
+  spelled with their quotes; ``replace`` or a fill that brings in such a character, and ``%c`` /
+  ``{:c}``, are read as a part whose escaping is undone (``SYM_RAW``), placed nowhere. ``.format`` / ``format_map`` / ``%`` with a
+  mapping / ``string.Template`` are read field by field, a format spec included; a builder whose
+  positions the guard cannot read (a format string built at run time) is unknown, and refused where
+  any argument needs a position. ``format_html`` / ``format_html_join``: each ARGUMENT is placed where
+  it lands in the format string, escaped (markup only when the guard knows it is). ``_walk`` then
+  reads the text the way an HTML tokenizer does: tags, attribute names, quoted and unquoted values,
+  comments (abrupt ``<!-->`` / ``<!--->`` included), character references a part could complete
+  (``&#10`` + a digit), ``RCDATA`` (``textarea`` / ``title``) and ``RAWTEXT`` bodies (``script``,
+  ``style``, ``xmp``, ``iframe``, ``noembed``, ``noframes``, ``noscript``) that end only at
+  ``</name`` followed by a delimiter, foreign content (``svg`` / ``math``: no raw-text body there),
+  JSON data blocks, a literal ``javascript:`` / ``vbscript:`` / ``data:`` at a URL's start (read after
+  decoding character references); CDATA, the script ``<!--`` escape states and ``plaintext`` are not
+  modelled, so nothing positioned may follow them. It refuses a part placed where its class may not
+  sit, and the finding says which part, where, and the text in front of it. A value with up to
+  ``_SPELLINGS`` spellings is read once per spelling, left to right, prefixes that leave the same
+  state merged (at most ``_PREFIXES``); straight-line ``s += piece`` is read in source order, a piece
+  under a branch as optional. Only pass B walks, so it only adds findings. Before it, an earlier part
+  the guard could not read counted as an ordinary character (``pre() + safe_url(x)`` of a ``pre``
+  that returns ``'<a href='`` from one of two branches was cleared), a balanced fragment was placed
+  unchecked inside a quoted or unquoted value, and a helper's markup placed in a larger string was
+  not looked into.
+* A function of this file REPLACED without a ``def`` (#3864): ``sys.modules[__name__].helper = ...``,
+  ``setattr`` on a module object (``sys.modules[...]``, ``importlib.import_module(...)``, a name that
+  holds one), its ``__dict__``, or ``helper.__code__ = ...``: pass B does not follow a call of it (its
+  result is an unknown call's). Replacing it from ANOTHER file is not seen: like a subclass there,
+  that is the developer's own code.
+* What the walk does not model: a ``style`` ATTRIBUTE (escaped values sit there in eleven functions
+  of the tree; ``safe_css_*`` is the rule for CSS); attributes a browser does not treat as URLs
+  (``data-url``: the client code that reads one decides); the result of an unknown call
+  (``functools.partial(...)(x)``), as before; and a developer's own ``__format__`` or ``int``
+  subclass behind a numeric format spec or an ``isinstance`` check (like a subclass in another file,
+  that is the developer's own code, not request data). A metaclass data descriptor of a class attribute's name is not missed: ``cls.X`` /
+  ``C.X`` of a class with a metaclass (or any class keyword) is not trusted (``self.X`` is, since an
+  instance lookup never reaches the metaclass).
 * Class attributes of a class whose base writes attributes from keywords: the package's own
   (``Component``, found by :func:`dynamic_class_names`) and Django's class-based views and forms
   (``EXTERNAL_DYNAMIC_BASES``, matched by name: ``View.__init__`` ``setattr``s every ``as_view()``
@@ -194,10 +231,12 @@ from __future__ import annotations
 
 import ast
 import copy
+import functools
 import re
 import string
 import sys
-from collections.abc import Callable, Iterable
+from html import unescape as _unescape
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -384,6 +423,8 @@ _URL_LEAD = re.compile(r"[\x01-\x20]*")
 DYNAMIC_ATTR_NAMES = frozenset({"__setattr__", "__delattr__", "__getattribute__", "__dict__"})
 DYNAMIC_ATTR_CALLS = frozenset({"setattr", "delattr", "vars"})
 DYNAMIC_GLOBAL_CALLS = frozenset({"globals", "exec", "eval", "vars"})
+#: Attributes of a function that replace what calling it runs or returns (#3864).
+_CODE_ATTRS = frozenset({"__code__", "__defaults__", "__kwdefaults__", "__wrapped__", "__call__"})
 #: Methods that change a container in place.
 MUTATORS = frozenset(
     {
@@ -538,6 +579,654 @@ _PERCENT_SPEC = re.compile(
     r"%(\([^)]*\))?[-#0 +]*(?:\d+|\*)?(?:\.(?:\d+|\*))?[hlL]?([diouxXeEfFgGcrsa%])"
 )
 
+# -- the text a part contributes, as pass B reads it (#3864) ---------------------------------------
+#
+# Pass B reads the text in front of a part as a string of literal characters and these symbols, one
+# per part it cannot spell out. Each says what the part can do to the HTML position it sits in, so a
+# position is either established from text the guard read or reported as unknown, never assumed:
+#
+#: digits or a fixed alphabet (``int(x)``, ``uuid4().hex``, a date's ``isoformat()``): no markup, no
+#: space, no quote: it changes nothing, wherever it sits
+SYM_DIGITS = "\x04"
+#: literal text the developer wrote (one of several spellings) with no ``<``, ``>`` or quote, that
+#: leaves a tag between attributes (`` hidden``, ``btn btn-primary``): anywhere but a tag's name or
+#: an unquoted value
+SYM_WORDS = "\x07"
+#: a value escaper's output (``safe_url``, ``safe_css_*``): no ``<`` or quote, but spaces: text, a
+#: quoted value or a comment, not a tag (it would add attributes) or an unquoted value
+SYM_VALUE = "\x00"
+#: an HTML-only escaper's output (``escape``, ``attr_text``): as ``SYM_VALUE``, and not where HTML
+#: escaping is not enough (the start of a URL, a handler, a script or style body, ``srcdoc``)
+SYM_ESCAPED = "\x05"
+#: JSON escaped for a script (``escape_json_for_script``): element text or a script body
+SYM_JSON = "\x06"
+#: markup that starts and ends in element text (``format_html``, ``conditional_escape``, a template's
+#: ``render()``, ``rich_html``, a string of this file whose every spelling does): element text only
+SYM_MARKUP = "\x02"
+#: whole attributes (a record builder's, ``component_id_attr``): between attributes, or in text
+SYM_ATTRS = "\x03"
+#: a part whose text the guard cannot read and cannot class: nothing after it has a known position
+SYM_UNKNOWN = "\x01"
+#: a value whose escaping was undone (``escape(x).replace("&quot;", '"')``, ``%c`` of a number,
+#: ``!r``): it is placed nowhere
+SYM_RAW = "\x08"
+_SYMBOLS = frozenset(
+    {
+        SYM_DIGITS,
+        SYM_WORDS,
+        SYM_VALUE,
+        SYM_ESCAPED,
+        SYM_JSON,
+        SYM_MARKUP,
+        SYM_ATTRS,
+        SYM_UNKNOWN,
+        SYM_RAW,
+    }
+)
+#: symbols that need a known position
+_POSITIONED = frozenset({SYM_WORDS, SYM_VALUE, SYM_ESCAPED, SYM_JSON, SYM_MARKUP, SYM_ATTRS})
+#: a text :func:`_walk` always refuses
+SYM_REFUSED = SYM_RAW
+#: a value with a few known spellings is kept as all of them: ``\x10a\x11b\x12`` is ``a`` or ``b``,
+#: and :func:`_walk` reads each (up to ``_SPELLINGS``) rather than the class they share
+CHOICE_OPEN, CHOICE_SEP, CHOICE_CLOSE = "\x10", "\x11", "\x12"
+_CONTROL = _SYMBOLS | {CHOICE_OPEN, CHOICE_SEP, CHOICE_CLOSE}
+#: the classes whose every spelling starts and ends in element text (what a recursive call is
+#: first read as, ``SYM_MARKUP``, promises)
+_FITS_MARKUP = frozenset({SYM_DIGITS, SYM_WORDS, SYM_VALUE, SYM_ESCAPED, SYM_MARKUP, SYM_ATTRS})
+#: how deep ``_text_b`` follows a value (names, calls, containers) before it reads "unknown"
+_TEXT_DEPTH = 30
+_SPELLINGS = 32
+#: how many distinct texts in front ``_walk`` reads a string with before it reads choices as classes
+_PREFIXES = 256
+#: the order the symbols join in: a set of spellings takes the weakest class every member fits
+_SPECIAL_TEXT = frozenset("<>\"'`")
+_NUMERIC_TEXT = frozenset("0123456789.-+e" + SYM_DIGITS)
+_WS = " \t\n\r\f"
+
+
+def _mapped(text: str) -> str:
+    """``text`` as :meth:`_Module._html_context` reads it. A symbol that may stand for the empty
+    string must not hide the start of a URL value: a value, escaped text, JSON and markup become
+    nothing, words and whole attributes a space (they stay apart from a neighbour); digits are a
+    number, never empty."""
+    return (
+        text.replace(SYM_DIGITS, "0")
+        .replace(SYM_VALUE, "")
+        .replace(SYM_ESCAPED, "")
+        .replace(SYM_JSON, "")
+        .replace(SYM_MARKUP, "")
+        .replace(SYM_WORDS, " ")
+        .replace(SYM_ATTRS, " ")
+    )
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _spelling_count(text: str) -> int:
+    """How many spellings ``text`` has (its choices taken each way), capped past ``_SPELLINGS``."""
+    if CHOICE_OPEN not in text:
+        return 1
+    # per open choice: the count of the run before it, and the counts of its finished spellings
+    levels: list[tuple[int, list[int]]] = []
+    cur = 1
+    for ch in text:
+        if ch == CHOICE_OPEN:
+            levels.append((cur, []))
+            cur = 1
+        elif ch == CHOICE_SEP:
+            levels[-1][1].append(cur)
+            cur = 1
+        elif ch == CHOICE_CLOSE:
+            outer, alts = levels.pop()
+            alts.append(cur)
+            cur = min(outer * sum(alts), _SPELLINGS + 1)
+    return min(cur, _SPELLINGS + 1)
+
+
+def _expand(text: str, limit: int = _SPELLINGS) -> list[str] | None:
+    """Every spelling of ``text`` (its choices taken each way), or ``None`` past ``limit``."""
+    start = text.find(CHOICE_OPEN)
+    if start < 0:
+        return [text]
+    depth, i, parts, last = 0, start, [], start + 1
+    while i < len(text):
+        ch = text[i]
+        if ch == CHOICE_OPEN:
+            depth += 1
+        elif ch == CHOICE_CLOSE:
+            depth -= 1
+            if depth == 0:
+                parts.append(text[last:i])
+                break
+        elif ch == CHOICE_SEP and depth == 1:
+            parts.append(text[last:i])
+            last = i + 1
+        i += 1
+    else:
+        return None  # not closed: never made by ``_summarize``
+    head, tail = text[:start], text[i + 1 :]
+    out: list[str] = []
+    for part in parts:
+        for spelled in _expand(part + tail, limit) or [None]:  # type: ignore[list-item]
+            if spelled is None:
+                return None
+            out.append(head + spelled)
+            if len(out) > limit:
+                return None
+    return out
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _walk(text: str) -> tuple[bool, str]:
+    """Read ``text`` from element text (see :func:`_walk_one`); a text with choices is read once per
+    spelling: every spelling must place its parts, and the state is theirs when they agree.
+
+    The spellings are read left to right, a choice at a time; a prefix that ends in element text
+    leaves nothing behind that changes what follows, so it is read as empty and equal prefixes
+    merge. Past ``_SPELLINGS`` distinct prefixes a choice is read as the class its spellings
+    share."""
+    if CHOICE_OPEN not in text:
+        return _walk_one(text)
+    prefixes = {""}
+    for segment in _segments(text):
+        grown = {p + s for p in prefixes for s in segment}
+        prefixes = set()
+        for p in grown:
+            ok, state, tail = _walk_tail(p)
+            if not ok:
+                return False, "unknown"
+            # what follows depends on the text since the tokenizer was last in element text
+            prefixes.add("" if state == "text" else p[tail:])
+        if len(prefixes) > _PREFIXES:
+            return _walk_one(_collapse(text))
+    states = {_walk_one(p)[1] for p in prefixes}
+    return True, (states.pop() if len(states) == 1 else "unknown")
+
+
+_SYMBOL_NAMES = {
+    SYM_DIGITS: "digits",
+    SYM_WORDS: "literal words",
+    SYM_VALUE: "a URL/CSS escaper's output",
+    SYM_ESCAPED: "an HTML-escaped value",
+    SYM_JSON: "script-escaped JSON",
+    SYM_MARKUP: "markup",
+    SYM_ATTRS: "whole attributes",
+    SYM_UNKNOWN: "a value the guard cannot read",
+    SYM_RAW: "a value whose escaping is undone (or is not text)",
+}
+
+
+def _spell(text: str) -> str:
+    return "".join(f"{{{_SYMBOL_NAMES[c]}}}" if c in _SYMBOL_NAMES else c for c in text)
+
+
+def refusal(text: str) -> str:
+    """Why :func:`_walk` refuses ``text``: the part, where it lands, and the text in front."""
+    spelling = None
+    if CHOICE_OPEN not in text:
+        spelling = text
+    else:
+        prefixes = {""}
+        for segment in _segments(text):
+            grown = {p + x for p in prefixes for x in segment}
+            bad = [p for p in grown if not _walk_one(p)[0]]
+            if bad:
+                spelling = min(bad, key=len)
+                break
+            prefixes = {"" if _walk_one(p)[1] == "text" else p for p in grown}
+    if spelling is None:
+        return "a string the guard cannot read in full"
+    for i in range(len(spelling)):
+        if spelling[i] in _SYMBOLS and not _walk_one(spelling[: i + 1])[0]:
+            front = spelling[:i]
+            ok, state = _walk_one(front)
+            where = _Module._html_context(_mapped(front)) if ok and state != "unknown" else None  # noqa: SLF001
+            if not ok or state == "unknown":
+                place = "after a part whose effect on the position is not known"
+            elif where == "url":
+                place = "at the start of a URL attribute's value"
+            elif where == "handler":
+                place = "in an event-handler attribute"
+            elif where in ("script", "style"):
+                place = f"in a <{where}> body"
+            elif where == "srcdoc":
+                place = "in srcdoc"
+            elif where == "unquoted" or state == "unquoted":
+                place = "in an unquoted attribute value"
+            elif state == "tag":
+                place = "inside a tag (a name or between attributes)"
+            elif state == "quoted":
+                place = "inside a quoted attribute value"
+            elif state == "comment":
+                place = "in a comment"
+            elif state == "raw":
+                place = "in a raw-text element's body"
+            else:
+                place = "in element text"
+            return f"{_SYMBOL_NAMES[spelling[i]]} {place}, after {_spell(front[-50:])!r}"
+    return "a string the guard cannot read in full"
+
+
+def _segments(text: str) -> list[list[str]]:
+    """``text`` as a sequence of its literal runs (one spelling each) and its outermost choices
+    (each spelling of each choice, its own choices expanded; past the bound, their class)."""
+    out: list[list[str]] = []
+    i, n = 0, len(text)
+    while i < n:
+        j = text.find(CHOICE_OPEN, i)
+        if j < 0:
+            out.append([text[i:]])
+            break
+        if j > i:
+            out.append([text[i:j]])
+        depth, k, parts, last = 0, j, [], j + 1
+        while k < n:
+            ch = text[k]
+            if ch == CHOICE_OPEN:
+                depth += 1
+            elif ch == CHOICE_CLOSE:
+                depth -= 1
+                if depth == 0:
+                    parts.append(text[last:k])
+                    break
+            elif ch == CHOICE_SEP and depth == 1:
+                parts.append(text[last:k])
+                last = k + 1
+            k += 1
+        spelled: list[str] = []
+        for part in parts:
+            spelled.extend(_expand(part) or [_collapse(part)])
+        out.append(sorted(set(spelled)))
+        i = k + 1
+    return out
+
+
+def _collapse(text: str) -> str:
+    """``text`` with each outermost choice replaced by the class its spellings share."""
+    out, i = [], 0
+    while i < len(text):
+        if text[i] != CHOICE_OPEN:
+            out.append(text[i])
+            i += 1
+            continue
+        depth, j = 0, i
+        while j < len(text):
+            if text[j] == CHOICE_OPEN:
+                depth += 1
+            elif text[j] == CHOICE_CLOSE:
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        inner, parts, depth, last = text[i + 1 : j], [], 0, 0
+        for k, ch in enumerate(inner):
+            if ch == CHOICE_OPEN:
+                depth += 1
+            elif ch == CHOICE_CLOSE:
+                depth -= 1
+            elif ch == CHOICE_SEP and depth == 0:
+                parts.append(inner[last:k])
+                last = k + 1
+        parts.append(inner[last:])
+        out.append(_join({_text_class(p) for p in parts}))
+        i = j + 1
+    return "".join(out)
+
+
+#: elements whose body the tokenizer reads as text up to their own end tag: RCDATA (entities are
+#: decoded) and RAWTEXT (they are not). ``script`` and ``style`` bodies are code (``_html_context``).
+_RCDATA = frozenset({"textarea", "title"})
+_RAWTEXT = frozenset({"script", "style", "xmp", "iframe", "noembed", "noframes", "noscript"})
+#: a character reference the next part could complete (``&#10`` + ``6;`` is ``j``)
+_OPEN_CHARREF = re.compile(r"&[#0-9A-Za-z]*$")
+
+
+def _ends_raw(text: str, i: int, name: str) -> int:
+    """The length of ``</name`` at ``i`` when it ends element ``name`` (followed by white space,
+    ``/`` or ``>``), ``-1`` when the text ends there (the next part decides), else 0."""
+    end = i + 2 + len(name)
+    if text[i : i + 2] != "</" or text[i + 2 : end].lower() != name:
+        return 0
+    if end >= len(text):
+        return -1
+    nxt = text[end]
+    if nxt in _WS + "/>":
+        return end - i
+    return -1 if nxt in _SYMBOLS else 0
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _walk_one(text: str) -> tuple[bool, str]:
+    ok, state, _tail = _walk_tail(text)
+    return ok, state
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _walk_tail(text: str) -> tuple[bool, str, int]:
+    """Read ``text`` (literal characters and the symbols above, no choice) from element text the
+    way an HTML tokenizer does: whether every symbol sits where its part may sit, and the state it
+    ends in: ``"text"``, ``"tag"`` (a tag's name, between attributes, an attribute name or after
+    ``=``), ``"unquoted"`` (an unquoted value), ``"quoted"``, ``"comment"``, ``"raw"`` (the body of
+    a ``RAWTEXT`` / ``RCDATA`` element) or ``"unknown"``. A part it cannot read
+    (``SYM_UNKNOWN``) may sit in element text only; whatever is positioned after it is refused.
+    Pass B only."""
+    state, quote, raw = "text", "", ""
+    foreign = 0  # inside ``<svg>`` / ``<math>``: no element there has a raw-text body
+    closing, raw_closed = False, ""
+    ts = ""  # in a tag: "name", "between", "attr", "after" (after a name), "value" (after ``=``)
+    loose = False  # a word between attributes: the names that follow are not known
+    ok = True
+    ctx = 0  # where the tokenizer was last in element text: ``_html_context`` reads from there
+    i, n = 0, len(text)
+
+    def where_at(k: int) -> str | None:
+        return _Module._html_context(_mapped(text[ctx:k]))  # noqa: SLF001
+
+    while i < n:
+        ch = text[i]
+        if ch in _SYMBOLS:
+            if ch == SYM_DIGITS:
+                if state == "tag" and ts == "value":
+                    state = "unquoted"
+                i += 1
+                continue
+            if ch == SYM_RAW or (ch == SYM_UNKNOWN and state != "text"):
+                return False, "unknown", 0
+            if ch == SYM_UNKNOWN:  # in element text (``raw`` is empty there): hides what follows
+                state = "unknown"
+                i += 1
+                continue
+            if state == "unknown":
+                return False, "unknown", 0
+            if state in ("quoted", "unquoted") and _OPEN_CHARREF.search(text[ctx:i]):
+                return False, "unknown", 0  # the part may complete ``&#10`` into another character
+            if ch == SYM_WORDS and state == "tag" and ts in ("between", "after"):
+                loose = True  # (digits cannot spell a name, and an empty one is mapped away)
+            if loose and state in ("tag", "quoted", "unquoted") and ch != SYM_WORDS:
+                return False, "unknown", 0
+            where = None if state == "comment" else where_at(i)
+            body = raw if state == "raw" else ""
+            plain_body = body and body not in ("script", "style")  # escaped text cannot end it
+            if ch == SYM_WORDS:
+                allowed = (
+                    state in ("text", "quoted", "comment")
+                    or (state == "raw" and (plain_body or where is None))
+                    or (state == "tag" and ts in ("between", "after") and where is None)
+                )
+            elif ch == SYM_VALUE:
+                # ``raw`` with ``where`` None is a JSON data block's body: never run
+                allowed = (state in ("text", "quoted", "comment") and where in (None, "url")) or (
+                    state == "raw" and (plain_body or where is None)
+                )
+            elif ch == SYM_ESCAPED:
+                allowed = state in ("text", "quoted", "comment") and where is None
+                allowed = allowed or (state == "raw" and (plain_body or where is None))
+            elif ch == SYM_JSON:
+                allowed = state == "text" or (state == "raw" and where in (None, "script"))
+            elif ch == SYM_MARKUP:
+                # element text, or a JSON data block's body (never run; ``where`` is None there)
+                # (and an RCDATA body, ``<textarea>``: a marked-safe value is the developer's
+                # markup there as in element text)
+                allowed = (state == "text" and where is None) or (
+                    state == "raw" and (body == "script" or body in _RCDATA) and where is None
+                )
+            else:  # SYM_ATTRS (whole attributes start with a space: after a tag's name too)
+                allowed = (state == "text" and where is None) or (
+                    state == "tag" and ts in ("name", "between", "attr", "after")
+                )
+            if not allowed:
+                return False, "unknown", 0
+            if state == "unquoted" or (state == "tag" and ts == "value"):
+                state = "unquoted"
+            i += 1
+            continue
+        if state == "text":
+            if text.startswith("<!--", i):
+                if text.startswith("<!-->", i) or text.startswith("<!--->", i):
+                    i += 5 if text[i + 4] == ">" else 6  # an abrupt comment: back in text
+                    ctx = i
+                    continue
+                state = "comment"
+                i += 4
+                continue
+            if text.startswith("<![CDATA[", i):
+                state = "unknown"  # foreign content: not modelled, nothing placed after it
+                i += 9
+                continue
+            if ch == "<":
+                nxt = text[i + 1] if i + 1 < n else ""
+                if nxt == "/" and (i + 2 >= n or not text[i + 2].isalpha()):
+                    if i + 2 < n and text[i + 2] in _SYMBOLS:
+                        return False, "unknown", 0
+                    state, ts = "bogus", ""  # ``</`` + not a letter: a bogus comment to ``>``
+                    i += 2
+                    continue
+                if nxt in "!?":
+                    state, ts = "bogus", ""
+                    i += 2
+                    continue
+                if nxt == "" or nxt.isalpha() or nxt == "/" or nxt == SYM_DIGITS:
+                    closing = nxt == "/"
+                    j = i + (2 if closing else 1)
+                    k = j
+                    while k < n and text[k] not in _WS + "/>" and text[k] not in _SYMBOLS:
+                        k += 1
+                    name = text[j:k].lower()
+                    state, ts = "tag", "name"
+                    raw = "" if closing else name
+                    raw_closed = name
+                    i = k
+                    continue
+                if nxt in _SYMBOLS:
+                    # ``'<' + escape(x)``: the value is the tag's name
+                    if nxt in _POSITIONED - {SYM_WORDS} or nxt in (SYM_RAW, SYM_UNKNOWN):
+                        return False, "unknown", 0
+                    state = "unknown"
+                    i += 2
+                    continue
+        elif state == "tag":
+            if ch == ">":
+                self_closing = text[i - 1 : i] == "/"
+                if raw in ("svg", "math") and not self_closing:
+                    foreign += 1
+                elif closing and raw_closed in ("svg", "math") and foreign:
+                    foreign -= 1
+                if foreign and raw not in ("svg", "math"):
+                    state, raw = "text", ""  # foreign content: a ``<title>`` there is markup
+                elif raw in _RAWTEXT or raw in _RCDATA:
+                    state = "raw"
+                elif raw == "plaintext":
+                    state = "unknown"
+                else:
+                    state, raw = "text", ""
+                    ctx = i + 1
+                ts, loose = "", False
+            elif ts == "value":
+                if ch in "\"'":
+                    state, quote = "quoted", ch
+                elif ch not in _WS:
+                    state = "unquoted"
+            elif ch == "=" and ts in ("attr", "after"):
+                ts = "value"
+            elif ch in _WS:
+                if ts in ("name", "attr"):
+                    ts = "after"
+                loose = False  # the next name is written out
+            elif ch == "/":
+                ts, loose = "between", False
+            elif ts in ("name",):
+                pass
+            else:
+                ts = "attr"
+        elif state == "unquoted":
+            if ch in _WS:
+                state, ts, loose = "tag", "between", False
+            elif ch == ">":
+                state, ts = "tag", ""
+                continue  # the ``>`` closes the tag
+        elif state == "quoted":
+            if ch == quote:
+                state, ts = "tag", "between"
+        elif state == "comment":
+            if text.startswith("-->", i):
+                state, ctx = "text", i + 3
+                i += 3
+                continue
+            if text.startswith("--!>", i):
+                state, ctx = "text", i + 4
+                i += 4
+                continue
+        elif state == "bogus":
+            if ch == ">":
+                state, ctx = "text", i + 1
+        elif state == "raw":
+            if raw == "script" and text.startswith("<!--", i):
+                state = "unknown"  # the script data escape states: not modelled
+                i += 4
+                continue
+            m = _ends_raw(text, i, raw) if text.startswith("</", i) else 0
+            if m < 0:
+                state = "unknown"
+                i += 2
+                continue
+            if m:
+                state, ts, raw = "tag", "name", ""
+                i += m
+                continue
+        i += 1
+    if state == "bogus":
+        state = "comment"
+    return ok, state, ctx
+
+
+def _text_class(text: str) -> str:
+    """The weakest symbol a string fits: its effect on the position, wherever it is read."""
+    # a text with choices: what any spelling holds (``flat``) and how every spelling walks
+    flat = text.replace(CHOICE_OPEN, "").replace(CHOICE_SEP, "").replace(CHOICE_CLOSE, "")
+    if SYM_RAW in flat:
+        return SYM_RAW
+    if SYM_UNKNOWN in flat:
+        return SYM_UNKNOWN
+    special = any(ch in _SPECIAL_TEXT for ch in flat)
+    syms = {ch for ch in flat if ch in _SYMBOLS}
+    if (
+        CHOICE_OPEN in text
+        and set(flat) <= _NUMERIC_TEXT
+        and all(t for t in (_expand(text) or [""]))
+    ):
+        return SYM_DIGITS
+    if not text:
+        return SYM_WORDS  # nothing: a word that may be empty
+    if CHOICE_OPEN not in text and set(text) <= _NUMERIC_TEXT:
+        return SYM_DIGITS  # a number: it cannot spell a name
+    # ``SYM_WORDS`` after it: it must leave a tag between attributes (not in an unquoted value)
+    if not special and not (syms - {SYM_DIGITS, SYM_WORDS}):
+        # words: no character HTML reads; with an ``=`` it must not leave a value open
+        if "=" not in flat or _walk("<x " + text + " " + SYM_WORDS) == (True, "tag"):
+            return SYM_WORDS
+    if not special and syms <= {SYM_DIGITS, SYM_VALUE}:
+        return SYM_VALUE
+    if not special and syms <= {SYM_DIGITS, SYM_VALUE, SYM_ESCAPED}:
+        return SYM_ESCAPED
+    if not special and syms <= {SYM_DIGITS, SYM_JSON}:
+        return SYM_JSON
+    if _walk(text) != (True, "text"):
+        return SYM_UNKNOWN
+    # whole attributes fit between attributes AND element text; markup fits element text only
+    if _walk("<x " + text + " " + SYM_WORDS) == (True, "tag"):
+        return SYM_ATTRS
+    return SYM_MARKUP
+
+
+def _join(classes: set[str]) -> str:
+    """The class of a value that is any of ``classes`` (each a symbol)."""
+    classes = set(classes) - {SYM_DIGITS} or {SYM_DIGITS}
+    if len(classes) > 1:
+        classes -= {SYM_WORDS}  # every other class admits fewer positions
+    if SYM_RAW in classes:
+        return SYM_RAW
+    if len(classes) == 1:
+        return next(iter(classes))
+    if SYM_UNKNOWN in classes:
+        return SYM_UNKNOWN
+    if classes <= {SYM_VALUE, SYM_ESCAPED}:
+        return SYM_ESCAPED
+    if SYM_JSON in classes:
+        return SYM_UNKNOWN if classes & {SYM_ATTRS} else SYM_MARKUP
+    return SYM_MARKUP  # escaped values, markup, attributes: all fit element text and stay there
+
+
+def _summarize(texts: list[str], repeated: bool = False) -> str:
+    """One text for a value that can be spelled each of ``texts`` (or, ``repeated``, any sequence of
+    them, a string built up in a loop): the text itself when there is one, else its class."""
+    distinct = set(texts)
+    if not distinct:
+        return SYM_UNKNOWN
+    if len(distinct) == 1 and not repeated:
+        return next(iter(distinct))
+    if not repeated and sum(_spelling_count(t) for t in distinct) <= _SPELLINGS:
+        # each spelling is read where it lands; past the bound the class (a string rebuilt in
+        # every branch would otherwise double its spellings with each branch, #4145)
+        return CHOICE_OPEN + CHOICE_SEP.join(sorted(distinct)) + CHOICE_CLOSE
+    joined = _join({_text_class(t) for t in distinct})
+    if repeated and joined == SYM_UNKNOWN and any(ch in _POSITIONED for t in distinct for ch in t):
+        # pieces in an order the guard does not know, one of them leaving a position open and
+        # another needing one (``s = '<a href="'`` then ``s += escape(x)``): never established
+        return SYM_REFUSED
+    return joined
+
+
+#: ``[[fill]align][sign][z][#][0][width][grouping][.precision][type]`` of ``format``
+_FORMAT_SPEC = re.compile(
+    r"(?:(?P<fill>.)?(?P<align>[<>=^]))?[+\- ]?z?#?0?(?P<width>[0-9]*)[,_]?"
+    r"(?:\.(?P<precision>[0-9]+))?(?P<type>[bcdeEfFgGnosxX%])?"
+)
+
+
+def _spec_text(text: str, spec: str, numeric: bool) -> str:
+    """``format(value, spec)`` of a value whose text is ``text`` (``numeric``: a number for sure).
+    Padding keeps what the value is (escaped text stays escaped) unless the fill character is one
+    HTML reads; a precision cuts it (digits may then be nothing); ``c`` writes any character; a
+    number's type prints digits only for a number (another object's ``__format__`` prints
+    anything)."""
+    m = _FORMAT_SPEC.fullmatch(spec)
+    if m is None:
+        return SYM_UNKNOWN  # not a spec ``format`` takes (or one built at run time): raises
+    kind = m.group("type") or ""
+    if kind == "c":
+        return SYM_RAW
+    cls = _text_class(text)
+    if kind and kind != "s":
+        # a number's type prints digits (a ``str`` raises). An object of the developer's own
+        # class whose ``__format__`` returns markup is the developer's code, not request data:
+        # like a subclass in another file, it is not seen (the module docstring says so)
+        return SYM_DIGITS
+    if cls == SYM_RAW:
+        return SYM_RAW
+    fill = m.group("fill") or " "
+    if (m.group("width") or m.group("align")) and fill in _SPECIAL_TEXT | {"&"} | _CONTROL:
+        return SYM_RAW
+    padded = bool(m.group("width"))
+    cut = m.group("precision") is not None
+    if not padded and not cut:
+        return text
+    if cls == SYM_DIGITS:
+        return SYM_WORDS if (cut or padded) else SYM_DIGITS
+    if cls in (SYM_WORDS, SYM_VALUE, SYM_ESCAPED):
+        return cls  # spaces around (or a part of) escaped text are escaped text
+    return SYM_UNKNOWN
+
+
+def _repr_text(text: str) -> str:
+    """``repr`` of a value whose text is ``text``: a number's digits; escaped text (it holds no
+    quote, so ``repr`` quotes it with ``'``) between apostrophes; anything else is placed nowhere."""
+    cls = _text_class(text)
+    if cls == SYM_DIGITS:
+        return SYM_DIGITS
+    if cls in (SYM_WORDS, SYM_VALUE, SYM_ESCAPED):
+        return "'" + cls + "'"
+    return SYM_RAW
+
 
 class _Raw:
     """A binding whose value is not known: a parameter, a loop variable, a ``with`` target."""
@@ -561,6 +1250,9 @@ class _ElementOf:
 
     def __init__(self, iterable: ast.expr) -> None:
         self.iterable = iterable
+        #: the target unpacks each element (``for a, b in rows``), and which member this name is
+        self.unpacked = False
+        self.index: int | None = None
 
 
 class _Foreign:
@@ -762,6 +1454,12 @@ class _Module:
         self.dynamic_attrs = False
         #: ``C.__getattr__ = ...`` somewhere: any class may fall through to it (#3850)
         self.getattr_assigned = False
+        #: functions of this module the file replaces where it does not say ``def`` (#3864):
+        #: ``sys.modules[__name__].helper = ...``, ``setattr(<module>, "helper", ...)``,
+        #: ``helper.__code__ = ...``; ``patched_all`` when the name is not a literal. Pass B does
+        #: not follow a call into such a function.
+        self.patched_names: set[str] = set()
+        self.patched_all = False
         #: (function, origins) -> whether what it returns is built from an escaper's output; memoised
         self._fn_hold: dict[tuple[int, int], int] = {}
         self._fn_hold_busy: set[tuple[int, int]] = set()
@@ -802,11 +1500,29 @@ class _Module:
         self._actuals: dict[int, dict[str, object]] = {} if call_binding else _NO_BINDINGS
         self._facts: dict[int, dict[int, tuple[tuple[str, str, bool], ...]]] = {}
         self._memo_text: dict[tuple, str] = {}
-        #: (part, scope, depth, call bindings in force, literal text in front) -> ``_misplaced``
-        #: (#4145), how many of those were computed rather than remembered (a test counts it), and
-        #: every call binding installed, kept alive for the run so an id in a key is never reused
-        self._memo_misplaced: dict[tuple, bool] = {}
-        self.misplaced_computed = 0
+        #: ids of the values the engine binds a block handler's ``content`` to (rendered markup)
+        self._engine_values: set[int] = set()
+        #: id(the value a narrowing test binds) -> (that value, the test, its scope)
+        self._narrowed_values: dict[int, tuple] = {}
+        #: pass B's text of a part (``_text_b``), remembered under (node, scope, bindings in force);
+        #: only nodes of this file's tree are keys (a node made on the fly may reuse an id)
+        self._memo_texts: dict[tuple, str] = {}
+        self._texts_busy: set[tuple] = set()
+        self._site_bindings: dict[tuple, dict | None] = {}
+        #: why the last ``_misplaces`` refused (the finding's message)
+        self._why_misplaced: str | None = None
+        self._memo_checked: dict[tuple, bool] = {}
+        self._memo_numeric: dict[tuple, bool] = {}
+        self._parents_of: dict[int, dict[int, ast.AST]] = {}
+        #: id(function) -> the ``_text_b`` key of the call being read into it
+        self._fns_reading: dict[int, tuple] = {}
+        self._texts_recursed: set[tuple] = set()
+        self._texts_pessimistic: set[tuple] = set()
+        self._tree_ids: frozenset[int] = (
+            frozenset(id(n) for n in ast.walk(self.tree)) if call_binding else frozenset()
+        )
+        #: every call binding installed, kept alive for the run so an id in a memo key (the call
+        #: bindings in force, ``_binding_state``) is never reused (#4145)
         self._installed_bindings: list[dict[str, object]] = []
         #: (id(callee expression), id(scope)) -> what ``_local_function`` found (it reads only
         #: what the file says); the entry holds the scope so its id cannot be reused meanwhile
@@ -841,12 +1557,98 @@ class _Module:
             else:
                 return self._ref_key(e)
 
+    def _scan_patches(self, nodes: list[ast.AST]) -> None:
+        """Fill ``patched_names`` / ``patched_all`` (#3864): writes that replace a function of this
+        module, or its code, without a ``def``. A module object is ``sys.modules[...]``,
+        ``importlib.import_module(...)`` / ``__import__(...)``, or a name the file binds to one of
+        those. A module replaced from ANOTHER file is not seen (the module docstring says so)."""
+        module_names: set[str] = set()
+
+        def module_like(e: ast.AST) -> bool:
+            if isinstance(e, ast.Subscript):
+                v = e.value
+                return isinstance(v, ast.Attribute) and v.attr == "modules"
+            if isinstance(e, ast.Call):
+                f = e.func
+                return (
+                    (isinstance(f, ast.Name) and f.id in ("__import__", "import_module"))
+                    or (isinstance(f, ast.Attribute) and f.attr == "import_module")
+                    or (
+                        isinstance(f, ast.Attribute)
+                        and f.attr == "get"
+                        and isinstance(f.value, ast.Attribute)
+                        and f.value.attr == "modules"
+                    )
+                )
+            return isinstance(e, ast.Name) and e.id in module_names
+
+        for _ in range(2):  # a name bound to a name bound to a module
+            for node in nodes:
+                if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                    value = node.value
+                    if value is not None and module_like(value):
+                        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                        for t in targets:
+                            module_names.update(_target_names(t))
+        for node in nodes:
+            if isinstance(node, ast.Attribute) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                if node.attr in _CODE_ATTRS:
+                    if isinstance(node.value, ast.Name):
+                        self.patched_names.add(node.value.id)
+                    else:
+                        self.patched_all = True
+                elif module_like(node.value):
+                    if node.attr in ("__class__", "__dict__", "__getattr__"):
+                        self.patched_all = True
+                    else:
+                        self.patched_names.add(node.attr)
+                elif not (isinstance(node.value, ast.Name) and node.value.id in ("self", "cls")):
+                    # ``obj.helper = ...``: ``obj`` may be this module (handed in, say)
+                    self.patched_names.add(node.attr)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in ("setattr", "delattr")
+                and len(node.args) >= 2
+            ):
+                target, name = node.args[0], node.args[1]
+                if isinstance(target, ast.Name) and target.id in ("self", "cls"):
+                    continue
+                if isinstance(name, ast.Constant) and isinstance(name.value, str):
+                    self.patched_names.add(name.value)
+                    if name.value in _CODE_ATTRS:
+                        if isinstance(target, ast.Name):
+                            self.patched_names.add(target.id)
+                        else:
+                            self.patched_all = True
+                elif module_like(target):
+                    self.patched_all = True
+            elif isinstance(node, ast.Subscript) and isinstance(node.ctx, (ast.Store, ast.Del)):
+                # ``sys.modules[__name__].__dict__["helper"] = ...``
+                v = node.value
+                if isinstance(v, ast.Attribute) and v.attr == "__dict__" and module_like(v.value):
+                    self.patched_all = True
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in MUTATORS
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "__dict__"
+                and module_like(node.func.value.value)
+            ):
+                self.patched_all = True
+
+    def _patched(self, name: str) -> bool:
+        """Pass B: the file replaces the function ``name`` without a ``def`` (#3864)."""
+        return self.call_binding and (self.patched_all or name in self.patched_names)
+
     def _scan_hazards(self) -> None:
         parents: dict[int, ast.AST] = {}
         nodes = list(ast.walk(self.tree))
         for n in nodes:
             for c in ast.iter_child_nodes(n):
                 parents[id(c)] = n
+        self._scan_patches(nodes)
         for node in nodes:
             if isinstance(node, (ast.Global, ast.Nonlocal)):
                 self.rebound_names.update(node.names)
@@ -1274,6 +2076,8 @@ class _Module:
             engine = self._engine_parameters(node)
             for arg in every:
                 value: object = ast.Constant("") if arg.arg in engine else _Param(arg.arg)
+                if arg.arg in engine:
+                    self._engine_values.add(id(value))  # rendered markup, for pass B's text
                 scope.assigns.setdefault(arg.arg, []).append(value)
                 scope.params[arg.arg] = value
         if self._returns_markup(node, parent):
@@ -1663,8 +2467,16 @@ class _Module:
             for n in _target_names(item):
                 self._bind(scope, key, n, _ElementOf(iterable.args[0]))
         else:
+            flat = isinstance(target, (ast.Tuple, ast.List)) and all(
+                isinstance(x, ast.Name) for x in target.elts
+            )
             for n in _target_names(target):
-                self._bind(scope, key, n, _ElementOf(iterable))
+                element = _ElementOf(iterable)
+                # ``for a, b in rows``: each name is a MEMBER of an element (pass B's text, #3864)
+                element.unpacked = isinstance(target, (ast.Tuple, ast.List))
+                if flat:
+                    element.index = [x.id for x in target.elts].index(n)  # type: ignore[attr-defined]
+                self._bind(scope, key, n, element)
         if comprehension:
             for n, values in scope.assigns.items():
                 scope.comp_values.update(id(v) for v in values[before.get(n, 0) :])
@@ -1859,16 +2671,18 @@ class _Module:
                 else:
                     args = [*call.args, *(kw.value for kw in call.keywords)]
                 for arg in args:
+                    self._why_misplaced = None
                     if self.tainted(arg, scope, 0, frozenset()):
-                        out.append(
-                            Finding(
-                                call.lineno,
-                                scope.name,
-                                name,
-                                (ast.get_source_segment(self.source, arg) or ast.dump(arg))[:90],
-                            )
-                        )
+                        why = (ast.get_source_segment(self.source, arg) or ast.dump(arg))[:90]
+                        if self._why_misplaced:
+                            why += f" [position: {self._why_misplaced}]"
+                        out.append(Finding(call.lineno, scope.name, name, why))
                         break
+                else:
+                    if name in self.format_sinks and self.call_binding:
+                        why = self._format_args_misplaced(call, scope, name)
+                        if why:
+                            out.append(Finding(call.lineno, scope.name, name, why))
             judged = {id(c) for c in scope.sinks}
             for ret in scope.html_returns:
                 value = ret.value
@@ -1910,6 +2724,8 @@ class _Module:
         if isinstance(e, ast.Constant):
             return True
         if isinstance(e, ast.JoinedStr):
+            if self._misplaces(e, sc):
+                return False
             return all(
                 self._field_clean(v, sc, d, seen, e, i)
                 for i, v in enumerate(e.values)
@@ -1920,6 +2736,8 @@ class _Module:
         if isinstance(e, ast.Starred):  # ``*items``: what it spreads
             return self.elements_clean(e.value, sc, d, seen)
         if isinstance(e, ast.BinOp):
+            if isinstance(e.op, (ast.Add, ast.Mod)) and self._misplaces(e, sc):
+                return False
             if isinstance(e.op, ast.Add):
                 return self._add_clean(e, sc, d, seen)
             if isinstance(e.op, ast.Mod):
@@ -2230,6 +3048,7 @@ class _Module:
                     whole = text.replace("\x00", "0")
                     # EVERY part the guard cannot read sits inside a quote the builder opened, not
                     # only the first (#3864: ``' title="' + safe_url(x) + '" z=' + safe_url(x)``)
+                    # (pass B's ``_misplaces`` also walks the string it is placed in, #3864)
                     unread = [i for i, ch in enumerate(text) if ch == "\x00"]
                     balanced = (
                         bool(unread)
@@ -2258,7 +3077,7 @@ class _Module:
         """The literal text ``e`` contributes in front of a later part of the same string: its own for a
         string constant, an f-string (a field counts as ``\x00``), a name that only ever holds one
         such value, or a call of a function of this file whose every ``return`` is the same literal;
-        ``\x00`` for anything the guard cannot read."""
+        ``\x00`` for anything the guard cannot read. (Pass B's walk reads with :meth:`_text_b`.)"""
         if depth > 6:
             return "\x00"
         d = depth + 1
@@ -2335,6 +3154,1074 @@ class _Module:
                 return text
         return "\x00"
 
+    # -- pass B: the text in front of a part, read or classed, never assumed (#3864) ---------------
+    #
+    # Pass A reads an earlier part it cannot spell out as ``\x00``, an ordinary character, so a part
+    # behind it was positioned as if that part could not move the position: ``pre() + safe_url(x)``
+    # was cleared where ``pre`` returns ``'<a href='`` from either of two branches. Pass B spells a
+    # part out where its text is known (every spelling of a name, a branch, a constant table, a
+    # function of this file) and otherwise puts the SYMBOL of what the part can do there (the
+    # ``SYM_*`` constants). :func:`_walk` then reads the whole text: a part behind one it cannot
+    # read sits at an unknown position and is reported.
+
+    def _text_b(self, e: object, sc: _Scope, depth: int = 0) -> str:
+        """The text ``e`` contributes (literal characters and ``SYM_*`` symbols). Remembered for the
+        run under the node, its scope and the call bindings in force; a value that reaches itself
+        (a recursion) is unknown."""
+        if depth > _TEXT_DEPTH:
+            return SYM_UNKNOWN  # past the bound: unknown, and remembered so (fail closed)
+        d = depth + 1
+        if isinstance(e, _Foreign):
+            return self._text_b(e.expr, e.scope, d)
+        if isinstance(e, _AnyOf):
+            return _summarize([self._text_b(v, sc, d) for v in e.values])
+        if isinstance(e, _ElementOf):
+            it = e.iterable
+            if (
+                isinstance(it, ast.Call)
+                and isinstance(it.func, ast.Name)
+                and it.func.id == "range"
+                and sc.find("range") is None
+            ) or self._deep_digits(it, sc):
+                return SYM_DIGITS
+            if isinstance(it, ast.Call) and self.origin(it.func, sc) in CLEAN_RECORD_ORIGINS:
+                return self._call_text(it, sc, d)  # ``root, zone, field = upload_attrs(...)``
+            texts = self._element_texts(it, sc, d, iterate=True, unpack=e.unpacked, index=e.index)
+            return SYM_UNKNOWN if texts is None else _summarize(texts)
+        if not isinstance(e, ast.expr):
+            return SYM_UNKNOWN  # a parameter, a loop variable of something unknown
+        if id(e) in self._engine_values:
+            return SYM_MARKUP  # the rendered body of a block tag (``ENGINE_RENDERED_PARAMETERS``)
+        if id(e) in self._narrowed_values:
+            return self._narrowed_text(*self._narrowed_values[id(e)][1:], d)
+        key = (id(e), id(sc), self._binding_state()) if id(e) in self._tree_ids else None
+        if key is None:
+            return self._read_text(e, sc, d)
+        hit = self._memo_texts.get(key)
+        if hit is not None:
+            return hit
+        if key in self._texts_busy:
+            # a recursion (a helper that renders its children through itself): read the inner
+            # call as markup that starts and ends in element text, and check that assumption below
+            self._texts_recursed.add(key)
+            return SYM_UNKNOWN if key in self._texts_pessimistic else SYM_MARKUP
+        start = len(self._memo_texts)
+        self._texts_busy.add(key)
+        try:
+            text = self._read_text(e, sc, d)
+            if key in self._texts_recursed and _text_class(text) not in _FITS_MARKUP:
+                # the result does not start and end in element text (a base case that leaves a
+                # quote open, under a step that adds the closing one): what was read under the
+                # assumption is forgotten and the inner call read as unknown
+                for stale in list(self._memo_texts)[start:]:
+                    del self._memo_texts[stale]
+                self._texts_pessimistic.add(key)
+                text = self._read_text(e, sc, d)
+        finally:
+            self._texts_busy.discard(key)
+            self._texts_recursed.discard(key)
+        self._memo_texts[key] = text
+        return text
+
+    def _narrowed_text(self, test: ast.AST, sc: _Scope, d: int) -> str:
+        """A name a test narrowed (``x in TABLE``, ``x == "a"``, ``isinstance(x, int)``): one of the
+        members the test names."""
+        if isinstance(test, ast.Compare) and len(test.ops) == 1:
+            op, other = test.ops[0], test.comparators[0]
+            if isinstance(op, (ast.In, ast.NotIn)):
+                texts = self._element_texts(other, sc, d, iterate=True)
+                return SYM_UNKNOWN if texts is None else _summarize(texts)
+            if isinstance(op, (ast.Eq, ast.NotEq)):
+                side = test.left if isinstance(test.left, ast.Constant) else other
+                if isinstance(side, ast.Constant):
+                    return self._literal_text(side.value)
+            return SYM_UNKNOWN
+        # ``isinstance(x, (int, float))``: a number. A subclass of the developer's own whose
+        # ``__str__`` returns markup is the developer's code, not request data (not seen, like a
+        # subclass in another file; the module docstring says so)
+        return SYM_DIGITS
+
+    def _str_fact_text(self, call: ast.Call, sc: _Scope, d: int) -> str:
+        """``str(x)`` where ``str(x) in TABLE`` holds (#3846): a member of any such table the
+        function tests ``str(x)`` against."""
+        arg = call.args[0] if call.args else None
+        if not isinstance(arg, ast.Name):
+            return SYM_UNKNOWN
+        texts: list[str] = []
+        for node in ast.walk(sc.node):
+            if (
+                isinstance(node, ast.Compare)
+                and len(node.ops) == 1
+                and isinstance(node.ops[0], (ast.In, ast.NotIn))
+                and isinstance(node.left, ast.Call)
+                and isinstance(node.left.func, ast.Name)
+                and node.left.func.id == "str"
+                and len(node.left.args) == 1
+                and isinstance(node.left.args[0], ast.Name)
+                and node.left.args[0].id == arg.id
+            ):
+                inner = self._element_texts(node.comparators[0], sc, d, iterate=True)
+                if inner is None:
+                    return SYM_UNKNOWN
+                texts.extend(inner)
+        return _summarize(texts)
+
+    @staticmethod
+    def _literal_text(value: object) -> str:
+        if isinstance(value, str):
+            return SYM_UNKNOWN if any(ch in _CONTROL for ch in value) else value
+        if value is None or isinstance(value, (bool, int, float)):
+            return SYM_DIGITS
+        return SYM_UNKNOWN
+
+    def _field_text(self, v: ast.expr, sc: _Scope, d: int) -> str:
+        """One piece of an f-string."""
+        if isinstance(v, ast.Constant):
+            return self._literal_text(v.value)
+        if not isinstance(v, ast.FormattedValue):
+            return SYM_UNKNOWN
+        spec = v.format_spec
+        text = self._text_b(v.value, sc, d)
+        if v.conversion in (ord("r"), ord("a")):
+            text = _repr_text(text)
+        if spec is None:
+            return text
+        if not (
+            isinstance(spec, ast.JoinedStr)
+            and all(isinstance(p, ast.Constant) and isinstance(p.value, str) for p in spec.values)
+        ):
+            return SYM_UNKNOWN  # a spec built at run time
+        return _spec_text(
+            text,
+            "".join(p.value for p in spec.values),  # type: ignore[attr-defined]
+            self._numeric(v.value, sc),
+        )
+
+    def _percent_text(self, e: ast.BinOp, sc: _Scope, d: int) -> str:
+        fmt = e.left
+        if not (isinstance(fmt, ast.Constant) and isinstance(fmt.value, str)):
+            return self._unplaced([e.right], sc, d, containers=True)
+        text = self._literal_text(fmt.value)
+        if text == SYM_UNKNOWN:
+            return text
+        right = e.right
+        args = list(right.elts) if isinstance(right, ast.Tuple) else [right]
+        named = (
+            {
+                k.value: v
+                for k, v in zip(right.keys, right.values)
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)
+            }
+            if isinstance(right, ast.Dict) and all(k is not None for k in right.keys)
+            else None
+        )
+        specs = [m for m in _PERCENT_SPEC.finditer(text) if m.group(2) != "%"]
+        out, last, i = [], 0, 0
+        for m in _PERCENT_SPEC.finditer(text):
+            out.append(text[last : m.start()])
+            last = m.end()
+            if m.group(2) == "%":
+                out.append("%")
+                continue
+            arg: ast.expr | None = None
+            if m.group(1) is not None:
+                arg = named.get(m.group(1)[1:-1]) if named is not None else None
+            elif named is None and len(specs) == len(args):
+                arg = args[i]
+            i += 1
+            if arg is None:
+                # ``'%(u)s' % d`` of a dict held by a name: one of its values, unread
+                out.append(self._unplaced([right], sc, d, containers=True))
+            elif m.group(2) in "diouxXeEfFgG":
+                out.append(SYM_DIGITS)  # ``%d`` and kin: ``int()`` / ``float()`` of it, or raises
+            elif m.group(2) == "c":
+                out.append(SYM_RAW)  # the character with that code: a quote, ``<``
+            elif m.group(2) in "ra":
+                out.append(_repr_text(self._text_b(arg, sc, d)))
+            else:
+                # ``%-5s`` pads, ``%.3s`` cuts: as the same spec of ``format``
+                flags = m.group(0)[1:-1].split(")")[-1]
+                out.append(_spec_text(self._text_b(arg, sc, d), flags.replace("-", "<"), False))
+        out.append(text[last:])
+        return "".join(out)
+
+    def _escaped_text(self, text: str, plain: bool) -> str:
+        """What ``conditional_escape`` makes of a value whose text is ``text`` (``plain``: never a
+        marked-safe value): escaped text, or, for a value that may be marked safe, the markup."""
+        cls = _text_class(text)
+        if cls in (SYM_DIGITS, SYM_WORDS, SYM_VALUE, SYM_ESCAPED):
+            return cls
+        if plain:
+            return SYM_ESCAPED
+        return cls if cls in (SYM_MARKUP, SYM_ATTRS, SYM_JSON) else SYM_MARKUP
+
+    def _format_args_misplaced(self, call: ast.Call, sc: _Scope, name: str) -> str:
+        """``format_html(fmt, *args)`` / ``format_html_join(sep, fmt, rows)``: each argument
+        (``conditional_escape``-d by Django) read where it lands in the literal format string.
+        A reason when one lands where its text may not sit (#3864), else ``""``."""
+        position = FORMAT_SINK_ARG.get(name, 0)
+        fmt = call.args[position] if len(call.args) > position else None
+        if not (isinstance(fmt, ast.Constant) and isinstance(fmt.value, str)) or self._has_star(
+            call
+        ):
+            return ""
+        try:
+            fields = list(string.Formatter().parse(fmt.value))
+        except ValueError:
+            return ""
+        keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+        rows = (
+            call.args[position + 1] if name == "format_html_join" and len(call.args) > 2 else None
+        )
+        out, auto = [], 0
+        for literal, field, spec, conv in fields:
+            out.append(literal)
+            if field is None:
+                continue
+            index: int | None = None
+            key = None
+            if field == "":
+                index, auto = auto, auto + 1
+            elif field.isdigit():
+                index = int(field)
+            else:
+                key = field
+            if rows is not None:
+                texts = (
+                    self._element_texts(rows, sc, 0, unpack=True, index=index)
+                    if index is not None
+                    else None
+                )
+                value = (
+                    SYM_ESCAPED
+                    if texts is None
+                    else _summarize(
+                        [
+                            self._escaped_text(
+                                t, _text_class(t) not in (SYM_MARKUP, SYM_ATTRS, SYM_JSON)
+                            )
+                            for t in texts
+                        ]
+                    )
+                )
+            else:
+                arg = (
+                    keywords.get(key)
+                    if key is not None
+                    else (
+                        call.args[position + 1 + index]
+                        if position + 1 + index < len(call.args)
+                        else None
+                    )
+                )
+                if arg is None:
+                    value = SYM_UNKNOWN
+                elif self._checked_url(arg, sc):
+                    value = SYM_VALUE
+                else:
+                    # ``format_html`` escapes each argument; a marked-safe one passes as it is,
+                    # which is the developer's markup by Django's contract: read as markup only
+                    # when the guard knows it is (``format_html(...)``, ``mark_safe(...)``)
+                    text = self._text_b(arg, sc)
+                    known_markup = _text_class(text) in (SYM_MARKUP, SYM_ATTRS, SYM_JSON)
+                    value = self._escaped_text(text, not known_markup)
+            if conv in ("r", "a"):
+                value = _repr_text(value)
+            if spec:
+                value = _spec_text(value, spec, False) if "{" not in spec else SYM_UNKNOWN
+            out.append(value)
+        text = "".join(out)
+        if _walk(text)[0]:
+            return ""
+        return f"format string {fmt.value[:60]!r} [position: {refusal(text)}]"
+
+    def _ordered_pieces(self, use: ast.Name, owner: _Scope, values: list, d: int) -> str | None:
+        """``s = '<a'`` then ``if c: s += f' title="{v}"'`` then ``s += '>'`` in one function, no
+        loop: the pieces in source order, each one under an ``if`` / ``try`` / ``match`` either
+        there or not. ``None`` when that order is not the order they run in (a piece in a loop,
+        more than one binding, a piece after the use, a closure)."""
+        fn = owner.node
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or len(values) != 1:
+            return None
+        if use.id in owner.params or use.id in self.rebound_names:
+            return None
+        parents = self._fn_parents(fn)
+        bind = [
+            n
+            for n in _own_nodes(fn)
+            if isinstance(n, (ast.Assign, ast.AnnAssign))
+            and use.id
+            in [
+                t
+                for x in (n.targets if isinstance(n, ast.Assign) else [n.target])
+                for t in _target_names(x)
+            ]
+        ]
+        augs = [
+            n
+            for n in _own_nodes(fn)
+            if isinstance(n, ast.AugAssign)
+            and isinstance(n.target, ast.Name)
+            and n.target.id == use.id
+        ]
+        if len(bind) != 1 or not augs or any(not isinstance(a.op, ast.Add) for a in augs):
+            return None
+        loops = (ast.For, ast.AsyncFor, ast.While)
+
+        def path(node: ast.AST) -> list[ast.AST]:
+            out, cur = [], parents.get(id(node))
+            while cur is not None and cur is not fn:
+                out.append(cur)
+                cur = parents.get(id(cur))
+            return out
+
+        start = bind[0]
+        if any(isinstance(x, loops) for x in path(start)) or any(
+            isinstance(x, loops) for x in path(use)
+        ):
+            return None
+        order = sorted(augs, key=lambda n: (n.lineno, n.col_offset))
+        if order[0].lineno <= start.lineno or order[-1].lineno >= use.lineno:
+            return None
+        out = [self._text_b(values[0], owner, d)]
+        for aug in order:
+            above = path(aug)
+            if any(isinstance(x, loops) for x in above):
+                return None
+            text = self._text_b(aug.value, owner, d)
+            optional = any(isinstance(x, (ast.If, ast.Try, ast.Match, ast.With)) for x in above)
+            out.append(_summarize([text, ""]) if optional else text)
+        return "".join(out)
+
+    def _fn_parents(self, fn: ast.AST) -> dict[int, ast.AST]:
+        hit = self._parents_of.get(id(fn))
+        if hit is None:
+            hit = self._parents_of[id(fn)] = {
+                id(c): n for n in ast.walk(fn) for c in ast.iter_child_nodes(n)
+            }
+        return hit
+
+    def _unplaced(self, args: list, sc: _Scope, d: int, containers: bool = False) -> str:
+        """A string built from ``args`` at positions the guard does not read: ``SYM_RAW`` when one
+        of them (or, ``containers``, an element of one) needs a position, else unknown."""
+        texts: list[str] = []
+        for a in args:
+            elements = self._element_texts(a, sc, d) if containers else None
+            texts.extend(elements if elements is not None else [self._text_b(a, sc, d)])
+        needs = _POSITIONED - {SYM_WORDS} | {SYM_UNKNOWN, SYM_RAW}
+        if any(ch in needs for t in texts for ch in t):
+            return SYM_RAW
+        return SYM_UNKNOWN
+
+    def _named_arguments(self, e: ast.Call) -> dict[str, ast.expr] | None:
+        """The names a call hands over: its keywords, or the one dict display it is given
+        (``format_map({...})``, ``substitute({...})``); ``None`` when they are not written out."""
+        if any(kw.arg is None for kw in e.keywords) or len(e.args) > 1:
+            return None
+        named = {kw.arg: kw.value for kw in e.keywords if kw.arg}
+        if e.args:
+            table = e.args[0]
+            if not (
+                isinstance(table, ast.Dict)
+                and all(
+                    isinstance(k, ast.Constant) and isinstance(k.value, str) for k in table.keys
+                )
+            ):
+                return None
+            named.update({k.value: v for k, v in zip(table.keys, table.values)})  # type: ignore[union-attr]
+        return named
+
+    def _template_text(self, e: ast.Call, template: str, sc: _Scope, d: int) -> str | None:
+        """``Template("<a title='$x'>").substitute(x=...)``: the literal text, each placeholder the
+        text of its value; ``None`` when the values are not written out."""
+        named = self._named_arguments(e)
+        if named is None:
+            return None
+        out, last = [], 0
+        for m in re.finditer(
+            r"\$(?:(\$)|([_a-zA-Z][_a-zA-Z0-9]*)|\{([_a-zA-Z][_a-zA-Z0-9]*)\})", template
+        ):
+            out.append(template[last : m.start()])
+            last = m.end()
+            if m.group(1):
+                out.append("$")
+                continue
+            value = named.get(m.group(2) or m.group(3))
+            out.append(SYM_UNKNOWN if value is None else self._text_b(value, sc, d))
+        out.append(template[last:])
+        return "".join(out)
+
+    def _format_text(
+        self,
+        e: ast.Call,
+        recv: ast.Constant,
+        sc: _Scope,
+        d: int,
+        keywords: dict[str, ast.expr] | None = None,
+    ) -> str:
+        """``"<a href={}>".format(...)`` (or ``format_map`` of a dict display, ``keywords``): the
+        literal text, each field the text of its argument."""
+        text = self._literal_text(recv.value)
+        if text == SYM_UNKNOWN or self._has_star(e):
+            return SYM_UNKNOWN
+        positional = e.args if keywords is None else []
+        if keywords is None:
+            keywords = {kw.arg: kw.value for kw in e.keywords if kw.arg}
+        try:
+            fields = list(string.Formatter().parse(text))
+        except ValueError:
+            return SYM_UNKNOWN
+        out, auto = [], 0
+        for literal, field, spec, conv in fields:
+            out.append(literal)
+            if field is None:
+                continue
+            arg: ast.expr | None = None
+            if field == "":
+                arg = positional[auto] if auto < len(positional) else None
+                auto += 1
+            elif field.isdigit():
+                arg = positional[int(field)] if int(field) < len(positional) else None
+            elif field.isidentifier():
+                arg = keywords.get(field)
+            if arg is None:
+                out.append(SYM_UNKNOWN)
+                continue
+            value = self._text_b(arg, sc, d)
+            if conv in ("r", "a"):
+                value = _repr_text(value)
+            if spec:
+                value = (
+                    SYM_UNKNOWN if "{" in spec else _spec_text(value, spec, self._numeric(arg, sc))
+                )
+            out.append(value)
+        return "".join(out)
+
+    def _element_texts(
+        self,
+        e: object,
+        sc: _Scope,
+        d: int,
+        iterate: bool = False,
+        unpack: bool = False,
+        index: int | None = None,
+    ) -> list[str] | None:
+        """The texts of the elements of a container (its VALUES for a dict, or its keys when
+        ``iterate``; with ``unpack``, the members of each element, for ``for a, b in rows``); ``None``
+        when they are not known."""
+        if unpack and isinstance(e, ast.Call) and not e.keywords:
+            # ``for k, v in d.items()`` / ``for a, b in zip(xs, ys)``: each name is one of these
+            pools: list[tuple[ast.expr, bool]] | None = None
+            if isinstance(e.func, ast.Attribute) and e.func.attr == "items" and not e.args:
+                pools = [(e.func.value, True), (e.func.value, False)]
+            elif isinstance(e.func, ast.Name) and e.func.id == "zip" and sc.find("zip") is None:
+                pools = [(a, False) for a in e.args]
+            if pools is not None:
+                if index is not None and index < len(pools):
+                    pools = [pools[index]]
+                out: list[str] = []
+                for pool, keys in pools:
+                    inner = self._element_texts(pool, sc, d, iterate=keys)
+                    if inner is None:
+                        return None
+                    out.extend(inner)
+                return out
+        exprs = self._element_exprs(e, sc, d, iterate)
+        if exprs is None:
+            return None
+        if not unpack:
+            return [self._text_b(x, xsc, d) for x, xsc in exprs]
+        out = []
+        for x, xsc in exprs:
+            if isinstance(x, (ast.Tuple, ast.List)) and not any(
+                isinstance(m, ast.Starred) for m in x.elts
+            ):
+                if index is not None:
+                    if index >= len(x.elts):
+                        return None
+                    out.append(self._text_b(x.elts[index], xsc, d))
+                else:
+                    out.extend(self._text_b(m, xsc, d) for m in x.elts)
+            else:
+                return None  # an element whose members are not written out
+        return out
+
+    def _element_exprs(
+        self, e: object, sc: _Scope, d: int, iterate: bool = False
+    ) -> list[tuple[object, _Scope]] | None:
+        """The element expressions of a container, each with its scope (see ``_element_texts``)."""
+        if d > _TEXT_DEPTH:
+            return None
+        if isinstance(e, _Foreign):
+            return self._element_exprs(e.expr, e.scope, d + 1, iterate)
+        if not isinstance(e, ast.expr):
+            return None
+        if isinstance(e, ast.Dict):
+            if any(k is None for k in e.keys):
+                return None  # ``{**other}``
+            items = e.keys if iterate else e.values
+            return [(x, sc) for x in items if x is not None]
+        if isinstance(e, (ast.List, ast.Tuple, ast.Set)):
+            if any(isinstance(x, ast.Starred) for x in e.elts):
+                return None
+            return [(x, sc) for x in e.elts]
+        if isinstance(e, (ast.ListComp, ast.GeneratorExp, ast.SetComp)):
+            return [(e.elt, self._comprehension_scope(e, sc))]
+        if isinstance(e, ast.DictComp):
+            return [(e.key if iterate else e.value, self._comprehension_scope(e, sc))]
+        if isinstance(e, (ast.IfExp, ast.BoolOp)):
+            out: list[tuple[object, _Scope]] = []
+            for part in [e.body, e.orelse] if isinstance(e, ast.IfExp) else e.values:
+                inner = self._element_exprs(part, sc, d + 1, iterate)
+                if inner is None:
+                    return None
+                out.extend(inner)
+            return out
+        if isinstance(e, ast.Subscript) and not isinstance(e.slice, ast.Slice):
+            # ``TABLE[k]`` of a table of tables: the elements of every element
+            outer = self._element_exprs(e.value, sc, d + 1)
+            if outer is None:
+                return None
+            out = []
+            for x, xsc in outer:
+                inner = self._element_exprs(x, xsc, d + 1, iterate)
+                if inner is None:
+                    return None
+                out.extend(inner)
+            return out
+        if isinstance(e, ast.Call) and isinstance(e.func, ast.Attribute) and not e.args:
+            recv = e.func.value
+            if e.func.attr == "values":
+                return self._element_exprs(recv, sc, d + 1)
+            if e.func.attr == "keys":
+                return self._element_exprs(recv, sc, d + 1, iterate=True)
+        if (
+            isinstance(e, ast.Call)
+            and isinstance(e.func, ast.Name)
+            and e.func.id in ELEMENT_CALLS
+            and sc.find(e.func.id) is None
+            and len(e.args) == 1
+            and not e.keywords
+        ):
+            return self._element_exprs(e.args[0], sc, d + 1, iterate)
+        if isinstance(e, ast.Attribute):
+            found = self.class_attribute(e, sc)
+            if found is None:
+                return None
+            out = []
+            for v in found[1]:
+                inner = self._element_exprs(v, found[0], d + 1, iterate)
+                if inner is None:
+                    return None
+                out.extend(inner)
+            return out
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None or owner.pieces.get(e.id):
+                return None
+            if self._in(self.escaped, self.escaped_in, e.id, owner):
+                return None  # handed on: something else can fill it
+            values, _ = self._bindings(e, e.id, owner, sc)
+            if not values:
+                return None
+            out = []
+            for v in values:
+                inner = self._element_exprs(v, owner, d + 1, iterate)
+                if inner is None:
+                    return None
+                out.extend(inner)
+            dict_like = owner.keys.get(e.id) or any(
+                isinstance(v, (ast.Dict, ast.DictComp))
+                or (
+                    isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "dict"
+                )
+                for v in values
+            )
+            put = (
+                owner.keys.get(e.id, []) if iterate and dict_like else owner.contents.get(e.id, [])
+            )
+            for c in put:
+                out.append(_unwrap(c, owner))
+            return out
+        return None
+
+    def _attribute_everywhere(self, e: ast.Attribute, sc: _Scope) -> list[tuple] | None:
+        """``self.X`` of a class that a subclass of this file overrides: every value the class and
+        those subclasses write (``KIND = "select"`` on each filter). ``None`` where
+        :meth:`class_attribute` refuses for any other reason."""
+        if not (isinstance(e.value, ast.Name) and e.value.id == "self"):
+            return None
+        cls: _Scope | None = sc
+        while cls is not None and not isinstance(cls.node, ast.ClassDef):
+            cls = cls.parent
+        if cls is None or not self._overridden_in_file(cls, e.attr):
+            return None
+        out: list[tuple] = []
+        for c in [cls, *self._subclasses(cls)]:
+            if c.node.decorator_list or e.attr in c.annotated or self._class_dynamic(c):  # type: ignore[attr-defined]
+                return None
+            if e.attr in c.def_nodes:
+                return None
+            values = c.assigns.get(e.attr, [])
+            if not self._stable(e.attr, values, c):
+                return None
+            out.extend((v, c) for v in values)
+        if self._mutated_or_rebound(e.attr) or e.attr in self.assigned_attrs:
+            return None
+        if self._falls_through(cls) and not self._defined_unconditionally(cls, e.attr):
+            return None
+        return out or None
+
+    def _numeric(self, e: object, sc: _Scope, depth: int = 0) -> bool:
+        """``e`` is a number: a numeric literal, ``len`` / ``int`` / ``float`` / ``round`` / ``abs`` /
+        a ``math`` function, arithmetic no string supports (``-``, ``/``, ``//``, ``**``), or ``+`` /
+        ``*`` / ``min`` / ``max`` of numbers, or a name that only ever holds one."""
+        if depth > 8 or not isinstance(e, ast.expr):
+            return False
+        if isinstance(e, ast.Constant):
+            return isinstance(e.value, (int, float)) and not isinstance(e.value, bool)
+        key = (id(e), id(sc), self._binding_state()) if id(e) in self._tree_ids else None
+        if key is not None:
+            hit = self._memo_numeric.get(key)
+            if hit is None:
+                self._memo_numeric[key] = False  # a name that reaches itself: not shown a number
+                hit = self._memo_numeric[key] = self._numeric_uncached(e, sc, depth)
+            return hit
+        return self._numeric_uncached(e, sc, depth)
+
+    def _numeric_uncached(self, e: ast.expr, sc: _Scope, depth: int) -> bool:
+        d = depth + 1
+        if isinstance(e, ast.UnaryOp):
+            return isinstance(e.op, (ast.USub, ast.UAdd)) and self._numeric(e.operand, sc, d)
+        if isinstance(e, ast.BinOp):
+            if isinstance(e.op, (ast.Add, ast.Mult, ast.Mod)):
+                # ``"<b>" * 3`` and ``"%s" % x`` are strings: only numbers on both sides
+                return self._numeric(e.left, sc, d) and self._numeric(e.right, sc, d)
+            return isinstance(e.op, (ast.Sub, ast.Div, ast.FloorDiv, ast.Pow))
+        if isinstance(e, ast.Call):
+            origin = self.origin(e.func, sc) or ""
+            if origin in ("len", "int", "float", "round", "abs") or origin.startswith("math."):
+                return True
+            if origin in ("min", "max", "sum"):
+                if len(e.args) == 1 and isinstance(
+                    e.args[0], (ast.GeneratorExp, ast.ListComp, ast.SetComp)
+                ):
+                    return self._numeric_elements(e.args[0], sc, d)
+                return bool(e.args) and all(self._numeric(a, sc, d) for a in e.args)
+            return False
+        if isinstance(e, ast.IfExp):
+            return self._numeric(e.body, sc, d) and self._numeric(e.orelse, sc, d)
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None or owner.contents.get(e.id):
+                return False
+            values, _ = self._bindings(e, e.id, owner, sc)
+            return (
+                bool(values)
+                and all(isinstance(v, ast.expr) and self._numeric(v, owner, d) for v in values)
+                and all(self._numeric(p, owner, d) for p in owner.pieces.get(e.id, []))
+            )
+        return False
+
+    def _numeric_elements(
+        self, comp: ast.GeneratorExp | ast.ListComp | ast.SetComp, sc: _Scope, d: int
+    ) -> bool:
+        """Every element of ``comp`` is a number (``max(len(r) for r in rows)``). A loop variable is
+        not one, whatever the same name holds outside the loop: the scope records it as bound by
+        the loop."""
+        return self._numeric(comp.elt, sc, d)
+
+    def _read_text(self, e: ast.expr, sc: _Scope, d: int) -> str:
+        T = self._text_b
+        if isinstance(e, ast.Constant):
+            return self._literal_text(e.value)
+        if isinstance(e, (ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.IfExp)) and self._numeric(
+            e, sc
+        ):
+            return SYM_DIGITS
+        if isinstance(e, ast.JoinedStr):
+            return "".join(self._field_text(v, sc, d) for v in e.values)
+        if isinstance(e, ast.BinOp):
+            if isinstance(e.op, ast.Add):
+                return T(e.left, sc, d) + T(e.right, sc, d)
+            if isinstance(e.op, ast.Mod):
+                return self._percent_text(e, sc, d)
+            if isinstance(e.op, ast.Mult):
+                # ``"<li>" * n``: the text, any number of times
+                texts = [T(x, sc, d) for x in (e.left, e.right)]
+                strings = [t for t in texts if _text_class(t) != SYM_DIGITS]
+                if not strings:
+                    return SYM_DIGITS  # a number times a number
+                return _summarize(strings, repeated=True) if len(strings) == 1 else SYM_UNKNOWN
+            # ``-``, ``/``, ``//``, ``**``, the bit operators: no string supports them
+            return SYM_DIGITS
+        if isinstance(e, ast.UnaryOp):
+            return SYM_DIGITS
+        if isinstance(e, ast.Compare):
+            return SYM_DIGITS  # ``True`` / ``False``
+        if isinstance(e, ast.IfExp):
+            return _summarize([T(e.body, sc, d), T(e.orelse, sc, d)])
+        if isinstance(e, ast.BoolOp):
+            return _summarize([T(v, sc, d) for v in e.values])
+        if isinstance(e, (ast.NamedExpr, ast.Await)):
+            return T(e.value, sc, d)
+        if isinstance(e, ast.Name):
+            owner = sc.find(e.id)
+            if owner is None:
+                origin = self._origin_of_import(e, sc)
+                return SYM_MARKUP if origin in CLEAN_NAME_ORIGINS else SYM_UNKNOWN
+            if owner.contents.get(e.id):
+                return SYM_UNKNOWN  # a container, printed
+            values, _ = self._bindings(e, e.id, owner, sc)
+            texts = [T(v, owner, d) for v in values]
+            pieces = owner.pieces.get(e.id, [])
+            if pieces:
+                ordered = self._ordered_pieces(e, owner, values, d)
+                if ordered is not None:
+                    return ordered
+                # ``s += part`` in a loop: any sequence of the pieces, after any first value
+                return self._raw_all(
+                    owner,
+                    e.id,
+                    lambda: _summarize(texts + [T(p, owner, d) for p in pieces], repeated=True),
+                )
+            return _summarize(texts)
+        if isinstance(e, ast.Attribute):
+            if e.attr in DATE_DIGIT_ATTRS and (
+                self._is_date(e.value, sc)
+                or self._is_delta(e.value, sc)
+                or (
+                    isinstance(e.value, ast.BinOp)
+                    and isinstance(e.value.op, ast.Sub)
+                    and self._is_date(e.value.left, sc)
+                    and self._is_date(e.value.right, sc)
+                )
+            ):
+                return SYM_DIGITS
+            if (
+                e.attr == "hex"
+                and isinstance(e.value, ast.Call)
+                and self.origin(e.value.func, sc) in SAFE_ALPHABET_ORIGINS
+            ):
+                return SYM_DIGITS
+            if self._is_record(e.value, sc, d, frozenset()):
+                return SYM_ATTRS
+            found = self.class_attribute(e, sc)
+            if found is not None:
+                return _summarize([T(v, found[0], d) for v in found[1]])
+            every = self._attribute_everywhere(e, sc)
+            if every is None:
+                return SYM_UNKNOWN
+            return _summarize([T(v, vsc, d) for v, vsc in every])
+        if isinstance(e, ast.Subscript):
+            if isinstance(e.slice, ast.Slice):
+                base = T(e.value, sc, d)
+                bounds = [e.slice.lower, e.slice.upper, e.slice.step]
+                if not any(ch in _CONTROL for ch in base) and all(
+                    b is None or (isinstance(b, ast.Constant) and type(b.value) is int)
+                    for b in bounds
+                ):
+                    lo, hi, st = (None if b is None else b.value for b in bounds)  # type: ignore[union-attr]
+                    try:
+                        return base[lo:hi:st]
+                    except ValueError:
+                        return SYM_UNKNOWN
+                cls = _text_class(base)
+                if cls == SYM_DIGITS:
+                    return SYM_WORDS  # a slice of digits may be nothing at all
+                return cls if cls in (SYM_VALUE, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
+            if isinstance(e.slice, ast.Constant) and type(e.slice.value) is int:
+                base = T(e.value, sc, d)
+                if base and not any(ch in _CONTROL for ch in base):
+                    try:
+                        return base[e.slice.value]
+                    except IndexError:
+                        return SYM_UNKNOWN
+            texts = self._element_texts(e.value, sc, d)
+            return SYM_UNKNOWN if texts is None else _summarize(texts)
+        if isinstance(e, ast.Call):
+            return self._call_text(e, sc, d)
+        return SYM_UNKNOWN
+
+    def _checked_url(self, e: ast.expr, sc: _Scope) -> bool:
+        """``e`` is a URL escaper's output (``_hold_level`` 1), remembered like ``_text_b``."""
+        key = (id(e), id(sc), self._binding_state())
+        hit = self._memo_checked.get(key)
+        if hit is None:
+            hit = self._memo_checked[key] = self._hold_level(e, sc, URL_ESCAPER_ORIGINS) == 1
+        return hit
+
+    def _plain_str(self, e: ast.expr, sc: _Scope, depth: int = 0) -> bool:
+        """``e`` is never a marked-safe value: a literal, an f-string, ``%`` / ``.format`` /
+        ``.join`` / ``.decode()`` / a ``str`` method's result, or a number."""
+        if isinstance(e, (ast.Constant, ast.JoinedStr)):
+            return True
+        if isinstance(e, ast.BinOp) and isinstance(e.op, ast.Mod):
+            return isinstance(e.left, (ast.Constant, ast.JoinedStr))
+        if isinstance(e, ast.Call):
+            if isinstance(e.func, ast.Attribute) and (
+                e.func.attr in ("decode", "format", "join", "hexdigest", "hex")
+                or e.func.attr in STR_METHODS
+            ):
+                return True
+            if isinstance(e.func, ast.Name) and e.func.id in ("len", "int", "float"):
+                return True
+            local = self._local_callee(e.func, sc) if depth < 6 else None
+            if local is not None:
+                fn, fscope = local
+                values = _return_values(fn)
+                return bool(values) and all(
+                    v is not None and self._plain_str(v, fscope, depth + 1) for v in values
+                )
+            return False
+        if isinstance(e, ast.Name) and depth < 6:
+            owner = sc.find(e.id)
+            if owner is None or owner.pieces.get(e.id) or owner.contents.get(e.id):
+                return False
+            values, _ = self._bindings(e, e.id, owner, sc)
+            return bool(values) and all(
+                isinstance(v, ast.expr) and self._plain_str(v, owner, depth + 1) for v in values
+            )
+        return False
+
+    def _call_text(self, e: ast.Call, sc: _Scope, d: int) -> str:
+        T = self._text_b
+        origin = self.origin(e.func, sc)
+        if origin in HTML_ONLY_ORIGINS:
+            if origin in QUOTE_ESCAPERS and not self._quotes_escaped(e, QUOTE_ESCAPERS[origin]):
+                return SYM_UNKNOWN
+            if e.args and self._checked_url(e.args[0], sc):
+                return SYM_VALUE  # ``conditional_escape(safe_url(x))``: a checked URL
+            inner = _text_class(self._text_b(e.args[0], sc, d)) if e.args else SYM_UNKNOWN
+            if inner in (SYM_DIGITS, SYM_WORDS):
+                return inner  # nothing there to escape
+            if origin in MARK_HONOURING_ORIGINS and not (e.args and self._plain_str(e.args[0], sc)):
+                return SYM_MARKUP  # a marked-safe value comes out as it went in
+            return SYM_ESCAPED
+        if origin in CONTEXT_SENSITIVE_ORIGINS:
+            return SYM_VALUE
+        if origin in JSON_ESCAPERS:
+            return SYM_JSON
+        if origin in (
+            "djust.components.utils.component_id_attr",
+            "djust.components.utils.style_attrs",
+        ):
+            return SYM_ATTRS
+        if origin == "djust.components.utils.interpolate_color" or origin in SAFE_ALPHABET_ORIGINS:
+            return SYM_DIGITS
+        if origin in CLEAN_RECORD_ORIGINS:
+            if origin in ("djust.components.utils.rich_html", "djust.markdown.render_markdown"):
+                return SYM_MARKUP
+            if origin.endswith((".clamp_columns", ".clamp_cells")):
+                return SYM_DIGITS
+            return SYM_ATTRS
+        if origin == "django.utils.html.format_html":
+            fmt = e.args[0] if e.args else None
+            if isinstance(fmt, ast.Constant) and isinstance(fmt.value, str):
+                text = self._literal_text(fmt.value)
+                try:
+                    fields = list(string.Formatter().parse(text))
+                except ValueError:
+                    return SYM_UNKNOWN
+                spelled = "".join(
+                    lit + ("" if field is None else SYM_DIGITS) for lit, field, _s, _c in fields
+                )
+                # markup that ends in element text is placed as markup; one that leaves a tag or
+                # a value open is spelled out, each argument an escaped value that may be empty
+                # (``format_html('<a href={}', ...)``: what follows is in that value)
+                if _walk(spelled)[1] == "text":
+                    cls = _text_class(spelled)  # whole attributes (`` disabled{}``) stay so
+                    return cls if cls in (SYM_ATTRS, SYM_WORDS, SYM_DIGITS) else SYM_MARKUP
+                return spelled.replace(SYM_DIGITS, SYM_VALUE)
+            return SYM_MARKUP
+        if origin == "django.utils.html.format_html_join":
+            return SYM_MARKUP
+        if (
+            isinstance(e.func, ast.Name)
+            and self._sink_name(e.func, sc) in ("mark_safe", "SafeString", "SafeText")
+            and len(e.args) == 1
+            and not e.keywords
+        ):
+            return T(e.args[0], sc, d)  # marking a string safe does not change its text
+        if isinstance(e.func, ast.Name) and sc.find(e.func.id) is None:
+            if e.func.id in NUMERIC_TYPES or e.func.id in ("len", "round", "abs", "sum"):
+                return SYM_DIGITS
+            if e.func.id in ("min", "max"):
+                return _summarize([T(a, sc, d) for a in e.args]) if e.args else SYM_UNKNOWN
+            if e.func.id == "str" and len(e.args) == 1 and not e.keywords:
+                if id(e) in self.narrowed_exprs:
+                    return self._str_fact_text(e, sc, d)
+                return T(e.args[0], sc, d)
+            if e.func.id == "str" and not e.args:
+                return ""
+            if e.func.id in RENDER_CALLS:
+                return SYM_MARKUP
+        if (
+            isinstance(e.func, ast.Attribute)
+            and e.func.attr in DATE_DIGIT_METHODS
+            and not e.args
+            and not e.keywords
+            and self._is_date(e.func.value, sc)
+        ):
+            return SYM_DIGITS
+        if isinstance(e.func, ast.Attribute):
+            recv = e.func.value
+            attr = e.func.attr
+            if attr in RENDER_CALLS:
+                return SYM_MARKUP  # by method name, as ``clean`` trusts it
+            if (
+                attr == "hex"
+                and not e.args
+                and isinstance(recv, ast.Call)
+                and isinstance(recv.func, ast.Attribute)
+                and recv.func.attr == "encode"
+            ):
+                return SYM_DIGITS  # ``s.encode().hex()``: hex digits
+            if attr == "join" and len(e.args) == 1 and not e.keywords:
+                sep = T(recv, sc, d)
+                arg = e.args[0]
+                if isinstance(arg, (ast.List, ast.Tuple)) and not any(
+                    isinstance(x, ast.Starred) for x in arg.elts
+                ):
+                    return sep.join(T(x, sc, d) for x in arg.elts)
+                texts = self._element_texts(arg, sc, d)
+                if texts is None:
+                    return SYM_UNKNOWN
+                return _summarize([*texts, sep], repeated=True)
+            if attr == "format" and isinstance(recv, ast.Constant) and isinstance(recv.value, str):
+                return self._format_text(e, recv, sc, d)
+            if (
+                attr == "format_map"
+                and isinstance(recv, ast.Constant)
+                and isinstance(recv.value, str)
+                and not e.keywords
+            ):
+                named = self._named_arguments(e)
+                if named is not None:
+                    return self._format_text(e, recv, sc, d, keywords=named)
+            if (
+                attr in ("substitute", "safe_substitute")
+                and isinstance(recv, ast.Call)
+                and self.origin(recv.func, sc) == "string.Template"
+                and len(recv.args) == 1
+                and isinstance(recv.args[0], ast.Constant)
+                and isinstance(recv.args[0].value, str)
+            ):
+                spelled = self._template_text(e, recv.args[0].value, sc, d)
+                if spelled is not None:
+                    return spelled
+            if attr in FORMAT_METHODS:
+                # ``format_map``, ``Template.substitute``, a format string held elsewhere: where
+                # each argument lands is not read, so one that needs a position is placed nowhere
+                return self._unplaced(
+                    [*e.args, *(k.value for k in e.keywords)], sc, d, containers=True
+                )
+            if attr == "get" and 1 <= len(e.args) <= 2 and not e.keywords:
+                texts = self._element_texts(recv, sc, d)
+                if texts is None:
+                    return SYM_UNKNOWN
+                default = T(e.args[1], sc, d) if len(e.args) == 2 else SYM_DIGITS
+                return _summarize([*texts, default])
+            if attr in STR_METHODS and not e.keywords:
+                base = T(recv, sc, d)
+                # what a call can put INTO the string: ``replace``'s new text, the fill of
+                # ``ljust`` / ``rjust`` / ``center``. One that may hold a character HTML reads
+                # undoes the escaping (``escape(x).replace("&quot;", '"')``): placed nowhere
+                put = e.args[1:2] if attr in ("replace", "ljust", "rjust", "center") else []
+                for a in put:
+                    t = T(a, sc, d)
+                    if any(ch in _SPECIAL_TEXT | {"&"} for ch in t) or _text_class(t) not in (
+                        SYM_DIGITS,
+                        SYM_WORDS,
+                        SYM_VALUE,
+                        SYM_ESCAPED,
+                    ):
+                        return SYM_RAW
+                args = [a.value if isinstance(a, ast.Constant) else a for a in e.args]
+                if any(not isinstance(a, (str, int)) for a in args) or any(
+                    isinstance(a, str) and (set(a) & _CONTROL) for a in args
+                ):
+                    # what it removes or matches is not known: what it leaves is no more than
+                    # what was there (the new text was checked above)
+                    cls = _text_class(base)
+                    return cls if cls in (SYM_VALUE, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
+                if attr in PURE_TRANSFORMS and args:
+                    cls = _text_class(base)  # ``strip(chars)`` removes characters, adds none
+                    return cls if cls in (SYM_VALUE, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
+                spellings = _expand(base)
+                if spellings is None:
+                    return SYM_UNKNOWN
+                try:
+                    return _summarize([getattr(str, attr)(t, *args) for t in spellings])
+                except (TypeError, ValueError):
+                    return SYM_UNKNOWN
+        local = self._local_callee(e.func, sc)
+        if local is not None:
+            fn, fscope = local
+            if self._actuals:
+                # read inside a bound call: with NO binding in force (its parameters, and any it
+                # closes over, unknown), so what a function's text is read as is remembered once
+                # per call site, not once per path to it (#4145)
+                saved, self._actuals = self._actuals, {}
+                try:
+                    return self._text_b(e, sc, d)
+                finally:
+                    self._actuals = saved
+            # a function read again while it is being read: a recursion, handled like a value
+            # that reaches itself in ``_text_b`` (its call sites alternate bound and unbound
+            # reads, so the same key need not come round before the depth bound)
+            outer = self._fns_reading.get(id(fn))
+            if outer is not None:
+                self._texts_recursed.add(outer)
+                return SYM_UNKNOWN if outer in self._texts_pessimistic else SYM_MARKUP
+            self._fns_reading[id(fn)] = (id(e), id(sc), self._binding_state())
+            try:
+                return self._local_text(local, e, sc, d)
+            finally:
+                self._fns_reading.pop(id(fn), None)
+        return SYM_UNKNOWN
+
+    def _local_text(self, local: tuple, e: ast.Call, sc: _Scope, d: int) -> str:
+        """What a call of a function of this file returns, read with no binding in force: its
+        parameters bound to THIS call's arguments (``_judge_returns``), or unknown for a call it
+        cannot bind."""
+        fn, fscope = local
+
+        def read() -> str:
+            values = [fn.body] if isinstance(fn, ast.Lambda) else self._live_returns(fn, fscope)
+            return _summarize(
+                [SYM_DIGITS if v is None else self._text_b(v, fscope, d) for v in values]
+                or [SYM_DIGITS]
+            )
+
+        site = (id(e), id(sc))
+        binding = self._site_bindings.get(site, False)
+        if binding is False:
+            binding = self._binding(local, e, sc)
+            self._site_bindings[site] = binding
+            if binding is not None:
+                self._installed_bindings.append(binding)  # its id is part of memo keys
+        if binding is None:
+            return read()
+        self._actuals[id(fscope)] = binding
+        try:
+            return read()
+        finally:
+            self._actuals.pop(id(fscope), None)
+
+    def _misplaces(self, e: ast.expr, sc: _Scope) -> bool:
+        """Pass B: the string ``e`` builds, read from element text, puts a part where it may not sit
+        or behind a part whose effect it cannot read (:func:`_walk`, #3864). The first refusal is
+        kept for the finding's message."""
+        if not self.call_binding:
+            return False
+        text = self._text_b(e, sc)
+        if _walk(text)[0]:
+            return False
+        if self._why_misplaced is None:
+            self._why_misplaced = refusal(text)
+        return True
+
     def _position_ok(self, kind: str, prefix: str) -> bool:
         """A ``kind`` of escaper output (or a string built from it, ``kind`` + ``"*"``) may sit after
         ``prefix``: text for ``"json"``; text or a quoted value for ``"sens"``; never an unquoted
@@ -2359,8 +4246,6 @@ class _Module:
         before = ""
         for leaf in leaves:
             kind = self._sens_kind(leaf, sc)
-            if self._html_only_misplaced(leaf, sc, before):
-                return False
             if kind:
                 if not self._position_ok(kind, before):
                     return False
@@ -2390,8 +4275,6 @@ class _Module:
             return False
         for i, arg in enumerate(args):
             kind = self._sens_kind(arg, sc)
-            if prefixes is not None and self._html_only_misplaced(arg, sc, prefixes[i]):
-                return False
             if kind:
                 if prefixes is None or not self._position_ok(kind, prefixes[i]):
                     return False
@@ -2440,8 +4323,6 @@ class _Module:
                 before += self._leaf_text(arg, sc) if arg is not None else "\x00"
         for arg in [*call.args, *(kw.value for kw in call.keywords)]:
             kind = self._sens_kind(arg, sc)
-            if any(self._html_only_misplaced(arg, sc, p) for p in marks.get(id(arg), ())):
-                return False
             if kind:
                 prefixes = marks.get(id(arg))
                 if not prefixes or not all(self._position_ok(kind, p) for p in prefixes):
@@ -2497,10 +4378,13 @@ class _Module:
         inert = False  # ... and it is a JSON data block: never run, and ``<`` is escaped
         while i < n:
             if raw:
-                end = prefix.lower().find("</" + raw, i)
-                if end < 0:
+                # the element ends at ``</raw`` followed by white space, ``/`` or ``>`` only
+                found = re.compile("</" + raw + r"[\t\n\f\r /]|</" + raw + ">", re.I).search(
+                    prefix, i
+                )
+                if found is None:
                     return None if inert else raw
-                i, raw = end, ""
+                i, raw = found.start(), ""
             while i < n and not (
                 prefix[i] == "<"
                 and (i + 1 == n or prefix[i + 1].isalpha() or prefix[i + 1] in "/!?")
@@ -2560,128 +4444,20 @@ class _Module:
                     return "handler"
                 if attr == "srcdoc":
                     return "srcdoc"
-                # ``data-href`` too: the client follows it (a table row's link), as ``xlink:href``
-                if (attr in URL_ATTRIBUTES or attr.endswith(("-href", ":href"))) and (
-                    _URL_LEAD.fullmatch(value) is not None
-                    or re.sub(r"[\x01-\x20]", "", value).lower().startswith("javascript:")
-                ):
-                    return "url"
+                # ``data-href`` too: the client follows it (a table row's link), as ``xlink:href``.
+                # The value is read as the browser reads it: character references decoded
+                # (``&#9;`` is a leading tab), white space and controls dropped from the scheme
+                decoded = _unescape(value)
+                scheme = re.sub(r"[\x01-\x20]", "", decoded).lower()
+                if attr in URL_ATTRIBUTES or attr.endswith(("-href", ":href")):
+                    if scheme.startswith(("javascript:", "vbscript:", "data:")):
+                        # after a literal script or data scheme the rest of the value is code
+                        # or a document: no escaper's output is safe there, a checked URL neither
+                        return "url-code"
+                    if _URL_LEAD.fullmatch(decoded) is not None:
+                        return "url"
                 return "value" if quoted else None
         return (None if inert else raw) or None
-
-    def _text_escapers(self, value: ast.expr, sc: _Scope) -> list[tuple[ast.Call, _Scope, str]]:
-        """The calls ``value`` can be (itself, through a name, either arm of a conditional, a bound
-        parameter) that are an HTML-only escaper or a URL escaper, each with its origin."""
-        out = []
-        for alt, asc in self._alternatives(value, sc):
-            if isinstance(alt, ast.Call):
-                origin = self.origin(alt.func, asc)
-                if origin in HTML_ONLY_ORIGINS or origin in URL_ESCAPER_ORIGINS:
-                    out.append((alt, asc, origin))
-        return out
-
-    def _after(
-        self, text: Callable[[], str | None], earlier: ast.expr, sc: _Scope
-    ) -> Callable[[], str | None]:
-        """The literal text in front of a part that follows ``earlier`` in a string that itself
-        follows ``text()``."""
-
-        def read() -> str | None:
-            before = text()
-            return None if before is None else before + self._leaf_text(earlier, sc)
-
-        return read
-
-    def _html_only_misplaced(
-        self, value: ast.expr, sc: _Scope, prefix: str | None | Callable[[], str]
-    ) -> bool:
-        """``value`` is (or may be) the output of an escaper that only HTML-escapes, written where
-        that is not enough (:meth:`_html_context`): ``href="{escape(x)}"``, ``onclick="go('{escape(x)}')"``,
-        ``<script>var a={escape(x)}</script>`` (#3864). Seen where the output is written in place or
-        held by a name (or a parameter a judged call binds to it), in the four builders whose literal
-        text gives it a position; only pass B asks (it adds findings, pass A is the guard as it was).
-        ``prefix`` is the literal text in front (or a function that reads it). It is read up front:
-        the answer for a part is remembered by the text in front of it (#4145)."""
-        if not self.call_binding:
-            return False
-        return self._misplaced(value, sc, prefix, 0)
-
-    def _misplaced(
-        self, value: ast.expr, sc: _Scope, prefix: str | None | Callable[[], str], depth: int
-    ) -> bool:
-        """:meth:`_html_only_misplaced` for one part, and for the parts of a string it builds in
-        place: an f-string or a ``+`` chain written as the part (``'<a href="' + f'{escape(x)}'``)
-        or held by the name, each judged after the text in front of IT."""
-        if depth > 6:
-            return False
-        before = prefix() if callable(prefix) else prefix
-        if before is None:
-            return False  # every part's text in front is unknown too (``_after``): none is placed
-        # the same part after the same text gives the same answer: remembered for the run (#4145)
-        key = (value, sc, depth, self._binding_state(), before)
-        hit = self._memo_misplaced.get(key)
-        if hit is None:
-            self.misplaced_computed += 1
-            hit = self._memo_misplaced[key] = self._misplaced_after(value, sc, before, depth)
-        return hit
-
-    def _misplaced_after(self, value: ast.expr, sc: _Scope, before: str | None, depth: int) -> bool:
-        """:meth:`_misplaced` once the literal text in front of ``value`` is known (``before``)."""
-        d = depth + 1
-
-        def text() -> str | None:
-            return before
-
-        for alt, asc in self._alternatives(value, sc):
-            if isinstance(alt, ast.JoinedStr):
-                for i, part in enumerate(alt.values):
-                    if isinstance(part, ast.FormattedValue) and self._misplaced(
-                        part.value,
-                        asc,
-                        self._after(text, ast.JoinedStr(values=alt.values[:i]), asc),
-                        d,
-                    ):
-                        return True
-            elif isinstance(alt, ast.BinOp) and isinstance(alt.op, ast.Add):
-                if self._misplaced(alt.left, asc, text, d) or self._misplaced(
-                    alt.right, asc, self._after(text, alt.left, asc), d
-                ):
-                    return True
-            elif (
-                isinstance(alt, ast.Call)
-                and len(alt.args) == 1
-                and not alt.keywords
-                and isinstance(alt.func, ast.Name)
-                and alt.func.id == "str"
-                and asc.find("str") is None
-            ):
-                if self._misplaced(alt.args[0], asc, text, d):  # ``str(escape(x))``: the same text
-                    return True
-        escapers = self._text_escapers(value, sc)
-        if not escapers:
-            return False
-        where = self._html_context(before, quoted=True) if before is not None else None
-        if where == "value":
-            # an ordinary quoted value: escaping is enough, but only an escaper that ESCAPES. One
-            # that leaves a marked-safe value as it is (``conditional_escape``) lets it out (#4009).
-            return any(origin in MARK_HONOURING_ORIGINS for _a, _s, origin in escapers)
-        if where is None:
-            return False
-        for alt, asc, origin in escapers:
-            if origin in URL_ESCAPER_ORIGINS:
-                # a checked URL is text too: it is code in a handler, a script or style body and
-                # ``srcdoc`` like any other (its own unquoted position is ``_position_ok``'s)
-                if where in _CODE_CONTEXTS:
-                    return True
-                continue
-            if (
-                where == "url"
-                and alt.args
-                and self._hold_level(alt.args[0], asc, URL_ESCAPER_ORIGINS) == 1
-            ):
-                continue  # ``conditional_escape(safe_url(x))``: the URL was checked first
-            return True
-        return False
 
     def _field_clean(
         self,
@@ -2708,12 +4484,6 @@ class _Module:
         ):
             return True
         kind = self._sens_kind(field.value, sc)
-        if joined is not None and self._html_only_misplaced(
-            field.value,
-            sc,
-            lambda: self._leaf_text(ast.JoinedStr(values=list(joined.values[:index])), sc),
-        ):
-            return False
         if kind:
             if joined is None:
                 return False
@@ -2844,6 +4614,12 @@ class _Module:
         if self._trusted_call(e, sc):
             return True
         name = _callee(e.func)
+        if (
+            isinstance(e.func, ast.Attribute)
+            and (name == "join" or name in FORMAT_METHODS)
+            and self._misplaces(e, sc)
+        ):
+            return False
         args = [*e.args, *(kw.value for kw in e.keywords)]
         origin = self.origin(e.func, sc)
         if origin in CLEAN_IF_ARGS_CLEAN:
@@ -2955,6 +4731,8 @@ class _Module:
             if func.id in self.rebound_names or self.dynamic_globals:
                 # ``global helper; helper = ...`` somewhere, or ``globals()[...] = ...``
                 return None
+            if self._patched(func.id):
+                return None  # ``sys.modules[__name__].helper = ...`` and kin (#3864)
             name, holder = func.id, owner
         elif (
             isinstance(func, ast.Attribute)
@@ -3016,6 +4794,7 @@ class _Module:
                 or func.id in owner.opaque
                 or func.id in self.rebound_names
                 or self.dynamic_globals
+                or self._patched(func.id)
                 or owner.def_nodes.get(func.id)
                 or owner.contents.get(func.id)
                 or owner.pieces.get(func.id)
@@ -3400,6 +5179,8 @@ class _Module:
         seen = seen | {key}
         if not values and not owner.pieces.get(name) and not owner.contents.get(name):
             return False
+        if owner.pieces.get(name) and self._misplaces(node, sc):
+            return False
         return all(self.clean(v, owner, d, seen) for v in values) and self._raw_all(
             owner,
             name,
@@ -3508,6 +5289,8 @@ class _Module:
             return True  # beyond what it can follow, flag: a long chain must not hide a sink
         d = depth + 1
         if isinstance(e, ast.JoinedStr):
+            if self._misplaces(e, sc):
+                return True
             return any(
                 not self._field_clean(v, sc, d, seen, e, i)
                 for i, v in enumerate(e.values)
@@ -3592,6 +5375,8 @@ class _Module:
                     if not all(self.clean(a, sc, d, seen) for a in e.args):
                         return True
                 if name == "join" and e.args:
+                    if self._misplaces(e, sc):
+                        return True
                     return not self.clean(recv, sc, d, seen) or not all(
                         self.elements_clean(a, sc, d, seen) for a in e.args
                     )
@@ -3614,6 +5399,8 @@ class _Module:
         if key in seen:
             return False
         seen = seen | {key}
+        if owner.pieces.get(name) and self._misplaces(node, sc):
+            return True
         return any(self.tainted(v, owner, d, seen) for v in values) or self._raw_all(
             owner,
             name,
@@ -3927,8 +5714,11 @@ class _Flow:
         if name.id not in state or name.id in self.disabled:
             return state
         new = dict(state)
+        value = ast.Constant("")
+        # pass B reads its text as the members of the collection the test names (#3864)
+        self.mod._narrowed_values[id(value)] = (value, key, self.scope)
         new[name.id] = frozenset(
-            {self._def(("narrow", id(key), name.id), name.id, ast.Constant(""), counted=False)}
+            {self._def(("narrow", id(key), name.id), name.id, value, counted=False)}
         )
         return new
 
@@ -4401,7 +6191,13 @@ def find_unsafe_markup(
     # every finding pass A makes.
     first = _Module(source, module, is_package, dynamic_bases).findings()
     second = _Module(source, module, is_package, dynamic_bases, call_binding=True).findings()
-    return sorted(set(first) | set(second), key=lambda f: (f.lineno, f.function, f.sink, f.why))
+    # one finding per sink: pass B's says where a part lands when that is why it flags
+    merged = {(f.lineno, f.function, f.sink): f for f in first}
+    for f in second:
+        key = (f.lineno, f.function, f.sink)
+        if key not in merged or "[position:" in f.why:
+            merged[key] = f
+    return sorted(merged.values(), key=lambda f: (f.lineno, f.function, f.sink, f.why))
 
 
 def _main(argv: list[str]) -> int:
