@@ -28,7 +28,6 @@ class CallbackComponent(LiveComponent):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("debug", [False, True])
-@pytest.mark.parametrize("hook", ["deferred_flush", "time_travel"])
 @pytest.mark.parametrize(
     "initial,final",
     [
@@ -38,7 +37,7 @@ class CallbackComponent(LiveComponent):
         ("legacy", "legacy"),
     ],
 )
-async def test_callback_diagnostic_destinations(monkeypatch, caplog, debug, hook, initial, final):
+async def test_callback_diagnostic_destinations(monkeypatch, caplog, debug, initial, final):
     transport = MockTransport()
     runtime = ViewRuntime(transport)
     owner = SimpleNamespace(exposure_policy=initial)
@@ -52,12 +51,8 @@ async def test_callback_diagnostic_destinations(monkeypatch, caplog, debug, hook
         raise ValueError("CALLBACK_DIAGNOSTIC_SENTINEL")
 
     with override_settings(DEBUG=debug):
-        if hook == "deferred_flush":
-            owner._flush_deferred_activity_events = fail
-            await runtime._flush_deferred_activity_events()
-        else:
-            transport.on_event_recorded = fail
-            await runtime._push_tt_event(owner, object())
+        owner._flush_deferred_activity_events = fail
+        await runtime._flush_deferred_activity_events()
     assert called == [True]
     assert ("CALLBACK_DIAGNOSTIC_SENTINEL" in caplog.text) == (
         initial == final == "legacy" or debug
@@ -117,7 +112,7 @@ async def test_waiter_diagnostic_destinations(monkeypatch, caplog, debug, route,
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["waiter", "time_travel", "deferred_flush"])
+@pytest.mark.parametrize("route", ["waiter", "deferred_flush"])
 @pytest.mark.parametrize("policy", ["explicit", "unknown", None])
 async def test_protected_callbacks_do_not_inspect_exceptions_or_metadata(route, policy, caplog):
     from djust._exposure_diagnostics import diagnostics_allowed
@@ -149,9 +144,6 @@ async def test_protected_callbacks_do_not_inspect_exceptions_or_metadata(route, 
             log_message="Failed %s: %s",
             log_args=(UnprintableMetadata(),),
         )
-    elif route == "time_travel":
-        runtime.transport.on_event_recorded = async_fail
-        await runtime._push_tt_event(owner, object())
     else:
         owner._flush_deferred_activity_events = async_fail
         await runtime._flush_deferred_activity_events()
@@ -162,12 +154,11 @@ async def test_protected_callbacks_do_not_inspect_exceptions_or_metadata(route, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["waiter", "time_travel"])
 @pytest.mark.parametrize(
     "root_policy,target_policy", [("explicit", "legacy"), ("legacy", "explicit")]
 )
 async def test_callback_restrictions_include_both_root_and_target(
-    route, root_policy, target_policy, caplog
+    root_policy, target_policy, caplog
 ):
     runtime = ViewRuntime(MockTransport())
     runtime.view_instance = SimpleNamespace(exposure_policy=root_policy)
@@ -178,18 +169,10 @@ async def test_callback_restrictions_include_both_root_and_target(
         target.exposure_policy = "legacy"
         raise ValueError("MIXED_OWNER_SENTINEL")
 
-    if route == "waiter":
-        target._notify_waiters = fail
-        runtime._notify_waiters_safely(
-            target, "click", {}, log_message="Failed %s: %s", log_args=("click",)
-        )
-    else:
-
-        async def async_fail(*args):
-            fail(*args)
-
-        runtime.transport.on_event_recorded = async_fail
-        await runtime._push_tt_event(target, object())
+    target._notify_waiters = fail
+    runtime._notify_waiters_safely(
+        target, "click", {}, log_message="Failed %s: %s", log_args=("click",)
+    )
     assert "Protected" in caplog.text
     assert "MIXED_OWNER_SENTINEL" not in caplog.text
 
@@ -279,7 +262,7 @@ async def test_sticky_child_waiter_failure_is_protected(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("route", ["waiter", "time_travel", "deferred_flush"])
+@pytest.mark.parametrize("route", ["waiter", "deferred_flush"])
 async def test_callback_replacement_cannot_grant_diagnostics(route, caplog):
     runtime = ViewRuntime(MockTransport())
     owner = SimpleNamespace(exposure_policy="legacy")
@@ -297,9 +280,6 @@ async def test_callback_replacement_cannot_grant_diagnostics(route, caplog):
         runtime._notify_waiters_safely(
             owner, "click", {}, log_message="Failed %s: %s", log_args=("click",)
         )
-    elif route == "time_travel":
-        runtime.transport.on_event_recorded = async_fail
-        await runtime._push_tt_event(owner, object())
     else:
         owner._flush_deferred_activity_events = async_fail
         await runtime._flush_deferred_activity_events()

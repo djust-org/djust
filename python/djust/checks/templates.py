@@ -103,8 +103,6 @@ _DOC_DJUST_EVENT_RE = re.compile(
 # `document.dispatchEvent(new CustomEvent('djust:...'))` sites:
 #   - 'djust:ws-reconnected'    python/djust/static/djust/client.js:670
 #   - 'djust:hvr-applied'       python/djust/static/djust/client.js:1463
-#   - 'djust:time-travel-state' python/djust/static/djust/client.js:1483
-#   - 'djust:time-travel-event' python/djust/static/djust/client.js:1501
 #   - 'djust:navigate-start'    python/djust/static/djust/client.js:10865
 #   - 'djust:navigate-end'      python/djust/static/djust/client.js:10877
 #   - 'djust:layout-changed'    python/djust/static/djust/client.js:13855
@@ -114,8 +112,6 @@ _DOC_DISPATCHED_DJUST_EVENTS = frozenset(
     {
         "ws-reconnected",
         "hvr-applied",
-        "time-travel-state",
-        "time-travel-event",
         "navigate-start",
         "navigate-end",
         "layout-changed",
@@ -843,8 +839,8 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
         # T004 -- document.addEventListener('djust:...') should be window
         # (#1809) — except for the djust: events djust itself dispatches on
-        # `document` (navigate-*, hvr-*, layout-changed, ws-reconnected,
-        # time-travel-*), where `document` is CORRECT. Also honor
+        # `document` (navigate-*, hvr-*, layout-changed, ws-reconnected),
+        # where `document` is CORRECT. Also honor
         # suppress_checks (mirrors T002/C013).
         if not _is_check_suppressed("djust.T004"):
             _line_counter = LineCounter(content)

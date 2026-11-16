@@ -52,7 +52,6 @@ def test_legacy_policy_preserves_current_context_behavior():
     assert view.get_context_data()["title"] == "Visible"
     assert "exposure_policy" not in view.get_context_data()
     assert "exposure_policy" not in view.get_state()
-    assert "exposure_policy" not in view._capture_snapshot_state()
 
 
 @pytest.mark.parametrize(

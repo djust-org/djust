@@ -17,8 +17,9 @@ This file pins:
    channel-layer wire-version drift, proving the channel-layer reset is what
    fixes it. With the reset, a stray ``djust_hotreload`` frame on a STALE shared
    layer cannot reach the victim consumer (it's on a fresh layer), so the
-   time-travel jump lands at version 3; without the reset, it lands at 4 — the
-   exact ``got 4`` #1882 symptom.
+   second render-send lands at version 3; without the reset, it lands at 4 — the
+   exact ``got 4`` #1882 symptom. (The second render-send was a time-travel
+   jump until 2.0 removed time travel, #4184; it is a second event now.)
 """
 
 from __future__ import annotations
@@ -262,6 +263,9 @@ def test_reset_is_optional_dep_safe(monkeypatch):
 
 _TT_MOD = "djust.tests.test_recovery_version_staleness_1817"
 
+#: The `ref` of the second render-send.
+_NEXT_REF = 2
+
 
 #: The `ref` this harness echoes on its arming event.
 _ARM_REF = 1
@@ -288,7 +292,7 @@ async def _recv_until(comm, wanted, *, ref=None, tries=8, timeout=30):
 
 
 async def _drive_jump_with_stale_layer_sender(reset_layer: bool):
-    """mount → (stray hotreload from a STALE shared layer) → bump → jump.
+    """mount → (stray hotreload from a STALE shared layer) → bump → bump.
 
     Models the #1882 race: a sibling test captured the cached channel layer and
     fires ``group_send("djust_hotreload", ...)`` to it DURING the victim's
@@ -328,7 +332,7 @@ async def _drive_jump_with_stale_layer_sender(reset_layer: bool):
     assert ok
     await comm.receive_json_from()  # connect frame
 
-    await comm.send_json_to({"type": "mount", "view": f"{_TT_MOD}._TTRecoveryView", "url": "/tt/"})
+    await comm.send_json_to({"type": "mount", "view": f"{_TT_MOD}._RecoveryView", "url": "/tt/"})
     mount = await _recv_until(comm, "mount")
     v_mount = mount["version"]
 
@@ -342,14 +346,9 @@ async def _drive_jump_with_stale_layer_sender(reset_layer: bool):
     ev1 = await _recv_until(comm, "patch", ref=_ARM_REF)
     v_arm = ev1["version"]
 
-    # Jump (the render-send drift path).
-    await comm.send_json_to({"type": "time_travel_jump", "index": 0, "which": "before"})
-    v_jump = None
-    for _ in range(8):
-        f = await comm.receive_json_from()
-        if f.get("type") in ("patch", "html_update"):
-            v_jump = f["version"]
-            break
+    # A second render-send (it was the time-travel jump before #4184).
+    await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": _NEXT_REF})
+    v_jump = (await _recv_until(comm, "patch", ref=_NEXT_REF))["version"]
 
     await comm.disconnect()
     return v_mount, v_arm, v_jump

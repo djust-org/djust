@@ -10,8 +10,20 @@ did with what state.
 Iter A ships the data shape + encode/decode round-trip. Iter B (tracked
 separately) adds a read-only replay view at ``/__djust__/replay/<blob>``.
 Iter C (tracked separately) adds a Redis store for payloads too large
-to fit inline, the ``djust replay`` CLI, and a ``time_travel_excluded_fields``
-class attribute for PII scrubbing at the framework level.
+to fit inline and the ``djust replay`` CLI.
+
+A capture is built from the states the caller supplies::
+
+    BugCapture(
+        state_before=before,
+        state_after=after,
+        vdom_patches=patches,
+        event_name="next_step",
+    ).encode(scrub=scrub_fields("password"))
+
+djust 2.0 removed ``encode_view_state()``, the debug panel's Share button and
+``time_travel_excluded_fields`` with time-travel debugging (#4184): they read
+the per-view time-travel buffer, which no longer exists.
 
 Security model (READ THIS BEFORE USING)
 ---------------------------------------
@@ -31,8 +43,8 @@ a :class:`BugCapture` and render it MUST treat the resulting state as
 untrusted input — escape on render, do not dispatch handlers against
 it, do not let it cross multi-tenant boundaries.
 
-**Default-off in production.** :func:`BugCapture.encode` and
-:func:`encode_view_state` raise when ``settings.DEBUG`` is falsy unless
+**Default-off in production.** :func:`BugCapture.encode` raises when
+``settings.DEBUG`` is falsy unless
 the deployer explicitly opts in via
 ``DJUST_BUG_CAPTURE_PROD_OPT_IN = True``. The opt-in is deliberately
 ugly so deployers think about whether they actually want users
@@ -285,155 +297,6 @@ class BugCapture:
         )
 
 
-def encode_view_state(
-    view: Any,
-    patches: Any,
-    event_name: str = "",
-    scrub: Optional[Callable[[BugCapture], BugCapture]] = None,
-) -> str:
-    """Build a :class:`BugCapture` from the latest event on *view* and encode it.
-
-    Reads the most recent :class:`~djust.time_travel.EventSnapshot` from
-    the view's time-travel buffer (the source of ``state_before`` /
-    ``state_after``) and combines it with the caller-supplied *patches*.
-
-    **Why patches are caller-supplied:** iter A intentionally does not
-    couple to the render pipeline. djust's ``render_with_diff()`` returns
-    patches into the WebSocket / SSE / runtime frame paths without
-    stashing them on the view, so there is no framework attribute to
-    introspect here. The caller is responsible for obtaining the patch
-    list — typically by calling ``render_with_diff()`` immediately
-    before this function, or by capturing patches from the framework's
-    own patch-emission signal (``djust.signals.patches_emitted``).
-
-    Iter B (#1561) will add a debug-panel button that wires up
-    ``render_with_diff()`` + this function in one click; until then,
-    the canonical pattern is::
-
-        from djust.bug_capture import encode_view_state, scrub_fields
-        html, patches_json, _version = my_view.render_with_diff()
-        blob = encode_view_state(
-            my_view,
-            patches=patches_json,
-            scrub=scrub_fields("password", "ssn"),
-        )
-
-    Args:
-        view: A :class:`~djust.live_view.LiveView` instance with
-            ``time_travel_enabled = True`` and at least one event
-            captured in its time-travel buffer.
-        patches: The VDOM patches to record. Accepts either the JSON
-            string returned by ``render_with_diff()`` or an
-            already-decoded list of patch dicts.
-        event_name: If provided, locates the most recent snapshot for
-            that event name. Default is the latest snapshot regardless
-            of event.
-        scrub: Forwarded to :meth:`BugCapture.encode`. Runs AFTER the
-            view's own ``time_travel_excluded_fields`` (below), so a
-            caller can add to the redaction but a missing ``scrub``
-            argument can never *remove* the view's declared safety net.
-
-    **Declarative exclusions.** Before *scrub* runs, this applies
-    ``scrub_fields(*view.time_travel_excluded_fields)`` — the view's own
-    list of top-level public-state keys that must never leave it inside a
-    shared capture. Names from BOTH sources land in the wire-visible
-    ``scrubbed_fields`` list (``scrub_fields`` carries forward whatever it
-    is handed), so a reviewer sees the full set that was held back. A
-    custom *scrub* callable should preserve ``capture.scrubbed_fields``
-    for the same reason; the built-in :func:`scrub_fields` already does.
-
-    Raises:
-        RuntimeError: see :meth:`BugCapture.encode`.
-        ValueError: if the view has no time-travel buffer, no recorded
-            events, the named event isn't in the buffer, or *patches*
-            is malformed (not a JSON list / not a list).
-    """
-    buffer = getattr(view, "_time_travel_buffer", None)
-    if buffer is None or len(buffer) == 0:
-        raise ValueError(
-            "view has no time-travel buffer or no recorded events; "
-            "set `time_travel_enabled = True` on the LiveView and "
-            "dispatch at least one event before capturing"
-        )
-
-    snapshot = None
-    history = list(buffer.history())
-    if event_name:
-        for entry in reversed(history):
-            if entry.get("event_name") == event_name:
-                snapshot = entry
-                break
-        if snapshot is None:
-            raise ValueError("no recorded event named %r in time-travel buffer" % event_name)
-    else:
-        snapshot = history[-1]
-
-    state_before = snapshot["state_before"]
-    state_after = snapshot["state_after"]
-    from ._exposure import ExposureContract, ExposureError, uses_legacy_exposure
-
-    if not uses_legacy_exposure(view):
-        policy = getattr(view, "exposure_policy", None)
-        if type(policy) is not str or policy != "explicit":
-            raise ExposureError("Unknown exposure policy for bug capture")
-        # A legacy record has no explicit projection provenance. A current
-        # policy declaration cannot retroactively authorize exporting it.
-        if snapshot.get("restorable") is not False:
-            raise ExposureError("Cannot export historical legacy state under explicit policy")
-        contract = ExposureContract.from_view_class(type(view))
-        # Use historical values, not today's view state. Reapply the current
-        # permissions so extra keys or narrowed grants cannot leak from history.
-        state_before = contract.project(state_before, "debug")
-        state_after = contract.project(state_after, "debug")
-
-    parsed_patches = _coerce_patches(patches)
-    capture = BugCapture(
-        state_before=state_before,
-        state_after=state_after,
-        vdom_patches=parsed_patches,
-        event_name=snapshot.get("event_name", "") or "",
-    )
-
-    # The view's declared exclusions run FIRST, so the safety net does not
-    # depend on the caller remembering to pass a `scrub`. Reuse
-    # `scrub_fields` rather than reimplementing the removal: it already
-    # handles absent keys and already CARRIES FORWARD `scrubbed_fields`,
-    # which is what lets names from both sources end up on the wire
-    # together (#1646 — one implementation of "remove these keys").
-    excluded = _declared_excluded_fields(view)
-    if excluded:
-        capture = scrub_fields(*excluded)(capture)
-
-    return capture.encode(scrub=scrub)
-
-
-def _declared_excluded_fields(view: Any) -> List[str]:
-    """Return ``view.time_travel_excluded_fields`` as a clean list of names.
-
-    Tolerant of the shapes a class attribute actually takes in the wild: a
-    tuple, a set, a frozenset (the contract is "an iterable of names", per
-    the filter-shape rule #1108), or a bare string. A bare string is the
-    interesting one — ``time_travel_excluded_fields = "password"`` iterates
-    as six characters, silently scrubbing nothing, so it is treated as a
-    single name instead of being quietly wrong.
-    """
-    declared = getattr(view, "time_travel_excluded_fields", None)
-    if not declared:
-        return []
-    if isinstance(declared, str):
-        return [declared]
-    try:
-        return [str(name) for name in declared]
-    except TypeError:
-        logger.warning(
-            "time_travel_excluded_fields on %s is not iterable (%s); ignoring it. "
-            "Captured state will NOT be scrubbed by the class attribute.",
-            type(view).__name__,
-            type(declared).__name__,
-        )
-        return []
-
-
 def scrub_fields(*field_names: str) -> Callable[[BugCapture], BugCapture]:
     """Return a scrub callable that removes *field_names* from state.
 
@@ -537,27 +400,6 @@ def _resolve_stored_payload(snapshot_id: str) -> str:
     return payload
 
 
-def _coerce_patches(patches: Any) -> List[Dict[str, Any]]:
-    """Normalize caller-supplied *patches* to a list of dicts.
-
-    Accepts the JSON string ``render_with_diff()`` returns OR an
-    already-decoded list. Raises :class:`ValueError` on anything else
-    so callers fail at the bug-capture boundary rather than producing a
-    malformed wire payload.
-    """
-    if isinstance(patches, str):
-        try:
-            parsed = json.loads(patches)
-        except json.JSONDecodeError as exc:
-            raise ValueError("patches is not valid JSON: %s" % exc) from exc
-        if not isinstance(parsed, list):
-            raise ValueError("patches JSON must be an array, decoded to %s" % type(parsed).__name__)
-        return parsed
-    if isinstance(patches, list):
-        return list(patches)
-    raise ValueError("patches must be a JSON string or list, got %s" % type(patches).__name__)
-
-
 __all__ = [
     "WIRE_VERSION",
     "STORE_MARKER",
@@ -566,7 +408,13 @@ __all__ = [
     "RedisSnapshotStore",
     "SnapshotStore",
     "UnauthenticatedRedisError",
-    "encode_view_state",
     "get_store",
     "scrub_fields",
 ]
+
+
+def __getattr__(name: str) -> Any:  # PEP 562
+    from djust._removed_settings import refuse_removed_name
+
+    refuse_removed_name(__name__, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

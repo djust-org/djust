@@ -391,9 +391,6 @@ LEAVES: Dict[Tuple[str, str], Tuple[str, Optional[str]]] = {
     # hook step
     ("_child_lifecycle.py", "untrack_view_presence"): ("run_sync_step", "hook"),
     ("push.py", "_presence_probe"): ("run_sync_step", "hook"),
-    # time travel
-    ("time_travel.py", "_stepped_handler"): ("sync_step", "event"),
-    ("time_travel.py", "replay_event"): ("_stepped_handler", None),
 }
 
 _LEAF_TAILS = {qualname.split(".")[-1] for _file, qualname in LEAVES}
@@ -447,10 +444,6 @@ _RENDER = (
 )
 _SESSION = "session, auth-state or storage I/O of the framework; calls no view hook"
 _STATE = "framework-owned bookkeeping (component ids, dirty baseline, temporary assigns)"
-_RESTORE = (
-    "assigns saved state with setattr / safe_setattr: an application property setter "
-    "would run here without the scope (guide: Not wrapped); no hook is called by name"
-)
 _SCOPE_INPUT = (
     "resolves what the scope depends on (the tenant, the caller), so it cannot run inside it"
 )
@@ -785,25 +778,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ),
     (
         "websocket.py",
-        "LiveViewConsumer._handle_time_travel_jump_locked",
-        "restore_snapshot",
-    ): plumbing(_RESTORE),
-    (
-        "websocket.py",
-        "LiveViewConsumer._handle_time_travel_component_jump_locked",
-        "restore_component_snapshot",
-    ): plumbing(_RESTORE),
-    ("websocket.py", "LiveViewConsumer._handle_forward_replay_locked", "replay_event"): leaf(),
-    (
-        "websocket.py",
-        "LiveViewConsumer.handle_bug_capture_share",
-        "self.view_instance.render_with_diff",
-    ): plumbing(_RENDER, _GET_TEMPLATE),
-    ("websocket.py", "LiveViewConsumer.handle_bug_capture_share", "encode_view_state"): plumbing(
-        _RENDER
-    ),
-    (
-        "websocket.py",
         "LiveViewConsumer._dispatch_single_event_body",
         "_sync_context_and_render",
     ): plumbing(_RENDER),
@@ -895,10 +869,6 @@ HOOKS: Dict[str, str] = {
     "(app).connected": "stepped:lifecycle",
     "(app).disconnected": "stepped:lifecycle",
     "LiveView._should_restore_snapshot": "stepped:lifecycle",
-    "LiveView._capture_snapshot_state": (
-        "unwrapped:not-threaded:djust 2.0 removed the legacy signed snapshot, its only stepped "
-        "caller; time-travel recording calls it in its caller's thread, with no step open"
-    ),
     "StickyChildRegistry._on_sticky_unmount": "inside:lifecycle|none@_child_lifecycle.py::dispose_child_subtree",
     "(app)._cleanup_on_unregister": "inside:lifecycle|none@_child_lifecycle.py::dispose_child_subtree",
     "UploadMixin._cleanup_uploads": "inside:lifecycle|none@_child_lifecycle.py::dispose_child_subtree",
@@ -1080,9 +1050,6 @@ HOOKS: Dict[str, str] = {
     ),
     "LiveViewConsumer._live_redirect_url_view": (
         "unwrapped:not-threaded:consumer internal (resolves the redirect target), not an application hook"
-    ),
-    "LiveViewConsumer._handle_forward_replay_locked": (
-        "unwrapped:async-def:consumer internal, awaited on the loop"
     ),
     "DjangoJSONEncoder._serialize_model_safely": (
         "unwrapped:not-threaded:serialization helper, not an application hook"

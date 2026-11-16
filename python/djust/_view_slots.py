@@ -129,9 +129,6 @@ PAGE_LEVEL_FRAMES = frozenset(
         "rate_limit_exceeded",
         "connect",
         "pong",
-        "time_travel_state",
-        "time_travel_event",
-        "bug_capture_share_result",
     }
 )
 

@@ -1070,9 +1070,8 @@ class DjangoJSONEncoder(json.JSONEncoder, metaclass=_EncoderDepthMeta):
 #    is what Django's own encoder returns.
 # 3. **A round trip back ONTO the view** — the Django session
 #    (``mixins/request.py``, ``runtime.py``, ``mixins/sticky.py``,
-#    ``mixins/components.py``) and the snapshot captures in ``live_view.py``,
-#    restored by ``runtime.py`` (the signed back-navigation snapshot) and
-#    ``time_travel.py`` (the recorded event buffer). This one is neither of
+#    ``mixins/components.py``), restored by ``runtime.py`` and the declared
+#    ``persist=`` restore paths. This one is neither of
 #    the above: whatever is stored is ``safe_setattr``-ed back onto the view on
 #    restore and lands in the template context on the very next render.
 #
@@ -1559,33 +1558,6 @@ def _decode_tagged_value(tagged: Any, enums: Optional[Any], depth: int) -> Any:
     raise StateValueError("an unknown kind of value")
 
 
-def decimal_tags_to_strings(obj: Any) -> Any:
-    """Render every tagged ``Decimal`` as its bare digit string, recursively.
-
-    For a CLIENT-BOUND *view* of state that was captured for destination 3 —
-    the time-travel debug panel, which DISPLAYS ``state_before`` /
-    ``state_after`` rather than restoring from them. Destination 2's rule is
-    the exact digit string, so this converts between the two instead of leaking
-    a tag shape into a UI (``{__djust_decimal__: "19.99"}`` where ``19.99``
-    belongs).
-
-    Never call this on state that will be restored: the restore path needs
-    :func:`decode_state_roundtrip`, and a bare string there is the #2214
-    regression.
-    """
-    if isinstance(obj, dict):
-        if len(obj) == 1:
-            payload = obj.get(STATE_DECIMAL_TAG)
-            if isinstance(payload, str):
-                return payload
-        return {k: decimal_tags_to_strings(v) for k, v in mapping_items(obj)}
-    if isinstance(obj, list):
-        return [decimal_tags_to_strings(v) for v in obj]
-    if isinstance(obj, tuple):
-        return tuple(decimal_tags_to_strings(v) for v in obj)
-    return obj
-
-
 class StateRoundtripJSONEncoder(DjangoJSONEncoder):
     """:class:`DjangoJSONEncoder` for a JSON round trip back onto the view.
 
@@ -1593,9 +1565,8 @@ class StateRoundtripJSONEncoder(DjangoJSONEncoder):
     :func:`decimal_for_state_roundtrip` writes in the tagged form so
     :func:`decode_state_roundtrip` can restore the real ``Decimal`` on the way
     back. Use this — never the plain encoder — when the ``json.dumps`` output
-    is read back and assigned to view state (``_capture_snapshot_state``,
-    ``_capture_components_snapshot``), and pair it with a decode at the restore
-    site.
+    is read back and assigned to view state, and pair it with a decode at the
+    restore site.
     """
 
     def _default_impl(self, obj: Any) -> Any:

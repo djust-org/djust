@@ -1,6 +1,6 @@
 """#3248: the legacy private-state session save honours the framework-internal list.
 
-The snapshot, assigns, time-travel and exposure paths all skip
+The snapshot, assigns and exposure paths all skip
 ``_FRAMEWORK_INTERNAL_ATTRS`` (``live_view.py``). The private-state capture
 (``_snapshot_user_private_attrs`` / ``_get_private_state``) and restore
 (``_restore_private_state``) checked only the init-time ``_framework_attrs``,

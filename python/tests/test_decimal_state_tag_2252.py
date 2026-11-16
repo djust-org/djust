@@ -41,8 +41,8 @@ the set is pinned mechanically in `TestTheDecodeSiteInventory`.
 grep matters: it names `mixins/rust_bridge.py`, which has no restore path at
 all, and omits three that do — `runtime.py`'s `_restore_snapshot` call (the
 legacy signed back-navigation snapshot, removed in 2.0), `time_travel.py`'s
-replay restores, and `_restore_component_state` (removed in 2.0 with the
-component session state).
+replay restores (removed in 2.0 with time-travel debugging), and
+`_restore_component_state` (removed in 2.0 with the component session state).
 
 Every template assertion is a differential against real Django, and the curated
 matrix is paired with a randomized sweep (v1.1.1-2 retro: a table samples the
@@ -63,21 +63,16 @@ import pytest
 
 pytest.importorskip("django")
 
-from django.contrib.sessions.middleware import SessionMiddleware  # noqa: E402
 from django.core.signing import JSONSerializer as DjangoSessionSerializer  # noqa: E402
 from django.db import models  # noqa: E402
 from django.template import Context as DjangoContext  # noqa: E402
 from django.template import Template as DjangoTemplate  # noqa: E402
-from django.test import RequestFactory  # noqa: E402
 
-from djust import LiveView  # noqa: E402
 from djust import _rust  # noqa: E402
-from djust.decorators import event_handler  # noqa: E402
 from djust.serialization import (  # noqa: E402
     STATE_DECIMAL_TAG,
     StateRoundtripJSONEncoder,
     decimal_for_state_roundtrip,
-    decimal_tags_to_strings,
     decode_state_roundtrip,
     django_json_datetime,
     normalize_django_value,
@@ -581,108 +576,14 @@ class TestEveryOtherTypeIsUntouched:
 
 
 # ===========================================================================
-# 6. The real paths. Reproduction fidelity (#1650): a real session, real
-#    view.get()/view.post(), real restore helpers — not a proxy.
-# ===========================================================================
-
-
-class _PriceView(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><span>{{ price }}</span></div>"
-
-    def mount(self, request, **kwargs):
-        self.price = Decimal("19.90")
-        self.huge = HUGE
-        self._secret_price = Decimal("0.00")
-        self._user_private_keys = {"_secret_price"}
-
-    @event_handler()
-    def bump(self, **kwargs):
-        self.price = self.price + Decimal("0.10")
-
-    def get_context_data(self, **kwargs):
-        return {"price": self.price, "huge": self.huge}
-
-
-def _with_session(request):
-    SessionMiddleware(lambda x: None).process_request(request)
-    request.session.save()
-    return request
-
-
-@pytest.mark.django_db
-class TestTheSnapshotCapture:
-    """`live_view.py`'s capture (`_capture_snapshot_state`, read by time-travel
-    recording) goes through the ENCODER adapter, a different serializer from
-    the session's, so it needs the tag too (the #1646 shape)."""
-
-    def test_the_capture_tags_a_decimal_and_the_decode_restores_it(self) -> None:
-        view = _PriceView()
-        view.mount(_with_session(RequestFactory().get("/price-2252/")))
-        captured = view._capture_snapshot_state()
-        assert captured["price"] == {STATE_DECIMAL_TAG: "19.90"}
-
-        # Plain JSON by this point: a bare dumps with no encoder carries it.
-        raw = json.dumps(captured, sort_keys=True, separators=(",", ":"))
-        restored = decode_state_roundtrip(json.loads(raw))
-        assert isinstance(restored["price"], Decimal)
-        assert str(restored["price"]) == "19.90"
-        assert restored["huge"] == HUGE
-
-
-@pytest.mark.django_db
-class TestTheTimeTravelRoundTrip:
-    """`time_travel.py` — a restore site the issue's list omits entirely, and
-    the one place a tagged value is also DISPLAYED rather than restored."""
-
-    def _snapshot(self):
-        from djust.time_travel import EventSnapshot
-
-        view = _PriceView()
-        view.mount(_with_session(RequestFactory().get("/price-2252/")))
-        return view, EventSnapshot(
-            event_name="bump",
-            params={},
-            ref=1,
-            ts=0.0,
-            state_before=view._capture_snapshot_state(),
-            state_after=view._capture_snapshot_state(),
-        )
-
-    def test_restoring_a_recorded_snapshot_gives_back_a_decimal(self) -> None:
-        from djust.time_travel import restore_snapshot
-
-        view, snap = self._snapshot()
-        view.price = Decimal("999.99")
-        assert restore_snapshot(view, snap, "before") is True
-        assert isinstance(view.price, Decimal)
-        assert str(view.price) == "19.90"
-
-    def test_the_debug_panel_sees_the_digit_string_not_the_tag(self) -> None:
-        """`to_dict` is the CLIENT-bound view of the same capture. Destination
-        2's rule is the bare digit string, so the panel must not be handed a
-        tag shape to render."""
-        _, snap = self._snapshot()
-        wire = snap.to_dict()
-        assert wire["state_before"]["price"] == "19.90"
-        assert wire["state_after"]["huge"] == str(HUGE)
-        # And the buffered dataclass still carries the restorable form.
-        assert snap.state_before["price"] == {STATE_DECIMAL_TAG: "19.90"}
-
-    def test_the_display_helper_leaves_a_near_miss_alone(self) -> None:
-        for value in ({STATE_DECIMAL_TAG: 5}, {STATE_DECIMAL_TAG: "1", "x": 2}, {"a": "b"}):
-            assert decimal_tags_to_strings(value) == value
-
-
-# ===========================================================================
 # 7. The inventory — grep the SINK, pin the SET (v1.1.1-2 retro, #1125).
 # ===========================================================================
 
 #: Every production restore site, as (module, enclosing function), found by
 #: grepping the SINK — `safe_setattr` plus the `_restore_*` hooks — NOT by
-#: mirroring the twelve write sites. The two sets do not correspond: the write
-#: side has no counterpart for `time_travel.py`, and `mixins/rust_bridge.py`
-#: (which #2252 named as a read site) has no restore path at all.
+#: mirroring the twelve write sites. The two sets do not correspond:
+#: `mixins/rust_bridge.py` (which #2252 named as a read site) has no restore
+#: path at all.
 EXPECTED_DECODE_SITES = {
     # #3252: restore the lazy child's server-held public/private session state,
     # tagged at save_http_lazy's encoder-less JSON boundary.
@@ -696,15 +597,13 @@ EXPECTED_DECODE_SITES = {
     # 2.0 removed the page-POST fallback's session restore and the component
     # session restore, with their decodes (``mixins/request.py``,
     # ``mixins/components.py``).
-    ("time_travel.py", "restore_snapshot"),
-    ("time_travel.py", "restore_component_snapshot"),
-    ("time_travel.py", "to_dict"),
+    # Time-travel's restore and display sites went with it in 2.0 (#4184).
 }
 
 
 def _decode_call_sites():
-    """Every call of `decode_state_roundtrip` / `decimal_tags_to_strings` in
-    the package, as (relative module, enclosing function)."""
+    """Every call of `decode_state_roundtrip` in the package, as (relative
+    module, enclosing function)."""
     found = set()
     for path in sorted(_PKG.rglob("*.py")):
         if "tests" in path.parts:
@@ -730,7 +629,7 @@ def _decode_call_sites():
             def visit_Call(self, node):
                 fn = node.func
                 name = fn.id if isinstance(fn, ast.Name) else getattr(fn, "attr", None)
-                if name in ("decode_state_roundtrip", "decimal_tags_to_strings") and stack:
+                if name == "decode_state_roundtrip" and stack:
                     found.add((rel, stack[-1]))
                 self.generic_visit(node)
 

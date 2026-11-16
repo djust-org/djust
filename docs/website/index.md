@@ -112,7 +112,6 @@ How to build specific features.
 | **[Accessibility (ARIA / WCAG)](guides/accessibility.md)** | Built-in component ARIA, the `Y` accessibility system checks, and theming color-contrast WCAG validation |
 | **[Hot View Replacement (v0.6.1)](guides/hot-view-replacement.md)** | State-preserving Python reload in dev (React Fast Refresh parity) |
 | **[Streaming Initial Render (v0.6.1)](guides/streaming-render.md)** | Flush the page shell before main content — first-paint win vs. Next.js `renderToPipeableStream` |
-| **[Time-Travel Debugging (v0.6.1)](guides/time-travel-debugging.md)** | Scrub back through event history and jump to any past state — beyond Redux DevTools |
 | **[Bug Capture — Share a Broken Transition (v1.1)](guides/bug-capture.md)** | Encode `state_before` + `state_after` + `vdom_patches` into a URL fragment a teammate can paste back to see exactly what the framework did |
 
 ---

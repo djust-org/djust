@@ -25,10 +25,6 @@ from .components.base import LiveComponent
 # islands importing it resolve against this stub.
 _FRAMEWORK_INTERNAL_ATTRS: frozenset[str]
 
-# ``__components__`` snapshot dispatch (#2896), used by
-# ``time_travel.restore_snapshot``.
-def restore_components_snapshot(view: Any, components_state: Any, *, source: str) -> bool: ...
-
 # ``{public_name: (kind, slot_name)}`` for a view class's descriptor-backed
 # fields (``state()`` and class-level components), read by
 # ``mixins.context.rendered_state_names`` (#4050).

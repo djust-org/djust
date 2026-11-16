@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 129 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 126 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -58,8 +58,8 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C303 | Config | Info | VDOM cache disabled |
 | C304 | Config | Warning | Client state with PII-like field names |
 | C401 | Config | Warning | Hot View Replacement without watchdog |
-| C501 | Config | Info | Time-travel debugging enabled globally |
-| C502 | Config | Error | Invalid time_travel_max_events |
+| C501 | Config | Retired | Retired in 2.0 with time-travel debugging (#4184): `LIVEVIEW_CONFIG['time_travel_enabled']` was on. Never emitted; the ID is not reused |
+| C502 | Config | Retired | Retired in 2.0 with time-travel debugging (#4184): `time_travel_max_events` was not a positive integer. Never emitted; the ID is not reused |
 | V001 | LiveView | Warning | LiveView missing template_name attribute |
 | V002 | LiveView | Info | LiveView missing mount() method |
 | V003 | LiveView | Error | mount() has wrong signature |
@@ -73,7 +73,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V011 | LiveView | Retired | Retired in 2.0 with `enable_state_snapshot`: a sticky child opted in to state snapshots and its parent did not. Never emitted; the ID is not reused |
 | V012 | LiveView | Warning | Sticky child template declares its own dj-view (nested duplicate binding) |
 | V013 | LiveView | Warning | HTTP-only setup()/dispatch()/get()/post() override or URLconf wrapper never runs on a WebSocket mount |
-| V014 | LiveView | Warning | Time-travel-enabled view has PII-looking model/form fields not in `time_travel_excluded_fields` |
+| V014 | LiveView | Retired | Retired in 2.0 with time-travel debugging (#4184): a time-travel view had PII-looking fields not in `time_travel_excluded_fields`. Never emitted; the ID is not reused |
 | V015 | LiveView | Warning | LIVEVIEW_ALLOWED_MODULES rejects a djust LiveView the URLconf routes (add `"djust"`) |
 | V016 | LiveView | Error | Strict-policy handler declaration that strict dispatch rejects (ADR-036) |
 | V017 | LiveView | Retired | Retired in 2.0 with the actor system: async strict event handler on an actor view. Never emitted; the ID is not reused |
@@ -402,6 +402,18 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C042"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C042"]`
 - **False positives**: an unmanaged model whose rows change only through your own Django statements (then the refresh is exact and the message can be suppressed). A trigger on a managed table is not detected.
 
+### C501 — Retired
+- **Retired in**: 2.0 (time-travel debugging was removed, #4184)
+- **What it did**: noted, under `DEBUG`, that `LIVEVIEW_CONFIG['time_travel_enabled']` was on
+- **Why it was retired**: time-travel debugging and its config keys were removed. A project that still sets the key is refused with `ImproperlyConfigured` at startup
+- **Migration**: remove `"C501"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
+
+### C502 — Retired
+- **Retired in**: 2.0 (time-travel debugging was removed, #4184)
+- **What it did**: reported a `LIVEVIEW_CONFIG['time_travel_max_events']` that was not a positive integer
+- **Why it was retired**: time-travel debugging and its config keys were removed. A project that still sets the key is refused with `ImproperlyConfigured` at startup
+- **Migration**: remove `"C502"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
+
 <!-- END GENERATED check-sections:C -->
 
 ---
@@ -545,15 +557,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `abstract = True` on the LiveView class, `DJUST_CONFIG = {'suppress_checks': ['V013']}`, or `SILENCED_SYSTEM_CHECKS = ["djust.V013"]`
 - Added in v1.1.0 (#2059)
 
-### V014 — Time-travel-enabled view exposes PII-looking fields
-- **Severity**: Warning
-- **Method**: Runtime (walks every registered `LiveView` that sets `time_travel_enabled = True`)
-- **What it detects**: The view records `state_before` / `state_after` for every event, and `encode_view_state()` turns those snapshots into a **shareable** `djbug1.` blob — a bug capture exists to leave the machine it was captured on. If the view's model or form declares a field whose name looks like PII (`password`, `passwd`, `ssn`, `credit_card`, `tax_id`, `email`, `phone`) and that name is not in `time_travel_excluded_fields`, a password or an SSN is one paste away from a bug tracker.
-- **Fix**: declare the sensitive keys — `time_travel_excluded_fields = ["password", "ssn"]`. `encode_view_state()` applies them before any caller-supplied `scrub`, so the redaction does not depend on every call site remembering one. The names are matched against **top-level public-state keys**, so list the attribute names the view assigns (often the same as the field names, but not necessarily).
-- **False positives**: three gates keep this quiet, in order of how much work each does. (1) **`time_travel_enabled`** — a deliberate dev-only opt-in almost no view sets, so a project not using the feature never sees V014 at all; the demo project declares several PII-carrying forms and V014 is silent on it as shipped. (2) **Token matching, not substring matching** — `telephone_pole` does not contain the *token* `phone`. (3) **Field type** — `email` is on almost every user model, and so is `email_verified`; a `BooleanField`/`DateField`/`DateTimeField`/relation/auto-pk field is skipped whatever it is called, which is what keeps `email_notifications`, `phone_confirmed_at` and `password_changed_at` quiet.
-- **Not `DEBUG`-gated**: the runtime surfaces (`BugCapture.encode`, the replay route) are, because they *do* something. A system check only tells you something, and `manage.py check --deploy` on the way to production is exactly when you want to hear that a shipped view records a password field.
-- **Suppression**: `DJUST_CONFIG = {'suppress_checks': ['V014']}` or `SILENCED_SYSTEM_CHECKS = ["djust.V014"]`
-- Added in the unreleased line (#1561)
+### V014 — Retired
+- **Retired in**: 2.0 (time-travel debugging was removed, #4184)
+- **What it did**: warned when a view with `time_travel_enabled = True` had model or form fields whose names looked like PII and were not listed in `time_travel_excluded_fields`, because the debug panel's bug-capture Share button turned its recorded state into a shareable blob
+- **Why it was retired**: the time-travel buffer, the Share button that read it and `time_travel_excluded_fields` were removed. A view that still sets `time_travel_enabled` or `time_travel_excluded_fields` is refused with `ImproperlyConfigured` when the class is created
+- **Migration**: remove `"V014"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### V016 — Strict-policy handler declaration that strict dispatch rejects
 - **Severity**: Error
@@ -925,7 +933,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Severity**: Warning
 - **Method**: Regex (template/JS scan)
 - **What it detects**: `document.addEventListener("djust:..."` for a djust event that is dispatched on `window` (e.g. `djust:push_event`, `djust:before-navigate`, `djust:error`, `djust:shell-swapped`, `djust:vdom-cache-applied`, `djust:upload:*`) — those listeners belong on `window`, not `document`
-- **Exempt (#1809)**: The djust events that the client dispatches on `document` are **not** flagged — `djust:navigate-start`, `djust:navigate-end`, `djust:hvr-applied`, `djust:layout-changed`, `djust:ws-reconnected`, `djust:time-travel-state`, `djust:time-travel-event`. Listening for these on `document` is correct.
+- **Exempt (#1809)**: The djust events that the client dispatches on `document` are **not** flagged — `djust:navigate-start`, `djust:navigate-end`, `djust:hvr-applied`, `djust:layout-changed`, `djust:ws-reconnected`. Listening for these on `document` is correct.
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T004"]` or `DJUST_CONFIG = {"suppress_checks": ["T004"]}` (the `suppress_checks` form was a no-op before #1809)
 - **False positives**: None for the window-dispatched events; the document-dispatched family above is exempt as of #1809
 

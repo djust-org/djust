@@ -127,9 +127,6 @@ class MockTransport:
     def on_view_mounted(self, view_instance: Any) -> None:
         pass
 
-    async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
-        return None
-
     @contextlib.asynccontextmanager
     async def event_context(self, view: Any):
         if self._in_event_context:

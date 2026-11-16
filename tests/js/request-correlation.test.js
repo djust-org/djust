@@ -5,8 +5,8 @@ import { readFileSync } from 'node:fs';
 
 const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
-it.each(['__time_travel_jump__', '__time_travel_component_jump__', '__forward_replay__'])(
-    'debug render %s cannot acknowledge foreground work',
+it.each(['refresh', 'tick', 'db_notify'])(
+    'a broadcast render for %s cannot acknowledge foreground work',
     async eventName => {
         const {dom, transport, button, sent, send} = setup('LiveViewWebSocket');
         try {
@@ -26,13 +26,13 @@ it.each(['__time_travel_jump__', '__time_travel_component_jump__', '__forward_re
     }
 );
 
-it('a debug control error cannot cancel foreground work', async () => {
+it('a server-initiated (async) error cannot cancel foreground work', async () => {
     const {dom, transport, button, sent, send} = setup('LiveViewWebSocket');
     try {
         let completed = false;
         send().then(() => { completed = true; });
         await transport.handleMessage({
-            type: 'error', error: 'time_travel_jump: restore failed', source: 'async'
+            type: 'error', error: 'background task failed', source: 'async'
         });
         expect(completed).toBe(false);
         expect(button.disabled).toBe(true);

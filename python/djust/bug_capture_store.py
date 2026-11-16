@@ -29,8 +29,8 @@ authorization, no revocation, and no audit trail. This is a deliberate
 trade (it is what makes a blob shareable by paste), but it means the
 *only* bound on exposure is the TTL: a leaked id is live until it
 expires. Choose the shortest TTL your workflow tolerates, keep the
-production opt-in off unless you mean it, and keep using ``scrub`` /
-``time_travel_excluded_fields`` — the store changes *where* PII lives,
+production opt-in off unless you mean it, and keep using ``scrub`` —
+the store changes *where* PII lives,
 never *whether* it is PII.
 
 **Ids are validated before they reach the store.** The decoder never

@@ -720,7 +720,7 @@ class TestRestoredEarlierStateIsCleaned:
         restore_public_state(view, self.prefix_state(view))
         client.send_event("validate_field", field="username", value="alice9")
         assert_not_carried(view, client)
-        assert json.dumps(view._capture_snapshot_state(), default=str).count(STORED) == 0
+        assert json.dumps(view.get_state(), default=str).count(STORED) == 0
 
     def test_the_admin_view_scrubs_it_too(self):
         from djust._state_restore import restore_public_state

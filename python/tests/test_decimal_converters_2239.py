@@ -764,10 +764,10 @@ class TestBoundaryInventory:
         forwarded = {m for m, _f, flag in _normalizer_calls() if flag == "forwarded"}
         assert forwarded == {"serialization.py"}
 
-    def test_the_snapshot_captures_use_the_roundtrip_encoder(self) -> None:
-        """The other half of the boundary: a captured snapshot round-trips
-        through json.dumps and is applied back to a view (time-travel), so it
-        takes the same rule as the session."""
+    def test_the_serializability_probes_keep_the_plain_encoder(self) -> None:
+        """The snapshot captures that round-tripped through the state encoder
+        went with time-travel debugging in 2.0 (#4184); the probes that remain
+        discard their output, so they keep the plain encoder."""
         src = (_PKG / "live_view.py").read_text()
         tree = ast.parse(src)
         by_function: dict[str, set[str]] = {}
@@ -781,8 +781,6 @@ class TestBoundaryInventory:
                     fn = _enclosing_function(tree, node.lineno)
                     by_function.setdefault(fn, set()).add(kw.value.id)
 
-        assert by_function.get("_capture_snapshot_state") == {"StateRoundtripJSONEncoder"}
-        assert by_function.get("_capture_components_snapshot") == {"StateRoundtripJSONEncoder"}
         # The serializability PROBES keep the plain encoder on purpose — they
         # discard the output, so the representation is irrelevant there.
         assert by_function.get("_get_private_state") == {"DjangoJSONEncoder"}

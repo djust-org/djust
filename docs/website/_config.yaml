@@ -407,11 +407,6 @@ navigation:
         file: guides/streaming-render.md
         order: 31
         level: intermediate
-      - title: Time-Travel Debugging (v0.6.1)
-        slug: time-travel-debugging
-        file: guides/time-travel-debugging.md
-        order: 32
-        level: intermediate
       - title: Bug Capture — Share a Broken Transition (v1.1)
         slug: bug-capture
         file: guides/bug-capture.md
