@@ -163,8 +163,8 @@
     {
       "label": "the union is pass B alone (review 3, a)",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "    return sorted(set(first) | set(second), key=",
-      "new": "    return sorted(set(second), key="
+      "old": "    merged = {(f.lineno, f.function, f.sink): f for f in first}",
+      "new": "    merged = {}"
     },
     {
       "label": "pass A binds calls too, so its caches are written under a binding (review 3, b)",

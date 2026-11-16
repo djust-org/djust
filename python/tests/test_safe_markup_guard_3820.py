@@ -1135,6 +1135,8 @@ def _break_wrappers_are_invisible(monkeypatch):
 
 def _break_position_is_ignored(monkeypatch):
     monkeypatch.setattr(taint._Module, "_position_ok", lambda self, kind, prefix: True)
+    # since #3864 pass B's position walk places the same outputs: the rule is off only with both
+    monkeypatch.setattr(taint._Module, "_misplaces", lambda self, e, sc: False)
 
 
 def _break_any_json_escape_is_clean(monkeypatch):
@@ -1145,6 +1147,17 @@ def _break_any_json_escape_is_clean(monkeypatch):
         "_position_ok",
         lambda self, kind, prefix: (
             True if kind.startswith("json") else original(self, kind, prefix)
+        ),
+    )
+    # ... and pass B's position walk reads it as digits, which fit anywhere (#3864)
+    call_text = taint._Module._call_text
+    monkeypatch.setattr(
+        taint._Module,
+        "_call_text",
+        lambda self, e, sc, d: (
+            taint.SYM_DIGITS
+            if self.origin(e.func, sc) in taint.JSON_ESCAPERS
+            else call_text(self, e, sc, d)
         ),
     )
 
@@ -1339,6 +1352,10 @@ ESCAPERS = {
 
 
 def _use(helper_call: str, imports: str) -> str:
+    if helper_call.startswith("component_id_attr("):
+        # a whole attribute: its place is between attributes (inside a quoted value it lets the
+        # escaped id out of the quotes, which the position walk reports since #3864)
+        return f"{imports}\ndef f(x):\n    return mark_safe(f'<a{{{helper_call}}}>')\n"
     return f"{imports}\ndef f(x):\n    return mark_safe(f'<a href=\"{{{helper_call}}}\">')\n"
 
 
@@ -2584,8 +2601,11 @@ class TestTheRealTree:
         assert sinks == sum(e.sites for e in audit.AUDITED.values())
         # 57 before #3845 / #3846 / #3847 proved ten functions; 39 since the last four of #3845 and
         # #3847 (OrgChartNode, FeedbackWidgetNode, FileTreeNode, ProgressHandler) escape or coerce
-        # the value where it is written
-        assert sinks <= 39, sinks
+        # the value where it is written; 42 since #3864 reports the three handlers that rewrite a
+        # rendered block body at an offset only their own code finds (audited); 49 since #3864 also
+        # reads the arguments of ``format_html`` at their positions, which reports seven sites that
+        # put a developer-configured URL at a URL attribute's start (audited)
+        assert sinks <= 49, sinks
 
     def test_the_wrappers_are_scanned_in_every_file_that_calls_them(self, tree_scan):
         files = {path for (path, _fn) in tree_scan}

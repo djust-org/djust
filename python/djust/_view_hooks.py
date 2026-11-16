@@ -38,6 +38,16 @@ async def _await(awaitable: Any) -> Any:
     return await awaitable
 
 
+async def _attributed_hook(fn: Any, awaitable: Any) -> Any:
+    """Await an ``async def`` hook with its statements attributed to its view (#4112)."""
+    from ._held_rows import RECORDED_STEPS, writes_by
+
+    if _hook_step(fn) not in RECORDED_STEPS:
+        return await awaitable
+    with writes_by(getattr(fn, "__self__", None)):
+        return await awaitable
+
+
 # ``handle_async_result`` / ``handle_tick`` reach here from the HTTP fallback's
 # background work (#3630), which has no ``call_async_result`` / ``call_tick``.
 _HOOK_STEPS = {
@@ -57,7 +67,7 @@ def _hook_step(fn: Any) -> str:
 async def call_hook(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Call ``fn`` from async code: awaited on the loop if async, else threaded."""
     if is_async_hook(fn):
-        return await fn(*args, **kwargs)
+        return await _attributed_hook(fn, fn(*args, **kwargs))
     from .sync_turn import sync_step
 
     stepped = sync_step(getattr(fn, "__self__", None), _hook_step(fn), fn)
@@ -122,7 +132,7 @@ def call_async_result_sync(
 def call_hook_sync(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Call ``fn`` from sync code, running an async hook to completion."""
     if is_async_hook(fn):
-        result = fn(*args, **kwargs)
+        result = _attributed_hook(fn, fn(*args, **kwargs))
     else:
         from .sync_turn import run_sync_step
 

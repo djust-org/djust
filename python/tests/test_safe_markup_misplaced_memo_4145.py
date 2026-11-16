@@ -1,18 +1,20 @@
-"""Pass B judges a part after a given text once per run (#4145).
+"""Pass B reads the text of a part once per run (#4145, #3864).
 
-``_Module._misplaced`` asks, for every part of a string a sink is handed, whether an HTML-only
-escaper's output lands where that is not enough (#3864). It walks the values a name can hold and the
-parts of each string built in place, and ``clean`` asks it again for every sub-chain it judges, so
-the same part after the same literal text was judged once per path that reaches it: exponential in
-the number of branches that rebuild a string. The differential fuzz of
-``test_safe_markup_guard_3820.py`` went from 7 s to 111 s on seed 1.
+Pass B asks, for every string a sink is handed, where each part lands (``_Module._misplaces``): it
+reads the text in front of the part through the values a name can hold and the parts of each string
+built in place, and ``clean`` asks again for every sub-chain it judges. Read once per path, the same
+part was read exponentially often in the number of branches that rebuild a string: the
+differential fuzz of ``test_safe_markup_guard_3820.py`` went from 7 s to 111 s on seed 1 (#4145,
+then for the HTML-context check that the position walk replaced, #3864).
 
-The answer for a part depends on the part, its scope, the depth, the call bindings in force and the
-text in front of it, nothing else, so it is remembered under exactly that key for the run. These
-tests count judgements; they assert no durations (the repo forbids wall-clock gates).
+The text of a part depends on the part, its scope and the call bindings in force, nothing else, so
+it is remembered under exactly that key for the run. These tests count readings; they assert no
+durations (the repo forbids wall-clock gates).
 """
 
 from __future__ import annotations
+
+from collections import Counter
 
 from scripts.lib import safe_markup_taint as taint
 from scripts.lib.safe_markup_taint import find_unsafe_markup
@@ -30,45 +32,61 @@ def rebuilt(branches: int, sink: str) -> str:
     return HEADER + "\n".join(lines) + "\n"
 
 
-def judged(source: str) -> tuple[taint._Module, list[taint.Finding], int]:
-    """Pass B over ``source``: the analyzer, its findings, and how many times a sink's part was
-    asked about from outside ``_misplaced`` (each of those walks the part's whole tree)."""
+def judged(source: str) -> tuple[taint._Module, list[taint.Finding], Counter]:
+    """Pass B over ``source``: the analyzer, its findings, and how often each part was READ (not
+    remembered) under each binding."""
     mod = taint._Module(source, call_binding=True)
-    asked = 0
-    ask = mod._html_only_misplaced
+    reads: Counter = Counter()
+    read = mod._read_text
 
-    def counting(*args):
-        nonlocal asked
-        asked += 1
-        return ask(*args)
+    def counting(e, sc, d):
+        reads[(id(e), id(sc), mod._binding_state())] += 1
+        return read(e, sc, d)
 
-    mod._html_only_misplaced = counting  # type: ignore[method-assign]
-    return mod, mod.findings(), asked
+    mod._read_text = counting  # type: ignore[method-assign]
+    return mod, mod.findings(), reads
 
 
-class TestEachPartIsJudgedOncePerText:
-    def test_a_part_is_judged_once_however_many_paths_reach_it(self):
-        # element text: never misplaced, so every question walks to the end (no early ``True``)
-        mod, found, asked = judged(rebuilt(5, "f'<p>{a}</p>'"))
+class TestEachPartIsReadOnce:
+    def test_a_part_is_read_once_however_many_paths_reach_it(self):
+        mod, found, reads = judged(rebuilt(5, "f'<p>{a}</p>'"))
         assert found == []
-        assert mod.misplaced_computed == len(mod._memo_misplaced)  # each key judged once
-        # 1706 questions over 341 distinct (part, text) pairs; unremembered it judged 9913 parts
-        assert asked > 4 * mod.misplaced_computed, (asked, mod.misplaced_computed)
+        tree_reads = {k: n for k, n in reads.items() if k[0] in mod._tree_ids}
+        assert tree_reads and max(tree_reads.values()) == 1, max(tree_reads.values())
 
-    def test_the_judgements_grow_with_the_parts_not_the_paths(self):
-        counts = [judged(rebuilt(n, "f'<p>{a}</p>'"))[0].misplaced_computed for n in (3, 4, 5)]
+    def test_the_readings_grow_with_the_parts_not_the_paths(self):
+        counts = [sum(judged(rebuilt(n, "f'<p>{a}</p>'"))[2].values()) for n in (3, 4, 5)]
         # the paths quadruple with each branch; the distinct parts grow by a near-constant step
         assert counts[2] - counts[1] < 2 * (counts[1] - counts[0]), counts
 
-    def test_asking_again_judges_nothing(self):
-        mod, _found, _asked = judged(rebuilt(4, "f'<p>{a}</p>'"))
-        before = mod.misplaced_computed
+    def test_reading_again_reads_nothing(self):
+        mod, _found, reads = judged(rebuilt(4, "f'<p>{a}</p>'"))
+        before = sum(reads.values())
         sink = next(c for scope in mod.scopes for c in scope.sinks)
-        field = sink.args[0].values[1]
-        assert isinstance(field, taint.ast.FormattedValue)
         scope = next(s for s in mod.scopes if s.name == "f")
-        assert mod._html_only_misplaced(field.value, scope, "<p>") is False
-        assert mod.misplaced_computed == before
+        mod._text_b(sink.args[0], scope)
+        assert sum(reads.values()) == before
+
+
+def helpers(n: int) -> str:
+    """``n`` helpers, each passing its argument (bound, so read with this call's argument) to the
+    next two: 2**n paths reach the last."""
+    lines = []
+    for i in range(n):
+        if i == n - 1:
+            lines.append(f"def h{i}(v):\n    return f'<b>{{escape(v)}}</b>'")
+        else:
+            lines.append(f"def h{i}(v):\n    return h{i + 1}(v) + h{min(i + 2, n - 1)}(v)")
+    return HEADER + "\n".join(lines) + "\ndef f(x):\n    return mark_safe('<p>' + h0(x) + '</p>')\n"
+
+
+class TestACallIsReadOncePerSite:
+    def test_a_web_of_helpers_is_read_once_per_call_site(self):
+        """A call read inside a bound call is read with no binding in force, so what a helper
+        returns is read once per call site, not once per path through the helpers (#4145)."""
+        counts = [sum(judged(helpers(n))[2].values()) for n in (8, 16)]
+        # twice the helpers, twice the call sites: the readings at most about double
+        assert counts[1] < 3 * counts[0], counts
 
 
 class TestTheVerdictIsUnchanged:
@@ -76,7 +94,7 @@ class TestTheVerdictIsUnchanged:
         found = find_unsafe_markup(rebuilt(5, "f'<a href=\"{a}\">'"))
         assert [(f.function, f.sink) for f in found] == [("f", "mark_safe")]
 
-    def test_the_same_text_in_front_is_not_the_same_question_under_another_binding(self):
+    def test_the_same_part_is_not_the_same_text_under_another_binding(self):
         """``h``'s part after ``<a href="`` is an escaper's output under one call and a constant
         under the other: the call bindings are part of the key, in either order of judging."""
         helper = HEADER + "def h(u):\n    return f'<a href=\"{u}\">'\n"
@@ -85,22 +103,13 @@ class TestTheVerdictIsUnchanged:
         for source in (helper + escaped + constant, helper + constant + escaped):
             assert [f.function for f in find_unsafe_markup(source)] == ["f"], source
 
-    def test_the_same_part_after_another_text_is_another_question(self):
+    def test_the_same_part_after_another_text_is_another_position(self):
         """One string, ``w`` (and so the same ``escape(x)`` node inside it), written twice: as element
-        text (enough) and at the start of a URL (not), in either order. The text in front is part
-        of the key."""
+        text (enough) and at the start of a URL (not), in either order. Its text is remembered, its
+        position is read where each copy lands."""
         body = "def f(x):\n    w = f'{escape(x)}'\n    return mark_safe({})\n"
         for sink in ("f'<p>{w}</p><a href=\"{w}\">'", "f'<a href=\"{w}\"><p>{w}</p>'"):
             source = HEADER + body.replace("{}", sink, 1)
             assert [f.function for f in find_unsafe_markup(source)] == ["f"], sink
         text_only = HEADER + body.replace("{}", "f'<p>{w}</p><b>{w}</b>'", 1)
         assert find_unsafe_markup(text_only) == []
-
-    def test_an_unknown_text_in_front_places_nothing(self):
-        """``None`` in front (a builder whose text cannot be read) answers ``False`` before any part
-        is walked, as walking it did: every part after it has no text either."""
-        mod = taint._Module(rebuilt(2, "f'<p>{a}</p>'"), call_binding=True)
-        scope = next(s for s in mod.scopes if s.name == "f")
-        sink = next(c for c in scope.sinks)
-        assert mod._html_only_misplaced(sink.args[0], scope, None) is False
-        assert mod.misplaced_computed == 0

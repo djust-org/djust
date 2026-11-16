@@ -281,6 +281,9 @@ def restore_snapshot(view: Any, snapshot: EventSnapshot, which: str = "before") 
     component boundaries — components are first-class instances, not
     parent-scoped attrs).
     """
+    from ._held_rows import reads_unknown
+
+    reads_unknown(view)  # restored values were not read by its renders (#4112)
     if which not in ("before", "after"):
         raise ValueError("which must be 'before' or 'after', got %r" % (which,))
     from ._exposure import uses_legacy_exposure

@@ -530,8 +530,13 @@ async def _call_handler(
         The result of calling the handler
     """
     if inspect.iscoroutinefunction(handler):
-        # Handler is already async, call it directly
-        return await handler(*positional_args, **(params or {}))
+        # Handler is already async, call it directly. The statements it runs,
+        # through its own ``sync_to_async`` calls too, are attributed to its
+        # view, so a write refreshes the rows the view holds (#4112).
+        from ._held_rows import writes_by
+
+        with writes_by(getattr(handler, "__self__", None)):
+            return await handler(*positional_args, **(params or {}))
     else:
         # Sync handler — run via sync_to_async to avoid blocking the event
         # loop. Handlers commonly do ORM queries or other I/O. The worker

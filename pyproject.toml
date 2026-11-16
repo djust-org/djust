@@ -1261,15 +1261,14 @@ constraint-dependencies = [
     "ujson>=5.12.0",
     "pyopenssl>=26.0.0",
     "pyasn1>=0.6.5",
-    # Lock-only workaround for CVE-2026-115877 / GHSA-q7qq-6mhp-9rc4 (HTTP
-    # request smuggling in twisted.web.http.HTTPChannel, which daphne serves
-    # through). Only 26.10.0rc1 is fixed so far. This constrains uv.lock, not
-    # djust's published metadata, so installers of `djust[daphne]` still
-    # resolve daphne's twisted[tls]>=22.4 to 26.4.0 (a base `djust` install
-    # has no daphne or twisted at all). When twisted 26.10.0 final is out, replace
-    # this with ">=26.10.0" (or drop it) and remove GHSA-8pqf-f4m5-798g and the
-    # CVE-2026-1157xx twisted entries from .github/security/pip-audit-ignore.txt.
-    "twisted>=26.10.0rc1",
+    # Lock-only floor for CVE-2026-115877 / GHSA-q7qq-6mhp-9rc4 (HTTP request
+    # smuggling in twisted.web.http.HTTPChannel, which daphne serves through)
+    # and the twisted advisories fixed alongside it (GHSA-8pqf-f4m5-798g,
+    # CVE-2026-115774/-115775/-115776/-115778), all fixed in 26.10.0. This
+    # constrains uv.lock, not djust's published metadata; installers of
+    # `djust[daphne]` resolve daphne's twisted[tls]>=22.4 to the latest release
+    # (a base `djust` install has no daphne or twisted at all).
+    "twisted>=26.10.0",
     # Lock-only: CVE-2026-116579 in autobahn 26.7.1 (reached through
     # `djust[daphne]` only); fixed in 26.10.1. Constrains uv.lock, not published metadata.
     "autobahn>=26.10.1",

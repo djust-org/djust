@@ -72,6 +72,7 @@ from asgiref.sync import sync_to_async
 from . import _per_turn
 from ._params_form import run_handle_params
 from ._view_hooks import call_async_result, call_hook
+from ._held_rows import rows_written, writes_by
 
 if TYPE_CHECKING:
     from ._async_batch import AsyncBatch
@@ -4538,7 +4539,10 @@ class ViewRuntime(RuntimeTurnPort):
                 _pre_box["identity"] = {
                     k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs
                 }
-                return _inner_handler(*args, **kwargs)
+                # This wrapper is not bound, so ``_call_handler`` cannot see the
+                # view: attribute the handler's statements here (#4112).
+                with writes_by(view):
+                    return _inner_handler(*args, **kwargs)
 
             pre_assigns = pre_identity = None
         else:
@@ -4670,7 +4674,7 @@ class ViewRuntime(RuntimeTurnPort):
             post_assigns = (
                 early_post_assigns if early_post_assigns is not None else _snapshot_assigns(view)
             )
-            if pre_assigns == post_assigns and not has_explicit_children:
+            if pre_assigns == post_assigns and not has_explicit_children and not rows_written(view):
                 skip_render = True
             else:
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
@@ -4979,7 +4983,7 @@ class ViewRuntime(RuntimeTurnPort):
         force_html = getattr(view, "_force_full_html", False)
         if not skip_render and not force_html:
             post_assigns = _snapshot_assigns(view)
-            if pre_assigns == post_assigns:
+            if pre_assigns == post_assigns and not rows_written(view):
                 skip_render = True
             else:
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
@@ -5554,7 +5558,7 @@ class ViewRuntime(RuntimeTurnPort):
             # view route answers — not a page render shipped as a 30 KB
             # ``html_update`` (#2922). ``_flush_all_pending`` below drains any
             # push events before the noop goes out, as on the view route.
-            if not changed:
+            if not changed and not rows_written(view):
                 await self._send_component_noop(event_name, event_ref, async_batch, snapshot_fields)
                 return True
 
@@ -8954,7 +8958,11 @@ class ViewRuntime(RuntimeTurnPort):
                     await self._flush_all_pending()
                     return False
                 force_full_html = getattr(view, "_force_full_html", False)
-                if pre_assigns == _snapshot_assigns(view) and not force_full_html:
+                if (
+                    pre_assigns == _snapshot_assigns(view)
+                    and not force_full_html
+                    and not rows_written(view)
+                ):
                     await self._flush_all_pending()
                     return False
                 snapshot_fields = None

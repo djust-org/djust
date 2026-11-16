@@ -695,7 +695,11 @@ def test_the_wrapper_is_not_paid_for_when_unset():
     check_object_permission(view, request)
     assert view._object is not None
     hook = begin_live_connection(view)
-    assert hook is not None and getattr(hook, "__func__", None) is AuthProbeView.connected
+    # No wrapper: the hook itself, only with its statements attributed to the view
+    # (#4112, djust._held_rows), so a write in connected() refreshes held rows.
+    assert hook is not None
+    inner = getattr(hook, "__wrapped__", hook)
+    assert getattr(inner, "__func__", None) is AuthProbeView.connected
 
 
 def test_the_http_fallbacks_result_hook_is_an_async_step_not_a_generic_hook(probe):

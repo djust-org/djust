@@ -315,6 +315,81 @@ def test_namespace_is_an_independent_copy():
 
 
 # --------------------------------------------------------------------------
+# Instance namespaces: the #4112 held-rows walk reads a view another thread writes.
+# --------------------------------------------------------------------------
+
+
+def test_held_rows_walk_survives_a_view_written_from_another_thread():
+    """A background task (``start_async``) assigns to the view, and to the dicts,
+    lists and sets it holds, while a turn's held-rows walk reads them. The walk
+    reads snapshots, so it neither raises nor loses the QuerySet it holds
+    (meaningful with the GIL off; run in the 3.14t CI job)."""
+    from django.contrib.auth.models import Group
+
+    from djust import _held_rows
+
+    held = Group.objects.all()
+    held._result_cache = []  # evaluated, without a database
+
+    class View:
+        pass
+
+    view = View()
+    view.rows = {"held": held}
+    view.by_name = {f"k{i}": [i] for i in range(64)}
+    view.queue = [[i] for i in range(64)]
+    view.tags = {f"t{i}" for i in range(64)}
+
+    stop = threading.Event()
+    errors: list[BaseException] = []
+    start = threading.Barrier(_READERS + 1)
+
+    def writer() -> None:
+        start.wait()
+        i = 0
+        while not stop.is_set():
+            setattr(view, f"_bg_{i}", [i])
+            view.by_name[f"n{i}"] = [i]
+            view.queue.append([i])
+            view.tags.add(f"n{i}")
+            i += 1
+            if i % 256 == 0:  # bounded; deletes resize too
+                for j in range(i - 256, i):
+                    delattr(view, f"_bg_{j}")
+                    del view.by_name[f"n{j}"]
+                    view.tags.discard(f"n{j}")
+                del view.queue[64:]
+
+    def reader() -> None:
+        start.wait()
+        while not stop.is_set():
+            try:
+                found = list(_held_rows._held_querysets(view))
+                if found != [held]:
+                    raise RuntimeError(f"the walk found {found!r}, not the held QuerySet")
+            except BaseException as exc:  # noqa: BLE001 — any failure fails the test
+                errors.append(exc)
+                return
+
+    old = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)  # on a GIL build, switch as often as possible
+    threads = [threading.Thread(target=writer)] + [
+        threading.Thread(target=reader) for _ in range(_READERS)
+    ]
+    try:
+        for t in threads:
+            t.start()
+        time.sleep(_HAMMER_SECONDS)
+    finally:
+        stop.set()
+        for t in threads:
+            t.join(timeout=30)
+        sys.setswitchinterval(old)
+    assert not [t.name for t in threads if t.is_alive()], "hammer threads did not stop"
+    assert not errors, f"{len(errors)} reader(s) raced a view write: {errors[0]!r}"
+
+
+# --------------------------------------------------------------------------
 # Mechanical gate: no request-path code iterates a live namespace or calls dir().
 # --------------------------------------------------------------------------
 
