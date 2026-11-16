@@ -247,52 +247,91 @@ default) binds its state to a saved server session when it mounts, and reads
 that session and its user again on every turn. A test with a stub user, a bare
 consumer or a `RequestFactory` request without a saved session is refused at
 mount ("State binding requires bounded nonempty identifiers"), or every event
-is denied. `djust.testing` gives a test what a browser has:
+is denied.
+
+`djust.testing` gives a test what a browser has, and sends every request
+through your project's own stack, so a test written with it fails wherever
+production would refuse:
 
 - `open_live_page(url, *, user=None, client=None, **extra) -> LivePage` does the
-  page GET with a `django.test.Client`, through your project's middleware and
-  URLconf. `user` is logged in first (`client.force_login`). `extra` holds
-  request extras such as `HTTP_HOST` (a subdomain tenant) or
-  `HTTP_X_TENANT_ID` (a header tenant), and every transport opened from the
-  page sends them too. Each call is a new page load and so a new tab; pass
-  `client=page.client` to open a second tab in the same browser session.
+  page GET through your project's middleware and URLconf, with a
+  `django.test.Client` that enforces CSRF as a browser's requests are checked.
+  `user` is logged in first (`client.force_login`). `extra` holds request
+  extras such as `HTTP_HOST` (a subdomain tenant) or `HTTP_X_TENANT_ID` (a
+  header tenant). The GET and every request or socket opened from the page
+  send them. Each call is a new page load and so a new tab. To open a second
+  tab in the same browser session, pass `client=page.client`.
 - `LivePage` has the page's `tab` id, `view_path` (its `dj-view`), `session`,
-  `html` and `response`, and three ways to reach the view:
-  - `post_event(event, params=None, **extra)` sends the HTTP fallback POST
-    (`X-Djust-Event`, the page's `X-Djust-Tab`, its CSRF token) and returns
-    the response.
+  `html`, `response`, `csrf_token` and `render_digest`. It reaches the view in
+  three ways, each as the browser's client does:
+  - `post_event(event, params=None, *, full=False, **extra)` sends the HTTP
+    fallback POST to the page URL. It sends `X-Djust-Event`, the page's
+    `X-Djust-Tab` and its CSRF token (`X-CSRFToken`, found as the client finds
+    it). It also sends the render digest of the last answer
+    (`X-Djust-Render-Digest`), so the server answers with patches where it
+    can. `full=True` sends no digest, so the answer is the whole page.
   - `await connect(view_path=None, *, params=None, application=None,
-    path="/ws/live/", timeout=10.0) -> LiveSocket` connects a
-    `WebsocketCommunicator` with the page's cookies and `Origin`, and mounts
-    the view on the page's tab. By default it uses a bare `LiveViewConsumer`
-    whose scope gets the page's session and user. Pass your project's
-    `asgi.application` to go through its own middleware instead.
+    path=None, timeout=10.0) -> LiveSocket` connects a `WebsocketCommunicator`
+    through your `ASGI_APPLICATION` (its origin validator, auth stack, router
+    and any middleware of your own). It sends the browser's cookies, `Origin`
+    and the page's extras, at the socket path the page gives its client
+    (`/ws/live/` by default), and mounts the view on the page's tab with the
+    page URL's query string as its parameters. When `ASGI_APPLICATION` is not
+    set, it falls back to a bare `LiveViewConsumer` whose scope gets the page's
+    session and its user, as `AuthMiddlewareStack` would provide them.
   - `await connect_sse(view_path=None, *, params=None, timeout=10.0) ->
-    LiveSSE` opens djust's SSE stream for the page. Your project does not
-    need to route the SSE URLs.
-- `LiveSocket` and `LiveSSE` share one interface. `mount` is the mount answer
-  (`{"type": "mount", ...}` on success). `await send_event(event, params=None,
-  **fields)` returns the frame that answers the event: it carries the event's
-  `ref`, or it is an `error`. `await receive(types=None, *, timeout=None)`
-  returns the next frame of those types, and `frames` lists every frame
-  received. Both are async context managers: leaving the block disconnects
-  the socket, or closes the stream and runs its teardown.
-- `live_session(user=None, *, store=None)` returns a new saved server
-  session, logged in as `user` when it is a saved user.
+    LiveSSE` opens the SSE stream, and each event is a POST to the message URL.
+    Both go through your URLconf and middleware at the URLs the page gives its
+    client. If your project does not route djust's SSE views, it fails with how
+    to route them. If a middleware refuses the stream (a login redirect, say),
+    it fails with that answer, as a browser's stream would.
+- `LiveSocket` and `LiveSSE` share one interface:
+  - `mount` is the mount answer (`{"type": "mount", ...}` on success).
+  - `await send_event(event, params=None, **fields)` returns the frame that
+    answers the event: it carries the event's `ref`, or it is an `error`.
+  - `await receive(types=None, *, timeout=None)` returns the next frame of
+    those types.
+  - `await receive_nothing(types=None, *, within=0.5)` asserts that no such
+    frame arrives in that time.
+  - `frames` lists every frame received.
+
+  A background task reads frames as they arrive. A `receive()` that times out
+  only stops waiting: the connection, and frames that arrive later, are
+  untouched. Both are async context managers: leaving the block disconnects
+  the socket, or closes the stream and runs its teardown. If closing fails
+  after your test has already failed, your test's own error is raised, with
+  the close failure as a note.
+- `live_session(user=None, *, store=None, backend=None)` returns a new saved
+  server session, logged in as `user` when it is a saved user. It records the
+  authentication backend that `Client.force_login` would.
   `with_live_session(target, user=...)` gives a hand-built
   `WebsocketCommunicator`, ASGI scope or request a saved session and a user.
   It keeps a saved session the target already has. Without a user it keeps
   the target's own, or uses `AnonymousUser`.
+- `close_live_pages()` releases every socket and SSE stream that a test opened
+  and did not close, for example when an assertion failed before the
+  `async with` block ended. Under pytest, import the autouse fixture into your
+  `conftest.py`: `from djust.testing import djust_live_pages`. In a
+  `django.test` case, call `self.addCleanup(close_live_pages)` in `setUp()`.
 
-These need no djust setting beyond what `djust new` writes: `SessionMiddleware`
-and `AuthenticationMiddleware`, and a server-side `SESSION_ENGINE`. The default
-database engine works. Sessions are database rows. A socket or SSE test runs
-the view on other threads, so with pytest-django mark it
-`@pytest.mark.django_db(transaction=True)`. With Django's own runner, use
-`TransactionTestCase`: in `TestCase` the mount works, but the event turn cannot
-see the session row inside the test's transaction. The fallback POST works
-under either runner's plain database access. The async examples below
-use pytest-asyncio's `@pytest.mark.asyncio`.
+These need no djust setting beyond what `djust new` writes. That means
+`SessionMiddleware` and `AuthenticationMiddleware`, a server-side
+`SESSION_ENGINE`, `ASGI_APPLICATION` and the SSE URLs, if you test SSE. The
+default database session store works. A socket or SSE test runs the view on
+other threads, so with pytest-django mark it
+`@pytest.mark.django_db(transaction=True)`.
+
+With Django's own runner, plain `TestCase` runs each test inside a transaction
+that other database connections cannot see. With the database session store,
+the fallback and socket events still work, but an SSE event answers
+`state_error`, because the SSE turn cannot read the session row the test's
+transaction holds. This is a limit of the test transaction, not of
+production, where the row is committed. Use `TransactionTestCase` for SSE, or
+use the cache session store (`SESSION_ENGINE =
+"django.contrib.sessions.backends.cache"`), under which all three work in
+`TestCase`.
+
+The async examples below use pytest-asyncio's `@pytest.mark.asyncio`.
 
 Over the HTTP fallback:
 
@@ -309,9 +348,10 @@ from djust.testing import open_live_page
 def test_counter_over_the_fallback():
     user = get_user_model().objects.create_user(username="ada", password="pw")
     page = open_live_page("/counter/", user=user)
-    response = page.post_event("increment")
-    assert response.status_code == 200
-    assert "count=1" in json.loads(response.content)["html"]
+    answer = json.loads(page.post_event("increment").content)
+    assert "patches" in answer  # the browser's answer: patches against its page
+    whole = json.loads(page.post_event("increment", full=True).content)
+    assert "count=2" in whole["html"]
 ```
 
 Over a WebSocket:
@@ -331,6 +371,7 @@ async def test_counter_over_a_socket():
         assert socket.mount["type"] == "mount", socket.mount
         answer = await socket.send_event("increment")
         assert answer["type"] in ("patch", "html_update"), answer
+        await socket.receive_nothing(("push_event",), within=0.2)
 ```
 
 Over SSE:
@@ -373,13 +414,12 @@ async def test_variations():
     other_tab = await sync_to_async(open_live_page)("/counter/", client=page.client)
     assert other_tab.tab != page.tab
 
-    # Your project's own ASGI stack (origin validator, auth middleware, router).
-    from myproject.asgi import application
-
-    async with await page.connect(application=application) as socket:
+    # Mount parameters come from the page URL's query string, or are given.
+    async with await page.connect(params={"filter": "open"}) as socket:
         await socket.send_event("increment")
 
-    # A hand-built communicator, with no page GET.
+    # A hand-built communicator, with no page GET. The bare consumer has no
+    # middleware, so with_live_session supplies the session and the user.
     communicator = with_live_session(
         WebsocketCommunicator(
             LiveViewConsumer.as_asgi(),
@@ -389,9 +429,8 @@ async def test_variations():
     )
     assert (await communicator.connect())[0]
     await communicator.send_json_to({"type": "mount", "view": "myapp.views.Counter", "url": "/"})
-    socket = LiveSocket(communicator)
-    assert (await socket.receive(("mount", "error")))["type"] == "mount"
-    await socket.disconnect()
+    async with LiveSocket(communicator) as socket:
+        assert (await socket.receive(("mount", "error")))["type"] == "mount"
 ```
 
 ## Putting it together
