@@ -1914,8 +1914,7 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                         "then renders; persisting it or sending it to the browser takes "
                         "persist= or client=True), or return it from %s.get_context_data(); "
                         "a get_context_data() that does not build on super() supplies no "
-                        "declared field, and state(render=False) keeps one out. To keep the 1.x behaviour "
-                        'while you migrate, set exposure_policy = "legacy" on the view. '
+                        "declared field, and state(render=False) keeps one out. "
                         "See %s. If the name is supplied in a way this check cannot follow, "
                         "silence it with a `{# djust_typecheck: noqa %s #}` template comment "
                         "or DJUST_CONFIG = {'suppress_checks': ['T027']}."

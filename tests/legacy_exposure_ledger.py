@@ -70,6 +70,10 @@ MIGRATED_4082: tuple[str, ...] = (
     "tests/integration/test_sw_advanced_flow.py",
 )
 
+#: Files #4185 moved off the legacy policy with the framework classes they
+#: test (the component ``Meta.event`` alias): they state no legacy policy now.
+MIGRATED_4185: tuple[str, ...] = ("python/djust/tests/test_legacy_component_alias_3078.py",)
+
 #: The #4082 files that still state the legacy policy, each with its reason.
 REMAINING_4082: dict[str, str] = {
     "python/djust/tests/test_async_check_permissions.py": (
@@ -234,7 +238,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_lazy_provenance_http_3252.py",
         "python/djust/tests/test_lazy_provenance_round2_3427.py",
         "python/djust/tests/test_legacy_async_cancel_on_disconnect.py",
-        "python/djust/tests/test_legacy_component_alias_3078.py",
         "python/djust/tests/test_legacy_context_framework_config_2960.py",
         "python/djust/tests/test_legacy_navigation_waiters_3236.py",
         "python/djust/tests/test_legacy_view_keeps_no_session_state.py",

@@ -16,6 +16,7 @@ from abc import ABC
 from django.utils.safestring import SafeString, mark_safe
 
 from djust._html import attr_name
+from djust._parameter_contract import ROUTED_COMPONENT_PARAMETER
 from djust._include_guard import include_guard_scope
 from djust._template_guards import TemplateMutatorGuard, alters_data
 from djust.decorators import is_event_handler
@@ -1261,9 +1262,16 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         of another type or evaluate an arbitrary view attribute (#3078). An
         unknown or foreign id is ignored, as an unresolved id always was.
 
-        The alias is pinned to the legacy parameter policy: its ``component_id``
-        is a reserved framework name and ``value`` is untyped, so it cannot be a
-        strict contract, and a project-wide strict policy must not break it.
+        The alias follows the project's parameter policy, like every other
+        handler (#4185; it was pinned to the legacy policy). Its
+        ``component_id`` is the event's routing target, a framework-reserved
+        name no application parameter may take, so the alias declares it a
+        framework-supplied argument: strict validation takes it out of the
+        payload and binds it only when it names one of the owner class's
+        declared components (``validation.bind_routed_component``), the same
+        rule the transports' ``resolve_component_target`` applies. ``value``
+        and the remaining keys are ``Any``, as the component's
+        ``_handle_event`` reads them.
         """
         import inspect
 
@@ -1306,7 +1314,11 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         try:
             from djust.decorators import event_handler as eh_decorator
 
-            handler = eh_decorator(parameter_policy="legacy")(handler)
+            handler = eh_decorator()(handler)
+            # Server-only, never published with the handler's client metadata.
+            handler._djust_framework_arguments = frozenset(  # type: ignore[attr-defined]
+                {ROUTED_COMPONENT_PARAMETER}
+            )
         except ImportError:
             # @event_handler is optional here; skip decoration if decorators module isn't available.
             pass

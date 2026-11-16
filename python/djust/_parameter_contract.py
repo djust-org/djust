@@ -37,6 +37,10 @@ _SERVER_DEFAULT = object()
 # bodies also drop "_"-prefixed keys, and the strict client collector refuses
 # both, so a keyword-capable application parameter can never receive them.
 FRAMEWORK_ARGUMENT_NAMES = frozenset({"view_id", "component_id"})
+# #4185: the one routing identity a framework-owned handler may declare as a
+# framework-supplied parameter (the component ``Meta.event`` alias). Strict
+# validation binds it only to a component the owner class declares.
+ROUTED_COMPONENT_PARAMETER = "component_id"
 # Per-event client bookkeeping read by the transport (the @cache round-trip id,
 # the dj_activity gate). Strict validation drops them on every path, so the
 # application payload is identical whichever transport delivered it.

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from tests.legacy_exposure_ledger import (
     MIGRATED_4082,
+    MIGRATED_4185,
     OTHER_LEGACY_FILES,
     REASONED_INLINE,
     REMAINING_4082,
@@ -84,6 +85,14 @@ def test_migrated_4082_files_state_no_legacy_policy():
     assert not set(MIGRATED_4082) & set(REMAINING_4082)
     assert not set(MIGRATED_4082) & set(OTHER_LEGACY_FILES)
     assert not set(REMAINING_4082) & set(OTHER_LEGACY_FILES)
+
+
+def test_migrated_4185_files_state_no_legacy_policy():
+    for path in MIGRATED_4185:
+        assert (ROOT / path).is_file(), path
+        assert not _legacy_lines(path), f"{path} was migrated to explicit (#4185)"
+    ledger = set(MIGRATED_4082) | set(REMAINING_4082) | set(OTHER_LEGACY_FILES)
+    assert not set(MIGRATED_4185) & ledger
 
 
 def test_every_remaining_4082_file_has_a_reason():
