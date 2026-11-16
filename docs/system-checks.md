@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 129 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 130 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -90,6 +90,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
 | V029 | LiveView | Warning | An explicit view's event handler reads and then changes a `state()` field declared `persist=False`, so the change is not saved between requests |
 | V030 | LiveView | Warning | A view or mixin defines or assigns `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, replacing djust's method of that name |
+| V031 | LiveView | Error | A `DjustModelAdmin`'s `change_list_widgets` or `change_form_widgets` lists a class that states `exposure_policy = "legacy"`, so that admin page fails to render |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
 | S003 | Security | Warning | Bare except: pass swallows all exceptions |
@@ -660,6 +661,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: a LiveView, or a mixin of one, that defines one of `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state` (#4129) in its class body, or assigns `self.<name>` in one of its methods. The attribute replaces djust's method with no error: if it is an `@event_handler`, a client can call it, and the view's own `self.skip_render()` runs the handler instead of skipping the render. Reported once per class and name, on the class that defines it. djust's own classes are not checked.
 - **Fix**: rename the attribute.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V030"]`
+
+### V031 — an admin widget states `exposure_policy = "legacy"`
+- **Severity**: Error
+- **Method**: Runtime (class inspection of every `DjustModelAdmin` subclass; no view is constructed).
+- **What it detects**: a `change_list_widgets` or `change_form_widgets` class attribute that lists a widget class whose `exposure_policy` is `"legacy"`. The djust admin change list and change form use explicit exposure (#4185), and an explicit page cannot embed a legacy view: every GET of that admin page fails with an HTTP 500 (`ExposureError: Child state persistence unavailable for the embedded view <widget>`). Reported once per admin class, slot and widget. A widget list built per request by an overridden `get_change_list_widgets()` / `get_change_form_widgets()` is not seen. `djust.V028` reports the same widget class as deprecated.
+- **Fix**: set `exposure_policy = "explicit"` on the widget (or delete the line: explicit is the default) and return what its template reads from `get_context_data()`. See the [admin widgets guide](website/guides/admin-widgets.md).
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V031"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V031"]`
 
 <!-- END GENERATED check-sections:V -->
 

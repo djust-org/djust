@@ -81,7 +81,8 @@ The change list and change form use explicit exposure, like every djust
 view, so a widget does too: its template reads its declared `state()`
 fields and what its `get_context_data()` returns. An explicit page cannot
 embed a widget that still states `exposure_policy = "legacy"` (the page
-fails to render); `manage.py check` lists such a class (`djust.V028`).
+fails to render); `manage.py check` reports it as an error (`djust.V031`,
+which names the admin slot and the widget).
 
 ### `change_list_widgets`
 

@@ -2363,6 +2363,66 @@ def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckM
     return messages
 
 
+@register("djust")
+def check_admin_legacy_widgets(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V031 (Error): an admin widget slot lists a class that states legacy exposure (#4185).
+
+    The djust admin change list and change form use explicit exposure, and an
+    explicit page cannot embed a legacy view: rendering the page fails (an
+    HTTP 500), on every GET of that admin page. V028 already reports the
+    widget class as deprecated; this says the admin page is broken now. Reads
+    the ``change_list_widgets`` / ``change_form_widgets`` class attributes of
+    every ``DjustModelAdmin`` subclass; a widget list built per request by an
+    overridden ``get_change_*_widgets()`` is not seen.
+    """
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V031"):
+        return messages
+    try:
+        from djust.admin_ext.options import DjustModelAdmin
+    except Exception:  # noqa: BLE001 — admin extension not importable: nothing to check
+        return messages
+
+    for admin in sorted(
+        _walk_subclasses(DjustModelAdmin), key=lambda c: (c.__module__, c.__qualname__)
+    ):
+        admin_label = "%s.%s" % (admin.__module__, admin.__qualname__)
+        for slot, page in (
+            ("change_list_widgets", "change list"),
+            ("change_form_widgets", "change form"),
+        ):
+            widgets = getattr(admin, slot, None)
+            if not isinstance(widgets, (list, tuple)):
+                continue
+            for widget in widgets:
+                if not isinstance(widget, type):
+                    continue
+                policy = inspect.getattr_static(widget, "exposure_policy", None)
+                if type(policy) is not str or policy != "legacy":
+                    continue
+                widget_label = "%s.%s" % (widget.__module__, widget.__qualname__)
+                messages.append(
+                    DjustError(
+                        '%s.%s lists %s, which states exposure_policy = "legacy". The djust '
+                        "admin %s uses explicit exposure and cannot embed a legacy view, so "
+                        "that admin page fails to render (HTTP 500)."
+                        % (admin_label, slot, widget_label, page),
+                        hint=(
+                            'Set exposure_policy = "explicit" on %s (or delete the line: '
+                            "explicit is the default) and return what its template reads "
+                            "from get_context_data(). See docs/website/guides/admin-widgets.md."
+                            % widget_label
+                        ),
+                        id="djust.V031",
+                        fix_hint=(
+                            'Replace `exposure_policy = "legacy"` with '
+                            '`exposure_policy = "explicit"` on `%s`.' % widget.__qualname__
+                        ),
+                    )
+                )
+    return messages
+
+
 _V029_MUTATORS = frozenset(
     {
         "add",
