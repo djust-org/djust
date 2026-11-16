@@ -19,7 +19,12 @@ ANY spelling lets a payload out, and that is the verdict the guard must reach (i
 
 from __future__ import annotations
 
+import json as _json
+import os as _os
 import random
+import shutil as _shutil
+import subprocess as _subprocess
+from pathlib import Path as _Path
 
 import safe_markup_call_fuzz_3864 as fuzz
 
@@ -45,6 +50,20 @@ PREFIXES = (
     '<a data-href="',
     "<",
     '<a href="/u/',
+    # what the browser's tokenizer reads otherwise than a simple scan would (#3864 review)
+    "<!--><a title=",
+    "<!---><a title=",
+    "<textarea><a title=",
+    "<title><a title=",
+    '<xmp><b title="</xmp><a title=',
+    "<script><!--<script></script><a title=",
+    "<script>1</scripts><a title=",
+    '<svg><![CDATA[<a title="]]><a title=',
+    "<a title=a'b ",
+    '<a href="&#10',
+    '<a href="&#9;',
+    '<a href="&#106',
+    '<iframe src="data:text/html,',
 )
 
 #: the part placed after it
@@ -55,6 +74,15 @@ VALUES = {
     "cond_escape": "conditional_escape(x)",
     "digits": "str(len(x))",
     "literal": "'k'",
+    # an escaper's output, then something done to it
+    "escape_spec": "f'{escape(x):>1}'",
+    "url_spec_s": "f'{safe_url(x)!s:>2}'",
+    "escape_format_spec": "'{:>3}'.format(escape(x))",
+    "escape_undone": "escape(x).replace('&quot;', '\"')",
+    "escape_upper": "escape(x).upper()",
+    "escape_repr": "repr(escape(x))",
+    "digits_cut": "str(len(x))[5:]",
+    "char_quote": "'%c' % 34 + escape(x)",
 }
 
 #: what follows the part
@@ -129,24 +157,53 @@ def build(
     )
 
 
-def run_any(producer, spellings, value, suffix, how) -> bool:
-    """Whether any spelling lets a payload out when run."""
+#: payloads beyond the call fuzz's, for the tokenizer states (a scheme split by white space, a
+#: character reference to complete, the end tag of a raw-text element)
+PAYLOADS = (
+    *fuzz.PAYLOADS,
+    " \tjava\nscript:INJ()",
+    "x onmouseover=1",
+    "a/onmouseover=1",
+    "`onmouseover=1",
+    "</title><x>",
+    "</xmp><x>",
+    "]]><x>",
+    "6;avascript:INJ()",
+    ";avascript:INJ()",
+    "text/html,<x>",
+)
+
+
+#: a payload that lets nothing out: what the developer's own literal text does (a ``data:`` URL
+#: they wrote) is subtracted from what a payload does
+BENIGN = "k"
+
+
+def outputs(producer, spellings, value, suffix, how, payloads=PAYLOADS) -> list[str]:
+    """What the module returns for every payload under every spelling (an exception is no
+    output)."""
     import sys
     import types
 
+    out: list[str] = []
     for k in range(len(spellings)):
         source = build(producer, spellings, value, suffix, how, k)
-        for payload in fuzz.PAYLOADS:
+        for payload in payloads:
             module = types.ModuleType("position_fuzz_case")
             sys.modules["position_fuzz_case"] = module
             try:
                 exec(compile(source, "<position-fuzz>", "exec"), module.__dict__)  # noqa: S102
-                out = str(module.f(payload))
+                out.append(str(module.f(payload)))
+            except (TypeError, ValueError):
+                pass  # the spelling raises: nothing is rendered
             finally:
                 sys.modules.pop("position_fuzz_case", None)
-            if fuzz.injected(out):
-                return True
-    return False
+    return out
+
+
+def run_any(producer, spellings, value, suffix, how) -> bool:
+    """Whether any spelling lets a payload out when run (Python's parser)."""
+    return any(fuzz.injected(o) for o in outputs(producer, spellings, value, suffix, how))
 
 
 def cases(samples: int, seed: int) -> list[tuple]:
@@ -167,8 +224,9 @@ def cases(samples: int, seed: int) -> list[tuple]:
     return out
 
 
-def survey(samples: int, seed: int) -> dict:
-    """``{"cases", "unsafe", "flagged", "false_negatives", "false_positives", "disagree"}``."""
+def survey(samples: int, seed: int, browser: bool = False) -> dict:
+    """``{"cases", "unsafe", "flagged", "false_negatives", "false_positives", "disagree"}``.
+    ``browser``: a case is also unsafe when a browser's parser lets a payload out (jsdom)."""
     result: dict = {
         "cases": 0,
         "unsafe": 0,
@@ -177,12 +235,33 @@ def survey(samples: int, seed: int) -> dict:
         "false_positives": [],
         "disagree": [],
     }
-    for case in cases(samples, seed):
+    all_cases = cases(samples, seed)
+    outs = [outputs(*case) for case in all_cases]
+    benign = [outputs(*case, payloads=(BENIGN,)) for case in all_cases]
+    in_browser: list[bool] = [False] * len(all_cases)
+    if browser:
+        flat = [o for case_outs in outs for o in case_outs]
+        flat_benign = [o for case_outs in benign for o in case_outs]
+        verdicts_flat = browser_verdicts(flat + flat_benign)
+        payload_verdicts, benign_verdicts = verdicts_flat[: len(flat)], verdicts_flat[len(flat) :]
+        i = j = 0
+        for n, case_outs in enumerate(outs):
+            # by kind (``url src``, ``attr onmouseover``): a reason names the value it saw, which
+            # differs per payload even where the payload changes nothing
+            own = {r.split("=")[0] for v in benign_verdicts[j : j + len(benign[n])] for r in v}
+            j += len(benign[n])
+            in_browser[n] = any(
+                {r.split("=")[0] for r in v} - own for v in payload_verdicts[i : i + len(case_outs)]
+            )
+            i += len(case_outs)
+    for n, case in enumerate(all_cases):
         verdicts = {bool(find_unsafe_markup(build(*case, k))) for k in range(len(case[1]))}
         if len(verdicts) != 1:
             result["disagree"].append(case)  # the guard read K
         flagged = True in verdicts
-        unsafe = run_any(*case)
+        unsafe = in_browser[n] or (
+            any(fuzz.injected(o) for o in outs[n]) and not any(fuzz.injected(o) for o in benign[n])
+        )
         result["cases"] += 1
         result["unsafe"] += unsafe
         result["flagged"] += flagged
@@ -191,3 +270,45 @@ def survey(samples: int, seed: int) -> dict:
         if flagged and not unsafe:
             result["false_positives"].append(case)
     return result
+
+
+# ---------------------------------------------------------------------------------------------
+# A browser's parser as the oracle (#3864): Python's ``HTMLParser`` does not follow the WHATWG
+# tokenizer (script data escape states, abrupt comments, RCDATA, character references), so a
+# generated module is also judged by jsdom (parse5), through node, when the toolchain has it.
+# ---------------------------------------------------------------------------------------------
+
+_ORACLE = _Path(__file__).with_name("safe_markup_browser_oracle_3864.cjs")
+_ROOT = _Path(__file__).resolve().parents[2]
+
+
+def browser_available() -> bool:
+    return bool(_shutil.which("node")) and (_ROOT / "node_modules" / "jsdom").is_dir()
+
+
+def browser_verdicts(
+    htmls: list[str], deadline: float = 120, heap_mb: int = 1024
+) -> list[list[str]]:
+    """For each HTML string, how a browser's parser lets a payload out (``[]``: it does not).
+    Bounded: node's heap is capped at ``heap_mb`` and the run at ``deadline`` seconds; a run that
+    hits either raises, it is never read as "safe"."""
+    out: list[list[str]] = []
+    for i in range(0, len(htmls), 1500):
+        chunk = htmls[i : i + 1500]
+        done = _subprocess.run(
+            ["node", f"--max-old-space-size={heap_mb}", str(_ORACLE)],
+            input=_json.dumps(chunk),
+            capture_output=True,
+            text=True,
+            timeout=deadline,
+            cwd=_ROOT,
+            env={**_os.environ, "NODE_PATH": str(_ROOT / "node_modules")},
+            check=False,
+        )
+        if done.returncode:
+            raise RuntimeError(f"the browser oracle failed: {done.stderr[-500:]}")
+        result = _json.loads(done.stdout)
+        if len(result) != len(chunk):
+            raise RuntimeError("the browser oracle answered for a different number of strings")
+        out += result
+    return out

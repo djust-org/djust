@@ -36,8 +36,22 @@ ROOT = Path(__file__).resolve().parents[2]
 THEMING = ROOT / "python/djust/theming"
 
 #: A flagged site that was read and kept: ``(path relative to the repo, function) -> reason``.
-#: Empty: the sites the detector found under ``djust/theming`` were fixed instead.
-AUDITED: dict[tuple[str, str], str] = {}
+#: The sites the detector found under ``djust/theming`` before #3864 were fixed instead. Since
+#: #3864 the guard places each ``format_html`` argument where it lands; these two hand a
+#: ``<style>`` body CSS the guard cannot read.
+AUDITED: dict[tuple[str, str], str] = {
+    ("python/djust/theming/templatetags/theme_tags.py", "theme_css"): (
+        "the <style> body is generate_css_for_state() of the ThemeManager's state, whose theme, "
+        "preset and pack are names the registry validates (a cookie naming anything else falls "
+        "back to the default); the CSS is the registered themes' own token values, never request "
+        "text. The nonce attribute is _nonce_attr's escaped value"
+    ),
+    ("python/djust/theming/templatetags/theme_tags.py", "theme_framework_overrides"): (
+        "the <style> body is the framework-override CSS the manager generates from the validated "
+        "theme state (registered values, never request text); the nonce attribute is "
+        "_nonce_attr's escaped value"
+    ),
+}
 
 PRELUDE = (
     "from django.utils.html import conditional_escape, escape, format_html\n"
@@ -60,7 +74,7 @@ SHAPES = {
     ),
     "local-variable": (
         'def f(x):\n    s = f"<a {x}>"\n    return mark_safe(s)\n',
-        'def f(x):\n    s = format_html("<a {}>", x)\n    return mark_safe(s)\n',
+        "def f(x):\n    s = format_html(\"<a title='{}'>\", x)\n    return mark_safe(s)\n",
     ),
     "augmented-assignment": (
         'def f(x):\n    s = "<a "\n    s += x\n    return mark_safe(s)\n',
@@ -159,15 +173,15 @@ SHAPES = {
     ),
     "closure": (
         'def f(x):\n    s = f"<a {x}>"\n    def g():\n        return mark_safe(s)\n    return g\n',
-        'def f(x):\n    s = format_html("<a {}>", x)\n    def g():\n        return mark_safe(s)\n    return g\n',
+        "def f(x):\n    s = format_html(\"<a title='{}'>\", x)\n    def g():\n        return mark_safe(s)\n    return g\n",
     ),
     "module-level": (
         'HTML = f"<a {open_value()}>"\nOUT = mark_safe(HTML)\n',
-        'HTML = format_html("<a {}>", open_value())\nOUT = mark_safe(HTML)\n',
+        "HTML = format_html(\"<a title='{}'>\", open_value())\nOUT = mark_safe(HTML)\n",
     ),
     "interpolated-format-string": (
         'def f(x):\n    return format_html(f"<a {x}>")\n',
-        'def f(x):\n    return format_html("<a {}>", x)\n',
+        "def f(x):\n    return format_html(\"<a title='{}'>\", x)\n",
     ),
     "attribute-value": (
         'def f(obj):\n    return mark_safe(f"<a id={obj.id}>")\n',
@@ -345,15 +359,15 @@ SHAPES.update(
         ),
         "rule-format_map": (
             'def f(x):\n    return mark_safe("<a {x}>".format_map({"x": x}))\n',
-            'def f(x):\n    return mark_safe("<a {x}>".format_map({"x": escape(x)}))\n',
+            'def f(x):\n    return mark_safe("<a title=\'{x}\'>".format_map({"x": escape(x)}))\n',
         ),
         "rule-Template.substitute": (
             'from string import Template\ndef f(x):\n    return mark_safe(Template("<a $x>").substitute(x=x))\n',
-            'from string import Template\ndef f(x):\n    return mark_safe(Template("<a $x>").substitute(x=escape(x)))\n',
+            "from string import Template\ndef f(x):\n    return mark_safe(Template(\"<a title='$x'>\").substitute(x=escape(x)))\n",
         ),
         "rule-Template.safe_substitute": (
             'from string import Template\ndef f(x):\n    return mark_safe(Template("<a $x>").safe_substitute(x=x))\n',
-            'from string import Template\ndef f(x):\n    return mark_safe(Template("<a $x>").safe_substitute(x=escape(x)))\n',
+            "from string import Template\ndef f(x):\n    return mark_safe(Template(\"<a title='$x'>\").safe_substitute(x=escape(x)))\n",
         ),
     }
 )

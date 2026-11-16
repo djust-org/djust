@@ -74,14 +74,17 @@ CONTEXTS: dict[str, str | None] = {
     '<button formaction="': "url",
     '<svg><a xlink:href="': "url",
     '<script src="': "url",
-    # a literal ``javascript:`` in front makes the rest of the value code
-    '<a href="javascript:go(': "url",
-    '<a href=" JavaScript:': "url",
+    # a literal ``javascript:`` (or ``data:``) in front makes the rest of the value code (#3864:
+    # a checked URL is no safer there than an escaped value)
+    '<a href="javascript:go(': "url-code",
+    '<a href=" JavaScript:': "url-code",
+    '<iframe src="data:text/html,': "url-code",
+    '<a href="java&#9;script:': "url-code",
     # ... and not past the start, or behind a part the guard cannot read
     '<a href="/u/': None,
     '<a href="\x00': None,
     '<a href="\x00javascript:': None,
-    '<a href="&#32;': None,
+    '<a href="&#32;': "url",  # a character reference is read decoded: a leading space
     # not a URL attribute
     '<a title="': None,
     '<a data-href="': "url",  # the client follows it (a table row's link)

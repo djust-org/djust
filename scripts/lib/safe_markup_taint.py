@@ -172,25 +172,45 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   it cannot spell out, a SYMBOL of what that part can do there (``SYM_*``): an escaped value keeps the position (text, a quoted value or a
   comment), digits and words fit almost anywhere, markup (``format_html``, ``render()``, a rendered
   block body, a string that starts and ends in element text) fits element text only, whole
-  attributes fit between attributes, and a part it cannot class makes the position of every
-  positioned part after it unknown. ``_walk`` then reads the text the way a browser does (tags,
-  quoted and unquoted values, comments, ``<script>`` / ``<style>`` bodies, JSON data blocks) and
-  refuses a part placed where its class may not sit. A value with up to ``_SPELLINGS`` spellings is
-  read once per spelling, left to right; ``s += piece`` pieces, read in no known order, are refused
-  when one leaves a position open and another needs one. Only pass B walks, so it only adds
-  findings. Before it, an earlier part the guard could not read counted as an ordinary character
-  (``pre() + safe_url(x)`` of a ``pre`` that returns ``'<a href='`` from one of two branches was
-  cleared), a balanced fragment was placed unchecked inside a quoted or unquoted value, and a
-  helper's markup placed in a larger string was not looked into.
+  attributes fit between attributes, and a part it cannot class (``SYM_UNKNOWN``) may sit in element
+  text only, where an arbitrary escaped string would be safe; everywhere else it is reported, and
+  every positioned part after it is reported too, since its effect on the position is not known. A
+  transformation of an escaper's output keeps the class only where it provably cannot add ``"'<>&``
+  (padding and alignment with a plain fill, case changes, ``strip``, a slice: a character
+  reference it cuts decodes to a character of the value, never to markup); ``!r`` / ``%r`` are
+  spelled with their quotes; ``replace`` or a fill that brings in such a character, and ``%c`` /
+  ``{:c}``, are read as a part whose escaping is undone (``SYM_RAW``), placed nowhere. ``.format`` / ``format_map`` / ``%`` with a
+  mapping / ``string.Template`` are read field by field, a format spec included; a builder whose
+  positions the guard cannot read (a format string built at run time) is unknown, and refused where
+  any argument needs a position. ``format_html`` / ``format_html_join``: each ARGUMENT is placed where
+  it lands in the format string, escaped (markup only when the guard knows it is). ``_walk`` then
+  reads the text the way an HTML tokenizer does: tags, attribute names, quoted and unquoted values,
+  comments (abrupt ``<!-->`` / ``<!--->`` included), character references a part could complete
+  (``&#10`` + a digit), ``RCDATA`` (``textarea`` / ``title``) and ``RAWTEXT`` bodies (``script``,
+  ``style``, ``xmp``, ``iframe``, ``noembed``, ``noframes``, ``noscript``) that end only at
+  ``</name`` followed by a delimiter, foreign content (``svg`` / ``math``: no raw-text body there),
+  JSON data blocks, a literal ``javascript:`` / ``vbscript:`` / ``data:`` at a URL's start (read after
+  decoding character references); CDATA, the script ``<!--`` escape states and ``plaintext`` are not
+  modelled, so nothing positioned may follow them. It refuses a part placed where its class may not
+  sit, and the finding says which part, where, and the text in front of it. A value with up to
+  ``_SPELLINGS`` spellings is read once per spelling, left to right, prefixes that leave the same
+  state merged (at most ``_PREFIXES``); straight-line ``s += piece`` is read in source order, a piece
+  under a branch as optional. Only pass B walks, so it only adds findings. Before it, an earlier part
+  the guard could not read counted as an ordinary character (``pre() + safe_url(x)`` of a ``pre``
+  that returns ``'<a href='`` from one of two branches was cleared), a balanced fragment was placed
+  unchecked inside a quoted or unquoted value, and a helper's markup placed in a larger string was
+  not looked into.
 * A function of this file REPLACED without a ``def`` (#3864): ``sys.modules[__name__].helper = ...``,
   ``setattr`` on a module object (``sys.modules[...]``, ``importlib.import_module(...)``, a name that
   holds one), its ``__dict__``, or ``helper.__code__ = ...``: pass B does not follow a call of it (its
   result is an unknown call's). Replacing it from ANOTHER file is not seen: like a subclass there,
   that is the developer's own code.
 * What the walk does not model: a ``style`` ATTRIBUTE (escaped values sit there in eleven functions
-  of the tree; ``safe_css_*`` is the rule for CSS), and where a ``format_html`` argument lands in its
-  own format string (the format string is judged for raw values, not for the position of each
-  argument). A metaclass data descriptor of a class attribute's name is not missed: ``cls.X`` /
+  of the tree; ``safe_css_*`` is the rule for CSS); attributes a browser does not treat as URLs
+  (``data-url``: the client code that reads one decides); the result of an unknown call
+  (``functools.partial(...)(x)``), as before; and a developer's own ``__format__`` or ``int``
+  subclass behind a numeric format spec or an ``isinstance`` check (like a subclass in another file,
+  that is the developer's own code, not request data). A metaclass data descriptor of a class attribute's name is not missed: ``cls.X`` /
   ``C.X`` of a class with a metaclass (or any class keyword) is not trusted (``self.X`` is, since an
   instance lookup never reaches the metaclass).
 * Class attributes of a class whose base writes attributes from keywords: the package's own
@@ -215,6 +235,7 @@ import functools
 import re
 import string
 import sys
+from html import unescape as _unescape
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -586,13 +607,26 @@ SYM_MARKUP = "\x02"
 SYM_ATTRS = "\x03"
 #: a part whose text the guard cannot read and cannot class: nothing after it has a known position
 SYM_UNKNOWN = "\x01"
+#: a value whose escaping was undone (``escape(x).replace("&quot;", '"')``, ``%c`` of a number,
+#: ``!r``): it is placed nowhere
+SYM_RAW = "\x08"
 _SYMBOLS = frozenset(
-    {SYM_DIGITS, SYM_WORDS, SYM_VALUE, SYM_ESCAPED, SYM_JSON, SYM_MARKUP, SYM_ATTRS, SYM_UNKNOWN}
+    {
+        SYM_DIGITS,
+        SYM_WORDS,
+        SYM_VALUE,
+        SYM_ESCAPED,
+        SYM_JSON,
+        SYM_MARKUP,
+        SYM_ATTRS,
+        SYM_UNKNOWN,
+        SYM_RAW,
+    }
 )
 #: symbols that need a known position
 _POSITIONED = frozenset({SYM_WORDS, SYM_VALUE, SYM_ESCAPED, SYM_JSON, SYM_MARKUP, SYM_ATTRS})
-#: a text :func:`_walk` always refuses: a positioned part behind an unknown one
-SYM_REFUSED = SYM_UNKNOWN + SYM_VALUE
+#: a text :func:`_walk` always refuses
+SYM_REFUSED = SYM_RAW
 #: a value with a few known spellings is kept as all of them: ``\x10a\x11b\x12`` is ``a`` or ``b``,
 #: and :func:`_walk` reads each (up to ``_SPELLINGS``) rather than the class they share
 CHOICE_OPEN, CHOICE_SEP, CHOICE_CLOSE = "\x10", "\x11", "\x12"
@@ -603,6 +637,8 @@ _FITS_MARKUP = frozenset({SYM_DIGITS, SYM_WORDS, SYM_VALUE, SYM_ESCAPED, SYM_MAR
 #: how deep ``_text_b`` follows a value (names, calls, containers) before it reads "unknown"
 _TEXT_DEPTH = 30
 _SPELLINGS = 32
+#: how many distinct texts in front ``_walk`` reads a string with before it reads choices as classes
+_PREFIXES = 256
 #: the order the symbols join in: a set of spellings takes the weakest class every member fits
 _SPECIAL_TEXT = frozenset("<>\"'`")
 _NUMERIC_TEXT = frozenset("0123456789.-+e" + SYM_DIGITS)
@@ -696,14 +732,79 @@ def _walk(text: str) -> tuple[bool, str]:
         grown = {p + s for p in prefixes for s in segment}
         prefixes = set()
         for p in grown:
-            ok, state = _walk_one(p)
+            ok, state, tail = _walk_tail(p)
             if not ok:
                 return False, "unknown"
-            prefixes.add("" if state == "text" else p)
-        if len(prefixes) > _SPELLINGS:
+            # what follows depends on the text since the tokenizer was last in element text
+            prefixes.add("" if state == "text" else p[tail:])
+        if len(prefixes) > _PREFIXES:
             return _walk_one(_collapse(text))
     states = {_walk_one(p)[1] for p in prefixes}
     return True, (states.pop() if len(states) == 1 else "unknown")
+
+
+_SYMBOL_NAMES = {
+    SYM_DIGITS: "digits",
+    SYM_WORDS: "literal words",
+    SYM_VALUE: "a URL/CSS escaper's output",
+    SYM_ESCAPED: "an HTML-escaped value",
+    SYM_JSON: "script-escaped JSON",
+    SYM_MARKUP: "markup",
+    SYM_ATTRS: "whole attributes",
+    SYM_UNKNOWN: "a value the guard cannot read",
+    SYM_RAW: "a value whose escaping is undone (or is not text)",
+}
+
+
+def _spell(text: str) -> str:
+    return "".join(f"{{{_SYMBOL_NAMES[c]}}}" if c in _SYMBOL_NAMES else c for c in text)
+
+
+def refusal(text: str) -> str:
+    """Why :func:`_walk` refuses ``text``: the part, where it lands, and the text in front."""
+    spelling = None
+    if CHOICE_OPEN not in text:
+        spelling = text
+    else:
+        prefixes = {""}
+        for segment in _segments(text):
+            grown = {p + x for p in prefixes for x in segment}
+            bad = [p for p in grown if not _walk_one(p)[0]]
+            if bad:
+                spelling = min(bad, key=len)
+                break
+            prefixes = {"" if _walk_one(p)[1] == "text" else p for p in grown}
+    if spelling is None:
+        return "a string the guard cannot read in full"
+    for i in range(len(spelling)):
+        if spelling[i] in _SYMBOLS and not _walk_one(spelling[: i + 1])[0]:
+            front = spelling[:i]
+            ok, state = _walk_one(front)
+            where = _Module._html_context(_mapped(front)) if ok and state != "unknown" else None  # noqa: SLF001
+            if not ok or state == "unknown":
+                place = "after a part whose effect on the position is not known"
+            elif where == "url":
+                place = "at the start of a URL attribute's value"
+            elif where == "handler":
+                place = "in an event-handler attribute"
+            elif where in ("script", "style"):
+                place = f"in a <{where}> body"
+            elif where == "srcdoc":
+                place = "in srcdoc"
+            elif where == "unquoted" or state == "unquoted":
+                place = "in an unquoted attribute value"
+            elif state == "tag":
+                place = "inside a tag (a name or between attributes)"
+            elif state == "quoted":
+                place = "inside a quoted attribute value"
+            elif state == "comment":
+                place = "in a comment"
+            elif state == "raw":
+                place = "in a raw-text element's body"
+            else:
+                place = "in element text"
+            return f"{_SYMBOL_NAMES[spelling[i]]} {place}, after {_spell(front[-50:])!r}"
+    return "a string the guard cannot read in full"
 
 
 def _segments(text: str) -> list[list[str]]:
@@ -772,120 +873,238 @@ def _collapse(text: str) -> str:
     return "".join(out)
 
 
+#: elements whose body the tokenizer reads as text up to their own end tag: RCDATA (entities are
+#: decoded) and RAWTEXT (they are not). ``script`` and ``style`` bodies are code (``_html_context``).
+_RCDATA = frozenset({"textarea", "title"})
+_RAWTEXT = frozenset({"script", "style", "xmp", "iframe", "noembed", "noframes", "noscript"})
+#: a character reference the next part could complete (``&#10`` + ``6;`` is ``j``)
+_OPEN_CHARREF = re.compile(r"&[#0-9A-Za-z]*$")
+
+
+def _ends_raw(text: str, i: int, name: str) -> int:
+    """The length of ``</name`` at ``i`` when it ends element ``name`` (followed by white space,
+    ``/`` or ``>``), ``-1`` when the text ends there (the next part decides), else 0."""
+    end = i + 2 + len(name)
+    if text[i : i + 2] != "</" or text[i + 2 : end].lower() != name:
+        return 0
+    if end >= len(text):
+        return -1
+    nxt = text[end]
+    if nxt in _WS + "/>":
+        return end - i
+    return -1 if nxt in _SYMBOLS else 0
+
+
 @functools.lru_cache(maxsize=1 << 16)
 def _walk_one(text: str) -> tuple[bool, str]:
-    """Read ``text`` (literal characters and the symbols above, no choice) from element text: whether every
-    symbol sits where its part may sit, and the state it ends in: ``"text"``, ``"tag"`` (in a tag:
-    a name, between attributes or an unquoted value), ``"quoted"``, ``"comment"``, ``"raw"`` (a
-    ``<script>`` / ``<style>`` body) or ``"unknown"`` (after a part it cannot read). Pass B only."""
+    ok, state, _tail = _walk_tail(text)
+    return ok, state
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _walk_tail(text: str) -> tuple[bool, str, int]:
+    """Read ``text`` (literal characters and the symbols above, no choice) from element text the
+    way an HTML tokenizer does: whether every symbol sits where its part may sit, and the state it
+    ends in: ``"text"``, ``"tag"`` (a tag's name, between attributes, an attribute name or after
+    ``=``), ``"unquoted"`` (an unquoted value), ``"quoted"``, ``"comment"``, ``"raw"`` (the body of
+    a ``RAWTEXT`` / ``RCDATA`` element) or ``"unknown"``. A part it cannot read
+    (``SYM_UNKNOWN``) may sit in element text only; whatever is positioned after it is refused.
+    Pass B only."""
     state, quote, raw = "text", "", ""
-    in_name = False  # reading a tag's name
-    #: a part it spells only as a class sits between this tag's attributes: the names that
-    #: follow are not known (``<a {name}="..."``), so no positioned part may follow in the tag
-    loose = False
+    foreign = 0  # inside ``<svg>`` / ``<math>``: no element there has a raw-text body
+    closing, raw_closed = False, ""
+    ts = ""  # in a tag: "name", "between", "attr", "after" (after a name), "value" (after ``=``)
+    loose = False  # a word between attributes: the names that follow are not known
     ok = True
+    ctx = 0  # where the tokenizer was last in element text: ``_html_context`` reads from there
     i, n = 0, len(text)
+
+    def where_at(k: int) -> str | None:
+        return _Module._html_context(_mapped(text[ctx:k]))  # noqa: SLF001
+
     while i < n:
         ch = text[i]
         if ch in _SYMBOLS:
-            if (
-                ch == SYM_WORDS
-                and state == "tag"
-                and not in_name
-                and _Module._html_context(_mapped(text[:i])) != "unquoted"  # noqa: SLF001
-            ):
-                loose = True  # (digits cannot spell a name, and an empty one is mapped away)
             if ch == SYM_DIGITS:
-                pass
-            elif ch == SYM_UNKNOWN:
+                if state == "tag" and ts == "value":
+                    state = "unquoted"
+                i += 1
+                continue
+            if ch == SYM_RAW or (ch == SYM_UNKNOWN and state != "text"):
+                return False, "unknown", 0
+            if ch == SYM_UNKNOWN:  # in element text (``raw`` is empty there): hides what follows
                 state = "unknown"
-            elif state == "unknown" or (loose and state in ("tag", "quoted") and ch != SYM_WORDS):
-                ok, state = False, "unknown"
-            else:
-                where = (
-                    None if state == "comment" else _Module._html_context(_mapped(text[:i]))  # noqa: SLF001
+                i += 1
+                continue
+            if state == "unknown":
+                return False, "unknown", 0
+            if state in ("quoted", "unquoted") and _OPEN_CHARREF.search(text[ctx:i]):
+                return False, "unknown", 0  # the part may complete ``&#10`` into another character
+            if ch == SYM_WORDS and state == "tag" and ts in ("between", "after"):
+                loose = True  # (digits cannot spell a name, and an empty one is mapped away)
+            if loose and state in ("tag", "quoted", "unquoted") and ch != SYM_WORDS:
+                return False, "unknown", 0
+            where = None if state == "comment" else where_at(i)
+            body = raw if state == "raw" else ""
+            plain_body = body and body not in ("script", "style")  # escaped text cannot end it
+            if ch == SYM_WORDS:
+                allowed = (
+                    state in ("text", "quoted", "comment")
+                    or (state == "raw" and (plain_body or where is None))
+                    or (state == "tag" and ts in ("between", "after") and where is None)
                 )
-                if ch == SYM_WORDS:
-                    allowed = state in ("text", "quoted", "comment", "raw") or (
-                        state == "tag" and not in_name and where is None
-                    )
-                elif ch == SYM_VALUE:
-                    # ``raw`` with ``where`` None is a JSON data block's body: never run
-                    allowed = (
-                        state in ("text", "quoted", "comment") and where in (None, "url")
-                    ) or (state == "raw" and where is None)
-                elif ch == SYM_ESCAPED:
-                    allowed = state in ("text", "quoted", "comment", "raw") and where is None
-                elif ch == SYM_JSON:
-                    allowed = state in ("text", "raw") and where in (None, "script")
-                elif ch == SYM_MARKUP:
-                    # element text, or a JSON data block's body (never run; ``where`` is None there)
-                    allowed = state in ("text", "raw") and where is None
-                else:  # SYM_ATTRS (whole attributes start with a space: after a tag's name too)
-                    allowed = state in ("text", "tag") and where is None
-                if not allowed:
-                    ok = False
-                    state = "unknown"
+            elif ch == SYM_VALUE:
+                # ``raw`` with ``where`` None is a JSON data block's body: never run
+                allowed = (state in ("text", "quoted", "comment") and where in (None, "url")) or (
+                    state == "raw" and (plain_body or where is None)
+                )
+            elif ch == SYM_ESCAPED:
+                allowed = state in ("text", "quoted", "comment") and where is None
+                allowed = allowed or (state == "raw" and (plain_body or where is None))
+            elif ch == SYM_JSON:
+                allowed = state == "text" or (state == "raw" and where in (None, "script"))
+            elif ch == SYM_MARKUP:
+                # element text, or a JSON data block's body (never run; ``where`` is None there)
+                # (and an RCDATA body, ``<textarea>``: a marked-safe value is the developer's
+                # markup there as in element text)
+                allowed = (state == "text" and where is None) or (
+                    state == "raw" and (body == "script" or body in _RCDATA) and where is None
+                )
+            else:  # SYM_ATTRS (whole attributes start with a space: after a tag's name too)
+                allowed = (state == "text" and where is None) or (
+                    state == "tag" and ts in ("name", "between", "attr", "after")
+                )
+            if not allowed:
+                return False, "unknown", 0
+            if state == "unquoted" or (state == "tag" and ts == "value"):
+                state = "unquoted"
             i += 1
             continue
         if state == "text":
             if text.startswith("<!--", i):
+                if text.startswith("<!-->", i) or text.startswith("<!--->", i):
+                    i += 5 if text[i + 4] == ">" else 6  # an abrupt comment: back in text
+                    ctx = i
+                    continue
                 state = "comment"
                 i += 4
                 continue
+            if text.startswith("<![CDATA[", i):
+                state = "unknown"  # foreign content: not modelled, nothing placed after it
+                i += 9
+                continue
             if ch == "<":
                 nxt = text[i + 1] if i + 1 < n else ""
-                if nxt == "" or nxt.isalpha() or nxt in "/!?" or nxt == SYM_DIGITS:
-                    state, in_name = "tag", True
+                if nxt == "/" and (i + 2 >= n or not text[i + 2].isalpha()):
+                    if i + 2 < n and text[i + 2] in _SYMBOLS:
+                        return False, "unknown", 0
+                    state, ts = "bogus", ""  # ``</`` + not a letter: a bogus comment to ``>``
+                    i += 2
+                    continue
+                if nxt in "!?":
+                    state, ts = "bogus", ""
+                    i += 2
+                    continue
+                if nxt == "" or nxt.isalpha() or nxt == "/" or nxt == SYM_DIGITS:
                     closing = nxt == "/"
                     j = i + (2 if closing else 1)
                     k = j
                     while k < n and text[k] not in _WS + "/>" and text[k] not in _SYMBOLS:
                         k += 1
                     name = text[j:k].lower()
+                    state, ts = "tag", "name"
                     raw = "" if closing else name
+                    raw_closed = name
                     i = k
                     continue
-                if nxt in _SYMBOLS and nxt != SYM_DIGITS:
+                if nxt in _SYMBOLS:
                     # ``'<' + escape(x)``: the value is the tag's name
-                    ok = ok and nxt not in _POSITIONED - {SYM_WORDS}
+                    if nxt in _POSITIONED - {SYM_WORDS} or nxt in (SYM_RAW, SYM_UNKNOWN):
+                        return False, "unknown", 0
                     state = "unknown"
                     i += 2
                     continue
         elif state == "tag":
             if ch == ">":
-                state = "raw" if raw in RAW_TEXT_ELEMENTS else "text"
-                in_name = loose = False
-            elif ch in "\"'":
-                state, quote, in_name = "quoted", ch, False
-            elif ch in _WS or ch == "/":
-                in_name = loose = False  # the next name is written out
+                self_closing = text[i - 1 : i] == "/"
+                if raw in ("svg", "math") and not self_closing:
+                    foreign += 1
+                elif closing and raw_closed in ("svg", "math") and foreign:
+                    foreign -= 1
+                if foreign and raw not in ("svg", "math"):
+                    state, raw = "text", ""  # foreign content: a ``<title>`` there is markup
+                elif raw in _RAWTEXT or raw in _RCDATA:
+                    state = "raw"
+                elif raw == "plaintext":
+                    state = "unknown"
+                else:
+                    state, raw = "text", ""
+                    ctx = i + 1
+                ts, loose = "", False
+            elif ts == "value":
+                if ch in "\"'":
+                    state, quote = "quoted", ch
+                elif ch not in _WS:
+                    state = "unquoted"
+            elif ch == "=" and ts in ("attr", "after"):
+                ts = "value"
+            elif ch in _WS:
+                if ts in ("name", "attr"):
+                    ts = "after"
+                loose = False  # the next name is written out
+            elif ch == "/":
+                ts, loose = "between", False
+            elif ts in ("name",):
+                pass
+            else:
+                ts = "attr"
+        elif state == "unquoted":
+            if ch in _WS:
+                state, ts, loose = "tag", "between", False
+            elif ch == ">":
+                state, ts = "tag", ""
+                continue  # the ``>`` closes the tag
         elif state == "quoted":
             if ch == quote:
-                state = "tag"
+                state, ts = "tag", "between"
         elif state == "comment":
             if text.startswith("-->", i):
-                state = "text"
+                state, ctx = "text", i + 3
                 i += 3
                 continue
             if text.startswith("--!>", i):
-                state = "text"
+                state, ctx = "text", i + 4
                 i += 4
                 continue
+        elif state == "bogus":
+            if ch == ">":
+                state, ctx = "text", i + 1
         elif state == "raw":
-            if text[i : i + 2 + len(raw)].lower() == "</" + raw:
-                state, in_name = "tag", False
-                i += 2 + len(raw)
-                raw = ""
+            if raw == "script" and text.startswith("<!--", i):
+                state = "unknown"  # the script data escape states: not modelled
+                i += 4
+                continue
+            m = _ends_raw(text, i, raw) if text.startswith("</", i) else 0
+            if m < 0:
+                state = "unknown"
+                i += 2
+                continue
+            if m:
+                state, ts, raw = "tag", "name", ""
+                i += m
                 continue
         i += 1
-    return ok, state
+    if state == "bogus":
+        state = "comment"
+    return ok, state, ctx
 
 
 def _text_class(text: str) -> str:
     """The weakest symbol a string fits: its effect on the position, wherever it is read."""
     # a text with choices: what any spelling holds (``flat``) and how every spelling walks
     flat = text.replace(CHOICE_OPEN, "").replace(CHOICE_SEP, "").replace(CHOICE_CLOSE, "")
+    if SYM_RAW in flat:
+        return SYM_RAW
     if SYM_UNKNOWN in flat:
         return SYM_UNKNOWN
     special = any(ch in _SPECIAL_TEXT for ch in flat)
@@ -902,16 +1121,19 @@ def _text_class(text: str) -> str:
         return SYM_DIGITS  # a number: it cannot spell a name
     # ``SYM_WORDS`` after it: it must leave a tag between attributes (not in an unquoted value)
     if not special and not (syms - {SYM_DIGITS, SYM_WORDS}):
-        if _walk("<x " + text + SYM_WORDS) == (True, "tag"):
+        # words: no character HTML reads; with an ``=`` it must not leave a value open
+        if "=" not in flat or _walk("<x " + text + " " + SYM_WORDS) == (True, "tag"):
             return SYM_WORDS
     if not special and syms <= {SYM_DIGITS, SYM_VALUE}:
         return SYM_VALUE
     if not special and syms <= {SYM_DIGITS, SYM_VALUE, SYM_ESCAPED}:
         return SYM_ESCAPED
+    if not special and syms <= {SYM_DIGITS, SYM_JSON}:
+        return SYM_JSON
     if _walk(text) != (True, "text"):
         return SYM_UNKNOWN
     # whole attributes fit between attributes AND element text; markup fits element text only
-    if _walk("<x " + text + SYM_WORDS) == (True, "tag"):
+    if _walk("<x " + text + " " + SYM_WORDS) == (True, "tag"):
         return SYM_ATTRS
     return SYM_MARKUP
 
@@ -921,6 +1143,8 @@ def _join(classes: set[str]) -> str:
     classes = set(classes) - {SYM_DIGITS} or {SYM_DIGITS}
     if len(classes) > 1:
         classes -= {SYM_WORDS}  # every other class admits fewer positions
+    if SYM_RAW in classes:
+        return SYM_RAW
     if len(classes) == 1:
         return next(iter(classes))
     if SYM_UNKNOWN in classes:
@@ -950,6 +1174,58 @@ def _summarize(texts: list[str], repeated: bool = False) -> str:
         # another needing one (``s = '<a href="'`` then ``s += escape(x)``): never established
         return SYM_REFUSED
     return joined
+
+
+#: ``[[fill]align][sign][z][#][0][width][grouping][.precision][type]`` of ``format``
+_FORMAT_SPEC = re.compile(
+    r"(?:(?P<fill>.)?(?P<align>[<>=^]))?[+\- ]?z?#?0?(?P<width>[0-9]*)[,_]?"
+    r"(?:\.(?P<precision>[0-9]+))?(?P<type>[bcdeEfFgGnosxX%])?"
+)
+
+
+def _spec_text(text: str, spec: str, numeric: bool) -> str:
+    """``format(value, spec)`` of a value whose text is ``text`` (``numeric``: a number for sure).
+    Padding keeps what the value is (escaped text stays escaped) unless the fill character is one
+    HTML reads; a precision cuts it (digits may then be nothing); ``c`` writes any character; a
+    number's type prints digits only for a number (another object's ``__format__`` prints
+    anything)."""
+    m = _FORMAT_SPEC.fullmatch(spec)
+    if m is None:
+        return SYM_UNKNOWN  # not a spec ``format`` takes (or one built at run time): raises
+    kind = m.group("type") or ""
+    if kind == "c":
+        return SYM_RAW
+    cls = _text_class(text)
+    if kind and kind != "s":
+        # a number's type prints digits (a ``str`` raises). An object of the developer's own
+        # class whose ``__format__`` returns markup is the developer's code, not request data:
+        # like a subclass in another file, it is not seen (the module docstring says so)
+        return SYM_DIGITS
+    if cls == SYM_RAW:
+        return SYM_RAW
+    fill = m.group("fill") or " "
+    if (m.group("width") or m.group("align")) and fill in _SPECIAL_TEXT | {"&"} | _CONTROL:
+        return SYM_RAW
+    padded = bool(m.group("width"))
+    cut = m.group("precision") is not None
+    if not padded and not cut:
+        return text
+    if cls == SYM_DIGITS:
+        return SYM_WORDS if (cut or padded) else SYM_DIGITS
+    if cls in (SYM_WORDS, SYM_VALUE, SYM_ESCAPED):
+        return cls  # spaces around (or a part of) escaped text are escaped text
+    return SYM_UNKNOWN
+
+
+def _repr_text(text: str) -> str:
+    """``repr`` of a value whose text is ``text``: a number's digits; escaped text (it holds no
+    quote, so ``repr`` quotes it with ``'``) between apostrophes; anything else is placed nowhere."""
+    cls = _text_class(text)
+    if cls == SYM_DIGITS:
+        return SYM_DIGITS
+    if cls in (SYM_WORDS, SYM_VALUE, SYM_ESCAPED):
+        return "'" + cls + "'"
+    return SYM_RAW
 
 
 class _Raw:
@@ -1233,8 +1509,11 @@ class _Module:
         self._memo_texts: dict[tuple, str] = {}
         self._texts_busy: set[tuple] = set()
         self._site_bindings: dict[tuple, dict | None] = {}
+        #: why the last ``_misplaces`` refused (the finding's message)
+        self._why_misplaced: str | None = None
         self._memo_checked: dict[tuple, bool] = {}
         self._memo_numeric: dict[tuple, bool] = {}
+        self._parents_of: dict[int, dict[int, ast.AST]] = {}
         #: id(function) -> the ``_text_b`` key of the call being read into it
         self._fns_reading: dict[int, tuple] = {}
         self._texts_recursed: set[tuple] = set()
@@ -2392,16 +2671,18 @@ class _Module:
                 else:
                     args = [*call.args, *(kw.value for kw in call.keywords)]
                 for arg in args:
+                    self._why_misplaced = None
                     if self.tainted(arg, scope, 0, frozenset()):
-                        out.append(
-                            Finding(
-                                call.lineno,
-                                scope.name,
-                                name,
-                                (ast.get_source_segment(self.source, arg) or ast.dump(arg))[:90],
-                            )
-                        )
+                        why = (ast.get_source_segment(self.source, arg) or ast.dump(arg))[:90]
+                        if self._why_misplaced:
+                            why += f" [position: {self._why_misplaced}]"
+                        out.append(Finding(call.lineno, scope.name, name, why))
                         break
+                else:
+                    if name in self.format_sinks and self.call_binding:
+                        why = self._format_args_misplaced(call, scope, name)
+                        if why:
+                            out.append(Finding(call.lineno, scope.name, name, why))
             judged = {id(c) for c in scope.sinks}
             for ret in scope.html_returns:
                 value = ret.value
@@ -2955,7 +3236,10 @@ class _Module:
                 if isinstance(side, ast.Constant):
                     return self._literal_text(side.value)
             return SYM_UNKNOWN
-        return SYM_DIGITS  # ``isinstance(x, (int, float))``
+        # ``isinstance(x, (int, float))``: a number. A subclass of the developer's own whose
+        # ``__str__`` returns markup is the developer's code, not request data (not seen, like a
+        # subclass in another file; the module docstring says so)
+        return SYM_DIGITS
 
     def _str_fact_text(self, call: ast.Call, sc: _Scope, d: int) -> str:
         """``str(x)`` where ``str(x) in TABLE`` holds (#3846): a member of any such table the
@@ -2997,33 +3281,26 @@ class _Module:
         if not isinstance(v, ast.FormattedValue):
             return SYM_UNKNOWN
         spec = v.format_spec
-        if spec is not None:
-            if (
-                v.conversion == -1
-                and isinstance(spec, ast.JoinedStr)
-                and spec.values
-                and all(
-                    isinstance(p, ast.Constant) and isinstance(p.value, str) for p in spec.values
-                )
-                and _NUMERIC_SPEC.fullmatch("".join(p.value for p in spec.values))  # type: ignore[attr-defined]
-            ):
-                return SYM_DIGITS
-            return (
-                SYM_DIGITS
-                if _text_class(self._text_b(v.value, sc, d)) == SYM_DIGITS
-                else SYM_UNKNOWN
-            )
-        if v.conversion in (-1, ord("s")):
-            return self._text_b(v.value, sc, d)
-        # ``!r`` / ``!a`` add quotes
-        return (
-            SYM_DIGITS if _text_class(self._text_b(v.value, sc, d)) == SYM_DIGITS else SYM_UNKNOWN
+        text = self._text_b(v.value, sc, d)
+        if v.conversion in (ord("r"), ord("a")):
+            text = _repr_text(text)
+        if spec is None:
+            return text
+        if not (
+            isinstance(spec, ast.JoinedStr)
+            and all(isinstance(p, ast.Constant) and isinstance(p.value, str) for p in spec.values)
+        ):
+            return SYM_UNKNOWN  # a spec built at run time
+        return _spec_text(
+            text,
+            "".join(p.value for p in spec.values),  # type: ignore[attr-defined]
+            self._numeric(v.value, sc),
         )
 
     def _percent_text(self, e: ast.BinOp, sc: _Scope, d: int) -> str:
         fmt = e.left
         if not (isinstance(fmt, ast.Constant) and isinstance(fmt.value, str)):
-            return SYM_UNKNOWN
+            return self._unplaced([e.right], sc, d, containers=True)
         text = self._literal_text(fmt.value)
         if text == SYM_UNKNOWN:
             return text
@@ -3053,22 +3330,243 @@ class _Module:
                 arg = args[i]
             i += 1
             if arg is None:
-                out.append(SYM_UNKNOWN)
+                # ``'%(u)s' % d`` of a dict held by a name: one of its values, unread
+                out.append(self._unplaced([right], sc, d, containers=True))
             elif m.group(2) in "diouxXeEfFgG":
-                out.append(SYM_DIGITS)
+                out.append(SYM_DIGITS)  # ``%d`` and kin: ``int()`` / ``float()`` of it, or raises
+            elif m.group(2) == "c":
+                out.append(SYM_RAW)  # the character with that code: a quote, ``<``
             elif m.group(2) in "ra":
-                out.append(SYM_UNKNOWN)
+                out.append(_repr_text(self._text_b(arg, sc, d)))
             else:
-                out.append(self._text_b(arg, sc, d))
+                # ``%-5s`` pads, ``%.3s`` cuts: as the same spec of ``format``
+                flags = m.group(0)[1:-1].split(")")[-1]
+                out.append(_spec_text(self._text_b(arg, sc, d), flags.replace("-", "<"), False))
         out.append(text[last:])
         return "".join(out)
 
-    def _format_text(self, e: ast.Call, recv: ast.Constant, sc: _Scope, d: int) -> str:
-        """``"<a href={}>".format(...)``: the literal text, each field the text of its argument."""
+    def _escaped_text(self, text: str, plain: bool) -> str:
+        """What ``conditional_escape`` makes of a value whose text is ``text`` (``plain``: never a
+        marked-safe value): escaped text, or, for a value that may be marked safe, the markup."""
+        cls = _text_class(text)
+        if cls in (SYM_DIGITS, SYM_WORDS, SYM_VALUE, SYM_ESCAPED):
+            return cls
+        if plain:
+            return SYM_ESCAPED
+        return cls if cls in (SYM_MARKUP, SYM_ATTRS, SYM_JSON) else SYM_MARKUP
+
+    def _format_args_misplaced(self, call: ast.Call, sc: _Scope, name: str) -> str:
+        """``format_html(fmt, *args)`` / ``format_html_join(sep, fmt, rows)``: each argument
+        (``conditional_escape``-d by Django) read where it lands in the literal format string.
+        A reason when one lands where its text may not sit (#3864), else ``""``."""
+        position = FORMAT_SINK_ARG.get(name, 0)
+        fmt = call.args[position] if len(call.args) > position else None
+        if not (isinstance(fmt, ast.Constant) and isinstance(fmt.value, str)) or self._has_star(
+            call
+        ):
+            return ""
+        try:
+            fields = list(string.Formatter().parse(fmt.value))
+        except ValueError:
+            return ""
+        keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+        rows = (
+            call.args[position + 1] if name == "format_html_join" and len(call.args) > 2 else None
+        )
+        out, auto = [], 0
+        for literal, field, spec, conv in fields:
+            out.append(literal)
+            if field is None:
+                continue
+            index: int | None = None
+            key = None
+            if field == "":
+                index, auto = auto, auto + 1
+            elif field.isdigit():
+                index = int(field)
+            else:
+                key = field
+            if rows is not None:
+                texts = (
+                    self._element_texts(rows, sc, 0, unpack=True, index=index)
+                    if index is not None
+                    else None
+                )
+                value = (
+                    SYM_ESCAPED
+                    if texts is None
+                    else _summarize(
+                        [
+                            self._escaped_text(
+                                t, _text_class(t) not in (SYM_MARKUP, SYM_ATTRS, SYM_JSON)
+                            )
+                            for t in texts
+                        ]
+                    )
+                )
+            else:
+                arg = (
+                    keywords.get(key)
+                    if key is not None
+                    else (
+                        call.args[position + 1 + index]
+                        if position + 1 + index < len(call.args)
+                        else None
+                    )
+                )
+                if arg is None:
+                    value = SYM_UNKNOWN
+                elif self._checked_url(arg, sc):
+                    value = SYM_VALUE
+                else:
+                    # ``format_html`` escapes each argument; a marked-safe one passes as it is,
+                    # which is the developer's markup by Django's contract: read as markup only
+                    # when the guard knows it is (``format_html(...)``, ``mark_safe(...)``)
+                    text = self._text_b(arg, sc)
+                    known_markup = _text_class(text) in (SYM_MARKUP, SYM_ATTRS, SYM_JSON)
+                    value = self._escaped_text(text, not known_markup)
+            if conv in ("r", "a"):
+                value = _repr_text(value)
+            if spec:
+                value = _spec_text(value, spec, False) if "{" not in spec else SYM_UNKNOWN
+            out.append(value)
+        text = "".join(out)
+        if _walk(text)[0]:
+            return ""
+        return f"format string {fmt.value[:60]!r} [position: {refusal(text)}]"
+
+    def _ordered_pieces(self, use: ast.Name, owner: _Scope, values: list, d: int) -> str | None:
+        """``s = '<a'`` then ``if c: s += f' title="{v}"'`` then ``s += '>'`` in one function, no
+        loop: the pieces in source order, each one under an ``if`` / ``try`` / ``match`` either
+        there or not. ``None`` when that order is not the order they run in (a piece in a loop,
+        more than one binding, a piece after the use, a closure)."""
+        fn = owner.node
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or len(values) != 1:
+            return None
+        if use.id in owner.params or use.id in self.rebound_names:
+            return None
+        parents = self._fn_parents(fn)
+        bind = [
+            n
+            for n in _own_nodes(fn)
+            if isinstance(n, (ast.Assign, ast.AnnAssign))
+            and use.id
+            in [
+                t
+                for x in (n.targets if isinstance(n, ast.Assign) else [n.target])
+                for t in _target_names(x)
+            ]
+        ]
+        augs = [
+            n
+            for n in _own_nodes(fn)
+            if isinstance(n, ast.AugAssign)
+            and isinstance(n.target, ast.Name)
+            and n.target.id == use.id
+        ]
+        if len(bind) != 1 or not augs or any(not isinstance(a.op, ast.Add) for a in augs):
+            return None
+        loops = (ast.For, ast.AsyncFor, ast.While)
+
+        def path(node: ast.AST) -> list[ast.AST]:
+            out, cur = [], parents.get(id(node))
+            while cur is not None and cur is not fn:
+                out.append(cur)
+                cur = parents.get(id(cur))
+            return out
+
+        start = bind[0]
+        if any(isinstance(x, loops) for x in path(start)) or any(
+            isinstance(x, loops) for x in path(use)
+        ):
+            return None
+        order = sorted(augs, key=lambda n: (n.lineno, n.col_offset))
+        if order[0].lineno <= start.lineno or order[-1].lineno >= use.lineno:
+            return None
+        out = [self._text_b(values[0], owner, d)]
+        for aug in order:
+            above = path(aug)
+            if any(isinstance(x, loops) for x in above):
+                return None
+            text = self._text_b(aug.value, owner, d)
+            optional = any(isinstance(x, (ast.If, ast.Try, ast.Match, ast.With)) for x in above)
+            out.append(_summarize([text, ""]) if optional else text)
+        return "".join(out)
+
+    def _fn_parents(self, fn: ast.AST) -> dict[int, ast.AST]:
+        hit = self._parents_of.get(id(fn))
+        if hit is None:
+            hit = self._parents_of[id(fn)] = {
+                id(c): n for n in ast.walk(fn) for c in ast.iter_child_nodes(n)
+            }
+        return hit
+
+    def _unplaced(self, args: list, sc: _Scope, d: int, containers: bool = False) -> str:
+        """A string built from ``args`` at positions the guard does not read: ``SYM_RAW`` when one
+        of them (or, ``containers``, an element of one) needs a position, else unknown."""
+        texts: list[str] = []
+        for a in args:
+            elements = self._element_texts(a, sc, d) if containers else None
+            texts.extend(elements if elements is not None else [self._text_b(a, sc, d)])
+        needs = _POSITIONED - {SYM_WORDS} | {SYM_UNKNOWN, SYM_RAW}
+        if any(ch in needs for t in texts for ch in t):
+            return SYM_RAW
+        return SYM_UNKNOWN
+
+    def _named_arguments(self, e: ast.Call) -> dict[str, ast.expr] | None:
+        """The names a call hands over: its keywords, or the one dict display it is given
+        (``format_map({...})``, ``substitute({...})``); ``None`` when they are not written out."""
+        if any(kw.arg is None for kw in e.keywords) or len(e.args) > 1:
+            return None
+        named = {kw.arg: kw.value for kw in e.keywords if kw.arg}
+        if e.args:
+            table = e.args[0]
+            if not (
+                isinstance(table, ast.Dict)
+                and all(
+                    isinstance(k, ast.Constant) and isinstance(k.value, str) for k in table.keys
+                )
+            ):
+                return None
+            named.update({k.value: v for k, v in zip(table.keys, table.values)})  # type: ignore[union-attr]
+        return named
+
+    def _template_text(self, e: ast.Call, template: str, sc: _Scope, d: int) -> str | None:
+        """``Template("<a title='$x'>").substitute(x=...)``: the literal text, each placeholder the
+        text of its value; ``None`` when the values are not written out."""
+        named = self._named_arguments(e)
+        if named is None:
+            return None
+        out, last = [], 0
+        for m in re.finditer(
+            r"\$(?:(\$)|([_a-zA-Z][_a-zA-Z0-9]*)|\{([_a-zA-Z][_a-zA-Z0-9]*)\})", template
+        ):
+            out.append(template[last : m.start()])
+            last = m.end()
+            if m.group(1):
+                out.append("$")
+                continue
+            value = named.get(m.group(2) or m.group(3))
+            out.append(SYM_UNKNOWN if value is None else self._text_b(value, sc, d))
+        out.append(template[last:])
+        return "".join(out)
+
+    def _format_text(
+        self,
+        e: ast.Call,
+        recv: ast.Constant,
+        sc: _Scope,
+        d: int,
+        keywords: dict[str, ast.expr] | None = None,
+    ) -> str:
+        """``"<a href={}>".format(...)`` (or ``format_map`` of a dict display, ``keywords``): the
+        literal text, each field the text of its argument."""
         text = self._literal_text(recv.value)
         if text == SYM_UNKNOWN or self._has_star(e):
             return SYM_UNKNOWN
-        keywords = {kw.arg: kw.value for kw in e.keywords if kw.arg}
+        positional = e.args if keywords is None else []
+        if keywords is None:
+            keywords = {kw.arg: kw.value for kw in e.keywords if kw.arg}
         try:
             fields = list(string.Formatter().parse(text))
         except ValueError:
@@ -3080,21 +3578,21 @@ class _Module:
                 continue
             arg: ast.expr | None = None
             if field == "":
-                arg = e.args[auto] if auto < len(e.args) else None
+                arg = positional[auto] if auto < len(positional) else None
                 auto += 1
             elif field.isdigit():
-                arg = e.args[int(field)] if int(field) < len(e.args) else None
+                arg = positional[int(field)] if int(field) < len(positional) else None
             elif field.isidentifier():
                 arg = keywords.get(field)
-            if arg is None or conv in ("r", "a"):
+            if arg is None:
                 out.append(SYM_UNKNOWN)
                 continue
             value = self._text_b(arg, sc, d)
+            if conv in ("r", "a"):
+                value = _repr_text(value)
             if spec:
                 value = (
-                    SYM_DIGITS
-                    if _NUMERIC_SPEC.fullmatch(spec) or _text_class(value) == SYM_DIGITS
-                    else SYM_UNKNOWN
+                    SYM_UNKNOWN if "{" in spec else _spec_text(value, spec, self._numeric(arg, sc))
                 )
             out.append(value)
         return "".join(out)
@@ -3305,6 +3803,10 @@ class _Module:
             if origin in ("len", "int", "float", "round", "abs") or origin.startswith("math."):
                 return True
             if origin in ("min", "max", "sum"):
+                if len(e.args) == 1 and isinstance(
+                    e.args[0], (ast.GeneratorExp, ast.ListComp, ast.SetComp)
+                ):
+                    return self._numeric_elements(e.args[0], sc, d)
                 return bool(e.args) and all(self._numeric(a, sc, d) for a in e.args)
             return False
         if isinstance(e, ast.IfExp):
@@ -3320,6 +3822,14 @@ class _Module:
                 and all(self._numeric(p, owner, d) for p in owner.pieces.get(e.id, []))
             )
         return False
+
+    def _numeric_elements(
+        self, comp: ast.GeneratorExp | ast.ListComp | ast.SetComp, sc: _Scope, d: int
+    ) -> bool:
+        """Every element of ``comp`` is a number (``max(len(r) for r in rows)``). A loop variable is
+        not one, whatever the same name holds outside the loop: the scope records it as bound by
+        the loop."""
+        return self._numeric(comp.elt, sc, d)
 
     def _read_text(self, e: ast.expr, sc: _Scope, d: int) -> str:
         T = self._text_b
@@ -3366,6 +3876,9 @@ class _Module:
             texts = [T(v, owner, d) for v in values]
             pieces = owner.pieces.get(e.id, [])
             if pieces:
+                ordered = self._ordered_pieces(e, owner, values, d)
+                if ordered is not None:
+                    return ordered
                 # ``s += part`` in a loop: any sequence of the pieces, after any first value
                 return self._raw_all(
                     owner,
@@ -3414,7 +3927,9 @@ class _Module:
                     except ValueError:
                         return SYM_UNKNOWN
                 cls = _text_class(base)
-                return cls if cls in (SYM_DIGITS, SYM_VALUE, SYM_ESCAPED) else SYM_UNKNOWN
+                if cls == SYM_DIGITS:
+                    return SYM_WORDS  # a slice of digits may be nothing at all
+                return cls if cls in (SYM_VALUE, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
             if isinstance(e.slice, ast.Constant) and type(e.slice.value) is int:
                 base = T(e.value, sc, d)
                 if base and not any(ch in _CONTROL for ch in base):
@@ -3515,11 +4030,19 @@ class _Module:
                 # a value open is spelled out, each argument an escaped value that may be empty
                 # (``format_html('<a href={}', ...)``: what follows is in that value)
                 if _walk(spelled)[1] == "text":
-                    return SYM_MARKUP
+                    cls = _text_class(spelled)  # whole attributes (`` disabled{}``) stay so
+                    return cls if cls in (SYM_ATTRS, SYM_WORDS, SYM_DIGITS) else SYM_MARKUP
                 return spelled.replace(SYM_DIGITS, SYM_VALUE)
             return SYM_MARKUP
         if origin == "django.utils.html.format_html_join":
             return SYM_MARKUP
+        if (
+            isinstance(e.func, ast.Name)
+            and self._sink_name(e.func, sc) in ("mark_safe", "SafeString", "SafeText")
+            and len(e.args) == 1
+            and not e.keywords
+        ):
+            return T(e.args[0], sc, d)  # marking a string safe does not change its text
         if isinstance(e.func, ast.Name) and sc.find(e.func.id) is None:
             if e.func.id in NUMERIC_TYPES or e.func.id in ("len", "round", "abs", "sum"):
                 return SYM_DIGITS
@@ -3567,6 +4090,32 @@ class _Module:
                 return _summarize([*texts, sep], repeated=True)
             if attr == "format" and isinstance(recv, ast.Constant) and isinstance(recv.value, str):
                 return self._format_text(e, recv, sc, d)
+            if (
+                attr == "format_map"
+                and isinstance(recv, ast.Constant)
+                and isinstance(recv.value, str)
+                and not e.keywords
+            ):
+                named = self._named_arguments(e)
+                if named is not None:
+                    return self._format_text(e, recv, sc, d, keywords=named)
+            if (
+                attr in ("substitute", "safe_substitute")
+                and isinstance(recv, ast.Call)
+                and self.origin(recv.func, sc) == "string.Template"
+                and len(recv.args) == 1
+                and isinstance(recv.args[0], ast.Constant)
+                and isinstance(recv.args[0].value, str)
+            ):
+                spelled = self._template_text(e, recv.args[0].value, sc, d)
+                if spelled is not None:
+                    return spelled
+            if attr in FORMAT_METHODS:
+                # ``format_map``, ``Template.substitute``, a format string held elsewhere: where
+                # each argument lands is not read, so one that needs a position is placed nowhere
+                return self._unplaced(
+                    [*e.args, *(k.value for k in e.keywords)], sc, d, containers=True
+                )
             if attr == "get" and 1 <= len(e.args) <= 2 and not e.keywords:
                 texts = self._element_texts(recv, sc, d)
                 if texts is None:
@@ -3575,13 +4124,30 @@ class _Module:
                 return _summarize([*texts, default])
             if attr in STR_METHODS and not e.keywords:
                 base = T(recv, sc, d)
+                # what a call can put INTO the string: ``replace``'s new text, the fill of
+                # ``ljust`` / ``rjust`` / ``center``. One that may hold a character HTML reads
+                # undoes the escaping (``escape(x).replace("&quot;", '"')``): placed nowhere
+                put = e.args[1:2] if attr in ("replace", "ljust", "rjust", "center") else []
+                for a in put:
+                    t = T(a, sc, d)
+                    if any(ch in _SPECIAL_TEXT | {"&"} for ch in t) or _text_class(t) not in (
+                        SYM_DIGITS,
+                        SYM_WORDS,
+                        SYM_VALUE,
+                        SYM_ESCAPED,
+                    ):
+                        return SYM_RAW
                 args = [a.value if isinstance(a, ast.Constant) else a for a in e.args]
                 if any(not isinstance(a, (str, int)) for a in args) or any(
-                    isinstance(a, str) and (set(a) & (_SPECIAL_TEXT | _CONTROL)) for a in args
+                    isinstance(a, str) and (set(a) & _CONTROL) for a in args
                 ):
-                    return SYM_UNKNOWN
+                    # what it removes or matches is not known: what it leaves is no more than
+                    # what was there (the new text was checked above)
+                    cls = _text_class(base)
+                    return cls if cls in (SYM_VALUE, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
                 if attr in PURE_TRANSFORMS and args:
-                    return SYM_UNKNOWN  # ``strip(chars)`` can eat a quote
+                    cls = _text_class(base)  # ``strip(chars)`` removes characters, adds none
+                    return cls if cls in (SYM_VALUE, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
                 spellings = _expand(base)
                 if spellings is None:
                     return SYM_UNKNOWN
@@ -3645,8 +4211,16 @@ class _Module:
 
     def _misplaces(self, e: ast.expr, sc: _Scope) -> bool:
         """Pass B: the string ``e`` builds, read from element text, puts a part where it may not sit
-        or behind a part whose effect it cannot read (:func:`_walk`, #3864)."""
-        return self.call_binding and not _walk(self._text_b(e, sc))[0]
+        or behind a part whose effect it cannot read (:func:`_walk`, #3864). The first refusal is
+        kept for the finding's message."""
+        if not self.call_binding:
+            return False
+        text = self._text_b(e, sc)
+        if _walk(text)[0]:
+            return False
+        if self._why_misplaced is None:
+            self._why_misplaced = refusal(text)
+        return True
 
     def _position_ok(self, kind: str, prefix: str) -> bool:
         """A ``kind`` of escaper output (or a string built from it, ``kind`` + ``"*"``) may sit after
@@ -3804,10 +4378,13 @@ class _Module:
         inert = False  # ... and it is a JSON data block: never run, and ``<`` is escaped
         while i < n:
             if raw:
-                end = prefix.lower().find("</" + raw, i)
-                if end < 0:
+                # the element ends at ``</raw`` followed by white space, ``/`` or ``>`` only
+                found = re.compile("</" + raw + r"[\t\n\f\r /]|</" + raw + ">", re.I).search(
+                    prefix, i
+                )
+                if found is None:
                     return None if inert else raw
-                i, raw = end, ""
+                i, raw = found.start(), ""
             while i < n and not (
                 prefix[i] == "<"
                 and (i + 1 == n or prefix[i + 1].isalpha() or prefix[i + 1] in "/!?")
@@ -3867,12 +4444,18 @@ class _Module:
                     return "handler"
                 if attr == "srcdoc":
                     return "srcdoc"
-                # ``data-href`` too: the client follows it (a table row's link), as ``xlink:href``
-                if (attr in URL_ATTRIBUTES or attr.endswith(("-href", ":href"))) and (
-                    _URL_LEAD.fullmatch(value) is not None
-                    or re.sub(r"[\x01-\x20]", "", value).lower().startswith("javascript:")
-                ):
-                    return "url"
+                # ``data-href`` too: the client follows it (a table row's link), as ``xlink:href``.
+                # The value is read as the browser reads it: character references decoded
+                # (``&#9;`` is a leading tab), white space and controls dropped from the scheme
+                decoded = _unescape(value)
+                scheme = re.sub(r"[\x01-\x20]", "", decoded).lower()
+                if attr in URL_ATTRIBUTES or attr.endswith(("-href", ":href")):
+                    if scheme.startswith(("javascript:", "vbscript:", "data:")):
+                        # after a literal script or data scheme the rest of the value is code
+                        # or a document: no escaper's output is safe there, a checked URL neither
+                        return "url-code"
+                    if _URL_LEAD.fullmatch(decoded) is not None:
+                        return "url"
                 return "value" if quoted else None
         return (None if inert else raw) or None
 
@@ -4033,7 +4616,7 @@ class _Module:
         name = _callee(e.func)
         if (
             isinstance(e.func, ast.Attribute)
-            and name in ("join", "format")
+            and (name == "join" or name in FORMAT_METHODS)
             and self._misplaces(e, sc)
         ):
             return False
@@ -5608,7 +6191,13 @@ def find_unsafe_markup(
     # every finding pass A makes.
     first = _Module(source, module, is_package, dynamic_bases).findings()
     second = _Module(source, module, is_package, dynamic_bases, call_binding=True).findings()
-    return sorted(set(first) | set(second), key=lambda f: (f.lineno, f.function, f.sink, f.why))
+    # one finding per sink: pass B's says where a part lands when that is why it flags
+    merged = {(f.lineno, f.function, f.sink): f for f in first}
+    for f in second:
+        key = (f.lineno, f.function, f.sink)
+        if key not in merged or "[position:" in f.why:
+            merged[key] = f
+    return sorted(merged.values(), key=lambda f: (f.lineno, f.function, f.sink, f.why))
 
 
 def _main(argv: list[str]) -> int:

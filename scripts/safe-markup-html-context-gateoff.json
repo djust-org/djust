@@ -33,32 +33,32 @@
     {
       "label": "only href is a URL attribute",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                if (attr in URL_ATTRIBUTES or attr.endswith((\"-href\", \":href\"))) and (",
-      "new": "                if (attr == \"href\") and ("
+      "old": "                if attr in URL_ATTRIBUTES or attr.endswith((\"-href\", \":href\")):",
+      "new": "                if attr == \"href\":"
     },
     {
       "label": "data-href is not a URL attribute",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                if (attr in URL_ATTRIBUTES or attr.endswith((\"-href\", \":href\"))) and (",
-      "new": "                if (attr in URL_ATTRIBUTES) and ("
+      "old": "                if attr in URL_ATTRIBUTES or attr.endswith((\"-href\", \":href\")):",
+      "new": "                if attr in URL_ATTRIBUTES:"
     },
     {
       "label": "a URL value past its start is still the start",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                    _URL_LEAD.fullmatch(value) is not None\n",
-      "new": "                    True\n"
+      "old": "                    if _URL_LEAD.fullmatch(decoded) is not None:",
+      "new": "                    if True:"
     },
     {
       "label": "leading white space hides the start of a URL",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                    _URL_LEAD.fullmatch(value) is not None\n",
-      "new": "                    value == \"\"\n"
+      "old": "                    if _URL_LEAD.fullmatch(decoded) is not None:",
+      "new": "                    if decoded == \"\":"
     },
     {
       "label": "a literal javascript: in front is not code",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                    or re.sub(r\"[\\x01-\\x20]\", \"\", value).lower().startswith(\"javascript:\")",
-      "new": "                    or False"
+      "old": "                    if scheme.startswith((\"javascript:\", \"vbscript:\", \"data:\")):",
+      "new": "                    if False:"
     },
     {
       "label": "an event handler is not a position",
@@ -87,8 +87,8 @@
     {
       "label": "a raw-text body never ends",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                i, raw = end, \"\"\n",
-      "new": "                return None if inert else raw\n"
+      "old": "                i, raw = found.start(), \"\"",
+      "new": "                return None if inert else raw"
     },
     {
       "label": "every script is a JSON data block",

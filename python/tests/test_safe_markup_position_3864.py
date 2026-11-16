@@ -46,7 +46,7 @@ from scripts.lib.safe_markup_taint import find_unsafe_markup
 pytestmark = pytest.mark.components
 
 ROOT = Path(__file__).resolve().parents[2]
-HEADER = fuzz.HEADER + "from django.utils.html import format_html\n"
+HEADER = fuzz.HEADER + "from django.utils.html import format_html, format_html_join\n"
 
 #: label -> (the module after ``HEADER``, which defines ``f(x)``; flagged?). A ``True`` row lets a
 #: payload out when run, a ``False`` row does not; ``CONSERVATIVE`` rows are flagged and do not.
@@ -56,6 +56,13 @@ ROWS: dict[str, tuple[str, bool]] = {
         "def pre(k):\n    return '<a href=' if k else '<b title='\n"
         "def f(x):\n    return mark_safe(pre(1) + safe_url(x) + '>l</a>')\n",
         True,
+    ),
+    # ``max`` of a comprehension is a number only when each element is, read with the loop
+    # variable unknown: a name bound outside the loop is not the loop's variable
+    "max of the lengths in a loop is digits": (
+        "def f(rows):\n    n = max(len(r) for r in rows)\n"
+        "    return mark_safe(f'<td colspan={n}>')\n",
+        False,
     ),
     "a helper with two returns": (
         "def pre(k):\n    if k:\n        return '<a href='\n    return '<b>'\n"
@@ -182,7 +189,22 @@ ROWS: dict[str, tuple[str, bool]] = {
         "def f(x):\n    return mark_safe(f'<a {NAMES[len(x) % 1]}=\"{escape(x)}\">l</a>')\n",
         True,
     ),
+    "pieces in a loop: one opens an unquoted value, a later one fills it": (
+        "def f(x):\n    s = '<a'\n    for p in (' title=',):\n        s += p\n"
+        "    s += escape(x)\n    return mark_safe(s + '>l</a>')\n",
+        True,
+    ),
     # -- clean twins: read, and placed where they fit
+    "straight-line pieces that open a quote and fill it (read in order)": (
+        "def f(x):\n    s = '<a title=\"'\n    s += escape(x)\n    s += '\">l</a>'\n"
+        "    return mark_safe(s)\n",
+        False,
+    ),
+    "a conditional quoted attribute, then another attribute": (
+        "def f(x):\n    html = '<a'\n    if x:\n        html += f' title=\"{escape(x)}\"'\n"
+        "    html += f' href=\"{safe_url(x)}\">l</a>'\n    return mark_safe(html)\n",
+        False,
+    ),
     "a helper's escaper around a URL the caller checked": (
         "def w(u):\n    return conditional_escape(u)\n"
         "def f(x):\n    return mark_safe(f'<a href=\"{w(safe_url(x))}\">l</a>')\n",
@@ -304,11 +326,20 @@ ROWS: dict[str, tuple[str, bool]] = {
 
 #: Flagged, and no payload of the fuzz gets out when run: what pass B cannot establish.
 CONSERVATIVE = {
-    # ``+=`` pieces are read in no order (the guard is flow-insensitive there): one opens a quote
-    # and another needs one, so where the value lands is not established
-    "pieces that open a quote and fill it": (
-        "def f(x):\n    s = '<a title=\"'\n    s += escape(x)\n    s += '\">l</a>'\n"
-        "    return mark_safe(s)\n"
+    # the loop variable is not the outer ``r = 3``: rows of strings put a string in an unquoted
+    # value (the run passes one string, whose largest character is harmless)
+    "max over a loop variable that shadows a number": (
+        "def f(rows):\n    r = 3\n    n = max(r for r in rows)\n"
+        "    return mark_safe(f'<td colspan={n}>')\n"
+    ),
+    # ``</scripts>`` does not end a script: the value is in the script body (no payload runs
+    # there, the body is a syntax error)
+    "a value after </scripts> is still in the script": (
+        "def f(x):\n    return mark_safe('<script>1</scripts><a title=\"' + escape(x) + '\">l</a>')\n"
+    ),
+    # foreign content's CDATA is not read: nothing is placed after it
+    "a value after a CDATA section": (
+        "def f(x):\n    return mark_safe('<svg><![CDATA[x]]><a title=\"' + escape(x) + '\">l</a></svg>')\n"
     ),
     # a value that honours mark_safe in a comment: a marked-safe ``-->`` closes it
     # (``test_safe_markup_html_context_3864.TestMarkedSafeInAnAttribute``)
@@ -335,6 +366,166 @@ def unsafe(module: str) -> bool:
         if fuzz.injected(out):
             return True
     return False
+
+
+D = "def f(x):\n    return mark_safe("
+#: The second review of #3864: each unsafe in a browser (jsdom) and, where Python's parser sees it,
+#: when run here too. ``True``: reported. ``False``: a twin that is safe and cleared.
+REVIEW_ROWS: dict[str, tuple[str, bool]] = {
+    # a format spec on an escaper's output pads it, it does not move it (R1)
+    "a padded escaped value in an href": (D + "f'<a href=\"{escape(x):>1}\">l</a>')\n", True),
+    "a padded escaped value as an unquoted value": (
+        D + "f'<a title={escape(x):>20}>l</a>')\n",
+        True,
+    ),
+    "a padded checked URL in a handler": (
+        D + "f'<b onclick=\"go(\\'{safe_url(x):>3}\\')\">b</b>')\n",
+        True,
+    ),
+    "!s with a spec": (D + "f'<a href=\"{escape(x)!s:>2}\">l</a>')\n", True),
+    "str.format with a spec": (D + "'<a href=\"{:>3}\">l</a>'.format(escape(x)))\n", True),
+    "a padded escaped value in a quoted title": (
+        D + "f'<a title=\"{escape(x):>20}\">l</a>')\n",
+        False,
+    ),
+    # abrupt comments put the tokenizer back in element text (R2)
+    "an abrupt comment <!-->": (D + "'<!--><a title=' + escape(x) + '>l</a>')\n", True),
+    "an abrupt comment <!--->": (D + "'<!---><a title=' + escape(x) + '>l</a>')\n", True),
+    "an escaped value in a real comment": (D + "'<!-- c ' + escape(x) + ' -->')\n", False),
+    # %c / :c write any character
+    "%c writes a quote": (D + "'<a title=\"a%c %s\">l</a>' % (34, escape(x)))\n", True),
+    "{:c} writes a quote": (D + "'<a title=\"a{:c} '.format(34) + escape(x) + '\">l</a>')\n", True),
+    # a quote inside an unquoted value is a character of the value
+    "a quote inside an unquoted value": (D + '"<a title=a\'b " + escape(x) + ">l</a>")\n', True),
+    # a value can complete a character reference (``&#10`` + ``6;``), or follow a decoded one
+    "a value completing a character reference": (
+        D + "'<a href=\"&#10' + escape(x) + '\">l</a>')\n",
+        True,
+    ),
+    "a value after a decoded tab": (D + "'<a href=\"&#9;' + escape(x) + '\">l</a>')\n", True),
+    "a value after a literal data: scheme": (
+        D + "'<iframe src=\"data:text/html,' + safe_url(x) + '\"></iframe>')\n",
+        True,
+    ),
+    # RCDATA / RAWTEXT / script data escape / foreign content
+    "inside a textarea a tag is text": (
+        D + "'<textarea><a title=\"' + escape(x) + '\"></textarea>')\n",
+        False,
+    ),
+    "a textarea's text then a quote": (
+        D + "'<textarea><a title=\"</textarea><a title=' + escape(x) + '>l</a>')\n",
+        True,
+    ),
+    "xmp ends at its end tag": (
+        D + "'<xmp><b title=\"</xmp><a title=' + escape(x) + '>l</a>')\n",
+        True,
+    ),
+    "a script's double escape": (
+        D + "'<script><!--<script></script>' + escape(x) + '</script>')\n",
+        True,
+    ),
+    "</scripts> does not end a script": (
+        D + "'<script>1</scripts><a title=' + escape(x) + '>l</a>')\n",
+        True,
+    ),
+    "a CDATA section": (
+        D + "'<svg><![CDATA[<a title=\"]]><a title=' + escape(x) + '>l</a></svg>')\n",
+        True,
+    ),
+    "an svg title is markup, not RCDATA": (
+        D + "f'<svg><title>{conditional_escape(x)}</title></svg><a title=\"{escape(x)}\">l</a>')\n",
+        False,
+    ),
+    # builders whose positions are now read
+    "format_map of a dict": (D + "'<a href=\"{u}\">l</a>'.format_map({'u': escape(x)}))\n", True),
+    "a % of a dict held by a name": (
+        "def f(x):\n    d = {'u': escape(x)}\n    return mark_safe('<a href=\"%(u)s\">l</a>' % d)\n",
+        True,
+    ),
+    "string.Template": (
+        "import string\ndef f(x):\n    return mark_safe(string.Template('<a href=\"$u\">l</a>').substitute(u=escape(x)))\n",
+        True,
+    ),
+    "string.Template in a title": (
+        "import string\ndef f(x):\n    return mark_safe(string.Template('<a title=\"$u\">l</a>').substitute(u=escape(x)))\n",
+        False,
+    ),
+    # escaping undone, or a value that may be nothing
+    "replace() undoes the escaping": (
+        D + "'<a title=\"' + escape(x).replace('&quot;', '\"') + '\">l</a>')\n",
+        True,
+    ),
+    "a cut of digits may be nothing at the start of a URL": (
+        D + "'<a href=\"' + str(len(x))[5:] + escape(x) + '\">l</a>')\n",
+        True,
+    ),
+    # format_html's arguments land in its format string
+    "format_html with an argument in an href": (
+        "def f(x):\n    return format_html('<a href=\"{}\">l</a>', x)\n",
+        True,
+    ),
+    "format_html with an argument in a handler": (
+        "def f(x):\n    return format_html('<b onclick=\"go(\\'{}\\')\">b</b>', x)\n",
+        True,
+    ),
+    "format_html with an argument as an unquoted value": (
+        "def f(x):\n    return format_html('<a title={}>l</a>', x)\n",
+        True,
+    ),
+    "format_html with a checked URL in an href": (
+        "def f(x):\n    return format_html('<a href=\"{}\">l</a>', safe_url(x))\n",
+        False,
+    ),
+    "an svg title holds markup: an unquoted value there": (
+        D + "'<svg><title><a title=' + escape(x) + '>l</a></title></svg>')\n",
+        True,
+    ),
+    "a format string held by a name": (
+        "FMT = '<a href={}>l</a>'\ndef f(x):\n    return mark_safe(FMT.format(escape(x)))\n",
+        True,
+    ),
+    "format_html with marked-safe script JSON in a script": (
+        "import json\nfrom djust.security.json_script import escape_json_for_script\n"
+        "def f(x):\n    return format_html('<script>var a={};</script>', "
+        "mark_safe(escape_json_for_script(json.dumps(x))))\n",
+        False,
+    ),
+    "format_html_join with an argument in an href": (
+        "def f(x):\n    return format_html_join('', '<a href=\"{}\">l</a>', ((v,) for v in [x]))\n",
+        True,
+    ),
+}
+
+
+def _outputs(module: str) -> list[str]:
+    out = []
+    for payload in positions.PAYLOADS:
+        mod = types.ModuleType("position_rows_3864")
+        sys.modules[mod.__name__] = mod
+        try:
+            exec(compile(HEADER + module, "<row>", "exec"), mod.__dict__)  # noqa: S102 - written here
+            out.append(str(mod.f(payload)))
+        except (TypeError, ValueError):
+            pass
+        finally:
+            sys.modules.pop(mod.__name__, None)
+    return out
+
+
+class TestTheSecondReview:
+    @pytest.mark.parametrize("label", sorted(REVIEW_ROWS))
+    def test_the_guard(self, label):
+        module, expected = REVIEW_ROWS[label]
+        assert flagged(module) is expected, label
+
+    @pytest.mark.parametrize("label", sorted(REVIEW_ROWS))
+    def test_the_row_is_true_in_a_browser(self, label):
+        if not positions.browser_available():
+            pytest.skip("node and jsdom are not installed here (npm ci)")
+        module, expected = REVIEW_ROWS[label]
+        outs = _outputs(module)
+        verdicts = positions.browser_verdicts(outs, deadline=60)
+        assert any(verdicts) is expected, (label, [o for o, v in zip(outs, verdicts) if v][:2])
 
 
 class TestTheRows:
@@ -430,6 +621,16 @@ class TestTheWalk:
         field = scope.sinks[0].args[0].values[0].value
         assert mod._text_b(field, scope) == S.SYM_DIGITS
 
+    def test_a_part_it_cannot_read_sits_in_element_text_only(self):
+        """Also where it is the last part: a slice of the rendered body (clean, unreadable) in a
+        quoted value is reported, in element text it is not (#3864)."""
+        head = "class H:\n    def render(self, args, content, context):\n        return _safe("
+        in_value = head + "'<a title=\"' + content[:3] + '\">l</a>')\n"
+        in_text = head + "'<p>' + content[:3] + '</p>')\n"
+        module = "djust.components.rust_handlers"
+        assert [f.function for f in find_unsafe_markup(in_value, module)] == ["H.render"]
+        assert find_unsafe_markup(in_text, module) == []
+
     def test_the_rendered_body_cut_at_an_offset_is_unknown(self):
         """A block handler's rendered body (``ENGINE_RENDERED_PARAMETERS``) is markup that starts
         and ends in element text; a slice of it at an offset is not, so a value escaper after it is
@@ -476,6 +677,16 @@ class TestTheDifferential:
         assert result["false_negatives"] == [], result["false_negatives"][:3]
         assert result["disagree"] == [], "the guard read K"
         assert result["unsafe"] >= 80, result["unsafe"]  # not vacuous
+
+    @pytest.mark.parametrize("seed", [3864])
+    def test_no_module_a_browser_lets_a_payload_out_of_is_cleared(self, seed):
+        """The same, judged by a browser's parser (jsdom through node; its run is bounded by a
+        deadline and a heap cap): the tokenizer states Python's parser does not follow."""
+        if not positions.browser_available():
+            pytest.skip("node and jsdom are not installed here (npm ci)")
+        result = positions.survey(300, seed, browser=True)
+        assert result["false_negatives"] == [], result["false_negatives"][:3]
+        assert result["unsafe"] >= 100, result["unsafe"]
 
     @pytest.mark.parametrize("seed", [3864])
     def test_what_it_flags_beyond_a_run_is_what_it_flags_written_in_place(self, seed):

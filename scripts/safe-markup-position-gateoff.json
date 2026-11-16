@@ -26,48 +26,6 @@
   "rss_mb": 4096,
   "mutations": [
     {
-      "label": "the walk is never asked (the whole mechanism)",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "        return self.call_binding and not _walk(self._text_b(e, sc))[0]",
-      "new": "        return False"
-    },
-    {
-      "label": "a part it cannot class leaves the position known",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "            elif ch == SYM_UNKNOWN:\n                state = \"unknown\"",
-      "new": "            elif ch == SYM_UNKNOWN:\n                pass"
-    },
-    {
-      "label": "an escaped value fits a tag",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                    allowed = state in (\"text\", \"quoted\", \"comment\", \"raw\") and where is None",
-      "new": "                    allowed = state in (\"text\", \"quoted\", \"comment\", \"raw\", \"tag\") and where in (None, \"unquoted\")"
-    },
-    {
-      "label": "a value escaper fits an unquoted value",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                        state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\")",
-      "new": "                        state in (\"text\", \"quoted\", \"comment\", \"tag\") and where in (None, \"url\", \"unquoted\")"
-    },
-    {
-      "label": "markup fits a quoted value or a comment",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                    allowed = state in (\"text\", \"raw\") and where is None",
-      "new": "                    allowed = state in (\"text\", \"raw\", \"quoted\", \"comment\")"
-    },
-    {
-      "label": "whole attributes fit a quoted value",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                    allowed = state in (\"text\", \"tag\") and where is None",
-      "new": "                    allowed = True"
-    },
-    {
-      "label": "a tag's name may be an escaped value",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                    ok = ok and nxt not in _POSITIONED - {SYM_WORDS}",
-      "new": "                    ok = ok"
-    },
-    {
       "label": "a word between attributes leaves the names known",
       "file": "scripts/lib/safe_markup_taint.py",
       "old": "                loose = True  # (digits cannot spell a name, and an empty one is mapped away)",
@@ -182,12 +140,6 @@
       "new": "        if isinstance(e.func, ast.Name):"
     },
     {
-      "label": "a checked URL fits a handler or a script",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                        state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\")",
-      "new": "                        state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\", \"handler\", \"script\", \"srcdoc\")"
-    },
-    {
       "label": "a number from a math function is unknown",
       "file": "scripts/lib/safe_markup_taint.py",
       "old": "        if isinstance(e, (ast.BinOp, ast.UnaryOp, ast.Call, ast.Name, ast.IfExp)) and self._numeric(",
@@ -204,6 +156,198 @@
       "file": "scripts/lib/safe_markup_taint.py",
       "old": "            outer = self._fns_reading.get(id(fn))",
       "new": "            outer = None"
+    },
+    {
+      "label": "the walk is never asked (the whole mechanism)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        text = self._text_b(e, sc)\n        if _walk(text)[0]:\n            return False\n        if self._why_misplaced is None:",
+      "new": "        text = self._text_b(e, sc)\n        if True:\n            return False\n        if self._why_misplaced is None:"
+    },
+    {
+      "label": "a part it cannot read may sit anywhere (it only hides what follows)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if ch == SYM_RAW or (ch == SYM_UNKNOWN and state != \"text\"):",
+      "new": "            if ch == SYM_RAW:"
+    },
+    {
+      "label": "a value whose escaping is undone is placed like any other",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if ch == SYM_RAW or (ch == SYM_UNKNOWN and state != \"text\"):",
+      "new": "            if ch == SYM_UNKNOWN and state != \"text\":"
+    },
+    {
+      "label": "an abrupt comment is a comment",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if text.startswith(\"<!-->\", i) or text.startswith(\"<!--->\", i):",
+      "new": "                if False:"
+    },
+    {
+      "label": "a quote inside an unquoted value opens a quoted one",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if ch in \"\\\"'\":\n                    state, quote = \"quoted\", ch\n                elif ch not in _WS:\n                    state = \"unquoted\"",
+      "new": "                if ch in \"\\\"'\":\n                    state, quote = \"quoted\", ch\n                elif ch not in _WS:\n                    state = \"tag\""
+    },
+    {
+      "label": "a part may complete a character reference in front of it",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if state in (\"quoted\", \"unquoted\") and _OPEN_CHARREF.search(text[ctx:i]):",
+      "new": "            if False:"
+    },
+    {
+      "label": "an RCDATA / RAWTEXT element's body is element text",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                elif raw in _RAWTEXT or raw in _RCDATA:\n                    state = \"raw\"",
+      "new": "                elif False:\n                    state = \"raw\""
+    },
+    {
+      "label": "a script's double escape is read as script text",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if raw == \"script\" and text.startswith(\"<!--\", i):",
+      "new": "            if False:"
+    },
+    {
+      "label": "an end tag needs no delimiter (</scripts> ends a script)",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    if nxt in _WS + \"/>\":\n        return end - i",
+      "new": "    if True:\n        return end - i"
+    },
+    {
+      "label": "a CDATA section is read like any text",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            if text.startswith(\"<![CDATA[\", i):",
+      "new": "            if False:"
+    },
+    {
+      "label": "svg content has raw-text elements too",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if foreign and raw not in (\"svg\", \"math\"):",
+      "new": "                if False:"
+    },
+    {
+      "label": "a padded escaper's output is unknown, not escaped text",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    if cls in (SYM_WORDS, SYM_VALUE, SYM_ESCAPED):\n        return cls  # spaces around",
+      "new": "    if False:\n        return cls  # spaces around"
+    },
+    {
+      "label": ":c of a number is digits",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    if kind == \"c\":\n        return SYM_RAW",
+      "new": "    if kind == \"c\":\n        return SYM_DIGITS"
+    },
+    {
+      "label": "%c is digits",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                out.append(SYM_RAW)  # the character with that code: a quote, ``<``",
+      "new": "                out.append(SYM_DIGITS)"
+    },
+    {
+      "label": "replace() with a quote keeps the escaping",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    if any(ch in _SPECIAL_TEXT | {\"&\"} for ch in t) or _text_class(t) not in (",
+      "new": "                    if False and _text_class(t) not in ("
+    },
+    {
+      "label": "a cut of digits is digits",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    return SYM_WORDS  # a slice of digits may be nothing at all",
+      "new": "                    return SYM_DIGITS"
+    },
+    {
+      "label": "a literal script or data scheme in front is only the start of a URL",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                        return \"url-code\"",
+      "new": "                        return \"url\""
+    },
+    {
+      "label": "a character reference in a URL value is read as written",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                decoded = _unescape(value)",
+      "new": "                decoded = value"
+    },
+    {
+      "label": "format_map and Template are not read",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                named = self._named_arguments(e)\n                if named is not None:",
+      "new": "                named = None\n                if named is not None:"
+    },
+    {
+      "label": "a builder whose positions are not read is unknown, not refused",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if any(ch in needs for t in texts for ch in t):\n            return SYM_RAW",
+      "new": "        if False:\n            return SYM_RAW"
+    },
+    {
+      "label": "+= pieces are read in no order",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                ordered = self._ordered_pieces(e, owner, values, d)",
+      "new": "                ordered = None"
+    },
+    {
+      "label": "format_html's arguments are not placed",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                        why = self._format_args_misplaced(call, scope, name)",
+      "new": "                        why = \"\""
+    },
+    {
+      "label": "a format_html argument is markup whatever it is",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if plain:\n            return SYM_ESCAPED",
+      "new": "        if False:\n            return SYM_ESCAPED"
+    },
+    {
+      "label": "mark_safe(x) reads as unknown, not as x",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "            return T(e.args[0], sc, d)  # marking a string safe does not change its text",
+      "new": "            return SYM_UNKNOWN"
+    },
+    {
+      "label": "a part it cannot class leaves the position known",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                state = \"unknown\"\n                i += 1\n                continue\n            if state == \"unknown\":\n                return False, \"unknown\", 0",
+      "new": "                i += 1\n                continue\n            if state == \"unknown\":\n                return False, \"unknown\", 0"
+    },
+    {
+      "label": "an escaped value fits a tag",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                allowed = state in (\"text\", \"quoted\", \"comment\") and where is None\n                allowed = allowed or",
+      "new": "                allowed = state in (\"text\", \"quoted\", \"comment\", \"tag\", \"unquoted\")\n                allowed = allowed or"
+    },
+    {
+      "label": "a value escaper fits an unquoted value",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                allowed = (state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\")) or (",
+      "new": "                allowed = (state in (\"text\", \"quoted\", \"comment\", \"unquoted\", \"tag\")) or ("
+    },
+    {
+      "label": "a checked URL fits a handler or a script",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                allowed = (state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\")) or (",
+      "new": "                allowed = (state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\", \"handler\", \"script\", \"srcdoc\")) or ("
+    },
+    {
+      "label": "markup fits a quoted value or a comment",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                allowed = (state == \"text\" and where is None) or (\n                    state == \"raw\" and (body == \"script\" or body in _RCDATA) and where is None\n                )",
+      "new": "                allowed = state in (\"text\", \"quoted\", \"comment\") or (\n                    state == \"raw\" and (body == \"script\" or body in _RCDATA) and where is None\n                )"
+    },
+    {
+      "label": "whole attributes fit a quoted value",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                allowed = (state == \"text\" and where is None) or (\n                    state == \"tag\" and ts in (\"name\", \"between\", \"attr\", \"after\")\n                )",
+      "new": "                allowed = True or (\n                    state == \"tag\" and ts in (\"name\", \"between\", \"attr\", \"after\")\n                )"
+    },
+    {
+      "label": "a tag's name may be an escaped value",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                    if nxt in _POSITIONED - {SYM_WORDS} or nxt in (SYM_RAW, SYM_UNKNOWN):",
+      "new": "                    if False:"
+    },
+    {
+      "label": "max / min / sum of a comprehension is not read as a number",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                if len(e.args) == 1 and isinstance(",
+      "new": "                if False and len(e.args) == 1 and isinstance("
     }
   ]
 }

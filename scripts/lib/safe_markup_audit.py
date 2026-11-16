@@ -284,7 +284,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
     (DC, "render_modal"): S(
         2,
         "title, close event and ids escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); size from a four-key dict, role from a two-way test, heading level int() in 2..6; `content` is the rendered tag body",
-        (DC, 'modal_id = attr_text(raw_id)'),
+        (DC, "modal_id = attr_text(raw_id)"),
         (DC, "if not 2 <= level <= 6:"),
         (DC, 'content = str(content).replace(_MODAL_DESCRIPTION_MARKER, "")'),
         (DC, "return render_modal(kw, self.nodelist.render(context))", "ModalNode.render"),
@@ -401,6 +401,42 @@ AUDITED: dict[tuple[str, str], Audit] = {
             "_layout_body_part",
         ),
     ),
+    # --- format_html with an argument in a URL attribute (#3864: the guard places each argument
+    # where it lands in the format string; format_html only HTML-escapes it, which does not stop
+    # a ``javascript:`` URL). Each URL here is the developer's configuration, never request
+    # data. ---
+    (PKG + "assets/tags.py", "_tag"): S(
+        3,
+        "the href / src is the asset's URL from the developer's asset manifest (`AssetFile.url`) or `static()` of the manifest's path; the integrity is the manifest's hash; `cors` is a constant attribute. format_html escapes each value",
+        (PKG + "assets/tags.py", "src, integrity, cross_origin = _source(file)"),
+        (PKG + "assets/tags.py", "url = static(file.path)", "_source"),
+        (
+            PKG + "assets/tags.py",
+            'cors = mark_safe(\' crossorigin="anonymous"\') if cross_origin else ""',
+        ),
+    ),
+    (PKG + "pwa/manifest.py", "generate_apple_touch_icon_tags"): S(
+        2,
+        "the icon src and sizes come from the developer's PWA icon configuration (or the constant default `/static/icons/apple-touch-icon.png`); format_html escapes each value",
+        (
+            PKG + "pwa/manifest.py",
+            'icons = [{"src": "/static/icons/apple-touch-icon.png", "sizes": "180x180"}]',
+        ),
+    ),
+    (PKG + "pwa/manifest.py", "generate_manifest_link_tag"): S(
+        1,
+        "manifest_url is the URL of the PWA manifest the developer configures; format_html escapes it",
+        (
+            PKG + "pwa/manifest.py",
+            'tag: str = format_html(\'<link rel="manifest" href="{}">\', manifest_url)',
+        ),
+    ),
+    (PWA, "djust_pwa_manifest"): S(
+        1,
+        "the href is a `data:application/manifest+json,` URI of json.dumps of the manifest dict the developer's PWA settings build (a manifest link is fetched as JSON, never run); format_html escapes it",
+        (PWA, 'data_uri = f"data:application/manifest+json,{manifest_json}"'),
+        (PWA, "manifest_json = json.dumps(manifest)"),
+    ),
     # --- three handlers that rewrite the rendered block body at an offset only their own code
     # finds (#3864): the guard reads `content` as markup that starts and ends in element text, and
     # a slice of it, or a replacement inside it, at a position it cannot read is reported rather
@@ -416,14 +452,14 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (RH, "NavMenuHandler.render"): S(
         1,
-        "class, id and toggle event escaped (attr_text / escape in an attribute); brand and hamburger built from escaped values and component_id_attr; `content` is the rendered block body, in which the marker NavItemHandler writes right after an item's `<li class=\"...` is replaced by literal text (`\">` or ` dj-nav__item--active\">`); the marker carries conditional_escape of a hex key and starts with `<!--`, which escaped data cannot spell",
+        'class, id and toggle event escaped (attr_text / escape in an attribute); brand and hamburger built from escaped values and component_id_attr; `content` is the rendered block body, in which the marker NavItemHandler writes right after an item\'s `<li class="...` is replaced by literal text (`">` or ` dj-nav__item--active">`); the marker carries conditional_escape of a hex key and starts with `<!--`, which escaped data cannot spell',
         (RH, "for key in _nav_active_keys(content):"),
         (RH, "' dj-nav__item--active\">' if hit else '\">',"),
-        (RH, "return payload.encode(\"utf-8\").hex()", "_nav_active_key"),
+        (RH, 'return payload.encode("utf-8").hex()', "_nav_active_key"),
     ),
     (RH, "PageHeaderHandler.render"): S(
         1,
-        "title, subtitle and description through conditional_escape (text), the class through attr_text; `content` (the rendered block body) is cut at the first literal `<div class=\"dj-page-header__actions\">` (the wrapper page_header_actions renders), so each half starts or ends at that tag and escaped data cannot spell it",
+        'title, subtitle and description through conditional_escape (text), the class through attr_text; `content` (the rendered block body) is cut at the first literal `<div class="dj-page-header__actions">` (the wrapper page_header_actions renders), so each half starts or ends at that tag and escaped data cannot spell it',
         (RH, "actions_marker = '<div class=\"dj-page-header__actions\">'"),
         (RH, "breadcrumb_content = content[:idx]"),
         (RH, "e_custom_class = attr_text(str(custom_class))"),
