@@ -16,13 +16,15 @@ Two layers:
   and returns a :class:`LivePage`, from which a test sends the HTTP fallback
   POST (:meth:`LivePage.post_event`), connects a socket
   (:meth:`LivePage.connect`) or opens an SSE stream
-  (:meth:`LivePage.connect_sse`), each carrying the page's session, user, tab
-  and request headers, as the client does.
+  (:meth:`LivePage.connect_sse`), each as the browser's client does and each
+  through the project's own stack: its middleware and URLconf for HTTP, its
+  ``ASGI_APPLICATION`` for the socket. A test written with them fails where
+  production would refuse.
 
 Database: sessions are database rows with the default ``SESSION_ENGINE``. A
 socket or SSE test runs the view on other threads, so under pytest-django it
-needs ``@pytest.mark.django_db(transaction=True)``, and under Django's own
-runner a ``TransactionTestCase``.
+needs ``@pytest.mark.django_db(transaction=True)``; under Django's own runner
+see the testing guide ("Real sessions and transports").
 """
 
 from __future__ import annotations
@@ -30,15 +32,18 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import sys
 import uuid
+import weakref
 from html import unescape
-from typing import Any, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, TypeVar
 from urllib.parse import parse_qs, urlsplit
 
 __all__ = [
     "LivePage",
     "LiveSSE",
     "LiveSocket",
+    "close_live_pages",
     "live_session",
     "open_live_page",
     "with_live_session",
@@ -90,7 +95,19 @@ def _is_saved_user(user: Any) -> bool:
     return isinstance(user, AbstractBaseUser) and user.pk is not None
 
 
-def live_session(user: Any = None, *, store: Any = None) -> Any:
+def _login_backend() -> str:
+    """The backend ``Client.force_login`` records: the first entry of
+    ``AUTHENTICATION_BACKENDS`` that can load a user (``get_user``)."""
+    from django.conf import settings
+    from django.contrib.auth import load_backend
+
+    for path in settings.AUTHENTICATION_BACKENDS:
+        if hasattr(load_backend(path), "get_user"):
+            return str(path)
+    raise ValueError("no AUTHENTICATION_BACKENDS entry can load a user (get_user)")
+
+
+def live_session(user: Any = None, *, store: Any = None, backend: Optional[str] = None) -> Any:
     """A new saved server session, logged in as ``user`` when it is a saved user.
 
     The keys are the ones ``django.contrib.auth.login`` writes, so the view's
@@ -102,6 +119,9 @@ def live_session(user: Any = None, *, store: Any = None) -> Any:
         store: The ``SessionStore`` class to use. Defaults to the configured
             ``SESSION_ENGINE`` when it is a server-side store, else Django's
             database store.
+        backend: The authentication backend to record, as a dotted path.
+            Defaults to the one ``Client.force_login`` chooses: the first entry
+            of ``AUTHENTICATION_BACKENDS`` that can load a user.
 
     Returns:
         The saved session (it has a ``session_key``). Needs database access.
@@ -111,7 +131,7 @@ def live_session(user: Any = None, *, store: Any = None) -> Any:
     session = (store or _default_store())()
     if _is_saved_user(user):
         session[SESSION_KEY] = user._meta.pk.value_to_string(user)
-        session[BACKEND_SESSION_KEY] = "django.contrib.auth.backends.ModelBackend"
+        session[BACKEND_SESSION_KEY] = backend or _login_backend()
         session[HASH_SESSION_KEY] = user.get_session_auth_hash()
     session.save()
     return session
@@ -180,15 +200,39 @@ def with_live_session(target: T, user: Any = _UNSET) -> T:
 # The page and its transports
 # --------------------------------------------------------------------------- #
 
+#: The page's render digest (``mixins/request.py``), echoed by the fallback client.
+_DIGEST_META = re.compile(r'<meta name="djust-render-digest" content="([^"]*)">')
+#: Where the page tells its client the CSRF cookie's name and the token (00-namespace.js).
+_CSRF_COOKIE_META = re.compile(r'<meta name="djust-csrf-cookie" content="([^"]*)">')
+_CSRF_TOKEN_META = re.compile(r'<meta name="djust-csrf-token" content="([^"]*)">')
+_CSRF_INPUT = re.compile(r"""<[^>]*\bname=["']?csrfmiddlewaretoken["']?[^>]*>""", re.IGNORECASE)
+_VALUE_ATTR = re.compile(r"""\bvalue=(?:"([^"]*)"|'([^']*)')""", re.IGNORECASE)
+#: The socket path and SSE prefix the page gives its client (``{% djust_client_config %}``).
+_WS_PATH_META = re.compile(r'<meta name="djust-ws-path" content="([^"]*)">')
+_SSE_PREFIX_META = re.compile(r'<meta name="djust-sse-prefix" content="([^"]*)">')
+#: How many whole-page answers in a row make the client stop sending its
+#: digest, and for how many requests (``11-event-handler.js``).
+_DIGEST_HOLD = 8
+_SSE_ROUTING_HINT = (
+    "Route them in the project's URLconf, as the browser's client expects them "
+    "at the page's SSE prefix (default /djust/):\n\n"
+    "    from djust.sse import sse_urlpatterns\n"
+    '    urlpatterns += [path("djust/", include(sse_urlpatterns))]'
+)
 
-def _meta_to_headers(extra: Dict[str, Any]) -> List[Tuple[bytes, bytes]]:
-    """``HTTP_X_TENANT_ID`` style request extras as ASGI header pairs."""
-    headers = []
-    for key, value in extra.items():
-        if key.startswith("HTTP_") and key not in ("HTTP_HOST", "HTTP_ORIGIN"):
-            name = key[5:].lower().replace("_", "-")
-            headers.append((name.encode("latin-1"), str(value).encode("latin-1")))
-    return headers
+
+def _meta(pattern: "re.Pattern[str]", html: str) -> Optional[str]:
+    match = pattern.search(html)
+    return unescape(match.group(1)) if match else None
+
+
+def _http_headers(extra: Dict[str, Any]) -> Dict[str, str]:
+    """``HTTP_X_TENANT_ID`` style request extras as header names and values."""
+    return {
+        key[5:].replace("_", "-").title(): str(value)
+        for key, value in extra.items()
+        if key.startswith("HTTP_")
+    }
 
 
 def _query_params(url: str) -> Dict[str, Any]:
@@ -202,8 +246,8 @@ def _query_params(url: str) -> Dict[str, Any]:
 
 def _page_session_and_user(page: "LivePage") -> Tuple[Any, Any]:
     """The page's session and whoever it is logged in as, resolved as
-    ``AuthenticationMiddleware`` does (``AnonymousUser`` when no one), so a
-    second tab of a logged-in client is logged in too. Sync (database)."""
+    ``AuthenticationMiddleware`` does (``AnonymousUser`` when no one). Sync
+    (database). Used only for the bare consumer, which has no middleware."""
     from types import SimpleNamespace
 
     from django.contrib.auth import get_user
@@ -217,12 +261,31 @@ def _page_session_and_user(page: "LivePage") -> Tuple[Any, Any]:
     return session, get_user(SimpleNamespace(session=session))
 
 
+def _project_asgi_application() -> Any:
+    """The project's ``ASGI_APPLICATION``, or ``None`` when it sets none."""
+    from django.conf import settings
+    from django.utils.module_loading import import_string
+
+    dotted = getattr(settings, "ASGI_APPLICATION", None)
+    return import_string(dotted) if dotted else None
+
+
+def _resolves_to(path: str, view_class: type) -> bool:
+    from django.urls import Resolver404, resolve
+
+    try:
+        match = resolve(path)
+    except Resolver404:
+        return False
+    return getattr(match.func, "view_class", None) is view_class
+
+
 class LivePage:
     """A page loaded with a real ``django.test.Client``; see :func:`open_live_page`.
 
     Attributes:
         url: The page URL that was requested.
-        client: The ``django.test.Client`` holding the session cookie. Load
+        client: The ``django.test.Client`` holding the browser's cookies. Load
             another tab of the same browser with
             ``open_live_page(url, client=page.client)``.
         response: The page GET's response.
@@ -231,9 +294,12 @@ class LivePage:
             ``None`` when the page carries none.
         view_path: The view path on the page's root (``dj-view``), or ``None``.
         user: The user passed to :func:`open_live_page`, or ``None``. The
-            transports use whoever the page's session is logged in as.
+            transports are whoever the page's session is logged in as.
         extra: The request extras (``HTTP_HOST``, ``HTTP_X_TENANT_ID``, ...) the
-            GET was made with; every transport opened from the page sends them.
+            GET was made with; every request and socket opened from the page
+            sends them.
+        render_digest: The render digest the next fallback POST sends, as the
+            client would (``None``: it sends none).
     """
 
     def __init__(
@@ -255,6 +321,9 @@ class LivePage:
         self.view_path: Optional[str] = unescape(view.group(1)) if view else None
         self.user = user
         self.extra: Dict[str, Any] = dict(extra or {})
+        self.render_digest: Optional[str] = _meta(_DIGEST_META, self.html) or None
+        self._whole_answers = 0
+        self._digest_hold = 0
 
     def __repr__(self) -> str:
         return "<LivePage %s tab=%s view=%s>" % (self.url, self.tab, self.view_path)
@@ -278,6 +347,32 @@ class LivePage:
     def origin(self) -> str:
         """The page's origin, sent as ``Origin`` by the socket and SSE requests."""
         return "http://%s" % self.host
+
+    @property
+    def ws_path(self) -> str:
+        """The socket path the page gives its client (``djust-ws-path``), as the
+        client honours it: a root-relative path, else ``/ws/live/``."""
+        path = (_meta(_WS_PATH_META, self.html) or "").strip()
+        if not path.startswith("/") or path.startswith("//"):
+            return "/ws/live/"
+        return path
+
+    @property
+    def csrf_token(self) -> str:
+        """The CSRF token the page's client sends, found as it finds it: a
+        rendered ``csrfmiddlewaretoken`` input, then the CSRF cookie (when
+        script can read it), then ``<meta name="djust-csrf-token">``."""
+        tag = _CSRF_INPUT.search(self.html)
+        if tag:
+            value = _VALUE_ATTR.search(tag.group(0))
+            token = value and (value.group(1) or value.group(2))
+            if token:
+                return unescape(token)
+        name = _meta(_CSRF_COOKIE_META, self.html) or "csrftoken"
+        morsel = self.client.cookies.get(name)
+        if morsel is not None and morsel.value and not morsel["httponly"]:
+            return str(morsel.value)
+        return _meta(_CSRF_TOKEN_META, self.html) or ""
 
     def _view(self, view_path: Optional[str]) -> str:
         view_path = view_path or self.view_path
@@ -303,32 +398,77 @@ class LivePage:
             "has_prerendered": True,
         }
 
-    def post_event(self, event: str, params: Optional[Dict[str, Any]] = None, **extra: Any) -> Any:
+    # -- HTTP fallback --------------------------------------------------------
+
+    def _digest_to_send(self) -> Optional[str]:
+        if not self.render_digest:
+            return None
+        if self._digest_hold > 0:
+            self._digest_hold -= 1
+            return None
+        return self.render_digest
+
+    def _note_answer(self, answer: Dict[str, Any], sent: Optional[str]) -> None:
+        """The client's digest bookkeeping after an answer (``11-event-handler.js``)."""
+        whole = isinstance(answer.get("html"), str)
+        changed = whole or bool(answer.get("patches"))
+        if answer.get("render_digest"):
+            self.render_digest = str(answer["render_digest"])
+        elif changed:
+            self.render_digest = None
+        if not sent or not changed:
+            return
+        if not whole:
+            self._whole_answers = 0
+        else:
+            self._whole_answers += 1
+            if self._whole_answers >= 2:
+                self._digest_hold = _DIGEST_HOLD
+
+    def post_event(
+        self,
+        event: str,
+        params: Optional[Dict[str, Any]] = None,
+        *,
+        full: bool = False,
+        **extra: Any,
+    ) -> Any:
         """Send ``event`` over the HTTP fallback, as the client does without a socket.
 
-        A JSON POST to the page URL with ``X-Djust-Event`` and the page's tab
-        (``X-Djust-Tab``), on the page's session and request extras. Returns
-        the response; its JSON body is the fallback answer (``html`` or
-        ``patches``). Sync: call it with ``sync_to_async`` from an async test.
+        A JSON POST to the page URL with what the client sends: ``X-Djust-Event``,
+        the page's tab (``X-Djust-Tab``), its CSRF token (``X-CSRFToken``), the
+        page's request extras, and the render digest of the last answer
+        (``X-Djust-Render-Digest``), so the server answers with patches where it
+        can, as the browser gets them. Returns the response; its JSON body is
+        the fallback answer (``patches`` or ``html``). Sync: call it with
+        ``sync_to_async`` from an async test.
 
         Args:
             event: The handler name.
             params: The handler's parameters (the JSON body).
-            **extra: More request extras, for example ``HTTP_X_DJUST_RENDER_DIGEST``.
+            full: Send no render digest, so the answer is the whole page.
+            **extra: More request extras; they replace the ones above.
         """
         headers: Dict[str, Any] = {**self.extra, "HTTP_X_DJUST_EVENT": event}
         if self.tab:
             headers["HTTP_X_DJUST_TAB"] = self.tab
-        from django.conf import settings
-
-        # The client sends the CSRF cookie's token back, as the page's script does.
-        csrf = self.client.cookies.get(settings.CSRF_COOKIE_NAME)
-        if csrf is not None:
-            headers["HTTP_X_CSRFTOKEN"] = csrf.value
+        token = self.csrf_token
+        if token:
+            headers["HTTP_X_CSRFTOKEN"] = token
+        sent = None if full else self._digest_to_send()
+        if sent:
+            headers["HTTP_X_DJUST_RENDER_DIGEST"] = sent
         headers.update(extra)
-        return self.client.post(
+        response = self.client.post(
             self.url, data=json.dumps(params or {}), content_type="application/json", **headers
         )
+        if response.status_code == 200 and "json" in response.get("Content-Type", ""):
+            answer = json.loads(response.content)
+            if isinstance(answer, dict):
+                self._note_answer(answer, sent)
+        return response
+
+    # -- WebSocket -------------------------------------------------------------
 
     async def connect(
         self,
@@ -336,41 +476,40 @@ class LivePage:
         *,
         params: Optional[Dict[str, Any]] = None,
         application: Any = None,
-        path: str = "/ws/live/",
+        path: Optional[str] = None,
         timeout: float = _DEFAULT_TIMEOUT,
     ) -> "LiveSocket":
         """Connect a ``WebsocketCommunicator`` as the page's client and mount the view.
 
-        The socket carries the page's cookies (session and CSRF), ``Origin``
-        and request extras. With the default bare consumer its scope is given
-        the page's session and user, as ``AuthMiddlewareStack`` would; a
-        project's own ``application`` resolves both from the cookie through its
-        own middleware. The mount frame is :meth:`mount_frame`.
+        The socket goes through the project's ``ASGI_APPLICATION`` (its origin
+        validator, auth stack, router and any middleware of its own), with the
+        browser's cookies, ``Origin`` and the page's request extras, at the
+        socket path the page gives its client. When the project sets no
+        ``ASGI_APPLICATION``, a bare ``LiveViewConsumer`` is used and its scope
+        is given what ``AuthMiddlewareStack`` would put there: the page's
+        session and its user.
 
         Args:
             view_path: The view to mount; defaults to the page's ``dj-view``.
             params: The mount parameters; defaults to the page URL's query.
-            application: The ASGI application; defaults to
-                ``LiveViewConsumer.as_asgi()``. A project's own ``asgi.application``
-                works too (``path`` must then match its WebSocket route).
-            path: The WebSocket path.
-            timeout: Seconds to wait for the connection and the mount answer.
+            application: An ASGI application to use instead of ``ASGI_APPLICATION``.
+            path: The WebSocket path; defaults to the page's (``/ws/live/``).
+            timeout: Seconds to wait for the connection and each frame.
 
         Returns:
             A connected :class:`LiveSocket`; its ``mount`` is the mount answer
             (``"mount"`` on success, ``"error"`` / ``"navigate"`` otherwise).
         """
-        from asgiref.sync import sync_to_async
         from channels.testing import WebsocketCommunicator
 
+        if application is None:
+            application = _project_asgi_application()
         bare = application is None
         if bare:
             from .websocket import LiveViewConsumer
 
             application = LiveViewConsumer.as_asgi()
-        session, user = await sync_to_async(_page_session_and_user)(self)
-        # The browser's cookies (session and CSRF), for an application whose
-        # own middleware reads them (``AuthMiddlewareStack``).
+        # The browser sends every cookie of the site, HttpOnly ones included.
         cookie = "; ".join(
             "%s=%s" % (name, morsel.value) for name, morsel in self.client.cookies.items()
         )
@@ -378,21 +517,53 @@ class LivePage:
             (b"host", self.host.encode("latin-1")),
             (b"origin", self.origin.encode("latin-1")),
             (b"cookie", cookie.encode("latin-1")),
-            *_meta_to_headers(self.extra),
+            *(
+                (name.lower().encode("latin-1"), value.encode("latin-1"))
+                for name, value in _http_headers(self.extra).items()
+                if name not in ("Host", "Origin")
+            ),
         ]
-        communicator = WebsocketCommunicator(application, path, headers=headers)
+        communicator = WebsocketCommunicator(application, path or self.ws_path, headers=headers)
         if bare:
-            # What AuthMiddlewareStack would have put in the scope. A project's
-            # own application resolves both from the cookie itself.
+            from asgiref.sync import sync_to_async
+
+            session, user = await sync_to_async(_page_session_and_user)(self)
             communicator.scope["session"] = session
             communicator.scope["user"] = user
-        connected, code = await communicator.connect(timeout=timeout)
-        if not connected:
-            raise AssertionError("the socket was refused (close code %r)" % (code,))
         socket = LiveSocket(communicator, timeout=timeout)
-        await communicator.send_json_to(self.mount_frame(view_path, params=params))
-        socket.mount = await socket.receive(_MOUNT_ANSWERS)
+        try:
+            connected, code = await communicator.connect(timeout=timeout)
+            if not connected:
+                raise AssertionError("the socket was refused (close code %r)" % (code,))
+            socket._start()
+            await socket.send(self.mount_frame(view_path, params=params))
+            socket.mount = await socket.receive(_MOUNT_ANSWERS)
+        except BaseException as exc:
+            await socket._close_after(exc)
+            raise
         return socket
+
+    # -- SSE -------------------------------------------------------------------
+
+    def _sse_urls(self, session_id: str) -> Tuple[str, str]:
+        """The stream and message URLs the page's client uses, checked against
+        the project's URLconf."""
+        from .sse import DjustSSEMessageView, DjustSSEStreamView
+
+        prefix = (_meta(_SSE_PREFIX_META, self.html) or "").strip() or "/djust/"
+        if not prefix.endswith("/"):
+            prefix += "/"
+        stream = "%ssse/%s/" % (prefix, session_id)
+        message = stream + "message/"
+        if not _resolves_to(stream, DjustSSEStreamView) or not _resolves_to(
+            message, DjustSSEMessageView
+        ):
+            raise AssertionError(
+                "djust's SSE views are not routed at %ssse/<id>/ in this project's "
+                "URLconf, so a browser's SSE client would get a 404. %s"
+                % (prefix, _SSE_ROUTING_HINT)
+            )
+        return stream, message
 
     async def connect_sse(
         self,
@@ -403,66 +574,76 @@ class LivePage:
     ) -> "LiveSSE":
         """Open the SSE stream as the page's client; the stream GET mounts the view.
 
-        The stream request goes to djust's SSE stream view with the page's
-        session, user, tab, ``Origin`` and request extras; the project need not
-        route the SSE URLs.
+        The stream GET and each event POST go through the project's URLconf
+        and middleware (``django.test.AsyncClient``, with the browser's
+        cookies), at the URLs the page gives its client, with ``Origin`` and
+        the page's request extras. A project that does not route djust's SSE
+        views fails here with how to route them.
 
         Args:
             view_path: The view to mount; defaults to the page's ``dj-view``.
             params: The mount parameters; defaults to the page URL's query.
-            timeout: Seconds to wait for each frame.
+            timeout: Seconds to wait for the stream GET and each frame.
 
         Returns:
             A :class:`LiveSSE`; its ``mount`` is the mount answer.
-        """
-        from asgiref.sync import sync_to_async
-        from django.test import RequestFactory
 
-        from .sse import DjustSSEStreamView
+        Raises:
+            AssertionError: The SSE views are not routed, or the stream GET
+                did not answer a 200 stream (a middleware redirect, a refusal).
+        """
+        from django.test import AsyncClient
 
         session_id = str(uuid.uuid4())
+        stream_url, message_url = self._sse_urls(session_id)
+        client = AsyncClient(
+            enforce_csrf_checks=getattr(self.client.handler, "enforce_csrf_checks", False)
+        )
+        client.cookies = self.client.cookies  # one browser: the same cookie jar
         query: Dict[str, Any] = _query_params(self.url) if params is None else dict(params)
         query.update({"view": self._view(view_path), "_djust_url": self.path})
         if self.tab:
             query["_djust_tab"] = self.tab
-        # A literal path: the stream view takes the session id as a keyword and
-        # the page URL from ``_djust_url``, so the request path routes nothing
-        # (and no non-literal URL reaches RequestFactory: the mount-URL pin).
-        request = RequestFactory().get(
-            "/djust/sse/",
-            query,
-            **{**self.extra, "HTTP_HOST": self.host, "HTTP_ORIGIN": self.origin},
-        )
-        request.session, request.user = await sync_to_async(_page_session_and_user)(self)
-        response = await DjustSSEStreamView.as_view()(request, session_id=session_id)
-        if getattr(response, "status_code", 200) != 200 or not getattr(
-            response, "streaming", False
-        ):
-            raise AssertionError(
-                "the SSE stream GET was refused: %s %r"
-                % (getattr(response, "status_code", "?"), getattr(response, "content", b"")[:300])
+        stream = LiveSSE(self, session_id, client, message_url, timeout=timeout)
+        try:
+            response = await asyncio.wait_for(
+                client.get(stream_url, query, headers=stream._headers()), timeout
             )
-        stream = LiveSSE(self, session_id, response, timeout=timeout)
-        stream.mount = await stream.receive(_MOUNT_ANSWERS)
+            if response.status_code != 200 or not getattr(response, "streaming", False):
+                raise AssertionError(
+                    "the SSE stream GET answered %s%s: %r"
+                    % (
+                        response.status_code,
+                        " to %s" % response["Location"] if response.has_header("Location") else "",
+                        getattr(response, "content", b"")[:300],
+                    )
+                )
+            stream._start(response)
+            stream.mount = await stream.receive(_MOUNT_ANSWERS)
+        except BaseException as exc:
+            await stream._close_after(exc)
+            raise
         return stream
 
 
 def open_live_page(url: str, *, user: Any = None, client: Any = None, **extra: Any) -> LivePage:
     """Load ``url`` as a browser does and return the :class:`LivePage`.
 
-    A GET with a ``django.test.Client`` through the project's own middleware
-    and URLconf: the page view saves a server session, mounts the view and
-    gives the page a tab id. Each call is a new page load, so a new tab; pass
-    the same ``client`` to load a second tab in the same browser session.
-    Sync: from an async test call it with ``sync_to_async``.
+    A GET with a ``django.test.Client`` (``enforce_csrf_checks=True``, as a
+    browser gets) through the project's own middleware and URLconf: the page
+    view saves a server session, mounts the view and gives the page a tab id.
+    Each call is a new page load, so a new tab; pass the same ``client`` to
+    load a second tab in the same browser session. Sync: from an async test
+    call it with ``sync_to_async``.
 
     Args:
         url: The page URL (path and query).
         user: A saved user to log in first (``client.force_login``), or ``None``
             for an anonymous page.
-        client: The ``django.test.Client`` to use; a new one by default.
-        **extra: Request extras sent with the GET and with every transport
-            opened from the page: ``HTTP_HOST`` for a subdomain tenant,
+        client: The ``django.test.Client`` to use; a new one, enforcing CSRF,
+            by default.
+        **extra: Request extras sent with the GET and with every request and
+            socket opened from the page: ``HTTP_HOST`` for a subdomain tenant,
             ``HTTP_X_TENANT_ID`` for a header tenant, and so on.
 
     Raises:
@@ -471,17 +652,93 @@ def open_live_page(url: str, *, user: Any = None, client: Any = None, **extra: A
     if client is None:
         from django.test import Client
 
-        client = Client()
+        client = Client(enforce_csrf_checks=True)
     if user is not None:
         client.force_login(user)
     response = client.get(url, **extra)
     if response.status_code != 200:
-        raise AssertionError("GET %s answered %s" % (url, response.status_code))
+        raise AssertionError(
+            "GET %s answered %s%s"
+            % (
+                url,
+                response.status_code,
+                " to %s" % response["Location"] if response.has_header("Location") else "",
+            )
+        )
     return LivePage(url, client, response, user=user, extra=extra)
 
 
+# --------------------------------------------------------------------------- #
+# Transports
+# --------------------------------------------------------------------------- #
+
+
+class _Closed:
+    """Queued once the connection ended; every later read sees it."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+
+#: Every transport opened and not yet closed, for :func:`close_live_pages`.
+_OPEN: "weakref.WeakSet[_Transport]" = weakref.WeakSet()
+
+
+def _cancel_quietly(task: "Optional[asyncio.Future[Any]]") -> None:
+    """Cancel ``task`` if its loop is still open (a finaliser may run later)."""
+    if task is None or task.done():
+        return
+    try:
+        task.cancel()
+    except RuntimeError:
+        pass  # its loop has closed: nothing is left to stop
+
+
+def _abandon_sse(session_id: str, pump: "Optional[asyncio.Future[Any]]") -> None:
+    """Release an SSE stream nobody closed: what the stream view's own guard
+    does for a stream that is gone (unregister the session, shut it down)."""
+    _cancel_quietly(pump)
+    sse = sys.modules.get("djust.sse")
+    if sse is None:
+        return
+    session = sse._get_session(session_id)
+    if session is not None:
+        session._stream_closed = True
+        sse._unregister_sse_session(session_id, session)
+        session.shutdown()
+
+
+def _abandon_socket(
+    pump: "Optional[asyncio.Future[Any]]", app: "Optional[asyncio.Future[Any]]"
+) -> None:
+    _cancel_quietly(pump)
+    _cancel_quietly(app)
+
+
+def close_live_pages() -> None:
+    """Release every socket and SSE stream opened from a :class:`LivePage`
+    and not closed: a test that failed before its ``async with`` ended, or
+    never closed what it opened.
+
+    Sync, so it runs after the test's event loop is gone: an SSE session is
+    unregistered and shut down as the stream view does for a client that
+    went away; a socket's application and frame reader are cancelled.
+    :data:`djust.testing.djust_live_pages` runs it after each pytest test;
+    in a ``django.test`` case add ``self.addCleanup(close_live_pages)``.
+    """
+    for transport in list(_OPEN):
+        transport._abandon()
+
+
 class _Transport:
-    """Frame bookkeeping shared by :class:`LiveSocket` and :class:`LiveSSE`."""
+    """Frame reading shared by :class:`LiveSocket` and :class:`LiveSSE`.
+
+    A background task reads every frame into a queue as it arrives, so a
+    ``receive()`` that times out only stops waiting: the connection and the
+    frames that arrive later are untouched.
+    """
+
+    _kind = "connection"
 
     def __init__(self, timeout: float) -> None:
         self.timeout = timeout
@@ -489,14 +746,40 @@ class _Transport:
         self.mount: Dict[str, Any] = {}
         #: Every frame received so far, in order.
         self.frames: List[Dict[str, Any]] = []
+        self._queue: "asyncio.Queue[Any]" = asyncio.Queue()
+        self._unread: List[Any] = []
+        self._pump: "Optional[asyncio.Future[Any]]" = None
+        self._finalizer: Optional[Callable[[], Any]] = None
         self._ref = 0
-        self._unread: List[Dict[str, Any]] = []
+        self.closed = False
+        _OPEN.add(self)
 
-    async def _next_frame(self, timeout: float) -> Dict[str, Any]:
-        raise NotImplementedError
+    def _abandon(self) -> None:
+        self.closed = True
+        _OPEN.discard(self)
+        if self._finalizer is not None:
+            self._finalizer()
 
     async def _send(self, frame: Dict[str, Any]) -> None:
         raise NotImplementedError
+
+    async def send(self, frame: Dict[str, Any]) -> None:
+        """Send a raw frame (``url_change``, ``upload_register``, ...)."""
+        await self._send(frame)
+
+    async def close(self) -> None:
+        raise NotImplementedError
+
+    async def _next(self, timeout: float) -> Dict[str, Any]:
+        """The next frame; ``asyncio.TimeoutError`` leaves the connection as it is."""
+        if self._unread:
+            item = self._unread.pop(0)
+        else:
+            item = await asyncio.wait_for(self._queue.get(), timeout)
+        if isinstance(item, _Closed):
+            self._unread.insert(0, item)  # every later read sees it too
+            raise AssertionError("the %s ended: %s" % (self._kind, item.reason))
+        return dict(item)
 
     async def receive(
         self, types: Optional[Tuple[str, ...]] = None, *, timeout: Optional[float] = None
@@ -505,21 +788,52 @@ class _Transport:
         and kept in :attr:`frames`).
 
         Raises:
-            asyncio.TimeoutError: No such frame arrived within ``timeout``.
+            asyncio.TimeoutError: No such frame arrived within ``timeout``; the
+                connection is untouched.
+            AssertionError: The connection ended first.
         """
         wait = self.timeout if timeout is None else timeout
         loop = asyncio.get_running_loop()
         deadline = loop.time() + wait
         while True:
-            if self._unread:
-                frame = self._unread.pop(0)
-            else:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    raise asyncio.TimeoutError("no frame of %r within %ss" % (types, wait))
-                frame = await self._next_frame(remaining)
+            remaining = deadline - loop.time()
+            if remaining <= 0 and not self._unread:
+                raise asyncio.TimeoutError("no frame of %r within %ss" % (types, wait))
+            frame = await self._next(max(remaining, 0))
             if types is None or frame.get("type") in types:
                 return frame
+
+    async def receive_nothing(
+        self, types: Optional[Tuple[str, ...]] = None, *, within: float = 0.5
+    ) -> None:
+        """Assert that no frame (of one of ``types`` when given) arrives within
+        ``within`` seconds. Other frames stay unread, in order.
+
+        Raises:
+            AssertionError: Such a frame arrived.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + within
+        others: List[Any] = []
+        try:
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0 and not self._unread:
+                    return
+                try:
+                    frame = await self._next(max(remaining, 0))
+                except asyncio.TimeoutError:
+                    return
+                except AssertionError:
+                    return  # the connection ended: nothing more can arrive
+                if types is None or frame.get("type") in types:
+                    raise AssertionError(
+                        "expected no %s frame within %ss, got %r"
+                        % (" / ".join(types) if types else "", within, frame)
+                    )
+                others.append(frame)
+        finally:
+            self._unread[0:0] = others
 
     async def send_event(
         self,
@@ -533,8 +847,8 @@ class _Transport:
 
         The event frame carries a ``ref``; the answer is the first frame that
         echoes it (``patch``, ``html_update``, ``noop``, ...) or an ``error``.
-        Frames that arrive before it (push events, for example) are in
-        :attr:`frames`.
+        Frames that arrive before it (push events, for example) stay unread
+        for :meth:`receive`, and are in :attr:`frames`.
 
         Args:
             event: The handler name.
@@ -549,14 +863,71 @@ class _Transport:
         wait = self.timeout if timeout is None else timeout
         loop = asyncio.get_running_loop()
         deadline = loop.time() + wait
+        skipped: List[Any] = []
+        try:
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0 and not self._unread:
+                    raise asyncio.TimeoutError("no answer to %r within %ss" % (event, wait))
+                frame = await self._next(max(remaining, 0))
+                if frame.get("ref") == ref or frame.get("type") == "error":
+                    return frame
+                skipped.append(frame)
+        finally:
+            self._unread[0:0] = skipped
+
+    async def _close_after(self, exc: BaseException) -> None:
+        """Close after ``exc``; a failure to close never replaces ``exc``."""
+        try:
+            await self.close()
+        except BaseException as failure:  # noqa: BLE001 - reported on exc instead
+            if isinstance(failure, (KeyboardInterrupt, SystemExit)):
+                raise
+            note = getattr(exc, "add_note", None)
+            if note is not None:
+                note("djust.testing: closing the %s also failed: %r" % (self._kind, failure))
+
+    async def __aexit__(self, exc_type: Any, exc: Optional[BaseException], tb: Any) -> None:
+        if exc is None:
+            await self.close()
+        else:
+            await self._close_after(exc)
+
+
+async def _pump_socket(
+    communicator: Any, frames: List[Dict[str, Any]], queue: "asyncio.Queue[Any]"
+) -> None:
+    """Read the application's output into ``queue`` without ever timing out
+    (a ``receive_output`` timeout cancels the application)."""
+    reason = "the application finished"
+    getter: "Optional[asyncio.Future[Any]]" = None
+    try:
         while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                raise asyncio.TimeoutError("no answer to %r within %ss" % (event, wait))
-            frame = await self._next_frame(remaining)
-            if frame.get("ref") == ref or frame.get("type") == "error":
-                return frame
-            self._unread.append(frame)
+            getter = asyncio.ensure_future(communicator.output_queue.get())
+            await asyncio.wait({getter, communicator.future}, return_when=asyncio.FIRST_COMPLETED)
+            if not getter.done():
+                getter.cancel()
+                if communicator.output_queue.empty():
+                    if communicator.future.cancelled():
+                        reason = "the application was cancelled"
+                    elif communicator.future.exception() is not None:
+                        reason = "the application raised %r" % (communicator.future.exception(),)
+                    return
+                message = communicator.output_queue.get_nowait()
+            else:
+                message = getter.result()
+            getter = None
+            if message.get("type") == "websocket.close":
+                reason = "the server closed the socket (code %s)" % message.get("code", 1000)
+                return
+            if message.get("type") == "websocket.send" and message.get("text") is not None:
+                frame = json.loads(message["text"])
+                frames.append(frame)
+                queue.put_nowait(frame)
+    finally:
+        if getter is not None and not getter.done():
+            getter.cancel()
+        queue.put_nowait(_Closed(reason))
 
 
 class LiveSocket(_Transport):
@@ -570,39 +941,95 @@ class LiveSocket(_Transport):
         frames: Every frame received, in order.
     """
 
+    _kind = "socket"
+
     def __init__(self, communicator: Any, *, timeout: float = _DEFAULT_TIMEOUT) -> None:
         super().__init__(timeout)
         self.communicator = communicator
 
-    async def _next_frame(self, timeout: float) -> Dict[str, Any]:
-        frame: Dict[str, Any] = await self.communicator.receive_json_from(timeout=timeout)
-        self.frames.append(frame)
-        return frame
+    def _start(self) -> None:
+        """Start reading frames; called once the socket is connected."""
+        if self._pump is not None:
+            return
+        self._pump = asyncio.ensure_future(
+            _pump_socket(self.communicator, self.frames, self._queue)
+        )
+        self._finalizer = weakref.finalize(
+            self, _abandon_socket, self._pump, getattr(self.communicator, "future", None)
+        )
 
     async def _send(self, frame: Dict[str, Any]) -> None:
+        if self._pump is None:
+            self._start()
         await self.communicator.send_json_to(frame)
 
-    async def send(self, frame: Dict[str, Any]) -> None:
-        """Send a raw frame (``url_change``, ``upload_register``, ...)."""
-        await self._send(frame)
+    async def receive(
+        self, types: Optional[Tuple[str, ...]] = None, *, timeout: Optional[float] = None
+    ) -> Dict[str, Any]:
+        if self._pump is None:
+            self._start()
+        return await super().receive(types, timeout=timeout)
 
     async def disconnect(self, code: int = 1000) -> None:
-        """Close the socket as the browser does; the view is torn down."""
-        await self.communicator.disconnect(code=code)
+        """Close the socket as the browser does; the view is torn down. An
+        exception the application raised is raised here."""
+        if self.closed:
+            return
+        self.closed = True
+        _OPEN.discard(self)
+        if self._finalizer is not None:
+            self._finalizer.detach()  # type: ignore[attr-defined]
+        try:
+            future = getattr(self.communicator, "future", None)
+            if future is not None and future.done():
+                if not future.cancelled():
+                    future.result()
+            else:
+                await self.communicator.disconnect(code=code, timeout=self.timeout)
+        finally:
+            if self._pump is not None:
+                self._pump.cancel()
+                await asyncio.wait({self._pump})
+
+    async def close(self) -> None:
+        """The same as :meth:`disconnect`."""
+        await self.disconnect()
 
     async def __aenter__(self) -> "LiveSocket":
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
-        await self.disconnect()
+
+async def _pump_sse(
+    response: Any, frames: List[Dict[str, Any]], queue: "asyncio.Queue[Any]"
+) -> None:
+    """Read the stream response into ``queue``; cancelling this task is a
+    browser going away (the stream's own teardown runs)."""
+    reason = "the stream ended"
+    content: AsyncIterator[Any] = response.streaming_content
+    try:
+        async for chunk in content:
+            text = chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk)
+            data = [line[6:] for line in text.splitlines() if line.startswith("data: ")]
+            if not data:
+                continue  # a keepalive comment
+            frame = json.loads("\n".join(data))
+            if frame.get("type") == "sse_connect":
+                continue
+            frames.append(frame)
+            queue.put_nowait(frame)
+    except asyncio.CancelledError:
+        reason = "the stream was closed"
+        raise
+    finally:
+        queue.put_nowait(_Closed(reason))
 
 
 class LiveSSE(_Transport):
     """An open SSE stream with a mounted view; see :meth:`LivePage.connect_sse`.
 
-    Events are POSTed to djust's SSE message view as the client does; frames
-    are read from the stream response. Use it as an async context manager, or
-    call :meth:`close`.
+    Events are POSTed to the project's SSE message URL as the client does;
+    frames are read from the stream response. Use it as an async context
+    manager, or call :meth:`close`.
 
     Attributes:
         session_id: The SSE session id.
@@ -611,18 +1038,40 @@ class LiveSSE(_Transport):
         frames: Every frame received, in order.
     """
 
+    _kind = "SSE stream"
+
     def __init__(
-        self, page: LivePage, session_id: str, response: Any, *, timeout: float = _DEFAULT_TIMEOUT
+        self,
+        page: LivePage,
+        session_id: str,
+        client: Any,
+        message_url: str,
+        *,
+        timeout: float = _DEFAULT_TIMEOUT,
     ) -> None:
         super().__init__(timeout)
         self.page = page
         self.session_id = session_id
+        self.response: Any = None
+        self._client = client
+        self._message_url = message_url
+        self._finalizer = weakref.finalize(self, _abandon_sse, session_id, None)
+
+    def _headers(self) -> Dict[str, str]:
+        # The test client sends the host (testserver) itself; a page opened
+        # with ``HTTP_HOST`` sends that one through the extras.
+        return {**_http_headers(self.page.extra), "Origin": self.page.origin}
+
+    def _start(self, response: Any) -> None:
         self.response = response
-        # The stream body itself (djust's generator), not Django's re-wrapping
-        # ``streaming_content``: closing it must run the stream's own teardown
-        # (its ``finally``), as a disconnecting browser does.
-        self._stream = response._iterator
-        self._closed = False
+        session = self.session
+        if session is not None:
+            # This client has no POST in flight when it closes (each one was
+            # answered), so the closing stream need not wait for one.
+            session._skip_close_linger = True
+        self._pump = asyncio.ensure_future(_pump_sse(response, self.frames, self._queue))
+        self._finalizer.detach()  # type: ignore[union-attr]
+        self._finalizer = weakref.finalize(self, _abandon_sse, self.session_id, self._pump)
 
     @property
     def session(self) -> Any:
@@ -631,62 +1080,49 @@ class LiveSSE(_Transport):
 
         return _get_session(self.session_id)
 
-    async def _next_frame(self, timeout: float) -> Dict[str, Any]:
-        while True:
-            chunk = await asyncio.wait_for(self._stream.__anext__(), timeout)
-            if isinstance(chunk, bytes):
-                chunk = chunk.decode("utf-8")
-            data = [line[6:] for line in chunk.splitlines() if line.startswith("data: ")]
-            if not data:
-                continue  # a keepalive comment
-            frame: Dict[str, Any] = json.loads("\n".join(data))
-            if frame.get("type") == "sse_connect":
-                continue
-            self.frames.append(frame)
-            return frame
-
     async def _send(self, frame: Dict[str, Any]) -> None:
-        from asgiref.sync import sync_to_async
-        from django.test import RequestFactory
-
-        from .sse import DjustSSEMessageView
-
-        request = RequestFactory().post(
-            "/djust/sse/%s/message/" % self.session_id,
+        response = await self._client.post(
+            self._message_url,
             data=json.dumps(frame),
             content_type="application/json",
-            **{**self.page.extra, "HTTP_HOST": self.page.host, "HTTP_ORIGIN": self.page.origin},
+            headers=self._headers(),
         )
-        request.session, request.user = await sync_to_async(_page_session_and_user)(self.page)
-        response = await DjustSSEMessageView.as_view()(request, session_id=self.session_id)
         if response.status_code != 200:
             raise AssertionError(
-                "the SSE message POST was refused: %s %r"
+                "the SSE message POST answered %s: %r"
                 % (response.status_code, response.content[:300])
             )
-
-    async def send(self, frame: Dict[str, Any]) -> None:
-        """POST a raw frame (``url_change``, ...) to the SSE message view."""
-        await self._send(frame)
 
     async def close(self) -> None:
         """Close the stream as a browser going away does: the stream's own
         teardown saves the view's state and disposes the session."""
-        if self._closed:
+        if self.closed:
             return
-        self._closed = True
-        from unittest import mock
-
-        from . import sse
-
-        # The closing stream waits a grace period for event POSTs still in
-        # flight. Every POST this helper made has been answered, so there is
-        # nothing to wait for.
-        with mock.patch.object(sse, "_SESSION_LINGER_S", 0):
-            await self._stream.aclose()
+        self.closed = True
+        _OPEN.discard(self)
+        if self._finalizer is not None:
+            self._finalizer.detach()  # type: ignore[attr-defined]
+        if self._pump is not None:
+            self._pump.cancel()
+            await asyncio.wait({self._pump})
+        else:
+            _abandon_sse(self.session_id, None)
 
     async def __aenter__(self) -> "LiveSSE":
         return self
 
-    async def __aexit__(self, *exc: Any) -> None:
-        await self.close()
+
+#: Closes what each test's pages opened (:func:`close_live_pages`). Import it
+#: into a ``conftest.py`` (``from djust.testing import djust_live_pages``); it
+#: is autouse, so every test below that conftest gets it. Defined only when
+#: pytest is running, so importing ``djust.testing`` never imports pytest.
+if "pytest" in sys.modules:
+    _pytest = sys.modules["pytest"]
+
+    @_pytest.fixture(autouse=True)
+    def djust_live_pages() -> Any:
+        """Close every socket and SSE stream a test's live pages left open."""
+        yield
+        close_live_pages()
+
+    __all__.append("djust_live_pages")
