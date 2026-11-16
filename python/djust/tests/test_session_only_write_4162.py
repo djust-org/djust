@@ -20,9 +20,11 @@ session adds no save; a component handler, background work, and a state store
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
+from unittest import mock
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -291,6 +293,39 @@ def _stored_state(key: str) -> Dict[str, Any]:
 
 # -- the three transports ------------------------------------------------------
 
+#: Only a guard against a hang: every wait below is for an event, and its outcome is an ordering.
+HANG_S = 60
+
+
+@contextlib.contextmanager
+def _background_settled() -> Iterator[asyncio.Event]:
+    """An event set once the runtime has finished with a background task's result, whether it
+    stored it, rendered it or discarded it.
+
+    A socket closed before then tears the owner down while the work may still run, and whether
+    such work's session writes are kept is not decided yet (nondeterministic today). So a test
+    of what the work stores waits for this before it closes the connection.
+    """
+    from djust.runtime import ViewRuntime
+
+    settled = asyncio.Event()
+    original = ViewRuntime._execute_explicit_async_task
+
+    async def wrapped(self: Any, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await original(self, *args, **kwargs)
+        finally:
+            settled.set()
+
+    with mock.patch.object(ViewRuntime, "_execute_explicit_async_task", wrapped):
+        yield settled
+
+
+async def _settle(settled: Optional[asyncio.Event]) -> None:
+    if settled is not None:
+        await asyncio.wait_for(settled.wait(), HANG_S)
+        settled.clear()
+
 
 async def _ws_mount(view: type, key: str) -> Any:
     from channels.testing import WebsocketCommunicator
@@ -318,8 +353,12 @@ async def _ws_mount(view: type, key: str) -> Any:
     return comm
 
 
-async def ws_turns(view: type, names: List[str], params: Any = None) -> Any:
-    """Page GET, socket mount, then each event; the client and per-turn saves."""
+async def ws_turns(
+    view: type, names: List[str], params: Any = None, settled: Optional[asyncio.Event] = None
+) -> Any:
+    """Page GET, socket mount, then each event; the client and per-turn saves. With
+    ``settled`` (:func:`_background_settled`), each event's background work is finished with
+    before the next event, and before the socket closes."""
     client = await sync_to_async(_page)(view)
     comm = await _ws_mount(view, _key(client))
     counts = []
@@ -328,13 +367,16 @@ async def ws_turns(view: type, names: List[str], params: Any = None) -> Any:
             SAVES.clear()
             frame = await harness.event(comm, name, params)
             assert frame["type"] in ("patch", "noop", "html_update", "embedded_update"), frame
+            await _settle(settled)
             counts.append(len(SAVES))
     finally:
         await comm.disconnect()
     return client, counts
 
 
-async def sse_turns(view: type, names: List[str], params: Any = None) -> Any:
+async def sse_turns(
+    view: type, names: List[str], params: Any = None, settled: Optional[asyncio.Event] = None
+) -> Any:
     from django.contrib.auth import get_user
     from django.utils.functional import SimpleLazyObject
 
@@ -376,6 +418,7 @@ async def sse_turns(view: type, names: List[str], params: Any = None) -> Any:
             answer = await DjustSSEMessageView().post(posted, session_id=sid)
             assert answer.status_code in (200, 202, 204), answer.content
             await sync_to_async(finish)(posted, answer)
+            await _settle(settled)
             counts.append(len(SAVES))
     finally:
         _sse_sessions.pop(sid, None)
@@ -399,11 +442,18 @@ def http_turns(view: type, names: List[str], params: Any = None) -> Any:
     return client, counts
 
 
-async def turns(transport: str, view: type, names: List[str], params: Any = None) -> Any:
+async def turns(
+    transport: str,
+    view: type,
+    names: List[str],
+    params: Any = None,
+    settled: Optional[asyncio.Event] = None,
+) -> Any:
     if transport == "ws":
-        return await ws_turns(view, names, params)
+        return await ws_turns(view, names, params, settled)
     if transport == "sse":
-        return await sse_turns(view, names, params)
+        return await sse_turns(view, names, params, settled)
+    # The fallback runs the work inside its request, before its answer: nothing to wait for.
     return await sync_to_async(http_turns)(view, names, params)
 
 
@@ -574,13 +624,9 @@ async def test_a_component_handler_writes_the_session(transport):
 async def test_background_work_writes_the_session_sse_and_http(transport):
     """SSE runs the work after the reply, as the socket does; the fallback runs
     it inside the request, before its answer."""
-    with _settings(0):
-        client, _ = await turns(transport, Plain, ["later"])
-        for _ in range(50):
-            seen = await sync_to_async(_read)(client)
-            if "late" in seen:
-                break
-            await asyncio.sleep(0.02)
+    with _settings(0), _background_settled() as settled:
+        client, _ = await turns(transport, Plain, ["later"], settled=settled)
+        seen = await sync_to_async(_read)(client)
     assert seen.get("late") == "yes"
 
 
@@ -763,13 +809,11 @@ async def test_failed_work_keeps_what_it_wrote(transport, view):
     kept, with or without ``handle_async_result`` and on every transport (the
     fallback runs the work inside its request and always kept it). The work's
     other effects stand as well; only the view's state is not saved."""
-    with _settings(0):
-        client, _ = await turns(transport, view, ["fail_bg"])
-        for _ in range(50):
-            seen = await sync_to_async(_read)(client)
-            if "late" in seen:
-                break
-            await asyncio.sleep(0.02)
+    # The work is finished with before the connection closes: closing it while the work still
+    # ran raced this test (what such work keeps is not decided yet, #4162).
+    with _settings(0), _background_settled() as settled:
+        client, _ = await turns(transport, view, ["fail_bg"], settled=settled)
+        seen = await sync_to_async(_read)(client)
     assert seen == {"cart": ["a"], "gone": 1, "late": "yes"}
 
 
