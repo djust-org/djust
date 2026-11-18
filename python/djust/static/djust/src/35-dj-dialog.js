@@ -69,7 +69,12 @@ function _installCloseListenerOnce(el) {
         // loading-state and activity-gate machinery.
         const _handleEvent = globalThis.djust && globalThis.djust.handleEvent;
         if (typeof _handleEvent === 'function') {
-            _handleEvent(eventName, { _targetElement: el });
+            // No owner context: the server runs the event on the page's view,
+            // so a strict handler's dj-value-* arguments follow that view's
+            // contract (#4225).
+            const strict = globalThis.djust._strictBinding(el, eventName, {}, [], null, true);
+            if (strict === false) return;
+            _handleEvent(eventName, Object.assign(strict || {}, { _targetElement: el }));
         }
     });
 }

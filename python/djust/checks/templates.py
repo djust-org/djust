@@ -1276,16 +1276,104 @@ def _get_context_data_reaches_base(cls: type) -> bool:
     return True
 
 
+_NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def _own_scope_nodes(func: ast.AST) -> list[ast.AST]:
+    """Every node of ``func``'s body, not descending into a nested function,
+    lambda or class: a helper's assignments are not the method's (#4224)."""
+    nodes: list[ast.AST] = []
+    stack = list(reversed(getattr(func, "body", [])))
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        if isinstance(node, _NESTED_SCOPES):
+            continue
+        stack.extend(reversed(list(ast.iter_child_nodes(node))))
+    return nodes
+
+
+def _literal_str_keys(node: ast.Dict) -> set[str]:
+    return {k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+
+
+def _override_context_keys(func: ast.AST) -> tuple[set[str], bool]:
+    """``(keys, calls_super)`` for one ``get_context_data()`` override.
+
+    Counts only what reaches the returned context (#4224): the string keys of a
+    returned literal dict; ``super().get_context_data(name=...)`` keywords; and,
+    for a returned local name bound only to ``super().get_context_data(...)`` or
+    to a literal dict, the keys of that literal and every ``name["key"] = ...``
+    on it. An unrelated local dict and a nested helper add nothing.
+    """
+    nodes = _own_scope_nodes(func)
+    keys: set[str] = set()
+    calls_super = False
+    returned: set[str] = set()
+    stores: dict[str, int] = {}
+    bindings: dict[str, list[ast.expr]] = {}
+    for node in nodes:
+        if isinstance(node, ast.expr) and _is_bare_super_get_context_data_call(node):
+            calls_super = True
+            keys.update(kw.arg for kw in node.keywords if kw.arg)  # type: ignore[attr-defined]
+        if isinstance(node, ast.Return):
+            if isinstance(node.value, ast.Dict):
+                keys |= _literal_str_keys(node.value)
+            elif isinstance(node.value, ast.Name):
+                returned.add(node.value.id)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stores[node.id] = stores.get(node.id, 0) + 1
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bindings.setdefault(target.id, []).append(node.value)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            if isinstance(node.target, ast.Name):
+                bindings.setdefault(node.target.id, []).append(node.value)
+    # A returned name is the context only when every binding of it is a plain
+    # ``name = super().get_context_data(...)`` or ``name = {...}``.
+    contexts = {
+        name
+        for name in returned
+        if bindings.get(name)
+        and len(bindings[name]) == stores.get(name)
+        and all(
+            isinstance(value, ast.Dict) or _is_bare_super_get_context_data_call(value)
+            for value in bindings[name]
+        )
+    }
+    for name in contexts:
+        for value in bindings[name]:
+            if isinstance(value, ast.Dict):
+                keys |= _literal_str_keys(value)
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id in contexts
+                    and isinstance(target.slice, ast.Constant)
+                    and isinstance(target.slice.value, str)
+                ):
+                    keys.add(target.slice.value)
+    return keys, calls_super
+
+
 def _get_context_data_chain_keys(cls: type) -> set[str]:
     """Names the view's ``get_context_data()`` chain supplies, following ``super()``.
 
     Walks the MRO from the most-derived override, djust's own classes
     included, and stops at the base method or at an override that does not
     call ``super().get_context_data(...)``. Each override contributes the
-    string keys it writes in the forms a shipped base uses (#4185):
+    string keys it writes into the context it returns, in the forms a shipped
+    base uses (#4185, narrowed by #4224):
 
     - a literal ``return {"name": ...}``;
-    - ``context["name"] = ...`` on a local name (``TtydTerminalView``);
+    - ``context["name"] = ...`` where ``context`` is bound to
+      ``super().get_context_data(...)`` or a literal dict and is returned
+      (``TtydTerminalView``) -- not an unrelated local dict, and nothing in
+      a nested helper function;
     - ``super().get_context_data(name=...)`` keyword arguments, which the
       base context merges in (the ttyd docstring's subclass).
 
@@ -1312,26 +1400,11 @@ def _get_context_data_chain_keys(cls: type) -> set[str]:
             tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
         except (OSError, TypeError, SyntaxError):
             break
-        calls_super = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.expr) and _is_bare_super_get_context_data_call(node):
-                calls_super = True
-                keys.update(kw.arg for kw in node.keywords if kw.arg)  # type: ignore[attr-defined]
-            elif isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
-                keys.update(
-                    k.value
-                    for k in node.value.keys
-                    if isinstance(k, ast.Constant) and isinstance(k.value, str)
-                )
-            elif isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if (
-                        isinstance(target, ast.Subscript)
-                        and isinstance(target.value, ast.Name)
-                        and isinstance(target.slice, ast.Constant)
-                        and isinstance(target.slice.value, str)
-                    ):
-                        keys.add(target.slice.value)
+        func = tree.body[0] if tree.body else None
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            break
+        own, calls_super = _override_context_keys(func)
+        keys |= own
         if not calls_super:
             break
     return keys

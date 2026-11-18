@@ -49,8 +49,11 @@
         if (window.djust && typeof window.djust.handleEvent === 'function') {
             try {
                 // ADR-036: `edge` is a generated value; a strict handler gets it
-                // only when declared (plus its dj-value-* arguments).
-                const strictParams = window.djust._strictBinding(container, eventName, { edge }, []);
+                // only when declared (plus its dj-value-* arguments). The event
+                // carries no owner context, so the server runs it on the page's
+                // view: resolve that view's contract (pageOwner, #4225).
+                const strictParams = window.djust._strictBinding(container, eventName, { edge }, [],
+                    null, true);
                 if (strictParams !== false) {
                     const sent = strictParams || { edge };
                     if (typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(sent, container);

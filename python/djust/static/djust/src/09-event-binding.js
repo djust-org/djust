@@ -933,10 +933,13 @@ function _handleDjCopy(element, e) {
         element.textContent = feedbackText;
         setTimeout(function() { element.textContent = original; }, 1500);
 
-        // Optional server event for analytics
+        // Optional server event for analytics. It carries no owner context,
+        // so the server runs it on the page's view: a strict handler there
+        // gets `text` only when declared (#4225).
         const copyEvent = element.getAttribute('dj-copy-event');
         if (copyEvent) {
-            handleEvent(copyEvent, markSlotOf({ text: textToCopy }, element));
+            const strict = _strictBinding(element, copyEvent, { text: textToCopy }, [], null, true);
+            if (strict !== false) handleEvent(copyEvent, markSlotOf(strict || { text: textToCopy }, element));
         }
     });
 }
