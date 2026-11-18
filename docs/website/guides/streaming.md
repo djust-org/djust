@@ -44,7 +44,7 @@ class ChatView(LiveView):
         return {**super().get_context_data(**kwargs), "messages": self.messages}
 
     @event_handler()
-    async def send_message(self, content="", **kwargs):
+    async def send_message(self, content: str):
         self.messages.append({"role": "user", "content": content})
         self.is_streaming = True
         await self.push_state()  # render now, so the stream target exists
@@ -228,7 +228,7 @@ class AIChat(LiveView):  # streaming is built in — no StreamingMixin needed
         return {**super().get_context_data(**kwargs), "messages": self.messages}
 
     @event_handler()
-    async def ask(self, content="", **kwargs):
+    async def ask(self, content: str):
         if self.is_streaming:
             return
 

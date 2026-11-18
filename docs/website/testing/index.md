@@ -101,7 +101,7 @@ def test_delete_item(self):
     client = LiveViewTestClient(ItemListView)
     client.mount()
 
-    # Simulate dj-click="delete" data-item-id="5"
+    # Simulate dj-click="delete" dj-value-item-id="5"
     client.send_event("delete_item", item_id=5)
     client.assert_state(items=[])  # or whatever the expected state is
 ```

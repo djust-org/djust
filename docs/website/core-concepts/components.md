@@ -54,7 +54,7 @@ class MyView(LiveView):
         return {**super().get_context_data(**kwargs), "rating": self._rating}
 
     @event_handler()
-    def set_rating(self, value, **kwargs):
+    def set_rating(self, value: int):
         self._rating.value = value
 ```
 
@@ -82,7 +82,7 @@ class ReviewView(LiveView):
         return {**super().get_context_data(**kwargs), "ratings": self._ratings}
 
     @event_handler()
-    def set_rating(self, value, name=None, **kwargs):
+    def set_rating(self, value: int, name: str):
         for rating in self._ratings:
             if rating.name == name:
                 rating.value = value

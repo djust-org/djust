@@ -230,7 +230,7 @@ wrapper's `dj-hook-value-points` attribute changes. The hook's
         <button
           type="button"
           dj-click="set_range"
-          data-range="{{ r }}"
+          dj-value-range="{{ r }}"
           class="range-btn {% if selected_range == r %}is-active{% endif %}"
           aria-pressed="{% if selected_range == r %}true{% else %}false{% endif %}"
         >{{ r }}</button>

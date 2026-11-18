@@ -651,7 +651,7 @@ class MyView(LiveView):
     sidebar_open = state(False)
 
     @event_handler()
-    def toggle_sidebar(self, **kwargs):
+    def toggle_sidebar(self):
         self.sidebar_open = not self.sidebar_open
 ```
 
@@ -841,7 +841,7 @@ Retired in 2.0 with time-travel debugging (#4184). Nothing reports it; remove it
 
 **What causes it**: An event handler or server function uses the strict parameter policy (ADR-036), and strict dispatch would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
 
-**Fix**: Correct the named parameter's declaration, use `Any` for input you validate yourself, or keep the handler on `parameter_policy="legacy"`. Legacy handlers are never reported.
+**Fix**: Correct the named parameter's declaration, or use `Any` for input you validate yourself. A handler not yet moved to the strict policy is never reported; converting one is covered in [Migrating to djust 2.0](migrating-to-2.0.md#2-make-event-handlers-strict).
 
 ---
 
@@ -931,9 +931,9 @@ A view that declares a `params_form` is also held to its `params_form_fallback`:
 
 **Severity**: Warning
 
-**What causes it**: A view with `exposure_policy = "legacy"` (or a mixin it inherits) declares a plain `Component` instance in its class body, such as `badge = Badge("new")`. A plain component has no descriptor, so it is one object shared by every session of the worker process, and a legacy view renders it. A handler that writes to it (`self.badge.label = request.user.email`) shows that value on every other user's next render and on every later page load. Message: "<class> declares the plain component '<name>' in its class body. It is one object shared by every session of the worker, ..."
+**What causes it**: A view still on the deprecated 1.x exposure policy (`djust.V028` reports it), or a mixin it inherits, declares a plain `Component` instance in its class body, such as `badge = Badge("new")`. A plain component has no descriptor, so it is one object shared by every session of the worker process, and a legacy view renders it. A handler that writes to it (`self.badge.label = request.user.email`) shows that value on every other user's next render and on every later page load. Message: "<class> declares the plain component '<name>' in its class body. It is one object shared by every session of the worker, ..."
 
-**Fix**: Create the component per view: assign `self._badge = Badge(...)` in `mount()` and return it from `get_context_data()`, or build it in `get_context_data()`. A component that no handler writes to can stay. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V026"]}`.
+**Fix**: Create the component per view: assign `self._badge = Badge(...)` in `mount()` and return it from `get_context_data()`, or build it in `get_context_data()`. Both also work after the view moves to explicit exposure ([Migrating to djust 2.0](migrating-to-2.0.md#1-move-each-view-to-explicit-exposure)). A component that no handler writes to can stay. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V026"]}`.
 
 On an explicit view the same declaration is refused when the class is created, with an `ExposureConfigurationError` that names the attribute and the working forms.
 
@@ -1317,6 +1317,7 @@ document.addEventListener('djust:navigate-end', (e) => { ... });
 
 **Fix**:
 
+<!-- doc-snippet-check: anti-pattern -->
 ```html
 <!-- WRONG -- dj-click for navigation -->
 <button dj-click="show_settings" data-view="settings">Settings</button>
@@ -1603,9 +1604,8 @@ supplied (#4054): djust 1.x generated `items_count` from a QuerySet or list
 `items`, and explicit exposure does not. Write `{{ items|length }}`, or return
 `items_count` from `get_context_data()`.
 
-To keep the 1.x
-behaviour while you migrate, set `exposure_policy = "legacy"` on the view
-([Migrating to djust 2.0](migrating-to-2.0.md)). The check skips a view whose
+Moving a whole 1.x view is covered in
+[Migrating to djust 2.0](migrating-to-2.0.md). The check skips a view whose
 `get_context_data()` it cannot read statically and a template that uses
 `{% extends %}`; with `DEBUG = True` djust logs the same condition at render
 time for those too. Suppress with
@@ -2946,7 +2946,7 @@ class ProjectView(LiveView):
     permission_required = "projects.manage_projects"
 
     @event_handler
-    def delete_project(self, project_id: int = 0, **kwargs):
+    def delete_project(self, project_id: int = 0):
         Project.objects.filter(pk=project_id).delete()
 ```
 
@@ -2955,7 +2955,7 @@ Or the more granular form:
 ```python
 @permission_required("projects.delete_project")
 @event_handler
-def delete_project(self, project_id: int = 0, **kwargs):
+def delete_project(self, project_id: int = 0):
     Project.objects.filter(pk=project_id).delete()
 ```
 
@@ -3561,4 +3561,4 @@ some_code()  # noqa: Q001,S003
 - [Security Guide](../advanced/security.md) -- Authentication and authorization
 - [Best Practices](BEST_PRACTICES.md) -- State management patterns
 
-<!-- generated-doc prose-sha256: 30d3dc4b5244 -->
+<!-- generated-doc prose-sha256: 3a677a417a34 -->

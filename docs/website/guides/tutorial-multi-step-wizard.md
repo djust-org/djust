@@ -295,7 +295,7 @@ common-case linear or branching wizard, a `state(int)` cursor plus
   that hydrates `step`, `name`, etc. from a saved draft (Django
   session or DB row). Save on every transition.
 - **Skip-to-step navigation:** add `<button dj-click="goto_step"
-  data-step="2">2. Plan</button>` and a `goto_step` handler that
+  dj-value-step="2">2. Plan</button>` and a `goto_step` handler that
   validates every step ≤ N before jumping.
 - **Branching wizards:** if step 2's plan choice changes step 3's
   questions, just check `self.plan` inside the step-3 template

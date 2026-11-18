@@ -144,12 +144,12 @@ def search(self, value: str = "", **kwargs):
 
 ## Passing Data from the DOM
 
-Use `data-*` attributes to pass data to event handlers:
+Use `dj-value-*` attributes to pass data to event handlers:
 
 ```python
 @event_handler()
-def delete_item(self, item_id: int = 0, **kwargs):
-    """data-item-id="5" becomes item_id=5 (auto-converted to int)."""
+def delete_item(self, item_id: int):
+    """dj-value-item-id="5" becomes item_id=5 (converted by the annotation)."""
     self.items = [i for i in self.items if i["id"] != item_id]
 ```
 
@@ -157,7 +157,7 @@ def delete_item(self, item_id: int = 0, **kwargs):
 {% for item in items %}
 <li>
     {{ item.name }}
-    <button dj-click="delete_item" data-item-id="{{ item.id }}">Delete</button>
+    <button dj-click="delete_item" dj-value-item-id="{{ item.id }}">Delete</button>
 </li>
 {% endfor %}
 ```

@@ -26,6 +26,18 @@ test:
    block with no template (a fragment showing one handler) runs on a stub
    template, as a view does.
 
+Every block runs under the 2.0 rules (#4188): the project parameter policy is
+``"strict"``, so each handler a block declares must have a strict signature
+(``djust.V016``, checked on the class even when the block cannot mount), a
+handler may not opt back into ``parameter_policy="legacy"``, and a view may not
+state ``exposure_policy = "legacy"``. A handler whose documented signature
+needs arguments is fired with the ones its template binding sends
+(``dj-value-*``, an input's ``value``, a form's fields), so a typed example is
+run, not only parsed. 1.3 code that a migration guide shows as the thing being
+replaced carries ``<!-- doc-snippet-check: before -->`` and is not executed.
+``test_docs_pass_event_arguments_as_dj_value`` reads every template in
+``docs/website`` for an event argument passed as ``data-*``.
+
 Outcomes that are not doc defects are *not* failures and are recorded as
 such: a block importing the reader's own app or a library the test env lacks,
 a block defining a Django model (no app to own it), a ``mount()`` that needs
@@ -55,6 +67,7 @@ import re
 import sys
 import traceback
 import types
+import warnings
 from dataclasses import dataclass, field
 
 import pytest
@@ -194,8 +207,9 @@ def _blocks_in(paths) -> list[Block]:
             continue
         for lineno, code, marker in extract(path):
             # ``<!-- doc-snippet-check: anti-pattern -->`` marks code the guide
-            # shows as WRONG; executing it would report the lesson as a defect.
-            if marker == "anti-pattern":
+            # shows as WRONG, and ``before`` the 1.3 code a migration guide
+            # replaces; executing either would report the lesson as a defect.
+            if marker in ("anti-pattern", "before"):
                 continue
             if _defines_live_class(code):
                 blocks.append(Block(path, lineno, code))
@@ -477,11 +491,7 @@ def _check_exposure(cls: type, client, block: Block) -> None:
     handlers, with no ``mount()`` and no template, is a fragment of a view the
     reader already has and is not judged.
     """
-    from djust._exposure import uses_legacy_exposure
-
     view = client.view_instance
-    if uses_legacy_exposure(view):
-        return  # the "before" half of migration material
     scanner = _exposure_scanner()
     examples = {
         example.cls: example
@@ -508,6 +518,196 @@ def _check_exposure(cls: type, client, block: Block) -> None:
             "this document reads the name, but get_context_data() does not supply it, so it "
             "renders empty (docs/website/state/explicit-exposure.md)",
         )
+
+
+def _check_2_0_declarations(classes: list[type], recovery: frozenset[str] = frozenset()) -> None:
+    """The block's classes use the 2.0 spellings (#4188).
+
+    * no class states ``exposure_policy = "legacy"`` (``djust.V028``);
+    * no handler states ``parameter_policy="legacy"``;
+    * every handler the class declares has a strict signature. This is
+      ``djust.V016`` itself (``checks.parameters._handler_messages``), run on the
+      class under the strict project policy the test sets, so it covers handlers
+      the block cannot fire and blocks that cannot mount (a model it does not
+      define). Handlers the class inherits from djust are not the example's.
+
+    ``recovery`` names the handlers a ``dj-auto-recover`` in the document
+    targets. They run under the legacy policy by owner decision R1 (their
+    ``_form_values`` / ``_data_attrs`` envelope has no strict signature yet), as
+    ``djust.V016`` itself skips them when it can read the view's template.
+    """
+    from djust._exposure import uses_legacy_exposure
+    from djust._parameter_metadata import component_stop, declared_handlers, view_stop
+    from djust.checks.parameters import _handler_messages
+    from djust.live_view import LiveView
+
+    for cls in classes:
+        if uses_legacy_exposure(cls):
+            raise _Fail(
+                "legacy exposure",
+                f'{cls.__name__} states exposure_policy = "legacy"; 2.0 examples are explicit '
+                "(docs/website/state/explicit-exposure.md). Mark 1.3 code a migration guide "
+                "replaces with <!-- doc-snippet-check: before -->",
+            )
+        stop = view_stop if issubclass(cls, LiveView) else component_stop
+        for name, member, function, _owner in declared_handlers(cls, stop, server_functions=True):
+            if inspect.unwrap(function).__module__ != cls.__module__:
+                # Inherited from djust, or installed by it (a descriptor
+                # component's ``set_tab``): not the example's declaration.
+                continue
+            if name in recovery:
+                continue
+            decorators = getattr(function, "_djust_decorators", {})
+            metadata = decorators.get("event_handler", decorators.get("server_function", {}))
+            if metadata.get("parameter_policy") == "legacy":
+                raise _Fail(
+                    "legacy parameter policy",
+                    f'{cls.__name__}.{name} states parameter_policy="legacy"; 2.0 examples '
+                    "are strict (core-concepts/events.md#typed-event-parameters-strict-policy)",
+                )
+            for message in _handler_messages(cls, name, member, function, True, True):
+                if message.id == "djust.V016":
+                    raise _Fail("handler is not strict", message.msg[:400])
+
+
+_EVENT_ATTR = (
+    r"dj-(?:click|dblclick|submit|change|input|keydown|keyup|keypress|blur|focus"
+    r"|mouseenter|mouseleave|paste)(?:\.[A-Za-z0-9_.-]+)?"
+)
+_TAG_RE = re.compile(r"<[A-Za-z][^<>]*>", re.DOTALL)
+_ATTR_RE = re.compile(r"([A-Za-z_:][-A-Za-z0-9_:.]*)(?:\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+))?")
+_FORM_RE = re.compile(r"<form\b[^<>]*>.*?</form>", re.DOTALL | re.IGNORECASE)
+
+
+def _attrs(tag: str) -> dict[str, str]:
+    body = tag[1:-1].split(None, 1)
+    attrs: dict[str, str] = {}
+    for m in _ATTR_RE.finditer(body[1] if len(body) > 1 else ""):
+        value = m.group(2) or ""
+        if value[:1] in {'"', "'"}:
+            value = value[1:-1]
+        attrs[m.group(1)] = value
+    return attrs
+
+
+def _binding_arguments(
+    template: str, handler: str, declared: frozenset[str] | None
+) -> list[dict[str, str]]:
+    """What the browser sends for each element of ``template`` bound to ``handler``.
+
+    The strict collection (``_strictBinding`` in ``09-event-binding.js``): its
+    ``dj-value-*`` arguments (``dj-value-item-id`` arrives as ``item_id``),
+    always; and the values the browser generates, only those the handler
+    declares (``declared``, None for a ``**`` catch-all): ``value`` and
+    ``field`` for an input or change event, the named fields of a submitted
+    form. A binding whose ``dj-value-*`` is a template expression
+    (``{{ item.id }}``) is not usable outside a render and is left out.
+    """
+
+    def wanted(name: str) -> bool:
+        return declared is None or name in declared
+
+    def literal(value: str) -> str:
+        return "doc" if "{{" in value or "{%" in value or not value else value
+
+    sends: list[dict[str, str]] = []
+    forms = [(m.start(), m.group(0)) for m in _FORM_RE.finditer(template)]
+    for tag_match in _TAG_RE.finditer(template):
+        attrs = _attrs(tag_match.group(0))
+        events = [a for a in attrs if re.fullmatch(_EVENT_ATTR, a)]
+        bound = [a for a in events if attrs[a].split("(")[0].strip() == handler]
+        if not bound:
+            continue
+        args: dict[str, str] = {}
+        for attr, value in attrs.items():
+            if attr.startswith("dj-value-"):
+                args[attr[len("dj-value-") :].split(":")[0].replace("-", "_")] = value
+        if any("{{" in v or "{%" in v for v in args.values()):
+            continue
+        event = bound[0].split(".")[0]
+        if event in {"dj-input", "dj-change"}:
+            if wanted("value"):
+                args.setdefault("value", literal(attrs.get("value", "")))
+            if wanted("field") and attrs.get("name"):
+                args.setdefault("field", attrs["name"])
+        if event == "dj-submit":
+            form = next((f for f in forms if f[0] == tag_match.start()), None)
+            if form is not None:
+                for field_tag in _TAG_RE.finditer(form[1]):
+                    field_attrs = _attrs(field_tag.group(0))
+                    name = field_attrs.get("name", "")
+                    if (
+                        name
+                        and wanted(name)
+                        and field_tag.group(0)[1:]
+                        .lower()
+                        .startswith(("input", "select", "textarea"))
+                    ):
+                        args.setdefault(name, literal(field_attrs.get("value", "")))
+        sends.append(args)
+    return sends
+
+
+def _recovery_targets(block: Block) -> frozenset[str]:
+    """Handlers a ``dj-auto-recover`` in the block's document names."""
+    if not block.path.exists():
+        return frozenset()
+    text = block.path.read_text(encoding="utf-8")
+    return frozenset(re.findall(r'dj-auto-recover="([A-Za-z_]\w*)"', text))
+
+
+def _document_templates(block: Block) -> str:
+    """The template fences that follow ``block`` in its document, up to the next python fence."""
+    if not block.path.exists():
+        return ""
+    scanner = _exposure_scanner()
+    text = block.path.read_text(encoding="utf-8")
+    found: list[str] = []
+    for line, language, body, _marker in scanner._fences(text):
+        if line <= block.lineno:
+            continue
+        if language in {"python", "py"}:
+            break
+        if language in {"html", "django", "jinja", "htmldjango", ""}:
+            found.append(body)
+    return "\n".join(found)
+
+
+def _fire_with_binding_arguments(
+    client, cls: type, handler: str, templates: list[str], outcome: Outcome, block_classes
+) -> bool:
+    """Fire ``handler`` with what a template binding sends. False when no binding fits."""
+    fn = getattr(cls, handler)
+    params = list(inspect.signature(fn).parameters.values())[1:]
+    declared = (
+        None
+        if any(p.kind is p.VAR_KEYWORD for p in params)
+        else frozenset(p.name for p in params if p.kind is not p.VAR_POSITIONAL)
+    )
+    required = {
+        p.name
+        for p in params
+        if p.default is inspect.Parameter.empty
+        and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
+    }
+    for template in templates:
+        for args in _binding_arguments(template, handler, declared):
+            if not required <= set(args):
+                continue
+            result = client.send_event(handler, **args)
+            if not result["success"]:
+                error = str(result.get("error"))
+                kind = _non_defect(error, block_classes)
+                if kind:
+                    outcome.notes.append(f"{cls.__name__}.{handler}: {kind[0]} ({kind[1]})")
+                    return True
+                raise _Fail(
+                    _failure_category(error, block_classes, "handler failed"),
+                    f"{cls.__name__}.{handler}({args}): {error[:400]}",
+                )
+            outcome.notes.append(f"{cls.__name__}.{handler}: fired with {sorted(args)}")
+            return True
+    return False
 
 
 def _classify_handler_error(error: str) -> str | None:
@@ -565,7 +765,15 @@ def _run_view(
                 (cls,),
                 {
                     "__module__": cls.__module__,
-                    "template": "<div dj-root>doc-snippet stub</div>",
+                    # A recovery handler the document's template targets
+                    # keeps its target in the stub, as the runtime reads it
+                    # from the real template (R1: legacy policy).
+                    "template": "<div dj-root>doc-snippet stub%s</div>"
+                    % "".join(
+                        f'<div dj-auto-recover="{target}"></div>'
+                        for target in sorted(_recovery_targets(block) if block else ())
+                        if callable(getattr(cls, target, None))
+                    ),
                     "template_name": None,
                 },
             )
@@ -663,10 +871,22 @@ def _run_view(
                         f"{name}: `{key}={value!r}` is in the template but not the render",
                     )
 
+    templates = [getattr(cls, "template", None) or ""] if not stub_used else []
+    if block is not None:
+        templates.append(_document_templates(block))
     for handler in _event_handlers(cls):
         fn = getattr(cls, handler)
         if _requires_args(fn):
-            outcome.notes.append(f"{name}.{handler}: requires arguments, not fired")
+            try:
+                fired = _fire_with_binding_arguments(
+                    client, cls, handler, templates, outcome, block_classes
+                )
+            except _Fail:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                raise _Fail("handler raised", f"{name}.{handler}: {_exc_text(exc)}") from exc
+            if not fired:
+                outcome.notes.append(f"{name}.{handler}: requires arguments, not fired")
             continue
         try:
             result = client.send_event(handler)
@@ -775,6 +995,7 @@ def run_block(block: Block) -> Outcome:
         }
         if not views and not components:
             raise _Skip("defines no concrete LiveView/LiveComponent", "")
+        _check_2_0_declarations(views + components, _recovery_targets(block))
         for cls in views:
             _run_view(cls, outcome, block_classes, block)
         for cls in components:
@@ -1150,7 +1371,7 @@ def _synthetic(code: str) -> Block:
     [(_UNDECORATED_VIEW, "    def bump"), (_UNDECORATED_COMPONENT, "    def flip")],
     ids=["view", "component"],
 )
-def test_a_binding_without_the_decorator_is_reported(code, decorated, settings):
+def test_a_binding_without_the_decorator_is_reported(code, decorated, settings, strict_parameters):
     """The consumer refuses an undecorated method, so a guide whose template binds one
     is broken for the reader; the test client calls methods by name and would not
     notice. Pinned for both runners, with the decorated control passing."""
@@ -1185,7 +1406,7 @@ _SUPPLY_NAME = (
 
 
 @pytest.mark.django_db
-def test_a_template_name_the_view_does_not_supply_is_reported(settings):
+def test_a_template_name_the_view_does_not_supply_is_reported(settings, strict_parameters):
     """#4048: under explicit exposure ``self.name`` alone renders ``{{ name }}`` empty.
 
     Nothing raises, so before this check such a guide block passed. The control
@@ -1212,14 +1433,135 @@ def test_a_template_name_the_view_does_not_supply_is_reported(settings):
     # #4050: a declared state() field renders without get_context_data().
     assert run_block(declared).status == "pass"
 
-    legacy = _synthetic(
-        _UNSUPPLIED_VIEW.replace(
-            "    template =", "    exposure_policy = 'legacy'\n    template =", 1
-        )
+
+_STRICT_VIEW = (
+    "from djust import LiveView, state\n"
+    "from djust.decorators import event_handler\n\n\n"
+    "class Picker(LiveView):\n"
+    '    template = \'<div dj-root><button dj-click="pick" dj-value-item-id="7">x</button>'
+    "{{ picked }}</div>'\n"
+    "    picked = state(0)\n\n"
+    "    @event_handler()\n"
+    "    def pick(self, item_id: int):\n"
+    "        self.picked = item_id\n"
+)
+
+
+@pytest.mark.django_db
+def test_a_legacy_declaration_is_reported(settings, strict_parameters):
+    """#4188: an example states neither the legacy exposure nor the legacy parameter policy,
+    and every handler it declares has a strict signature, fired or not."""
+    control = _synthetic(_STRICT_VIEW)
+    settings.LIVEVIEW_ALLOWED_MODULES = [control.module_name]
+    outcome = run_block(control)
+    assert outcome.status == "pass", outcome
+    # The required argument came from the binding's dj-value-item-id, not a default.
+    assert "Picker.pick: fired with ['item_id']" in outcome.notes, outcome.notes
+
+    cases = {
+        "legacy exposure": _STRICT_VIEW.replace(
+            "    picked = state(0)", "    exposure_policy = 'legacy'\n    picked = state(0)"
+        ),
+        "legacy parameter policy": _STRICT_VIEW.replace(
+            "@event_handler()", "@event_handler(parameter_policy='legacy')"
+        ),
+        "handler is not strict": _STRICT_VIEW.replace("item_id: int", "item_id"),
+    }
+    for category, code in cases.items():
+        assert code != _STRICT_VIEW, category
+        block = _synthetic(code)
+        settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            outcome = run_block(block)
+        assert (outcome.status, outcome.category) == ("fail", category), outcome
+
+
+@pytest.mark.django_db
+def test_an_unfired_handler_is_still_held_to_a_strict_signature(settings, strict_parameters):
+    """A handler whose arguments no binding supplies is not fired, but its signature is checked."""
+    unbound = _STRICT_VIEW.replace(' dj-value-item-id="7"', "")
+    assert "dj-value" in _STRICT_VIEW and "dj-value" not in unbound
+    block = _synthetic(unbound)
+    settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
+    outcome = run_block(block)
+    assert outcome.status == "pass", outcome
+    assert "Picker.pick: requires arguments, not fired" in outcome.notes, outcome.notes
+
+    code = unbound.replace("item_id: int", "item_id")
+    assert code != unbound
+    block = _synthetic(code)
+    settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
+    outcome = run_block(block)
+    assert (outcome.status, outcome.category) == ("fail", "handler is not strict"), outcome
+
+
+# ``data-*`` attributes on an event element that are not event arguments: the
+# client's routing and behaviour markers (``extractTypedParams`` in
+# ``static/djust/src/08-event-parsing.js`` skips the routing ones; the rest are
+# read by the draft manager and the rate limiter, not sent).
+_DATA_MARKERS = re.compile(
+    r"data-(?:component-id|debounce|throttle|loading|dj-close|draft(?:-[a-z-]+)?"
+    r"|liveview[a-z-]*|live-[a-z-]+|djust[a-z-]*)$"
+)
+_BEFORE_FENCE_RE = re.compile(
+    r"^<!-- doc-snippet-check: (?:before|anti-pattern) -->\n(```+)[^\n]*\n.*?^\1\s*$",
+    re.DOTALL | re.MULTILINE,
+)
+_WEBSITE_DOCS = sorted(
+    {*REPO_ROOT.glob("docs/website/*.md"), *REPO_ROOT.glob("docs/website/*/*.md")}
+)
+
+
+def data_argument_findings(text: str) -> list[str]:
+    """Each element in ``text`` that passes an event argument as ``data-*``.
+
+    Under the strict policy, the 2.0 default, a handler receives only
+    ``dj-value-*`` arguments, so such an argument never arrives (#4188). A
+    fence marked ``<!-- doc-snippet-check: before -->`` (1.3 code a migration
+    guide replaces), or ``anti-pattern`` (markup a guide shows as wrong, such
+    as the trigger of check ``djust.T010``), is left out.
+    """
+    text = _BEFORE_FENCE_RE.sub("", text)
+    findings = []
+    for tag in _TAG_RE.finditer(text):
+        attrs = _attrs(tag.group(0))
+        if not any(re.fullmatch(_EVENT_ATTR, a) for a in attrs):
+            continue
+        arguments = [a for a in attrs if a.startswith("data-") and not _DATA_MARKERS.match(a)]
+        if arguments:
+            line = text.count("\n", 0, tag.start()) + 1
+            findings.append(f"line {line}: {' '.join(tag.group(0).split())[:160]}")
+    return findings
+
+
+def test_data_argument_scan_finds_a_data_argument_and_spares_markers():
+    assert data_argument_findings('<button dj-click="delete" data-item-id="5">x</button>')
+    assert data_argument_findings('<button\n  dj-click="go"\n  data-dj-tab="a">x</button>')
+    assert not data_argument_findings('<button dj-click="delete" dj-value-item-id="5">x</button>')
+    assert not data_argument_findings(
+        '<button dj-click="inc" data-component-id="c1">+</button>'
+        '<input dj-input="search" data-debounce="300">'
+        '<div data-item-id="5">not an event element</div>'
     )
-    settings.LIVEVIEW_ALLOWED_MODULES = [legacy.module_name]
-    with pytest.warns(DeprecationWarning):
-        assert run_block(legacy).status == "pass"
+    before = (
+        '<!-- doc-snippet-check: before -->\n```python\nx = \'<a dj-click="a" data-b="1">\'\n```\n'
+    )
+    assert not data_argument_findings(before)
+    assert not data_argument_findings(before.replace("before", "anti-pattern"))
+    assert data_argument_findings(before.replace("before", "skip"))
+
+
+@pytest.mark.parametrize(
+    "path", _WEBSITE_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _WEBSITE_DOCS]
+)
+def test_docs_pass_event_arguments_as_dj_value(path):
+    """#4188: every example passes event arguments the 2.0 way, ``dj-value-*``."""
+    findings = data_argument_findings(path.read_text(encoding="utf-8"))
+    assert not findings, (
+        f"{path.relative_to(REPO_ROOT)} passes event arguments as data-*, which a strict "
+        "handler never receives; use dj-value-*:\n  " + "\n  ".join(findings)
+    )
 
 
 def test_an_anti_pattern_block_is_not_executed(tmp_path, monkeypatch):
@@ -1269,9 +1611,22 @@ def _reader_templates(templates: list[dict]) -> list[dict]:
     return readers
 
 
+@pytest.fixture
+def strict_parameters():
+    """The strict project parameter policy, 2.0's (#4188, #4189)."""
+    from djust.config import config
+
+    old = config.get("event_parameter_policy", "legacy")
+    config.set("event_parameter_policy", "strict")
+    try:
+        yield
+    finally:
+        config.set("event_parameter_policy", old)
+
+
 @pytest.mark.django_db
 @pytest.mark.parametrize("block", [_param(b) for b in _BLOCKS])
-def test_doc_snippet_executes(block: Block, settings, no_network):
+def test_doc_snippet_executes(block: Block, settings, no_network, strict_parameters):
     """The block executes, mounts, renders and handles events as documented."""
     settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
     settings.TEMPLATES = _reader_templates(settings.TEMPLATES)

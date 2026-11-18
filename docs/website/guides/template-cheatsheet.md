@@ -46,8 +46,8 @@ Every LiveView template needs these two things:
 
 | Attribute | Fires On | Handler Receives |
 |---|---|---|
-| `dj-click="handler"` | Click | `data-*` attributes as kwargs |
-| `dj-submit="handler"` | Form submit | All named form fields as kwargs |
+| `dj-click="handler"` | Click | `dj-value-*` attributes as kwargs |
+| `dj-submit="handler"` | Form submit | The named form fields it declares (all of them with `**fields: str`) |
 | `dj-copy="text"` | Click | Client-only clipboard copy, no server round-trip |
 | `dj-copy="#selector"` | Click | Copy `textContent` of matched element |
 
@@ -56,7 +56,7 @@ Every LiveView template needs these two things:
 <button dj-click="increment">+</button>
 
 <!-- Pass data to handler -->
-<button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
+<button dj-click="delete" dj-value-item-id="{{ item.id }}">Delete</button>
 
 <!-- Inline args (positional) -->
 <button dj-click="set_period('month')">Monthly</button>
@@ -115,7 +115,7 @@ Every LiveView template needs these two things:
 <!-- Disable the default 300 ms debounce on dj-input: one event per keystroke -->
 <input dj-input="on_change" dj-debounce="0" />
 
-<!-- Legacy data-* attributes (still supported) -->
+<!-- Older rate-limit spellings, honoured on dj-input only; prefer dj-debounce / dj-throttle -->
 <input dj-input="search" data-debounce="500" />
 <input dj-input="on_resize" data-throttle="100" />
 
@@ -426,48 +426,40 @@ its request is in flight. An element with no `dj-*` event attribute needs `dj-lo
 
 ## Passing Data to Handlers
 
-### `data-*` attributes
+### `dj-value-*` attributes
 
 ```html
-<!-- data-* values arrive as strings unless you add a type suffix -->
+<!-- The handler's annotations convert the text; a type suffix converts in the browser -->
 <button dj-click="select_item"
-        data-item-id:int="{{ item.id }}"
-        data-price:float="{{ item.price }}"
-        data-active:bool="true">
+        dj-value-item-id:int="{{ item.id }}"
+        dj-value-price:float="{{ item.price }}"
+        dj-value-active:bool="true">
     Select
 </button>
 ```
 
-Handler receives: `select_item(self, item_id=42, price=9.99, active=True)`
+Handler: `def select_item(self, item_id: int, price: float, active: bool)`
+receives `item_id=42, price=9.99, active=True`.
 
-Type coercion rules:
-- Without a suffix, a `data-*` value is passed as a `str` (`data-item-id="42"` → `item_id="42"`).
-- Suffixes coerce on the client: `:int`, `:float`, `:bool`, `:json`, `:list`.
-- Alternatively, annotate the handler (`def select_item(self, item_id: int = 0, price: float = 0.0, active: bool = False, **kwargs)`) and djust coerces by the type hints.
+Conversion rules:
+- The annotation converts the value (`dj-value-item-id="42"` → `item_id=42` for `item_id: int`).
+- Suffixes convert on the client: `:int`, `:float`, `:bool`, `:json`, `:list` (a JSON array). A suffix that contradicts the annotation is rejected.
+- `data-*` attributes are not arguments; keep them for your own scripts and CSS.
 
-### `dj-value-*` attributes
+### `field` (which input fired)
 
-```html
-<!-- Pass extra values without data- prefix -->
-<button dj-click="handler" dj-value-mode="edit" dj-value-row="{{ row.id }}">
-    Edit
-</button>
-```
-
-### `_target` (automatic, legacy policy only)
-
-For `dj-change` and `dj-input` bound to a legacy-policy handler (the default), the `_target` parameter is included automatically with the triggering element's `name` attribute. Strict-policy handlers never receive `_target`; see the next section. Useful when multiple fields share one handler:
+For `dj-change` and `dj-input`, a handler that declares `field` receives the triggering element's `name`. Useful when multiple fields share one handler:
 
 ```html
 <input name="email" dj-change="validate" />
 <input name="username" dj-change="validate" />
 ```
 
-Handler receives `_target="email"` or `_target="username"`.
+Handler `validate(self, value: str, field: str)` receives `field="email"` or `field="username"`.
 
-### Generated values under the strict policy
+### Generated values
 
-Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields (and the pressed submit button's `name=value`) for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive the same values as before, with one change: a repeated field name on `dj-submit`, and a `dj-change` / `dj-input` / `dj-blur` / `dj-focus` on a group of same-named checkboxes or a `<select multiple>`, now arrive as a **list** (see [Fields with several values](forms.md#fields-with-several-values)).
+Under the strict parameter policy (ADR-036; the examples in these guides use it), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields (and the pressed submit button's `name=value`) for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. A repeated field name on `dj-submit`, and a `dj-change` / `dj-input` / `dj-blur` / `dj-focus` on a group of same-named checkboxes or a `<select multiple>`, arrive as a **list** (see [Fields with several values](forms.md#fields-with-several-values)).
 
 ---
 
@@ -935,8 +927,7 @@ VDOM identity:
   dj-hook="name"                  (JS lifecycle hooks)
 
 Data passing:
-  data-*                          (string kwargs; data-x:int etc. to coerce)
-  dj-value-*                      (extra value kwargs)
+  dj-value-*                      (handler kwargs; dj-value-x:int etc. to convert)
   dj-target="#selector"           (INERT: read, then dropped; does not scope updates)
 ```
 

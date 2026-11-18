@@ -252,6 +252,7 @@ data made only of what it declares. See
 `"legacy"` is still accepted when a class states it, so a 1.x view keeps its
 behaviour by adding one line:
 
+<!-- doc-snippet-check: before -->
 ```python
 class OldView(LiveView):
     exposure_policy = "legacy"
@@ -910,4 +911,4 @@ API is evaluated. Existing per-session ticks and push/presence behavior retain
 their stability commitments. Phases 1–3 are process-local; distributed ownership
 is deferred.
 
-<!-- generated-doc prose-sha256: a49ebdcfa0a3 -->
+<!-- generated-doc prose-sha256: 8e7a64abada1 -->

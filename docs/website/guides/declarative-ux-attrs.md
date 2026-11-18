@@ -32,13 +32,15 @@ Fires a server event when the marked element's attributes or children change, vi
 ```
 
 ```python
+from typing import Optional
+
 from djust import LiveView
 from djust.decorators import event_handler
 
 class ChartView(LiveView):
     @event_handler
-    def handle_change(self, mutation: str = "", attrs: list = None,
-                       added: int = 0, removed: int = 0, **kwargs):
+    def handle_change(self, mutation: str, attrs: Optional[list[str]] = None,
+                       added: int = 0, removed: int = 0):
         # mutation is "attributes" or "childList"
         # attrs is the list of changed attribute names (when mutation=="attributes")
         # added/removed is the child-count delta (when mutation=="childList")

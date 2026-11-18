@@ -226,11 +226,11 @@ class EditorView(LiveView):
     body = state("")
 
     @event_handler()
-    def validate_title(self, value="", **kwargs):
+    def validate_title(self, value: str):
         self.title = value
 
     @event_handler()
-    def preview(self, value="", **kwargs):
+    def preview(self, value: str):
         self.body = value
 
     @event_handler()

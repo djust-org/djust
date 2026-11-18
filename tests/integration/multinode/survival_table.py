@@ -168,7 +168,7 @@ STATE_ROWS = (
     ),
     Row(
         "legacy",
-        '`exposure_policy = "legacy"` view attribute',
+        "An attribute of a view still on the 1.x exposure policy",
         "Migrate the view to explicit exposure: a legacy view's state is not saved.",
     ),
     Row(

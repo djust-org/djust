@@ -27,8 +27,12 @@ the old behaviour.
 If you are already on a 2.0 pre-release with views you have not migrated,
 state `exposure_policy = "legacy"` on them, or once on a base class they
 inherit from, and then migrate them one at a time. Without it an unmigrated
-view renders the names nothing supplies as empty, with no error. See
-[Keeping the legacy policy](../state/explicit-exposure.md#keeping-the-legacy-policy).
+view renders the names nothing supplies as empty, with no error. No setting
+changes the default. The views djust itself ships that still state it (the
+admin change list and form, `TtydTerminalView`, the `@live_view` decorator) do
+not warn, since that line is not yours to change. The 2.0 pre-releases accept
+the policy and 2.0.0 does not, so this is only a stopgap
+([section 4](#4-still-to-be-removed-before-the-final-release)).
 
 Stating `"legacy"` raises a `DeprecationWarning` when the class is defined. If
 your tests run with warnings as errors, that fails the import of every module
@@ -144,6 +148,7 @@ Without `--view` it reports every LiveView in the project; `--app shop` limits
 it to one app, and `--json` prints JSON. It reads your source and never
 creates a view or prints a value. For this view:
 
+<!-- doc-snippet-check: before -->
 ```python
 from djust import LiveView
 from djust.decorators import event_handler
@@ -525,6 +530,7 @@ checks every event again, including ones a script sends by hand.
 
 ### Before and after
 
+<!-- doc-snippet-check: before -->
 ```python
 from djust import LiveView, state
 from djust.decorators import event_handler
@@ -720,7 +726,7 @@ class WizardView(LiveView):
         return context
 
     @event_handler()
-    def forward(self, **kwargs):
+    def forward(self):
         self.step += 1
 ```
 
@@ -755,7 +761,7 @@ class CartView(LiveView):
         return context
 
     @event_handler()
-    def add(self, sku: str = "", **kwargs):
+    def add(self, sku: str = ""):
         self.items = [*self.items, sku]
 ```
 
@@ -919,7 +925,7 @@ class FeedView(LiveView):
         return context
 
     @event_handler()
-    def more(self, **kwargs):
+    def more(self):
         self.offset += self._page_size
 ```
 
@@ -978,4 +984,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 014a12d56e13 -->
+<!-- generated-doc prose-sha256: 43740668b3a9 -->
