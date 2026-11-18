@@ -164,6 +164,12 @@ class TenantDetailView(BaseViewWithNavbar):
 
     def mount(self, request, pk=None, **kwargs):
         """Initialize tenant detail view"""
+        self._pk = pk
+
+    def _load(self):
+        # Read on every render, not kept from mount(): between events the HTTP
+        # fallback restores a saved model as its field dict, not a row.
+        pk = self._pk
         self._tenant_id = pk
 
         # Load tenant
@@ -187,6 +193,7 @@ class TenantDetailView(BaseViewWithNavbar):
 
     def get_context_data(self, **kwargs):
         """Add tenant detail context"""
+        self._load()
         context = super().get_context_data(**kwargs)
 
         if not self._tenant:

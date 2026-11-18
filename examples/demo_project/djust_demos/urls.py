@@ -77,6 +77,7 @@ urlpatterns = [
     # PWA & Multi-Tenant Demos
     path("pwa/", PWADemoView.as_view(), name="pwa"),
     path("tenant/", TenantDemoView.as_view(), name="tenant"),
+    path("tenant/<slug:tenant_id>/", TenantDemoView.as_view(), name="tenant-detail"),
     # What's New
     path("whats-new/0.4.2/", WhatsNew042View.as_view(), name="whats-new-042"),
     # v0.7.0 — server functions + dj-prefetch demo

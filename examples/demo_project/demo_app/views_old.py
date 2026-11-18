@@ -230,11 +230,15 @@ class PerformanceTestView(BaseViewWithNavbar):
     """
     template_name = "demos/performance.html"
 
-    # The raw list; get_context_data() renders it filtered and sorted.
-    all_items = state(default_factory=list, persist="server", render=False)
-    next_id = state(1, persist="server", render=False)
+    # The raw list is server-side working data in private attributes mount()
+    # creates (automatic server state saves them), not a persist="server"
+    # field, which a large list outgrows; get_context_data() renders it.
     filter_text = state("", persist="server")
     sort_by = state("name", persist="server")
+
+    def mount(self, request, **kwargs):
+        self._all_items = []
+        self._next_id = 1
 
     def _generate_items(self, count):
         """Generate sample items"""
@@ -247,13 +251,13 @@ class PerformanceTestView(BaseViewWithNavbar):
         new_items = []
         for i in range(count):
             new_items.append({
-                'id': self.next_id,
-                'name': f'Item {self.next_id:04d}',
+                'id': self._next_id,
+                'name': f'Item {self._next_id:04d}',
                 'priority': random.choice([True, False]),
                 'selected': False,
                 'timestamp': time.strftime('%H:%M:%S', time.localtime(base_time - i * 60)),
             })
-            self.next_id += 1
+            self._next_id += 1
 
         return new_items
 
@@ -261,9 +265,9 @@ class PerformanceTestView(BaseViewWithNavbar):
         """Apply current filter and sort settings"""
         # Filter
         if self.filter_text:
-            filtered = [item for item in self.all_items if self.filter_text.lower() in item['name'].lower()]
+            filtered = [item for item in self._all_items if self.filter_text.lower() in item['name'].lower()]
         else:
-            filtered = self.all_items[:]
+            filtered = self._all_items[:]
 
         # Sort
         if self.sort_by == "name":
@@ -278,31 +282,31 @@ class PerformanceTestView(BaseViewWithNavbar):
     def get_context_data(self, **kwargs):
         return super().get_context_data(
             items=self._apply_filter_and_sort(),
-            item_count=len(self.all_items),
-            selected_count=sum(1 for item in self.all_items if item.get('selected', False)),
+            item_count=len(self._all_items),
+            selected_count=sum(1 for item in self._all_items if item.get('selected', False)),
             **kwargs,
         )
 
     @event_handler
     def add_items_10(self):
         """Add 10 items"""
-        self.all_items.extend(self._generate_items(10))
+        self._all_items.extend(self._generate_items(10))
 
     @event_handler
     def add_items_100(self):
         """Add 100 items"""
-        self.all_items.extend(self._generate_items(100))
+        self._all_items.extend(self._generate_items(100))
 
     @event_handler
     def add_items_1000(self):
         """Add 1000 items"""
-        self.all_items.extend(self._generate_items(1000))
+        self._all_items.extend(self._generate_items(1000))
 
     @event_handler
     def clear_all(self):
         """Clear all items"""
-        self.all_items = []
-        self.next_id = 1
+        self._all_items = []
+        self._next_id = 1
         self.filter_text = ""
 
     @event_handler
@@ -320,7 +324,7 @@ class PerformanceTestView(BaseViewWithNavbar):
         """Toggle item selection"""
         item_id = id
         if item_id:
-            for item in self.all_items:
+            for item in self._all_items:
                 if item['id'] == item_id:
                     item['selected'] = not item.get('selected', False)
                     break
@@ -328,26 +332,26 @@ class PerformanceTestView(BaseViewWithNavbar):
     @event_handler
     def select_all(self):
         """Select all items"""
-        for item in self.all_items:
+        for item in self._all_items:
             item['selected'] = True
 
     @event_handler
     def deselect_all(self):
         """Deselect all items"""
-        for item in self.all_items:
+        for item in self._all_items:
             item['selected'] = False
 
     @event_handler
     def delete_selected(self):
         """Delete all selected items"""
-        self.all_items = [item for item in self.all_items if not item.get('selected', False)]
+        self._all_items = [item for item in self._all_items if not item.get('selected', False)]
 
     @event_handler
     def toggle_priority(self, id: int = 0, **kwargs):
         """Toggle item priority"""
         item_id = id
         if item_id:
-            for item in self.all_items:
+            for item in self._all_items:
                 if item['id'] == item_id:
                     item['priority'] = not item.get('priority', False)
                     break
@@ -355,7 +359,7 @@ class PerformanceTestView(BaseViewWithNavbar):
     @event_handler
     def toggle_priority_selected(self):
         """Toggle priority for all selected items"""
-        for item in self.all_items:
+        for item in self._all_items:
             if item.get('selected', False):
                 item['priority'] = not item.get('priority', False)
 
@@ -364,7 +368,7 @@ class PerformanceTestView(BaseViewWithNavbar):
         """Delete a specific item"""
         item_id = id
         if item_id:
-            self.all_items = [item for item in self.all_items if item['id'] != item_id]
+            self._all_items = [item for item in self._all_items if item['id'] != item_id]
 
 
 class ProductDataTableView(BaseViewWithNavbar):

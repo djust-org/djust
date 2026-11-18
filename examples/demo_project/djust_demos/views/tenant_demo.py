@@ -65,18 +65,27 @@ class TenantDemoView(TenantMixin, BaseViewWithNavbar):
 
     def resolve_tenant(self, request):
         """
-        Override to resolve tenant from query parameter for demo purposes.
+        Resolve the tenant from the URL path (``/demos/tenant/<tenant_id>/``).
 
-        In production you'd use subdomain, header, or session resolvers.
-        Falls back to "acme" for unknown tenant IDs.
+        In production you'd use subdomain, header, or session resolvers. The
+        path, not a query parameter: every transport's event request carries
+        the mounted page's path, while the SSE event request carries no query
+        string, so a tenant read from ``?tenant=`` resolved to the default on
+        SSE events and the event was refused. ``/demos/tenant/`` is the default
+        tenant; an unknown tenant id falls back to "acme".
         """
-        tenant_id = request.GET.get("tenant", "acme")
-        return DEMO_TENANTS.get(tenant_id) or DEMO_TENANTS["acme"]
+        from django.urls import Resolver404, resolve
+
+        try:
+            tenant_id = resolve(request.path_info).kwargs.get("tenant_id")
+        except Resolver404:
+            tenant_id = None
+        return DEMO_TENANTS.get(tenant_id or "acme") or DEMO_TENANTS["acme"]
 
     # Tenant-scoped values live in the class-level store above and are loaded
-    # in mount(); the fields below are what the template renders. They are not
-    # persisted: the tenant store is the source of truth, and a session-saved
-    # copy would carry one tenant's values to another after a tenant switch.
+    # in mount(); the fields below are what the template renders. No
+    # persist="server": the tenant store is the source of truth. (Each tenant
+    # has its own path, so a saved copy is bound to its tenant's route.)
     counter = state(0)
     messages = state(default_factory=list)
     presence_list = state(default_factory=list, render=False)

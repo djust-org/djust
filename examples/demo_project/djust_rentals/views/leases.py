@@ -181,6 +181,12 @@ class LeaseDetailView(BaseViewWithNavbar):
 
     def mount(self, request, pk=None, **kwargs):
         """Initialize lease detail view"""
+        self._pk = pk
+
+    def _load(self):
+        # Read on every render, not kept from mount(): between events the HTTP
+        # fallback restores a saved model as its field dict, not a row.
+        pk = self._pk
         self._lease_id = pk
 
         # Load lease
@@ -199,6 +205,7 @@ class LeaseDetailView(BaseViewWithNavbar):
 
     def get_context_data(self, **kwargs):
         """Add lease detail context"""
+        self._load()
         context = super().get_context_data(**kwargs)
 
         if not self._lease:

@@ -24,11 +24,12 @@ from djust.tenants import TenantAwareMemoryBackend
 
 
 def _make_request(path="/", tenant=None):
-    """Create a GET request with session support and optional ?tenant= param."""
+    """Create a GET request with session support; ``tenant`` names the tenant
+    demo's path segment (``/demos/tenant/<tenant>/``, #4187)."""
     factory = RequestFactory()
     url = path
     if tenant is not None:
-        url = f"{path}?tenant={tenant}"
+        url = f"/demos/tenant/{tenant}/"
     request = factory.get(url)
     middleware = SessionMiddleware(lambda x: None)
     middleware.process_request(request)
@@ -162,7 +163,7 @@ class TestTenantIsolation:
         assert backend_acme.count("demo-room") == 1
 
     def test_invalid_tenant_id_cannot_create_phantom_state(self):
-        """?tenant=evil must fall back to 'acme'; no phantom state entries."""
+        """/demos/tenant/evil/ must fall back to 'acme'; no phantom state entries."""
         from djust_demos.views.tenant_demo import TenantDemoView
 
         view = _make_tenant_view()
@@ -274,7 +275,7 @@ class TestTenantDemoView:
         TenantAwareMemoryBackend.clear_all()
 
     def test_mount_resolves_tenant_from_query_param(self):
-        """?tenant=acme should resolve to Acme Corp."""
+        """/demos/tenant/acme/ should resolve to Acme Corp."""
         view = _mount_tenant_view("acme")
         assert view.tenant.id == "acme"
         assert view.tenant.name == "Acme Corp"
@@ -291,7 +292,7 @@ class TestTenantDemoView:
         assert view.tenant.id == "acme"
 
     def test_mount_invalid_tenant_falls_back(self):
-        """?tenant=evil falls back to acme."""
+        """/demos/tenant/evil/ falls back to acme."""
         view = _mount_tenant_view("evil")
         assert view.tenant.id == "acme"
 
@@ -568,12 +569,18 @@ class TestDemoRegistration:
 
     @pytest.mark.django_db
     def test_tenant_view_http_get(self):
-        """GET /demos/tenant/?tenant=acme returns 200."""
+        """GET /demos/tenant/globex/ returns 200 for that tenant (#4187: the
+        tenant is read from the path, which every transport's event request
+        carries); /demos/tenant/ is the default tenant."""
         from django.test import Client
 
         client = Client()
-        response = client.get("/demos/tenant/?tenant=acme")
+        response = client.get("/demos/tenant/globex/")
         assert response.status_code == 200
+        assert b"Globex Inc" in response.content
+        response = client.get("/demos/tenant/")
+        assert response.status_code == 200
+        assert b"Acme Corp" in response.content
 
     def test_service_worker_url_resolves(self):
         """Service worker URL /sw.js resolves."""

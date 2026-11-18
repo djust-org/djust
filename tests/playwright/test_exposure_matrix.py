@@ -30,7 +30,10 @@ under DEBUG the explicit view's error frame must carry it, in production it
 must reach no frame, page or log. Run the server with ``DJUST_DEMO_DEBUG=0``
 and this script with ``E5_DEBUG=0`` for the production contract. Under DEBUG
 the explicit view's own error frame is the control: it must carry the error
-sentinel, which proves the frame capture sees what reaches the client. (The
+sentinel, which proves the frame capture sees what reaches the client. In
+either mode, with ``E5_SERVER_LOG`` set, the failing handler's
+``E5_LOG_CONTROL`` line must be in the server log, which proves the log checks
+read a log this flow wrote to. (The
 legacy twin that used to be the control in both modes went with the legacy
 policy in 2.0, #4187.)
 
@@ -71,6 +74,8 @@ DEMO_DIR = os.environ.get("E5_DEMO_DIR", "examples/demo_project")
 
 # Never reach any destination, in either mode.
 SENTINELS = ("E5_UNDECLARED_SENTINEL", "E5_PRIVATE_SENTINEL")
+#: Logged by the failing handler before it raises (djust_demos.views.exposure_demo).
+LOG_CONTROL = "E5_LOG_CONTROL"
 ERROR_SENTINEL = "E5_ERROR_SENTINEL"
 # The server's mode (E5_DEBUG=0 when it runs with DJUST_DEMO_DEBUG=0). Errors
 # follow Django (ADR-038 D-a): detail under DEBUG, value-free in production.
@@ -331,6 +336,12 @@ async def run_flow(browser, transport, failures, notes):
         failures.append(f"{label}: no stored session found for this flow")
     logged = log_tail(start)
     if SERVER_LOG:
+        # Positive control, in both modes: the failing handler logs LOG_CONTROL
+        # before it raises, so the checks below read a log this flow wrote to
+        # (in production this replaces the legacy twin's control, which logged
+        # the error detail).
+        if LOG_CONTROL not in logged:
+            failures.append(f"{label}: control failed, {LOG_CONTROL} not in the server log")
         for sentinel in SENTINELS:
             if sentinel in logged:
                 failures.append(f"{label}: {sentinel} in the server log")

@@ -36,8 +36,9 @@ class TenantDashboardView(BaseViewWithNavbar):
     """
     template_name = 'rentals/tenant_dashboard.html'
 
-    def mount(self, request, **kwargs):
-        """Initialize tenant dashboard"""
+    def _load(self):
+        # Read on every render, not kept from mount(): between events the HTTP
+        # fallback restores a saved model as its field dict, not a row.
         # In real app, get tenant from request.user
         # For demo, we'll load first tenant
         # .first() returns None on an empty table rather than raising, so test
@@ -84,6 +85,7 @@ class TenantDashboardView(BaseViewWithNavbar):
 
     def get_context_data(self, **kwargs):
         """Add tenant dashboard context"""
+        self._load()
         context = super().get_context_data(**kwargs)
 
         if not self._tenant:
@@ -298,8 +300,9 @@ class TenantPaymentsView(BaseViewWithNavbar):
     """
     template_name = 'rentals/tenant_payments.html'
 
-    def mount(self, request, **kwargs):
-        """Initialize tenant payments view"""
+    def _load(self):
+        # Read on every render, not kept from mount(): between events the HTTP
+        # fallback restores a saved model as its field dict, not a row.
         # Get tenant from request.user (for demo, use first tenant)
         # .first() returns None on an empty table rather than raising, so test
         # for it: a bare except here never ran and the page 500'd (#3994).
@@ -321,6 +324,7 @@ class TenantPaymentsView(BaseViewWithNavbar):
 
     def get_context_data(self, **kwargs):
         """Add payments context"""
+        self._load()
         context = super().get_context_data(**kwargs)
 
         if not self._tenant:

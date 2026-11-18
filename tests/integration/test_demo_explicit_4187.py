@@ -15,7 +15,13 @@ interaction over the three transports a browser can use: the WebSocket, SSE
 and the HTTP fallback (``djust.testing.open_live_page``, through the demo's
 own URLconf, middleware and ASGI application). After the events on each
 transport a fresh socket mounts the page again in the same session, as a
-reconnect does, and must show the declared state the events changed.
+reconnect does, and must show the state the events changed. That holds
+because 2.0 saves a view's declared fields (and the private attributes its
+``mount()`` creates) on the server after every turn, ``persist="server"`` or
+not; ``persist="server"`` is the grant ``djust.V029`` asks for on a field a
+handler changes, so the demo states it. What the effect of a handler can only
+be seen in its own answer (a component's state is not restored), the answer
+is checked instead.
 
 Gate-off: state the legacy exposure policy again on
 ``djust_shared.views.BaseViewWithNavbar`` and the pin and the policy tests
@@ -158,10 +164,9 @@ def test_the_demo_is_clean_under_strict_event_parameters():
 # Each migrated page's primary interaction, over every transport
 # --------------------------------------------------------------------------- #
 
-#: (page, handler, params, how many events, a regex the page shows afterwards).
-#: ``{t}`` in a param or marker is the transport's name, for state that outlives
-#: one page (the tenant demo's per-tenant store). ``None``: no visible marker;
-#: the event must still answer without an error on every transport.
+#: (page, handler, params, how many events, a regex the page shows afterwards
+#: and not before). ``{t}`` in a param or marker is the transport's name, for
+#: state that outlives one page (the tenant demo's per-tenant store).
 CASES = [
     ("/demos/counter/", "increment", {}, 3, r">3</div>"),
     ("/demos/activity/", "set_profile_name", {"value": "Ada4187"}, 1, r'value="Ada4187"'),
@@ -171,14 +176,19 @@ CASES = [
     ("/demos/todo/", "add_todo", {"text": "milk4187"}, 1, r"milk4187"),
     ("/demos/chat/", "send_message", {"message": "hello4187"}, 1, r"hello4187"),
     ("/demos/performance/", "add_items_10", {}, 1, r"Item 10\b"),
+    # A thousand items, and the eighth hundred: more than a persist="server"
+    # field may hold, so the list is private working state.
+    ("/demos/performance/", "add_items_1000", {}, 1, r"Item 1000\b"),
+    ("/demos/performance/", "add_items_100", {}, 8, r"Item 800\b"),
     ("/demos/", "increment", {}, 3, r">\s*3\s*</div>"),
     ("/demos/smart-dashboard/", "set_temperature", {"temperature": 77.5}, 1, r"77\.5"),
     ("/demos/pwa/", "add_note", {"text": "note4187"}, 1, r"note4187"),
     ("/demos/tenant/", "add_message", {"text": "msg-{t}"}, 1, r"msg-{t}"),
+    # A tenant other than the default: it is read from the path, which every
+    # transport's event request carries (the SSE one carries no query string).
+    ("/demos/tenant/globex/", "add_message", {"text": "gx-{t}"}, 1, r"gx-{t}"),
+    ("/demos/tenant/globex/", "increment", {}, 2, r"font-size: 3rem;[^>]*>2</div>"),
     ("/demos/whats-new/0.4.2/", "increment_private", {}, 2, r'class="value"[^>]*>2</div>'),
-    ("/demos/kitchen-sink/", "show_modal", {}, 1, None),
-    ("/demos/markdown-stream/", "reset", {}, 1, None),
-    ("/rentals/", "filter_properties", {"status": "vacant"}, 1, None),
     ("/rentals/properties/", "search", {"query": "zz4187"}, 1, r'value="zz4187"'),
     ("/rentals/leases/", "search", {"value": "zz4187"}, 1, r'value="zz4187"'),
     ("/rentals/tenants/", "search", {"query": "zz4187"}, 1, r'value="zz4187"'),
@@ -190,10 +200,19 @@ CASES = [
         1,
         r'<button(?=[^>]*dj-value-period="year")(?=[^>]*bg-primary text-primary-foreground)',
     ),
-    ("/rentals/portal/maintenance/", "filter_by_status", {"status": "open"}, 1, None),
 ]
 
 TRANSPORTS = ("ws", "sse", "http")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_tenant_store():
+    """The tenant demo keeps each tenant's state in a class-level store."""
+    from djust_demos.views.tenant_demo import TenantDemoView
+
+    TenantDemoView._tenant_state.clear()
+    yield
+    TenantDemoView._tenant_state.clear()
 
 
 def _fill(value, transport):
@@ -210,22 +229,27 @@ def _assert_answer(answer, label):
 
 
 async def _drive(page, transport, handler, params, times):
+    """Send the event ``times`` times; returns the answers."""
     label = "%s %s over %s" % (page.path, handler, transport)
+    answers = []
     if transport == "http":
         for _ in range(times):
             response = await sync_to_async(page.post_event)(handler, params)
             body = response.content.decode("utf-8")
             assert response.status_code == 200, (label, body[:500])
-            _assert_answer(json.loads(body), label)
-        return
+            answers.append(json.loads(body))
+            _assert_answer(answers[-1], label)
+        return answers
     connect = page.connect if transport == "ws" else page.connect_sse
     connection = await connect()
     try:
         assert connection.mount.get("type") == "mount", (label, connection.mount)
         for _ in range(times):
-            _assert_answer(await connection.send_event(handler, params), label)
+            answers.append(await connection.send_event(handler, params))
+            _assert_answer(answers[-1], label)
     finally:
         await connection.close()
+    return answers
 
 
 def _params():
@@ -475,3 +499,164 @@ def test_the_portal_filter_reads_its_tenant_on_every_turn(transport, django_user
         close_live_pages()
     assert "Leaky tap" not in html
     assert re.search(r"<[^>]*bg-primary text-primary-foreground", html)
+
+
+@pytest.mark.parametrize("transport", TRANSPORTS)
+def test_the_kitchen_sink_modal_opens(transport):
+    """``show_modal`` counts and opens the modal; the count is in the modal's
+    body, which is component state, so it is read from the answers."""
+    from djust.testing import close_live_pages, open_live_page
+
+    page = open_live_page("/demos/kitchen-sink/")
+    assert "has been opened" not in page.html
+    try:
+        answers = asyncio.run(_drive(page, transport, "show_modal", {}, 2))
+    finally:
+        close_live_pages()
+    assert "has been opened 1 time" in json.dumps(answers[0]), answers[0]
+    assert "has been opened 2 time" in json.dumps(answers[1]), answers[1]
+
+
+#: Stream ops (``stream_to``) are sent over the WebSocket only
+#: (``StreamingMixin._send_stream_ops``); an SSE view's stream is dropped and its
+#: ``dj-update="ignore"`` target keeps its first render. A framework parity gap,
+#: not this demo's: strict, so the case fails once SSE carries streams.
+SSE_STREAMS = pytest.mark.xfail(
+    reason="stream ops reach the WebSocket only, not SSE (framework parity gap)", strict=True
+)
+
+
+@pytest.mark.parametrize("transport", ["ws", pytest.param("sse", marks=SSE_STREAMS), "http"])
+def test_the_markdown_stream_starts(transport, monkeypatch):
+    """``start_stream`` streams the reply into the page (a short reply here)."""
+    from djust.testing import close_live_pages, open_live_page
+    from djust_demos.views import markdown_stream_demo
+
+    monkeypatch.setattr(markdown_stream_demo, "_SAMPLE_REPLY", "**md4187**")
+    # The settled render: a provisional one keeps the partial line escaped.
+    DONE = r"<strong[^>]*>md4187</strong>"
+    page = open_live_page("/demos/markdown-stream/")
+    assert "md4187" not in page.html
+
+    async def run():
+        if transport == "http":
+            return json.dumps(await _drive(page, transport, "start_stream", {}, 1))
+        connect = page.connect if transport == "ws" else page.connect_sse
+        connection = await connect()
+        try:
+            _assert_answer(await connection.send_event("start_stream", {}), transport)
+            seen = []
+            for _ in range(200):
+                try:
+                    seen.append(await connection.receive(timeout=0.2))
+                except asyncio.TimeoutError:
+                    pass
+                if re.search(DONE, json.dumps(list(connection.frames))):
+                    break
+            return json.dumps(list(connection.frames))
+        finally:
+            await connection.close()
+
+    try:
+        frames = asyncio.run(run())
+    finally:
+        close_live_pages()
+    assert re.search(DONE, frames), frames[-800:]
+
+
+@pytest.mark.parametrize("transport", TRANSPORTS)
+def test_the_rentals_dashboard_filters_its_properties(transport, django_user_model):
+    """The seeded property is occupied (an active lease): "vacant" hides it
+    from the property list (its address; the lease panel names it too)."""
+    from djust.testing import close_live_pages, open_live_page
+
+    _seeded(django_user_model)
+    page = open_live_page("/rentals/")
+    assert "1 Elm St" in page.html
+
+    async def run():
+        await _drive(page, transport, "filter_properties", {"status": "vacant"}, 1)
+        socket = await page.connect()
+        try:
+            return socket.mount.get("html") or ""
+        finally:
+            await socket.close()
+
+    try:
+        html = asyncio.run(run())
+    finally:
+        close_live_pages()
+    assert "1 Elm St" not in html
+
+
+@pytest.mark.parametrize("transport", TRANSPORTS)
+def test_a_tenant_keeps_its_own_state(transport):
+    """A non-default tenant's message stays with that tenant: the default
+    tenant's page does not show it."""
+    from djust.testing import close_live_pages, open_live_page
+    from djust_demos.views.tenant_demo import TenantDemoView
+
+    globex = open_live_page("/demos/tenant/globex/")
+    acme = open_live_page("/demos/tenant/")
+    marker = "only-globex-%s" % transport
+
+    async def run():
+        await _drive(globex, transport, "add_message", {"text": marker}, 1)
+        pages = []
+        for page in (globex, acme):
+            socket = await page.connect()
+            try:
+                pages.append(socket.mount.get("html") or "")
+            finally:
+                await socket.close()
+        return pages
+
+    try:
+        globex_html, acme_html = asyncio.run(run())
+    finally:
+        close_live_pages()
+        TenantDemoView._tenant_state.clear()
+    assert marker in globex_html and "Globex Inc" in globex_html
+    assert marker not in acme_html
+
+
+#: The rentals pages that only read rows. A built-in event (``update_model``)
+#: over the HTTP fallback restores the view's saved state, where a row kept
+#: from mount() came back as a field dict and the page answered 500.
+READ_ONLY = [
+    "/rentals/maintenance/{MaintenanceRequest}/",
+    "/rentals/tenants/{Tenant}/",
+    "/rentals/properties/{Property}/",
+    "/rentals/leases/{Lease}/",
+    "/rentals/portal/",
+    "/rentals/portal/payments/",
+]
+
+
+@pytest.mark.parametrize("url", READ_ONLY)
+def test_a_read_only_rentals_page_survives_a_fallback_event(url, django_user_model):
+    from djust.testing import close_live_pages, open_live_page
+
+    pks = _seeded(django_user_model)
+    page = open_live_page(url.format(**pks))
+    try:
+        for _ in range(2):
+            response = page.post_event("update_model", {"field": "x", "value": "y"})
+            assert response.status_code < 500, (url, response.content[:300])
+    finally:
+        close_live_pages()
+
+
+def test_the_exposure_matrix_failure_logs_its_control(caplog):
+    """``tests/playwright/test_exposure_matrix.py`` requires this line in the
+    server log before it trusts a "not in the log" check (the legacy twin's
+    production log was that control until #4187)."""
+    import logging
+
+    from djust_demos.views.exposure_demo import LOG_CONTROL, ExposureMatrixView
+
+    with caplog.at_level(logging.INFO, logger="djust_demos"):
+        with pytest.raises(ValueError):
+            ExposureMatrixView().boom()
+    assert any(LOG_CONTROL in record.getMessage() for record in caplog.records)
+    assert not any("E5_ERROR_SENTINEL" in record.getMessage() for record in caplog.records)

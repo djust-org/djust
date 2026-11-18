@@ -175,6 +175,12 @@ class PropertyDetailView(BaseViewWithNavbar):
 
     def mount(self, request, pk=None, **kwargs):
         """Initialize property detail view"""
+        self._pk = pk
+
+    def _load(self):
+        # Read on every render, not kept from mount(): between events the HTTP
+        # fallback restores a saved model as its field dict, not a row.
+        pk = self._pk
         self._property_id = pk
 
         # Load property
@@ -195,6 +201,7 @@ class PropertyDetailView(BaseViewWithNavbar):
 
     def get_context_data(self, **kwargs):
         """Add property detail context"""
+        self._load()
         context = super().get_context_data(**kwargs)
 
         if not self._property:

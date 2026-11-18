@@ -320,14 +320,18 @@ class PerformanceTestView(LiveView):
     """
     template_name = "demos/performance.html"
 
-    items = state(default_factory=list, persist="server", render=False)
     filter_text = state("", persist="server")
     sort_by = state("name", persist="server")
+
+    def mount(self, request, **kwargs):
+        # Working data in a private attribute: saved
+        # on the server between events, never sent.
+        self._items = []
 
     @event_handler
     def add_items_100(self):
         """Add 100 items for testing"""
-        self.items.extend(self._generate_items(100))
+        self._items.extend(self._generate_items(100))
 
     @event_handler
     def filter_items(self, value: str = ""):
@@ -342,7 +346,7 @@ class PerformanceTestView(LiveView):
     @event_handler
     def toggle_item(self, id: int = 0):
         """Toggle item selection"""
-        for item in self.items:
+        for item in self._items:
             if item['id'] == id:
                 item['selected'] = not item['selected']
                 break

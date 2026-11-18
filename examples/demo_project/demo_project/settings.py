@@ -209,7 +209,11 @@ if os.environ.get("DJUST_DEMO_LOG_CONSOLE") == "1":
         "version": 1,
         "disable_existing_loggers": False,
         "handlers": {"console": {"class": "logging.StreamHandler"}},
-        "loggers": {"djust": {"handlers": ["console"], "level": "DEBUG", "propagate": False}},
+        "loggers": {
+            "djust": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+            # The E5 matrix's log control (djust_demos.views.exposure_demo).
+            "djust_demos": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        },
     }
 
 

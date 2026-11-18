@@ -11,13 +11,24 @@ legacy twin, the harness control, went with the legacy policy in 2.0 (#4187).
 - ``E5_PRIVATE_SENTINEL``: an underscore attribute. Same.
 - ``E5_FLOOR_SENTINEL``: held as ``self.password``, a name on the
   sensitive-field list. Never sent and never saved, the session included.
+- ``E5_LOG_CONTROL``: logged by that handler before it raises. The harness
+  requires it in the server log it reads, so a "not in the log" check cannot
+  pass on a log that was never written to or read.
 - ``E5_ERROR_SENTINEL``: raised by a handler. Errors follow Django (ADR-038
   D-a): under DEBUG every view's error frame carries it; in production the
   explicit view's frame and log do not.
 """
 
+import logging
+
 from djust import LiveView
 from djust.decorators import event_handler, state
+
+logger = logging.getLogger(__name__)
+
+#: Logged by ``boom`` before it raises: the harness's positive control that the
+#: server log it reads is this server's, during this flow. Not a secret.
+LOG_CONTROL = "E5_LOG_CONTROL"
 
 
 class ExposureMatrixView(LiveView):
@@ -64,4 +75,5 @@ class ExposureMatrixView(LiveView):
 
     @event_handler()
     def boom(self):
+        logger.info("%s: the failing handler ran", LOG_CONTROL)
         raise ValueError("E5_ERROR_SENTINEL")

@@ -24,7 +24,7 @@
                 <div class="p-4" style="background: var(--color-bg-elevated);">
                     <div style="display: flex; gap: 0.75rem; flex-wrap: wrap;">
                         {% for t in available_tenants %}
-                        <a href="?tenant={{ t.id }}"
+                        <a href="/demos/tenant/{{ t.id }}/"
                            style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.625rem 1.25rem; border-radius: var(--radius-md); text-decoration: none; font-weight: 600; font-size: 0.875rem; transition: all 0.2s;
                                   {% if t.active %}
                                   background: {{ tenant_theme }}; color: white; box-shadow: 0 2px 8px rgba(0,0,0,0.15);

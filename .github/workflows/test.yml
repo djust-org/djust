@@ -1445,7 +1445,7 @@ jobs:
         run: |
           cd examples/demo_project
           PYTHONPATH=../.. uv run --no-sync python -m pytest -p no:cacheprovider -o addopts= \
-            --rootdir=. --ds=demo_project.settings djust_rentals/tests djust_rentals/components/tests -q
+            --rootdir=. --ds=demo_project.settings djust_rentals/tests djust_rentals/components/tests djust_shared/tests.py -q
 
   # The benchmark-gated job tests/benchmarks/conftest.py has claimed exists
   # since it was written (#2156). It did not: a grep for `--benchmark-only`
