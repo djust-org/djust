@@ -186,7 +186,10 @@ Every render provides these variables:
 | `step_errors`       | dict | `{field_name: [errors]}` for current step           |
 | `step_data`         | dict | All data across all steps                           |
 
-Choice fields are also exposed as flat top-level variables (e.g. `status_choices`, `borough_choices`) for convenience.
+Choice fields are also exposed as flat top-level variables (e.g. `status_choices`, `borough_choices`) for convenience,
+on every view, including the default explicit exposure. A flat name never replaces a name the context already
+holds (a declared `state()` field, or `form_choices` itself for a field named `form`), and your own
+`get_context_data()` can still set one after `super()`.
 
 ## Pre-Rendered Field HTML
 

@@ -535,7 +535,8 @@ old digest. `ExplicitRenderContext` and `provide_context`
 - An `_action_state` entry for an undeclared action is refused.
 - The wizard's flat `<field>_choices` aliases are not rendered under explicit,
   because they depend on runtime form fields and cannot be declared;
-  `form_choices` remains.
+  `form_choices` remains. (Since #4177 they render under explicit too, as plain
+  context entries rather than provider keys.)
 
 **View-dependent tags.** `dj_activity`, `colocated_hook`, `live_form`,
 `live_field`, `live_errors` and the `field_value`/`has_errors` filters resolve

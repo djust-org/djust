@@ -351,6 +351,34 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   over WebSocket, SSE and the HTTP fallback. `persist=False` on the declaration
   opts out. See [Interactive Components](../guides/interactive-components.md#persistence-keyboard-and-security).
 
+- **Function views.** A function decorated with `@live_view(template_name=...)`
+  is an explicit view: the values it returns (usually `locals()`) are its
+  context, and the `@event_handler` callables it returns are its handlers,
+  strict or not. Names starting with an underscore, other callables, and the
+  request are not rendered. The view is built for each request and the
+  function runs again every time, so nothing is kept between requests. It
+  answers the page GET and the HTTP fallback POST; a WebSocket or SSE mount is
+  refused with `View not found`, because the class it names is built inside
+  the request. Write a `LiveView` class for a page that keeps state or uses a
+  socket.
+
+  ```python
+  from djust import live_view
+  from djust.decorators import event_handler
+
+
+  @live_view(template_name="greeting.html")
+  def greeting(request):
+      name = request.GET.get("name", "world")
+      shouted = []
+
+      @event_handler
+      def shout(**kwargs):
+          shouted.append(name.upper())
+
+      return locals()
+  ```
+
 ## Not supported under explicit exposure
 
 - **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare a
@@ -380,9 +408,8 @@ inherit from. There is no setting that changes the default.
 Stating `"legacy"` raises a `DeprecationWarning` when the class is defined, once
 for each class that states it. The policy is removed in djust 2.0: the 2.0
 pre-releases still accept it, and 2.0.0 does not. The views djust itself ships
-that still state it (the admin change list and form,
-`TtydTerminalView`, the `@live_view` decorator) do not warn, since that line is
-not yours to change.
+that still state it (the admin change list and form, `TtydTerminalView`) do not
+warn, since that line is not yours to change.
 
 ## Migrating a view
 
