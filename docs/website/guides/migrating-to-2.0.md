@@ -893,6 +893,15 @@ state the old value.
   either changes `dj-chart-revision` when that state changes, or sets
   `dj-chart-update="always"` for the old behaviour
   ([#4004](https://github.com/djust-org/djust/issues/4004)).
+- **Background work stops when the connection closes.** Under the 1.3
+  default a view's `start_async()` / `@background` work ran to completion
+  after its socket or SSE stream closed, and the result was discarded, unless
+  the view set `cancel_async_on_disconnect = True`. An explicit view's work,
+  and the tasks it starts with `self.create_task()`, are cancelled when the
+  view is disposed: when the connection closes and when the user navigates to
+  another view. `cancel_async_on_disconnect` changes nothing on an explicit
+  view, so there is no old value to state: work that must finish (a payment,
+  an import) belongs in a task queue, not on the view.
 
 ### State a legacy view no longer keeps
 
@@ -1013,4 +1022,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: b52289b0f89d -->
+<!-- generated-doc prose-sha256: 3c550e6896a2 -->

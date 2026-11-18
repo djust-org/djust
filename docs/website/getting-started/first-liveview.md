@@ -25,6 +25,12 @@ Add `"myapp"` to `INSTALLED_APPS` in your project's settings, and add
 (`djust init` does not; without the setting, installed apps are allowed). Keep the existing
 entries. The URL step below connects this app to the site.
 
+The handlers below are written for the strict event parameter policy, which
+[Installation](./installation.md#3-configure-django) turns on with
+`LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}`: a handler declares,
+with annotations, exactly the arguments its events carry, and the browser
+sends it nothing else.
+
 ## 1. Create the View
 
 Create `myapp/views.py`:
@@ -39,11 +45,11 @@ class CounterView(LiveView):
     count = state(0)
 
     @event_handler()
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
 
     @event_handler()
-    def decrement(self, **kwargs):
+    def decrement(self):
         self.count -= 1
 ```
 
@@ -132,7 +138,7 @@ For text inputs, use `dj-input` (fires on the `input` event, debounced 300 ms by
 
 ```python
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str):
     """The 'value' parameter receives the current input value."""
     self.query = value
 ```

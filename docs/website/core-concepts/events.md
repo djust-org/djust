@@ -588,10 +588,11 @@ Attribute values are text. The handler's annotation converts them, so no
 
 ```python
 @event_handler()
-def update(self, count: int, price: float, enabled: bool):
-    # dj-value-count="42"     → count=42
-    # dj-value-price="19.99"  → price=19.99
-    # dj-value-enabled="true" → enabled=True
+def update(self, count: int, price: float, enabled: bool, tags: list[str]):
+    # dj-value-count="42"           → count=42
+    # dj-value-price="19.99"        → price=19.99
+    # dj-value-enabled="true"       → enabled=True
+    # dj-value-tags:list='["a","b"]' → tags=["a", "b"]
     pass
 ```
 

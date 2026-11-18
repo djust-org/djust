@@ -65,6 +65,7 @@ import os
 import pathlib
 import re
 import sys
+import textwrap
 import traceback
 import types
 import warnings
@@ -1536,6 +1537,119 @@ def test_docs_pass_event_arguments_as_dj_value(path):
         f"{path.relative_to(REPO_ROOT)} passes event arguments as data-*, which a strict "
         "handler never receives; use dj-value-*:\n  " + "\n  ".join(findings)
     )
+
+
+def _handler_signatures(text: str) -> dict[str, list[tuple[frozenset[str], bool]]]:
+    """Each ``@event_handler`` a document defines: its parameter names, and whether it
+    has a ``**`` catch-all. A name defined more than once keeps every definition."""
+    found: dict[str, list[tuple[frozenset[str], bool]]] = {}
+    for _lineno, code, marker in _load_extractor()(_DocText(text)):
+        if marker in ("anti-pattern", "before"):
+            continue
+        try:
+            tree = ast.parse(textwrap.dedent(code))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not any("event_handler" in ast.unparse(d) for d in node.decorator_list):
+                continue
+            args = node.args
+            names = frozenset(a.arg for a in args.posonlyargs + args.args + args.kwonlyargs)
+            found.setdefault(node.name, []).append((names, args.kwarg is not None))
+    return found
+
+
+class _DocText:
+    """A path-like holding document text, for ``extract_python_blocks``."""
+
+    def __init__(self, text: str) -> None:
+        self._text = text
+
+    def read_text(self, *args, **kwargs) -> str:
+        return self._text
+
+
+def unmatched_dj_value_arguments(text: str) -> list[str]:
+    """Each ``dj-value-*`` argument a document's markup sends to a handler the same
+    document defines, when no definition of that handler declares the name.
+
+    Under the strict policy such an argument is refused before the handler runs,
+    so a guide whose button carries one shows an example that cannot work. Only
+    handlers the document defines are judged (a framework handler such as
+    ``on_table_sort`` is not); a ``**`` catch-all accepts every name.
+    """
+    handlers = _handler_signatures(text)
+    markup = _BEFORE_FENCE_RE.sub("", text)
+    findings = []
+    for tag in _TAG_RE.finditer(markup):
+        attrs = _attrs(tag.group(0))
+        for event in (a for a in attrs if re.fullmatch(_EVENT_ATTR, a)):
+            target = attrs[event].split("(")[0].strip()
+            definitions = handlers.get(target)
+            if not definitions:
+                continue
+            sent = {
+                a[len("dj-value-") :].split(":")[0].replace("-", "_")
+                for a in attrs
+                if a.startswith("dj-value-")
+            }
+            if not any(open_ or sent <= names for names, open_ in definitions):
+                line = markup.count("\n", 0, tag.start()) + 1
+                missing = sorted(set.intersection(*(sent - names for names, _ in definitions)))
+                findings.append(f"line {line}: {target}() does not declare {missing}")
+    return findings
+
+
+def test_dj_value_pin_finds_an_undeclared_argument():
+    doc = (
+        "```python\n@event_handler()\ndef update(self, count: int):\n    pass\n```\n\n"
+        '```html\n<button dj-click="update" dj-value-count="1" dj-value-tags:list=\'["a"]\'>x</button>\n```\n'
+    )
+    assert unmatched_dj_value_arguments(doc) == ["line 8: update() does not declare ['tags']"]
+    fixed = doc.replace("count: int)", "count: int, tags: list[str])")
+    assert fixed != doc and unmatched_dj_value_arguments(fixed) == []
+    open_ = doc.replace("count: int)", "count: int, **rest: str)")
+    assert open_ != doc and unmatched_dj_value_arguments(open_) == []
+    # A handler the document does not define is not judged.
+    assert unmatched_dj_value_arguments(doc.replace('dj-click="update"', 'dj-click="other"')) == []
+
+
+@pytest.mark.parametrize(
+    "path", _WEBSITE_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _WEBSITE_DOCS]
+)
+def test_dj_value_arguments_match_the_documented_handler(path):
+    """#4188: a ``dj-value-*`` argument a guide's markup sends is declared by its handler."""
+    findings = unmatched_dj_value_arguments(path.read_text(encoding="utf-8"))
+    assert not findings, (
+        f"{path.relative_to(REPO_ROOT)} sends dj-value-* arguments its own handler does not "
+        "declare, which strict dispatch refuses:\n  " + "\n  ".join(findings)
+    )
+
+
+#: The only documents whose 1.3 code may opt out of execution as ``before``:
+#: the migration guide and the API-stability record of the deprecations.
+_BEFORE_ALLOWED = frozenset({"docs/website/guides/migrating-to-2.0.md", "docs/API_STABILITY.md"})
+
+
+def test_the_before_marker_is_used_only_by_migration_material():
+    """#4188: ``before`` skips execution; anywhere else it would hide a 1.x example."""
+    markdown = [
+        path
+        for path in REPO_ROOT.rglob("*.md")
+        if not {".venv", "node_modules", ".git", "target"} & set(path.relative_to(REPO_ROOT).parts)
+    ]
+    users = {
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in markdown
+        if any(
+            line.strip() == "<!-- doc-snippet-check: before -->"
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+        )
+    }
+    assert users, "no document uses the before marker: the pin would pass vacuously"
+    assert users <= _BEFORE_ALLOWED, sorted(users - _BEFORE_ALLOWED)
 
 
 def test_an_anti_pattern_block_is_not_executed(tmp_path, monkeypatch):
