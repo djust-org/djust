@@ -1268,7 +1268,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         name no application parameter may take, so the alias declares it a
         framework-supplied argument: strict validation takes it out of the
         payload and binds it only when it names one of the owner class's
-        declared components (``validation.bind_routed_component``), the same
+        declared components (``validation.bind_declared_component_name``), the same
         rule the transports' ``resolve_component_target`` applies. ``value``
         and the remaining keys are ``Any``, as the component's
         ``_handle_event`` reads them.

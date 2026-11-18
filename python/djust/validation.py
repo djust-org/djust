@@ -35,10 +35,12 @@ _SIGNATURE_OWNER = object()
 def declared_framework_arguments(handler: Callable) -> frozenset[str]:
     """The framework-supplied parameters a framework-owned handler declares (#4185).
 
-    Only the component ``Meta.event`` alias declares one, the event's routed
-    ``component_id`` (``components/base.py``), as a server-only function
-    attribute. Any other name is ignored, so nothing but that routing identity
-    can become a framework-supplied argument this way.
+    Only the component ``Meta.event`` alias declares one, ``component_id``
+    (``components/base.py``), as a server-only function attribute. Its value
+    is still a client string, checked against the view's declared component
+    names (:func:`bind_declared_component_name`). Any other name in the
+    marker is ignored, so nothing but ``component_id`` can become a
+    framework-supplied argument this way.
     """
     function = getattr(handler, "__func__", handler)
     names = getattr(function, "_djust_framework_arguments", None)
@@ -361,17 +363,22 @@ def validated_call_arguments(validation: Dict[str, Any]) -> tuple[tuple[Any, ...
     return (), validation.get("coerced_params", {})
 
 
-def bind_routed_component(handler: Callable, params: Any) -> tuple[Any, Dict[str, Any]]:
+def bind_declared_component_name(handler: Callable, params: Any) -> tuple[Any, Dict[str, Any]]:
     """Take the event's ``component_id`` out of ``params`` for a handler that
     declares it framework-supplied (the component ``Meta.event`` alias, #4185).
 
-    Returns the remaining payload and the framework-supplied arguments. The id
-    is bound only when it is empty (the alias then resolves the single
-    component of its type) or names a component the handler's owner class
-    declares: the rule ``_component_state.resolve_component_target`` applies
-    before an event reaches the alias over WebSocket, SSE and the HTTP
-    fallback. Anything else is refused, as strict refuses a routing target
-    the route did not consume.
+    The ``component_id`` is a string the CLIENT sent, not a server object and
+    not a value the server minted. What makes it safe to pass to the alias is
+    only this check: it must be a ``str`` that is either empty (the alias then
+    resolves the single component of its type) or one of the component names
+    the handler's owner class declares (``_component_descriptors``), the rule
+    ``_component_state.resolve_component_target`` applies before an event
+    reaches the alias over WebSocket, SSE and the HTTP fallback. Any other
+    value is refused, as strict refuses a routing target the route did not
+    consume. The alias still resolves the name itself, against the same
+    declared names.
+
+    Returns the remaining payload and ``{"component_id": <checked name>}``.
     """
     from ._parameter_contract import ParameterError
 
@@ -408,7 +415,7 @@ def _validate_strict_handler_params(
             # D5: transport bookkeeping is dispatch context, never an argument.
             params = {k: v for k, v in params.items() if k not in TRANSPORT_METADATA_KEYS}
         if ROUTED_COMPONENT_PARAMETER in contract.trusted:
-            params, trusted = bind_routed_component(handler, params)
+            params, trusted = bind_declared_component_name(handler, params)
         if type(params) is dict and any(key in FRAMEWORK_ARGUMENT_NAMES for key in params):
             # The route that received this event did not consume its target.
             raise ParameterError("The event's routing target is not handled by this route.")

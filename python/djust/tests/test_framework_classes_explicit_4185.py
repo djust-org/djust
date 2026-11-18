@@ -8,7 +8,7 @@ the legacy parameter policy. Each is driven here through the real transports
 The alias names its target with ``component_id``, which strict parameters
 reserve as a routing name. It declares that name framework-supplied, and
 strict validation binds it only when it names a component the view class
-declares (``validation.bind_routed_component``), so the alias works under a
+declares (``validation.bind_declared_component_name``), so the alias works under a
 project-wide strict policy on every transport.
 """
 
@@ -39,7 +39,7 @@ from djust.components.descriptors import Dropdown, Modal, Tabs
 from djust.config import config
 from djust.tests.test_admin_page_render import _Socket, _session_cookie
 from djust.validation import (
-    bind_routed_component,
+    bind_declared_component_name,
     declared_framework_arguments,
     get_strict_handler_contract,
     validate_handler_params,
@@ -388,6 +388,25 @@ def test_the_alias_compiles_as_a_strict_contract_without_publishing_component_id
     assert [p["name"] for p in contract.metadata()] == ["value", "kwargs"]
 
 
+def test_the_marker_makes_only_component_id_framework_supplied():
+    """Any other name in the server-side marker is ignored (review G7): a
+    framework-owned handler cannot widen the trusted set by listing more."""
+
+    def handler(self, component_id: str = "", view_id: str = "", value=None, **kwargs):
+        pass
+
+    handler._djust_framework_arguments = frozenset({"component_id", "view_id", "_secret"})
+    assert declared_framework_arguments(handler) == {"component_id"}
+    # Not a frozenset: ignored entirely.
+    handler._djust_framework_arguments = {"component_id"}
+    assert declared_framework_arguments(handler) == frozenset()
+    # The contract the default trusts follows: view_id stays reserved, so the
+    # handler cannot compile as strict.
+    handler._djust_framework_arguments = frozenset({"component_id", "view_id"})
+    with pytest.raises(ContractError):
+        get_strict_handler_contract(handler)
+
+
 def test_an_application_handler_cannot_declare_component_id():
     """Only the alias's server-side marker makes the name framework-supplied."""
     from djust.decorators import event_handler
@@ -414,14 +433,14 @@ def test_an_application_handler_cannot_declare_component_id():
     ],
 )
 def test_a_declared_or_empty_component_id_is_bound(params, expected):
-    remaining, trusted = bind_routed_component(AliasPage().toggle_dropdown, params)
+    remaining, trusted = bind_declared_component_name(AliasPage().toggle_dropdown, params)
     assert (remaining, trusted["component_id"]) == expected
 
 
 @pytest.mark.parametrize("target", ["secret", "template", "__class__", ["menu"], 7, {"a": 1}])
 def test_any_other_component_id_is_refused(target):
     with pytest.raises(ParameterError):
-        bind_routed_component(AliasPage().toggle_dropdown, {"component_id": target})
+        bind_declared_component_name(AliasPage().toggle_dropdown, {"component_id": target})
 
 
 def test_strict_validation_routes_component_id_to_the_alias(strict_policy):
