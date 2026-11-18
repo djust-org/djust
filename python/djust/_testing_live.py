@@ -76,18 +76,28 @@ _DEFAULT_TIMEOUT = 10.0
 
 
 def _default_store() -> Any:
-    """The configured ``SESSION_ENGINE``'s store when it can hold server
-    state, else Django's database store."""
+    """The configured ``SESSION_ENGINE``'s store, resolved the way the
+    framework resolves it (``djust.utils.get_session_store_class``).
+
+    An engine that cannot hold server state (the signed-cookies store, or one
+    that does not import) is refused here, as production refuses an explicit
+    view on it, instead of quietly saving the session somewhere else.
+    """
     from django.conf import settings
+    from django.core.exceptions import ImproperlyConfigured
 
-    from ._exposure_sessions import session_engine_store, session_store_supported
+    from ._exposure_sessions import SUPPORTED_SESSION_ENGINES, session_store_supported
+    from .utils import get_session_store_class
 
-    store = session_engine_store(getattr(settings, "SESSION_ENGINE", None))
+    store = get_session_store_class()
     if session_store_supported(store):
         return store
-    from django.contrib.sessions.backends.db import SessionStore
-
-    return SessionStore
+    raise ImproperlyConfigured(
+        "djust.testing's live sessions need a server-side SESSION_ENGINE, as an "
+        "explicit view does; SESSION_ENGINE is %r. Set it to one of %s (or a "
+        "subclass of its store), or pass store= to live_session()."
+        % (getattr(settings, "SESSION_ENGINE", None), ", ".join(SUPPORTED_SESSION_ENGINES))
+    )
 
 
 def _is_saved_user(user: Any) -> bool:
@@ -118,8 +128,8 @@ def live_session(user: Any = None, *, store: Any = None, backend: Optional[str] 
     Args:
         user: A saved ``AUTH_USER_MODEL`` instance, or ``None``.
         store: The ``SessionStore`` class to use. Defaults to the configured
-            ``SESSION_ENGINE`` when it is a server-side store, else Django's
-            database store.
+            ``SESSION_ENGINE``'s store; an engine that cannot hold server
+            state (signed cookies) raises ``ImproperlyConfigured``.
         backend: The authentication backend to record, as a dotted path.
             Defaults to the one ``Client.force_login`` chooses: the first entry
             of ``AUTHENTICATION_BACKENDS`` that can load a user.

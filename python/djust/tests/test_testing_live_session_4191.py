@@ -768,3 +768,26 @@ def test_djust_testing_declares_its_re_exports():
     ):
         assert name in testing.__all__, name
         assert hasattr(testing, name), name
+
+
+# -- train/2.0-aa: live sessions resolve SESSION_ENGINE the framework's way (#2210 pin)
+
+
+@override_settings(SESSION_ENGINE="django.contrib.sessions.backends.signed_cookies")
+def test_live_session_refuses_an_engine_that_cannot_hold_server_state():
+    from django.core.exceptions import ImproperlyConfigured
+
+    from djust.testing import live_session
+
+    with pytest.raises(ImproperlyConfigured, match="server-side SESSION_ENGINE"):
+        live_session()
+
+
+@override_settings(SESSION_ENGINE="django.contrib.sessions.backends.cache")
+def test_live_session_uses_the_configured_engine():
+    from django.contrib.sessions.backends.cache import SessionStore as CacheStore
+
+    from djust.testing import live_session
+
+    session = live_session()
+    assert type(session) is CacheStore and session.session_key
