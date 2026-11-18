@@ -2365,7 +2365,7 @@ def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckM
 
 @register("djust")
 def check_admin_legacy_widgets(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """V031 (Error): an admin widget slot lists a class that states legacy exposure (#4185).
+    """V032 (Error): an admin widget slot lists a class that states legacy exposure (#4185).
 
     The djust admin change list and change form use explicit exposure, and an
     explicit page cannot embed a legacy view: rendering the page fails (an
@@ -2376,7 +2376,7 @@ def check_admin_legacy_widgets(app_configs: Any, **kwargs: Any) -> list[CheckMes
     overridden ``get_change_*_widgets()`` is not seen.
     """
     messages: list[CheckMessage] = []
-    if _is_check_suppressed("djust.V031"):
+    if _is_check_suppressed("djust.V032"):
         return messages
     try:
         from djust.admin_ext.options import DjustModelAdmin
@@ -2413,7 +2413,7 @@ def check_admin_legacy_widgets(app_configs: Any, **kwargs: Any) -> list[CheckMes
                             "from get_context_data(). See docs/website/guides/admin-widgets.md."
                             % widget_label
                         ),
-                        id="djust.V031",
+                        id="djust.V032",
                         fix_hint=(
                             'Replace `exposure_policy = "legacy"` with '
                             '`exposure_policy = "explicit"` on `%s`.' % widget.__qualname__

@@ -482,7 +482,7 @@ object for every event, rebuilt from its saved state as in 1.3.
 - **A legacy widget on an admin page.** The admin change list and change
   form are explicit, and an explicit page cannot embed a view that states
   `"legacy"`: a `change_list_widgets` / `change_form_widgets` view that
-  still does makes the page fail (`djust.V031` names it). Migrate the
+  still does makes the page fail (`djust.V032` names it). Migrate the
   widget first.
 - **Undeclared names in a `TtydTerminalView` subclass.** The terminal base
   class is explicit. Its own names (`ttyd_url`, `rows`, `cols`,
@@ -969,4 +969,4 @@ looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 43b744a3940b -->
+<!-- generated-doc prose-sha256: 73d5b6db6108 -->

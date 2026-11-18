@@ -126,8 +126,8 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
     {
         # #4112: rows a legacy view publishes refresh after a write, as explicit ones do.
         "python/djust/tests/test_held_rows_4112.py",
-        # #4185: djust.V031 names an admin widget that states the legacy policy.
-        "python/djust/tests/test_admin_legacy_widget_v031.py",
+        # #4185: djust.V032 names an admin widget that states the legacy policy.
+        "python/djust/tests/test_admin_legacy_widget_v032.py",
         "python/djust/tests/_view_memory_scenarios.py",
         "python/djust/tests/test_adr034_delegated_rows.py",
         "python/djust/tests/test_adr037_binding_checks.py",
