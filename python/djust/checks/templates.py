@@ -193,6 +193,10 @@ _T012_EXEMPT_ATTRIBUTES = frozenset(
         "dj-trigger-action",
         "dj-mutation-attr",
         "dj-mutation-debounce",
+        # An argument of the trigger on the same element (#4186): the combobox
+        # reads its option's dj-value-value to match the hidden input; it sends
+        # nothing on its own.
+        "dj-value-value",
     }
 )
 # A trigger attribute, optionally with ``.modifier`` suffixes (``dj-model.lazy``,
