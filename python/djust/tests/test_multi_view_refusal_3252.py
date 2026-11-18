@@ -27,7 +27,7 @@ from django.test import RequestFactory, override_settings
 from django.urls import path
 from django.utils.functional import SimpleLazyObject
 
-from djust.tests._live_session import live_session
+from djust.testing import live_session
 from djust import LiveView, event_handler, sse
 from djust.hooks import on_mount
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions

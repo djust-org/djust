@@ -3,7 +3,7 @@
 CodeQL's ``py/cyclic-import`` builds its graph from every ``import`` statement,
 including the ones deferred into a function body. djust relies on deferred
 imports to keep the ADR-038 core (``_exposure``, ``_state``, ``live_view``,
-``components``, ``time_travel``) and a few smaller module pairs cooperating, so
+``components``) and a few smaller module pairs cooperating, so
 that query reported about 50 cycles that cannot fail at import time. It is
 excluded in ``.github/codeql/codeql-config.yml``, and this test is the guard
 that replaces it. It builds the graph from module-level imports only, the ones

@@ -513,7 +513,7 @@ def test_activities_internal_state_excluded_from_get_state(rf):
 
     ``_djust_activities`` and ``_deferred_activity_events`` store
     server-only bookkeeping. The underscore-prefix filter in
-    :func:`LiveView.get_state` / ``_capture_snapshot_state`` MUST exclude
+    :func:`LiveView.get_state` MUST exclude
     them — otherwise a malicious client could see queue lengths + event
     parameters they never triggered.
     """

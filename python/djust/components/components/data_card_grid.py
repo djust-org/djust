@@ -119,7 +119,9 @@ class DataCardGrid(Component):
 
             click_attr = ""
             if self.event:
-                click_attr = f" {self.event_attrs(self.event, title=it.get('title', ''))}"
+                # The card's category is an argument too (#4186): ``data-category`` stays
+                # as the filter marker, and no strict handler reads a data-* attribute.
+                click_attr = f" {self.event_attrs(self.event, title=it.get('title', ''), category=str(it.get(fk, '')))}"
 
             cards.append(
                 f'<div class="dj-data-card-grid__card" data-category="{cat}" '

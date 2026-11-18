@@ -3,9 +3,8 @@
 Owner decisions (2026-09-25): Q1 publishes ``DropdownMenu``, ``ActionItem`` and
 ``SeparatorItem`` from ``djust.components.interactive`` and adds a check for a
 module importing both DropdownMenus (``djust.Q004``). Q5 (actor views, ``djust.V020``) left with the actor system
-in 2.0. The debug panel's
-time-travel jump restores interactive state over a real WebSocket without
-emitting outputs or changing identities.
+in 2.0. Two menus on one page dispatch over a real WebSocket, each to its own
+callback (the time-travel jump this file also covered was removed in 2.0, #4184).
 """
 
 import ast
@@ -20,10 +19,9 @@ from djust.components.interactive import DropdownMenu
 CALLS: list = []
 
 
-class JumpPage(LiveView):
+class MenusPage(LiveView):
     exposure_policy = "legacy"
     template = "<div dj-root>{{ menu }}{{ other }}<p>{{ result }}</p></div>"
-    time_travel_enabled = True
     menu = DropdownMenu(label="Project", items=[{"label": "Edit", "value": "edit"}])
     other = DropdownMenu(label="Account", items=[{"label": "Settings", "value": "settings"}])
 
@@ -131,13 +129,13 @@ def test_q004_is_silent_otherwise(source):
 
 
 # --------------------------------------------------------------------------
-# Debug transport: time-travel jump over a real WebSocket.
+# Two interactive menus over a real WebSocket.
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-async def test_time_travel_jump_restores_interactive_state_over_websocket():
+async def test_two_menus_dispatch_to_their_own_callbacks_over_websocket():
     from asgiref.sync import sync_to_async
     from channels.testing import WebsocketCommunicator
 
@@ -164,7 +162,7 @@ async def test_time_travel_jump_restores_interactive_state_over_websocket():
 
         try:
             await socket.send_json_to(
-                {"type": "mount", "view": __name__ + ".JumpPage", "url": "/jump/"}
+                {"type": "mount", "view": __name__ + ".MenusPage", "url": "/menus/"}
             )
             mounted = await receive_until({"mount", "error"})
             html = mounted[-1]["html"]
@@ -184,23 +182,7 @@ async def test_time_travel_jump_restores_interactive_state_over_websocket():
             assert "project:edit" in json.dumps(frames)
             assert CALLS == [("menu", "edit")]
 
-            # Jump to before the selection: the menu is open again, nothing
-            # is selected, no output fires, and identities are unchanged.
-            await socket.send_json_to({"type": "time_travel_jump", "index": 2, "which": "before"})
-            frames = await receive_until({"time_travel_state", "error"})
-            assert not any(f.get("type") == "error" for f in frames), frames
-            jump = next(f for f in frames if f.get("event_name") == "__time_travel_jump__")
-            restored = jump["html"]
-            # Both menus are open as they were before the selection, the view
-            # state is the pre-selection value, and the identities are unchanged.
-            assert restored.count("dj-dropdown-menu--open") == 2, restored
-            assert '<p dj-id="5">initial</p>' in restored or ">initial</p>" in restored
-            assert [
-                chunk.split('"', 1)[0] for chunk in restored.split('data-component-id="')[1:]
-            ] == [menu_id, other_id]
-            assert CALLS == [("menu", "edit")], "a restore must not emit an output"
-
-            # The restored menu still dispatches to its own callback.
+            # The menu still dispatches to its own callback.
             frames = await event(4, "select", component_id=menu_id, value="edit")
             assert not any(f.get("type") == "error" for f in frames), frames
             assert CALLS == [("menu", "edit"), ("menu", "edit")]

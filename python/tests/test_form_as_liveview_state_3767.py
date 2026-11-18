@@ -764,7 +764,7 @@ async def _ws_run(view_path: str, events: list[str]) -> list[str]:
 
     from asgiref.sync import sync_to_async
 
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -892,7 +892,7 @@ class TestTheSseTransport:
 
         from djust.runtime import SSESessionTransport, ViewRuntime
         from djust.sse import SSESession, _sse_sessions
-        from djust.tests._live_session import with_live_session
+        from djust.testing import with_live_session
 
         session = SSESession("sse-3767")
         _sse_sessions["sse-3767"] = session

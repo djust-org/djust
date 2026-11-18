@@ -20,7 +20,7 @@ import sys
 
 import pytest
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytest.importorskip("channels")
 

@@ -196,7 +196,7 @@ def _as_caller(user_id):
 
   | `step` | Runs |
   |---|---|
-  | `"event"` | an event handler; also a time-travel replay of one |
+  | `"event"` | an event handler |
   | `"mount"`, `"handle_params"` | `mount()`, `handle_params()`. A view that sets `params_form` enters `"handle_params"` twice for a URL: once to validate it (the form's validators and querysets run there), once for `handle_params()` or `handle_invalid_params()` |
   | `"hook"` | another sync view hook: a push handler (in the stock turn and in the worker-pool one-hop turn), `handle_info`, `handle_cursor_move()`, `update_presence_heartbeat()`, and the `get_presence_key()` / `untrack_presence()` reads |
   | `"async"` | a `start_async` / `@background` callback **and** the `handle_async_result` call that receives its outcome (two separate entries) |
@@ -337,11 +337,6 @@ Everything above is the sync code djust runs on a worker thread through
   calls, so it runs wherever your code calls it. `get_http_status()` runs in the
   HTTP response phase. The *other* component and tag hooks are not here: see
   [template-time hooks](#not-wrapped-template-time-form-and-tag-hooks).
-- **State restores that assign with `setattr`.** The time-travel jump
-  (`restore_snapshot`, `restore_component_snapshot`) assigns saved fields with `safe_setattr` / `setattr`,
-  so a property setter you wrote would run there without the scope. They call no
-  hook by name and read no rows. (`_restore_private_state` is different: it
-  re-fetches private model references, so it is a `"lifecycle"` step.)
 - **Identity resolution before the scope exists.** `establish_mount_session` and
   `fresh_socket_request` call Django's `get_user()`, which runs your authentication
   backend's `get_user()` to find the caller; the scope is built from that caller,
@@ -389,9 +384,8 @@ letting a tag or a field evaluate a queryset.
 The snapshot-restore gate is covered: `_should_restore_snapshot()` is a
 `"lifecycle"` step, and `handle_restore()` is a `"hook"` step. (The legacy
 signed snapshot, whose `_restore_snapshot()` and `_capture_snapshot_state()`
-overrides were `"lifecycle"` steps too, was removed in 2.0. Time-travel
-recording, a `DEBUG` tool, still calls `_capture_snapshot_state()`, and does
-so with no step open.) A `{% live_render lazy=True %}` child's
+overrides were `"lifecycle"` steps too, was removed in 2.0, and so was
+time-travel debugging, whose jump and replay ran outside any step.) A `{% live_render lazy=True %}` child's
 `mount()` and `get_context_data()` are `"mount"` and `"render"` steps when its slot
 is filled. `PresenceMixin` entering its broadcast from
 async code (`track_presence()` under a running loop) is a `"hook"` step as well.

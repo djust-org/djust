@@ -16,6 +16,10 @@ Two shapes over a real WebSocket (``WebsocketCommunicator`` + ``LiveViewConsumer
 The pages here are what the client sees: the patches are the only channel for
 the rows (the server ships no separate stream frame; ``_stream_operations`` is
 recorded for the test client but nothing sends it).
+
+The socket carries a saved server session and a user (``djust.testing``'s
+``with_live_session``, #4191), as a browser's does: an explicit view binds to
+them at mount and reads them again on every turn.
 """
 
 from __future__ import annotations
@@ -23,15 +27,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
-from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
-from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.testing import LiveSocket, with_live_session
 
-pytestmark = [pytest.mark.django_db]
+pytestmark = [pytest.mark.django_db(transaction=True)]
 
 MODULE = __name__
 
@@ -52,7 +55,7 @@ _FEED_TEMPLATE = (
 
 
 class Feed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _FEED_TEMPLATE.format(view=f"{MODULE}.Feed")
 
     def mount(self, request, **kwargs):
@@ -124,47 +127,26 @@ async def drive(view_name, events, *, module=None):
     from djust.websocket import LiveViewConsumer
 
     module = module or MODULE
-
-    def make_key():
-        session = SessionStore()
-        session.create()
-        return session.session_key
-
-    key = await sync_to_async(make_key)()
-
-    class Session:
-        session_key = key
-
-    communicator = WebsocketCommunicator(
-        LiveViewConsumer.as_asgi(),
-        "/ws/",
-        headers=[(b"host", b"testserver"), (b"origin", b"http://testserver")],
+    communicator = with_live_session(
+        WebsocketCommunicator(
+            LiveViewConsumer.as_asgi(),
+            "/ws/",
+            headers=[(b"host", b"testserver"), (b"origin", b"http://testserver")],
+        )
     )
-    communicator.scope["session"] = Session()
+    socket = LiveSocket(communicator)
     frames = []
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[module]):
         connected, _ = await communicator.connect()
         assert connected
-        await communicator.receive_json_from()
         await communicator.send_json_to(
             {"type": "mount", "view": f"{module}.{view_name}", "url": "/"}
         )
-        mounted = None
-        for _ in range(8):
-            mounted = await communicator.receive_json_from()
-            if mounted.get("type") == "mount":
-                break
-        assert mounted and mounted.get("type") == "mount", mounted
-        for ref, event in enumerate(events, start=1):
-            await communicator.send_json_to(
-                {"type": "event", "event": event, "params": {}, "ref": ref}
-            )
-            for _ in range(8):
-                frame = await communicator.receive_json_from()
-                if frame.get("type") in ("patch", "noop", "html_update", "error"):
-                    break
-            frames.append(frame)
-        await communicator.disconnect()
+        mounted = await socket.receive(("mount", "error"))
+        assert mounted["type"] == "mount", mounted
+        for event in events:
+            frames.append(await socket.send_event(event))
+        await socket.disconnect()
     return frames
 
 

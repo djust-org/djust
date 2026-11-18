@@ -24,7 +24,7 @@ from djust.decorators import event_handler
 from djust import push as _push
 from djust.push import _server_push_message, apush_to_view, origin_channel
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytest.importorskip("channels")
 

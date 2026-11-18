@@ -374,7 +374,7 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "after initial page mount (e.g. an element revealed by a later {% if %} patch "
         "or a modal that opens later). Fires once per DOM node.",
         "value": "handler_name",
-        "example": '<div dj-mounted="chart_ready" data-value-chart-id="{{ id }}">...</div>',
+        "example": '<div dj-mounted="chart_ready" dj-value-chart-id="{{ id }}">...</div>',
     },
     {
         "name": "dj-click-away",
@@ -1234,7 +1234,7 @@ BEST_PRACTICES = {
             "Declare the parameters the binding sends; manage.py check reports a mismatch (djust.T020)",
             "Under the legacy policy dj-input/dj-change also send field and _target, and dj-submit sends _target with the form fields: declare them or keep **kwargs",
             "Input/change events use 'value' parameter name",
-            "Button data attributes: data-item-id='5' -> item_id=5",
+            "Button arguments: dj-value-item-id:int='5' -> item_id=5 (data-* attributes are not arguments)",
             "Form submission: all fields as kwargs",
         ],
         "examples": {
@@ -1272,7 +1272,7 @@ BEST_PRACTICES = {
     },
     "template_directives": {
         "click": '<button dj-click="increment">+1</button>',
-        "click_with_data": '<button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>',
+        "click_with_data": '<button dj-click="delete" dj-value-item-id:int="{{ item.id }}">Delete</button>',
         "input": '<input type="text" dj-input="search" value="{{ query }}" />',
         "change": (
             '<select dj-change="filter">\n'

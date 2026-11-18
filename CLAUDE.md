@@ -598,8 +598,10 @@ repeat them.
   Stage 11 reviewers correctly flag them. The grep targets:
   - **Wire-protocol decisions**: `python/djust/websocket.py` and
     `python/djust/streaming.py` for outbound frame shapes.
-  - **State-snapshot patterns**: `python/djust/time_travel.py` and
-    `python/djust/live_view.py:_capture_snapshot_state`.
+  - **State-snapshot patterns**: `python/djust/_exposure_snapshots.py`
+    (the signed back-navigation snapshot) and `python/djust/_state_restore.py`
+    (the restore sink). Time travel, the earlier example here, was removed
+    in 2.0 (#4184).
   - **Async dispatch**: `python/djust/mixins/async_work.py:45` for the
     canonical `start_async` definition (see also the dispatch site
     that consumes it).

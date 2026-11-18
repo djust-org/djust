@@ -405,8 +405,6 @@ CALLERS = {
     ("mixins/request.py", "RequestMixin._post_turn_body"): "page-POST fallback",
     ("testing.py", "LiveViewTestClient.send_event"): "test client",
     ("testing.py", "LiveComponentTestClient.send_event"): "component test client",
-    ("observability/views.py", "eval_handler"): "DEBUG eval_handler",
-    ("time_travel.py", "replay_event"): "time-travel replay",
 }
 
 
@@ -498,7 +496,7 @@ REVIEWED_DISPATCH = {
         "server push from the channel layer, not a client"
     ),
     ("websocket.py", "LiveViewConsumer._route_to_view"): (
-        "a consumer method the router names (uploads, request_html, time travel)"
+        "a consumer method the router names (uploads, request_html)"
     ),
     ("websocket.py", "LiveViewConsumer._run_lane_item"): "a queued _route_to_view item",
     ("theming/gallery/live_views.py", "_make_forwarder.handler"): (

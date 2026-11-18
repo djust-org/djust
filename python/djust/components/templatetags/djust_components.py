@@ -396,7 +396,7 @@ class TabsNode(template.Node):
                 query = urlencode({str(param): str(tid)})
                 action = f'dj-patch="?{escape(query)}"'
             else:
-                action = f'dj-click="{escape(event)}" data-value="{e_tid}"'
+                action = f'dj-click="{escape(event)}" dj-value-value="{e_tid}"'
             nav_items.append(
                 f'<button class="dj-tab {active_cls}" role="tab" '
                 f'id="{tab_el_id}" aria-controls="{panel_el_id}" '
@@ -508,7 +508,7 @@ class AccordionNode(template.Node):
                 f'<button class="dj-accordion__trigger" id="{trigger_id}" '
                 f'aria-expanded="{"true" if is_open else "false"}" '
                 f'aria-controls="{panel_id}" '
-                f'dj-click="{attr_text(event)}" data-value="{e_iid}"{cid_attr}>'
+                f'dj-click="{attr_text(event)}" dj-value-value="{e_iid}"{cid_attr}>'
                 f"<span>{conditional_escape(title)}</span>"
                 f'<span class="dj-accordion__chevron {chevron_cls}" aria-hidden="true">&#9662;</span>'
                 f"</button>"
@@ -894,7 +894,7 @@ def table_width_attrs(value: Any) -> Any:
 
 @register.filter
 def table_cell(row: Any, key: Any) -> Any:
-    """``row[key]`` of a dict row, as ``table.html`` writes a cell and a row's ``data-value`` (#3870).
+    """``row[key]`` of a dict row, as ``table.html`` writes a cell and a row's ``dj-value-value`` (#3870).
 
     The template read a cell as ``{{ row|dictsort:col.key|first }}``: ``dictsort`` over a dict
     iterates its KEYS and resolves ``col.key`` against each one, so every cell was ``""``. Django
@@ -1149,7 +1149,7 @@ def data_table(
             Empty string (default) disables row-level click events.
             LiveView-idiomatic — preferred over row_url for routing inside
             a LiveView app. CSP-friendly (no inline JS).
-        row_click_value_key: row dict key whose value is sent as data-value
+        row_click_value_key: row dict key whose value is sent as dj-value-value
             on the dj-click. Default "id". Override for slug-based routing
             (e.g. "uuid", "slug").
         row_url: row dict key holding a URL. When set, the <tr> gets
@@ -2416,7 +2416,7 @@ def render_stepper(
     items = format_html_join(
         "",
         '<li class="{}"><button type="button" class="stepper-step-button"{} '
-        'dj-click="{}" data-value="{}"{}><span class="{}">{}</span> <span class="{}">{}</span>{}'
+        'dj-click="{}" dj-value-value="{}"{}><span class="{}">{}</span> <span class="{}">{}</span>{}'
         "</button></li>",
         (
             (
@@ -2708,7 +2708,7 @@ def combobox(
     # ``validate_field`` and other inputs' events carry) when this is a form
     # field or validates through ``validate_field``.
     field_attr = (
-        f' data-field="{a_name}"' if field is not None or str(event) == "validate_field" else ""
+        f' dj-value-field="{a_name}"' if field is not None or str(event) == "validate_field" else ""
     )
     e_error = conditional_escape(error)
     e_helper = conditional_escape(helper)
@@ -2739,14 +2739,14 @@ def combobox(
         tags_html = ""
         hidden_inputs_html = ""
         for sv in selected:
-            e_sv = attr_text(sv)  # only in data-value= / value= (#3904)
+            e_sv = attr_text(sv)  # only in dj-value-value= / value= (#3904)
             sl = opt_label_map.get(str(sv), str(sv))
             e_sl = conditional_escape(sl)
             tags_html += (
                 f'<span class="combobox-tag">'
                 f'<span class="combobox-tag-label">{e_sl}</span>'
                 f'<button class="combobox-tag-remove" dj-click="{e_event}" '
-                f'data-value="{e_sv}" type="button">&times;</button>'
+                f'dj-value-value="{e_sv}" type="button">&times;</button>'
                 f"</span>"
             )
             hidden_inputs_html += f'<input type="hidden" name="{a_name}[]" value="{e_sv}">'
@@ -2768,7 +2768,7 @@ def combobox(
             options_html += (
                 f'<div class="combobox-option{sel_cls}" id="{id_prefix}-option-{n}" role="option" '
                 f'aria-selected="{aria_sel}" '
-                f'dj-click="{e_event}" data-value="{av}"{field_attr}>{ol}</div>'
+                f'dj-click="{e_event}" dj-value-value="{av}"{field_attr}>{ol}</div>'
             )
     else:
         # Single-select mode (existing behavior)
@@ -2791,7 +2791,7 @@ def combobox(
             options_html += (
                 f'<div class="combobox-option{sel}" id="{id_prefix}-option-{n}" role="option" '
                 f'aria-selected="{"true" if is_sel else "false"}" '
-                f'dj-click="{e_event}" data-value="{av}"{field_attr}>{ol}</div>'
+                f'dj-click="{e_event}" dj-value-value="{av}"{field_attr}>{ol}</div>'
             )
 
     label_html = f'<label class="form-label" for="{input_id}">{e_label}</label>' if label else ""
@@ -2953,7 +2953,7 @@ def rating(
         else:
             parts.append(
                 f'<button type="button" class="{star_cls}" dj-click="{e_event}" '
-                f'data-value="{i}" title="{i} star{"s" if i > 1 else ""}">★</button>'
+                f'dj-value-value="{i}" title="{i} star{"s" if i > 1 else ""}">★</button>'
             )
 
     hidden = ""
@@ -3163,7 +3163,7 @@ def notification_center(
     for n in notifications:
         if not isinstance(n, dict):
             continue
-        nid = attr_text(n.get("id", ""))  # only in data-value= (#3904)
+        nid = attr_text(n.get("id", ""))  # only in dj-value-value= (#3904)
         msg = conditional_escape(str(n.get("message", n.get("msg", ""))))
         time_ = conditional_escape(str(n.get("time", "")))
         unread = n.get("unread", False)
@@ -3171,7 +3171,7 @@ def notification_center(
         time_html = f'<span class="notif-item-time">{time_}</span>' if time_ else ""
         items_html += (
             f'<div class="notif-item{unread_cls}" '
-            f'dj-click="{e_read}" data-value="{nid}">'
+            f'dj-click="{e_read}" dj-value-value="{nid}">'
             f'<div class="notif-item-msg">{msg}</div>'
             f"{time_html}"
             f"</div>"
@@ -3321,7 +3321,7 @@ def carousel(
         dot_cls = " carousel-dot-active" if i == active else ""
         dots += (
             f'<button class="carousel-dot{dot_cls}" '
-            f'dj-click="{e_go}" data-value="{i}"{cid_attr}></button>'
+            f'dj-click="{e_go}" dj-value-value="{i}"{cid_attr}></button>'
         )
 
     total = len(images)
@@ -3383,7 +3383,7 @@ def tree_view(
     def render_node(node: Any, depth: Any = 0) -> Any:
         if not isinstance(node, dict):
             return ""
-        nid = attr_text(node.get("id", ""))  # only in data-value= (#3904)
+        nid = attr_text(node.get("id", ""))  # only in dj-value-value= (#3904)
         label = conditional_escape(str(node.get("label", "")))
         children = node.get("children", [])
         if open_ids is None:
@@ -3399,7 +3399,7 @@ def tree_view(
 
         toggle_icon = "▾" if is_open else "▸"
         toggle_html = (
-            f'<button class="tree-toggle" dj-click="{e_expand}" data-value="{nid}"{cid_attr}>'
+            f'<button class="tree-toggle" dj-click="{e_expand}" dj-value-value="{nid}"{cid_attr}>'
             f"{toggle_icon}</button>"
             if has_children
             else '<span class="tree-toggle-placeholder"></span>'
@@ -3418,7 +3418,7 @@ def tree_view(
             f"{style_attrs(padding_left=f'{indent}rem')}>"
             f'<div class="tree-node-row">'
             f"{toggle_html}"
-            f'<button class="tree-node-label" dj-click="{e_select}" data-value="{nid}">'
+            f'<button class="tree-node-label" dj-click="{e_select}" dj-value-value="{nid}">'
             f"{label}</button>"
             f"</div>"
             f"{children_html}"
@@ -3465,7 +3465,7 @@ def color_picker(
             f'<button class="color-swatch{active_cls}"'
             f"{style_attrs(background_color=style_value('background-color', sw) or 'transparent', css='background:{}')}"
             f' title="{e_sw}" '
-            f'dj-click="{e_event}" data-value="{e_sw}"></button>'
+            f'dj-click="{e_event}" dj-value-value="{e_sw}"></button>'
         )
 
     return mark_safe(
@@ -3731,7 +3731,7 @@ def date_picker(
                         cls += " dp-day-selected"
                 day_cells += (
                     f'<button class="{cls}" dj-click="{e_select}" '
-                    f'data-value="{date_str}">{day}</button>'
+                    f'dj-value-value="{date_str}">{day}</button>'
                 )
 
     label_html = f'<label class="form-label">{e_label}</label>' if label else ""
@@ -3894,7 +3894,7 @@ def table_of_contents(
         items: list of dicts {"id": "section-1", "label": "Introduction", "level": 1}
         title: TOC heading
         active: currently active section id (highlight)
-        event: dj-click event when an item is clicked (sends id as data-value)
+        event: dj-click event when an item is clicked (sends id as dj-value-value)
     """
     if not items:
         return mark_safe("")
@@ -3905,12 +3905,12 @@ def table_of_contents(
     def render_item(item: Any) -> Any:
         if not isinstance(item, dict):
             return ""
-        iid = attr_text(item.get("id", ""))  # only in href="#..." / data-value= (#3904)
+        iid = attr_text(item.get("id", ""))  # only in href="#..." / dj-value-value= (#3904)
         lbl = conditional_escape(str(item.get("label", "")))
         level = int(item.get("level", 1))
         indent = (level - 1) * 1.0
         active_cls = " toc-item-active" if str(item.get("id", "")) == active else ""
-        event_attr = f' dj-click="{e_event}" data-value="{iid}"' if e_event else ""
+        event_attr = f' dj-click="{e_event}" dj-value-value="{iid}"' if e_event else ""
         return (
             f'<a href="#{iid}" class="toc-item toc-level-{level}{active_cls}"'
             f"{style_attrs(padding_left=f'{indent + 0.75}rem')}{event_attr}>{lbl}</a>"
@@ -4207,7 +4207,7 @@ def kanban_board(
 
         add_btn = (
             f'<button class="kanban-add-card" dj-click="{e_add_card}" '
-            f'data-value="{col_id}">+ Add card</button>'
+            f'dj-value-value="{col_id}">+ Add card</button>'
             if e_add_card
             else ""
         )
@@ -4382,7 +4382,7 @@ def multi_select(
                 f'<span class="multi-select-tag">'
                 f"{conditional_escape(ol)}"
                 f'<button type="button" class="multi-select-tag-remove" '
-                f'dj-click="{dj_event}" data-value="{attr_text(ov)}" '
+                f'dj-click="{dj_event}" '
                 f'dj-value-option="{attr_text(ov)}" dj-value-value:bool="false"'
                 f"{disabled_attr}>&times;</button>"
                 f"</span>"
@@ -4526,12 +4526,12 @@ def number_stepper(
         f"{label_html}"
         f'<div class="number-stepper-controls">'
         f'<button type="button" class="number-stepper-btn number-stepper-dec" '
-        f'dj-click="{dj_event}" data-value="dec"{disabled_attr}>&minus;</button>'
+        f'dj-click="{dj_event}" dj-value-value="dec"{disabled_attr}>&minus;</button>'
         f'<input type="number" class="number-stepper-input" name="{e_name}" '
         f'id="{e_name}" value="{value}" step="{step}"'
         f'{min_attr}{max_attr}{disabled_attr} dj-change="{dj_event}">'
         f'<button type="button" class="number-stepper-btn number-stepper-inc" '
-        f'dj-click="{dj_event}" data-value="inc"{disabled_attr}>&plus;</button>'
+        f'dj-click="{dj_event}" dj-value-value="inc"{disabled_attr}>&plus;</button>'
         f"</div>"
         f"</div>"
     )
@@ -4581,12 +4581,12 @@ def tag_input(
     tag_parts = []
     for tag in tags:
         e_tag = conditional_escape(str(tag))
-        a_tag = attr_text(tag)  # data-value= / value=; e_tag stays the text (#3904)
+        a_tag = attr_text(tag)  # dj-value-value= / value=; e_tag stays the text (#3904)
         tag_parts.append(
             f'<span class="tag-input-tag">'
             f"{e_tag}"
             f'<button type="button" class="tag-input-remove" '
-            f'dj-click="{dj_event}" data-value="remove:{a_tag}"'
+            f'dj-click="{dj_event}" dj-value-value="remove:{a_tag}"'
             f"{disabled_attr}>&times;</button>"
             f'<input type="hidden" name="{e_name}" value="{a_tag}">'
             f"</span>"
@@ -4848,7 +4848,7 @@ def toggle_group(
     for opt in options:
         if not isinstance(opt, dict):
             continue
-        opt_value = attr_text(opt.get("value", ""))  # only in data-value= (#3904)
+        opt_value = attr_text(opt.get("value", ""))  # only in dj-value-value= (#3904)
         opt_label = conditional_escape(str(opt.get("label", "")))
         opt_icon = opt.get("icon", "")
 
@@ -4860,7 +4860,7 @@ def toggle_group(
         active_cls = " toggle-group-btn--active" if is_active else ""
         aria_pressed = "true" if is_active else "false"
         disabled_attr = " disabled" if disabled else ""
-        click_attr = "" if disabled else f' dj-click="{e_event}" data-value="{opt_value}"'
+        click_attr = "" if disabled else f' dj-click="{e_event}" dj-value-value="{opt_value}"'
 
         icon_html = ""
         if opt_icon:
@@ -4871,7 +4871,7 @@ def toggle_group(
         buttons.append(
             f'<button type="button" class="toggle-group-btn{active_cls}" '
             f'aria-pressed="{aria_pressed}" '
-            f'data-name="{e_name}"{click_attr}{disabled_attr}>'
+            f'dj-value-name="{e_name}"{click_attr}{disabled_attr}>'
             f"{icon_html}"
             f'<span class="toggle-group-label">{opt_label}</span>'
             f"</button>"
@@ -5773,7 +5773,7 @@ def rich_select(
 
     uid = attr_text(id or f"rs-{name}")
     field_attr = (
-        f' data-field="{e_name}"' if field is not None or str(event) == "validate_field" else ""
+        f' dj-value-field="{e_name}"' if field is not None or str(event) == "validate_field" else ""
     )
     listbox_id = f"{uid}-listbox"
 
@@ -5810,7 +5810,7 @@ def rich_select(
         opt_html = _rich_select_option_html(opt, is_display=False)
         opt_parts.append(
             f'<div class="rich-select-option{active_cls}{variant_cls}" '
-            f'data-value="{attr_text(ov)}" '
+            f'dj-value-value="{attr_text(ov)}" '
             f'dj-click="{dj_event}"{field_attr} '
             f'role="option" aria-selected="{"true" if ov == value else "false"}">'
             f"{opt_html}"
@@ -6004,7 +6004,7 @@ def data_grid(
     for row in rows:
         if not isinstance(row, dict):
             continue
-        rk = attr_text(row.get(row_key, ""))  # only in data-value= / data-row-key= (#3904)
+        rk = attr_text(row.get(row_key, ""))  # only in dj-value-value= / data-row-key= (#3904)
         cells = []
         for idx, col in enumerate(columns):
             if not isinstance(col, dict):
@@ -6038,7 +6038,7 @@ def data_grid(
             cells.append(
                 f'<td class="data-grid-cell data-grid-actions-col">'
                 f'<button class="data-grid-delete-btn" '
-                f'dj-click="{e_delete_row_event}" data-value="{rk}" '
+                f'dj-click="{e_delete_row_event}" dj-value-value="{rk}" '
                 f'title="Delete row">&times;</button>'
                 f"</td>"
             )
@@ -6579,7 +6579,7 @@ def render_theme_toggle(
     for mode, icon, label in _THEME_TOGGLE_MODES:
         checked = mode == current
         active = " dj-theme-toggle__btn--active" if checked else ""
-        click = f' dj-click="{e_event}" data-value="{mode}"' if e_event else ""
+        click = f' dj-click="{e_event}" dj-value-value="{mode}"' if e_event else ""
         buttons.append(
             f'<button type="button" class="dj-theme-toggle__btn{active}" role="radio" '
             f'data-theme-mode="{mode}" aria-checked="{"true" if checked else "false"}"{click} '
@@ -7263,7 +7263,7 @@ class InlineEditNode(template.Node):
         else:
             return mark_safe(
                 f'<span class="{cls}" dj-click="inline_edit_start" '
-                f'data-field="{e_field}" title="Click to edit">'
+                f'dj-value-field="{e_field}" title="Click to edit">'
                 f'<span class="dj-inline-edit__display">{e_value}</span>'
                 f'<span class="dj-inline-edit__icon">&#9998;</span></span>'
             )
@@ -7657,7 +7657,7 @@ class NotificationPopoverNode(template.Node):
             read_cls = "dj-notif-popover__item--read" if n_read else ""
             mark_attr = ""
             if not n_read:
-                mark_attr = f' dj-click="{e_mark_read}" data-id="{e_n_id}"'
+                mark_attr = f' dj-click="{e_mark_read}" dj-value-id="{e_n_id}"'
             items_html.append(
                 f'<div class="dj-notif-popover__item {read_cls}"{mark_attr}>'
                 f'<div class="dj-notif-popover__item-title">{e_n_title}</div>'
@@ -7971,14 +7971,14 @@ class FeedbackWidgetNode(template.Node):
         down_cls = "dj-feedback__btn--active" if value == "down" else ""
         return (
             f'<button class="dj-feedback__btn {up_cls}" '
-            f'dj-click="{e_event}" data-value="up" aria-label="Thumbs up">'
+            f'dj-click="{e_event}" dj-value-value="up" aria-label="Thumbs up">'
             f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
             f'stroke-width="2" width="18" height="18">'
             f'<path d="M14 9V5a3 3 0 00-3-3l-4 9v11h11.28a2 2 0 002-1.7l1.38-9a2 2 0 00-2-2.3H14z"/>'
             f'<path d="M7 22H4a2 2 0 01-2-2v-7a2 2 0 012-2h3"/>'
             f"</svg></button>"
             f'<button class="dj-feedback__btn {down_cls}" '
-            f'dj-click="{e_event}" data-value="down" aria-label="Thumbs down">'
+            f'dj-click="{e_event}" dj-value-value="down" aria-label="Thumbs down">'
             f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
             f'stroke-width="2" width="18" height="18">'
             f'<path d="M10 15v4a3 3 0 003 3l4-9V2H5.72a2 2 0 00-2 1.7l-1.38 9a2 2 0 002 2.3H10z"/>'
@@ -7995,7 +7995,7 @@ class FeedbackWidgetNode(template.Node):
             fill = "currentColor" if i <= current else "none"
             parts.append(
                 f'<button class="dj-feedback__btn dj-feedback__star {active}" '
-                f'dj-click="{e_event}" data-value="{i}" aria-label="{i} star">'
+                f'dj-click="{e_event}" dj-value-value="{i}" aria-label="{i} star">'
                 f'<svg viewBox="0 0 24 24" fill="{fill}" stroke="currentColor" '
                 f'stroke-width="2" width="18" height="18">'
                 f'<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>'
@@ -8018,7 +8018,7 @@ class FeedbackWidgetNode(template.Node):
             e_val = attr_text(val)
             parts.append(
                 f'<button class="dj-feedback__btn {active}" '
-                f'dj-click="{e_event}" data-value="{e_val}" aria-label="{e_val}">'
+                f'dj-click="{e_event}" dj-value-value="{e_val}" aria-label="{e_val}">'
                 f"{emoji}</button>"
             )
         return "".join(parts)
@@ -8233,7 +8233,7 @@ class ModelSelectorNode(template.Node):
             inner = self._option_inner(opt)
             opt_parts.append(
                 f'<div class="dj-model-sel__opt{active_cls}" '
-                f'data-value="{attr_text(ov)}" '
+                f'dj-value-value="{attr_text(ov)}" '
                 f'dj-click="{e_event}" '
                 f'role="option" aria-selected="{"true" if ov == value else "false"}">'
                 f"{inner}</div>"
@@ -8810,9 +8810,9 @@ class MarkdownTextareaNode(template.Node):
         toolbar = (
             f'<div class="dj-md-textarea__toolbar">'
             f'<button type="button" class="dj-md-textarea__tab{write_active}" '
-            f'dj-click="{e_event}"{cid_attr} data-mode="write">Write</button>'
+            f'dj-click="{e_event}"{cid_attr} dj-value-mode="write">Write</button>'
             f'<button type="button" class="dj-md-textarea__tab{preview_active}" '
-            f'dj-click="{e_event}"{cid_attr} data-mode="preview">Preview</button>'
+            f'dj-click="{e_event}"{cid_attr} dj-value-mode="preview">Preview</button>'
             f"</div>"
         )
 
@@ -9174,7 +9174,7 @@ class WizardNode(template.Node):
         for i, step in enumerate(steps):
             if not isinstance(step, dict):
                 continue
-            step_id = attr_text(step.get("id", ""))  # only in data-value= (#3904)
+            step_id = attr_text(step.get("id", ""))  # only in dj-value-value= (#3904)
             step_label = conditional_escape(str(step.get("label", "")))
             step_cls = "dj-wizard__step"
             if i < active_idx:
@@ -9188,7 +9188,7 @@ class WizardNode(template.Node):
 
             indicators.append(
                 f'<button class="{step_cls}" '
-                f'dj-click="{e_event}" data-value="{step_id}"{cid_attr}>'
+                f'dj-click="{e_event}" dj-value-value="{step_id}"{cid_attr}>'
                 f"{number_html}"
                 f'<span class="dj-wizard__label">{step_label}</span></button>'
             )
@@ -9572,7 +9572,7 @@ class FormArrayNode(template.Node):
             if can_remove:
                 remove_html = (
                     f'<button class="dj-form-array__remove" type="button" '
-                    f'dj-click="{e_remove_event}" data-value="{i}" '
+                    f'dj-click="{e_remove_event}" dj-value-value="{i}" '
                     f'aria-label="Remove row {i + 1}">&times;</button>'
                 )
 
@@ -9840,7 +9840,7 @@ def render_menu_item(item: Any, event_attrs: Any = None) -> str:
     else:
         event_attr = f' dj-click="{escape(event)}"' if event else ""
         if event and value is not None and value != "":
-            event_attr += f' data-value="{escape(str(value))}"'
+            event_attr += f' dj-value-value="{escape(str(value))}"'
     disabled_attr = ' aria-disabled="true" disabled' if disabled else ""
     return (
         f'<button type="button" class="{item_cls}" role="{role}"{checked_attr}'
@@ -10816,7 +10816,7 @@ class LightboxNode(template.Node):
         prev_btn = (
             (
                 f'<button class="dj-lightbox__prev" dj-click="{e_nav}" '
-                f'data-value="{idx - 1}"{cid_attr} aria-label="Previous">'
+                f'dj-value-value="{idx - 1}"{cid_attr} aria-label="Previous">'
                 f"&#8249;</button>"
             )
             if total > 1
@@ -10826,7 +10826,7 @@ class LightboxNode(template.Node):
         next_btn = (
             (
                 f'<button class="dj-lightbox__next" dj-click="{e_nav}" '
-                f'data-value="{idx + 1}"{cid_attr} aria-label="Next">'
+                f'dj-value-value="{idx + 1}"{cid_attr} aria-label="Next">'
                 f"&#8250;</button>"
             )
             if total > 1

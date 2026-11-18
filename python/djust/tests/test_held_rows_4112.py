@@ -37,7 +37,7 @@ from djust import LiveView
 from djust import _held_rows
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import background, event_handler, state
-from djust.tests._live_session import live_session
+from djust.testing import live_session
 
 TAG = {"value": ""}
 TEMPLATE = (
@@ -2586,23 +2586,17 @@ def test_c042_names_models_the_database_changes_by_itself(monkeypatch, setting, 
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("restore", ["restore_public_state", "restore_snapshot"])
+@pytest.mark.parametrize("restore", ["restore_public_state"])
 def test_djusts_restores_make_r_unknown(restore):
-    from types import SimpleNamespace
-
+    # The time-travel restore_snapshot case went with time travel (#4184).
     _world()
     view = _Probe()
     view._rows = _rows()
     view._show = lambda: [g.name for g in view._rows]
     view.render_with_diff()
-    if restore == "restore_public_state":
-        from djust._state_restore import restore_public_state
+    from djust._state_restore import restore_public_state
 
-        restore_public_state(view, {})
-    else:
-        from djust.time_travel import restore_snapshot
-
-        restore_snapshot(view, SimpleNamespace(restorable=False), "before")
+    restore_public_state(view, {})
     _held_rows.mark_tree(view, frozenset({"auth_permission"}))
     assert _held_rows.rows_written(view) is True
     _held_rows.unmark(view)

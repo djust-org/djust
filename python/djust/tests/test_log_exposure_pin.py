@@ -36,19 +36,6 @@ LEGACY_GATED = {
     ("render_embedded_child_html", "Failed to render embedded child %s: %s"): (
         "a nonlegacy child raises a value-free ExposureError from None first"
     ),
-    ("_handle_time_travel_jump_locked", "time_travel_jump: re-render failed"): (
-        "restore_snapshot returns False for a nonlegacy view before re-rendering"
-    ),
-    (
-        "_handle_time_travel_component_jump_locked",
-        "time_travel_component_jump: re-render failed",
-    ): "restore_component_snapshot returns False for a nonlegacy view first",
-    ("_handle_forward_replay_locked", "forward_replay: failed to set branch_id"): (
-        "reached only after replay_event, which returns False for a nonlegacy view"
-    ),
-    ("_handle_forward_replay_locked", "forward_replay: re-render failed"): (
-        "replay_event returns False for a nonlegacy view before re-rendering"
-    ),
     ("_mount_one", "mount_batch: _mount_one raised for view %s"): (
         "legacy branch only; the owner is the resolved class, fail-closed if unresolvable"
     ),
@@ -92,9 +79,6 @@ RUNTIME_LEGACY_GATED = {
     ("_notify_waiters_safely", "<Name>"): (
         "inside `if diagnostics_allowed()` after restricting to both owners"
     ),
-    ("_push_tt_event", "Runtime: time_travel on_event_recorded hook fail"): (
-        "inside `if diagnostics_allowed()` after restricting to both owners"
-    ),
     ("_execute_async_task_body", "Runtime: error in start_async callback '%s' on %"): (
         "inside `if legacy_diagnostics and uses_legacy_exposure(view)`"
     ),
@@ -126,20 +110,7 @@ RUNTIME_KNOWN_OPEN = {}
 # Smaller modules. An empty table still pins the module: a new exception-
 # carrying log call there fails the test until it is classified.
 MIXIN_TABLES = {
-    "live_view.py": (
-        {
-            (
-                "_capture_components_snapshot",
-                "time_travel: component snapshot failed for id=%s",
-            ): (
-                "_capture_snapshot_state returns the explicit projection before "
-                "reaching the component snapshot"
-            ),
-        },
-        {
-            ("__init__", "time_travel: failed to allocate buffer"): "buffer allocation",
-        },
-    ),
+    "live_view.py": ({}, {}),
     "_child_lifecycle.py": (
         {
             ("discard_sticky_child", "sticky child %s raised"): (
@@ -169,39 +140,6 @@ MIXIN_TABLES = {
         {
             ("_notify_waiters_inner", "wait_for_event predicate for %r raised %r — trea"): (
                 "inside `if diagnostics_allowed()` after restricting to the view"
-            ),
-        },
-    ),
-    "time_travel.py": (
-        {
-            ("record_event_end", "time_travel: _capture_snapshot_state failed (aft"): (
-                "nonlegacy or non-restorable records return early with the debug projection"
-            ),
-            ("record_event_end", "time_travel: error coercion failed"): (
-                "nonlegacy or non-restorable records return early with the debug projection"
-            ),
-            ("record_event_start", "time_travel: _capture_snapshot_state failed (bef"): (
-                "explicit_debug_projection is non-None for every nonlegacy policy, so they never reach the capture"
-            ),
-            ("replay_event", "time_travel: dry replay handler %s raised"): (
-                "returns False for a nonlegacy view before replaying"
-            ),
-            ("replay_event", "time_travel: replay handler %s raised"): (
-                "returns False for a nonlegacy view before replaying"
-            ),
-            ("restore_component_snapshot", "time_travel: component restore failed for id=%s "): (
-                "returns False for a nonlegacy view before restoring"
-            ),
-            ("restore_snapshot", "time_travel: ghost-attr cleanup failed for key=%"): (
-                "returns False for a nonlegacy view before restoring"
-            ),
-            ("restore_snapshot", "time_travel: restore failed for key=%s"): (
-                "returns False for a nonlegacy view before restoring"
-            ),
-        },
-        {
-            ("next_branch_id", "time_travel: failed to increment branch counter"): (
-                "branch counter"
             ),
         },
     ),
@@ -293,22 +231,7 @@ MIXIN_TABLES = {
             ),
         },
     ),
-    "observability/views.py": (
-        {
-            ("eval_handler", "eval_handler: handler call failed (TypeError) ha"): (
-                "_mutation_policy_gate refuses a nonlegacy view before mount or the handler runs"
-            ),
-            ("eval_handler", "eval_handler: handler raised handler=%s"): (
-                "_mutation_policy_gate refuses a nonlegacy view before mount or the handler runs"
-            ),
-            ("reset_view_state", "reset_view_state: mount() raised for session %s"): (
-                "_mutation_policy_gate refuses a nonlegacy view before mount or the handler runs"
-            ),
-        },
-        {
-            ("eval_handler", "eval_handler: invalid JSON body"): ("request body parse"),
-        },
-    ),
+    "observability/views.py": ({}, {}),
     "updates.py": (
         {},
         {
@@ -832,15 +755,6 @@ MIXIN_TABLES = {
             ): "deploy CLI: HTTP calls and tarball assembly",
         },
     ),
-    "observability/dry_run.py": (
-        {},
-        {
-            (
-                "_uninstall",
-                "DryRunContext failed to restore %s.%s: %s",
-            ): "dry-run attribute restore",
-        },
-    ),
     "pwa/manifest.py": (
         {},
         {
@@ -1264,23 +1178,13 @@ def f(self):
 # ``detail = str(exc)`` passed later is not visible to this scan.
 # --------------------------------------------------------------------------
 
-CLIENT_FRAME_SENDERS = {"send_error", "_send_debug_error", "send_json", "send"}
+CLIENT_FRAME_SENDERS = {"send_error", "send_json", "send"}
 
+# The time-travel jump/replay and bug-capture share handlers that filled the
+# websocket.py table were removed in 2.0 (#4184). The empty tables still pin
+# both modules: a new exception-interpolating client frame fails the test.
 CLIENT_FRAME_LEGACY_GATED = {
-    "websocket.py": {
-        ("_handle_time_travel_jump_locked", "_send_debug_error"): (
-            "re-render runs only after restore_snapshot, which refuses a nonlegacy view"
-        ),
-        ("_handle_time_travel_component_jump_locked", "_send_debug_error"): (
-            "re-render runs only after restore_component_snapshot, which refuses nonlegacy"
-        ),
-        ("_handle_forward_replay_locked", "_send_debug_error"): (
-            "re-render runs only after replay_event, which refuses a nonlegacy view"
-        ),
-        ("handle_bug_capture_share", "send_error"): (
-            "inside `if uses_legacy_exposure(view) or isinstance(exc, ExposureError)`"
-        ),
-    },
+    "websocket.py": {},
     "runtime.py": {},
 }
 

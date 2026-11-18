@@ -395,6 +395,7 @@ module = [
     "djust.formsets",
     "djust.simple_live_view",
     "djust.testing",
+    "djust._testing_live",
     "djust.react",
     "djust.frameworks",
     "djust.js",
@@ -1171,7 +1172,7 @@ warn_return_any = true
 # runtime auditor, the bug-capture harness, the proposed CSS system-checks, the
 # lifecycle hooks registry, the hot-view-replacement engine, the
 # state/template backend back-compat shims, the template-filter helpers, the
-# time-travel recorder, the shared utils + BackendRegistry, and the package
+# shared utils + BackendRegistry, and the package
 # __main__ entry point) plus the two leaf subpackages: the presence backends
 # (base / memory / redis / registry) and the PostgreSQL LISTEN/NOTIFY bridge
 # (decorators / exceptions / notifications). `db/decorators` carries narrow
@@ -1189,7 +1190,6 @@ module = [
     "djust.hooks",
     "djust.hot_view_replacement",
     "djust.template_filters",
-    "djust.time_travel",
     "djust.utils",
     "djust.__main__",
     "djust.backends.__init__",

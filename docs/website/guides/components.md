@@ -324,9 +324,8 @@ What this gives you:
 
 - **`view.nav`** is a *bound component*: `view.nav.active` reads and writes
   this view's state (`view.nav.state` is the `State` itself), and it is
-  registered in `view._components` on first access, so it is routed, captured
-  in time-travel snapshots and saved/restored with the session like any other
-  component.
+  registered in `view._components` on first access, so it is routed and
+  saved/restored with the session like any other component.
 - **Handlers are ordinary `@event_handler` methods** on the component; inside
   one, `self.state` is the state of the view that received the event. Clicks
   inside the rendered markup carry the `component_id` automatically because
@@ -1068,8 +1067,8 @@ nested interactive descendants (`<a>`, `<button>`, `<input>`,
 **never** trigger row navigation.
 
 **Option B — `row_click_event` (preferred, LiveView-idiomatic)**: each
-`<tr>` fires a djust event with `data-value=row[row_click_value_key]`.
-Your `@event_handler` receives the row's value via `**kwargs` and can
+`<tr>` fires a djust event with `dj-value-value=row[row_click_value_key]`.
+Your `@event_handler` receives the row's value as `value` (a string) and can
 use `self.live_redirect(...)` to navigate over the existing LiveView
 connection (the target must be a LiveView; for any other page, render a
 normal link instead), or do anything else:

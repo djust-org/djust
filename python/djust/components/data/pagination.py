@@ -72,10 +72,11 @@ class PaginationComponent(LiveComponent):
     def _click(self, event: str, **data: Any) -> str:
         """``dj-click`` for one of this component's own page controls, paired
         with ``data-component-id`` so the click routes to THIS component and not
-        the parent view (#2776 — same shape as ``TableComponent.sort_by``)."""
+        the parent view (#2776 — same shape as ``TableComponent.sort_by``). The
+        arguments are ``dj-value-*``, which a strict handler receives (#4186)."""
         attrs = f' dj-click="{conditional_escape(event)}" data-component-id="{conditional_escape(self.component_id)}"'
         for key, value in data.items():
-            attrs += f' {attr_name("data-" + str(key))}="{conditional_escape(value)}"'
+            attrs += f' {attr_name("dj-value-" + str(key))}="{conditional_escape(value)}"'
         return attrs
 
     @event_handler()

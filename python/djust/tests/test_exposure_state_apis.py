@@ -46,16 +46,7 @@ def test_get_state_exports_only_client_grants_and_detaches_values(view, settings
     assert "_state_transient_value" not in view.__dict__
 
 
-def test_snapshot_api_uses_only_snapshot_grants(view):
-    exported = view._capture_snapshot_state()
-    assert exported == {"snapshot_value": {"page": 1}}
-    exported["snapshot_value"]["page"] = 2
-    assert view.snapshot_value == {"page": 1}
-    assert "_state_client_value" not in view.__dict__
-    assert "_state_server_value" not in view.__dict__
-
-
-@pytest.mark.parametrize("method", ["get_state", "_capture_snapshot_state"])
+@pytest.mark.parametrize("method", ["get_state"])
 @pytest.mark.parametrize("policy", [None, "typo", 0])
 def test_unknown_policy_never_selects_legacy_export(view, method, policy):
     view.exposure_policy = policy
@@ -63,7 +54,7 @@ def test_unknown_policy_never_selects_legacy_export(view, method, policy):
         getattr(view, method)()
 
 
-@pytest.mark.parametrize("method", ["get_state", "_capture_snapshot_state"])
+@pytest.mark.parametrize("method", ["get_state"])
 def test_export_failure_is_redacted_without_legacy_fallback(view, method):
     def secret_factory():
         raise RuntimeError("FACTORY_SECRET_SENTINEL")
@@ -81,7 +72,7 @@ def test_export_failure_is_redacted_without_legacy_fallback(view, method):
     assert error.value.__suppress_context__
 
 
-@pytest.mark.parametrize("method", ["get_state", "_capture_snapshot_state"])
+@pytest.mark.parametrize("method", ["get_state"])
 @pytest.mark.parametrize("bad", [object(), float("nan"), "x" * 65536])
 def test_declared_values_still_require_bounded_exact_json(view, method, bad):
     view.snapshot_value = {"nested": bad}
@@ -89,7 +80,7 @@ def test_declared_values_still_require_bounded_exact_json(view, method, bad):
         getattr(view, method)()
 
 
-@pytest.mark.parametrize("method", ["_get_private_state", "_capture_components_snapshot"])
+@pytest.mark.parametrize("method", ["_get_private_state"])
 @pytest.mark.parametrize("policy", ["explicit", "invalid", None])
 def test_legacy_private_and_component_exporters_reject_nonlegacy(view, method, policy):
     view.exposure_policy = policy
@@ -124,7 +115,6 @@ def test_legacy_direct_api_behavior_remains_available():
     legacy._user_private_keys = {"_private_value"}
     assert legacy.get_state() == {"public_value": [1]}
     assert legacy._get_private_state() == {"_private_value": "private"}
-    assert legacy._capture_snapshot_state() == {"public_value": [1]}
     legacy._restore_private_state({"_private_value": "restored"})
     assert legacy._private_value == "restored"
 
@@ -145,7 +135,7 @@ def test_audio_private_restore_rejects_before_filtering_payload():
     assert view.__dict__ == {}
 
 
-@pytest.mark.parametrize("method", ["get_state", "_capture_snapshot_state"])
+@pytest.mark.parametrize("method", ["get_state"])
 def test_inherited_grants_cannot_widen_exports(method):
     class Inherited(ExportView):
         pass
@@ -156,7 +146,7 @@ def test_inherited_grants_cannot_widen_exports(method):
     assert view.__dict__ == {}
 
 
-@pytest.mark.parametrize("method", ["get_state", "_capture_snapshot_state"])
+@pytest.mark.parametrize("method", ["get_state"])
 @pytest.mark.parametrize("error_type", [RuntimeError, AttributeError])
 def test_policy_lookup_failure_does_not_disclose_exception(method, error_type):
     class BrokenPolicy(LiveView):

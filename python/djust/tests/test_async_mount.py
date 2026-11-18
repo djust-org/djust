@@ -29,7 +29,7 @@ from django.test import override_settings
 from djust import LiveView
 from djust.decorators import event_handler
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytest.importorskip("channels")
 

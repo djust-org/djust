@@ -546,23 +546,15 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
-### C501: Time-travel debugging enabled globally
+### C501: Time-travel debugging enabled globally (removed in 2.0)
 
-**Severity**: Info (DEBUG only)
-
-**What causes it**: `LIVEVIEW_CONFIG['time_travel_enabled']` is `True`. Message: "Time-travel debugging is enabled globally (LIVEVIEW_CONFIG['time_travel_enabled']=True)." This is a discoverability notice; individual views still need `time_travel_enabled = True` to allocate a buffer.
-
-**Fix**: None needed. See [Time-Travel Debugging](time-travel-debugging.md).
+Retired in 2.0 with time-travel debugging (#4184). `LIVEVIEW_CONFIG['time_travel_enabled']` is now refused with `ImproperlyConfigured` at startup; delete the key. To follow state changes event by event, use the debug panel's **State** tab. Nothing reports C501; remove it from `suppress_checks` or `SILENCED_SYSTEM_CHECKS`.
 
 ---
 
-### C502: Invalid time_travel_max_events
+### C502: Invalid time_travel_max_events (removed in 2.0)
 
-**Severity**: Error (DEBUG only)
-
-**What causes it**: `time_travel_max_events` in the djust config is not a positive integer. Message: "time_travel_max_events must be a positive integer (got ...)." The time-travel ring buffer raises `ValueError` on a non-positive cap, which breaks `LiveView.__init__` for any view with `time_travel_enabled = True`.
-
-**Fix**: Set a positive integer (the default is 100).
+Retired in 2.0 with time-travel debugging (#4184). `LIVEVIEW_CONFIG['time_travel_max_events']` is now refused with `ImproperlyConfigured` at startup; delete the key. Nothing reports C502; remove it from `suppress_checks` or `SILENCED_SYSTEM_CHECKS`.
 
 <!-- END GENERATED check-sections:C -->
 
@@ -827,13 +819,9 @@ Retired in 2.0 with `enable_state_snapshot`, the opt-in it compared between a st
 
 ---
 
-### V014: Time travel records PII-like fields
+### V014: Time-travel view exposes PII-looking fields (removed in 2.0)
 
-**Severity**: Warning
-
-**What causes it**: A view sets `time_travel_enabled = True`, and its model or form declares fields whose names look like PII that are not listed in `time_travel_excluded_fields`. Message: "<view>: time_travel_enabled = True, and its model/form declares field(s) whose names look like PII and are not in time_travel_excluded_fields: ...". Time-travel snapshots can be exported as a shareable bug-capture blob.
-
-**Fix**: List the sensitive public-state keys in `time_travel_excluded_fields` on the view, or suppress with `DJUST_CONFIG = {"suppress_checks": ["V014"]}` if they never reach the view's public state. See [Bug Capture](bug-capture.md).
+Retired in 2.0 with time-travel debugging (#4184). Nothing reports it; remove it from `suppress_checks` or `SILENCED_SYSTEM_CHECKS`. A bug capture is now built from states you supply, so pass `scrub=scrub_fields(...)` to `BugCapture.encode()` for the fields to leave out. See [Bug Capture](bug-capture.md).
 
 ---
 
@@ -1268,7 +1256,7 @@ A template with `dj-*` directives and **neither** `dj-root` nor `dj-view` is not
 
 **What you see**: The event listener never fires. No error in the console -- completely silent failure.
 
-> **Exempt (#1809)**: djust dispatches a second family of events on `document` (not `window`): `djust:navigate-start`, `djust:navigate-end`, `djust:hvr-applied`, `djust:layout-changed`, `djust:ws-reconnected`, `djust:time-travel-state`, `djust:time-travel-event`. Listening for those on `document` is **correct** and is no longer flagged by T004.
+> **Exempt (#1809)**: djust dispatches a second family of events on `document` (not `window`): `djust:navigate-start`, `djust:navigate-end`, `djust:hvr-applied`, `djust:layout-changed`, `djust:ws-reconnected`. Listening for those on `document` is **correct** and is no longer flagged by T004.
 
 **Fix**:
 

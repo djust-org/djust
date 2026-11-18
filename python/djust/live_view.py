@@ -94,29 +94,9 @@ __all__ = [
 # (this set, same membership) and the reserved ``state()`` names are
 # ``_exposure.reserved_state_names()``. This name stays only for the legacy
 # exporters that still filter the attribute walk with it (``get_state``,
-# ``_capture_snapshot_state``, the private-state helpers, time travel, the
+# the private-state helpers, the
 # legacy debug panel and the exposure inventory); it goes with them (rows 7, 9).
 _FRAMEWORK_INTERNAL_ATTRS: frozenset = CHANGE_DETECTION_IGNORED
-
-
-# Component-level analog (#1041): framework-internal LiveComponent
-# attrs that DON'T start with ``_`` but aren't user state. Excluded
-# from the ``__components__`` snapshot to keep the time-travel state
-# focused on actual user state. Mirrors the parent's
-# :data:`_FRAMEWORK_INTERNAL_ATTRS` for component fields.
-#
-# ``component_id`` in particular is the registry key — restoring it
-# from stale snapshot state would desync the registry from the
-# instance's ``component_id`` attribute.
-_COMPONENT_INTERNAL_ATTRS: frozenset = frozenset(
-    {
-        "component_id",
-        "template",
-        "template_name",
-        "assigns",
-        "slots",
-    }
-)
 
 
 def _descriptor_fields(cls: type) -> Dict[str, tuple]:
@@ -175,120 +155,6 @@ def _holds_model(value: Any) -> bool:
     if isinstance(value, (list, tuple)):
         return any(_holds_model(v) for v in value)
     return False
-
-
-def _shadows_component_method(component: Any, key: str) -> bool:
-    """Whether ``key`` names a callable on the component's class (#3046).
-
-    Checks the component's own class and, for a class-level component bound
-    to a view (``BoundComponent``, ADR-031), the descriptor's class too, since
-    that is where its handlers live. Class-level lookup only: an instance
-    value never counts.
-    """
-    classes = [type(component)]
-    descriptor = getattr(component, "__dict__", {}).get("_descriptor")
-    if descriptor is not None:
-        classes.append(type(descriptor))
-    for cls in classes:
-        try:
-            member = getattr(cls, key, None)
-        except Exception:  # noqa: BLE001 — a raising class attr is not a method
-            continue
-        if callable(member):
-            return True
-    return False
-
-
-def restore_components_snapshot(view: Any, components_state: Any, *, source: str) -> bool:
-    """Apply a ``__components__`` snapshot map to ``view``'s components.
-
-    Used by the time-travel restore (``time_travel.py``, #2896).
-
-    Each ``{component_id: {field: value}}`` entry goes only to a component the
-    view already knows: one in ``view._components``, or a class-level component
-    DECLARED on the view class (bound on demand, as the first ``view.<name>``
-    access would). Unknown ids, non-dict entries and blocked field names
-    (private, dunder, :data:`_COMPONENT_INTERNAL_ATTRS`) are skipped. Values go
-    through ``safe_setattr``.
-
-    Returns ``True`` when every entry applied cleanly.
-    """
-    from .security import safe_setattr
-
-    if not components_state:
-        return True
-    if not isinstance(components_state, dict):
-        logger.warning("%s: __components__ is not a mapping; ignoring", source)
-        return False
-    registry = getattr(view, "_components", None)
-    if not isinstance(registry, dict):
-        registry = {}
-    declared = _descriptor_fields(type(view))
-    ok = True
-    for component_id, component_snap in components_state.items():
-        component = registry.get(component_id)
-        if (
-            component is None
-            and isinstance(component_id, str)
-            and declared.get(component_id, (None,))[0] == "component"
-        ):
-            component = getattr(view, component_id, None)
-        if component is None:
-            logger.warning("%s: component %r in snapshot but not in registry", source, component_id)
-            ok = False
-            continue
-        if not isinstance(component_snap, dict):
-            logger.warning("%s: component %r snapshot is not a mapping", source, component_id)
-            ok = False
-            continue
-        # An interactive component restores through its concrete state
-        # schema, never field-by-field (ADR-038); None keeps the legacy path.
-        from .time_travel import _restore_interactive_state
-
-        restored = _restore_interactive_state(component, component_snap)
-        if restored is not None:
-            ok = restored and ok
-            continue
-        for key, value in component_snap.items():
-            if not isinstance(key, str) or key in _COMPONENT_INTERNAL_ATTRS:
-                continue
-            if _shadows_component_method(component, key):
-                # A snapshot field named like a method (``render``, ``mount``,
-                # a handler) would shadow it on the instance (#3046). No real
-                # state field has such a name, so skip it.
-                logger.warning(
-                    "%s: component restore skipped id=%s key=%s (names a method)",
-                    source,
-                    component_id,
-                    key,
-                )
-                ok = False
-                continue
-            try:
-                applied = safe_setattr(component, key, value, allow_private=False)
-            except Exception as exc:  # noqa: BLE001 — log + degrade, never break a restore
-                from ._exposure_diagnostics import log_failure_for
-
-                # A setter is application code; its error text can carry
-                # state, so it is value-free for a nonlegacy owner (ADR-038).
-                log_failure_for(
-                    logger,
-                    (view, component),
-                    exc,
-                    "%s: component restore failed for id=%s key=%s",
-                    source,
-                    component_id,
-                    key,
-                    traceback=True,
-                )
-                ok = False
-                continue
-            if not applied:
-                logger.warning(
-                    "%s: component restore blocked for id=%s key=%s", source, component_id, key
-                )
-                ok = False
-    return ok
 
 
 #: The wrappers :func:`_protect_http_entry` returns, by identity. A wrapper made
@@ -806,38 +672,6 @@ class LiveView(
     # tracked for v0.6.2 as Phase 2.
     streaming_render: bool = False
 
-    # Time-travel debugging (v0.6.1 — dev-only).
-    #
-    # Opt-in per-view flag that enables a per-instance ring buffer of
-    # :class:`djust.time_travel.EventSnapshot` entries — one for every
-    # ``@event_handler`` dispatch, capturing ``state_before`` /
-    # ``state_after``. The debug panel exposes a "Time Travel" tab that
-    # lets developers scrub through history and jump back to any past
-    # state; the server restores the snapshot + re-renders.
-    #
-    # Safe default (``False``) costs zero when disabled. Gated on
-    # ``DEBUG=True`` at the WebSocket consumer so enabling it in a
-    # release build silently no-ops. See
-    # :mod:`djust.time_travel` for the recording machinery.
-    time_travel_enabled: bool = False
-
-    # Top-level public-state keys that must NEVER leave this view inside a
-    # shared bug capture (#1561). ``encode_view_state()`` applies these
-    # BEFORE any caller-supplied ``scrub`` callable, so the redaction does
-    # not depend on every call site remembering to pass one — the per-call
-    # ``scrub`` argument stays available for arbitrary policies, and this
-    # is the default safety net underneath it.
-    #
-    # Declarative rather than behavioural on purpose: it is a list a
-    # reviewer can read, and the ``djust.V014`` system check reads it too,
-    # warning when a time-travel-enabled view has model or form fields whose
-    # names look like PII and are not named here.
-    #
-    # Scope matches ``scrub_fields``: TOP-LEVEL public-state keys only. A
-    # nested ``self.profile["ssn"]`` is not reached by naming ``"ssn"``;
-    # pass your own ``scrub`` callable for that.
-    time_travel_excluded_fields: List[str] = []
-
     # ============================================================================
     # AS_VIEW DISPATCH (PR-B for v0.9.0 streaming, ADR-015)
     # ============================================================================
@@ -1003,29 +837,6 @@ class LiveView(
         # Track user-defined _private attr names (populated by
         # _snapshot_user_private_attrs after mount, or _restore_private_state).
         self._user_private_keys: Set[str] = set()
-
-        # Time-travel debugging (v0.6.1) — lazy per-instance ring buffer.
-        # Allocated only when the subclass opts in via the class attr so
-        # the 99% of views that don't use it pay zero memory cost.
-        self._time_travel_buffer = None
-        # Branched-timeline tracking (#1151, v0.9.4). Default branch is
-        # "main" — the canonical recorded timeline. Forward-replay from
-        # a non-tip cursor allocates a fresh branch id from the counter.
-        # Both fields are inert when the buffer isn't allocated.
-        self._time_travel_branch_id = "main"
-        self._time_travel_branch_counter = 0
-        if getattr(self.__class__, "time_travel_enabled", False):
-            try:
-                from djust.time_travel import TimeTravelBuffer
-                from djust.config import config as _djust_config
-
-                self._time_travel_buffer = TimeTravelBuffer(
-                    max_events=_djust_config.get("time_travel_max_events", 100)
-                )
-            except Exception:  # noqa: BLE001
-                # Never let a misconfigured buffer break __init__.
-                logger.exception("time_travel: failed to allocate buffer")
-                self._time_travel_buffer = None
 
         # Object-permission cache (ADR-017, v0.9.5-1a). Populated by
         # check_object_permission() post-mount when get_object is overridden.
@@ -1453,139 +1264,6 @@ class LiveView(
                 user_keys = getattr(self, "_user_private_keys", None)
                 if user_keys is not None:
                     user_keys.add(key)
-
-    # ============================================================================
-    # STATE SNAPSHOT
-    # ============================================================================
-
-    def _capture_snapshot_state(self) -> Dict[str, Any]:
-        """Return a JSON-serializable snapshot of public view state.
-
-        Explicit policy returns only declared ``persist="client"`` values,
-        detached and bounded. It does not infer any component state. The
-        returned dict is not a signed restore capability; explicit restoration
-        uses the bound snapshot adapter.
-
-        Legacy policy filters out private (``_``-prefixed) attributes, framework-internal
-        attrs enumerated in ``_FRAMEWORK_INTERNAL_ATTRS``, callables, and any
-        value that fails a ``DjangoJSONEncoder`` round-trip. Time-travel
-        recording uses it; the snapshot is lossy by design (a model comes
-        back as a disconnected dict).
-
-        Component state (#1041, v0.9.0): when this view has registered
-        :class:`~djust.components.LiveComponent` instances in
-        ``self._components`` (the registry populated by
-        :meth:`_assign_component_ids`), each component's public state
-        is captured under the special ``"__components__"`` key as a
-        ``{component_id: {field: value}}`` nested dict. The reserved
-        name keeps component snapshots out of the parent's flat state
-        namespace and gives the time-travel debug panel a clean shape
-        to render per-component scrubbers.
-        """
-        from ._exposure import explicit_state_projection, uses_legacy_exposure
-
-        if not uses_legacy_exposure(self):
-            return explicit_state_projection(self, "snapshot")
-
-        result: Dict[str, Any] = {}
-        for key, value in self.__dict__.items():
-            if type(key) is not str or key.startswith("_"):  # #4143
-                continue
-            if key in _FRAMEWORK_INTERNAL_ATTRS:
-                continue
-            if callable(value):
-                continue
-            try:
-                # json.dumps serves as the serializability check; the
-                # accompanying json.loads round-trips to a *disconnected*
-                # value so later in-place mutations to the source object
-                # (e.g. ``self.items.append(...)``) do not retroactively
-                # rewrite this snapshot. Without the round-trip the
-                # time-travel state_before / state_after fields aliased
-                # the live view attrs — see Stage 11 Fix B.
-                result[key] = json.loads(json.dumps(value, cls=StateRoundtripJSONEncoder))
-            except (TypeError, ValueError, OverflowError):
-                # Skip non-serializable — matches _get_private_state pattern.
-                continue
-
-        # Component-level state (#1041). Each registered component
-        # contributes its own public-state dict under
-        # ``__components__`` keyed by ``component_id``.
-        components_state = self._capture_components_snapshot()
-        if components_state:
-            result["__components__"] = components_state
-        return result
-
-    def _capture_components_snapshot(self) -> Dict[str, Dict[str, Any]]:
-        """Return a ``{component_id: {field: value}}`` snapshot map.
-
-        Walks ``self._components`` (the registry of LiveComponent
-        instances populated by ``_assign_component_ids``) and captures
-        each component's public state. Returns an empty dict when the
-        registry is empty or absent — no key is added to the parent
-        snapshot in that case.
-
-        Capture rules per component:
-        - Public (non-``_``-prefixed) attrs from ``component.__dict__``.
-        - Skip callables and non-serializable values (same rules as
-          parent state).
-        - Skip ``_descriptor_*`` machinery and other framework-
-          internal attrs that begin with ``_``.
-        - Skip framework-internal config attrs that DON'T start with
-          ``_`` but aren't user state (see
-          :data:`_COMPONENT_INTERNAL_ATTRS`). ``component_id`` in
-          particular is the registry key — restoring it from stale
-          state would desync the registry from the instance attr.
-
-        Failures on individual components are logged and the bad
-        component is skipped — degrade gracefully rather than break
-        the whole snapshot.
-
-        This legacy reflective helper is unavailable under explicit policy.
-        A component descriptor does not grant permission to export its state.
-        """
-        from ._exposure import require_legacy_state_api
-
-        require_legacy_state_api(self)
-        registry = getattr(self, "_components", None)
-        if not registry:
-            return {}
-        components_state: Dict[str, Dict[str, Any]] = {}
-        from .components.base import BoundComponent
-        from .components._interactive import DropdownMenu
-        from .components.mixins.base import state_dict
-
-        for component_id, component in registry.items():
-            try:
-                comp_state: Dict[str, Any] = {}
-                # ADR-031: a bound component's public state IS its State dict.
-                # ``state_dict``: a State field may be named ``items`` (#4134).
-                items = (
-                    state_dict(component.state).items()
-                    if isinstance(component, (BoundComponent, DropdownMenu))
-                    else component.__dict__.items()
-                )
-                for key, value in items:
-                    if key.startswith("_"):
-                        continue
-                    if key in _COMPONENT_INTERNAL_ATTRS:
-                        continue
-                    if callable(value):
-                        continue
-                    try:
-                        comp_state[key] = json.loads(
-                            json.dumps(value, cls=StateRoundtripJSONEncoder)
-                        )
-                    except (TypeError, ValueError, OverflowError):
-                        # Skip non-serializable — matches parent rule.
-                        continue
-                components_state[component_id] = comp_state
-            except Exception:  # noqa: BLE001 — dev-only, log + degrade
-                logger.exception(
-                    "time_travel: component snapshot failed for id=%s",
-                    component_id,
-                )
-        return components_state
 
     def _should_restore_snapshot(self, request: Any) -> bool:
         """Return True to allow the signed client snapshot to be restored.

@@ -1,6 +1,6 @@
 """#3637: ``sync_turn_wrapper`` also covers the object-permission check, the view-level
-auth check, ``on_mount`` hooks, ``connected()`` / ``disconnected()``, the cursor and
-presence hooks, and the time-travel replay.
+auth check, ``on_mount`` hooks, ``connected()`` / ``disconnected()``, and the cursor and
+presence hooks (it also covered the time-travel replay until 2.0 removed it, #4184).
 
 Before this change those view hooks ran on the worker thread through a bare
 ``sync_to_async`` with NO wrapper entry. An app that opens a per-turn database scope
@@ -38,7 +38,7 @@ from djust.hooks import on_mount
 from djust.presence import PresenceMixin
 from djust.tests._ws_frames import drain_extra, has_type, receive_until
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytest.importorskip("channels")
 
@@ -326,35 +326,6 @@ async def test_get_presence_key_runs_inside_the_wrapper_on_mount_and_on_teardown
     assert None not in SEEN["presence_key"], SEEN
     assert {"hook", "mount"} >= set(SEEN["presence_key"]), SEEN
     assert "hook" in SEEN["presence_key"], SEEN
-
-
-# ---------------------------------------------------------------------------
-# Time-travel replay
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_a_time_travel_replay_runs_the_handler_inside_the_wrapper(
-    probe, settings, monkeypatch
-):
-    from djust.tests.test_debug_render_contracts import DebugView, setup
-
-    @event_handler(parameter_policy="strict")
-    def advance(self, value: int):
-        note("replayed")
-        self.count += value
-
-    monkeypatch.setattr(DebugView, "advance", advance)
-    settings.DEBUG = True
-    consumer, view = await setup()
-    ENTERED.clear()
-
-    await consumer.handle_forward_replay({"from_index": 0})
-
-    assert SEEN["replayed"] == ["event"], SEEN
-    assert "event" in steps()
-    assert view.count == 9
 
 
 # ---------------------------------------------------------------------------

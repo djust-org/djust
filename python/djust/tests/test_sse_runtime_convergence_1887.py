@@ -39,7 +39,7 @@ from django.contrib.auth.models import AnonymousUser
 from asgiref.sync import sync_to_async
 from django.test import RequestFactory, override_settings
 
-from djust.tests._live_session import live_session
+from djust.testing import live_session
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.sse import DjustSSEStreamView, _sse_sessions

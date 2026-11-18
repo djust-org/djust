@@ -425,7 +425,7 @@ def test_a_function_in_a_column_is_warned_about_once(caplog) -> None:
 def test_an_object_column_is_read_for_its_key_label_and_width(engine, case: str) -> None:
     head, body = _table(engine(SRC, CASES[case]))
     assert re.findall(r"<th\b[^>]*>(.*?)</th>", head) == ["Name", "Age"], head
-    assert 'data-value="name"' in head and 'style="width:10px"' in head, head
+    assert 'dj-value-value="name"' in head and 'style="width:10px"' in head, head
     assert body == "<tr><td>N</td><td>3</td></tr>", body
 
 

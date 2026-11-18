@@ -175,18 +175,6 @@ class TestTaggedForm:
         assert back[STATE_COMPONENT_TAG] == tagged[STATE_COMPONENT_TAG]
         assert back["state"]["amount"] == Decimal("1.5")
 
-    def test_a_non_serialisable_state_value_skips_the_attribute_in_the_snapshot(self):
-        """Review 🟡6: the snapshot path mirrors a view's own rule — skip, never ``str()``."""
-
-        class Holder(Component):
-            template = "<i></i>"
-
-        view = RatingView()
-        view.mount(None)
-        view.holder = Holder(fn=lambda: 1)
-        snap = view._capture_snapshot_state()
-        assert "rating" in snap and "holder" not in snap
-
     def test_a_user_dict_that_merely_has_a_state_key_is_untouched(self):
         plain = {"state": {"a": 1}, "other": 2}
         assert decode_state_roundtrip(plain) == plain
@@ -204,7 +192,9 @@ class TestSnapshotPaths:
         view = RatingView()
         view.mount(None)
         view.rating.value = 5
-        snap = view._capture_snapshot_state()
+        # Encoded as the state round trip encodes a public value (the
+        # time-travel capture that used to produce it went with #4184).
+        snap = json.loads(json.dumps({"rating": view.rating}, cls=StateRoundtripJSONEncoder))
         assert snap["rating"][STATE_COMPONENT_TAG].endswith(".Rating")
         fresh = RatingView()  # mount() is skipped on a session restore
         restore_public_state(fresh, decode_state_roundtrip(json.loads(json.dumps(snap))))

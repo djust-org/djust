@@ -977,8 +977,8 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         access. ``@event_handler`` methods on the component class run with the
         bound component as ``self`` when an event carries ``component_id``;
         ``{{ nav }}`` renders the declared ``template`` with the State as the
-        context. Time-travel and session save/restore see it like any other
-        registered component.
+        context. Session save/restore sees it like any other registered
+        component.
     """
 
     # Component configuration

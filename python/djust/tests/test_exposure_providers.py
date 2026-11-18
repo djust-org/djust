@@ -78,7 +78,6 @@ class Base(LiveView):
     exposure_policy = "explicit"
     count = state(0, persist="server")
     navigation = state("NAV", persist="client", client=True)
-    time_travel_enabled = True
 
     def get_context_data(self, **kwargs):
         return super().get_context_data(count=self.count, **kwargs)
@@ -493,8 +492,6 @@ async def test_explicit_provider_values_never_reach_state_destinations(staged, m
     codec = await sync_to_async(snapshot_codec)(view, request)
     assert codec.restore(token) == {"navigation": "NAV"}
     debug = json.dumps(explicit_debug_projection(view))
-    history = json.dumps([snapshot.to_dict() for snapshot in view._time_travel_buffer._buf])
-    assert history != "[]", "time travel must have recorded the event"
     with override_settings(DEBUG=True):
         register_view("exposure-provider-test", view)
         try:
@@ -512,7 +509,6 @@ async def test_explicit_provider_values_never_reach_state_destinations(staged, m
         assert sentinel not in token
         assert sentinel not in frames
         assert sentinel not in debug
-        assert sentinel not in history
         assert sentinel not in response.content.decode()
 
 

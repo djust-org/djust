@@ -36,11 +36,11 @@ _lazy_str = lazy(lambda text: text, str)
 
 
 def _combobox_options(out: str) -> list[tuple[str, bool]]:
-    """``[(raw data-value, drawn selected)]`` per option, and the class and aria agree."""
+    """``[(raw dj-value-value, drawn selected)]`` per option, and the class and aria agree."""
     found = []
     for cls, aria, value in re.findall(
         r'<div class="combobox-option([^"]*)" id="[^"]*" role="option" '
-        r'aria-selected="(true|false)" dj-click="[^"]*" data-value="([^"]*)"',
+        r'aria-selected="(true|false)" dj-click="[^"]*" dj-value-value="([^"]*)"',
         out,
     ):
         selected = "combobox-option-selected" in cls
@@ -149,7 +149,7 @@ class TestOrdinaryAndEdgeValuesAreUnchanged:
             {"o": [{"value": "a&b", "label": "<i>&</i>"}], "v": "a&b"},
         )
         assert ">&lt;i&gt;&amp;&lt;/i&gt;</div>" in out and "<i>" not in out
-        assert 'data-value="a&amp;b"' in out
+        assert 'dj-value-value="a&amp;b"' in out
 
 
 @pytest.mark.parametrize("engine,render", ENGINES)
@@ -178,7 +178,7 @@ class TestMarkedSafeAndLazyValuesCompareByTheirText:
             '{% combobox name="c" options=o value=v %}',
             {"o": [{"value": mark_safe('"><b>'), "label": "L"}], "v": '"><b>'},
         )
-        assert 'data-value="&quot;&gt;&lt;b&gt;"' in out and '"><b>' not in out
+        assert 'dj-value-value="&quot;&gt;&lt;b&gt;"' in out and '"><b>' not in out
 
 
 class _Liar(str):

@@ -271,8 +271,8 @@ class TestReservedNames:
     def test_an_instance_assignment_is_not_reactive_state(self, name):
         """``self.state_attribute = ...`` in ``mount()`` must not become template state."""
 
-        # Legacy on purpose: the subject is the legacy state APIs (get_state,
-        # _capture_snapshot_state), which read the attribute walk.
+        # Legacy on purpose: the subject is the legacy state API (get_state),
+        # which reads the attribute walk.
         class Assigns(LiveView):
             exposure_policy = "legacy"
             template = "<div dj-root></div>"
@@ -285,6 +285,6 @@ class TestReservedNames:
 
         view = Assigns()
         view.mount(RequestFactory().get("/"))
-        for state in (view.get_state(), view._capture_snapshot_state()):
+        for state in (view.get_state(),):
             assert name not in state
             assert "visible" in state

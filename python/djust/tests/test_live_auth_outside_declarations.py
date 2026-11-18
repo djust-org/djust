@@ -460,7 +460,7 @@ def _login(user_cls):
     """
     from django.contrib.auth import get_user_model
 
-    from djust.tests._live_session import live_session
+    from djust.testing import live_session
 
     if user_cls is _AnonUser:
         return AnonymousUser(), live_session(None)

@@ -17,6 +17,9 @@ from __future__ import annotations
 #: The #4082 files the second migration pass ran as explicit: they state no
 #: legacy policy any more.
 MIGRATED_4082: tuple[str, ...] = (
+    # Its last legacy cases (debug eval, time-travel replay) went with those
+    # features in 2.0 (#4184).
+    "python/djust/tests/test_push_handler_marker_3002.py",
     "python/djust/tests/test_async_result_render_lock_2840.py",
     "python/djust/tests/test_async_work_render_lock_2830.py",
     "python/djust/tests/test_auth_refusal_codes_3319.py",
@@ -70,6 +73,11 @@ MIGRATED_4082: tuple[str, ...] = (
     "tests/integration/test_sw_advanced_flow.py",
 )
 
+#: Files the legacy removal's test migration (#4171 step 3) ran as explicit:
+#: their views get a real session and user from ``djust.testing``'s
+#: live-session helpers (#4191). They state no legacy policy any more.
+MIGRATED_STEP3: tuple[str, ...] = ("python/djust/tests/test_stream_only_handlers_3639.py",)
+
 #: The #4082 files that still state the legacy policy, each with its reason.
 REMAINING_4082: dict[str, str] = {
     "python/djust/tests/test_async_check_permissions.py": (
@@ -92,9 +100,6 @@ REMAINING_4082: dict[str, str] = {
     ),
     "python/djust/tests/test_multi_view_refusal_3252.py": (
         "migrated; the revocation cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
-    ),
-    "python/djust/tests/test_push_handler_marker_3002.py": (
-        "migrated; the debug eval and time-travel replay cases stay legacy: both refuse explicit views by design"
     ),
     "python/djust/tests/test_reauth_reads_stored_session.py": (
         "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
@@ -134,8 +139,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_automatic_state_unsaveable_text_4143.py",
         "python/djust/tests/test_background_parameter_contracts.py",
         "python/djust/tests/test_bound_component_adr031.py",
-        "python/djust/tests/test_bug_capture.py",
-        "python/djust/tests/test_bug_capture_pii_scrub.py",
         "python/djust/tests/test_capture_state_with_orm_objects.py",
         "python/djust/tests/test_component_default_events_4037.py",
         "python/djust/tests/test_component_state_persistence_adr033.py",
@@ -146,7 +149,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_data_table_residuals_3895.py",
         "python/djust/tests/test_debug_info_properties_3103.py",
         "python/djust/tests/test_debug_json_script_escape.py",
-        "python/djust/tests/test_debug_render_contracts.py",
         "python/djust/tests/test_debug_state_sizes.py",
         "python/djust/tests/test_declared_state_renders_4050.py",
         "python/djust/tests/test_deferred_state_3253.py",
@@ -246,10 +248,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_named_partial_root.py",
         "python/djust/tests/test_namedtuple_state_render_4141.py",
         "python/djust/tests/test_number_localization_2221.py",
-        "python/djust/tests/test_observability_dry_run.py",
-        "python/djust/tests/test_observability_eval_handler.py",
-        "python/djust/tests/test_observability_localhost_gate.py",
-        "python/djust/tests/test_observability_reset_view.py",
         "python/djust/tests/test_observability_view_assigns.py",
         "python/djust/tests/test_ordinary_root_dependencies.py",
         "python/djust/tests/test_parameter_contract_checks.py",
@@ -293,7 +291,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_sticky_child_event_noop_1802.py",
         "python/djust/tests/test_sticky_child_recovery_1813.py",
         "python/djust/tests/test_sticky_update_hook_2919.py",
-        "python/djust/tests/test_stream_only_handlers_3639.py",
         "python/djust/tests/test_sync_turn_inside_audit_3646.py",
         "python/djust/tests/test_sync_turn_lifecycle_gaps_3646.py",
         "python/djust/tests/test_tab_meta_and_page_save_4107.py",
@@ -333,7 +330,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/tests/test_custom_callable_model_argument_3949.py",
         "python/tests/test_date_format_injection.py",
         "python/tests/test_debug_panel.py",
-        "python/tests/test_decimal_state_tag_2252.py",
         "python/tests/test_dict_keys_keep_their_type_2339.py",
         "python/tests/test_form_data_secret_seed.py",
         "python/tests/test_form_floor_differential_3790.py",
@@ -372,13 +368,11 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "tests/benchmarks/test_model_backed_render_2532.py",
         "tests/integration/multinode/app/views.py",
         "tests/integration/multinode/survival_table.py",
-        "tests/integration/test_bug_capture_share.py",
         "tests/integration/test_hvr_flow.py",
         "tests/integration/test_lazy_streaming_flow.py",
         "tests/integration/test_object_permission_event.py",
         "tests/integration/test_sticky_http_get_1784.py",
         "tests/integration/test_sticky_redirect_flow.py",
-        "tests/integration/test_time_travel_flow.py",
         "tests/playwright/test_lazy_attribute_http_3252.py",
         "tests/test_doc_snippets_execute.py",
         "tests/test_rust_vdom_safe_diff_783.py",
@@ -409,7 +403,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "tests/unit/test_streams_context_2112.py",
         "tests/unit/test_sw_advanced.py",
         "tests/unit/test_tick_skip.py",
-        "tests/unit/test_time_travel.py",
         "tests/unit/test_view_state_v1_2_1_7.py",
         "tests/unit/test_wizard_mixin.py",
     }
@@ -426,7 +419,6 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_async_pending_flag_2963.py",
     "python/djust/tests/test_multi_view_refusal_3252.py",
     "python/djust/tests/test_turn_middleware_core.py",
-    "python/djust/tests/test_push_handler_marker_3002.py",
     "python/djust/tests/test_event_loop_offload_3074.py",
     "python/djust/tests/test_async_check_permissions.py",
     "python/djust/tests/test_live_auth_denials_and_wrappers.py",

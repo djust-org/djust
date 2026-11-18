@@ -2700,7 +2700,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         One protected diagnostic scope per message (ADR-038 D-a): the
         catch-all below also receives failures from the verbs that bypass
         ``dispatch_message`` (``request_html``, ``live_redirect_mount``,
-        ``mount_batch``, uploads, presence, time travel, ...), and
+        ``mount_batch``, uploads, presence, ...), and
         ``handle_exception`` is value-free there for a nonlegacy owner.
         """
         logger.debug(
@@ -2818,7 +2818,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             #     ``_handle_event_inner``: the ``event_context`` render-lock +
             #     #1677 origin + PerformanceTracker/SQL observability,
             #     ``view_id`` sticky-child + ``component_id`` LiveComponent
-            #     routing, ``dj_activity`` gate + flush, time-travel recording +
+            #     routing, ``dj_activity`` gate + flush,
             #     #1466 session state-save + ADR-018 sticky-child save, #1777
             #     reauth, #700 identity push-only auto-skip, patch compression,
             #     ``_force_full_html`` + ``embedded_update`` framing, the #1788/
@@ -2847,8 +2847,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # WS-ONLY EXTENSION SET (no runtime equivalent; binary upload
             # frames 0x01/0x02/0x03 are handled above before decode):
             #   mount_batch, ping, live_redirect_mount, upload_register,
-            #   upload_resume, request_html, time_travel_jump,
-            #   time_travel_component_jump, forward_replay, bug_capture_share.
+            #   upload_resume, request_html. The time-travel and bug-capture
+            #   share frames were removed in 2.0 (#4184): an old client that
+            #   still sends one gets the unknown-message-type refusal below.
             if msg_type in self.RUNTIME_OWNED_VERBS:
                 # Runtime-owned: route through the dispatch_message chokepoint
                 # rather than calling the bespoke handler directly, so future
@@ -2884,14 +2885,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 await self._route_to_view(data, "_handle_upload_resume")
             elif msg_type == "request_html":
                 await self._route_to_view(data, "handle_request_html")
-            elif msg_type == "time_travel_jump":
-                await self._route_to_view(data, "handle_time_travel_jump")
-            elif msg_type == "time_travel_component_jump":
-                await self._route_to_view(data, "handle_time_travel_component_jump")
-            elif msg_type == "forward_replay":
-                await self._route_to_view(data, "handle_forward_replay")
-            elif msg_type == "bug_capture_share":
-                await self._route_to_view(data, "handle_bug_capture_share")
             else:
                 logger.warning("Unknown message type: %s", msg_type)
                 await self.send_error(f"Unknown message type: {msg_type}")
@@ -3579,7 +3572,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         twin of the runtime's event path). Phase 2.3a grew
         :meth:`ViewRuntime.dispatch_event` into a functional SUPERSET of that
         bespoke handler (event spine, component/sticky/embedded routing,
-        time-travel + #1466 state-save, ``event_context`` render-lock + origin +
+        #1466 state-save, ``event_context`` render-lock + origin +
         observability, ``dj_activity`` gate + flush, #1777 reauth,
         async dispatch, wire-version stamping), and Phase 2.3b adds ``"event"`` to
         :attr:`RUNTIME_OWNED_VERBS` so ``receive()`` now routes events through the
@@ -3590,7 +3583,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         ``dispatch_message``), but it is retained as a stable public entry point /
         backward-compatible shim for callers that invoke it directly. The runtime
         owns the tenant context (``dispatch_event`` wraps the turn in
-        ``_tenant_context``), the render lock, time-travel, state-save, and the
+        ``_tenant_context``), the render lock, state-save, and the
         per-render observability (DJE-053 warning + handler timing + full-HTML-update
         signal) via the ``on_render_emitted`` / ``on_handler_timing`` transport hooks.
 
@@ -4360,7 +4353,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     #: runtime ``dispatch_event`` is now a functional superset of the deleted
     #: bespoke ``_handle_event_inner`` (Phase 2.3a grew the event_context render
     #: lock + origin + observability, the per-render
-    #: ``on_render_emitted`` / ``on_handler_timing`` folds, time-travel, #1466
+    #: ``on_render_emitted`` / ``on_handler_timing`` folds, #1466
     #: state-save, ``dj_activity``, #1777 reauth), so every WS event now flows
     #: through the single chokepoint — the #1646 convergence.
     #:
@@ -5318,498 +5311,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             }
         )
 
-    # Per-frame size cap for time_travel_event frames. Set to 16 KiB —
-    # a quarter of the conventional 64 KiB WebSocket frame limit — so a
-    # view with large state (e.g. a 1000-row list) cannot flood the
-    # channel on every event. When exceeded, state_before / state_after
-    # are replaced with a truncation placeholder and the frame carries
-    # ``_truncated: True``. See Stage 11 Fix C.
-    _TT_EVENT_SIZE_CAP = 16 * 1024
-
-    async def _maybe_push_tt_event(self, view: Any, snapshot: Any) -> None:
-        """Push a ``time_travel_event`` frame to the client after a record.
-
-        Dev-only. Fan out freshly-captured :class:`EventSnapshot` entries
-        over the main djust WebSocket so the debug panel's Time Travel
-        tab can incrementally populate its history — without re-sending
-        the entire buffer on every event.
-
-        No-op when:
-            * ``snapshot`` is ``None`` (time-travel disabled on the view
-              or a guard returned early)
-            * ``DEBUG`` is off (production gate)
-            * The send itself fails (best-effort)
-
-        When the serialized entry exceeds :attr:`_TT_EVENT_SIZE_CAP`,
-        ``state_before`` / ``state_after`` are replaced with a truncation
-        placeholder so spammy handlers on large-state views can't bloat
-        the WS channel. The full state is still available server-side
-        via the ring buffer for ``time_travel_jump``.
-        """
-        if snapshot is None:
-            return
-        from django.conf import settings
-
-        if not getattr(settings, "DEBUG", False):
-            return
-        buffer = getattr(view, "_time_travel_buffer", None)
-        if buffer is None:
-            return
-        try:
-            entry = snapshot.to_dict()
-            # Serialized size check — default=str tolerates non-JSON-
-            # native types (datetimes, Decimals) the same way the rest
-            # of the debug-frame plumbing does.
-            serialized = json.dumps(entry, default=str)
-            if len(serialized) > self._TT_EVENT_SIZE_CAP:
-                state_before = entry.get("state_before") or {}
-                state_after = entry.get("state_after") or {}
-                entry["state_before"] = {
-                    "_truncated": True,
-                    "_size": len(json.dumps(state_before, default=str)),
-                }
-                entry["state_after"] = {
-                    "_truncated": True,
-                    "_size": len(json.dumps(state_after, default=str)),
-                }
-                entry["_truncated"] = True
-            # Surface __components__ at the top level too (#1151, v0.9.4)
-            # so the client doesn't have to dig into entry.state_after to
-            # find per-component state. Mirrors the existing additive-
-            # field pattern from mount-batch frames.
-            components_mirror = None
-            if not entry.get("_truncated"):
-                state_after = entry.get("state_after") or {}
-                components_mirror = state_after.get("__components__")
-            await self.send_json(
-                {
-                    "type": "time_travel_event",
-                    "entry": entry,
-                    "history_len": len(buffer),
-                    "branch_id": getattr(view, "_time_travel_branch_id", "main"),
-                    "components": components_mirror,
-                }
-            )
-        except Exception as exc:  # noqa: BLE001 — dev-only, degrade silently
-            self._log_view_hook_failure(
-                view, exc, "time_travel: failed to push event frame", traceback=True
-            )
-
-    def _build_time_travel_state(
-        self,
-        view: Any,
-        buffer: Any,
-        cursor: int,
-        which: str,
-    ) -> Dict[str, Any]:
-        """Build the ``time_travel_state`` ack frame (#1151, v0.9.4).
-
-        Augments the v0.6.1 ack shape (cursor / which / history_len) with
-        ``branch_id``, ``forward_replay_enabled``, and ``max_events`` so
-        the debug panel UI can render the per-component scrubber, the
-        forward-replay button, and the max-events indicator without a
-        second request.
-
-        ``forward_replay_enabled`` is true iff replaying from the current
-        cursor would produce a meaningful branch — i.e., the cursor is
-        not at the canonical tip of the buffer. Tip semantics depend on
-        ``which``: with ``which="after"`` the tip is the last index;
-        with ``which="before"`` the tip is the index PAST the last (the
-        baseline before any future event would land), so a cursor at
-        ``len-1`` with ``which="before"`` is still pre-tip.
-        """
-        from djust.config import config as _djust_config
-
-        history_len = len(buffer)
-        if which == "after":
-            forward_replay_enabled = cursor < history_len - 1
-        else:  # which == "before"
-            forward_replay_enabled = cursor < history_len
-        return {
-            "type": "time_travel_state",
-            "cursor": cursor,
-            "which": which,
-            "history_len": history_len,
-            "branch_id": getattr(view, "_time_travel_branch_id", "main"),
-            "forward_replay_enabled": forward_replay_enabled,
-            "max_events": getattr(
-                buffer, "max_events", _djust_config.get("time_travel_max_events", 100)
-            ),
-        }
-
-    async def _run_debug_render(
-        self,
-        data: Dict[str, Any],
-        operation: Callable[[Dict[str, Any]], Awaitable[None]],
-    ) -> None:
-        """Serialize debug restoration and rendering against normal events."""
-        view = self.view_instance
-        async with self._render_lock:
-            if self.view_instance is not view:
-                return
-            with _tenant_context(getattr(view, "_tenant", None)):
-                await operation(data)
-
-    async def _send_debug_error(self, error: str) -> None:
-        """Debug controls are not foreground event requests."""
-        await self.send_error(error, source="async")
-
-    async def handle_time_travel_jump(self, data: Dict[str, Any]) -> None:
-        """Restore and render a historical root state under the render lock."""
-        await self._run_debug_render(data, self._handle_time_travel_jump_locked)
-
-    async def _handle_time_travel_jump_locked(self, data: Dict[str, Any]) -> None:
-        """Jump the view to a past :class:`EventSnapshot`.
-
-        Dev-only. The debug panel's Time Travel tab emits
-        ``{"type": "time_travel_jump", "index": N, "which": "before"|"after"}``;
-        the server restores the captured state onto the view and
-        re-renders via the normal patch pipeline. A ``time_travel_state``
-        frame is sent back so the client can update its cursor.
-
-        Rejected in production (``DEBUG=False``) and when the view
-        hasn't opted in via ``time_travel_enabled``.
-        """
-        from django.conf import settings
-
-        if not getattr(settings, "DEBUG", False):
-            await self._send_debug_error("time_travel requires DEBUG=True")
-            return
-        if not self.view_instance:
-            await self._send_debug_error("View not mounted")
-            return
-        view = self.view_instance
-        buffer = getattr(view, "_time_travel_buffer", None)
-        if buffer is None:
-            await self._send_debug_error("time_travel not enabled on this view")
-            return
-
-        index = data.get("index")
-        which = data.get("which", "before")
-        if not isinstance(index, int):
-            await self._send_debug_error("time_travel_jump: index must be int")
-            return
-        if which not in ("before", "after"):
-            await self._send_debug_error("time_travel_jump: which must be 'before' or 'after'")
-            return
-
-        snapshot = buffer.jump(index)
-        if snapshot is None:
-            await self._send_debug_error("time_travel_jump: no snapshot at index %d" % index)
-            return
-
-        from djust.time_travel import restore_snapshot
-
-        ok = await settle_render_operation(sync_to_async(restore_snapshot)(view, snapshot, which))
-        if self.view_instance is not view:
-            return
-        if not ok:
-            await self._send_debug_error("time_travel_jump: restore failed")
-            return
-
-        # Re-render via the existing patch pipeline so the client sees
-        # the restored state without a full mount. Use render_with_diff
-        # directly (mirrors the hotreload / broadcast paths).
-        try:
-            rendered = await self._render_background(view)
-            if rendered is None:
-                return
-            html, patches = rendered.html, rendered.patches
-            patch_list = None
-            if patches is not None:
-                patch_list = fast_json_loads(patches) if patches else []
-            await self._send_update(
-                patches=patch_list,
-                html=html if patches is not None else rendered.content,
-                # Render-send: arm recovery so _recovery_version tracks this
-                # jump's version (#1817). ``html`` is the pre-strip render.
-                version=self._next_version_armed(html),
-                event_name="__time_travel_jump__",
-                source="broadcast",
-                **rendered.send_fields,
-            )
-        except Exception as exc:  # noqa: BLE001 — dev-only, log + report
-            logger.exception("time_travel_jump: re-render failed")
-            await self._send_debug_error("time_travel_jump: re-render failed: %s" % exc)
-            return
-
-        if self.view_instance is view:
-            await self.send_json(self._build_time_travel_state(view, buffer, index, which))
-
-    async def handle_time_travel_component_jump(self, data: Dict[str, Any]) -> None:
-        """Restore and render one component under its parent's render lock."""
-        await self._run_debug_render(data, self._handle_time_travel_component_jump_locked)
-
-    async def _handle_time_travel_component_jump_locked(self, data: Dict[str, Any]) -> None:
-        """Scrub a SINGLE component's state (#1151, v0.9.4).
-
-        Dev-only. Mirrors :meth:`handle_time_travel_jump` but restores
-        only ``view._components[component_id]`` from the snapshot at
-        ``index``, leaving the parent view and other components alone.
-        Used by the debug panel's per-component scrubber.
-
-        Frame: ``{"type": "time_travel_component_jump", "index": N,
-        "component_id": "<id>", "which": "before"|"after"}``.
-        """
-        from django.conf import settings
-
-        if not getattr(settings, "DEBUG", False):
-            await self._send_debug_error("time_travel requires DEBUG=True")
-            return
-        if not self.view_instance:
-            await self._send_debug_error("View not mounted")
-            return
-        view = self.view_instance
-        buffer = getattr(view, "_time_travel_buffer", None)
-        if buffer is None:
-            await self._send_debug_error("time_travel not enabled on this view")
-            return
-
-        index = data.get("index")
-        component_id = data.get("component_id")
-        which = data.get("which", "before")
-        if not isinstance(index, int):
-            await self._send_debug_error("time_travel_component_jump: index must be int")
-            return
-        if not isinstance(component_id, str) or not component_id:
-            await self._send_debug_error(
-                "time_travel_component_jump: component_id must be a non-empty string"
-            )
-            return
-        if which not in ("before", "after"):
-            await self._send_debug_error(
-                "time_travel_component_jump: which must be 'before' or 'after'"
-            )
-            return
-
-        snapshot = buffer.jump(index)
-        if snapshot is None:
-            await self._send_debug_error(
-                "time_travel_component_jump: no snapshot at index %d" % index
-            )
-            return
-
-        from djust.time_travel import restore_component_snapshot
-
-        ok = await settle_render_operation(
-            sync_to_async(restore_component_snapshot)(view, snapshot, component_id, which)
-        )
-        if self.view_instance is not view:
-            return
-        if not ok:
-            await self._send_debug_error("time_travel_component_jump: restore failed")
-            return
-
-        try:
-            rendered = await self._render_background(view)
-            if rendered is None:
-                return
-            html, patches = rendered.html, rendered.patches
-            patch_list = None
-            if patches is not None:
-                patch_list = fast_json_loads(patches) if patches else []
-            await self._send_update(
-                patches=patch_list,
-                html=html if patches is not None else rendered.content,
-                # Render-send: arm recovery so _recovery_version tracks this
-                # component-jump's version (#1817). ``html`` is the pre-strip render.
-                version=self._next_version_armed(html),
-                event_name="__time_travel_component_jump__",
-                source="broadcast",
-                **rendered.send_fields,
-            )
-        except Exception as exc:  # noqa: BLE001 — dev-only, log + report
-            logger.exception("time_travel_component_jump: re-render failed")
-            await self._send_debug_error("time_travel_component_jump: re-render failed: %s" % exc)
-            return
-
-        if self.view_instance is view:
-            await self.send_json(self._build_time_travel_state(view, buffer, index, which))
-
-    async def handle_forward_replay(self, data: Dict[str, Any]) -> None:
-        """Replay and render a historical event under the render lock."""
-        await self._run_debug_render(data, self._handle_forward_replay_locked)
-
-    async def _handle_forward_replay_locked(self, data: Dict[str, Any]) -> None:
-        """Forward-replay a recorded event with optional override params (#1151, v0.9.4).
-
-        Dev-only. Restores the view to ``state_before`` of the snapshot at
-        ``from_index`` and re-invokes the recorded event handler with
-        either the original params or caller-supplied ``override_params``.
-        When the cursor is not at the buffer tip, allocates a new
-        ``branch_id`` for the resulting branched timeline.
-
-        Frame: ``{"type": "forward_replay", "from_index": N,
-        "override_params": {...}}`` (override_params is optional).
-        """
-        from django.conf import settings
-
-        if not getattr(settings, "DEBUG", False):
-            await self._send_debug_error("time_travel requires DEBUG=True")
-            return
-        if not self.view_instance:
-            await self._send_debug_error("View not mounted")
-            return
-        view = self.view_instance
-        buffer = getattr(view, "_time_travel_buffer", None)
-        if buffer is None:
-            await self._send_debug_error("time_travel not enabled on this view")
-            return
-
-        from_index = data.get("from_index")
-        override_params = data.get("override_params")
-        if not isinstance(from_index, int):
-            await self._send_debug_error("forward_replay: from_index must be int")
-            return
-        if override_params is not None and not isinstance(override_params, dict):
-            await self._send_debug_error("forward_replay: override_params must be dict or null")
-            return
-
-        snapshot = buffer.jump(from_index)
-        if snapshot is None:
-            await self._send_debug_error("forward_replay: no snapshot at index %d" % from_index)
-            return
-
-        # Decide whether this replay forks the timeline. Two conditions
-        # warrant a new branch_id (either is sufficient):
-        #   1. ``from_index`` is not the buffer tip — replaying a past
-        #      event diverges from the recorded successor.
-        #   2. ``override_params`` is non-None — replay runs with
-        #      different inputs than originally recorded, so it diverges
-        #      even when from the tip. (Caught by Stage 11 review:
-        #      replaying the LAST entry with override_params silently
-        #      merged into "main" before this fix.)
-        # Replay from the tip with no overrides just re-records to
-        # "main". Branch-id is allocated AFTER ``replay_event`` succeeds
-        # — otherwise a missing / un-decorated handler would leak a
-        # counter bump and a stale branch_id with no recorded events.
-        from djust.time_travel import next_branch_id, replay_event
-
-        history_len_before = len(buffer)
-        forks_timeline = from_index < history_len_before - 1 or override_params is not None
-
-        replayed = await settle_render_operation(
-            sync_to_async(replay_event)(view, snapshot, override_params, True)
-        )
-        if self.view_instance is not view:
-            return
-        if replayed is None:
-            await self._send_debug_error("forward_replay: replay handler missing or refused")
-            return
-
-        # Replay succeeded — commit the branch_id mutation now.
-        if forks_timeline:
-            new_branch = next_branch_id(view)
-            try:
-                view._time_travel_branch_id = new_branch
-            except Exception:  # noqa: BLE001 — slot/descriptor readonly
-                logger.exception("forward_replay: failed to set branch_id")
-
-        try:
-            rendered = await self._render_background(view)
-            if rendered is None:
-                return
-            html, patches = rendered.html, rendered.patches
-            patch_list = None
-            if patches is not None:
-                patch_list = fast_json_loads(patches) if patches else []
-            await self._send_update(
-                patches=patch_list,
-                html=html if patches is not None else rendered.content,
-                # Render-send: arm recovery so _recovery_version tracks this
-                # forward-replay's version (#1817). ``html`` is the pre-strip render.
-                version=self._next_version_armed(html),
-                event_name="__forward_replay__",
-                source="broadcast",
-                **rendered.send_fields,
-            )
-        except Exception as exc:  # noqa: BLE001 — dev-only, log + report
-            logger.exception("forward_replay: re-render failed")
-            await self._send_debug_error("forward_replay: re-render failed: %s" % exc)
-            return
-
-        # Cursor lands at the new tip after the replay's recorded snapshot.
-        new_cursor = len(buffer) - 1
-        if self.view_instance is view:
-            await self.send_json(self._build_time_travel_state(view, buffer, new_cursor, "after"))
-
-    async def handle_bug_capture_share(self, data: Dict[str, Any]) -> None:
-        """Compute a `djbug1.` bug-capture blob for the debug panel's Share button (#1562).
-
-        Dev-only, mirrors the ``handle_time_travel_jump`` gating shape.
-        Strictly read-only from the client's point of view: this never
-        mutates view state, never dispatches a handler, and the server
-        never touches the clipboard itself — it only computes the blob
-        and sends it back as a ``bug_capture_share_result`` frame; the
-        client-side debug panel (``09a-tab-time-travel.js``) is
-        responsible for the actual ``navigator.clipboard.writeText()``
-        call.
-
-        The DEBUG-vs-production gate is intentionally NOT duplicated
-        here — ``encode_view_state()`` -> ``BugCapture.encode()`` ->
-        ``_enforce_prod_gate()`` is the single authoritative check (the
-        same one the programmatic ``encode_view_state()`` API and the
-        replay viewer's URL registration both key off), so this handler
-        can't silently drift from it. A ``RuntimeError`` from that gate
-        is caught below like any other encode-time error.
-
-        Frame: ``{"type": "bug_capture_share"}`` (no other fields —
-        the field list this view's ``scrub`` applies comes from
-        ``LIVEVIEW_CONFIG['bug_capture_default_scrub']``, a *server*
-        setting; the client cannot widen or narrow what gets scrubbed).
-        """
-        if not self.view_instance:
-            await self.send_error("View not mounted")
-            return
-        if not getattr(self.view_instance, "time_travel_enabled", False):
-            await self.send_error(
-                "bug_capture_share: time_travel_enabled must be True on this view"
-            )
-            return
-
-        from djust.bug_capture import encode_view_state, scrub_fields
-        from djust.config import config as _djust_config
-
-        try:
-            _html, patches_json, _version = await sync_to_async(
-                self.view_instance.render_with_diff
-            )()
-            default_scrub = _djust_config.get("bug_capture_default_scrub", []) or []
-            scrub = scrub_fields(*default_scrub) if default_scrub else None
-            blob = await sync_to_async(encode_view_state)(
-                self.view_instance,
-                patches=patches_json or "[]",
-                scrub=scrub,
-            )
-        except (RuntimeError, ValueError) as exc:
-            from ._exposure import ExposureError
-
-            view = self.view_instance
-            # ADR-038: for a nonlegacy owner only framework ExposureError text
-            # (value-free by construction) reaches the client; an application
-            # ValueError/RuntimeError from the re-render can carry undeclared state.
-            from ._exposure_diagnostics import diagnostics_policy_allows
-
-            if diagnostics_policy_allows(view) or isinstance(exc, ExposureError):
-                await self.send_error("bug_capture_share: %s" % exc)
-            else:
-                self._log_view_hook_failure(
-                    view, exc, "bug_capture_share: failed to encode capture", traceback=True
-                )
-                await self.send_error("bug_capture_share: failed to encode capture")
-            return
-        except Exception as exc:  # noqa: BLE001 — dev tool, never crash the socket
-            self._log_view_hook_failure(
-                self.view_instance,
-                exc,
-                "bug_capture_share: failed to encode capture",
-                traceback=True,
-            )
-            await self.send_error("bug_capture_share: failed to encode capture")
-            return
-
-        await self.send_json({"type": "bug_capture_share_result", "blob": blob})
-
     async def presence_event(self, event: Dict[str, Any]) -> None:
         """
         Handle presence-related events from the channel layer.
@@ -6339,7 +5840,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         if state and isinstance(state, dict):
             # Apply via safe_setattr — the same guard every other
             # state-restore sink uses (snapshot restore at ~:2311,
-            # time_travel.py:276, mixins/request.py). A channel-layer
+            # mixins/request.py). A channel-layer
             # attacker (the framework's own stated threat model, see the
             # restricted handler path just below) must NOT be able to
             # overwrite dunders (__class__/__init__), framework internals
@@ -6668,7 +6169,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         A nonlegacy root's turn was authorized at its start; its declared state
         is committed here, before the frame, and a failed save withholds the
-        render (ADR-038 E3). Time-travel callers never reach this for them.
+        render (ADR-038 E3).
         """
         if self.view_instance is not view:
             return None

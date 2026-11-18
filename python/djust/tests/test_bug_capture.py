@@ -1,8 +1,8 @@
 """Tests for djust.bug_capture (B7 iter A — sharable bug-capture artifacts).
 
-Covers the round-trip, the scrub hook, the DEBUG-gate, untrusted-input
-rejection, and the `encode_view_state` integration with the existing
-time-travel buffer + the framework's vdom-patch attribute conventions.
+Covers the round-trip, the scrub hook, the DEBUG-gate and untrusted-input
+rejection. ``encode_view_state`` read the time-travel buffer and was removed
+with it in 2.0 (#4184); the last section pins the refusal.
 """
 
 from __future__ import annotations
@@ -17,7 +17,6 @@ from django.test import override_settings
 from djust.bug_capture import (
     WIRE_VERSION,
     BugCapture,
-    encode_view_state,
     scrub_fields,
 )
 
@@ -287,141 +286,26 @@ class TestUntrustedInput:
 
 
 # ---------------------------------------------------------------------------
-# encode_view_state integration with view conventions
+# encode_view_state was removed with time-travel debugging (#4184)
 # ---------------------------------------------------------------------------
 
 
-class _StubBuffer:
-    """Minimal stand-in for `TimeTravelBuffer` exposing the bits encode_view_state reads."""
-
-    def __init__(self, entries):
-        self._entries = entries
-
-    def __len__(self):
-        return len(self._entries)
-
-    def history(self):
-        return list(self._entries)
-
-
-class _StubView:
-    """Test view exposing the framework convention encode_view_state pulls from.
-
-    Iter A consciously decouples bug-capture from the render pipeline:
-    `encode_view_state` takes patches as an explicit parameter rather
-    than introspecting a non-existent framework attribute (the original
-    Action #1101 hazard caught by PR #1563's reviewer). The stub only
-    needs to expose `_time_travel_buffer`.
-    """
-
-    exposure_policy = "legacy"
-
-    def __init__(self, entries):
-        self._time_travel_buffer = _StubBuffer(entries)
+def test_encode_view_state_import_names_the_removal_and_the_replacement():
+    """It read the time-travel buffer; 2.0 removed both. The import must name
+    the replacement (a capture built from caller-supplied states), not fail
+    with a bare "cannot import name"."""
+    with pytest.raises(ImportError) as refused:
+        from djust.bug_capture import encode_view_state  # noqa: F401
+    message = str(refused.value)
+    assert "removed in djust 2.0" in message
+    assert "BugCapture(state_before=" in message
+    assert "State tab" in message
 
 
-class TestEncodeViewState:
-    @override_settings(DEBUG=True)
-    def test_picks_latest_snapshot_by_default(self):
-        entries = [
-            {
-                "event_name": "earlier",
-                "state_before": {"x": 1},
-                "state_after": {"x": 2},
-            },
-            {
-                "event_name": "latest",
-                "state_before": {"x": 10},
-                "state_after": {"x": 20},
-            },
-        ]
-        view = _StubView(entries)
-        encoded = encode_view_state(view, patches='[{"op":"replace","path":[0],"html":"<div/>"}]')
-        decoded = BugCapture.decode(encoded)
-        assert decoded.event_name == "latest"
-        assert decoded.state_before == {"x": 10}
-        assert decoded.state_after == {"x": 20}
-        assert decoded.vdom_patches == [{"op": "replace", "path": [0], "html": "<div/>"}]
-
-    @override_settings(DEBUG=True)
-    def test_picks_specific_event_when_named(self):
-        entries = [
-            {
-                "event_name": "next_step",
-                "state_before": {"step": "claimant"},
-                "state_after": {"step": "vehicle"},
-            },
-            {
-                "event_name": "unrelated_click",
-                "state_before": {"step": "vehicle"},
-                "state_after": {"step": "vehicle", "highlighted": True},
-            },
-        ]
-        view = _StubView(entries)
-        decoded = BugCapture.decode(encode_view_state(view, patches="[]", event_name="next_step"))
-        assert decoded.event_name == "next_step"
-
-    @override_settings(DEBUG=True)
-    def test_raises_when_event_name_not_in_buffer(self):
-        view = _StubView([{"event_name": "click", "state_before": {}, "state_after": {}}])
-        with pytest.raises(ValueError, match="no recorded event named"):
-            encode_view_state(view, patches="[]", event_name="never_happened")
-
-    @override_settings(DEBUG=True)
-    def test_raises_when_view_has_no_buffer(self):
-        class _NoBuffer:
-            pass
-
-        with pytest.raises(ValueError, match="no time-travel buffer"):
-            encode_view_state(_NoBuffer(), patches="[]")
-
-    @override_settings(DEBUG=True)
-    def test_raises_when_buffer_is_empty(self):
-        view = _StubView([])
-        with pytest.raises(ValueError, match="no recorded events"):
-            encode_view_state(view, patches="[]")
-
-    @override_settings(DEBUG=True)
-    def test_patches_as_list_works_too(self):
-        """Accepts both JSON string and pre-decoded list — useful for tests
-        and for any internal caller that already has the patches parsed."""
-        view = _StubView([{"event_name": "e", "state_before": {}, "state_after": {}}])
-        decoded = BugCapture.decode(
-            encode_view_state(view, patches=[{"op": "insert", "path": [0], "html": "<p/>"}])
-        )
-        assert decoded.vdom_patches == [{"op": "insert", "path": [0], "html": "<p/>"}]
-
-    @override_settings(DEBUG=True)
-    def test_raises_on_malformed_patches_json(self):
-        view = _StubView([{"event_name": "e", "state_before": {}, "state_after": {}}])
-        with pytest.raises(ValueError, match="patches is not valid JSON"):
-            encode_view_state(view, patches="not json")
-
-    @override_settings(DEBUG=True)
-    def test_raises_on_patches_decoding_to_non_list(self):
-        view = _StubView([{"event_name": "e", "state_before": {}, "state_after": {}}])
-        with pytest.raises(ValueError, match="patches JSON must be an array"):
-            encode_view_state(view, patches='{"op":"x"}')
-
-    @override_settings(DEBUG=True)
-    def test_raises_on_patches_wrong_type(self):
-        view = _StubView([{"event_name": "e", "state_before": {}, "state_after": {}}])
-        with pytest.raises(ValueError, match="patches must be a JSON string or list"):
-            encode_view_state(view, patches=42)
-
-    @override_settings(DEBUG=True)
-    def test_scrub_forwarded_to_encode(self):
-        view = _StubView(
-            [
-                {
-                    "event_name": "submit",
-                    "state_before": {"password": "secret", "form_id": "x"},
-                    "state_after": {"password": "secret", "form_id": "x"},
-                }
-            ]
-        )
-        decoded = BugCapture.decode(
-            encode_view_state(view, patches="[]", scrub=scrub_fields("password"))
-        )
-        assert "password" not in decoded.state_before
-        assert "password" in decoded.scrubbed_fields
+@override_settings(DEBUG=True)
+def test_a_capture_built_from_supplied_states_still_round_trips():
+    """The replacement the refusal names works end to end."""
+    blob = _capture().encode(scrub=scrub_fields("step"))
+    decoded = BugCapture.decode(blob)
+    assert decoded.state_before == {"count": 0}
+    assert decoded.scrubbed_fields == ["step"]

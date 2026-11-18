@@ -13,6 +13,13 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+#: What a developer uses instead of time-travel debugging (#4184).
+TIME_TRAVEL_REPLACEMENT = (
+    "to follow state changes event by event, open the debug panel's State tab "
+    "(DEBUG = True, with LIVEVIEW_CONFIG['debug_panel'] left on), which lists each "
+    "event with the state after it and what changed from the event before"
+)
+
 #: Top-level Django settings that were aliases of a nested key (#3500).
 REMOVED_FLAT_SETTINGS: dict[str, str] = {
     "DJUST_WS_COMPRESSION": "LIVEVIEW_CONFIG['websocket_compression']",
@@ -54,6 +61,9 @@ REMOVED_CONFIG_KEYS: dict[str, str] = {
         'runs mount() again. Fields declared state(..., persist="server") are '
         "still kept"
     ),
+    # #4184: time-travel debugging was removed, with its buffer size.
+    "time_travel_enabled": "time-travel debugging was removed; " + TIME_TRAVEL_REPLACEMENT,
+    "time_travel_max_events": "time-travel debugging was removed; " + TIME_TRAVEL_REPLACEMENT,
 }
 
 #: Keys that are top-level Django settings, never keys of ``LIVEVIEW_CONFIG`` /
@@ -129,6 +139,17 @@ REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
         'state(..., persist="server") (and state(..., persist="client", client=True) '
         "for what the browser may hold across Back)"
     ),
+    # #4184: time-travel debugging (record, jump, component jump, forward
+    # replay) was removed. The excluded-fields list only fed the bug-capture
+    # Share button, which read the time-travel buffer and went with it.
+    "time_travel_enabled": "time-travel debugging was removed; delete the attribute and, "
+    + TIME_TRAVEL_REPLACEMENT,
+    "time_travel_excluded_fields": (
+        "it named the fields the time-travel Share button left out, and that button "
+        "read the time-travel buffer, which was removed; delete the attribute. The "
+        "debug panel's State tab now has the Share button: list the fields it must "
+        "leave out in LIVEVIEW_CONFIG['bug_capture_default_scrub']"
+    ),
 }
 
 
@@ -162,7 +183,17 @@ _INERT_CLIENT_STATE = (
     "both in one handler"
 )
 
+_TIME_TRAVEL = "time-travel debugging was removed (#4184); " + TIME_TRAVEL_REPLACEMENT
+_ENCODE_VIEW_STATE = (
+    "it read the time-travel buffer, which was removed with time-travel debugging "
+    "(#4184). Use the Share button on the debug panel's State tab, or build the "
+    "capture from the states you choose: BugCapture(state_before=..., "
+    "state_after=..., vdom_patches=...).encode(scrub=scrub_fields(...))"
+)
+
 REMOVED_NAMES: dict[tuple[str, str], str] = {
+    ("djust", "time_travel"): _TIME_TRAVEL,
+    ("djust.bug_capture", "encode_view_state"): _ENCODE_VIEW_STATE,
     ("djust", "PersistentLiveView"): _PERSISTENT_LIVE_VIEW,
     ("djust.live_view", "PersistentLiveView"): _PERSISTENT_LIVE_VIEW,
     ("djust.security", "sign_snapshot"): _SIGNED_SNAPSHOT,

@@ -132,7 +132,7 @@ All handlers are available via `dj-click` or `dj-submit` in templates:
 | -------------------- | ---------------------------------------------------------- |
 | `next_step`          | Merge the fields the step's form posted, validate the step, advance if valid |
 | `prev_step`          | Go back one step (no validation, data preserved)           |
-| `go_to_step`         | Jump to a completed step (`data-step_index="N"`)           |
+| `go_to_step`         | Jump to a completed step (`dj-value-step-index:int="N"`)   |
 | `update_step_field`  | Store a single field value (`data-field="name"`)           |
 | `validate_field`     | Store a field's value as the user edits it and validate that one field (used by `as_live_field()`) |
 | `submit_wizard`      | Merge the last step's posted fields, validate all steps, call `on_wizard_complete()` if valid |
@@ -144,7 +144,7 @@ Users can click on completed steps in the step indicator:
 ```html
 {% for step in steps %}
     {% if step.is_completed %}
-        <button dj-click="go_to_step" data-step_index="{{ step.index }}">
+        <button dj-click="go_to_step" dj-value-step-index:int="{{ step.index }}">
             {{ step.title }}
         </button>
     {% endif %}

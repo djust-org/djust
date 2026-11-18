@@ -16,7 +16,7 @@ import importlib
 
 import pytest
 
-# The 13 registered checks (one per @register("djust")) — the discovery contract.
+# Registered checks (one per @register("djust")) — the discovery contract.
 EXPECTED_CHECKS = {
     "check_configuration",
     "check_service_worker_advanced",
@@ -27,7 +27,6 @@ EXPECTED_CHECKS = {
     "check_templates",
     "check_code_quality",
     "check_hot_view_replacement",
-    "check_time_travel_debugging",
     "check_admin_widgets",
     "check_psycopg3_for_pg_notify",
 }

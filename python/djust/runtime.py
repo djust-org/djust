@@ -1198,25 +1198,6 @@ class Transport(Protocol):
         runtime stays wire-blind (#1887, ADR-022 Iter 1 / #1919, ADR-022 Iter 3).
         """
 
-    async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
-        """Push a freshly-captured time-travel :class:`EventSnapshot` to the client.
-
-        Called by ``_dispatch_event_inner`` (and the component / sticky-child
-        branches) immediately after ``record_event_end`` finalizes the snapshot,
-        so the debug panel's Time Travel tab can incrementally populate its
-        history without re-sending the entire buffer on every event (ADR-022 Iter
-        2 Phase 2.2 — replaces the WS ``_maybe_push_tt_event`` direct send with a
-        transport hook so the runtime stays wire-blind).
-
-        - WS: serializes + DEBUG-gates the entry and emits a ``time_travel_event``
-          frame (the verbatim ``_maybe_push_tt_event`` logic, websocket.py:5267).
-        - SSE: a no-op — SSE has no time-travel debug panel surface today.
-
-        Always no-ops when ``snapshot`` is ``None`` (time-travel disabled on the
-        view or a guard returned early). Best-effort: a failure here must never
-        break the event turn.
-        """
-
     def on_handler_timing(self, view: Any, event_name: str, duration_ms: float) -> None:
         """Record per-handler execution time for percentile telemetry.
 
@@ -1834,19 +1815,6 @@ class WSConsumerTransport:
         from .push import sync_push_scope_groups
 
         await sync_push_scope_groups(self._consumer, view)
-
-    async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
-        """Emit the DEBUG-gated ``time_travel_event`` frame for WS.
-
-        Delegates to the consumer's existing ``_maybe_push_tt_event`` (the
-        verbatim DEBUG-gate + size-cap + ``__components__`` mirror logic at
-        websocket.py:5267), so the runtime port and the legacy WS
-        ``_handle_event_inner`` path share ONE implementation of the frame shape
-        (the #1646 cure — Phase 2.3 deletes the WS-side call sites but keeps this
-        single source). No-op when the consumer lacks the helper."""
-        push = getattr(self._consumer, "_maybe_push_tt_event", None)
-        if push is not None:
-            await push(view, snapshot)
 
     def on_handler_timing(self, view: Any, event_name: str, duration_ms: float) -> None:
         """Forward handler timing to the global percentile registry (#1907).
@@ -2654,14 +2622,6 @@ class SSESessionTransport:
             from ._child_lifecycle import untrack_view_presence
 
             await sync_to_async(untrack_view_presence)(view)
-
-    async def on_event_recorded(self, view: Any, snapshot: Any) -> None:
-        """No-op for SSE — there is no time-travel debug-panel surface on the SSE
-        transport today (the debug panel is a WS-only client feature). The
-        runtime still RECORDS the snapshot into the view's buffer (server-side
-        time-travel state is transport-agnostic); only the incremental client
-        push is WS-specific."""
-        return None
 
     def on_handler_timing(self, view: Any, event_name: str, duration_ms: float) -> None:
         """No-op for SSE (#1907).
@@ -4347,7 +4307,7 @@ class ViewRuntime(RuntimeTurnPort):
         Always invoked inside ``transport.event_context`` (see
         :meth:`_dispatch_event_inner`) so the render serialization + observability
         scope is established for the whole handler+render turn."""
-        from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
+        from ._exposure_diagnostics import restrict_diagnostics
 
         event_name = data.get("event")
         params: Dict[str, Any] = dict(data.get("params") or {})
@@ -4453,34 +4413,11 @@ class ViewRuntime(RuntimeTurnPort):
             await self.transport.send(noop_msg)
             return
 
-        # Time-travel record (v0.6.1 dev-only, ADR-022 Iter 2 Phase 2.2). Capture
-        # ``state_before`` BEFORE the security check so a PERMISSION-DENIED or
-        # VALIDATION-FAILED event STILL records a snapshot (with the error set +
-        # state_after == state_before) for the debug panel — mirrors WS
-        # ``_handle_event_inner`` (websocket.py:3541-3565), which did
-        # ``_tt_start`` → validate → on ``handler is None`` set
-        # ``_tt_error = "permission_denied"`` + ``_tt_end`` BEFORE returning.
-        # #1907 THE FLIP regression fix: the first flip ran ``record_event_start``
-        # AFTER the security check, so a denied handler on a time-travel view
-        # recorded ZERO entries (the bespoke recorded one with
-        # error="permission_denied"). ``record_event_start`` is a no-op unless the
-        # view opted into time-travel, so default views pay nothing.
-        from .time_travel import record_event_end, record_event_start
-
-        _tt_snapshot = record_event_start(view, event_name, params, event_ref)
-        _tt_error: Optional[str] = None
-
         # Security
         handler = await _validate_event_security(
             self.transport, event_name, view, self._rate_limiter
         )
         if handler is None:
-            # Permission denied / rate-limited / unsafe name — record the denial
-            # in the time-travel buffer (with error) before returning, matching the
-            # WS bespoke path (websocket.py:3550-3553).
-            _tt_error = "permission_denied"
-            record_event_end(view, _tt_snapshot, error=_tt_error)
-            await self._push_tt_event(view, _tt_snapshot)
             return
 
         # Parameter validation
@@ -4493,12 +4430,6 @@ class ViewRuntime(RuntimeTurnPort):
                 "Runtime: parameter validation failed: %s",
                 sanitize_for_log(validation["error"]),
             )
-            # Record the validation failure in the time-travel buffer too (the WS
-            # bespoke path set ``_tt_error = "validation_failed"`` + ``_tt_end``
-            # before the error send, websocket.py:3563-3565).
-            _tt_error = "validation_failed"
-            record_event_end(view, _tt_snapshot, error=_tt_error)
-            await self._push_tt_event(view, _tt_snapshot)
             await self.transport.send_error(
                 validation["error"],
                 validation_details={
@@ -4549,33 +4480,23 @@ class ViewRuntime(RuntimeTurnPort):
             pre_assigns = _snapshot_assigns(view)
             pre_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
 
-        # Call handler. The time-travel record is finalized + pushed in the
-        # ``finally`` for BOTH the success and the raising path (mirrors WS
-        # ``_handle_event_inner`` websocket.py:3625-3635, which records in a
-        # finally so permission-denied / raising handlers still appear in the
-        # debug panel). On a raise we set ``_tt_error`` and return early after
-        # sending the error frame.
+        # Call handler. On a raise, send the error frame and return early.
         _handler_start = time.perf_counter()
         try:
-            try:
-                await _call_handler(handler, call_kwargs or None, positional_args=call_args)
-                restrict_diagnostics(view)
-            except Exception as exc:
-                restrict_diagnostics(view)
-                _tt_error = str(exc)[:200] if diagnostics_allowed() else "[redacted]"
-                response = handle_exception(
-                    exc,
-                    error_type="event",
-                    event_name=event_name,
-                    view_class=view.__class__.__name__,
-                    logger=logger,
-                    log_message=f"Error in handler {view.__class__.__name__}.{sanitize_for_log(event_name)}()",
-                )
-                await self.transport.send(response)
-                return
-        finally:
-            record_event_end(view, _tt_snapshot, error=_tt_error)
-            await self._push_tt_event(view, _tt_snapshot)
+            await _call_handler(handler, call_kwargs or None, positional_args=call_args)
+            restrict_diagnostics(view)
+        except Exception as exc:
+            restrict_diagnostics(view)
+            response = handle_exception(
+                exc,
+                error_type="event",
+                event_name=event_name,
+                view_class=view.__class__.__name__,
+                logger=logger,
+                log_message=f"Error in handler {view.__class__.__name__}.{sanitize_for_log(event_name)}()",
+            )
+            await self.transport.send(response)
+            return
         if _pre_box:
             pre_assigns = _pre_box["assigns"]
             pre_identity = _pre_box["identity"]
@@ -4590,7 +4511,7 @@ class ViewRuntime(RuntimeTurnPort):
         # before this point, matching the WS path where the record line is
         # unreachable on a raise. Folded behind ``on_handler_timing`` so it stays
         # WS-scoped (SSE no-op). Called defensively (mirroring the existing
-        # ``on_view_mounted`` / ``on_event_recorded`` hook calls) so a partial test
+        # ``on_view_mounted`` hook call) so a partial test
         # transport without the hook is a no-op. Best-effort by hook contract.
         on_handler_timing = getattr(self.transport, "on_handler_timing", None)
         if on_handler_timing is not None:
@@ -5026,10 +4947,6 @@ class ViewRuntime(RuntimeTurnPort):
         )
         self._dispatch_async_work(event_name, async_batch)
 
-    # ------------------------------------------------------------------ #
-    # Time-travel push hook (ADR-022 Iter 2 Phase 2.2)
-    # ------------------------------------------------------------------ #
-
     def _notify_waiters_safely(
         self,
         view: Any,
@@ -5065,34 +4982,6 @@ class ViewRuntime(RuntimeTurnPort):
                     )
                 else:
                     logger.warning("Protected waiter notification failed")
-
-    @_runtime_diagnostic_scope
-    async def _push_tt_event(self, view: Any, snapshot: Any) -> None:
-        """Invoke the transport's ``on_event_recorded`` hook after a record.
-
-        Replaces the WS ``_maybe_push_tt_event`` direct send (websocket.py:5267)
-        with a transport-blind dispatch: WS emits the DEBUG-gated
-        ``time_travel_event`` frame, SSE no-ops. Forward-compat: transports
-        predating the hook (the ``on_view_mounted`` getattr precedent) are
-        tolerated. Best-effort — a debug-frame failure must never break the
-        event turn."""
-        if snapshot is None:
-            return
-        hook = getattr(self.transport, "on_event_recorded", None)
-        if hook is None:
-            return
-        from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
-
-        restrict_diagnostics(view)
-        try:
-            await hook(view, snapshot)
-        except Exception:  # noqa: BLE001 — dev-only time-travel push; degrade silently
-            restrict_diagnostics(view)
-            restrict_diagnostics(self.view_instance)
-            if diagnostics_allowed():
-                logger.exception("Runtime: time_travel on_event_recorded hook failed")
-            else:
-                logger.error("Protected time-travel notification failed")
 
     # ------------------------------------------------------------------ #
     # Embedded-child routing (ADR-022 Iter 2 Phase 2.1)
@@ -5219,42 +5108,25 @@ class ViewRuntime(RuntimeTurnPort):
         coerced_params = validation.get("coerced_params", params)
         call_args, call_kwargs = validated_call_arguments(validation)
 
-        # Time-travel record (ADR-022 Iter 2 Phase 2.2). For a sticky-child event
-        # the snapshot records against the CHILD (``target_view``) — the child is
-        # a full LiveView with its own ``_time_travel_buffer`` (#1467). Mirrors
-        # the WS path's per-target ``_tt_start(target_view, ...)`` /
-        # ``_tt_end(target_view, ...)`` (websocket.py:3541/3634). No-op unless the
-        # child opted into time-travel.
-        from .time_travel import record_event_end, record_event_start
-
-        _tt_snapshot = record_event_start(target_view, event_name, params, event_ref)
-        _tt_error: Optional[str] = None
-
         try:
-            try:
-                await _call_handler(handler, call_kwargs or None, positional_args=call_args)
-            except Exception as exc:
-                if explicit_child:
-                    _tt_error = "Child event failed"
-                    await self.transport.send_error("Child event failed.", code="event_error")
-                    return True
-                _tt_error = str(exc)[:200]
-                response = handle_exception(
-                    exc,
-                    error_type="event",
-                    event_name=event_name,
-                    view_class=target_view.__class__.__name__,
-                    logger=logger,
-                    log_message=(
-                        f"Error in embedded child {target_view.__class__.__name__}."
-                        f"{sanitize_for_log(event_name)}()"
-                    ),
-                )
-                await self.transport.send(response)
+            await _call_handler(handler, call_kwargs or None, positional_args=call_args)
+        except Exception as exc:
+            if explicit_child:
+                await self.transport.send_error("Child event failed.", code="event_error")
                 return True
-        finally:
-            record_event_end(target_view, _tt_snapshot, error=_tt_error)
-            await self._push_tt_event(target_view, _tt_snapshot)
+            response = handle_exception(
+                exc,
+                error_type="event",
+                event_name=event_name,
+                view_class=target_view.__class__.__name__,
+                logger=logger,
+                log_message=(
+                    f"Error in embedded child {target_view.__class__.__name__}."
+                    f"{sanitize_for_log(event_name)}()"
+                ),
+            )
+            await self.transport.send(response)
+            return True
 
         # Waiter notification (ADR-002 Phase 1b) — resolve waiters on the CHILD
         # view. Best-effort: a waiter bug must never break the event.
@@ -5428,19 +5300,6 @@ class ViewRuntime(RuntimeTurnPort):
         coerced_event_data = validation.get("coerced_params", event_data)
         call_args, call_kwargs = validated_call_arguments(validation)
 
-        # Time-travel record (ADR-022 Iter 2 Phase 2.2). Per #1467 canon a
-        # LiveComponent has NO separate time-travel buffer in Phase 1, so the
-        # snapshot records against the PARENT ``view`` (not the component) —
-        # state the component pushes into the parent via ``send_parent`` shows up
-        # in state_before/state_after. Mirrors WS ``_tt_start_c(self.view_instance,
-        # ...)`` / ``_tt_end_c(self.view_instance, ...)`` (websocket.py:3424/3489).
-        # Recorded against the pre-strip ``params`` to match WS. No-op unless the
-        # parent opted into time-travel.
-        from .time_travel import record_event_end, record_event_start
-
-        _tt_snapshot = record_event_start(view, event_name, params, event_ref)
-        _tt_error: Optional[str] = None
-
         # ADR-032: a bound component's event may patch only its own subtree
         # when the handler changed nothing else — decided from the snapshot,
         # not from the template alone (decision driver 2).
@@ -5456,47 +5315,41 @@ class ViewRuntime(RuntimeTurnPort):
             else None
         )
         try:
-            try:
-                await _call_handler(handler, call_kwargs or None, positional_args=call_args)
-            except EventRefused as refusal:
-                # The component refused the event's input before changing
-                # anything (#4046): a refused event, as on the HTTP fallback.
-                _tt_error = "refused"
-                # The refusal's text goes to the server log only (the project's
-                # logging rule), never to the client: every view answers the
-                # generic message, with no DEBUG traceback (it carries the text).
-                from ._exposure_diagnostics import log_failure_for
+            await _call_handler(handler, call_kwargs or None, positional_args=call_args)
+        except EventRefused as refusal:
+            # The component refused the event's input before changing
+            # anything (#4046): a refused event, as on the HTTP fallback.
+            # The refusal's text goes to the server log only (the project's
+            # logging rule), never to the client: every view answers the
+            # generic message, with no DEBUG traceback (it carries the text).
+            from ._exposure_diagnostics import log_failure_for
 
-                log_failure_for(
-                    logger,
-                    (view,),
-                    refusal,
-                    "Runtime: event %s refused by %s: %s",
-                    sanitize_for_log(event_name),
-                    type(component).__name__,
-                    sanitize_for_log(str(refusal)),
-                    level="warning",
-                )
-                await self.transport.send_error("Event rejected", _exc_info=(None, None, None))
-                return True
-            except Exception as exc:
-                _tt_error = str(exc)[:200]
-                response = handle_exception(
-                    exc,
-                    error_type="event",
-                    event_name=event_name,
-                    view_class=view.__class__.__name__,
-                    logger=logger,
-                    log_message=(
-                        f"Error in {view.__class__.__name__}."
-                        f"{sanitize_for_log(event_name)}() (component event)"
-                    ),
-                )
-                await self.transport.send(response)
-                return True
-        finally:
-            record_event_end(view, _tt_snapshot, error=_tt_error)
-            await self._push_tt_event(view, _tt_snapshot)
+            log_failure_for(
+                logger,
+                (view,),
+                refusal,
+                "Runtime: event %s refused by %s: %s",
+                sanitize_for_log(event_name),
+                type(component).__name__,
+                sanitize_for_log(str(refusal)),
+                level="warning",
+            )
+            await self.transport.send_error("Event rejected", _exc_info=(None, None, None))
+            return True
+        except Exception as exc:
+            response = handle_exception(
+                exc,
+                error_type="event",
+                event_name=event_name,
+                view_class=view.__class__.__name__,
+                logger=logger,
+                log_message=(
+                    f"Error in {view.__class__.__name__}."
+                    f"{sanitize_for_log(event_name)}() (component event)"
+                ),
+            )
+            await self.transport.send(response)
+            return True
 
         # Propagate the component event to the PARENT view's waiters with the
         # component_id injected (ADR-002 Phase 1b/1c, websocket.py:3456-3479).

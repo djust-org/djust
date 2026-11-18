@@ -210,7 +210,7 @@ describe("data-table-row-click — Option B (dj-click composition)", () => {
     const dom = buildDom(`
       <table class="data-table"><tbody>
         <tr class="data-table-row-clickable"
-            dj-click="open_user" data-value="42"
+            dj-click="open_user" dj-value-value="42"
             role="button" tabindex="0">
           <td id="cell">Alice</td>
         </tr>
@@ -237,7 +237,7 @@ describe("data-table-row-click — Option B (dj-click composition)", () => {
     const dom = buildDom(`
       <table class="data-table"><tbody>
         <tr class="data-table-row-clickable"
-            dj-click="open_user" data-value="42"
+            dj-click="open_user" dj-value-value="42"
             role="button" tabindex="0">
           <td><a href="/inner/" id="inner-link">link</a></td>
         </tr>

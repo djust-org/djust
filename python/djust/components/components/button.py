@@ -162,6 +162,7 @@ class Button(Component):
             attrs.append("disabled")
 
         # Add dj-click action
+        ea = ""
         if not self.disabled and not self.loading:
             ea = self.event_attrs(self.action)
             if ea:
@@ -170,6 +171,9 @@ class Button(Component):
         # Add data attributes
         for k, v in self.data.items():
             attrs.append(f'{attr_name("data-" + str(k))}="{html.escape(str(v))}"')
+            if ea:
+                # The event's argument (#4186): a strict handler reads only dj-value-*.
+                attrs.append(f'{attr_name("dj-value-" + str(k))}="{html.escape(str(v))}"')
 
         # Add onclick (use sparingly)
         if self.onclick and not self.disabled and not self.loading:

@@ -741,6 +741,10 @@ DECIDED_WRITERS = {
 #: Functions with a ``**attrs``-style parameter, decided not to be passthrough writers.
 NOT_WRITERS = {
     # (relative path, function): why
+    ("_testing_live.py", "open_live_page"): "**extra is the Django test client's request extras "
+    "(HTTP_HOST, HTTP_X_...), sent as WSGI environ keys, not HTML attributes (#4191)",
+    ("_testing_live.py", "post_event"): "**extra is request extras for the fallback POST, "
+    "not HTML attributes (#4191)",
 }
 
 

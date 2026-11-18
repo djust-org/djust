@@ -82,9 +82,9 @@ const TOUR = ({ step = 0, total = 3, target = '#create', extra = '' } = {}) =>
     `<h4 class="dj-tour__title">Step title ${step + 1}</h4><span class="dj-tour__step-label">Step ${step + 1} of ${total}</span></div>` +
     '<div class="dj-tour__body"><p class="dj-tour__content">Some text.</p></div>' +
     '<div class="dj-tour__footer">' +
-    (step < total - 1 ? '<button class="dj-tour__skip" type="button" dj-click="tour" data-value="skip">Skip tour</button>' : '') +
-    (step > 0 ? '<button class="dj-tour__prev" type="button" dj-click="tour" data-value="prev">Back</button>' : '') +
-    `<button class="dj-tour__next" type="button" dj-click="tour" data-value="${step === total - 1 ? 'finish' : 'next'}">${step === total - 1 ? 'Finish' : 'Next'}</button>` +
+    (step < total - 1 ? '<button class="dj-tour__skip" data-dj-close type="button" dj-click="tour" dj-value-value="skip">Skip tour</button>' : '') +
+    (step > 0 ? '<button class="dj-tour__prev" type="button" dj-click="tour" dj-value-value="prev">Back</button>' : '') +
+    `<button class="dj-tour__next" type="button" dj-click="tour" dj-value-value="${step === total - 1 ? 'finish' : 'next'}">${step === total - 1 ? 'Finish' : 'Next'}</button>` +
     '</div></div></div>';
 
 // ---------------------------------------------------------------------------

@@ -124,17 +124,16 @@ def _first_control(html: str, event: str) -> str:
 def _client_params(tag: str) -> Dict[str, Any]:
     """Build the event params the client would send for ``tag``
     (``08-event-parsing.js`` ``extractTypedParams`` + ``09-event-binding.js``
-    ``addEventContext``): every ``data-*`` becomes a snake_case key, and
+    ``addEventContext``): every ``dj-value-*`` becomes a snake_case key (what a
+    strict handler receives, and a legacy one too, #4186), and
     ``data-component-id`` becomes ``component_id`` — ONLY if present."""
     params: Dict[str, Any] = {}
     attrs = dict(_ATTR.findall(tag))
     for name, value in attrs.items():
-        if not name.startswith("data-"):
-            continue
         if name == "data-component-id":
             params["component_id"] = value
-            continue
-        params[name[5:].replace("-", "_")] = value
+        elif name.startswith("dj-value-"):
+            params[name[len("dj-value-") :].split(":")[0].replace("-", "_")] = value
     return params
 
 
@@ -222,7 +221,7 @@ class TestSortableHeaderOverWebSocket:
     async def test_clicking_a_sortable_header_sorts(self, framework):
         comp = TableComponent(component_id="t1", columns=list(_COLUMNS), rows=list(_ROWS))
         tag = _first_control(_render_under(comp, framework), "sort_by")
-        assert 'data-column="id"' in tag, tag
+        assert 'dj-value-column="id"' in tag, tag
         # Send exactly what the client builds from the rendered <th>.
         mount_frame, resp = await _click_over_ws("TableHostView", tag, "sort_by")
         assert "order=Zed,Amy,Mia" in mount_frame.get("html", ""), mount_frame
@@ -234,7 +233,7 @@ class TestSortableHeaderOverWebSocket:
     async def test_sorting_by_name_then_toggles_direction(self):
         comp = TableComponent(component_id="t1", columns=list(_COLUMNS), rows=list(_ROWS))
         html = _render_under(comp, "plain")
-        tag = [t for t in _TAG.findall(html) if 'data-column="name"' in t][0]
+        tag = [t for t in _TAG.findall(html) if 'dj-value-column="name"' in t][0]
         _, resp = await _click_over_ws("TableHostView", tag, "sort_by")
         assert "order=Amy,Mia,Zed" in resp.get("html", ""), resp
 
@@ -262,7 +261,7 @@ class TestSiblingsFoundByTheExtendedPin:
         comp = PaginationComponent(component_id="p1", current_page=2, total_pages=5)
         html = _render_under(comp, "bootstrap5")
         tags = [t for t in _TAG.findall(html) if f'dj-click="{event}"' in t]
-        tag = [t for t in tags if 'data-page="4"' in t][0] if event == "go_to_page" else tags[0]
+        tag = [t for t in tags if 'dj-value-page="4"' in t][0] if event == "go_to_page" else tags[0]
         mount_frame, resp = await _click_over_ws("PaginationHostView", tag, event)
         assert "page=2" in mount_frame.get("html", "")
         assert resp.get("type") != "error", f"#2776 sibling: {event} rejected: {resp!r}"
@@ -274,7 +273,7 @@ class TestSiblingsFoundByTheExtendedPin:
             tabs=[{"id": "one", "label": "One"}, {"id": "two", "label": "Two"}],
         )
         html = _render_under(comp, "bootstrap5")
-        tag = [t for t in _TAG.findall(html) if 'data-tab="two"' in t][0]
+        tag = [t for t in _TAG.findall(html) if 'dj-value-tab="two"' in t][0]
         mount_frame, resp = await _click_over_ws("TabsHostView", tag, "activate_tab")
         assert "active=one" in mount_frame.get("html", "")
         assert resp.get("type") != "error", f"#2776 sibling: activate_tab rejected: {resp!r}"

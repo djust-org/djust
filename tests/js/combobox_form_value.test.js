@@ -24,8 +24,8 @@ function combobox({ value = '', shown = '', freeText = false, clientFilter = tru
     <input class="combobox-input form-input" type="text" id="id_run-city" placeholder="Search" value="${shown}"
            role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="id_run-city-listbox" autocomplete="off">
     <div class="combobox-dropdown" id="id_run-city-listbox" role="listbox">
-      <div class="combobox-option" role="option" aria-selected="false" data-value="a">Alpha</div>
-      <div class="combobox-option" role="option" aria-selected="false" data-value="b">Beta</div>
+      <div class="combobox-option" role="option" aria-selected="false" dj-value-value="a">Alpha</div>
+      <div class="combobox-option" role="option" aria-selected="false" dj-value-value="b">Beta</div>
     </div>
   </div>
 </div></form>`;
@@ -36,8 +36,8 @@ const RICH = `
   <input type="hidden" name="city" value="">
   <div class="rich-select-trigger" tabindex="0" role="combobox" aria-controls="id_city-listbox" aria-expanded="false"><span class="rich-select-placeholder">Select...</span><span class="rich-select-chevron" aria-hidden="true">&#9662;</span></div>
   <div class="rich-select-dropdown" role="listbox" id="id_city-listbox">
-    <div class="rich-select-option" data-value="a" role="option" aria-selected="false"><span class="rich-select-option-text"><span class="rich-select-option-label">Alpha</span></span></div>
-    <div class="rich-select-option" data-value="b" role="option" aria-selected="false"><span class="rich-select-option-text"><span class="rich-select-option-label">Beta</span></span></div>
+    <div class="rich-select-option" dj-value-value="a" role="option" aria-selected="false"><span class="rich-select-option-text"><span class="rich-select-option-label">Alpha</span></span></div>
+    <div class="rich-select-option" dj-value-value="b" role="option" aria-selected="false"><span class="rich-select-option-text"><span class="rich-select-option-label">Beta</span></span></div>
   </div>
 </div></form>`;
 
@@ -73,11 +73,11 @@ describe('combobox submits the selected value', () => {
     it('a pick puts the option value in the hidden input and its label in the text box', () => {
         const dom = createDom(combobox());
         const doc = dom.window.document;
-        click(dom, doc.querySelector('[data-value="b"]'));
+        click(dom, doc.querySelector('[dj-value-value="b"]'));
         expect(doc.querySelector('.combobox-value').value).toBe('b');
         expect(doc.querySelector('.combobox-input').value).toBe('Beta');
-        expect(doc.querySelector('[data-value="b"]').getAttribute('aria-selected')).toBe('true');
-        expect(doc.querySelector('[data-value="a"]').getAttribute('aria-selected')).toBe('false');
+        expect(doc.querySelector('[dj-value-value="b"]').getAttribute('aria-selected')).toBe('true');
+        expect(doc.querySelector('[dj-value-value="a"]').getAttribute('aria-selected')).toBe('false');
         expect(submitted(dom)).toEqual([['run-city', 'b']]);
     });
 
@@ -115,13 +115,13 @@ describe('rich_select submits the selected value', () => {
         const dom = createDom(RICH);
         const doc = dom.window.document;
         click(dom, doc.querySelector('.rich-select-trigger'));
-        click(dom, doc.querySelector('[data-value="b"]'));
+        click(dom, doc.querySelector('[dj-value-value="b"]'));
         expect(submitted(dom)).toEqual([['city', 'b']]);
         const trigger = doc.querySelector('.rich-select-trigger');
         expect(trigger.textContent).toContain('Beta');
         expect(trigger.querySelector('.rich-select-placeholder')).toBeNull();
         expect(trigger.querySelector('.rich-select-chevron')).not.toBeNull();
-        expect(doc.querySelector('[data-value="b"]').getAttribute('aria-selected')).toBe('true');
+        expect(doc.querySelector('[dj-value-value="b"]').getAttribute('aria-selected')).toBe('true');
         expect(doc.querySelector('.rich-select').classList.contains('rich-select--open')).toBe(false);
     });
 });
@@ -136,16 +136,16 @@ describe('combobox without a search handler filters on the client', () => {
         const dom = createDom(combobox());
         const doc = dom.window.document;
         typeOnly(dom, doc.querySelector('.combobox-input'), 'et');
-        expect(doc.querySelector('[data-value="a"]').style.display).toBe('none');
-        expect(doc.querySelector('[data-value="b"]').style.display).toBe('');
+        expect(doc.querySelector('[dj-value-value="a"]').style.display).toBe('none');
+        expect(doc.querySelector('[dj-value-value="b"]').style.display).toBe('');
         typeOnly(dom, doc.querySelector('.combobox-input'), '');
-        expect(doc.querySelector('[data-value="a"]').style.display).toBe('');
+        expect(doc.querySelector('[dj-value-value="a"]').style.display).toBe('');
     });
 
     it('a combobox with a server search event is left to the server', () => {
         const dom = createDom(combobox({ clientFilter: false }));
         const doc = dom.window.document;
         typeOnly(dom, doc.querySelector('.combobox-input'), 'et');
-        expect(doc.querySelector('[data-value="a"]').style.display).toBe('');
+        expect(doc.querySelector('[dj-value-value="a"]').style.display).toBe('');
     });
 });

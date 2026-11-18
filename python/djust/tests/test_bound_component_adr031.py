@@ -500,14 +500,9 @@ class TestBoundComponentHttpPost:
 
 
 class TestBoundComponentPersistence:
-    def test_time_travel_snapshot_holds_the_state_flat(self):
+    def test_safe_setattr_writes_through_to_the_state(self):
         view = Page()
         view.nav.active = "t"
-        view.aux  # noqa: B018
-        snap = view._capture_components_snapshot()
-        assert snap["nav"] == {"active": "t", "count": 0}
-        assert snap["aux"] == {"active": "x", "count": 0}
-        # The restore loop (time_travel.py) applies each key with safe_setattr.
         assert safe_setattr(view.nav, "active", "back", allow_private=False) is True
         assert view.nav.state["active"] == "back"
 

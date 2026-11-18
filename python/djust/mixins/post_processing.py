@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import sys
-from typing import TYPE_CHECKING, Any, Dict, cast
+from typing import TYPE_CHECKING, Any, Dict, List, cast
 from .._class_snapshot import attribute_names
 
 logger = logging.getLogger(__name__)
@@ -122,6 +122,26 @@ def _read_debug_attr(view: Any, name: str) -> "tuple[Any, Dict[str, Any] | None]
         }
 
 
+def bug_capture_scrub() -> List[str]:
+    """``LIVEVIEW_CONFIG['bug_capture_default_scrub']`` as a clean list of names.
+
+    The debug panel's State tab removes these top-level keys from both states
+    before it encodes a bug capture (#4184). Anything that is not a list or
+    tuple of strings gives an empty list, with a warning: a bare string
+    ``"password"`` would otherwise be split into characters.
+    """
+    from ..config import config
+
+    names = config.get("bug_capture_default_scrub", []) or []
+    if not isinstance(names, (list, tuple)) or not all(isinstance(n, str) for n in names):
+        logger.warning(
+            "LIVEVIEW_CONFIG['bug_capture_default_scrub'] must be a list of field names; "
+            "ignoring it"
+        )
+        return []
+    return list(names)
+
+
 class PostProcessingMixin:
     """Post-processing: get_debug_info, _hydrate_react_components, _inject_client_script."""
 
@@ -152,7 +172,10 @@ class PostProcessingMixin:
                 **self._explicit_debug_update(explicit),
                 "handlers": {},
                 "template": None,
-                "config": {"maxHistory": config.get("debug_panel_max_history", 50)},
+                "config": {
+                    "maxHistory": config.get("debug_panel_max_history", 50),
+                    "bugCaptureScrub": bug_capture_scrub(),
+                },
             }
         from .._parameter_metadata import _event_methods
         from ..validation import get_handler_signature_info
@@ -229,7 +252,7 @@ class PostProcessingMixin:
             "variables": variables,
             "state_sizes": self._debug_state_sizes(),
             "template": self.template_name if hasattr(self, "template_name") else None,
-            "config": {"maxHistory": max_history},
+            "config": {"maxHistory": max_history, "bugCaptureScrub": bug_capture_scrub()},
         }
 
     def _debug_state_sizes(self) -> Dict[str, Dict[str, Any]]:

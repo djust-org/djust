@@ -473,9 +473,9 @@ class DataTableMixin:
 
     # Phase 6 class-level configuration (#1111: row-level navigation)
     table_row_click_event = (
-        ""  # if set, dj-click fires per row with data-value=row[row_click_value_key]
+        ""  # if set, dj-click fires per row with dj-value-value=row[row_click_value_key]
     )
-    table_row_click_value_key = "id"  # which row key to send as data-value
+    table_row_click_value_key = "id"  # which row key to send as dj-value-value
     table_row_url = ""  # if set, row becomes a static link (Option A in #1111)
 
     _djust_context_providers = (_data_table_provider,)
@@ -605,10 +605,12 @@ class DataTableMixin:
 
     @event_handler()
     def on_table_filter(self, value: Any, column: Optional[str] = None, **kwargs: Any) -> None:
-        """Handle filter event: set or clear filter, reset to page 1, refresh rows."""
-        if column is None:
-            column = kwargs.get("data-column", kwargs.get("data_column", ""))
-        column = str(column)
+        """Handle filter event: set or clear filter, reset to page 1, refresh rows.
+
+        ``column`` is the filter input's ``dj-value-column`` (#4186). A form-field
+        binding never collects ``data-*``, so the ``data-column`` it carried before
+        never reached this handler from a browser."""
+        column = str(column or "")
         if column not in self._table_column_keys("filterable", default=False):
             return
         value = str(value)
@@ -951,12 +953,19 @@ class DataTableMixin:
         self.table_rows.extend(rows)
 
     @event_handler()
-    def on_table_expression(self, value: Any, **kwargs: Any) -> None:
-        """Handle column expression filter. value is JSON: {column, expression}."""
-        try:
-            data = json.loads(str(value)) if isinstance(value, str) else value
-        except (json.JSONDecodeError, TypeError):
-            return
+    def on_table_expression(self, value: Any, column: Optional[str] = None, **kwargs: Any) -> None:
+        """Handle a column expression filter.
+
+        The filter row's input sends the expression text as ``value`` and its
+        ``dj-value-column`` as ``column`` (#4186). Without ``column``, ``value`` is
+        JSON: ``{column, expression}``."""
+        if column is not None:
+            data: Any = {"column": column, "expression": value}
+        else:
+            try:
+                data = json.loads(str(value)) if isinstance(value, str) else value
+            except (json.JSONDecodeError, TypeError):
+                return
         if not isinstance(data, dict):
             return
         column = str(data.get("column", ""))

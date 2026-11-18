@@ -241,23 +241,6 @@ def test_test_client(case):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", sorted(set(METADATA) | set(FORGED)))
-async def test_time_travel_replay(case, monkeypatch):
-    from djust.tests.test_debug_render_contracts import DebugView, setup
-    from djust.time_travel import replay_event
-
-    @event_handler(parameter_policy="strict")
-    def advance(self, value: int):
-        CALLS.append(("choose", value))
-
-    monkeypatch.setattr(DebugView, "advance", advance)
-    _, view = await setup()
-    payload = {**METADATA, **FORGED}[case]
-    await sync_to_async(replay_event)(view, view._time_travel_buffer.jump(0), dict(payload))
-    assert CALLS == _expect(case)
-
-
-@pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 async def test_real_websocket():
     from channels.testing import WebsocketCommunicator

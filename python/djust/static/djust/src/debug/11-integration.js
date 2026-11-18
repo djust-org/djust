@@ -185,7 +185,7 @@
                 const eventName = debugInfo._eventName || null;
 
                 // Capture state before updating variables
-                this.captureState(trigger, eventName, debugInfo.variables);
+                this.captureState(trigger, eventName, debugInfo.variables, debugInfo.patches);
 
                 this.variables = debugInfo.variables;
                 if (this.state.activeTab === 'variables') {

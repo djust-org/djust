@@ -588,7 +588,7 @@ def _render_scripts() -> str:
             if (el.hasAttribute('onclick')) return;
 
             const action = el.getAttribute('dj-click');
-            const value = el.getAttribute('data-value') || '';
+            const value = el.getAttribute('dj-value-value') || '';
             const preview = el.closest('.variant-preview');
             if (!preview) return;
 

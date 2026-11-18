@@ -42,7 +42,7 @@ from django.test import override_settings
 
 from djust.live_view import LiveView
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 

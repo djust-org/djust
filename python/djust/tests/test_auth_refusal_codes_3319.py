@@ -27,7 +27,7 @@ from djust.decorators import permission_required, state
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, has_type, receive_until
-from ._live_session import live_session
+from djust.testing import live_session
 from .test_exposure_runtime import make_request
 
 CODE = "permission_denied"

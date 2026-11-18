@@ -405,10 +405,6 @@ def test_site_live_view_snapshot_user_private_attrs():
     assert all(type(key) is str for key in view._user_private_keys)
 
 
-def test_site_live_view_capture_snapshot_state_legacy():
-    assert _legacy_view()._capture_snapshot_state() == {"count": 1, "note": "fine"}
-
-
 def test_site_live_view_get_state_legacy():
     state = _legacy_view().get_state()
     assert state["count"] == 1 and all(type(key) is str for key in state)
@@ -434,12 +430,3 @@ def test_site_context_mixin_get_context_data_legacy():
     view.request = RequestFactory().get("/")
     context = view.get_context_data()
     assert context["count"] == 1 and all(type(key) is str for key in context)
-
-
-def test_site_time_travel_restore_snapshot():
-    from djust.time_travel import EventSnapshot, restore_snapshot
-
-    view = _legacy_view()
-    snapshot = EventSnapshot("inc", {}, None, 0.0, state_before={"count": 5, "note": "fine"})
-    assert restore_snapshot(view, snapshot) is True
-    assert view.count == 5 and vars(view)[1] == "one"

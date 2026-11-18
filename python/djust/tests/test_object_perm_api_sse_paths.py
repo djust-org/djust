@@ -274,7 +274,7 @@ def _sse_session():
 
 
 def _sse_request(doc_id=None):
-    from djust.tests._live_session import with_live_session
+    from djust.testing import with_live_session
 
     rf = RequestFactory()
     query = f"?view=x&doc_id={doc_id}" if doc_id is not None else "?view=x"

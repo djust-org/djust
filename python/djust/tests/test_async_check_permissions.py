@@ -373,7 +373,7 @@ async def _login(user=None):
     from asgiref.sync import sync_to_async
     from django.contrib.auth import get_user_model
 
-    from djust.tests._live_session import live_session
+    from djust.testing import live_session
 
     def make():
         if isinstance(user, AnonymousUser):

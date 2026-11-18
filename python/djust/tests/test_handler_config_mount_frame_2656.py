@@ -25,7 +25,7 @@ from django.test import override_settings
 from djust import LiveView
 from djust.decorators import cache, debounce, event_handler, rate_limit, throttle
 from djust import state
-from djust.tests._live_session import with_live_session
+from djust.testing import with_live_session
 
 pytestmark = [pytest.mark.django_db]
 

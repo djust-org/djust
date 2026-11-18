@@ -16,6 +16,8 @@ before `pythonpath` is applied, so a bare `pytest` (not `python -m pytest`)
 could not find them.
 """
 
+import sys
+
 import pytest
 
 pytest_plugins = [
@@ -213,6 +215,13 @@ def _release_left_sse_sessions():
     nothing, unless `djust.sse` is already loaded and its registry is non-empty.
     """
     yield
+    # What a test's live pages opened is closed by djust.testing's own cleanup
+    # (the one a downstream project uses, #4191); only when the helpers were
+    # loaded, so the import footprint the tests pin is unchanged.
+    if "djust._testing_live" in sys.modules:
+        from djust.testing import close_live_pages
+
+        close_live_pages()
     from tests.sse_isolation import release_sse_sessions
 
     release_sse_sessions()

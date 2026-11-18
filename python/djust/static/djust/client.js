@@ -2578,61 +2578,6 @@ class LiveViewWebSocket {
                     globalThis.djust.hvr.showIndicator(data);
                 }
                 break;
-            case 'time_travel_state':
-                // Time-travel debugging (v0.6.1) — server acknowledges
-                // a completed jump with the new cursor/history_len.
-                // The debug panel listens for this event to update its
-                // timeline UI; the main client just fans out so non-
-                // debug-panel consumers can observe.
-                try {
-                    document.dispatchEvent(new CustomEvent('djust:time-travel-state', {
-                        detail: data,
-                        bubbles: true,
-                    }));
-                } catch (e) {
-                    if (globalThis.djustDebug) {
-                        console.warn('[djust] time-travel-state dispatch failed', e);
-                    }
-                }
-                break;
-            case 'time_travel_event':
-                // Time-travel debugging (v0.6.1 Fix #3) — server pushes
-                // each recorded snapshot so the debug panel's timeline
-                // populates incrementally. Payload shape:
-                //   { type: 'time_travel_event', entry: {...}, history_len: N }
-                // Fanned out as a CustomEvent so the debug-panel (and
-                // any other listener) can append the entry.
-                try {
-                    document.dispatchEvent(new CustomEvent('djust:time-travel-event', {
-                        detail: data,
-                        bubbles: true,
-                    }));
-                } catch (e) {
-                    if (globalThis.djustDebug) {
-                        console.warn('[djust] time-travel-event dispatch failed', e);
-                    }
-                }
-                break;
-
-            case 'bug_capture_share_result':
-                // Bug-capture iter B (#1562) — server computed a djbug1.
-                // blob in response to the debug panel's Share button.
-                // Payload shape: { type: 'bug_capture_share_result', blob: '...' }
-                // Fanned out as a CustomEvent so the debug panel (which
-                // owns clipboard access) can copy it — the main client
-                // layer never touches the clipboard itself.
-                try {
-                    document.dispatchEvent(new CustomEvent('djust:bug-capture-share-result', {
-                        detail: data,
-                        bubbles: true,
-                    }));
-                } catch (e) {
-                    if (globalThis.djustDebug) {
-                        console.warn('[djust] bug-capture-share-result dispatch failed', e);
-                    }
-                }
-                break;
-
             default:
                 // The frames both transports apply alike (02c-frame-dispatch.js).
                 await dispatchCommonFrame(this, data, '[LiveView]');
@@ -23294,7 +23239,7 @@ globalThis.djust.djTransitionGroup = {
             dialog.querySelector('[data-dj-close][dj-click]');
         if (closer) {
             // Press it, so the event carries exactly what a click on it sends
-            // (its data-value / dj-value-* arguments, strict-handler binding,
+            // (its dj-value-* arguments, strict-handler binding,
             // dj-confirm, locks); a bare handleEvent(name) sent none of that.
             closer.click();
             return true;
@@ -23922,7 +23867,7 @@ globalThis.djust.djTransitionGroup = {
         const hidden = box.querySelector('.combobox-value');
         if (!hidden) return null;
         const current = _comboboxOptions(box).filter(function (opt) {
-            return opt.getAttribute('data-value') === hidden.value;
+            return opt.getAttribute('dj-value-value') === hidden.value;
         })[0];
         return current ? current.textContent.trim() : '';
     }
@@ -23934,7 +23879,7 @@ globalThis.djust.djTransitionGroup = {
         const hidden = box.querySelector('.combobox-value');
         const input = _comboboxInput(box);
         const label = option.textContent.trim();
-        if (hidden && input && hidden.value === option.getAttribute('data-value')) {
+        if (hidden && input && hidden.value === option.getAttribute('dj-value-value')) {
             input.value = label;
             _setComboboxOpen(box, false);
             return;
@@ -23954,14 +23899,14 @@ globalThis.djust.djTransitionGroup = {
         const hidden = box.querySelector('.combobox-value');
         const input = box.querySelector('.combobox-input');
         if (!hidden || !input) return;  // multiple mode: the server renders the tags
-        hidden.value = option.getAttribute('data-value') || '';
+        hidden.value = option.getAttribute('dj-value-value') || '';
         input.value = option.textContent.trim();
         _markSelected(_comboboxOptions(box), option, 'combobox-option-selected');
     }
 
     function _pickRichSelectOption(root, option) {
         const hidden = root.querySelector('input[type=hidden]');
-        if (hidden) hidden.value = option.getAttribute('data-value') || '';
+        if (hidden) hidden.value = option.getAttribute('dj-value-value') || '';
         const trigger = root.querySelector('.rich-select-trigger');
         const chevron = trigger && trigger.querySelector('.rich-select-chevron');
         if (trigger && chevron) {
@@ -24034,7 +23979,7 @@ globalThis.djust.djTransitionGroup = {
             const target = activeOption || _exactComboboxMatch(box, input.value);
             const hidden = box.querySelector('.combobox-value');
             if (target && (activeOption || !hidden ||
-                           hidden.value !== target.getAttribute('data-value'))) {
+                           hidden.value !== target.getAttribute('dj-value-value'))) {
                 e.preventDefault();
                 _commitComboboxOption(box, target);
             } else if (hidden) {
@@ -24452,7 +24397,7 @@ globalThis.djust.djTransitionGroup = {
             _markSelected(options, null, 'combobox-option-selected');
         } else {
             const current = options.filter(function (opt) {
-                return opt.getAttribute('data-value') === hidden.value;
+                return opt.getAttribute('dj-value-value') === hidden.value;
             })[0];
             input.value = current ? current.textContent.trim() : '';
         }

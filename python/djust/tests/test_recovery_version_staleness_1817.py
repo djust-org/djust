@@ -27,12 +27,9 @@ actually on.
 
 Fidelity
 --------
-``test_time_travel_jump_recovery_version_is_current`` drives the REAL
-``LiveViewConsumer`` through a real ``WebsocketCommunicator`` end-to-end:
-mount → arming event → time-travel jump (a render-send drift path) →
-``request_html``, and asserts the ``html_recovery`` frame carries the version
-the client is CURRENTLY on (post-jump), not the stale pre-jump version. The
-GATE-OFF evidence (reverting the arm on the jump path) is recorded in the PR.
+The end-to-end case drove a time-travel jump, one of the drift paths, through
+a real ``WebsocketCommunicator``; it went with time-travel debugging in 2.0
+(#4184). The helper contract and the per-path arm invariant are pinned below.
 """
 
 from __future__ import annotations
@@ -46,21 +43,13 @@ from djust import LiveView
 from djust.decorators import event_handler
 
 
-class _TTRecoveryView(LiveView):
-    """Time-travel-enabled view used to drive the jump render-send drift path.
-
-    ``time_travel_enabled = True`` makes each ``@event_handler`` dispatch record
-    a ``state_before`` / ``state_after`` snapshot, so a ``time_travel_jump`` to
-    a past snapshot can restore ``count`` and re-render. The re-render is a
-    render-send (the client applies it as new display state + writes
-    ``clientVdomVersion``), so it MUST arm recovery (#1817).
-    """
+class _RecoveryView(LiveView):
+    """A counter whose event is a render-send that arms recovery (#1817)."""
 
     exposure_policy = "legacy"
-    time_travel_enabled = True
 
     template = (
-        '<div dj-view="djust.tests.test_recovery_version_staleness_1817._TTRecoveryView" '
+        '<div dj-view="djust.tests.test_recovery_version_staleness_1817._RecoveryView" '
         'dj-id="0">Count: {{ count }}</div>'
     )
 
@@ -133,7 +122,7 @@ def _solicited_by(frame, ref) -> bool:
     """
     if ref is None:
         return False
-    return frame.get("ref") == ref or (frame.get("entry") or {}).get("ref") == ref
+    return frame.get("ref") == ref
 
 
 async def _receive_until(communicator, wanted_type, *, ref=None, tries=8, timeout=30):
@@ -193,107 +182,6 @@ def _frame_version(frame):
 # ---------------------------------------------------------------------------
 # (1) End-to-end real-WebsocketCommunicator reproduction (load-bearing, #1210).
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-@pytest.mark.asyncio
-async def test_time_travel_jump_recovery_version_is_current():
-    """mount → bump → time_travel_jump → request_html.
-
-    The ``time_travel_jump`` is a render-send DRIFT path: it advances the wire
-    version and the client applies it (clientVdomVersion = jump version). BEFORE
-    #1817 the jump did NOT arm recovery, so a subsequent ``request_html``
-    returned an ``html_recovery`` stamped with the STALE pre-jump version. AFTER
-    the fix the ``html_recovery`` version equals the post-jump version the
-    client is currently on.
-
-    Gate-off check: revert the arm on the jump path (use bare ``_next_version()``
-    in ``handle_time_travel_jump``) and the final assertion fails with the stale
-    pre-jump version — proving this test exercises the fix.
-    """
-    from django.test import override_settings
-
-    # DEBUG=True is required for time-travel handlers (dev-only feature).
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True):
-        communicator, mount_frame = await _connect_and_mount(
-            view_suffix="_TTRecoveryView", url="/tt/"
-        )
-        v_mount = _frame_version(mount_frame)
-        assert v_mount == 1, (
-            f"fresh mount baseline must be 1, got {v_mount!r}. A value other "
-            f"than 1 means this was not a fresh mount — session or consumer "
-            f"state leaked from an earlier test (see #2154). Frames so far:\n"
-            f"{_log_frames()}"
-        )
-
-        # (2) Arming event: a normal diff. Records time-travel snapshot[0]
-        # (state_before={count:0}, state_after={count:1}) AND arms recovery at
-        # this version (the canonical handle_event armed path).
-        await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
-        ev1 = await _receive_until(communicator, "patch")
-        assert ev1.get("type") == "patch", f"bump should patch, got {ev1!r}"
-        v_arm = _frame_version(ev1)
-        # MONOTONIC, not adjacent (#2215). This used to assert
-        # `v_arm == v_mount + 1`, and that is what the flake failed on: an
-        # extra `_next_version()` bump landed between the mount and this frame,
-        # so it read 3 where 2 was expected.
-        #
-        # The exact integer was never what this test guards. Gating off the
-        # #1817 fix shows the LAST assertion — `v_recovery == v_jump` — catches
-        # the regression entirely on its own; these two only assert that the
-        # counter is a counter. So they now assert exactly that, and the
-        # "did something else bump it" question moved to
-        # `test_an_idle_connection_receives_no_unsolicited_frames` below, which
-        # can NAME the intruder instead of reporting an off-by-N.
-        assert v_arm > v_mount, (
-            f"the arming event must ADVANCE the wire version past the mount "
-            f"baseline ({v_mount}); got {v_arm!r}. Frames so far:\n{_log_frames()}"
-        )
-
-        # (3) DRIFT path: jump back to snapshot[0]'s state_before (count → 0).
-        # This re-renders (count 1 → 0 produces a patch) and advances the wire
-        # version; the client applies it (clientVdomVersion = jump version).
-        await communicator.send_json_to({"type": "time_travel_jump", "index": 0, "which": "before"})
-        # The jump emits a patch/html_update render frame first, then a
-        # time_travel_state frame. Capture the render frame's version.
-        jump_render = None
-        for _ in range(8):
-            frame = await _recv(communicator, 30)
-            if frame.get("type") in ("patch", "html_update"):
-                jump_render = frame
-                break
-            if frame.get("type") == "error":
-                pytest.fail(f"time_travel_jump errored: {frame!r}")
-        assert jump_render is not None, "time_travel_jump must emit a render frame"
-        v_jump = _frame_version(jump_render)
-        # Monotonic for the same reason as above (#2215): what matters is that
-        # the jump ADVANCES the version — the client writes
-        # `clientVdomVersion = data.version` from this frame — not that it
-        # advances by exactly one.
-        assert v_jump > v_arm, (
-            f"the jump render must advance the wire version past the arming "
-            f"version ({v_arm}); got {v_jump!r}. Frames so far:\n{_log_frames()}"
-        )
-
-        # (4) request_html → html_recovery. Its version MUST be the post-jump
-        # version the client is currently on (v_jump), NOT the stale pre-jump
-        # arming version (v_arm). BEFORE #1817 this was v_arm.
-        await communicator.send_json_to({"type": "request_html"})
-        recovery = await _receive_until(communicator, "html_recovery")
-        assert recovery.get("type") == "html_recovery", (
-            f"request_html must return html_recovery; got {recovery!r}"
-        )
-        v_recovery = _frame_version(recovery)
-        assert v_recovery == v_jump, (
-            f"html_recovery version must equal the client's CURRENT version "
-            f"after the time-travel jump ({v_jump}); got {v_recovery!r}. A stale "
-            f"value (the pre-jump arming version {v_arm}) is the #1817 drift: the "
-            "client would reset backwards and the next diff would mismatch, "
-            "forcing an extra recovery round-trip. The jump render-send path must "
-            "arm recovery via self._next_version_armed(html)."
-        )
-
-        await communicator.disconnect()
 
 
 # ---------------------------------------------------------------------------
@@ -381,8 +269,8 @@ async def test_an_idle_connection_receives_no_unsolicited_frames():
     """Nothing may push a frame at a connection that did not ask for one.
 
     This is where the "did something else bump the version counter" question
-    lives now. It used to be answered accidentally, by
-    ``test_time_travel_jump_recovery_version_is_current`` asserting
+    lives now. It used to be answered accidentally, by the time-travel jump
+    test (removed with time travel in 2.0, #4184) asserting
     ``v_arm == v_mount + 1`` — so a stray broadcast surfaced as an off-by-N in
     a test about something else, with no indication of what had arrived.
 
@@ -408,7 +296,7 @@ async def test_an_idle_connection_receives_no_unsolicited_frames():
 
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True):
         communicator, mount_frame = await _connect_and_mount(
-            view_suffix="_TTRecoveryView", url="/tt/"
+            view_suffix="_RecoveryView", url="/tt/"
         )
         baseline = _frame_version(mount_frame)
 
@@ -456,8 +344,6 @@ async def test_an_idle_connection_receives_no_unsolicited_frames():
         # caught" by injecting a sending one (#1867 — a prose invariant must be
         # falsification-tested, not just citation-checked).
         #
-        # This view has time travel on, so an event legitimately emits a
-        # `time_travel_event` too; it carries the same `ref` under `entry`.
         strays = [f for f in _FRAME_LOG[window_start:] if not _solicited_by(f, _EVENT_REF)]
         # Reachability (#1859): this is not decorative — the first run of it
         # went red on a real frame captured from the window and named it, which
@@ -528,7 +414,7 @@ async def test_a_suppressed_hotreload_broadcast_consumes_no_wire_version():
     from django.test import override_settings
 
     async def _mount_broadcast_event(*, broadcast: bool) -> tuple:
-        communicator, mount = await _connect_and_mount(view_suffix="_TTRecoveryView", url="/tt/")
+        communicator, mount = await _connect_and_mount(view_suffix="_RecoveryView", url="/tt/")
         v_mount = _frame_version(mount)
         if broadcast:
             # An unrelated file: re-renders to zero patches, so `_send_update`

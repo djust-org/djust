@@ -10,8 +10,9 @@ NOT a live consumer.
 Every test here drives a real channels ``WebsocketCommunicator`` against
 ``LiveViewConsumer.as_asgi()`` end-to-end (mount → event frame → assert on the
 response frame), so it exercises the WS event path — which is now the RUNTIME
-path. Five behaviors are pure-equivalent and stay green unchanged across the flip
-(time-travel, dj_activity, ref echo, force_full_html) — that equivalence IS
+path. The behaviors below are pure-equivalent and stay green unchanged across the flip
+(dj_activity, ref echo, force_full_html; time-travel was one too until 2.0
+removed it, #4184) — that equivalence IS
 the parity proof (#1466 / #1780 / #1468). The SIXTH (``component_id`` — see
 ``TestComponentIdRouting``) is the ONE intended behavioral change: the deleted
 bespoke path returned an ``error`` frame (it never re-rendered the parent — #1898),
@@ -159,41 +160,6 @@ class ComponentParentView(LiveView):
         ctx["parent_n"] = self.parent_n
         ctx["last_label"] = self.last_label
         return ctx
-
-
-class TimeTravelView(LiveView):
-    """View with time-travel recording enabled (DEBUG + class opt-in)."""
-
-    exposure_policy = "legacy"
-    time_travel_enabled = True
-    template = (
-        '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.TimeTravelView" '
-        'dj-id="0">n={{ n }}</div>'
-    )
-
-    def mount(self, request, **kwargs):
-        self.n = 0
-
-    @event_handler()
-    def bump(self, **kwargs):
-        self.n += 1
-
-
-class PlainView(LiveView):
-    """No time-travel buffer — the gate-off control for the tt-event test."""
-
-    exposure_policy = "legacy"
-    template = (
-        '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.PlainView" '
-        'dj-id="0">n={{ n }}</div>'
-    )
-
-    def mount(self, request, **kwargs):
-        self.n = 0
-
-    @event_handler()
-    def bump(self, **kwargs):
-        self.n += 1
 
 
 class ActivityView(LiveView):
@@ -418,76 +384,6 @@ class TestComponentIdRouting:
             assert resp.get("type") == "error", f"unknown component_id must error; got {resp!r}"
             assert "not found" in resp.get("error", "").lower(), (
                 f"unknown component_id must be a 'Component not found' rejection; got {resp!r}"
-            )
-
-            await communicator.disconnect()
-
-
-# ===========================================================================
-# 2. time-travel-on-event
-# ===========================================================================
-
-
-@pytest.mark.django_db
-@pytest.mark.asyncio
-class TestTimeTravelOnEvent:
-    async def test_event_emits_time_travel_event_frame_with_update(self):
-        """An event on a time-travel-enabled view (DEBUG + class opt-in) emits a
-        ``time_travel_event`` frame in addition to the render (``patch``) frame.
-        ``_maybe_push_tt_event`` runs in the handler's ``finally`` (before the
-        render send), so both frames reach the client in the same round-trip.
-        """
-        from django.test import override_settings
-
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED], DEBUG=True):
-            communicator, _ = await _connect_and_mount(f"{_ALLOWED}.TimeTravelView")
-
-            await communicator.send_json_to(
-                {"type": "event", "event": "bump", "params": {}, "ref": 1}
-            )
-
-            frames = await _drain_available(
-                communicator,
-                until=lambda fs: has_type("time_travel_event")(fs) and _RENDER(fs),
-            )
-
-            types = [f.get("type") for f in frames]
-            assert "time_travel_event" in types, (
-                f"a time-travel-enabled view must emit a time_travel_event frame; got {types}"
-            )
-            # The render frame for the state change is also present.
-            assert "patch" in types or "html_update" in types, (
-                f"the event's render frame must accompany the tt frame; got {types}"
-            )
-            tt = next(f for f in frames if f.get("type") == "time_travel_event")
-            assert "entry" in tt and tt["entry"].get("event_name") == "bump", (
-                f"time_travel_event must carry the recorded entry for 'bump'; got {tt!r}"
-            )
-
-            await communicator.disconnect()
-
-    async def test_gate_off_no_tt_frame_without_buffer(self):
-        """GATE-OFF (#1468): an identical event on a view WITHOUT
-        ``time_travel_enabled`` emits NO ``time_travel_event`` frame — proving
-        the frame in the positive test comes from the buffer opt-in, not from
-        every event unconditionally."""
-        from django.test import override_settings
-
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED], DEBUG=True):
-            communicator, _ = await _connect_and_mount(f"{_ALLOWED}.PlainView")
-
-            await communicator.send_json_to(
-                {"type": "event", "event": "bump", "params": {}, "ref": 1}
-            )
-
-            frames = await _drain_available(communicator, until=_RENDER)
-
-            types = [f.get("type") for f in frames]
-            assert "time_travel_event" not in types, (
-                f"a view without time_travel_enabled must NOT emit a tt frame; got {types}"
-            )
-            assert "patch" in types or "html_update" in types, (
-                f"the event still renders normally; got {types}"
             )
 
             await communicator.disconnect()
