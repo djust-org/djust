@@ -615,7 +615,12 @@ def close_modal(self, **kwargs):
 The close event runs on the page's view, even when the dialog sits inside a
 component or a `{% live_render %}` child (it carries no owner context), and the
 browser follows that view's handler contract (#4225). A handler under the strict
-parameter policy receives the dialog's `dj-value-*` arguments.
+parameter policy receives the dialog's `dj-value-*` arguments. Inside a component
+the two ways to close therefore reach different owners: a `dj-click` close (×)
+button carries the component's id and runs on the component, while the native
+close (Escape, a `method="dialog"` button, `dialog.close()`) sends
+`dj-dialog-close-event` to the page's view. Define the close handler on the
+owner each path reaches.
 
 ### Scope
 
