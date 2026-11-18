@@ -1,9 +1,9 @@
-"""ADR-038 E5 live matrix surface: an explicit view and its legacy twin.
+"""ADR-038 E5 live matrix surface: an explicit view.
 
-Exercised by ``tests/playwright/test_exposure_matrix.py``, which drives both
+Exercised by ``tests/playwright/test_exposure_matrix.py``, which drives it
 over WebSocket and SSE in a real browser and asserts that the sentinels below
-reach no destination (HTML, frames, stored session state, server log) under
-the explicit policy, while the legacy twin shows the harness can see them.
+reach no destination (HTML, frames, stored session state, server log). Its
+legacy twin, the harness control, went with the legacy policy in 2.0 (#4187).
 
 - ``E5_UNDECLARED_SENTINEL``: an ordinary attribute. Never context, never
   sent, never client-settable. Saved server-side in the caller's own session
@@ -46,45 +46,6 @@ class ExposureMatrixView(LiveView):
         context["page"] = self.page
         context["policy"] = "explicit"
         return context
-
-    @event_handler()
-    def increment(self):
-        self.count += 1
-
-    @event_handler()
-    def spawn(self):
-        self.start_async(self._work)
-
-    def _work(self):
-        return 10
-
-    def handle_async_result(self, name, result=None, error=None):
-        if error is None:
-            self.count += result
-
-    @event_handler()
-    def boom(self):
-        raise ValueError("E5_ERROR_SENTINEL")
-
-
-class LegacyExposureMatrixView(LiveView):
-    """The legacy twin: same behaviour, implicit exposure. Harness control."""
-
-    exposure_policy = "legacy"
-    template_name = "demos/exposure_matrix_legacy.html"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self.page = 1
-        self.policy = "legacy"
-        self.secret_note = "E5_UNDECLARED_SENTINEL"
-        self._private_note = "E5_PRIVATE_SENTINEL"
-        self.password = "E5_FLOOR_SENTINEL"
-
-    def handle_params(self, params, uri):
-        raw = params.get("page")
-        if isinstance(raw, str) and raw.isdigit():
-            self.page = int(raw)
 
     @event_handler()
     def increment(self):

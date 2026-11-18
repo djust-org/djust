@@ -710,7 +710,7 @@
                             {% if dropdown_open %}
                             <div class="dropdown-menu">
                                 {% for item in dropdown_items %}
-                                <div dj-click="select_item" data-item="{{ item }}" class="dropdown-item">
+                                <div dj-click="select_item" dj-value-item="{{ item }}" class="dropdown-item">
                                     {{ item }}
                                 </div>
                                 {% endfor %}
@@ -865,15 +865,6 @@
                 <p class="demo-card-description">
                     Real-time messaging system demonstrating WebSocket
                     communication and live updates.
-                </p>
-            </a>
-
-            <a href="/demos/react/" class="demo-card">
-                <span class="demo-icon">⚛️</span>
-                <h3 class="demo-card-title">React Integration</h3>
-                <p class="demo-card-description">
-                    Hybrid approach combining server-side LiveView with
-                    client-side React components.
                 </p>
             </a>
 

@@ -10,6 +10,7 @@ Demonstrates:
 
 import time
 
+from djust import state
 from djust.decorators import event_handler
 from djust.tenants import TenantMixin, TenantInfo, TenantAwareMemoryBackend
 from djust_shared.views import BaseViewWithNavbar
@@ -72,34 +73,29 @@ class TenantDemoView(TenantMixin, BaseViewWithNavbar):
         tenant_id = request.GET.get("tenant", "acme")
         return DEMO_TENANTS.get(tenant_id) or DEMO_TENANTS["acme"]
 
+    # Tenant-scoped values live in the class-level store above and are loaded
+    # in mount(); the fields below are what the template renders. They are not
+    # persisted: the tenant store is the source of truth, and a session-saved
+    # copy would carry one tenant's values to another after a tenant switch.
+    counter = state(0)
+    messages = state(default_factory=list)
+    presence_list = state(default_factory=list, render=False)
+    presence_count = state(0)
+    tenant_theme = state("#6b7280")
+    tenant_plan = state("N/A")
+    tenant_max_users = state(0)
+    available_tenants = state(default_factory=list)
+
     def mount(self, request, **kwargs):
         # Ensure tenant is resolved for WebSocket mount (dispatch() isn't called
         # by the WebSocket consumer, so TenantMixin._ensure_tenant() needs
         # to be called explicitly here)
         self._ensure_tenant(request)
 
-        from djust_shared.components.ui import HeroSection, BackButton
-
-        # Render components to HTML strings for reliable VDOM serialization
-        self.hero_html = HeroSection(
-            title="Multi-Tenant Demo",
-            subtitle="Tenant isolation and context injection with djust",
-            icon="🏢",
-        ).render()
-        self.back_btn_html = BackButton(href="/demos/").render()
-
-        # Get or initialize tenant-scoped state
-        tenant_id = self.tenant.id if self.tenant else "unknown"
-        if tenant_id not in self._tenant_state:
-            self._tenant_state[tenant_id] = {
-                "counter": 0,
-                "messages": [],
-                "msg_counter": 0,
-            }
-
-        state = self._tenant_state[tenant_id]
-        self.counter = state["counter"]
-        self.messages = list(state["messages"])
+        tenant_id = self._tenant_id()
+        store = self._store()
+        self.counter = store["counter"]
+        self.messages = list(store["messages"])
 
         # Set up presence for this tenant
         self._presence_backend = TenantAwareMemoryBackend(tenant_id=tenant_id)
@@ -114,15 +110,11 @@ class TenantDemoView(TenantMixin, BaseViewWithNavbar):
         self.presence_list = self._presence_backend.list("tenant-demo")
         self.presence_count = len(self.presence_list)
 
-        # Computed tenant display values (set here so ContextMixin picks them up)
+        # Computed tenant display values
         if self.tenant:
             self.tenant_theme = self.tenant.get_setting("theme_color", "#6b7280")
             self.tenant_plan = self.tenant.get_setting("plan", "Free")
             self.tenant_max_users = self.tenant.get_setting("max_users", 10)
-        else:
-            self.tenant_theme = "#6b7280"
-            self.tenant_plan = "N/A"
-            self.tenant_max_users = 0
 
         # Available tenants for the switcher
         self.available_tenants = [
@@ -130,17 +122,28 @@ class TenantDemoView(TenantMixin, BaseViewWithNavbar):
             for tid, t in DEMO_TENANTS.items()
         ]
 
+    def _tenant_id(self):
+        return self.tenant.id if self.tenant else "unknown"
+
+    def _store(self):
+        """This tenant's entry in the class-level store, created on first use."""
+        return self._tenant_state.setdefault(
+            self._tenant_id(), {"counter": 0, "messages": [], "msg_counter": 0}
+        )
+
     @event_handler
     def increment(self, **kwargs):
         """Increment the tenant-scoped counter."""
-        self.counter = min(self.counter + 1, self.COUNTER_MAX)
-        self._save_state()
+        store = self._store()
+        store["counter"] = min(store["counter"] + 1, self.COUNTER_MAX)
+        self.counter = store["counter"]
 
     @event_handler
     def decrement(self, **kwargs):
         """Decrement the tenant-scoped counter."""
-        self.counter = max(self.counter - 1, self.COUNTER_MIN)
-        self._save_state()
+        store = self._store()
+        store["counter"] = max(store["counter"] - 1, self.COUNTER_MIN)
+        self.counter = store["counter"]
 
     @event_handler
     def add_message(self, text: str = "", **kwargs):
@@ -148,47 +151,38 @@ class TenantDemoView(TenantMixin, BaseViewWithNavbar):
         text = text.strip()
         if text:
             text = text[:self.MAX_TEXT_LENGTH]
-            tenant_id = self.tenant.id if self.tenant else "unknown"
-            state = self._tenant_state.get(tenant_id, {})
-            state["msg_counter"] = state.get("msg_counter", 0) + 1
-            self.messages.append({
-                "id": state["msg_counter"],
+            store = self._store()
+            store["msg_counter"] += 1
+            store["messages"].append({
+                "id": store["msg_counter"],
                 "text": text,
                 "time": time.strftime("%H:%M:%S"),
-                "tenant": tenant_id,
+                "tenant": self._tenant_id(),
             })
             # Cap message list — drop oldest on overflow
-            if len(self.messages) > self.MAX_MESSAGES:
-                self.messages = self.messages[-self.MAX_MESSAGES:]
-            self._save_state()
+            del store["messages"][:-self.MAX_MESSAGES]
+            self.messages = list(store["messages"])
 
     @event_handler
     def clear_messages(self, **kwargs):
         """Clear all messages for the current tenant."""
+        self._store()["messages"] = []
         self.messages = []
-        self._save_state()
-
-    def _save_state(self):
-        """Persist state back to class-level storage."""
-        tenant_id = self.tenant.id if self.tenant else "unknown"
-        self._tenant_state[tenant_id] = {
-            "counter": self.counter,
-            "messages": list(self.messages),
-            "msg_counter": self._tenant_state.get(tenant_id, {}).get("msg_counter", 0),
-        }
 
     def get_context_data(self, **kwargs):
+        from djust_shared.components.ui import HeroSection, BackButton
+
         context = super().get_context_data(**kwargs)
 
-        # Convert TenantInfo to a plain dict for JSON-serializable VDOM context
-        # (TenantInfo uses __slots__ and doesn't serialize for VDOM updates)
-        if self.tenant:
-            context["tenant"] = {
-                "id": self.tenant.id,
-                "name": self.tenant.name,
-                "settings": self.tenant.settings,
-            }
-        else:
-            context["tenant"] = None
+        # Render components to HTML strings for reliable VDOM serialization
+        context["hero_html"] = HeroSection(
+            title="Multi-Tenant Demo",
+            subtitle="Tenant isolation and context injection with djust",
+            icon="🏢",
+        ).render()
+        context["back_btn_html"] = BackButton(href="/demos/").render()
+        context["messages_count"] = len(self.messages)
 
+        # ``tenant`` is TenantMixin's own render value (the resolved TenantInfo);
+        # the template reads its id and name.
         return context

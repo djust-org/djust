@@ -691,6 +691,11 @@ benchmark-turn: ## Complete event turns, explicit vs legacy exposure, 3 shapes (
 
 ##@ Database
 
+.PHONY: demo-tests
+demo-tests: ## Run the demo project's own tests (rentals views and components); CI's demo-checks job runs it
+	@cd examples/demo_project && PYTHONPATH=../..:../../python $(PYTHON) -m pytest -p no:cacheprovider -o addopts= \
+		--rootdir=. --ds=demo_project.settings djust_rentals/tests djust_rentals/components/tests -q
+
 .PHONY: migrate
 migrate: ## Run Django migrations
 	@echo "$(GREEN)Running migrations...$(NC)"

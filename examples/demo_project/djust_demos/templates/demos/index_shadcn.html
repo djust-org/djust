@@ -517,7 +517,7 @@
                             {% if dropdown_open %}
                             <div class="absolute top-full left-0 right-0 mt-2 rounded-md border border-slate-800 bg-slate-900 shadow-lg overflow-hidden z-50">
                                 {% for item in dropdown_items %}
-                                <div dj-click="select_item" data-item="{{ item }}" class="px-4 py-3 text-sm text-slate-50 hover:bg-slate-800 cursor-pointer transition-colors">
+                                <div dj-click="select_item" dj-value-item="{{ item }}" class="px-4 py-3 text-sm text-slate-50 hover:bg-slate-800 cursor-pointer transition-colors">
                                     {{ item }}
                                 </div>
                                 {% endfor %}

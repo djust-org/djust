@@ -7,8 +7,9 @@ This demonstrates the shadcn-like component approach where components are:
 3. Customizable (can be extended and configured)
 """
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.components.layout import NavbarComponent, NavItem
+from djust.decorators import event_handler
 
 
 class BaseViewWithNavbar(LiveView):
@@ -19,7 +20,7 @@ class BaseViewWithNavbar(LiveView):
     doesn't use Django's context processors.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -69,9 +70,8 @@ class IndexViewWithNavbar(BaseViewWithNavbar):
 
     template_name = 'index_with_navbar.html'
 
-    def mount(self, request, **kwargs):
-        self.title = "djust - Reactive Django"
-        self.subtitle = "Build real-time apps with Python and Rust"
+    title = state("djust - Reactive Django")
+    subtitle = state("Build real-time apps with Python and Rust")
 
 
 # Alternative: Directly using navbar in a single view
@@ -83,11 +83,10 @@ class CustomNavbarView(LiveView):
     on a per-view basis.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = 'custom_navbar.html'
 
-    def mount(self, request, **kwargs):
-        self.title = "Custom Navbar Example"
+    title = state("Custom Navbar Example")
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -122,42 +121,34 @@ class DynamicNavbarView(LiveView):
     - Dynamically updating the active item
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = 'dynamic_navbar.html'
 
-    def mount(self, request, **kwargs):
-        self.current_page = "Home"
+    # The navbar is built per render from these fields; a component is never
+    # view state. persist="server" keeps them across the HTTP fallback.
+    current_page = state("Home", persist="server")
+    show_admin = state(False, persist="server", render=False)
 
-        # Create base navbar
-        self.navbar = NavbarComponent(
-            brand_name="Dynamic App",
-            brand_href="/",
-            items=[
-                NavItem("Home", "/", active=True),
-                NavItem("About", "/about/"),
-            ],
-        )
+    _PAGE_URLS = {"Home": "/", "About": "/about/", "Admin": "/admin/"}
 
-    def add_admin_menu(self):
+    @event_handler
+    def add_admin_menu(self, **kwargs):
         """Event handler to add admin menu items"""
-        self.navbar.add_item(NavItem("Admin", "/admin/", icon="🔧"))
+        self.show_admin = True
 
-    def navigate_to(self, page: str):
+    @event_handler
+    def navigate_to(self, page: str = "", **kwargs):
         """Event handler to change active page"""
-        self.current_page = page
-
-        # Update active item
-        page_urls = {
-            "Home": "/",
-            "About": "/about/",
-            "Admin": "/admin/",
-        }
-
-        if page in page_urls:
-            self.navbar.set_active(page_urls[page])
+        if page in self._PAGE_URLS:
+            self.current_page = page
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['navbar'] = self.navbar
-        context['current_page'] = self.current_page
-        return context
+        active = self._PAGE_URLS.get(self.current_page, "/")
+        items = [
+            NavItem("Home", "/", active=active == "/"),
+            NavItem("About", "/about/", active=active == "/about/"),
+        ]
+        if self.show_admin:
+            items.append(NavItem("Admin", "/admin/", icon="🔧", active=active == "/admin/"))
+        navbar = NavbarComponent(brand_name="Dynamic App", brand_href="/", items=items)
+        return super().get_context_data(navbar=navbar, **kwargs)

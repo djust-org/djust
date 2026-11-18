@@ -86,6 +86,8 @@ Testing localStorage auto-save with 500ms debounce, auto-restore, and draft clea
                 after 500ms of inactivity. Refresh the page to see it restore automatically!
             </div>
 
+            {# A form: dj-submit sends the three named fields to save_article(). #}
+            <form dj-submit="save_article">
             <div class="mb-3">
                 <label class="form-label fw-semibold">Title</label>
                 <input
@@ -123,16 +125,14 @@ Testing localStorage auto-save with 500ms debounce, auto-restore, and draft clea
 
             <div class="d-flex gap-2">
                 <button
+                    type="submit"
                     class="btn btn-primary"
-                    dj-click="save_article"
-                    data-title="title"
-                    data-content="content"
-                    data-author="author"
                 >
                     <i class="bi bi-check-circle me-2"></i>
                     Save Article
                 </button>
                 <button
+                    type="button"
                     class="btn btn-outline-secondary"
                     dj-click="discard_draft"
                 >
@@ -140,6 +140,7 @@ Testing localStorage auto-save with 500ms debounce, auto-restore, and draft clea
                     Discard Draft
                 </button>
             </div>
+            </form>
 
             {% if last_saved %}
             <div class="alert alert-success mt-3">

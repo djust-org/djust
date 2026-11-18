@@ -69,7 +69,7 @@ class IndexView(LiveView):
         self.demo_counter += 1
 
     @event_handler
-    def on_search_demo(self, value="", **kwargs):
+    def on_search_demo(self, value: str = "", **kwargs):
         """Search demo: filter languages"""
         self.search_query = value
         if value:
@@ -81,7 +81,7 @@ class IndexView(LiveView):
             self.filtered_languages = self.all_languages
 
     @event_handler
-    def add_todo(self, todo_text="", **kwargs):
+    def add_todo(self, todo_text: str = "", **kwargs):
         """Todo demo: add a new todo from user input"""
         if todo_text.strip():
             self.demo_todos.append({
@@ -91,20 +91,14 @@ class IndexView(LiveView):
             del self.demo_todos[:-MAX_DEMO_TODOS]  # keep the newest MAX_DEMO_TODOS
 
     @event_handler
-    def toggle_todo(self, index=0, **kwargs):
+    def toggle_todo(self, index: int = 0, **kwargs):
         """Todo demo: toggle todo completion"""
-        if index == '' or index is None:
-            index = 0
-        index = int(index)
         if 0 <= index < len(self.demo_todos):
             self.demo_todos[index]['done'] = not self.demo_todos[index]['done']
 
     @event_handler
-    def delete_todo(self, index=0, **kwargs):
+    def delete_todo(self, index: int = 0, **kwargs):
         """Todo demo: delete a todo"""
-        if index == '' or index is None:
-            index = 0
-        index = int(index)
         if 0 <= index < len(self.demo_todos):
             self.demo_todos.pop(index)
 
@@ -149,8 +143,7 @@ class CounterView(BaseViewWithNavbar):
     """
     template_name = "demos/counter.html"
 
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = state(0, persist="server")
 
     @event_handler
     def increment(self):
@@ -171,12 +164,11 @@ class TodoView(BaseViewWithNavbar):
     """
     template_name = "demos/todo.html"
 
-    def mount(self, request, **kwargs):
-        self.todos = []
-        self.next_id = 1
+    todos = state(default_factory=list, persist="server")
+    next_id = state(1, persist="server", render=False)
 
     @event_handler
-    def add_todo(self, text="", **kwargs):
+    def add_todo(self, text: str = "", **kwargs):
         if text.strip():
             self.todos.append({
                 'id': self.next_id,
@@ -186,29 +178,21 @@ class TodoView(BaseViewWithNavbar):
             self.next_id += 1
 
     @event_handler
-    def toggle_todo(self, id=None, **kwargs):
-        # Accept both 'id' and 'todo_id' for backwards compatibility
-        item_id = id or kwargs.get('todo_id')
-        if item_id:
-            for todo in self.todos:
-                if todo['id'] == int(item_id):
-                    todo['done'] = not todo['done']
-                    break
+    def toggle_todo(self, id: int = 0, **kwargs):
+        for todo in self.todos:
+            if todo['id'] == id:
+                todo['done'] = not todo['done']
+                break
 
     @event_handler
-    def delete_todo(self, id=None, **kwargs):
-        # Accept both 'id' and 'todo_id' for backwards compatibility
-        item_id = id or kwargs.get('todo_id')
-        if item_id:
-            self.todos = [t for t in self.todos if t['id'] != int(item_id)]
+    def delete_todo(self, id: int = 0, **kwargs):
+        self.todos = [t for t in self.todos if t['id'] != id]
 
-    @property
-    def active_count(self):
-        return sum(1 for t in self.todos if not t['done'])
-
-    @property
-    def done_count(self):
-        return sum(1 for t in self.todos if t['done'])
+    def get_context_data(self, **kwargs):
+        done = sum(1 for t in self.todos if t['done'])
+        return super().get_context_data(
+            active_count=len(self.todos) - done, done_count=done, **kwargs
+        )
 
 
 class ChatView(BaseViewWithNavbar):
@@ -217,12 +201,14 @@ class ChatView(BaseViewWithNavbar):
     """
     template_name = "demos/chat.html"
 
+    messages = state(default_factory=list, persist="server")
+    username = state("Guest")
+
     def mount(self, request, **kwargs):
-        self.messages = []
         self.username = request.user.username if request.user.is_authenticated else "Guest"
 
     @event_handler
-    def send_message(self, message="", **kwargs):
+    def send_message(self, message: str = "", **kwargs):
         if message.strip():
             import datetime
             self.messages.append({
@@ -230,46 +216,6 @@ class ChatView(BaseViewWithNavbar):
                 'text': message,
                 'time': datetime.datetime.now().strftime("%H:%M"),
             })
-
-
-class ReactDemoView(BaseViewWithNavbar):
-    """
-    React integration demo - showcases React components within LiveView templates
-
-    This demonstrates:
-    - Using JSX-style component syntax in templates
-    - Server-side rendering of React components with Rust
-    - Client-side hydration for interactivity
-    - Mixing server-side LiveView state with client-side React state
-    """
-    template_name = "demos/react.html"
-
-    def mount(self, request, **kwargs):
-        """Initialize component state"""
-        # Import React components
-        from . import react_components  # Ensure components are registered
-
-        self.server_count = 0
-        self.client_count = 0
-        self.todos = [
-            {'text': 'Try React integration', 'done': False},
-            {'text': 'Build amazing apps', 'done': False},
-        ]
-
-    @event_handler
-    def increment_server(self):
-        """Increment server-side counter (LiveView state)"""
-        self.server_count += 1
-
-    @event_handler
-    def add_todo_item(self, text="", **kwargs):
-        """Add a new todo item"""
-        if text.strip():
-            self.todos.append({'text': text, 'done': False})
-
-    def delete_todo_item(self, text=""):
-        """Delete a todo item by text"""
-        self.todos = [t for t in self.todos if t['text'] != text]
 
 
 class PerformanceTestView(BaseViewWithNavbar):
@@ -284,12 +230,11 @@ class PerformanceTestView(BaseViewWithNavbar):
     """
     template_name = "demos/performance.html"
 
-    def mount(self, request, **kwargs):
-        """Initialize with empty state"""
-        self.items = []
-        self.next_id = 1
-        self.filter_text = ""
-        self.sort_by = "name"
+    # The raw list; get_context_data() renders it filtered and sorted.
+    all_items = state(default_factory=list, persist="server", render=False)
+    next_id = state(1, persist="server", render=False)
+    filter_text = state("", persist="server")
+    sort_by = state("name", persist="server")
 
     def _generate_items(self, count):
         """Generate sample items"""
@@ -314,14 +259,11 @@ class PerformanceTestView(BaseViewWithNavbar):
 
     def _apply_filter_and_sort(self):
         """Apply current filter and sort settings"""
-        if not hasattr(self, '_items'):
-            return []
-
         # Filter
         if self.filter_text:
-            filtered = [item for item in self._items if self.filter_text.lower() in item['name'].lower()]
+            filtered = [item for item in self.all_items if self.filter_text.lower() in item['name'].lower()]
         else:
-            filtered = self._items[:]
+            filtered = self.all_items[:]
 
         # Sort
         if self.sort_by == "name":
@@ -333,71 +275,52 @@ class PerformanceTestView(BaseViewWithNavbar):
 
         return filtered
 
-    @property
-    def items(self):
-        """Return filtered and sorted items"""
-        return self._apply_filter_and_sort()
-
-    @items.setter
-    def items(self, value):
-        """Set the raw items list"""
-        self._items = value
-
-    @property
-    def item_count(self):
-        return len(self._items) if hasattr(self, '_items') else 0
-
-    @property
-    def selected_count(self):
-        if not hasattr(self, '_items'):
-            return 0
-        return sum(1 for item in self._items if item.get('selected', False))
+    def get_context_data(self, **kwargs):
+        return super().get_context_data(
+            items=self._apply_filter_and_sort(),
+            item_count=len(self.all_items),
+            selected_count=sum(1 for item in self.all_items if item.get('selected', False)),
+            **kwargs,
+        )
 
     @event_handler
     def add_items_10(self):
         """Add 10 items"""
-        if not hasattr(self, '_items'):
-            self._items = []
-        self._items.extend(self._generate_items(10))
+        self.all_items.extend(self._generate_items(10))
 
     @event_handler
     def add_items_100(self):
         """Add 100 items"""
-        if not hasattr(self, '_items'):
-            self._items = []
-        self._items.extend(self._generate_items(100))
+        self.all_items.extend(self._generate_items(100))
 
     @event_handler
     def add_items_1000(self):
         """Add 1000 items"""
-        if not hasattr(self, '_items'):
-            self._items = []
-        self._items.extend(self._generate_items(1000))
+        self.all_items.extend(self._generate_items(1000))
 
     @event_handler
     def clear_all(self):
         """Clear all items"""
-        self._items = []
+        self.all_items = []
         self.next_id = 1
         self.filter_text = ""
 
     @event_handler
-    def filter_items(self, value="", **kwargs):
+    def filter_items(self, value: str = "", **kwargs):
         """Update filter text"""
         self.filter_text = value
 
     @event_handler
-    def sort_items(self, value="name", **kwargs):
+    def sort_items(self, value: str = "name", **kwargs):
         """Update sort order"""
         self.sort_by = value
 
     @event_handler
-    def toggle_item(self, **kwargs):
+    def toggle_item(self, id: int = 0, **kwargs):
         """Toggle item selection"""
-        item_id = kwargs.get('id')
-        if item_id and hasattr(self, '_items'):
-            item_id = int(item_id)
-            for item in self._items:
+        item_id = id
+        if item_id:
+            for item in self.all_items:
                 if item['id'] == item_id:
                     item['selected'] = not item.get('selected', False)
                     break
@@ -405,30 +328,26 @@ class PerformanceTestView(BaseViewWithNavbar):
     @event_handler
     def select_all(self):
         """Select all items"""
-        if hasattr(self, '_items'):
-            for item in self._items:
-                item['selected'] = True
+        for item in self.all_items:
+            item['selected'] = True
 
     @event_handler
     def deselect_all(self):
         """Deselect all items"""
-        if hasattr(self, '_items'):
-            for item in self._items:
-                item['selected'] = False
+        for item in self.all_items:
+            item['selected'] = False
 
     @event_handler
     def delete_selected(self):
         """Delete all selected items"""
-        if hasattr(self, '_items'):
-            self._items = [item for item in self._items if not item.get('selected', False)]
+        self.all_items = [item for item in self.all_items if not item.get('selected', False)]
 
     @event_handler
-    def toggle_priority(self, **kwargs):
+    def toggle_priority(self, id: int = 0, **kwargs):
         """Toggle item priority"""
-        item_id = kwargs.get('id')
-        if item_id and hasattr(self, '_items'):
-            item_id = int(item_id)
-            for item in self._items:
+        item_id = id
+        if item_id:
+            for item in self.all_items:
                 if item['id'] == item_id:
                     item['priority'] = not item.get('priority', False)
                     break
@@ -436,18 +355,16 @@ class PerformanceTestView(BaseViewWithNavbar):
     @event_handler
     def toggle_priority_selected(self):
         """Toggle priority for all selected items"""
-        if hasattr(self, '_items'):
-            for item in self._items:
-                if item.get('selected', False):
-                    item['priority'] = not item.get('priority', False)
+        for item in self.all_items:
+            if item.get('selected', False):
+                item['priority'] = not item.get('priority', False)
 
     @event_handler
-    def delete_item(self, **kwargs):
+    def delete_item(self, id: int = 0, **kwargs):
         """Delete a specific item"""
-        item_id = kwargs.get('id')
-        if item_id and hasattr(self, '_items'):
-            item_id = int(item_id)
-            self._items = [item for item in self._items if item['id'] != item_id]
+        item_id = id
+        if item_id:
+            self.all_items = [item for item in self.all_items if item['id'] != item_id]
 
 
 class ProductDataTableView(BaseViewWithNavbar):
@@ -464,6 +381,9 @@ class ProductDataTableView(BaseViewWithNavbar):
 
     # Disable normal LiveView patching for this view
     use_dom_patching = False
+
+    # render=False: get_context_data() renders the rows and their stats.
+    products = state(default_factory=list, persist="server", render=False)
 
     def get_template_OLD(self):
         return """
@@ -978,17 +898,19 @@ class ProductDataTableView(BaseViewWithNavbar):
         import json
 
         try:
+            from djust.decorators import is_event_handler
+
             # Ensure products is initialized
-            if not hasattr(self, 'products'):
+            if not self.products:
                 self.products = self._generate_sample_products(20)
 
             data = json.loads(request.body)
             event = data.get('event')
             params = data.get('params', {})
 
-            # Call the event handler
-            handler = getattr(self, event, None)
-            if handler and callable(handler):
+            # Call the event handler (only an @event_handler is a client event)
+            handler = getattr(self, event, None) if isinstance(event, str) else None
+            if handler and is_event_handler(handler):
                 if params:
                     handler(**params)
                 else:
@@ -1024,6 +946,7 @@ class ProductDataTableView(BaseViewWithNavbar):
         new_products = self._generate_sample_products(10, start_id=len(self.products) + 1)
         self.products.extend(new_products)
 
+    @event_handler
     def clear_products(self):
         """Clear all products"""
         self.products = []

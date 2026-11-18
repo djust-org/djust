@@ -27,7 +27,6 @@ urlpatterns = [
     path("browser-smoke/", BrowserSmokeView.as_view(), name="browser-smoke"),
     # ADR-038 E5 live matrix (tests/playwright/test_exposure_matrix.py).
     path("exposure/", ExposureMatrixView.as_view(), name="exposure"),
-    path("exposure-legacy/", LegacyExposureMatrixView.as_view(), name="exposure-legacy"),
     # ADR-036 P2 live matrix (tests/playwright/test_strict_parameters.py).
     path("strict-parameters/", StrictParametersView.as_view(), name="strict-parameters"),
     # ADR-035 F2 live surface (tests/playwright/test_model_form.py).
@@ -50,7 +49,6 @@ urlpatterns = [
     path("table-select/", TableSelectView.as_view(), name="table-select"),
     path("todo/", TodoView.as_view(), name="todo"),
     path("chat/", ChatView.as_view(), name="chat"),
-    path("react/", ReactDemoView.as_view(), name="react"),
     path("performance/", PerformanceTestView.as_view(), name="performance"),
     path("datatable/", ProductDataTableView.as_view(), name="datatable"),
     # Component Demos

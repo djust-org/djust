@@ -32,7 +32,7 @@ Why this handler is ``async def`` (and streams explicitly):
 
 import asyncio
 
-from djust import render_markdown
+from djust import render_markdown, state
 from djust.decorators import event_handler
 from djust_shared.views import BaseViewWithNavbar
 
@@ -76,10 +76,10 @@ class MarkdownStreamDemoView(BaseViewWithNavbar):
 
     template_name = "demos/markdown_stream_demo.html"
 
-    def mount(self, request, **kwargs):
-        # Public — auto-exposed to the template.
-        self.llm_output = ""
-        self.streaming = False
+    # Declared state renders in the template. Not persisted: a stream is tied
+    # to the live connection, and a fresh mount starts from an empty reply.
+    llm_output = state("")
+    streaming = state(False)
 
     @event_handler
     def start_stream(self, **kwargs):

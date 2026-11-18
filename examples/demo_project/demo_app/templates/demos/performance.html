@@ -263,7 +263,7 @@
                                                class="item-checkbox"
                                                {% if item.selected %}checked{% endif %}
                                                dj-change="toggle_item"
-                                               data-id="{{ item.id }}" />
+                                               dj-value-id="{{ item.id }}" />
                                         <div class="item-content">
                                             <span class="item-name">{{ item.name }}</span>
                                             <span class="item-timestamp">{{ item.timestamp }}</span>
@@ -273,11 +273,11 @@
                                             <span class="priority-badge">High Priority</span>
                                             {% endif %}
                                             <button dj-click="toggle_priority"
-                                                    data-id="{{ item.id }}"
+                                                    dj-value-id="{{ item.id }}"
                                                     class="btn-secondary-modern"
                                                     style="padding: 0.25rem 0.5rem; font-size: 0.875rem;">★</button>
                                             <button dj-click="delete_item"
-                                                    data-id="{{ item.id }}"
+                                                    dj-value-id="{{ item.id }}"
                                                     class="btn-secondary-modern"
                                                     style="padding: 0.25rem 0.5rem; font-size: 1rem; border-color: var(--color-error); color: var(--color-error);">×</button>
                                         </div>
@@ -311,7 +311,8 @@
                                     <span class="code-badge-modern">Python</span>
                                 </div>
                                 <div class="code-block-modern">
-                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView, state
+from djust.decorators import event_handler
 
 class PerformanceTestView(LiveView):
     """
@@ -319,37 +320,38 @@ class PerformanceTestView(LiveView):
     """
     template_name = "demos/performance.html"
 
-    def mount(self, request, **kwargs):
-        self.items = []
-        self.next_id = 1
-        self.filter_text = ""
-        self.sort_by = "name"
+    items = state(default_factory=list, persist="server", render=False)
+    filter_text = state("", persist="server")
+    sort_by = state("name", persist="server")
 
+    @event_handler
     def add_items_100(self):
         """Add 100 items for testing"""
-        new_items = self._generate_items(100)
-        self._items.extend(new_items)
+        self.items.extend(self._generate_items(100))
 
-    def filter_items(self, value=""):
+    @event_handler
+    def filter_items(self, value: str = ""):
         """Real-time filtering"""
         self.filter_text = value
 
-    def sort_items(self, value="name"):
+    @event_handler
+    def sort_items(self, value: str = "name"):
         """Change sort order"""
         self.sort_by = value
 
-    def toggle_item(self, **kwargs):
+    @event_handler
+    def toggle_item(self, id: int = 0):
         """Toggle item selection"""
-        item_id = int(kwargs.get('id'))
-        for item in self._items:
-            if item['id'] == item_id:
+        for item in self.items:
+            if item['id'] == id:
                 item['selected'] = not item['selected']
                 break
 
-    @property
-    def items(self):
-        """Return filtered and sorted items"""
-        return self._apply_filter_and_sort()</code></pre>
+    def get_context_data(self, **kwargs):
+        """Render the filtered and sorted items"""
+        return super().get_context_data(
+            items=self._apply_filter_and_sort(), **kwargs
+        )</code></pre>
                                 </div>
                             </div>
 
@@ -376,7 +378,7 @@ class PerformanceTestView(LiveView):
     &lt;input type="checkbox"
            &#123;% if item.selected %&#125;checked&#123;% endif %&#125;
            dj-change="toggle_item"
-           data-id="&#123;&#123; item.id &#125;&#125;" /&gt;
+           dj-value-id="&#123;&#123; item.id &#125;&#125;" /&gt;
     &lt;span&gt;&#123;&#123; item.name &#125;&#125;&lt;/span&gt;
   &lt;/div&gt;
 &#123;% endfor %&#125;</code></pre>

@@ -179,10 +179,11 @@ class TestTenantIsolation:
         view = _mount_tenant_view("acme")
         context = view.get_context_data()
 
-        assert context["tenant"]["id"] == "acme"
-        assert context["tenant"]["name"] == "Acme Corp"
+        # TenantMixin's own render value: the resolved TenantInfo (#4187).
+        assert context["tenant"].id == "acme"
+        assert context["tenant"].name == "Acme Corp"
         # No Globex data in context
-        assert "globex" not in str(context["tenant"])
+        assert "globex" not in repr(context["tenant"]).lower()
 
     def test_tenant_switching_preserves_each_tenants_state(self):
         """Full round-trip: Acme +3, Globex +1, re-mount Acme → still 3."""
@@ -320,14 +321,15 @@ class TestTenantDemoView:
     def test_counter_clamped(self):
         """Counter must be clamped to COUNTER_MAX (999)."""
         view = _mount_tenant_view("acme")
-        view.counter = 998
+        # The per-tenant store is the counter's source of truth (#4187).
+        view._store()["counter"] = 998
         view.increment()
         assert view.counter == 999
         view.increment()
         assert view.counter == 999, "Counter should not exceed 999"
 
         # Test lower bound
-        view.counter = -998
+        view._store()["counter"] = -998
         view.decrement()
         assert view.counter == -999
         view.decrement()
@@ -374,16 +376,17 @@ class TestTenantDemoView:
         view.clear_messages()
         assert view.messages == []
 
-    def test_get_context_data_converts_tenant_to_dict(self):
-        """context['tenant'] should be a plain dict with id, name, settings."""
+    def test_get_context_data_renders_the_resolved_tenant(self):
+        """context['tenant'] is TenantMixin's resolved TenantInfo, which the
+        template reads by attribute; the view no longer replaces it (#4187:
+        under explicit exposure that is a provider collision)."""
         view = _mount_tenant_view("acme")
         context = view.get_context_data()
         tenant = context["tenant"]
 
-        assert isinstance(tenant, dict)
-        assert tenant["id"] == "acme"
-        assert tenant["name"] == "Acme Corp"
-        assert "settings" in tenant
+        assert tenant.id == "acme"
+        assert tenant.name == "Acme Corp"
+        assert tenant.get_setting("plan") == "Enterprise"
 
     def test_ensure_tenant_in_mount(self):
         """self.tenant must be set after mount() — WebSocket compat."""
@@ -422,12 +425,14 @@ class TestPWADemoView:
     """Test PWADemoView event handlers and hardening."""
 
     def test_mount_initializes_state(self):
-        """mount() sets notes, note_counter, hero_html, back_btn_html."""
+        """notes and note_counter start empty; hero_html and back_btn_html are
+        render values from get_context_data() (#4187)."""
         view = _mount_pwa_view()
         assert view.notes == []
         assert view.note_counter == 0
-        assert isinstance(view.hero_html, str) and len(view.hero_html) > 0
-        assert isinstance(view.back_btn_html, str) and len(view.back_btn_html) > 0
+        context = view.get_context_data()
+        assert isinstance(context["hero_html"], str) and len(context["hero_html"]) > 0
+        assert isinstance(context["back_btn_html"], str) and len(context["back_btn_html"]) > 0
 
     def test_add_note(self):
         """add_note() appends a note with id, text, time keys."""
@@ -481,8 +486,7 @@ class TestPWADemoView:
     def test_manifest_preview_is_json(self):
         """manifest_preview should be a valid JSON string."""
         view = _mount_pwa_view()
-        view.get_context_data()  # triggers manifest_preview creation
-        parsed = json.loads(view.manifest_preview)
+        parsed = json.loads(view.get_context_data()["manifest_preview"])
         assert isinstance(parsed, dict)
         assert "name" in parsed
 

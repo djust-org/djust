@@ -1438,6 +1438,16 @@ jobs:
         env:
           PYTHONPATH: .
 
+      # The demo project's own tests (rentals views and components, #4187):
+      # nothing else ran them, so a failing escape test went unnoticed. Same
+      # command as `make demo-tests` (which also puts ../../python first, for a
+      # worktree; here the installed prebuilt wheel is djust).
+      - name: Run the demo project's own tests (BLOCKING)
+        run: |
+          cd examples/demo_project
+          PYTHONPATH=../.. uv run --no-sync python -m pytest -p no:cacheprovider -o addopts= \
+            --rootdir=. --ds=demo_project.settings djust_rentals/tests djust_rentals/components/tests -q
+
   # The benchmark-gated job tests/benchmarks/conftest.py has claimed exists
   # since it was written (#2156). It did not: a grep for `--benchmark-only`
   # across all twelve workflows returned nothing.

@@ -107,7 +107,7 @@ class NoTemplateDemo(LiveView):
                                 {% for item in items %}
                                 <div class="d-flex justify-content-between align-items-center p-2 border-bottom">
                                     <span>{{ item }}</span>
-                                    <button class="btn btn-sm btn-danger" dj-click="remove_item" data-index="{{ forloop.counter0 }}">×</button>
+                                    <button class="btn btn-sm btn-danger" dj-click="remove_item" dj-value-index="{{ forloop.counter0 }}">×</button>
                                 </div>
                                 {% endfor %}
                             {% else %}

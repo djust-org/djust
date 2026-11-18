@@ -7,6 +7,7 @@ Demonstrates:
 - `dj-prefetch` — hover/touch intent-based prefetch for fast navigation.
 """
 
+from djust import state
 from djust.decorators import server_function
 from djust_shared.views import BaseViewWithNavbar
 
@@ -46,11 +47,10 @@ class ServerFunctionDemoView(BaseViewWithNavbar):
         {"id": 8, "name": "Coffee Mug", "price": 14.00},
     ]
 
-    def mount(self, request, **kwargs):
-        # State on the server — the @server_function does NOT touch this.
-        # It's here to prove the "no re-render" contract: invoking
-        # djust.call should not modify ``ping_count``.
-        self.ping_count = 0
+    # State on the server — the @server_function does NOT touch this.
+    # It's here to prove the "no re-render" contract: invoking
+    # djust.call should not modify ``ping_count``.
+    ping_count = state(0)
 
     @server_function
     def search_products(self, q: str = "", **kwargs):

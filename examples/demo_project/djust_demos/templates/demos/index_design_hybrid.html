@@ -1013,7 +1013,7 @@
                         {% if dropdown_open %}
                         <div class="dropdown-menu">
                             {% for item in dropdown_items %}
-                            <div dj-click="select_item" data-item="{{ item }}" class="dropdown-item">
+                            <div dj-click="select_item" dj-value-item="{{ item }}" class="dropdown-item">
                                 {{ item }}
                             </div>
                             {% endfor %}

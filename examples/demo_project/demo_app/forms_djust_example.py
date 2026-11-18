@@ -9,6 +9,8 @@ Key Differences:
 - Djust: Server-side state management, LiveView with real-time updates
 """
 
+from typing import Any
+
 from django import forms
 from django.contrib.auth.models import User
 from djust import LiveView
@@ -276,7 +278,7 @@ class StatusChangeFormView(FormMixin, LiveView):
     # ========================================================================
 
     @event_handler
-    def on_employee_change(self, value="", employee_id=None, **kwargs):
+    def on_employee_change(self, value: str = "", employee_id: Any = None, **kwargs):
         """
         Handle employee selection change.
         Auto-populates fields from employee profile.
@@ -306,7 +308,7 @@ class StatusChangeFormView(FormMixin, LiveView):
                 pass
 
     @event_handler
-    def on_business_line_change(self, value="", business_line_id=None, **kwargs):
+    def on_business_line_change(self, value: str = "", business_line_id: Any = None, **kwargs):
         """
         Handle business line change.
         Filters executive_approver dropdown.
@@ -317,7 +319,7 @@ class StatusChangeFormView(FormMixin, LiveView):
         # Form will re-render with filtered executive_approver options
 
     @event_handler
-    def on_project_duration_change(self, value="", duration=None, **kwargs):
+    def on_project_duration_change(self, value: str = "", duration: Any = None, **kwargs):
         """
         Handle project duration change.
         Shows/hides expected_end_date field.
@@ -327,22 +329,22 @@ class StatusChangeFormView(FormMixin, LiveView):
         self.show_expected_end_date = (duration or value) == "over_12"
 
     @event_handler
-    def on_needs_company_toggle(self, checked):
+    def on_needs_company_toggle(self, checked: bool):
         """Toggle company change fields visibility"""
         self.show_company_fields = checked
 
     @event_handler
-    def on_needs_supervisor_toggle(self, checked):
+    def on_needs_supervisor_toggle(self, checked: bool):
         """Toggle supervisor change fields visibility"""
         self.show_supervisor_fields = checked
 
     @event_handler
-    def on_needs_projects_toggle(self, checked):
+    def on_needs_projects_toggle(self, checked: bool):
         """Toggle project information fields visibility"""
         self.show_project_fields = checked
 
     @event_handler
-    def on_needs_meals_toggle(self, checked):
+    def on_needs_meals_toggle(self, checked: bool):
         """Toggle meals per diem fields visibility"""
         self.show_meals_fields = checked
 
@@ -358,7 +360,7 @@ class StatusChangeFormView(FormMixin, LiveView):
         self.form.data["total_monthly_meals_per_diem"] = days * rate
 
     @event_handler
-    def toggle_section(self, section_id):
+    def toggle_section(self, section_id: str):
         """Toggle section expansion (replaces React state)"""
         self.sections_expanded[section_id] = not self.sections_expanded.get(section_id, True)
 

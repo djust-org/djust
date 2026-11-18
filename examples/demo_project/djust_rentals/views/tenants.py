@@ -4,6 +4,9 @@ Tenant Management Views
 CRUD operations for tenants with search and filtering.
 """
 
+from typing import Any
+
+from djust import state
 from djust_shared.views import BaseViewWithNavbar
 from djust.decorators import debounce, event_handler
 from djust_shared.components.ui import HeroSection
@@ -24,14 +27,10 @@ class TenantListView(BaseViewWithNavbar):
     """
     template_name = 'rentals/tenant_list.html'
 
-    def mount(self, request, **kwargs):
-        """Initialize tenant list state"""
-        # Search state
-        self.search_query = ""
-        self.filter_status = "all"  # all, active, inactive
-
-        # Load tenants
-        self._refresh_tenants()
+    # Search and filter inputs; persist="server" keeps them across the HTTP
+    # fallback and a reconnect. The list is queried per render from them.
+    search_query = state("", persist="server")
+    filter_status = state("all", persist="server")  # all, active, inactive
 
     def _refresh_tenants(self):
         """Refresh tenant list based on current filters"""
@@ -65,8 +64,6 @@ class TenantListView(BaseViewWithNavbar):
             active_tenant_ids = Lease.objects.filter(status='active').values_list('tenant_id', flat=True)
             tenants = tenants.exclude(id__in=active_tenant_ids)
 
-        # Store as private variable to avoid auto-JIT serialization
-        # We'll assign to self.tenants in get_context_data() instead
         self._tenants = tenants.order_by('user__last_name', 'user__first_name')
 
     @event_handler()
@@ -74,20 +71,15 @@ class TenantListView(BaseViewWithNavbar):
     def search(self, query: str = "", **kwargs):
         """Search tenants with debouncing"""
         self.search_query = query
-        self._refresh_tenants()
 
     @event_handler()
     def filter_by_status(self, status: str = "all", **kwargs):
         """Filter tenants by lease status"""
         self.filter_status = status
-        self._refresh_tenants()
 
     def get_context_data(self, **kwargs):
         """Add tenant list context"""
-        # Store tenants as instance variable for JIT serialization
-        self.tenants = self._tenants
-
-        # Call parent - JIT serializes 'tenants' with Rust + auto-generates 'tenants_count'
+        self._refresh_tenants()
         context = super().get_context_data(**kwargs)
 
         # Create page header (do this in get_context_data so it's available for every render)
@@ -172,44 +164,44 @@ class TenantDetailView(BaseViewWithNavbar):
 
     def mount(self, request, pk=None, **kwargs):
         """Initialize tenant detail view"""
-        self.tenant_id = pk
+        self._tenant_id = pk
 
         # Load tenant
         try:
-            self.tenant = Tenant.objects.select_related('user').get(pk=pk)
+            self._tenant = Tenant.objects.select_related('user').get(pk=pk)
         except Tenant.DoesNotExist:
-            self.tenant = None
-            self.error_message = f"Tenant with ID {pk} not found"
+            self._tenant = None
+            self._error_message = f"Tenant with ID {pk} not found"
             return
 
         # Load related data
-        self.current_lease = self.tenant.get_current_lease()
-        self.current_property = self.tenant.get_current_property()
-        self.lease_history = Lease.objects.filter(tenant=self.tenant).order_by('-start_date')
-        self.payment_history = Payment.objects.filter(
-            lease__tenant=self.tenant
+        self._current_lease = self._tenant.get_current_lease()
+        self._current_property = self._tenant.get_current_property()
+        self._lease_history = Lease.objects.filter(tenant=self._tenant).order_by('-start_date')
+        self._payment_history = Payment.objects.filter(
+            lease__tenant=self._tenant
         ).order_by('-payment_date')[:20]
-        self.maintenance_requests = MaintenanceRequest.objects.filter(
-            tenant=self.tenant
+        self._maintenance_requests = MaintenanceRequest.objects.filter(
+            tenant=self._tenant
         ).order_by('-created_at')[:10]
 
     def get_context_data(self, **kwargs):
         """Add tenant detail context"""
         context = super().get_context_data(**kwargs)
 
-        if not self.tenant:
-            context['error_message'] = self.error_message
+        if not self._tenant:
+            context['error_message'] = self._error_message
             return context
 
         # Create page header (do this in get_context_data so it's available for every render)
         page_header = PageHeader(
-            title=self.tenant.user.get_full_name(),
-            subtitle=self.tenant.user.email,
+            title=self._tenant.user.get_full_name(),
+            subtitle=self._tenant.user.email,
             icon="user",
             actions=[
                 {
                     "label": "Edit Tenant",
-                    "url": f"/rentals/tenants/{self.tenant.pk}/edit/",
+                    "url": f"/rentals/tenants/{self._tenant.pk}/edit/",
                     "icon": "edit",
                     "variant": "secondary"
                 }
@@ -218,15 +210,15 @@ class TenantDetailView(BaseViewWithNavbar):
 
         # Calculate payment statistics
         from django.db.models import Sum, Count
-        total_payments = self.payment_history.aggregate(
+        total_payments = self._payment_history.aggregate(
             total=Sum('amount'),
             count=Count('id')
         )
 
         # Count maintenance requests by status
-        # Over all of the tenant's requests: self.maintenance_requests is the
+        # Over all of the tenant's requests: self._maintenance_requests is the
         # sliced "recent 10", and a sliced queryset cannot be filtered (#3994).
-        all_requests = MaintenanceRequest.objects.filter(tenant=self.tenant)
+        all_requests = MaintenanceRequest.objects.filter(tenant=self._tenant)
         maintenance_stats = {
             'total': all_requests.count(),
             'open': all_requests.filter(status='open').count(),
@@ -239,12 +231,12 @@ class TenantDetailView(BaseViewWithNavbar):
             'page_header': page_header.render(),
 
             # Tenant data
-            'tenant': self.tenant,
-            'current_lease': self.current_lease,
-            'current_property': self.current_property,
-            'lease_history': self.lease_history,
-            'payment_history': self.payment_history,
-            'maintenance_requests': self.maintenance_requests,
+            'tenant': self._tenant,
+            'current_lease': self._current_lease,
+            'current_property': self._current_property,
+            'lease_history': self._lease_history,
+            'payment_history': self._payment_history,
+            'maintenance_requests': self._maintenance_requests,
             'total_paid': total_payments['total'] or 0,
             'payment_count': total_payments['count'] or 0,
             'maintenance_stats': maintenance_stats,
@@ -264,52 +256,48 @@ class TenantFormView(BaseViewWithNavbar):
     """
     template_name = 'rentals/tenant_form.html'
 
+    # The edited tenant's id: from the URL, or set when a new tenant is saved.
+    # persist="server" keeps it across the HTTP fallback, so a second save
+    # updates that tenant instead of creating another.
+    tenant_id = state(None, persist="server", render=False)
+    success_message = state("", render=False)
+    error_message = state("", render=False)
+    validation_errors = state(default_factory=dict, render=False)
+
     def mount(self, request, pk=None, **kwargs):
         """Initialize tenant form"""
         self.tenant_id = pk
-        self.is_edit = pk is not None
-        # Set before the not-found return below: get_context_data reads them (#3994).
-        self.success_message = ""
-        self.error_message = ""
-        self.validation_errors = {}
+        if pk is not None and self._tenant() is None:
+            self.error_message = f"Tenant with ID {pk} not found"
 
-        if self.is_edit:
-            # Load existing tenant
-            try:
-                self.tenant = Tenant.objects.select_related('user').get(pk=pk)
-            except Tenant.DoesNotExist:
-                self.tenant = None
-                self.error_message = f"Tenant with ID {pk} not found"
-                return
-        else:
-            # New tenant
-            self.tenant = None
-
-        # Form state
-        self.success_message = ""
-        self.error_message = ""
-        self.validation_errors = {}
+    def _tenant(self):
+        """The edited tenant, or None for a new one."""
+        if self.tenant_id is None:
+            return None
+        return Tenant.objects.select_related('user').filter(pk=self.tenant_id).first()
 
     @event_handler()
-    def save_tenant(self, first_name="", last_name="", email="", phone="",
-                   emergency_contact_name="", emergency_contact_phone="",
-                   employer="", monthly_income=None, notes="", **kwargs):
+    def save_tenant(self, first_name: str = "", last_name: str = "", email: str = "",
+                    phone: str = "", emergency_contact_name: str = "",
+                    emergency_contact_phone: str = "", employer: str = "",
+                    monthly_income: Any = None, notes: str = "", **kwargs):
         """Save tenant (create or update)"""
         try:
-            if self.is_edit and self.tenant:
+            tenant = self._tenant()
+            if tenant is not None:
                 # Update existing tenant
-                self.tenant.user.first_name = first_name
-                self.tenant.user.last_name = last_name
-                self.tenant.user.email = email
-                self.tenant.user.save()
+                tenant.user.first_name = first_name
+                tenant.user.last_name = last_name
+                tenant.user.email = email
+                tenant.user.save()
 
-                self.tenant.phone = phone
-                self.tenant.emergency_contact_name = emergency_contact_name
-                self.tenant.emergency_contact_phone = emergency_contact_phone
-                self.tenant.employer = employer
-                self.tenant.monthly_income = monthly_income if monthly_income else None
-                self.tenant.notes = notes
-                self.tenant.save()
+                tenant.phone = phone
+                tenant.emergency_contact_name = emergency_contact_name
+                tenant.emergency_contact_phone = emergency_contact_phone
+                tenant.employer = employer
+                tenant.monthly_income = monthly_income if monthly_income else None
+                tenant.notes = notes
+                tenant.save()
 
                 self.success_message = "Tenant updated successfully!"
             else:
@@ -333,7 +321,7 @@ class TenantFormView(BaseViewWithNavbar):
                 )
 
                 # Create tenant
-                self.tenant = Tenant.objects.create(
+                tenant = Tenant.objects.create(
                     user=user,
                     phone=phone,
                     emergency_contact_name=emergency_contact_name,
@@ -344,8 +332,7 @@ class TenantFormView(BaseViewWithNavbar):
                 )
 
                 self.success_message = "Tenant created successfully!"
-                self.is_edit = True
-                self.tenant_id = self.tenant.id
+                self.tenant_id = tenant.id
 
             self.error_message = ""
             self.validation_errors = {}
@@ -356,10 +343,11 @@ class TenantFormView(BaseViewWithNavbar):
     def get_context_data(self, **kwargs):
         """Add form context"""
         context = super().get_context_data(**kwargs)
+        is_edit = self.tenant_id is not None
 
         # Create page header
-        title = "Edit Tenant" if self.is_edit else "Add New Tenant"
-        subtitle = "Update tenant details" if self.is_edit else "Fill in tenant details"
+        title = "Edit Tenant" if is_edit else "Add New Tenant"
+        subtitle = "Update tenant details" if is_edit else "Fill in tenant details"
         page_header = PageHeader(
             title=title,
             subtitle=subtitle,
@@ -371,8 +359,8 @@ class TenantFormView(BaseViewWithNavbar):
             'page_header': page_header.render(),
 
             # Form data
-            'tenant': self.tenant,
-            'is_edit': self.is_edit,
+            'tenant': self._tenant(),
+            'is_edit': is_edit,
             'success_message': self.success_message,
             'error_message': self.error_message,
             'validation_errors': self.validation_errors,
