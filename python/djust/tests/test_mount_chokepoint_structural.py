@@ -197,16 +197,18 @@ class TestDynamicImportChokepoint:
 _VIEW_TARGET_NAMES = {"view", "view_instance", "component"}
 
 # Only the exact developer-returned dictionary application is sanctioned: the
-# function view's own callables (its event handlers) set on the view it built
-# for this request; its values are context, not attributes (#4183).
+# function view's own callables (its event handlers) and the LiveView settings
+# it returns (login_required, template ...) set on the view it built for this
+# request; its other values are context, not attributes (#4183).
 # Match its AST and lexical scope, not moving line numbers or an entire function.
 _DEVELOPER_STATE_APPLICATION = ast.parse("""
 view = DynamicLiveView()
 result = func(request, *args, **kwargs)
 if isinstance(result, dict):
-    DynamicLiveView._djust_function_context = _function_view_context(result)
+    DynamicLiveView._djust_function_context = _function_view_context(result, DynamicLiveView)
+    configuration = _function_view_configuration(result)
     for key, value in result.items():
-        if callable(value):
+        if callable(value) or key in configuration:
             setattr(view, key, value)
 """).body
 

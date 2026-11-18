@@ -82,9 +82,92 @@ def counter(request, pk=0):
     return locals()
 
 
+@live_view(template="<div dj-root>members c={{ c }} lr={{ login_required }}</div>")
+def members(request):
+    login_required = True
+    c = 1
+
+    @event_handler
+    def bump(**kwargs):
+        BUMPED.append("members")
+
+    return locals()
+
+
+@live_view(template="<div dj-root>admins pr={{ permission_required }}</div>")
+def admins(request):
+    permission_required = "auth.delete_user"
+
+    @event_handler
+    def bump(**kwargs):
+        BUMPED.append("admins")
+
+    return locals()
+
+
+@live_view(template="<div dj-root>decorator's template</div>")
+def own_template(request):
+    template = "<div dj-root>the function's template n={{ n }}</div>"
+    n = 5
+    return locals()
+
+
+@live_view(
+    template=(
+        "<div dj-root>reserved ok={{ ok }} view={{ view.x }} csrf={{ csrf_token|length }}"
+        " date={{ DATE_FORMAT }} time={{ TIME_FORMAT }}</div>"
+    )
+)
+def shadows_framework_names(request):
+    ok = "yes"
+    view = {"x": "local"}
+    csrf_token = "not-the-token"
+    DATE_FORMAT = "local date format"
+    TIME_FORMAT = "local time format"
+    return locals()
+
+
+#: Spelled through a name: this module defines no legacy view (the ledger in
+#: tests/legacy_exposure_ledger.py lists files that do).
+LEGACY_POLICY = "legacy"
+
+
+@live_view(template="<div dj-root>policy</div>")
+def states_a_policy(request):
+    exposure_policy = LEGACY_POLICY
+    return locals()
+
+
+@live_view(
+    template=(
+        '<div dj-root><button dj-click="shout" dj-value-times="3">Shout</button>'
+        "{% for word in shouted %}<p>{{ word }}</p>{% endfor %}</div>"
+    )
+)
+def greeting(request):
+    """The example in docs/website/state/explicit-exposure.md, template inlined."""
+    name = request.GET.get("name", "world")
+    shouted = []
+
+    @event_handler
+    def shout(times: int = 1):
+        shouted.extend([name.upper()] * times)
+
+    return locals()
+
+
+#: Handlers of the gated views that ran.
+BUMPED: list = []
+
 urlpatterns = [
     path("fn/", counter),
     path("fn/<int:pk>/", counter),
+    path("members/", members),
+    path("admins/", admins),
+    path("own-template/", own_template),
+    path("reserved/", shadows_framework_names),
+    path("policy/", states_a_policy),
+    path("greeting/", greeting),
     # Defined from the example's source on each request (below).
     path("example/", lambda request: _example_counter_view()(request)),
 ]
@@ -307,6 +390,101 @@ async def test_an_sse_mount_is_refused(fn_urls, monkeypatch):
     finally:
         await stream.aclose()
         _sse_sessions.clear()
+
+
+# --------------------------------------------------------------------------
+# Returned LiveView settings configure the view, before its access checks
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def people(django_user_model):
+    from django.contrib.auth.models import Permission
+
+    plain = django_user_model.objects.create_user("plain", password="pw")
+    admin = django_user_model.objects.create_user("admin", password="pw")
+    admin.user_permissions.add(Permission.objects.get(codename="delete_user"))
+    BUMPED.clear()
+    yield {"anonymous": None, "plain": plain, "admin": admin}
+    BUMPED.clear()
+
+
+def _browser(people, who):
+    browser = Client()
+    if people[who] is not None:
+        browser.force_login(people[who])
+    return browser
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "url, who, page, event",
+    [
+        ("/members/", "anonymous", 302, 403),
+        ("/members/", "plain", 200, 200),
+        ("/admins/", "anonymous", 302, 403),
+        ("/admins/", "plain", 403, 403),
+        ("/admins/", "admin", 200, 200),
+    ],
+)
+def test_a_returned_login_or_permission_requirement_is_enforced(
+    fn_urls, people, url, who, page, event
+):
+    browser = _browser(people, who)
+    response = browser.get(url)
+    assert response.status_code == page, response.content[:300]
+    if page == 302:
+        assert "login" in response["Location"]
+    answer = _post(browser, url, "bump")
+    assert answer.status_code == event, answer.content[:300]
+    assert BUMPED == ([url.strip("/")] if event == 200 else [])
+
+
+@pytest.mark.django_db
+def test_a_setting_is_configuration_not_a_template_name(fn_urls, people):
+    html = _browser(people, "plain").get("/members/").content.decode()
+    assert "members c=1 lr=</div>" in html, html
+    context = type(BUILT[-1])._djust_function_context
+    assert "login_required" not in context and context["c"] == 1
+
+
+@pytest.mark.django_db
+def test_a_returned_template_replaces_the_decorators(fn_urls):
+    html = Client().get("/own-template/").content.decode()
+    assert "the function's template n=5" in html, html
+    assert "decorator's template" not in html
+
+
+@pytest.mark.django_db
+def test_names_djust_supplies_keep_the_framework_value(fn_urls):
+    response = Client().get("/reserved/")
+    assert response.status_code == 200, response.content[:300]
+    html = response.content.decode()
+    assert "reserved ok=yes view= " in html, html
+    assert "not-the-token" not in html and "local date format" not in html
+    assert "local time format" not in html
+    answer = _post(Client(), "/reserved/", "missing")
+    assert answer.status_code != 500
+
+
+@pytest.mark.django_db
+def test_a_returned_exposure_policy_is_not_applied(fn_urls):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        assert Client().get("/policy/").status_code == 200
+    assert not uses_legacy_exposure(BUILT[-1])
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("policy", ["legacy", "strict"])
+def test_the_documented_example_answers_its_dj_value_argument(fn_urls, settings, policy):
+    settings.LIVEVIEW_CONFIG = {**settings.LIVEVIEW_CONFIG, "event_parameter_policy": policy}
+    browser = Client()
+    assert browser.get("/greeting/?name=ann").status_code == 200
+    # What the button sends: dj-value-times="3" as the ``times`` argument.
+    answer = _post(browser, "/greeting/?name=ann", "shout", times="3")
+    assert answer.status_code == 200, answer.content[:300]
+    assert answer.json()["html"].count(">ANN</p>") == 3
 
 
 # --------------------------------------------------------------------------

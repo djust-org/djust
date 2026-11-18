@@ -168,9 +168,8 @@ def test_explicit_and_unstated_views_do_not_warn():
 
 
 def test_a_legacy_statement_shipped_in_djust_does_not_warn_through_a_subclass():
-    """A class shipped in djust that states legacy (only the ``@live_view``
-    decorator's class still does, until #4183; #4185 moved the rest) is not the
-    application's to change. A stand-in shipped class, so the test does not
+    """A class shipped in djust that states legacy is not the application's to
+    change (none does any more: #4185 and #4183 moved them). A stand-in shipped class, so the test does not
     depend on which djust class is still pinned."""
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
