@@ -71,6 +71,26 @@ class Rebound(LiveView):
         return ctx
 
 
+class SpreadIntoReturnedLiteral(LiveView):
+    def get_context_data(self, **kwargs: Any) -> dict:
+        ctx = super().get_context_data(**kwargs)
+        ctx["total"] = 1
+        return {**ctx, "extra": 2}
+
+
+class SpreadTotalPage(LiveView):
+    """A user view whose spread context supplies the attribute it holds."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ total }}{{ extra }}</div>"
+    total = 3
+
+    def get_context_data(self, **kwargs: Any) -> dict:
+        ctx = super().get_context_data(**kwargs)
+        ctx["total"] = self.total
+        return {**ctx, "extra": 1}
+
+
 # --- the chain ----------------------------------------------------------------
 
 
@@ -109,6 +129,14 @@ def test_writes_to_a_dict_that_is_not_returned_supply_nothing():
     assert _get_context_data_chain_keys(SuperNotReturned) == {"returned"}
 
 
+def test_a_local_spread_into_the_returned_literal_is_the_context():
+    assert _get_context_data_chain_keys(SpreadIntoReturnedLiteral) == {"total", "extra"}
+
+
+def test_the_system_check_is_quiet_for_a_name_written_into_a_spread_context():
+    assert _t027_names(SpreadTotalPage) == set()
+
+
 def test_a_name_rebound_to_something_else_is_not_the_context():
     assert _get_context_data_chain_keys(Rebound) == set()
 
@@ -139,13 +167,16 @@ class ChoicesList(ModelListView):
     extra = state("")
 
 
-def test_the_system_check_names_a_subclass_attribute_the_parent_only_used_locally():
+def _t027_names(view_class: type) -> set[str]:
     from djust.checks.templates import check_unsupplied_template_names
 
-    label = "%s.%s --" % (__name__, ChoicesList.__qualname__)
-    names = {
+    label = "%s.%s --" % (__name__, view_class.__qualname__)
+    return {
         re.search(r"reads '(\w+)'", str(message.msg)).group(1)
         for message in check_unsupplied_template_names(None)
         if str(message.msg).startswith(label) and message.id == "djust.T027"
     }
-    assert names == {"choices"}
+
+
+def test_the_system_check_names_a_subclass_attribute_the_parent_only_used_locally():
+    assert _t027_names(ChoicesList) == {"choices"}

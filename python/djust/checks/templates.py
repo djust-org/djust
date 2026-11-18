@@ -1302,9 +1302,10 @@ def _override_context_keys(func: ast.AST) -> tuple[set[str], bool]:
 
     Counts only what reaches the returned context (#4224): the string keys of a
     returned literal dict; ``super().get_context_data(name=...)`` keywords; and,
-    for a returned local name bound only to ``super().get_context_data(...)`` or
-    to a literal dict, the keys of that literal and every ``name["key"] = ...``
-    on it. An unrelated local dict and a nested helper add nothing.
+    for a local returned directly or spread into a returned literal
+    (``return {**ctx, ...}``) and bound only to ``super().get_context_data(...)``
+    or to a literal dict, the keys of that literal and every
+    ``name["key"] = ...`` on it. An unrelated local dict and a nested helper add nothing.
     """
     nodes = _own_scope_nodes(func)
     keys: set[str] = set()
@@ -1319,6 +1320,12 @@ def _override_context_keys(func: ast.AST) -> tuple[set[str], bool]:
         if isinstance(node, ast.Return):
             if isinstance(node.value, ast.Dict):
                 keys |= _literal_str_keys(node.value)
+                # ``return {**ctx, ...}``: a spread local is returned too.
+                returned.update(
+                    item.id
+                    for key, item in zip(node.value.keys, node.value.values)
+                    if key is None and isinstance(item, ast.Name)
+                )
             elif isinstance(node.value, ast.Name):
                 returned.add(node.value.id)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
