@@ -103,23 +103,6 @@ def test_child_slot_parser_failure_rejects_entire_render(monkeypatch):
     assert render.regions == {}
 
 
-def test_rendered_recovery_scanner_keeps_only_seen_targets(monkeypatch):
-    _marked_sections_raise(monkeypatch)
-    from djust import validation
-
-    class View:
-        pass
-
-    view = View()
-    monkeypatch.setattr(validation, "_strict_possible", lambda view: True)
-    monkeypatch.setattr(validation, "_scan_describes", lambda view: False)
-    validation.note_rendered_recovery_targets(
-        view,
-        '<div dj-auto-recover="before"></div><![\ue000CDATA[ ><div dj-auto-recover="after"></div>',
-    )
-    assert validation._RENDERED_RECOVERY[view] == frozenset({"before"})
-
-
 def test_new_lazy_test_views_are_excluded_from_global_binding_discovery():
     from djust.checks.bindings import owner_kinds
     from djust.tests import test_lazy_context_state_3442, test_lazy_expression_literals_3430
@@ -130,30 +113,18 @@ def test_new_lazy_test_views_are_excluded_from_global_binding_discovery():
 
 @pytest.mark.parametrize("error", [AssertionError, ValueError])
 @pytest.mark.parametrize("method", ["feed", "close"])
-@pytest.mark.parametrize("scanner", ["shell", "recovery"])
-def test_other_scanners_handle_parser_failures(monkeypatch, error, method, scanner):
+def test_other_scanners_handle_parser_failures(monkeypatch, error, method):
+    # The rendered-HTML recovery scanner this also covered went with ADR-036
+    # R1 (#4178): recovery targets no longer change a handler's policy.
     from html.parser import HTMLParser
+
+    from djust._page_shell import _entries
 
     def fail(*args):
         raise error("malformed declaration")
 
     monkeypatch.setattr(HTMLParser, method, fail)
-    if scanner == "shell":
-        from djust._page_shell import _entries
-
-        assert _entries("<div dj-root></div>") is None
-    else:
-        from djust import validation
-
-        class View:
-            pass
-
-        view = View()
-        monkeypatch.setattr(validation, "_strict_possible", lambda view: True)
-        monkeypatch.setattr(validation, "_scan_describes", lambda view: False)
-        validation.note_rendered_recovery_targets(view, '<div dj-auto-recover="seen"></div>')
-        expected = frozenset() if method == "feed" else frozenset({"seen"})
-        assert validation._RENDERED_RECOVERY[view] == expected
+    assert _entries("<div dj-root></div>") is None
 
 
 def test_token_fallback_records_malformed_markup_gap(monkeypatch):

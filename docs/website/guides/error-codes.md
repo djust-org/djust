@@ -839,7 +839,7 @@ Retired in 2.0 with time-travel debugging (#4184). Nothing reports it; remove it
 
 **Severity**: Error
 
-**What causes it**: An event handler or server function uses the strict parameter policy (ADR-036), and strict dispatch would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
+**What causes it**: An event handler or server function uses the strict parameter policy (ADR-036), and strict dispatch would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, `dict[str, T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
 
 **Fix**: Correct the named parameter's declaration, use `Any` for input you validate yourself, or keep the handler on `parameter_policy="legacy"`. Legacy handlers are never reported.
 
@@ -863,15 +863,12 @@ is never reused. Existing suppressions of V017 have no effect and can be removed
 
 ---
 
-### V019: Strict declaration on a dj-auto-recover handler
+### V019: Retired
 
-**Severity**: Warning
-
-**What causes it**: A handler targeted by `dj-auto-recover` in the view's template declares `parameter_policy="strict"`. Recovery handlers receive the `_form_values` and `_data_attrs` dictionaries, so they always run under the legacy policy.
-
-**Fix**: Remove `parameter_policy="strict"` from the recovery handler.
-
----
+**Retired in 2.0** (#4178). V019 warned that a strict declaration on a
+`dj-auto-recover` handler was ignored. Recovery handlers now follow their own
+policy, and `djust.V031` reports one that still reads `_form_values` /
+`_data_attrs`. djust no longer emits V019, and the ID is never reused.
 
 ### V020: Retired
 
@@ -968,6 +965,14 @@ On an explicit view the same declaration is refused when the class is created, w
 **What causes it**: A view or one of its mixins defines `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, or assigns `self.<name>`. These are djust's view methods; the attribute replaces the method of that name, and an `@event_handler` of that name can be called by the client. Message: "<view> defines skip_render, which replaces djust's skip_render() method on the view."
 
 **Fix**: Rename the attribute or handler. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V030"]}`.
+
+### V031: a dj-auto-recover handler that cannot receive its values
+
+**Severity**: Error under the strict parameter policy; Warning for the 1.x names under the legacy policy
+
+**What causes it**: A handler named by `dj-auto-recover` takes the 1.x `_form_values` / `_data_attrs` names (as parameters or from `**kwargs`), which strict dispatch never delivers; or it declares the 2.0 `form_values` / `data_attrs` parameters positional-only, or under the legacy policy, which sends only the `_` names. Message: "<view>.restore(): this dj-auto-recover handler declares _form_values / _data_attrs, which strict dispatch never delivers, so the event is refused."
+
+**Fix**: Declare `form_values: dict[str, Any]` and `data_attrs: dict[str, str]` and run the handler under the strict policy. See the [reconnection guide](reconnection.md#custom-recovery-with-dj-auto-recover). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V031"]}`.
 
 ### V032: an admin widget states `exposure_policy = "legacy"`
 

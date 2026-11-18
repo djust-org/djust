@@ -520,7 +520,7 @@ All enhancements are backward compatible with existing `dj-copy` usage.
 
 ## Reconnection Recovery (`dj-auto-recover`)
 
-After a WebSocket reconnect, elements with `dj-auto-recover` automatically fire a server event with serialized DOM state, enabling the server to restore state that the default form-value replay cannot:
+After a WebSocket or SSE reconnect, elements with `dj-auto-recover` automatically fire a server event with serialized DOM state, enabling the server to restore state that the default form-value replay cannot:
 
 ```html
 <div dj-auto-recover="restore_canvas" data-canvas-id="main">
@@ -530,18 +530,17 @@ After a WebSocket reconnect, elements with `dj-auto-recover` automatically fire 
 ```
 
 ```python
-@event_handler()
-def restore_canvas(self, _form_values=None, _data_attrs=None, **kwargs):
+@event_handler(parameter_policy="strict")
+def restore_canvas(self, form_values: dict[str, Any], data_attrs: dict[str, str]):
     """Called automatically after reconnect with DOM state from the container."""
-    form = _form_values or {}
-    data = _data_attrs or {}
-    self.brush_size = int(form.get("brush_size") or 5)
-    self.canvas_id = data.get("canvas-id", "")
+    self.brush_size = int(form_values.get("brush_size") or 5)
+    self.canvas_id = data_attrs.get("canvas-id", "")
 ```
 
 Key behavior:
 - Does **not** fire on initial page load — only after reconnection
-- Serializes the container's form field values and `data-*` attributes; they arrive as the `_form_values` and `_data_attrs` dicts. `data-*` keys keep their dashes (`canvas-id`), and `dj-value-*` attributes are not included
+- Serializes the container's form field values and `data-*` attributes; the handler declares `form_values` and/or `data_attrs` and receives the ones it declares, validated like any argument. `data-*` keys keep their dashes (`canvas-id`). The container's `dj-value-*` attributes arrive as ordinary arguments
+- A 1.x handler that reads `_form_values` / `_data_attrs` keeps working only under the legacy policy; check `djust.V031` names the new signature (see the [reconnection guide](../guides/reconnection.md#custom-recovery-with-dj-auto-recover))
 - Multiple independent `dj-auto-recover` elements can coexist on the same page
 - Use for complex state (drag positions, canvas state, multi-step wizard progress) that form replay cannot restore
 
@@ -747,6 +746,7 @@ handlers. (The JSON `dj-params` attribute is not read at all since 2.0.)
 | `date` | ISO `YYYY-MM-DD` only |
 | `Optional[T]` | JSON `null` or a valid `T`. The argument is still required unless it has a default |
 | `list[T]` | A JSON array whose members are valid `T`. Not comma-separated text |
+| `dict[str, T]` | A JSON object whose values are valid `T` (keys are strings). Not query-string text |
 | `Any` | Anything, unchecked: an explicit escape hatch |
 
 Other annotations, and named parameters without one, are rejected at startup
@@ -771,8 +771,9 @@ parameter and expected type, never the submitted value.
 
 - Routing keys (`view_id`, `component_id`) and client bookkeeping are never
   handler arguments. Names starting with `_` are reserved (check `V016`).
-- `dj-auto-recover` handlers always run under the legacy policy (check
-  `V019` warns about a strict declaration).
+- `dj-auto-recover` handlers declare the generated `form_values` /
+  `data_attrs` dictionaries like any argument (check `V031` reports one that
+  still reads the 1.x `_form_values` / `_data_attrs`).
 - `dj-model` sends the fixed `field`/`value` pair its handler declares.
 
 ### Migrating a handler
@@ -783,7 +784,7 @@ parameter and expected type, never the submitted value.
    `_target` with `field` or a `dj-value-*` argument.
 3. Add `parameter_policy="strict"`, drop `**kwargs` unless the handler
    really takes an open payload, and run `manage.py check`: C022 and
-   V016–V019 report what strict dispatch would reject.
+   V016, V018 and V031 report what strict dispatch would reject.
 
 ## Next Steps
 
