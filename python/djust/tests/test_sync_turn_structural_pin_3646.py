@@ -946,6 +946,8 @@ HOOKS: Dict[str, str] = {
     "FormMixin.as_live": "unwrapped:template-time:called by the {% live_form %} tag, at template time: no step is open, so a queryset the form's fields evaluate (a ModelChoiceField) is read without the wrapper scope",
     "FormMixin.as_live_field": "unwrapped:template-time:called by the {% live_field %} tag, at template time: no step is open, so a queryset the field evaluates (a ModelChoiceField) is read without the wrapper scope",
     "AdminFormMixin._create_form": "inside:mount@admin_ext/forms.py::AdminFormMixin.mount",
+    # An @event_handler since #4218 (the override was undeclared, so refused).
+    "AdminFormMixin.validate_field": "stepped:event",
     "AdminFormMixin.get_field_value": "inside:render|none@admin_ext/views.py::ModelListView.get_context_data",
     "AdminTailwindAdapter.render_field": "unwrapped:template-time:called while as_live_field renders a field at template time: no step is open",
     "BaseAdapter._merge_widget_attrs": "unwrapped:template-time:called while the form adapter renders a widget at template time: no step is open",

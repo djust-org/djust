@@ -12,6 +12,7 @@ from django import forms
 from django.http import Http404
 from django.db.models import ForeignKey, ManyToManyField, OneToOneField
 from django.db.models.fields import DateField, DateTimeField, TimeField
+from djust.decorators import event_handler
 from djust.forms import FormMixin
 
 logger = logging.getLogger(__name__)
@@ -281,6 +282,7 @@ class AdminFormMixin(FormMixin):
         fields = getattr(getattr(self, "form_instance", None), "fields", None)
         return frozenset(fields or ())
 
+    @event_handler(parameter_policy="strict")
     def validate_field(
         self, field: str = "", field_name: str = "", value: Any = None, **kwargs: Any
     ) -> None:
@@ -290,6 +292,14 @@ class AdminFormMixin(FormMixin):
         Extends FormMixin.validate_field() to work with ModelAdmin forms, and
         carries the same ``field`` / ``field_name`` coalesce — the client sends
         ``field`` (#2137).
+
+        A declared handler, like the one it overrides: an override without
+        ``@event_handler`` is not exposed, so on an explicit-exposure view (the
+        admin's) every keystroke was refused (#4218). It takes strict parameters
+        whatever the project's policy. The admin's fields bind it by name alone
+        (``dj-input="validate_field"``), so the client sends the generated
+        ``field`` and ``value``: the field's name and its value (a checkbox's
+        checked state, a multiple select's list).
 
         Args:
             field: Name of the field to validate — what the client sends

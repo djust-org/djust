@@ -183,7 +183,7 @@ class AdminTailwindAdapter(TailwindAdapter):
         field_class = self.FIELD_CLASS_INVALID if has_errors else self.SELECT_CLASS
 
         html = f'<select name="{field_name}" id="id_{field_name}" class="{field_class}" '
-        html += f"dj-change=\"validate_field('{field_name}', value)\">"
+        html += 'dj-change="validate_field">'
         html += '<option value="">---------</option>'
 
         for opt in options:
@@ -213,11 +213,8 @@ class AdminTailwindAdapter(TailwindAdapter):
 
         html = f'<select name="{field_name}" id="id_{field_name}" class="{field_class}" '
         html += 'multiple size="6" '
-        # dj-change handler for M2M - extracts selected option values as array
-        dj_change = (
-            f"validate_field('{field_name}', Array.from(this.selectedOptions).map(o => o.value))"
-        )
-        html += f'dj-change="{dj_change}">'
+        # The client sends a <select multiple>'s selected values as a list.
+        html += 'dj-change="validate_field">'
 
         for opt in options:
             selected = "selected" if opt["value"] in selected_values else ""
@@ -256,7 +253,7 @@ class AdminTailwindAdapter(TailwindAdapter):
 
         html = f'<input type="{input_type}" name="{field_name}" id="id_{field_name}" '
         html += f'value="{escape(formatted_value)}" class="{field_class}" '
-        html += f"dj-change=\"validate_field('{field_name}', value)\""
+        html += 'dj-change="validate_field"'
         if field.required:
             html += " required"
         html += " />"
@@ -280,7 +277,7 @@ class AdminTailwindAdapter(TailwindAdapter):
 
         if field_type == "textarea":
             html = f'<textarea name="{field_name}" id="id_{field_name}" class="{field_class}" '
-            html += f'rows="4" dj-input="validate_field(\'{field_name}\', value)"'
+            html += 'rows="4" dj-input="validate_field"'
             if field.required:
                 html += " required"
             html += f">{escape(str(value) if value else '')}</textarea>"
@@ -290,7 +287,8 @@ class AdminTailwindAdapter(TailwindAdapter):
             checked = "checked" if value else ""
             html = f'<input type="checkbox" name="{field_name}" id="id_{field_name}" '
             html += f'class="{self.CHECKBOX_CLASS}" {checked} '
-            html += f"dj-change=\"validate_field('{field_name}', this.checked)\""
+            # The client sends a lone checkbox's checked state as the value.
+            html += 'dj-change="validate_field"'
             if field.required:
                 html += " required"
             html += " />"
@@ -298,7 +296,7 @@ class AdminTailwindAdapter(TailwindAdapter):
 
         elif field_type == "select":
             html = f'<select name="{field_name}" id="id_{field_name}" class="{field_class}" '
-            html += f"dj-change=\"validate_field('{field_name}', value)\">"
+            html += 'dj-change="validate_field">'
 
             if not field.required:
                 html += '<option value="">---------</option>'
@@ -316,7 +314,7 @@ class AdminTailwindAdapter(TailwindAdapter):
             # Standard input field
             html = f'<input type="{field_type}" name="{field_name}" id="id_{field_name}" '
             html += f'value="{escape(str(value) if value else "")}" class="{field_class}" '
-            html += f"dj-input=\"validate_field('{field_name}', value)\""
+            html += 'dj-input="validate_field"'
             if field.required:
                 html += " required"
             html += " />"

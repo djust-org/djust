@@ -6,7 +6,7 @@
         {% if w.label %}
         <h3 class="text-sm font-medium text-gray-900 mb-3">{{ w.label }}</h3>
         {% endif %}
-        {% live_render w.view_path %}
+        {% live_render w.view_path view_id=w.view_id %}
     </div>
     {% endfor %}
 </div>

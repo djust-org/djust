@@ -16,6 +16,7 @@ from django.contrib.auth.views import LoginView as DjangoLoginView
 from django.core.exceptions import PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import ForeignKey, OneToOneField, Q
+from django.forms import CheckboxInput
 from django.http import Http404, HttpRequest, HttpResponse, HttpResponseRedirect
 from django.urls import Resolver404, resolve, reverse
 from djust import LiveView
@@ -25,6 +26,15 @@ from .._log_utils import sanitize_for_log
 from .forms import AdminFormMixin
 
 logger = logging.getLogger(__name__)
+
+#: The change form's submit buttons other than the plain Save (which goes to the change list).
+_SAVE_BUTTONS = ("save_and_continue", "save_and_add_another")
+
+#: Shown when a Save arrives without the form's values (#4218).
+SAVE_NOT_RECEIVED = (
+    "The form's values did not arrive with Save, so nothing was saved. "
+    "Reload the page and try again."
+)
 
 # Global registry for admin view configurations
 # This avoids storing non-serializable objects on view instances
@@ -108,12 +118,16 @@ def _serialize_widget_slots(
     """Convert a list of LiveView widget classes into the dict shape
     that ``_change_form_widgets.html`` / ``_change_list_widgets.html``
     expect. Each entry carries the dotted ``view_path`` so
-    ``{% live_render %}`` can resolve it.
+    ``{% live_render %}`` can resolve it, and the slot's ``view_id``: a stable
+    id, so that over a socket the widget is the same live child on every
+    re-render of the page (its state kept, ``mount()`` run once) rather than a
+    new ``child_N`` mounted on each parent event (#4223).
     """
     out: List[Dict[str, Any]] = []
-    for widget_cls in widget_classes:
+    for position, widget_cls in enumerate(widget_classes, start=1):
         entry = {
             "view_path": f"{widget_cls.__module__}.{widget_cls.__name__}",
+            "view_id": f"djust_admin_widget_{position}",
             "label": getattr(widget_cls, "label", ""),
             "size": getattr(widget_cls, "size", "md"),
         }
@@ -734,6 +748,7 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             "object_pk": object_pk,
             "is_saving": self.is_saving,
             "save_success": self.save_success,
+            "save_errors": self._save_errors(),
             "fieldsets": fieldsets_data,
             "has_delete_permission": self._model_admin.has_delete_permission(
                 self.request, self.object
@@ -747,11 +762,19 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             "change_form_widgets": change_form_widgets,
         }
 
+    def _save_errors(self) -> List[str]:
+        """What a failed Save tells the person: the refusal, and the form's own errors."""
+        errors = [self.error_message] if getattr(self, "error_message", "") else []
+        form_errors = getattr(self, "form_errors", None)
+        if isinstance(form_errors, (list, tuple)):
+            errors.extend(str(error) for error in form_errors)
+        return errors
+
     @event_handler
     def update_field(self, field: str, value: Any) -> None:
         """Handle field value change."""
         self.save_success = False
-        self.validate_field(field_name=field, value=value)
+        self.validate_field(field=field, value=value)
 
     def form_valid(self, form: Any) -> None:
         self._check_save_permission()
@@ -761,36 +784,69 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
     def form_invalid(self, form: Any) -> None:
         self.save_success = False
 
-    @event_handler
-    def save(self, redirect: bool = True) -> None:
-        """Save the form."""
+    # The change form is one ``<form dj-submit="save">``: every Save carries the values on the
+    # page, so what is saved is what the person sees, whether or not each field's live
+    # ``validate_field`` event arrived (#4218). The handlers take strict parameters whatever the
+    # project's policy: the pressed button then arrives as its own ``name=value`` on every
+    # transport (ADR-036; under the legacy policy its only channel was ``_target``, which the
+    # HTTP fallback does not carry).
+
+    @event_handler(parameter_policy="strict")
+    def save(self, **form_values: Any) -> None:
+        """Save the submitted form, then go where the pressed button says (the change list)."""
+        then = None
+        for button in _SAVE_BUTTONS:
+            if form_values.pop(button, None) is not None:
+                then = button
+        self._save_submitted(form_values, then)
+
+    @event_handler(parameter_policy="strict")
+    def save_and_continue(self, **form_values: Any) -> None:
+        """Save the submitted form and stay on the page."""
+        self._save_submitted(form_values, "save_and_continue")
+
+    @event_handler(parameter_policy="strict")
+    def save_and_add_another(self, **form_values: Any) -> None:
+        """Save the submitted form and go to a new add page."""
+        self._save_submitted(form_values, "save_and_add_another")
+
+    def _save_submitted(self, form_values: Dict[str, Any], then: Optional[str]) -> None:
+        """Save the values a Save carried. A Save that carries none of the form's fields saves
+        nothing and says so: saving the values the server already holds would report "saved"
+        for edits that never arrived (#4218)."""
         self._check_save_permission()
         self.is_saving = True
         self.save_success = False
         self.redirect_url = None
+        self.error_message = ""
 
-        self.submit_form()
-
-        if self.save_success and redirect:
-            self.redirect_url = reverse(
-                f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}_changelist"
+        fields = self._create_form().fields
+        received = {name: value for name, value in form_values.items() if name in fields}
+        if fields and not received:
+            logger.warning(
+                "djust admin: a Save for %s carried none of the form's values; nothing was saved",
+                sanitize_for_log(self._model._meta.label),
             )
+            self.error_message = SAVE_NOT_RECEIVED
+            self.is_saving = False
+            return
 
+        # A field the submission leaves out means what it means in a native post: an unchecked
+        # checkbox is not in the form data, and is False.
+        for name, form_field in fields.items():
+            if name not in received and isinstance(form_field.widget, CheckboxInput):
+                received[name] = False
+        self.submit_form(**received)
+
+        if self.save_success and then != "save_and_continue":
+            page = "add" if then == "save_and_add_another" else "changelist"
+            self.redirect_url = reverse(
+                f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}_{page}"
+            )
+            # Navigation every transport carries; the template's former inline
+            # ``<script>`` read a ``redirect_url`` the context never held.
+            self.live_redirect(self.redirect_url)
         self.is_saving = False
-
-    @event_handler
-    def save_and_continue(self) -> None:
-        """Save and stay on the same page."""
-        self.save(redirect=False)
-
-    @event_handler
-    def save_and_add_another(self) -> None:
-        """Save and redirect to add another."""
-        self.save(redirect=False)
-        if self.save_success:
-            self.redirect_url = reverse(
-                f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}_add"
-            )
 
 
 class ModelCreateView(ModelDetailView):
