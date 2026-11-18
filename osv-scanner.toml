@@ -6,3 +6,17 @@
 # id = "GHSA-xxxx-xxxx-xxxx"
 # ignoreUntil = 2026-12-31
 # reason = "Not reachable: … (#NNNN)"
+
+# Reviewed 2026-11-18. Informational "unmaintained" notices for every version,
+# with no CVSS, no affected functions and no fixed version: not a known
+# vulnerability in djust's use (template date filters and timezone conversion).
+# Replacement tracked in #4222.
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+ignoreUntil = 2027-02-28
+reason = "chrono 0.4.45 is marked unmaintained (informational, no vulnerability); replacement tracked in #4222"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0555"
+ignoreUntil = 2027-02-28
+reason = "chrono-tz 0.10.4 is marked unmaintained (informational, no vulnerability); replacement tracked in #4222"
