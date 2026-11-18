@@ -1276,6 +1276,67 @@ def _get_context_data_reaches_base(cls: type) -> bool:
     return True
 
 
+def _get_context_data_chain_keys(cls: type) -> set[str]:
+    """Names the view's ``get_context_data()`` chain supplies, following ``super()``.
+
+    Walks the MRO from the most-derived override, djust's own classes
+    included, and stops at the base method or at an override that does not
+    call ``super().get_context_data(...)``. Each override contributes the
+    string keys it writes in the forms a shipped base uses (#4185):
+
+    - a literal ``return {"name": ...}``;
+    - ``context["name"] = ...`` on a local name (``TtydTerminalView``);
+    - ``super().get_context_data(name=...)`` keyword arguments, which the
+      base context merges in (the ttyd docstring's subclass).
+
+    Anything else adds nothing, so a name this cannot follow is still
+    reported; ``_get_context_data_is_too_dynamic`` keeps user overrides to
+    the literal and ``super()`` forms.
+    """
+    from djust.mixins.context import ContextMixin
+
+    base = ContextMixin.__dict__["get_context_data"]
+    keys: set[str] = set()
+    for klass in cls.__mro__:
+        if klass is object:
+            continue
+        mod = getattr(klass, "__module__", "") or ""
+        if mod.startswith("django.") or mod == "builtins":
+            continue
+        method = klass.__dict__.get("get_context_data")
+        if method is None:
+            continue
+        if method is base:
+            break
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
+        except (OSError, TypeError, SyntaxError):
+            break
+        calls_super = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.expr) and _is_bare_super_get_context_data_call(node):
+                calls_super = True
+                keys.update(kw.arg for kw in node.keywords if kw.arg)  # type: ignore[attr-defined]
+            elif isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+                keys.update(
+                    k.value
+                    for k in node.value.keys
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str)
+                )
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Subscript)
+                        and isinstance(target.value, ast.Name)
+                        and isinstance(target.slice, ast.Constant)
+                        and isinstance(target.slice.value, str)
+                    ):
+                        keys.add(target.slice.value)
+        if not calls_super:
+            break
+    return keys
+
+
 def _get_context_data_is_too_dynamic(cls: type) -> bool:
     """True if any user-code override of ``get_context_data()`` does more
     than return a literal dict or delegate straight to
@@ -1846,6 +1907,7 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                 _extract_context_keys_from_ast(cls, attributes=False)
                 | set(registered_components(cls))
                 | _extract_template_locals(src)
+                | _get_context_data_chain_keys(cls)
             )
             if _get_context_data_reaches_base(cls):
                 supplied |= set(rendered_state_names(cls))
@@ -1914,8 +1976,7 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                         "then renders; persisting it or sending it to the browser takes "
                         "persist= or client=True), or return it from %s.get_context_data(); "
                         "a get_context_data() that does not build on super() supplies no "
-                        "declared field, and state(render=False) keeps one out. To keep the 1.x behaviour "
-                        'while you migrate, set exposure_policy = "legacy" on the view. '
+                        "declared field, and state(render=False) keeps one out. "
                         "See %s. If the name is supplied in a way this check cannot follow, "
                         "silence it with a `{# djust_typecheck: noqa %s #}` template comment "
                         "or DJUST_CONFIG = {'suppress_checks': ['T027']}."

@@ -259,7 +259,7 @@ host view's. A poll stops when its element leaves the page.
 | Attribute | Fires On | Handler Receives |
 |---|---|---|
 | `dj-mounted="handler"` | Element enters DOM (after VDOM patch) | `dj-value-*` attrs as kwargs |
-| `dj-auto-recover="handler"` | WebSocket reconnects | Form values + `data-*` from container |
+| `dj-auto-recover="handler"` | WebSocket or SSE reconnects | `form_values` / `data_attrs` dicts it declares, plus the container's `dj-value-*` (strict) |
 | `dj-no-recover` | — | Opts field out of automatic form recovery on reconnect |
 
 ```html
@@ -279,7 +279,7 @@ host view's. A poll stops when its element leaves the page.
 
 `dj-mounted` does not fire on initial page load — only after subsequent VDOM patches insert the element.
 
-`dj-auto-recover` does not fire on initial page load — only after WebSocket reconnection. Serializes form field values and `data-*` attributes from the container.
+`dj-auto-recover` does not fire on initial page load — only after a WebSocket or SSE reconnection. Serializes form field values and `data-*` attributes from the container; a strict handler declares them as `form_values: dict[str, Any]` / `data_attrs: dict[str, str]` and gets `dj-value-canvas-id` as `canvas_id`. A 1.x handler reading `_form_values` / `_data_attrs` works only under the legacy policy (`djust.V031`).
 
 `dj-no-recover` prevents a field from being auto-recovered on reconnect. Useful for ephemeral search fields or fields where server state is the source of truth. Fields inside `dj-auto-recover` containers are automatically skipped (custom handler takes precedence).
 

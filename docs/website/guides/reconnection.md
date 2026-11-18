@@ -19,7 +19,7 @@ When the WebSocket connection drops (server restart, network hiccup, sleep/wake)
 2. Retries with exponential backoff and jitter (prevents thundering herd)
 3. On successful reconnect, remounts the LiveView
 4. Automatically recovers form field values that differ from server defaults
-5. Fires `dj-auto-recover` handlers for custom state restoration
+5. Fires `dj-auto-recover` handlers for custom state restoration (WebSocket and SSE)
 
 ## Backoff with Jitter
 
@@ -158,28 +158,54 @@ For views with complex state that cannot be inferred from form values alone (can
 </div>
 ```
 
-A recovery handler always runs under the legacy parameter policy, even in a
-project using the strict parameter policy (ADR-036).
+On reconnect, djust fires the `restore_state` handler with two dictionaries.
+The handler declares the ones it uses as parameters, under the strict
+parameter policy:
 
-On reconnect, djust fires the `restore_state` handler with two dict arguments
-(they are not flattened into separate kwargs):
-- `_form_values`: the container's form field values, keyed by `name`. A group of
-  same-named checkboxes and a `<select multiple>` are a list of the checked or
-  selected values, a radio group is the checked radio's value, and a lone checkbox
-  is a boolean. Password fields are left out; hidden and disabled fields are
-  included
-- `_data_attrs`: the container element's `data-*` attributes, keyed without the
-  `data-` prefix (`dj-value-*` attributes are **not** collected)
+- `form_values: dict[str, Any]`: the container's form field values, keyed by
+  `name`. A group of same-named checkboxes and a `<select multiple>` are a list
+  of the checked or selected values, a radio group is the checked radio's value,
+  a lone checkbox is a boolean, and every other control is its text. Password
+  fields are left out; hidden and disabled fields are included
+- `data_attrs: dict[str, str]`: the container element's `data-*` attributes,
+  keyed without the `data-` prefix (`data-canvas-id` becomes `canvas-id`)
 
 ```python
-@event_handler()
-def restore_state(self, _form_values=None, _data_attrs=None, **kwargs):
-    fv = _form_values or {}
-    da = _data_attrs or {}
-    self.canvas_id = da.get("canvas-id", "")
-    self.brush_size = int(fv.get("brush_size", 5))
-    self.color = fv.get("color", "#ff0000")
+from typing import Any
+
+@event_handler(parameter_policy="strict")
+def restore_state(self, form_values: dict[str, Any], data_attrs: dict[str, str]):
+    self.canvas_id = data_attrs.get("canvas-id", "")
+    self.brush_size = int(form_values.get("brush_size", 5))
+    self.color = form_values.get("color", "#ff0000")
 ```
+
+The browser sends only the dictionaries the handler declares (a handler that
+needs only the form declares only `form_values`; a `**values: Any` catch-all
+receives both), and adds the container's `dj-value-*` attributes as ordinary
+arguments. A `dj-value-*` attribute named `form-values` or `data-attrs` is
+refused, because it would collide with a generated value.
+
+The values come from the browser, so they are validated like every event
+argument. `dict[str, T]` accepts a JSON object with string keys and checks each
+value as `T`; the event is refused, before the handler runs, if a value has the
+wrong type (a number in `data_attrs`, say) or the arguments pass the event
+limits: 1,024 entries in one dictionary or list, 10,000 values in all,
+65,536 characters of text in all (keys included), or 32 levels of nesting. The browser applies the same limits
+before it sends, so a container whose fields hold more text than that is not
+recovered. Use `dict[str, Any]` for `form_values`, since one form mixes text,
+booleans and lists; validate the values you read as you would any other input.
+
+Recovery runs after a WebSocket reconnect and after the SSE stream reconnects;
+both keep what the user had typed through the reconnect's mount. The HTTP
+fallback has no reconnect, so it never fires recovery.
+
+#### Upgrading a 1.x recovery handler
+
+A 1.x recovery handler read `_form_values` / `_data_attrs`, names a strict
+signature cannot declare. `manage.py check` reports one that still does
+(`djust.V031`) and names the new signature; the before-and-after is in
+[Migrating to djust 2.0](migrating-to-2.0.md#2-make-event-handlers-strict).
 
 ## SSE Transport
 
@@ -217,6 +243,8 @@ Over SSE (Server-Sent Events), the browser's `EventSource` handles reconnection 
 ```
 
 ```python
+from typing import Any
+
 from djust import LiveView, state
 from djust.decorators import event_handler
 
@@ -233,8 +261,8 @@ class EditorView(LiveView):
     def preview(self, value: str):
         self.body = value
 
-    @event_handler()
-    def restore_editor(self, _form_values=None, _data_attrs=None, **kwargs):
+    @event_handler(parameter_policy="strict")
+    def restore_editor(self, form_values: dict[str, Any], data_attrs: dict[str, str]):
         # Custom recovery: restore editor state from DOM values
-        self.doc_id = (_data_attrs or {}).get("doc-id", "")
-        self.cursor_pos = (_form_values or {}).get("cursor", "")
+        self.doc_id = data_attrs.get("doc-id", "")
+        self.cursor_pos = form_values.get("cursor", "")

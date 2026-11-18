@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, g
 from uuid import UUID
 
 from djust.security import sanitize_for_log
-from ._parameter_contract import ParameterContract
+from ._parameter_contract import ROUTED_COMPONENT_PARAMETER, ParameterContract
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +32,35 @@ _MISSING_POSITIONAL = object()
 _SIGNATURE_OWNER = object()
 
 
+def declared_framework_arguments(handler: Callable) -> frozenset[str]:
+    """The framework-supplied parameters a framework-owned handler declares (#4185).
+
+    Only the component ``Meta.event`` alias declares one, ``component_id``
+    (``components/base.py``), as a server-only function attribute. Its value
+    is still a client string, checked against the view's declared component
+    names (:func:`bind_declared_component_name`). Any other name in the
+    marker is ignored, so nothing but ``component_id`` can become a
+    framework-supplied argument this way.
+    """
+    function = getattr(handler, "__func__", handler)
+    names = getattr(function, "_djust_framework_arguments", None)
+    if type(names) is not frozenset:
+        return frozenset()
+    return names & {ROUTED_COMPONENT_PARAMETER}
+
+
 def get_strict_handler_contract(
-    handler: Callable, trusted: frozenset[str] = frozenset()
+    handler: Callable, trusted: Optional[frozenset[str]] = None
 ) -> ParameterContract:
     """Cache declarations, never bound methods or their live owner instances.
 
     ``trusted`` names framework-injected parameters (ADR-036 D5); see
-    ``ParameterContract.compile``. Client-callable handlers use none.
+    ``ParameterContract.compile``. Client-callable handlers use none, except
+    the framework-supplied ones a framework-owned handler declares
+    (:func:`declared_framework_arguments`), which are the default.
     """
+    if trusted is None:
+        trusted = declared_framework_arguments(handler)
     key = (inspect.ismethod(handler), frozenset(trusted))
     function = handler.__func__ if inspect.ismethod(handler) else handler
     if not inspect.isfunction(function):
@@ -62,44 +83,6 @@ def get_project_parameter_policy() -> str:
     return str(policy)
 
 
-_RECOVERY_HANDLERS: "weakref.WeakKeyDictionary[type, tuple[frozenset[str], bool]]" = (
-    weakref.WeakKeyDictionary()
-)
-
-
-def _recovery_scan(view_class: type) -> tuple[frozenset[str], bool]:
-    """``_template_bindings.recovery_scan``, once per class."""
-    cached = _RECOVERY_HANDLERS.get(view_class)
-    if cached is None:
-        from ._template_bindings import recovery_scan
-        from .mixins.template import TemplateMixin
-
-        names, complete = recovery_scan(view_class)
-        # A view that chooses its own template is not described by the scan.
-        if getattr(view_class, "get_template", None) is not TemplateMixin.get_template:
-            complete = False
-        cached = (names, complete)
-        _RECOVERY_HANDLERS[view_class] = cached
-    return cached
-
-
-def recovery_handler_names(view_class: type) -> frozenset[str]:
-    """Handlers a literal ``dj-auto-recover`` in the view's template targets.
-
-    ADR-036 owner decision R1: recovery handlers run under the legacy policy,
-    because their ``_form_values`` / ``_data_attrs`` envelope cannot be a strict
-    signature. The template is server-owned, so a client cannot claim this.
-    Read once per class by the template binding scan (ADR-037 row 18), which
-    follows ``{% include %}`` and ``{% extends %}``. Where the scan cannot see
-    every target (a computed value, markup it cannot follow), dispatch also
-    uses the targets of each render (``note_rendered_recovery_targets``). This
-    scan serves the V019 startup check and renders Python does not see
-    (an HTTP instance before it renders).
-    """
-    return _recovery_scan(view_class)[0]
-
-
-_RENDERED_RECOVERY: "weakref.WeakKeyDictionary[Any, frozenset[str]]" = weakref.WeakKeyDictionary()
 _DECLARES_STRICT: "weakref.WeakKeyDictionary[type, bool]" = weakref.WeakKeyDictionary()
 
 
@@ -121,7 +104,7 @@ def _declares_strict(view_class: type) -> bool:
 
 
 def _strict_possible(view: Any) -> bool:
-    """Whether a recovery target could change a policy for ``view`` (fails safe)."""
+    """Whether any handler of ``view`` can resolve to the strict policy (fails safe)."""
     from ._parameter_contract import ContractError
 
     try:
@@ -130,80 +113,6 @@ def _strict_possible(view: Any) -> bool:
         return _declares_strict(type(view))
     except (ContractError, TypeError):
         return True
-
-
-def _scan_describes(view: Any) -> bool:
-    """Whether the class-level scan sees every recovery target ``view`` renders.
-
-    Not when the view sets ``template`` or ``template_name`` on the instance
-    (in ``mount()``, say): the scan read the class's template, not that one
-    (PR #3159 review).
-    """
-    if _INSTANCE_TEMPLATE_NAMES & set(getattr(view, "__dict__", ())):
-        return False
-    return _recovery_scan(type(view))[1]
-
-
-_INSTANCE_TEMPLATE_NAMES = frozenset({"template", "template_name"})
-
-
-def note_rendered_recovery_targets(view: Any, html: str) -> None:
-    """Record the recovery targets in the HTML the server just rendered for ``view``.
-
-    Used only where the class-level template scan cannot see every target: a
-    computed ``dj-auto-recover`` value, markup the scan cannot follow (a
-    dynamic include, a tag that renders markup), or a view that picks its own
-    template (``get_template()``, or ``template``/``template_name`` set on the
-    instance). Elsewhere a render adds nothing, because rendered HTML also
-    carries user content: ``|safe`` HTML from a sanitizer that keeps unknown
-    attributes could otherwise name a strict handler and downgrade it (#3127).
-    Where the render is used, such a sanitizer must drop ``dj-*`` attributes.
-    Only real ``dj-auto-recover`` attributes of parsed elements count; escaped
-    text that merely spells one does not.
-    """
-    try:
-        names: frozenset[str] = frozenset()
-        # R1 only downgrades strict handlers: a legacy-only view never needs the
-        # parse (it cost ~3 ms per 20 KB render, PR #3122 review).
-        if "dj-auto-recover" in html and _strict_possible(view) and not _scan_describes(view):
-            from html.parser import HTMLParser
-
-            found: set[str] = set()
-
-            class _Targets(HTMLParser):
-                def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-                    for name, value in attrs:
-                        if name == "dj-auto-recover" and value and value.isidentifier():
-                            found.add(value)
-
-                handle_startendtag = handle_starttag
-
-            parser = _Targets()
-            try:
-                parser.feed(html)
-                parser.close()
-            except (AssertionError, ValueError):
-                # Only targets seen before the malformed section are known.
-                # Unseen targets retain their strict exposure policy.
-                logger.debug("Recovery target scan stopped at malformed HTML")
-            names = frozenset(found)
-        _RENDERED_RECOVERY[view] = names
-    except TypeError:
-        pass  # Not weak-referenceable: the template scan still applies.
-
-
-def is_recovery_target(view: Any, name: str) -> bool:
-    """R1: a handler a ``dj-auto-recover`` binding targets in this view.
-
-    The union of the last server render of this instance and the class-level
-    template scan (which also covers renders Python did not see, such as a
-    reconstructed HTTP instance before it renders).
-    """
-    try:
-        rendered = _RENDERED_RECOVERY.get(view, frozenset())
-    except TypeError:  # an unhashable or non-weak-referenceable view
-        rendered = frozenset()
-    return name in rendered or name in recovery_handler_names(type(view))
 
 
 def _definition_key(function: Any) -> tuple:
@@ -291,38 +200,12 @@ def get_handler_parameter_policy(handler: Callable) -> str:
     policy = metadata.get("parameter_policy")
     if policy is not None and policy not in ("legacy", "strict"):
         raise ContractError("parameter_policy must be 'legacy' or 'strict'.")
-    if policy == "legacy":
-        return "legacy"
-    owner = getattr(handler, "__self__", None)
-
-    def _recovery_target() -> bool:
-        return (
-            owner is not None
-            and not isinstance(owner, type)
-            and _is_live_view(owner)
-            and is_recovery_target(owner, getattr(handler, "__name__", ""))
-        )
-
-    if policy is None:
-        try:
-            resolved = get_project_parameter_policy()
-        except ContractError:
-            # R1 wins even over an invalid project policy, as before.
-            if _recovery_target():
-                return "legacy"
-            raise
-    else:
-        resolved = str(policy)
-    # R1 only ever downgrades strict, so legacy apps never scan templates here.
-    if resolved == "strict" and _recovery_target():
-        return "legacy"
-    return resolved
-
-
-def _is_live_view(owner: Any) -> bool:
-    from .live_view import LiveView
-
-    return isinstance(owner, LiveView)
+    if policy is not None:
+        return str(policy)
+    # A dj-auto-recover target follows the same policy as any handler: its
+    # form values and data attributes are ordinary declared parameters
+    # (``form_values`` / ``data_attrs``) under strict (#4178).
+    return get_project_parameter_policy()
 
 
 def get_handler_coercion(handler: Callable) -> bool:
@@ -342,6 +225,40 @@ def validated_call_arguments(validation: Dict[str, Any]) -> tuple[tuple[Any, ...
     return (), validation.get("coerced_params", {})
 
 
+def bind_declared_component_name(handler: Callable, params: Any) -> tuple[Any, Dict[str, Any]]:
+    """Take the event's ``component_id`` out of ``params`` for a handler that
+    declares it framework-supplied (the component ``Meta.event`` alias, #4185).
+
+    The ``component_id`` is a string the CLIENT sent, not a server object and
+    not a value the server minted. What makes it safe to pass to the alias is
+    only this check: it must be a ``str`` that is either empty (the alias then
+    resolves the single component of its type) or one of the component names
+    the handler's owner class declares (``_component_descriptors``), the rule
+    ``_component_state.resolve_component_target`` applies before an event
+    reaches the alias over WebSocket, SSE and the HTTP fallback. Any other
+    value is refused, as strict refuses a routing target the route did not
+    consume. The alias still resolves the name itself, against the same
+    declared names.
+
+    Returns the remaining payload and ``{"component_id": <checked name>}``.
+    """
+    from ._parameter_contract import ParameterError
+
+    if type(params) is not dict:
+        return params, {ROUTED_COMPONENT_PARAMETER: ""}
+    remaining = dict(params)
+    target = remaining.pop(ROUTED_COMPONENT_PARAMETER, "")
+    if target is None:
+        target = ""
+    owner = getattr(handler, "__self__", None)
+    declared = getattr(type(owner), "_component_descriptors", None) if owner is not None else None
+    if type(target) is not str or (
+        target and (not isinstance(declared, dict) or target not in declared)
+    ):
+        raise ParameterError("The event's routing target is not handled by this route.")
+    return remaining, {ROUTED_COMPONENT_PARAMETER: target}
+
+
 def _validate_strict_handler_params(
     handler: Callable, params: Dict[str, Any], coerce: bool, positional_args: Any
 ) -> Dict[str, Any]:
@@ -354,10 +271,13 @@ def _validate_strict_handler_params(
     contract = get_strict_handler_contract(handler)
     expected = [item["name"] for item in contract.metadata()]
     positional = () if positional_args is _MISSING_POSITIONAL else positional_args
+    trusted: Dict[str, Any] = {}
     try:
         if type(params) is dict and any(key in TRANSPORT_METADATA_KEYS for key in params):
             # D5: transport bookkeeping is dispatch context, never an argument.
             params = {k: v for k, v in params.items() if k not in TRANSPORT_METADATA_KEYS}
+        if ROUTED_COMPONENT_PARAMETER in contract.trusted:
+            params, trusted = bind_declared_component_name(handler, params)
         if type(params) is dict and any(key in FRAMEWORK_ARGUMENT_NAMES for key in params):
             # The route that received this event did not consume its target.
             raise ParameterError("The event's routing target is not handled by this route.")
@@ -366,7 +286,7 @@ def _validate_strict_handler_params(
                 raise ParameterError("Positional arguments were supplied twice.")
             params = params.copy()
             positional = params.pop("_args")
-        bound = contract.bind(params, positional, coerce=coerce)
+        bound = contract.bind(params, positional, coerce=coerce, trusted=trusted)
     except ParameterError as exc:
         # Never return the original payload or arbitrary client-supplied keys in
         # an error envelope. Declared names and fixed type labels are sufficient.

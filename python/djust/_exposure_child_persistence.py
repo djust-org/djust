@@ -16,6 +16,15 @@ from ._session_merge import asave_merged
 from .auth.core import check_view_auth, enforce_object_permission
 
 
+class _ChildCaptureError(ExposureError):
+    """The capture failed while handling one embedded view; names its class.
+
+    The message carries only the class's dotted path (as the page's
+    ``{% live_render %}`` markup already does), never the underlying error,
+    which may hold provider or default values.
+    """
+
+
 def _capture_children(root: Any, request: Any) -> list[tuple[ChildStateSession, dict[str, Any]]]:
     """Validate the entire owned tree before changing any session entries."""
     try:
@@ -26,6 +35,7 @@ def _capture_children(root: Any, request: Any) -> list[tuple[ChildStateSession, 
         seen: set[int] = set()
         captured: list[tuple[ChildStateSession, dict[str, Any]]] = []
         children = []
+        failing: Any = None
         registries = []
         while pending:
             parent = pending.pop()
@@ -38,6 +48,7 @@ def _capture_children(root: Any, request: Any) -> list[tuple[ChildStateSession, 
             entries = tuple(registry.items())
             registries.append((parent, entries))
             for slot, child in entries:
+                failing = child
                 if (
                     getattr(child, "_parent_view", None) is not parent
                     or getattr(child, "_view_id", None) != slot
@@ -61,6 +72,7 @@ def _capture_children(root: Any, request: Any) -> list[tuple[ChildStateSession, 
         # Defaults and application authorization hooks may alter other children.
         # Recheck every recorded scope after capture, before the first write.
         for child, adapter in children:
+            failing = child
             if getattr(child, "_djust_child_disposed", False):
                 raise ExposureError("Child persistence owner was disposed")
             if check_view_auth(child, request) is not None:
@@ -69,6 +81,7 @@ def _capture_children(root: Any, request: Any) -> list[tuple[ChildStateSession, 
             current = child_event_adapter(child, root, request)
             if (current.binding if current else None) != (adapter.binding if adapter else None):
                 raise ExposureError("Child persistence identity changed")
+        failing = None
         for parent, entries in registries:
             registry = getattr(parent, "_child_views", {})
             if (
@@ -87,6 +100,14 @@ def _capture_children(root: Any, request: Any) -> list[tuple[ChildStateSession, 
                 adapter._check_session()
         return captured
     except Exception:  # noqa: BLE001 — provider/default errors may contain secrets
+        if failing is not None:
+            # #4185: name the embedded view (an admin widget that states the
+            # legacy policy fails here), never the underlying error.
+            kind = type(failing)
+            raise _ChildCaptureError(
+                "Child state persistence unavailable for the embedded view %s.%s"
+                % (kind.__module__, kind.__qualname__)
+            ) from None
         raise ExposureError("Child state persistence unavailable") from None
 
 
@@ -95,6 +116,8 @@ def _capture_batch(root: Any, request: Any) -> tuple[SessionBase, dict[str, Any]
         batch = prepare_child_batch(_capture_children(root, request), root, request)
         root._explicit_child_state_tracked = batch is not None
         return batch
+    except _ChildCaptureError:
+        raise
     except Exception:  # noqa: BLE001
         raise ExposureError("Child state persistence unavailable") from None
 

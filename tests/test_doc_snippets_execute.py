@@ -520,7 +520,7 @@ def _check_exposure(cls: type, client, block: Block) -> None:
         )
 
 
-def _check_2_0_declarations(classes: list[type], recovery: frozenset[str] = frozenset()) -> None:
+def _check_2_0_declarations(classes: list[type]) -> None:
     """The block's classes use the 2.0 spellings (#4188).
 
     * no class states ``exposure_policy = "legacy"`` (``djust.V028``);
@@ -529,12 +529,8 @@ def _check_2_0_declarations(classes: list[type], recovery: frozenset[str] = froz
       ``djust.V016`` itself (``checks.parameters._handler_messages``), run on the
       class under the strict project policy the test sets, so it covers handlers
       the block cannot fire and blocks that cannot mount (a model it does not
-      define). Handlers the class inherits from djust are not the example's.
-
-    ``recovery`` names the handlers a ``dj-auto-recover`` in the document
-    targets. They run under the legacy policy by owner decision R1 (their
-    ``_form_values`` / ``_data_attrs`` envelope has no strict signature yet), as
-    ``djust.V016`` itself skips them when it can read the view's template.
+      define). Handlers the class inherits from djust are checked too, and
+      djust's own pass.
     """
     from djust._exposure import uses_legacy_exposure
     from djust._parameter_metadata import component_stop, declared_handlers, view_stop
@@ -551,12 +547,6 @@ def _check_2_0_declarations(classes: list[type], recovery: frozenset[str] = froz
             )
         stop = view_stop if issubclass(cls, LiveView) else component_stop
         for name, member, function, _owner in declared_handlers(cls, stop, server_functions=True):
-            if inspect.unwrap(function).__module__ != cls.__module__:
-                # Inherited from djust, or installed by it (a descriptor
-                # component's ``set_tab``): not the example's declaration.
-                continue
-            if name in recovery:
-                continue
             decorators = getattr(function, "_djust_decorators", {})
             metadata = decorators.get("event_handler", decorators.get("server_function", {}))
             if metadata.get("parameter_policy") == "legacy":
@@ -646,14 +636,6 @@ def _binding_arguments(
                         args.setdefault(name, literal(field_attrs.get("value", "")))
         sends.append(args)
     return sends
-
-
-def _recovery_targets(block: Block) -> frozenset[str]:
-    """Handlers a ``dj-auto-recover`` in the block's document names."""
-    if not block.path.exists():
-        return frozenset()
-    text = block.path.read_text(encoding="utf-8")
-    return frozenset(re.findall(r'dj-auto-recover="([A-Za-z_]\w*)"', text))
 
 
 def _document_templates(block: Block) -> str:
@@ -765,15 +747,7 @@ def _run_view(
                 (cls,),
                 {
                     "__module__": cls.__module__,
-                    # A recovery handler the document's template targets
-                    # keeps its target in the stub, as the runtime reads it
-                    # from the real template (R1: legacy policy).
-                    "template": "<div dj-root>doc-snippet stub%s</div>"
-                    % "".join(
-                        f'<div dj-auto-recover="{target}"></div>'
-                        for target in sorted(_recovery_targets(block) if block else ())
-                        if callable(getattr(cls, target, None))
-                    ),
+                    "template": "<div dj-root>doc-snippet stub</div>",
                     "template_name": None,
                 },
             )
@@ -995,7 +969,7 @@ def run_block(block: Block) -> Outcome:
         }
         if not views and not components:
             raise _Skip("defines no concrete LiveView/LiveComponent", "")
-        _check_2_0_declarations(views + components, _recovery_targets(block))
+        _check_2_0_declarations(views + components)
         for cls in views:
             _run_view(cls, outcome, block_classes, block)
         for cls in components:

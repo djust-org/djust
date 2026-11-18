@@ -484,6 +484,16 @@ object for every event, rebuilt from its saved state as in 1.3.
   warns about it (`djust.V026`), because a legacy view renders it to every
   user.
 - **Actors** (`use_actors = True`). See [What does not survive](#5-what-does-not-survive).
+- **A legacy widget on an admin page.** The admin change list and change
+  form are explicit, and an explicit page cannot embed a view that states
+  `"legacy"`: a `change_list_widgets` / `change_form_widgets` view that
+  still does makes the page fail (`djust.V032` names it). Migrate the
+  widget first.
+- **Undeclared names in a `TtydTerminalView` subclass.** The terminal base
+  class is explicit. Its own names (`ttyd_url`, `rows`, `cols`,
+  `theme_json`) come from `super().get_context_data()`; a subclass whose
+  template reads its own attributes (`session_log`, `terminal_connected`)
+  lists them there, or they render empty (`djust.T027` names each one).
 - **A `state()` grant on a legacy view.** `state(0, persist="server")` on a
   view that is still `"legacy"` raises when the view is created, so a grant
   never looks like protection it does not give. Add the grant and the policy
@@ -589,7 +599,7 @@ A form handler that takes whatever fields the form has keeps a typed
 catch-all: `def save(self, title: str, **fields: str)`.
 
 The accepted annotations are `str`, `int`, `float`, `bool`, `Decimal`, `UUID`,
-`date`, `Optional[T]`, `list[T]` and `Any`. The exact rules for each are in
+`date`, `Optional[T]`, `list[T]`, `dict[str, T]` and `Any`. The exact rules for each are in
 [Typed event parameters](../core-concepts/events.md#typed-event-parameters-strict-policy).
 
 ### Switching the whole project
@@ -639,8 +649,27 @@ djust's own component tags and templates already send their arguments as
 element by `data-value`, `data-column`, `data-mode`, `data-tab` or another
 argument attribute, select the `dj-value-*` attribute instead.
 
-Handlers named by a `dj-auto-recover` attribute always run under the legacy
-policy for now; `djust.V019` warns if you mark one strict.
+A handler named by a `dj-auto-recover` attribute declares the recovered
+values instead of reading `_form_values` / `_data_attrs`, which a strict
+signature cannot declare. It follows the same policy as any other handler:
+
+```python
+# 1.3
+@event_handler()
+def restore(self, _form_values=None, _data_attrs=None, **kwargs):
+    title = (_form_values or {}).get("title", "")
+
+# 2.0
+@event_handler(parameter_policy="strict")
+def restore(self, form_values: dict[str, Any], data_attrs: dict[str, str]):
+    title = form_values.get("title", "")
+```
+
+The browser sends only the dictionaries the handler declares.
+`djust.V031` reports a recovery handler that still reads the 1.3 names (a
+warning under the legacy policy, an error under strict) and one that declares
+the 2.0 names while it runs under the legacy policy. The values and their
+limits are in [Reconnection](reconnection.md#custom-recovery-with-dj-auto-recover).
 
 ## 3. Replace removed names and settings
 
@@ -984,4 +1013,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 43740668b3a9 -->
+<!-- generated-doc prose-sha256: b52289b0f89d -->
