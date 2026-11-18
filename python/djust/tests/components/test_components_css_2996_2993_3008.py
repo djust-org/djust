@@ -17,7 +17,7 @@ import pytest
 
 from djust.components.components.code_block import CodeBlock
 
-STATIC = Path(__file__).resolve().parents[1] / "static" / "djust_components"
+STATIC = Path(__file__).resolve().parents[2] / "components" / "static" / "djust_components"
 CLASSES_CSS = (STATIC / "components-classes.css").read_text()
 COMPONENTS_CSS = (STATIC / "components.css").read_text()
 DJUST_ROOT = Path(__file__).resolve().parents[2]

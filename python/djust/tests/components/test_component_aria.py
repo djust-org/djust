@@ -43,7 +43,7 @@ def render_tag(src, ctx=None):
 # Inclusion-template files are read directly — djust.components is not in
 # demo_project's INSTALLED_APPS, so the app-based loader can't find them
 # by name (mirrors test_data_table_link_row_nav.py).
-_TPL_DIR = Path(__file__).resolve().parents[1] / "templates" / "djust_components"
+_TPL_DIR = Path(__file__).resolve().parents[2] / "components" / "templates" / "djust_components"
 
 
 def _engine_template(name):

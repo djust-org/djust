@@ -103,3 +103,115 @@ def test_make_test_runs_every_python_root() -> None:
     assert len(commands) == 1, commands
     for root in REQUIRED_ROOTS:
         assert root in commands[0].split(), (root, commands[0])
+
+
+# ---------------------------------------------------------------------------
+# #4217 — no test file outside the collected roots
+# ---------------------------------------------------------------------------
+#
+# The pins above check that CI passes every root. They cannot see a test file
+# that sits in NO root: `python/djust/components/tests/` (9 files, 153 tests)
+# ran in no job and no default `pytest` until #4217 moved it under
+# `python/djust/tests/components/`. A fixture failure in it was invisible to
+# every targeted run and the early tier (#4186).
+#
+# So: every test-shaped file in the tree is under a root, and not under one of
+# pyproject's `--ignore`s, or it is listed here with the reason it is not a
+# suite test. A new directory of tests anywhere else fails this pin.
+
+TEST_FILE_RE = re.compile(r"^(test_.*|.*_test)\.py$")
+
+# Directories never walked: tool state, builds, vendored trees.
+SKIP_DIRS = {"node_modules", "target", "build", "dist", "__pycache__", "site-packages"}
+
+# path (a file, or a directory ending in "/") -> why it is not collected.
+OUTSIDE_ROOTS = {
+    "tests/playwright/": (
+        "browser scripts: each is run directly (`python tests/playwright/<file>.py`) "
+        "by a browser job; pyproject's addopts --ignore it"
+    ),
+    "examples/demo_project/demo_app/views/": (
+        "demo pages whose names contain 'test' (cache_test.py, test_index.py, ...); "
+        "they are views, not tests"
+    ),
+    "examples/demo_project/djust_tests/views/": (
+        "demo pages whose names contain 'test'; they are views, not tests"
+    ),
+    "examples/demo_project/djust_rentals/": (
+        "the rentals demo app's own tests; the demo is example code, not the framework suite"
+    ),
+    "examples/test_textarea_component.py": (
+        "a hand-run example script that configures its own settings"
+    ),
+    "python/djust/test_isolation.py": (
+        "a library module (public test-isolation helpers), not a test file"
+    ),
+}
+
+
+def _pytest_ini() -> dict:
+    import tomllib
+
+    return tomllib.loads((ROOT / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"]
+
+
+def _ignored_paths() -> list[str]:
+    out = []
+    for opt in _pytest_ini().get("addopts", []):
+        if opt.startswith("--ignore="):
+            out.append(opt.split("=", 1)[1].rstrip("/") + "/")
+    return out
+
+
+def _test_shaped_files() -> list[str]:
+    import os
+
+    found = []
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS]
+        for name in filenames:
+            if TEST_FILE_RE.match(name):
+                found.append(Path(dirpath, name).relative_to(ROOT).as_posix())
+    return sorted(found)
+
+
+def _ledgered(path: str) -> bool:
+    return any(path == key or (key.endswith("/") and path.startswith(key)) for key in OUTSIDE_ROOTS)
+
+
+def _collected(path: str) -> bool:
+    in_root = any(path.startswith(root) for root in REQUIRED_ROOTS)
+    ignored = any(path.startswith(ign) for ign in _ignored_paths())
+    return in_root and not ignored
+
+
+def test_pyproject_testpaths_are_the_ci_roots() -> None:
+    """A bare `pytest` collects what CI collects: the same three roots."""
+    testpaths = {p.rstrip("/") + "/" for p in _pytest_ini()["testpaths"]}
+    assert testpaths == set(REQUIRED_ROOTS), (
+        f"pyproject testpaths {sorted(testpaths)} differ from the CI roots "
+        f"{sorted(REQUIRED_ROOTS)}: a bare `pytest` and CI would run different suites."
+    )
+
+
+def test_every_test_file_is_collected_or_listed() -> None:
+    files = _test_shaped_files()
+    assert len(files) > 500, f"the walk found only {len(files)} test files; it is broken"
+    stray = [f for f in files if not _collected(f) and not _ledgered(f)]
+    assert not stray, (
+        "test files that NO pytest run collects (not under "
+        f"{list(REQUIRED_ROOTS)}, or under an addopts --ignore):\n  "
+        + "\n  ".join(stray)
+        + "\nMove them under a root, or list them in OUTSIDE_ROOTS with the reason "
+        "they are not suite tests (#4217)."
+    )
+
+
+def test_every_ledger_entry_still_matches_a_file() -> None:
+    files = _test_shaped_files()
+    stale = [
+        key
+        for key in OUTSIDE_ROOTS
+        if not any(f == key or (key.endswith("/") and f.startswith(key)) for f in files)
+    ]
+    assert not stale, f"OUTSIDE_ROOTS entries that match no test file: {stale}"

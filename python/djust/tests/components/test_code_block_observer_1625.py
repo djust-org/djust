@@ -18,7 +18,11 @@ from djust.components.templatetags.djust_components import code_block
 # The bootstrap now lives in a static file (a strict CSP refuses an inline
 # script); every highlighted block loads it.
 HIGHLIGHTER = (
-    Path(__file__).resolve().parents[1] / "static" / "djust_components" / "code-block-highlight.js"
+    Path(__file__).resolve().parents[2]
+    / "components"
+    / "static"
+    / "djust_components"
+    / "code-block-highlight.js"
 ).read_text()
 
 
