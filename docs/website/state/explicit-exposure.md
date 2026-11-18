@@ -355,7 +355,12 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   is an explicit view: the values it returns (usually `locals()`) are its
   context, and the `@event_handler` callables it returns are its handlers,
   strict or not. Names starting with an underscore, other callables, and the
-  request are not rendered. The view is built for each request and the
+  request are not rendered. A returned LiveView setting (`login_required`,
+  `permission_required`, `login_url`, `template`, `template_name` ...)
+  configures the view and is checked before anything runs; it is not a
+  template name. `view`, `csrf_token`, `DATE_FORMAT` and `TIME_FORMAT` keep
+  djust's own values, and a returned `exposure_policy` is ignored. The view is
+  built for each request and the
   function runs again every time, so nothing is kept between requests. It
   answers the page GET and the HTTP fallback POST; a WebSocket or SSE mount is
   refused with `View not found`, because the class it names is built inside
@@ -373,10 +378,18 @@ token = state("", persist="server", render=False)  # handlers only, never templa
       shouted = []
 
       @event_handler
-      def shout(**kwargs):
-          shouted.append(name.upper())
+      def shout(times: int = 1):
+          shouted.extend([name.upper()] * times)
 
       return locals()
+  ```
+
+  ```html
+  <!-- greeting.html -->
+  <div dj-root>
+    <button dj-click="shout" dj-value-times="3">Shout</button>
+    {% for word in shouted %}<p>{{ word }}</p>{% endfor %}
+  </div>
   ```
 
 ## Not supported under explicit exposure
