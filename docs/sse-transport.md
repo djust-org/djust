@@ -180,12 +180,22 @@ deployments (e.g. `gunicorn -w 4`) the SSE stream GET and the event POST
 requests **must be routed to the same worker process**.
 
 Configure your load balancer with session affinity (sticky sessions) based on
-the session UUID in the URL path. Example nginx configuration:
+the session UUID in the URL path, with one upstream entry per process (here,
+one single-worker server per port). Hash the UUID itself, not the whole URL:
+the stream GET carries a query string and the POSTs go to `.../message/`, so
+`hash $request_uri` sends them to different processes (about half of all
+sessions with two backends). Example nginx configuration:
 
 ```nginx
+# The <uuid> of /djust/sse/<uuid>/ and /djust/sse/<uuid>/message/;
+# other requests keep their own key.
+map $uri $djust_sse_session {
+    ~^/djust/sse/(?<sid>[^/]+)/ $sid;
+    default $request_uri;
+}
+
 upstream djust_app {
-    # Sticky by the /djust/sse/<uuid>/ path segment
-    hash $request_uri consistent;
+    hash $djust_sse_session consistent;
     server 127.0.0.1:8000;
     server 127.0.0.1:8001;
 }

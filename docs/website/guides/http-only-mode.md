@@ -315,7 +315,7 @@ class CounterView(LiveView):
 
 ## Automatic Fallback
 
-If the WebSocket exhausts its reconnect attempts and the SSE endpoint is mounted (`include(sse_urlpatterns)`), djust switches to the SSE transport automatically. Without SSE mounted there is no automatic fallback.
+If the WebSocket exhausts its reconnect attempts, djust switches to the SSE transport automatically whenever the browser has `EventSource`. The client does not know whether the SSE endpoint is mounted: without `include(sse_urlpatterns)` its stream GET gets a 404, the client marks the transport disabled and adds `dj-disconnected`, and events do nothing.
 
 ## Troubleshooting
 

@@ -93,7 +93,7 @@ Test roots are historical locations, not clean unit/integration partitions.
 
 Every test file lives under one of the three roots (`tests/`, `python/tests/`,
 `python/djust/tests/`), which are both `testpaths` and the paths CI passes. A
-test-shaped file anywhere else is collected by nothing, so
+tracked test-shaped file anywhere else is collected by nothing, so
 `tests/test_ci_python_test_roots.py` fails on it unless it is listed there with
 the reason it is not a suite test (#4217).
 
