@@ -924,10 +924,6 @@ class RequestMixin:
         self._prepare_child_ids()
         self._defer_lazy_registration = True
         html = render_view_full_template(self, request, serialized_context=state_serializable)
-        # ADR-036 R1: recovery targets come from what the server rendered.
-        from ..validation import note_rendered_recovery_targets
-
-        note_rendered_recovery_targets(self, html)
         # #3252: the VDOM-diff render below runs the template a SECOND time, so
         # the tag stashes a second thunk for every lazy slot. Those are NOT
         # interchangeable with the page pass: `_prepare_child_ids` scopes the

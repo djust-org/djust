@@ -116,12 +116,14 @@ their mount. The server remains authoritative for hand-crafted messages.
 a fallback after a socket `live_redirect` uses the current contracts.
 
 **Not changed.** `dj-model` (`update_model` receives the fixed
-`field`/`value` pair its framework handler declares), application hook
-`pushEvent` payloads, and `dj-auto-recover`, whose `_form_values` and
-`_data_attrs` keys cannot be strict parameters. The owner decided (R1) that
-recovery stays legacy: the server resolves a literal recovery target in the
-view's template to the legacy policy, and warns (V019) about an explicit
-strict declaration. Forms with file inputs sent to a `**`
+`field`/`value` pair its framework handler declares) and application hook
+`pushEvent` payloads. `dj-auto-recover` was listed here under R1 (recovery
+stays legacy; V019 warned about a strict declaration); #4178 superseded that:
+a strict recovery handler declares the generated `form_values: dict[str, Any]`
+/ `data_attrs: dict[str, str]` values, the browser sends the ones it declares
+under the page view's contract (recovery events carry no owner context), a
+legacy handler keeps the `_form_values` / `_data_attrs` envelope, and V031
+replaced V019. Forms with file inputs sent to a `**`
 catch-all are rejected by the collector, because it will not serialize a
 `File`; uploads use their own channel. That remains part of the (c) matrix.
 

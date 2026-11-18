@@ -177,28 +177,26 @@ class TtydTerminalView(LiveView):
             def on_ttyd_disconnect(self, timestamp="", code=0, reason="", **kwargs):
                 self.session_log.append(f"Disconnected at {timestamp} (code={code})")
 
-    The view keeps ``exposure_policy = "legacy"``, so a subclass's public
-    attributes reach its template as they always have. A subclass that sets
-    ``exposure_policy = "explicit"`` lists what its own template reads; the
-    terminal's names (``ttyd_url``, ``rows``, ``cols``, ``theme_json``) come
-    from ``super()``::
+    The view uses explicit exposure, like every djust view: a subclass's
+    template reads only the names its ``get_context_data()`` returns. The
+    terminal's own names (``ttyd_url``, ``rows``, ``cols``, ``theme_json``)
+    come from ``super()``, so a subclass that renders its own attributes lists
+    them there::
 
         class MyTerminalView(TtydTerminalView):
-            exposure_policy = "explicit"
-
             def get_context_data(self, **kwargs):
                 return super().get_context_data(
                     session_log=self.session_log,
                     terminal_connected=self.terminal_connected,
                     **kwargs,
                 )
+
+    A subclass that relied on its public attributes reaching the template
+    without that list (djust 1.x) renders them empty; ``manage.py check``
+    reports each such name (``djust.T027``).
     """
 
-    # Pinned to the legacy policy: this is a base class applications subclass,
-    # and a subclass's own public attributes (``session_log`` above) render
-    # through the attribute walk. A subclass opts in to explicit exposure
-    # itself; ``get_context_data()`` below already supplies this template's names.
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "djust_components/ttyd_terminal.html"
     login_required = False  # v1: assume open/local access; override in subclasses
 

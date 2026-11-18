@@ -199,8 +199,7 @@ def warn_unsupplied_template_names(view: Any, context: Any) -> None:
                 "%s.%s: the template reads {{ %s }} and the view sets %s, but nothing "
                 "supplies it to the template, so it renders empty. %s "
                 "Persisting it or sending it to the browser takes its own grant "
-                '(persist=, client=True). To keep the 1.x behaviour for now, set exposure_policy = "legacy" on '
-                "the view. See %s",
+                "(persist=, client=True). See %s",
                 cls.__module__,
                 cls.__qualname__,
                 name,
