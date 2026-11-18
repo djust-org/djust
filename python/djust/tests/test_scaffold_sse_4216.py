@@ -10,7 +10,8 @@ The URLconf has two writers: ``URLS_PY`` (every project) and the
 ``--from-schema`` writer, which replaces the URLconf wholesale. Each case
 generates a real project in a temporary directory, runs its ``manage.py check``
 and then, in the project's own process, resolves the SSE URLs and mounts the
-index view over SSE with ``djust.testing``'s live page.
+index view over SSE with ``djust.testing``'s live page, then sends one event
+over that session and reads the re-render it answers with.
 """
 
 from __future__ import annotations
@@ -27,6 +28,14 @@ from djust.scaffolding import generator
 APP = "ssechild"
 
 SCHEMA = {"models": [{"name": "Post", "fields": [{"name": "title", "type": "string"}]}]}
+
+#: Per variant: an event its scaffolded view handles, its parameters, and text
+#: that only the re-render after that event contains.
+EVENTS = {
+    "default": ("add_item", {"name": "Added over SSE 4216"}, "Added over SSE 4216"),
+    "bare": ("ping", {}, "1 round trip "),
+    "schema": ("create", {"title": "Posted over SSE 4216"}, "Posted over SSE 4216"),
+}
 
 PROBE = """
 import asyncio, json, os, django
@@ -60,6 +69,10 @@ async def mount_over_sse():
     try:
         out["mount_type"] = sse.mount.get("type")
         out["mount_has_html"] = bool(sse.mount.get("html"))
+        # One event round trip over the same session: POST to message/, answer on the stream.
+        answer = await sse.send_event(%(event)r, %(params)r)
+        out["event_type"] = answer.get("type")
+        out["event_answer"] = json.dumps(answer)
     finally:
         await sse.close()
 
@@ -113,7 +126,8 @@ def test_a_scaffolded_project_serves_sse(tmp_path, variant):
     check = _run(project, "manage.py", "check")
     assert check.returncode == 0, check.stdout + check.stderr
 
-    probe = _run(project, "-c", PROBE % {"app": APP})
+    event, params, marker = EVENTS[variant]
+    probe = _run(project, "-c", PROBE % {"app": APP, "event": event, "params": params})
     lines = [line for line in probe.stdout.splitlines() if line.startswith("PROBE_JSON")]
     assert lines, "the probe printed no result:\n%s\n%s" % (probe.stdout, probe.stderr)
     out = json.loads(lines[-1].split(" ", 1)[1])
@@ -123,4 +137,6 @@ def test_a_scaffolded_project_serves_sse(tmp_path, variant):
     assert "mount_error" not in out, out["mount_error"]
     assert out["mount_type"] == "mount", out
     assert out["mount_has_html"] is True, out
+    assert out["event_type"] in ("patch", "html_update"), out
+    assert marker in out["event_answer"], out
     assert "sse_urlpatterns" in (project / APP / "urls.py").read_text()
