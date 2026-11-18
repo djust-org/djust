@@ -60,7 +60,7 @@ from django.core.exceptions import PermissionDenied
 from django.test import RequestFactory
 
 # Live sessions and real transports for tests of explicit views (#4191).
-from ._testing_live import (  # noqa: F401 — re-exported public API
+from ._testing_live import (  # re-exported public API, listed in __all__
     LivePage,
     LiveSocket,
     LiveSSE,
@@ -70,9 +70,37 @@ from ._testing_live import (  # noqa: F401 — re-exported public API
     with_live_session,
 )
 
+__all__ = [
+    # Live sessions and real transports (#4191), re-exported from _testing_live.
+    "LivePage",
+    "LiveSocket",
+    "LiveSSE",
+    "close_live_pages",
+    "live_session",
+    "open_live_page",
+    "with_live_session",
+    # Defined in this module.
+    "MountRedirect",
+    "NoHandlerFoundError",
+    "EventRejectedError",
+    "LiveViewTestClient",
+    "LiveComponentTestClient",
+    "SnapshotTestMixin",
+    "performance_test",
+    "MockRequest",
+    "create_test_view",
+    "render_template_string",
+    "render_component",
+    "assert_all_routed_liveviews_allowlisted",
+    "XSS_PAYLOADS",
+    "LiveViewSmokeTest",
+]
+
 if "pytest" in __import__("sys").modules:
     # The autouse cleanup fixture; defined only under pytest (#4191).
-    from ._testing_live import djust_live_pages  # noqa: F401
+    from ._testing_live import djust_live_pages  # noqa: F401 - listed in __all__ below
+
+    __all__.append("djust_live_pages")
 
 
 def _run_step(view: Any, step: str, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:

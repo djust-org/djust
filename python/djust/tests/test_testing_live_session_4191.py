@@ -720,3 +720,51 @@ class SocketUnderTransactionTestCase(TransactionTestCase):
             self.assertEqual(stream.mount["type"], "mount")
             await stream.send_event("increment")
         self.assertEqual([entry[:2] for entry in _seen("increment")], [("ada", "-")] * 2)
+
+
+# -- train/2.0-aa: close-after-failure keeps only ordinary errors (CodeQL py/catch-base-exception)
+
+
+class _ClosingFails:
+    _kind = "socket"
+
+    def __init__(self, failure: BaseException) -> None:
+        self.failure = failure
+
+    async def close(self) -> None:
+        raise self.failure
+
+
+def test_a_close_error_after_a_failure_is_noted_on_the_original_error():
+    from djust._testing_live import _Transport
+
+    original = AssertionError("the test's own failure")
+    asyncio.run(_Transport._close_after(_ClosingFails(RuntimeError("boom")), original))
+    assert any("closing the socket also failed" in n for n in getattr(original, "__notes__", []))
+
+
+def test_a_cancellation_during_the_close_propagates():
+    from djust._testing_live import _Transport
+
+    original = AssertionError("the test's own failure")
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_Transport._close_after(_ClosingFails(asyncio.CancelledError()), original))
+    assert not getattr(original, "__notes__", [])
+
+
+def test_djust_testing_declares_its_re_exports():
+    import djust.testing as testing
+
+    for name in (
+        "LivePage",
+        "LiveSocket",
+        "LiveSSE",
+        "close_live_pages",
+        "live_session",
+        "open_live_page",
+        "with_live_session",
+        "LiveViewTestClient",
+        "djust_live_pages",
+    ):
+        assert name in testing.__all__, name
+        assert hasattr(testing, name), name

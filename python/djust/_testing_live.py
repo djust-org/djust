@@ -916,9 +916,9 @@ class _Transport:
         """Close after ``exc``; a failure to close never replaces ``exc``."""
         try:
             await self.close()
-        except BaseException as failure:  # noqa: BLE001 - reported on exc instead
-            if isinstance(failure, (KeyboardInterrupt, SystemExit)):
-                raise
+        except Exception as failure:  # noqa: BLE001 - reported on exc instead
+            # Only an ordinary error is folded into ``exc``: a cancellation,
+            # KeyboardInterrupt or SystemExit during the close propagates.
             note = getattr(exc, "add_note", None)
             if note is not None:
                 note("djust.testing: closing the %s also failed: %r" % (self._kind, failure))
