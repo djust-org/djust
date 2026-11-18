@@ -168,14 +168,19 @@ def test_explicit_and_unstated_views_do_not_warn():
 
 
 def test_a_legacy_statement_shipped_in_djust_does_not_warn_through_a_subclass():
-    """``TtydTerminalView`` states legacy itself; an application cannot change that line."""
-    from djust.components.ttyd.terminal import TtydTerminalView
-
-    assert TtydTerminalView.__dict__["exposure_policy"] == "legacy"
+    """A class shipped in djust that states legacy (only the ``@live_view``
+    decorator's class still does, until #4183; #4185 moved the rest) is not the
+    application's to change. A stand-in shipped class, so the test does not
+    depend on which djust class is still pinned."""
     with warnings.catch_warnings(record=True) as record:
         warnings.simplefilter("always")
+        shipped = type(
+            "ShippedBase",
+            (LiveView,),
+            {"__module__": "djust.components.shipped_example", "exposure_policy": "legacy"},
+        )
 
-        class Subclass(TtydTerminalView):
+        class Subclass(shipped):
             pass
 
         Subclass()

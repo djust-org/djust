@@ -169,11 +169,6 @@ class _OwnerContext:
         stop = component_stop if kind == "component" else view_stop
         self.handlers = {h.name: h for h in declared_handlers(cls, stop)}
         self.meta_event = self._meta_event() if kind == "component" else None
-        self.recovery = {b.name for b in scan.bindings if b.directive == "dj-auto-recover"}
-        if kind == "view":
-            from djust.validation import recovery_handler_names
-
-            self.recovery |= set(recovery_handler_names(cls))
 
     def _meta_event(self) -> Optional[str]:
         meta = inspect.getattr_static(self.cls, "Meta", None)
@@ -362,8 +357,6 @@ class _OwnerContext:
             policy = get_handler_parameter_policy(method)
         except ContractError:
             return []  # djust.C022 / V016 report the invalid policy.
-        if binding.directive == "dj-auto-recover" or binding.name in self.recovery:
-            policy = "legacy"
         payload = binding.payload
         findings = _routing_findings(payload)
         if policy == "strict":
@@ -564,8 +557,9 @@ def _strict_findings(binding: Any, method: Any) -> list[Finding]:
     positional_params = [p for p in metadata if p["kind"].startswith("positional")]
     types_by_name = dict(contract.types)
     coerce = get_handler_coercion(method)
-    generated = set(payload.generated)
-    sent_generated = [g for g in payload.generated if g in named or open_]
+    generated_names = [*payload.generated, *payload.strict_generated]
+    generated = set(generated_names)
+    sent_generated = [g for g in generated_names if g in named or open_]
     positional = payload.positional or []
     positional_names = [p["name"] for p in positional_params[: len(positional)]]
     findings: list[Finding] = []

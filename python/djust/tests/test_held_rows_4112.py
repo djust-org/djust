@@ -2569,12 +2569,23 @@ class ProbeOverView(models.Model):
         managed = False
 
 
+@pytest.mark.parametrize("cold_registry", [False, True])
 @pytest.mark.parametrize("setting,expected", [(False, ["djust.C042"]), (True, [])])
-def test_c042_names_models_the_database_changes_by_itself(monkeypatch, setting, expected):
+def test_c042_names_models_the_database_changes_by_itself(
+    monkeypatch, setting, expected, cold_registry
+):
     from django.apps import apps
 
     from djust.checks.configuration import _check_database_side_writes
 
+    if cold_registry:
+        # What an earlier test that registers a model leaves behind (train/2.0-ab).
+        apps.clear_cache()
+
+    # get_fields() builds a model's relation tree from apps.get_models(include_auto_created=True)
+    # when it is not cached, and any earlier test that registers a model clears that cache.
+    # Build it from the real registry first, so the stub below only chooses the models checked.
+    Group._meta.get_fields()
     monkeypatch.setattr(apps, "get_models", lambda: [Group, ProbeOverView])
     errors: list = []
     with override_settings(DJUST_REFRESH_ON_ANY_WRITE=setting):

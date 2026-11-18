@@ -118,7 +118,7 @@ def test_already_typed(annotation, value):
 
 
 @pytest.mark.parametrize(
-    "annotation", [dict[str, int], int | str, Literal[1], list, "MissingType", datetime]
+    "annotation", [dict[int, str], dict, int | str, Literal[1], list, "MissingType", datetime]
 )
 def test_unsupported_declarations_fail_closed(annotation):
     with pytest.raises(ContractError):

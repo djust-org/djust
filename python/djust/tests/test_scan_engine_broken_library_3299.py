@@ -3,7 +3,7 @@ library that fails to import must cost the scan only that library.
 
 ``get_installed_libraries`` raises ``InvalidTemplateLibrary`` for the first broken
 ``templatetags`` module; used as-is it aborted ``manage.py check`` and the
-strict-policy recovery scan for a project that never had a problem before.
+dj-auto-recover target scan for a project that never had a problem before.
 """
 
 from __future__ import annotations
@@ -16,9 +16,8 @@ from django.apps import apps
 from django.test import override_settings
 
 from djust import LiveView
-from djust._template_bindings import django_engine
+from djust._template_bindings import django_engine, recovery_scan
 from djust.checks.bindings import check_event_bindings
-from djust.validation import _RECOVERY_HANDLERS, _recovery_scan
 
 APP = "broken_lib_app_3299"
 
@@ -71,7 +70,6 @@ def project(tmp_path):
         for name in [m for m in sys.modules if m == APP or m.startswith(APP + ".")]:
             del sys.modules[name]
         apps.clear_cache()
-        _RECOVERY_HANDLERS.clear()
 
 
 def test_a_broken_templatetags_module_does_not_stop_the_scan(project):
@@ -88,8 +86,7 @@ def test_recovery_scan_still_reads_templates_that_load_the_working_libraries(pro
         exposure_policy = "explicit"
         template_name = "page.html"
 
-    _RECOVERY_HANDLERS.clear()
-    assert _recovery_scan(Page) == (frozenset({"restore"}), True)
+    assert recovery_scan(Page) == (frozenset({"restore"}), True)
 
 
 def test_an_engine_that_cannot_be_built_skips_the_scan_instead_of_raising(project, monkeypatch):
@@ -104,7 +101,6 @@ def test_an_engine_that_cannot_be_built_skips_the_scan_instead_of_raising(projec
         exposure_policy = "explicit"
         template_name = "page.html"
 
-    _RECOVERY_HANDLERS.clear()
     assert django_engine() is None
-    assert _recovery_scan(Page) == (frozenset(), False)
+    assert recovery_scan(Page) == (frozenset(), False)
     check_event_bindings(None)  # degrades to the T023 skip, never raises

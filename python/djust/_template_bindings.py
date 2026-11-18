@@ -82,6 +82,8 @@ class Directive:
     generated: tuple[str, ...] = ()
     #: Generated only under the legacy policy (the strict binder never sends it).
     legacy_only: tuple[str, ...] = ()
+    #: Generated only under the strict policy (the legacy binder never sends it).
+    strict_only: tuple[str, ...] = ()
     #: Whether the client attaches owner context (component or embedded view).
     #: Without it the event reaches the page's root view; ``dj-poll`` is the
     #: one exception: a poll inside an embedded child view (``{% live_render %}``)
@@ -117,8 +119,14 @@ DIRECTIVES: dict[str, Directive] = {
     "dj-click-away": Directive("raw", "element"),
     "dj-mounted": Directive("raw", "element"),
     "dj-shortcut": Directive("shortcut", "element", ("key", "code", "shortcut")),
+    # #4178: a strict handler declares form_values / data_attrs; the legacy
+    # binder sends the 1.x envelope under "_" names.
     "dj-auto-recover": Directive(
-        "raw", "fixed", ("_form_values", "_data_attrs"), owner_context=False
+        "raw",
+        "fixed",
+        legacy_only=("_form_values", "_data_attrs"),
+        strict_only=("form_values", "data_attrs"),
+        owner_context=False,
     ),
     "dj-dialog-close-event": Directive("raw", "fixed", owner_context=False),
     "dj-viewport-top": Directive("raw", "fixed", ("edge",), owner_context=False),
@@ -732,6 +740,8 @@ class Payload:
     generated_complete: bool = True
     #: Generated names only the legacy binder sends (``_target``).
     legacy_generated: tuple[str, ...] = ()
+    #: Generated names only the strict binder sends (``dj-auto-recover``).
+    strict_generated: tuple[str, ...] = ()
     #: Positional ``name(args)`` literals, None when not statically known.
     positional: Optional[list[Any]] = field(default_factory=list)
     #: (attribute, normalized name) pairs that collide in the client's merge.
@@ -900,7 +910,10 @@ def _payload(
     base: str, spec: Directive, element: Element, opaque: set[int], positional: Optional[list[Any]]
 ) -> Payload:
     payload = Payload(
-        generated=spec.generated, legacy_generated=spec.legacy_only, positional=positional
+        generated=spec.generated,
+        legacy_generated=spec.legacy_only,
+        strict_generated=spec.strict_only,
+        positional=positional,
     )
     if spec.payload == "element":
         _element_payload(element, payload)
@@ -1321,7 +1334,18 @@ def recovery_scan(cls: type) -> tuple[frozenset[str], bool]:
     return names, complete
 
 
-def recovery_targets(cls: type) -> frozenset[str]:
-    """Handlers a literal ``dj-auto-recover`` in the class's template targets,
-    including its includes and parents (ADR-037 row 18)."""
-    return recovery_scan(cls)[0]
+def recovery_bindings(cls: type) -> tuple[frozenset[str], bool]:
+    """The handlers a literal ``dj-auto-recover`` in the class's template
+    targets, including its includes and parents (ADR-037 row 18), and whether
+    the template also has a computed one (``dj-auto-recover="{{ handler }}"``),
+    whose target the scan cannot name. Used by check ``djust.V031``."""
+    engine = django_engine()
+    if engine is None:
+        return frozenset(), False
+    cache: dict[Any, Any] = {}
+    _label, key = scan_class_template(cls, engine, cache)
+    scan = cache.get(key) if key is not None else None
+    if not isinstance(scan, TemplateScan):
+        return frozenset(), False
+    recover = [b for b in scan.bindings if b.directive == "dj-auto-recover"]
+    return frozenset(b.name for b in recover if b.name), any(not b.name for b in recover)

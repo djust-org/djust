@@ -43,7 +43,6 @@ MIGRATED_4082: tuple[str, ...] = (
     "python/djust/tests/test_pool_shared_session_view.py",
     "python/djust/tests/test_push_skip_render_no_noop_3034.py",
     "python/djust/tests/test_ratelimit_per_caller_f27_f28.py",
-    "python/djust/tests/test_recovery_handler_policy.py",
     "python/djust/tests/test_run_async_work_teardown_1940.py",
     "python/djust/tests/test_runtime.py",
     "python/djust/tests/test_runtime_dj_activity_1903.py",
@@ -77,6 +76,10 @@ MIGRATED_4082: tuple[str, ...] = (
 #: their views get a real session and user from ``djust.testing``'s
 #: live-session helpers (#4191). They state no legacy policy any more.
 MIGRATED_STEP3: tuple[str, ...] = ("python/djust/tests/test_stream_only_handlers_3639.py",)
+
+#: Files #4185 moved off the legacy policy with the framework classes they
+#: test (the component ``Meta.event`` alias): they state no legacy policy now.
+MIGRATED_4185: tuple[str, ...] = ("python/djust/tests/test_legacy_component_alias_3078.py",)
 
 #: The #4082 files that still state the legacy policy, each with its reason.
 REMAINING_4082: dict[str, str] = {
@@ -127,6 +130,8 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
     {
         # #4112: rows a legacy view publishes refresh after a write, as explicit ones do.
         "python/djust/tests/test_held_rows_4112.py",
+        # #4185: djust.V032 names an admin widget that states the legacy policy.
+        "python/djust/tests/test_admin_legacy_widget_v032.py",
         "python/djust/tests/_view_memory_scenarios.py",
         "python/djust/tests/test_adr034_delegated_rows.py",
         "python/djust/tests/test_adr037_binding_checks.py",
@@ -236,7 +241,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_lazy_provenance_http_3252.py",
         "python/djust/tests/test_lazy_provenance_round2_3427.py",
         "python/djust/tests/test_legacy_async_cancel_on_disconnect.py",
-        "python/djust/tests/test_legacy_component_alias_3078.py",
         "python/djust/tests/test_legacy_context_framework_config_2960.py",
         "python/djust/tests/test_legacy_navigation_waiters_3236.py",
         "python/djust/tests/test_legacy_view_keeps_no_session_state.py",
@@ -264,7 +268,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_property_shadow_parity_2614.py",
         "python/djust/tests/test_public_apis_4129.py",
         "python/djust/tests/test_ratelimit_post_fallback.py",
-        "python/djust/tests/test_recovery_scan_cost_3122.py",
         "python/djust/tests/test_recovery_version_staleness_1817.py",
         "python/djust/tests/test_removed_enable_state_snapshot.py",
         "python/djust/tests/test_removed_restore_snapshot_override.py",

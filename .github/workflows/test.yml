@@ -1357,8 +1357,7 @@ jobs:
             python/tests/test_security*.py \
             python/djust/tests/test_parameter_contract.py \
             python/djust/tests/test_strict_parameter_dispatch.py \
-            python/djust/tests/test_recovery_handler_policy.py \
-            python/djust/tests/test_recovery_scan_cost_3122.py \
+            python/djust/tests/test_auto_recover_strict_4178.py \
             -v \
             --cov=djust.security \
             --cov=djust.uploads \
