@@ -56,7 +56,12 @@ EXPLICIT = {
     "admin_ext/progress.py:BulkActionProgressWidget",
     "admin_ext/views.py:AdminIndexView",
     "admin_ext/views.py:LogoutView",
+    # #4185: the change list and change form embed the ModelAdmin's widget
+    # views; an explicit root holds explicit widgets (test_framework_classes_explicit_4185).
+    "admin_ext/views.py:ModelCreateView",
     "admin_ext/views.py:ModelDeleteView",
+    "admin_ext/views.py:ModelDetailView",
+    "admin_ext/views.py:ModelListView",
     "auth/admin_views.py:OAuthProvidersView",
     "auth/admin_views.py:SocialAccountsView",
     "components/gallery/live_views.py:DataGalleryView",
@@ -72,6 +77,9 @@ EXPLICIT = {
     "components/interactive_examples.py:DropdownMenuExample",
     # Built per request by the function-based @live_view decorator (#4183).
     "live_view.py:DynamicLiveView",
+    # #4185: a documented base class; a subclass lists what its own template
+    # reads in get_context_data() (test_a_terminal_subclass_* below).
+    "components/ttyd/terminal.py:TtydTerminalView",
     "theming/gallery/live_views.py:ComponentsCategoryView",
     "theming/gallery/live_views.py:ComponentsDetailView",
     "theming/gallery/live_views.py:ComponentsIndexView",
@@ -82,23 +90,7 @@ EXPLICIT = {
 #: the class body, so a changed default does not convert them), each with what
 #: it relies on that explicit exposure does not offer yet. Not a place for
 #: "not converted yet".
-LEGACY = {
-    "components/ttyd/terminal.py:TtydTerminalView": (
-        "A documented base class. A subclass renders its own public attributes "
-        "(session_log in the docstring example) through the attribute walk, so making "
-        "the base explicit would empty existing subclasses' templates without an error."
-    ),
-    "admin_ext/views.py:ModelListView": (
-        "Embeds the ModelAdmin's change_list_widgets with {% live_render %}. Those are "
-        "application views, legacy by default, and an explicit root cannot hold a "
-        "legacy child: _exposure_child_persistence._capture_children asks every "
-        "registered child for an explicit binding on the HTTP GET."
-    ),
-    "admin_ext/views.py:ModelDetailView": (
-        "Embeds the ModelAdmin's change_form_widgets with {% live_render %}; see ModelListView."
-    ),
-    "admin_ext/views.py:ModelCreateView": "A ModelDetailView; see ModelListView.",
-}
+LEGACY = {}
 
 
 #: Built inside a function on each call, so there is no class to import.
@@ -347,7 +339,9 @@ class _AuthPages(AdminPlugin):
 
 
 class LoggingTerminal(TtydTerminalView):
-    """The docstring's subclass, as an application wrote it before this change."""
+    """The docstring's subclass as a 1.x application wrote it: its own names
+    are not listed in get_context_data(), so explicit exposure (#4185) leaves
+    them out of the template."""
 
     template = (
         '<div dj-root><i data-rows="{{ rows }}">{{ ttyd_url }}</i>'
@@ -366,9 +360,7 @@ class LoggingTerminal(TtydTerminalView):
 
 
 class ExplicitTerminal(LoggingTerminal):
-    """The docstring's explicit subclass: it lists what its own template reads."""
-
-    exposure_policy = "explicit"
+    """The docstring's subclass: it lists what its own template reads."""
 
     def get_context_data(self, **kwargs):
         return super().get_context_data(
@@ -578,20 +570,75 @@ async def test_terminal_view_mounts_and_records_a_connection(site_urls):
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("name", ["LoggingTerminal", "ExplicitTerminal"])
-async def test_a_terminal_subclass_renders_its_own_attributes(site_urls, name):
-    """The base stays legacy, so an existing subclass is unchanged; an explicit
-    subclass gets the terminal's names from ``super()`` and lists its own."""
-    url = "/ttyd-logging/" if name == "LoggingTerminal" else "/ttyd-explicit/"
+async def test_a_terminal_subclass_renders_the_names_it_lists(site_urls):
+    """The terminal's names come from ``super()``; the subclass lists its own."""
+    url = "/ttyd-explicit/"
     browser = await _visitor(url)
     async with _Socket(_session_cookie(browser)) as ws:
-        mounted = await ws.mount(MODULE + "." + name, url)
+        mounted = await ws.mount(MODULE + ".ExplicitTerminal", url)
         html = mounted["html"]
         assert 'data-rows="24"' in html and "ws://localhost:7681" in html, html
         assert re.search(r"<b[^>]*>\[False\]</b>", html) and re.search(r"<u[^>]*>0</u>", html)
         await ws.send(_event("on_ttyd_connect", timestamp="now"))
         frame = await ws.until("patch", "html_update")
     assert {"[True]", "1"} <= set(_text_patches(frame)), frame
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_terminal_subclass_that_lists_nothing_renders_its_own_names_empty(site_urls):
+    """The developer-visible change of #4185: the base is explicit, so a
+    subclass's own attributes that its get_context_data() does not list render
+    empty (the terminal's own names still render). djust.T027 and the
+    unsupplied-name log report each such name."""
+    url = "/ttyd-logging/"
+    browser = await _visitor(url)
+    async with _Socket(_session_cookie(browser)) as ws:
+        mounted = await ws.mount(MODULE + ".LoggingTerminal", url)
+        html = mounted["html"]
+        assert 'data-rows="24"' in html and "ws://localhost:7681" in html, html
+        assert re.search(r"<b[^>]*>\[\]</b>", html), html
+        await ws.send(_event("on_ttyd_connect", timestamp="now"))
+        frame = await ws.until("patch", "html_update", "noop")
+    assert "[True]" not in json.dumps(frame), frame
+
+
+class BareTerminal(TtydTerminalView):
+    """A subclass that only overrides a default: the base's own template and
+    ``get_context_data()`` supply every name the template reads."""
+
+    rows = 40
+
+
+def _t027_names(view_class) -> set[str]:
+    from djust.checks.templates import check_unsupplied_template_names
+
+    label = "%s.%s --" % (MODULE, view_class.__qualname__)
+    return {
+        re.search(r"reads '(\w+)'", str(message.msg)).group(1)
+        for message in check_unsupplied_template_names(None)
+        if str(message.msg).startswith(label) and message.id == "djust.T027"
+    }
+
+
+@pytest.mark.parametrize(
+    "view_class, expected",
+    [
+        # Exactly its own two names: the terminal's (rows, ttyd_url) come from
+        # the base's get_context_data(), which writes them as ctx["rows"] = ...
+        (LoggingTerminal, {"terminal_connected", "session_log"}),
+        # Its own names are passed to super().get_context_data(name=...).
+        (ExplicitTerminal, set()),
+        # The base's template, every name supplied by the base (#4185 review).
+        (BareTerminal, set()),
+    ],
+    ids=["lists-nothing", "lists-its-names", "bare-subclass"],
+)
+def test_the_system_check_names_exactly_what_a_terminal_subclass_does_not_list(
+    view_class, expected
+):
+    """djust.T027 reports the subclass's own names its template reads, and
+    nothing the terminal base supplies."""
+    assert _t027_names(view_class) == expected
 
 
 # --------------------------------------------------------------------------

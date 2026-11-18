@@ -2509,9 +2509,4 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         # Reset temporary assigns and streams to free memory after rendering
         self._reset_temporary_assigns()
 
-        # ADR-036 R1: recovery targets come from what the server rendered.
-        from ..validation import note_rendered_recovery_targets
-
-        note_rendered_recovery_targets(self, html)
-
         return (html, patches_json, version)

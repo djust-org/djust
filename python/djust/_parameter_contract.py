@@ -37,6 +37,11 @@ _SERVER_DEFAULT = object()
 # bodies also drop "_"-prefixed keys, and the strict client collector refuses
 # both, so a keyword-capable application parameter can never receive them.
 FRAMEWORK_ARGUMENT_NAMES = frozenset({"view_id", "component_id"})
+# #4185: the one name a framework-owned handler may declare as a
+# framework-supplied parameter (the component ``Meta.event`` alias). Its value
+# is a client string; strict validation binds it only when it is empty or one
+# of the component names the owner class declares.
+ROUTED_COMPONENT_PARAMETER = "component_id"
 # Per-event client bookkeeping read by the transport (the @cache round-trip id,
 # the dj_activity gate). Strict validation drops them on every path, so the
 # application payload is identical whichever transport delivered it.
@@ -86,9 +91,13 @@ def _compile_type(annotation: Any, depth: int = 0) -> _Type:
     if origin is list and len(args) == 1:
         child = _compile_type(args[0], depth + 1)
         return _Type(list, f"list[{child.label}]", child)
+    if origin is dict and len(args) == 2 and args[0] is str:
+        # A JSON object: string keys, each value converted like a list item.
+        child = _compile_type(args[1], depth + 1)
+        return _Type(dict, f"dict[str, {child.label}]", child)
     raise ContractError(
         "Unsupported annotation; use str, int, float, bool, Decimal, UUID, date, "
-        "Optional[T], list[T] or explicit Any."
+        "Optional[T], list[T], dict[str, T] or explicit Any."
     )
 
 
@@ -209,6 +218,11 @@ def _convert(value: Any, spec: _Type, coerce: bool) -> Any:
             raise ValueError
         assert spec.child is not None
         return [_convert(item, spec.child, coerce) for item in value]
+    if kind is dict:
+        if type(value) is not dict or any(type(key) is not str for key in value):
+            raise ValueError
+        assert spec.child is not None
+        return {key: _convert(item, spec.child, coerce) for key, item in value.items()}
     if type(value) is kind:
         if kind is float and not math.isfinite(value):
             raise ValueError
@@ -281,10 +295,17 @@ class ParameterContract:
     ) -> "ParameterContract":
         """Compile ``handler``; ``trusted`` names framework-injected parameters.
 
-        A trusted parameter is bound only from server-owned values passed to
-        ``bind(trusted=...)``: never from a client key or a positional value,
-        never converted, and absent from the public metadata. Its type is the
-        injecting framework code's responsibility (ADR-036 D5).
+        A trusted parameter is bound only from values the framework passes to
+        ``bind(trusted=...)``: never straight from a client key or a positional
+        value, never converted, and absent from the public metadata. Its type
+        is the injecting framework code's responsibility (ADR-036 D5).
+
+        "Trusted" means framework-checked, not server-originated. The one
+        trusted parameter a client can influence is the ``Meta.event`` alias's
+        ``component_id`` (#4185): the value is the client's string, taken out
+        of the payload by ``validation.bind_declared_component_name`` and
+        passed here only when it is empty or names a component the view class
+        declares. It is never a server object.
         """
         try:
             signature = inspect.signature(handler)

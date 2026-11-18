@@ -322,8 +322,8 @@ def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None
     .. deprecated:: 2.0
        ``exposure_policy = "legacy"``. Removed in 2.0.0.
 
-    A class shipped in djust that states ``"legacy"`` (the admin change list,
-    ...) does not warn, here or through a subclass:
+    A class shipped in djust that states ``"legacy"`` (the ``@live_view``
+    decorator's class, until #4183) does not warn, here or through a subclass:
     that statement is not the application's to change.
     """
     if at_class_statement:
