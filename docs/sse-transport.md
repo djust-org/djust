@@ -108,7 +108,8 @@ used instead of the plain HTTP fallback.
 
 ### 1. Register URL patterns
 
-Add the SSE endpoints to your Django `urlpatterns`:
+A project made with `djust new` already routes them (#4216). In any other
+project, add the SSE endpoints to your Django `urlpatterns`:
 
 ```python
 # urls.py

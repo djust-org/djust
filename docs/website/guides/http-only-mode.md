@@ -49,7 +49,7 @@ config.set('use_websocket', False)
 
 ### Mount the SSE endpoint
 
-The SSE transport needs its URL patterns. Add them to your root URLconf:
+The SSE transport needs its URL patterns. A project made with `djust new` routes them already; in any other project, add them to your root URLconf:
 
 ```python
 from django.urls import include, path

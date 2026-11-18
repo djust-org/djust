@@ -479,6 +479,8 @@ server {
 }
 ```
 
+The `location /` block also carries djust's SSE transport (`/djust/sse/<session>/`), which the client falls back to when a WebSocket cannot connect. A project made with `djust new` routes it; any other project adds `path("djust/", include(sse_urlpatterns))` to its root URLconf (see [Mount the SSE endpoint](http-only-mode.md#mount-the-sse-endpoint)). The stream answers with `X-Accel-Buffering: no`, so nginx does not buffer it, and its GET and its message POSTs must reach the same process, which `ip_hash` above provides.
+
 ### Serving the app under a path prefix
 
 When the app lives under a prefix (`https://example.com/app/`, set with
