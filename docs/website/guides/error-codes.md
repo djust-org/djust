@@ -969,6 +969,14 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Rename the attribute or handler. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V030"]}`.
 
+### V032: an admin widget states `exposure_policy = "legacy"`
+
+**Severity**: Error
+
+**What causes it**: A `DjustModelAdmin`'s `change_list_widgets` or `change_form_widgets` lists a widget class that states `exposure_policy = "legacy"`. The admin pages are explicit and cannot embed a legacy view, so the page fails to render. Message: '<admin>.change_form_widgets lists <widget>, which states exposure_policy = "legacy". The djust admin change form uses explicit exposure and cannot embed a legacy view, so that admin page fails to render (HTTP 500).'
+
+**Fix**: Set `exposure_policy = "explicit"` on the widget and return what its template reads from `get_context_data()`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V032"]}`.
+
 <!-- END GENERATED check-sections:V -->
 
 ---

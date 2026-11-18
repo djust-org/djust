@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, g
 from uuid import UUID
 
 from djust.security import sanitize_for_log
-from ._parameter_contract import ParameterContract
+from ._parameter_contract import ROUTED_COMPONENT_PARAMETER, ParameterContract
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +32,35 @@ _MISSING_POSITIONAL = object()
 _SIGNATURE_OWNER = object()
 
 
+def declared_framework_arguments(handler: Callable) -> frozenset[str]:
+    """The framework-supplied parameters a framework-owned handler declares (#4185).
+
+    Only the component ``Meta.event`` alias declares one, ``component_id``
+    (``components/base.py``), as a server-only function attribute. Its value
+    is still a client string, checked against the view's declared component
+    names (:func:`bind_declared_component_name`). Any other name in the
+    marker is ignored, so nothing but ``component_id`` can become a
+    framework-supplied argument this way.
+    """
+    function = getattr(handler, "__func__", handler)
+    names = getattr(function, "_djust_framework_arguments", None)
+    if type(names) is not frozenset:
+        return frozenset()
+    return names & {ROUTED_COMPONENT_PARAMETER}
+
+
 def get_strict_handler_contract(
-    handler: Callable, trusted: frozenset[str] = frozenset()
+    handler: Callable, trusted: Optional[frozenset[str]] = None
 ) -> ParameterContract:
     """Cache declarations, never bound methods or their live owner instances.
 
     ``trusted`` names framework-injected parameters (ADR-036 D5); see
-    ``ParameterContract.compile``. Client-callable handlers use none.
+    ``ParameterContract.compile``. Client-callable handlers use none, except
+    the framework-supplied ones a framework-owned handler declares
+    (:func:`declared_framework_arguments`), which are the default.
     """
+    if trusted is None:
+        trusted = declared_framework_arguments(handler)
     key = (inspect.ismethod(handler), frozenset(trusted))
     function = handler.__func__ if inspect.ismethod(handler) else handler
     if not inspect.isfunction(function):
@@ -342,6 +363,40 @@ def validated_call_arguments(validation: Dict[str, Any]) -> tuple[tuple[Any, ...
     return (), validation.get("coerced_params", {})
 
 
+def bind_declared_component_name(handler: Callable, params: Any) -> tuple[Any, Dict[str, Any]]:
+    """Take the event's ``component_id`` out of ``params`` for a handler that
+    declares it framework-supplied (the component ``Meta.event`` alias, #4185).
+
+    The ``component_id`` is a string the CLIENT sent, not a server object and
+    not a value the server minted. What makes it safe to pass to the alias is
+    only this check: it must be a ``str`` that is either empty (the alias then
+    resolves the single component of its type) or one of the component names
+    the handler's owner class declares (``_component_descriptors``), the rule
+    ``_component_state.resolve_component_target`` applies before an event
+    reaches the alias over WebSocket, SSE and the HTTP fallback. Any other
+    value is refused, as strict refuses a routing target the route did not
+    consume. The alias still resolves the name itself, against the same
+    declared names.
+
+    Returns the remaining payload and ``{"component_id": <checked name>}``.
+    """
+    from ._parameter_contract import ParameterError
+
+    if type(params) is not dict:
+        return params, {ROUTED_COMPONENT_PARAMETER: ""}
+    remaining = dict(params)
+    target = remaining.pop(ROUTED_COMPONENT_PARAMETER, "")
+    if target is None:
+        target = ""
+    owner = getattr(handler, "__self__", None)
+    declared = getattr(type(owner), "_component_descriptors", None) if owner is not None else None
+    if type(target) is not str or (
+        target and (not isinstance(declared, dict) or target not in declared)
+    ):
+        raise ParameterError("The event's routing target is not handled by this route.")
+    return remaining, {ROUTED_COMPONENT_PARAMETER: target}
+
+
 def _validate_strict_handler_params(
     handler: Callable, params: Dict[str, Any], coerce: bool, positional_args: Any
 ) -> Dict[str, Any]:
@@ -354,10 +409,13 @@ def _validate_strict_handler_params(
     contract = get_strict_handler_contract(handler)
     expected = [item["name"] for item in contract.metadata()]
     positional = () if positional_args is _MISSING_POSITIONAL else positional_args
+    trusted: Dict[str, Any] = {}
     try:
         if type(params) is dict and any(key in TRANSPORT_METADATA_KEYS for key in params):
             # D5: transport bookkeeping is dispatch context, never an argument.
             params = {k: v for k, v in params.items() if k not in TRANSPORT_METADATA_KEYS}
+        if ROUTED_COMPONENT_PARAMETER in contract.trusted:
+            params, trusted = bind_declared_component_name(handler, params)
         if type(params) is dict and any(key in FRAMEWORK_ARGUMENT_NAMES for key in params):
             # The route that received this event did not consume its target.
             raise ParameterError("The event's routing target is not handled by this route.")
@@ -366,7 +424,7 @@ def _validate_strict_handler_params(
                 raise ParameterError("Positional arguments were supplied twice.")
             params = params.copy()
             positional = params.pop("_args")
-        bound = contract.bind(params, positional, coerce=coerce)
+        bound = contract.bind(params, positional, coerce=coerce, trusted=trusted)
     except ParameterError as exc:
         # Never return the original payload or arbitrary client-supplied keys in
         # an error envelope. Declared names and fixed type labels are sufficient.
