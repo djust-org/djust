@@ -70,6 +70,8 @@ EXPLICIT = {
     "components/gallery/live_views.py:OverlayGalleryView",
     "components/gallery/live_views.py:TypographyGalleryView",
     "components/interactive_examples.py:DropdownMenuExample",
+    # Built per request by the function-based @live_view decorator (#4183).
+    "live_view.py:DynamicLiveView",
     "theming/gallery/live_views.py:ComponentsCategoryView",
     "theming/gallery/live_views.py:ComponentsDetailView",
     "theming/gallery/live_views.py:ComponentsIndexView",
@@ -85,11 +87,6 @@ LEGACY = {
         "A documented base class. A subclass renders its own public attributes "
         "(session_log in the docstring example) through the attribute walk, so making "
         "the base explicit would empty existing subclasses' templates without an error."
-    ),
-    "live_view.py:DynamicLiveView": (
-        "The class the function-based @live_view decorator builds per request. The "
-        "decorated function returns its locals and they are set as view attributes "
-        "for the attribute walk to render; there is no declared context to give it."
     ),
     "admin_ext/views.py:ModelListView": (
         "Embeds the ModelAdmin's change_list_widgets with {% live_render %}. Those are "

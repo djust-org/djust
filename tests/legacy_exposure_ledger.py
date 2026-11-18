@@ -76,7 +76,11 @@ MIGRATED_4082: tuple[str, ...] = (
 #: Files the legacy removal's test migration (#4171 step 3) ran as explicit:
 #: their views get a real session and user from ``djust.testing``'s
 #: live-session helpers (#4191). They state no legacy policy any more.
-MIGRATED_STEP3: tuple[str, ...] = ("python/djust/tests/test_stream_only_handlers_3639.py",)
+MIGRATED_STEP3: tuple[str, ...] = (
+    "python/djust/tests/test_stream_only_handlers_3639.py",
+    # Its last legacy case (the flat <field>_choices names) is explicit since #4177.
+    "tests/unit/test_wizard_mixin.py",
+)
 
 #: The #4082 files that still state the legacy policy, each with its reason.
 REMAINING_4082: dict[str, str] = {
@@ -404,7 +408,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "tests/unit/test_sw_advanced.py",
         "tests/unit/test_tick_skip.py",
         "tests/unit/test_view_state_v1_2_1_7.py",
-        "tests/unit/test_wizard_mixin.py",
     }
 )
 

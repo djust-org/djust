@@ -1600,6 +1600,28 @@ class LiveView(
         self._object = None
 
 
+def _function_view_context(result: Mapping[str, Any]) -> Dict[str, Any]:
+    """The template names a function view's returned mapping supplies (#4183).
+
+    The same names the attribute walk rendered when these values were set as
+    view attributes: no private (``_``-prefixed) name, nothing callable, and no
+    module, class or request object.
+    """
+    import types
+
+    from django.http import HttpRequest
+
+    skip = (types.ModuleType, type, HttpRequest)
+    return {
+        key: value
+        for key, value in result.items()
+        if type(key) is str
+        and not key.startswith("_")
+        and not callable(value)
+        and not isinstance(value, skip)
+    }
+
+
 def live_view(
     template_name: Optional[str] = None, template: Optional[str] = None
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -1611,15 +1633,17 @@ def live_view(
         def counter_view(request):
             count = 0
 
-            def increment():
-                nonlocal count
-                count += 1
-
-            def decrement():
-                nonlocal count
-                count -= 1
+            @event_handler
+            def increment(**kwargs):
+                ...
 
             return locals()
+
+    The view uses explicit exposure (#4183): the values the function returns
+    are its context, and the callables it returns are its handlers. A function
+    view runs over the page GET and the HTTP POST fallback. It is built per
+    request, so it has no class a WebSocket or SSE mount can name, and it keeps
+    no state between requests: the function runs again for every request.
 
     Args:
         template_name: Path to Django template
@@ -1633,9 +1657,15 @@ def live_view(
         def wrapper(request: Any, *args: Any, **kwargs: Any) -> Any:
             # Create a dynamic LiveView class
             class DynamicLiveView(LiveView):
-                # The decorated function's returned locals are set as view
-                # attributes below and rendered by the attribute walk.
-                exposure_policy = "legacy"
+                # The decorated function's returned values are this view's
+                # context; it declares no state (#4183).
+                exposure_policy = "explicit"
+                _djust_function_context: Dict[str, Any] = {}
+
+                def get_context_data(self, **context_kwargs: Any) -> Dict[str, Any]:
+                    context = super().get_context_data(**context_kwargs)
+                    context.update(type(self)._djust_function_context)
+                    return context
 
             if template_name:
                 DynamicLiveView.template_name = template_name
@@ -1647,10 +1677,12 @@ def live_view(
             # Execute the function to get initial state
             result = func(request, *args, **kwargs)
             if isinstance(result, dict):
+                # The class is built for this request alone, so its context
+                # is too. Callables stay view attributes: they are the
+                # function's event handlers.
+                DynamicLiveView._djust_function_context = _function_view_context(result)
                 for key, value in result.items():
-                    if not callable(value):
-                        setattr(view, key, value)
-                    else:
+                    if callable(value):
                         setattr(view, key, value)
 
             # Handle the request

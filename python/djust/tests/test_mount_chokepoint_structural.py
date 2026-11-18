@@ -196,16 +196,17 @@ class TestDynamicImportChokepoint:
 # internals (decorators.py, formsets.py, live_view default-assigns).
 _VIEW_TARGET_NAMES = {"view", "view_instance", "component"}
 
-# Only the exact developer-returned dictionary application is sanctioned.
+# Only the exact developer-returned dictionary application is sanctioned: the
+# function view's own callables (its event handlers) set on the view it built
+# for this request; its values are context, not attributes (#4183).
 # Match its AST and lexical scope, not moving line numbers or an entire function.
 _DEVELOPER_STATE_APPLICATION = ast.parse("""
 view = DynamicLiveView()
 result = func(request, *args, **kwargs)
 if isinstance(result, dict):
+    DynamicLiveView._djust_function_context = _function_view_context(result)
     for key, value in result.items():
-        if not callable(value):
-            setattr(view, key, value)
-        else:
+        if callable(value):
             setattr(view, key, value)
 """).body
 
@@ -295,17 +296,17 @@ class TestSetattrChokepoint:
         )
 
     def test_whitelisted_setattr_sites_still_present(self):
-        """Require both exact developer-dict sites, independent of line shifts."""
+        """Require the exact developer-dict site, independent of line shifts."""
         tree = _parse(_PKG_DIR / "live_view.py")
         sanctioned = _sanctioned_setattr_lines(tree)
-        assert len(sanctioned) == 2
+        assert len(sanctioned) == 1
         assert sanctioned <= set(_find_unsafe_setattrs(tree))
 
     def test_sanctioned_sites_allow_line_shifts(self):
         source = (_PKG_DIR / "live_view.py").read_text()
         original = _sanctioned_setattr_lines(ast.parse(source))
         shifted = _sanctioned_setattr_lines(ast.parse("\n" * 19 + source))
-        assert len(original) == 2
+        assert len(original) == 1
         assert shifted == {line + 19 for line in original}
 
     def test_client_payload_is_not_sanctioned(self):
@@ -315,7 +316,7 @@ class TestSetattrChokepoint:
         mutated = source.replace(old, "result = request.POST")
         tree = ast.parse(mutated)
         assert not _sanctioned_setattr_lines(tree)
-        assert len(list(_find_unsafe_setattrs(tree))) == 2
+        assert len(list(_find_unsafe_setattrs(tree))) == 1
 
     def test_adjacent_setattr_is_not_sanctioned(self):
         source = (_PKG_DIR / "live_view.py").read_text()
@@ -324,7 +325,7 @@ class TestSetattrChokepoint:
         mutated = source.replace(old, "            setattr(view, key, request.POST)\n" + old)
         tree = ast.parse(mutated)
         sanctioned = _sanctioned_setattr_lines(tree)
-        assert len(sanctioned) == 2
+        assert len(sanctioned) == 1
         assert len(set(_find_unsafe_setattrs(tree)) - sanctioned) == 1
 
     def test_same_block_in_wrong_scope_is_not_sanctioned(self):
@@ -333,7 +334,7 @@ class TestSetattrChokepoint:
         assert source.count(old) == 1
         tree = ast.parse(source.replace(old, "def transport_handler("))
         assert not _sanctioned_setattr_lines(tree)
-        assert len(list(_find_unsafe_setattrs(tree))) == 2
+        assert len(list(_find_unsafe_setattrs(tree))) == 1
 
 
 # --------------------------------------------------------------------------- #
