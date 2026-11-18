@@ -518,6 +518,8 @@ Copy text to the clipboard on click without a server round-trip:
 
 All enhancements are backward compatible with existing `dj-copy` usage.
 
+The `dj-copy-event` event runs on the page's view, even when the button sits inside a component or a `{% live_render %}` child (it carries no owner context), and the browser follows that view's handler contract (#4225). A handler under the strict parameter policy receives `text` only when it declares it, plus the button's `dj-value-*` arguments.
+
 ## Reconnection Recovery (`dj-auto-recover`)
 
 After a WebSocket or SSE reconnect, elements with `dj-auto-recover` automatically fire a server event with serialized DOM state, enabling the server to restore state that the default form-value replay cannot:
