@@ -205,6 +205,7 @@ _DEVELOPER_STATE_APPLICATION = ast.parse("""
 view = DynamicLiveView()
 result = func(request, *args, **kwargs)
 if isinstance(result, dict):
+    _refuse_function_view_access_hooks(func, result)
     DynamicLiveView._djust_function_context = _function_view_context(result, DynamicLiveView)
     configuration = _function_view_configuration(result)
     for key, value in result.items():

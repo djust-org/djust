@@ -156,6 +156,27 @@ def greeting(request):
     return locals()
 
 
+def _returns_hook(name, value):
+    @live_view(template="<div dj-root>open page</div>")
+    def hooked(request):
+        @event_handler
+        def bump():
+            BUMPED.append(name)
+
+        values = {"bump": bump}
+        values[name] = value
+        return values
+
+    return hooked
+
+
+REFUSED_HOOKS = {
+    "check_permissions": lambda request: False,
+    "get_object": lambda: None,
+    "on_mount": [lambda view, request, **kwargs: "/login/"],
+}
+
+
 #: Handlers of the gated views that ran.
 BUMPED: list = []
 
@@ -168,6 +189,7 @@ urlpatterns = [
     path("reserved/", shadows_framework_names),
     path("policy/", states_a_policy),
     path("greeting/", greeting),
+    *[path("hook/%s/" % name, _returns_hook(name, value)) for name, value in REFUSED_HOOKS.items()],
     # Defined from the example's source on each request (below).
     path("example/", lambda request: _example_counter_view()(request)),
 ]
@@ -465,6 +487,23 @@ def test_names_djust_supplies_keep_the_framework_value(fn_urls):
     assert "local time format" not in html
     answer = _post(Client(), "/reserved/", "missing")
     assert answer.status_code != 500
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("name", sorted(REFUSED_HOOKS))
+def test_a_returned_access_hook_is_refused_before_anything_renders(fn_urls, name):
+    """djust reads these from the class only: returned, they would leave the page open."""
+    from django.core.exceptions import ImproperlyConfigured
+
+    BUMPED.clear()
+    browser = Client()
+    url = "/hook/%s/" % name
+    with pytest.raises(ImproperlyConfigured, match=r"returns '%s'.*LiveView subclass" % name):
+        browser.get(url)
+    with pytest.raises(ImproperlyConfigured, match="returns '%s'" % name):
+        _post(browser, url, "bump")
+    assert BUMPED == []
+    assert BUILT == [], "the view was asked to render or answer"
 
 
 @pytest.mark.django_db

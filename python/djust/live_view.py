@@ -1601,6 +1601,26 @@ class LiveView(
         self._object = None
 
 
+#: Access hooks djust reads from a view's CLASS, never from the instance: a
+#: function view cannot supply them, and setting one on the view would be
+#: ignored, leaving the page open while it looks gated (#4183).
+_FUNCTION_VIEW_REFUSED = ("check_permissions", "get_object", "on_mount")
+
+
+def _refuse_function_view_access_hooks(func: Callable[..., Any], result: Mapping[str, Any]) -> None:
+    """Refuse a returned access hook a function view cannot apply (#4183)."""
+    from django.core.exceptions import ImproperlyConfigured
+
+    for name in _FUNCTION_VIEW_REFUSED:
+        if name in result:
+            raise ImproperlyConfigured(
+                "@live_view function %s returns %r, which djust reads only from a LiveView "
+                "class, so it would not protect the page. Write a LiveView subclass that "
+                "defines %s, or return login_required / permission_required instead."
+                % (getattr(func, "__qualname__", func), name, name)
+            )
+
+
 def _function_view_configuration(result: Mapping[str, Any]) -> frozenset:
     """The returned names that configure a function view instead of rendering (#4183).
 
@@ -1715,6 +1735,7 @@ def live_view(
             # Execute the function to get initial state
             result = func(request, *args, **kwargs)
             if isinstance(result, dict):
+                _refuse_function_view_access_hooks(func, result)
                 # The class is built for this request alone, so its context
                 # is too. Callables stay view attributes: they are the
                 # function's event handlers. So do the view's configuration
