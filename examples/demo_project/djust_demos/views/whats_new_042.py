@@ -5,13 +5,14 @@ Demonstrates:
 - TutorialMixin guided tours (Phase 1c)
 - push_commands server-driven UI (Phase 1a)
 - wait_for_event async primitive (Phase 1b)
-- Private attribute preservation (#627/#611)
+- Server-only state that survives reconnects (#627/#611; 2.0: state(render=False))
 - Serialization hardening (set, Decimal, date)
 """
 
 from datetime import date
 from decimal import Decimal
 
+from djust import state
 from djust.decorators import background, event_handler
 from djust.js import JS
 from djust.tutorials import TutorialMixin, TutorialStep
@@ -57,7 +58,7 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
         ),
         TutorialStep(
             target="#section-state",
-            message="Private attributes now survive reconnects. "
+            message="Server-only fields (render=False) survive reconnects. "
             "And set(), Decimal, date all serialize correctly.",
             timeout=4.0,
         ),
@@ -69,32 +70,24 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
         ),
     ]
 
-    def mount(self, request, **kwargs):
-        from djust_shared.components.ui import (
-            BackButton,
-            HeroSection,
-        )
+    # Public state: declared fields render. persist="server" keeps a value
+    # across the HTTP fallback and a reconnect.
+    count = state(0, persist="server")
+    confirmed = state(False, persist="server")
 
-        # Public state
-        self.count = 0
-        self._highlight_active = False
-        self.confirmed = False
+    # Server-only state: render=False keeps a field out of the template and
+    # the browser; persist="server" still saves it, so it survives events,
+    # the HTTP fallback and a reconnect (the 2.0 spelling of the private
+    # attributes #627 preserved).
+    highlight_active = state(False, persist="server", render=False)
+    internal_counter = state(0, persist="server", render=False)
 
-        # v0.4.2 fix: private attrs now survive events (#627)
-        self._internal_counter = 0
-
-        # v0.4.2 fix: these types now serialize correctly (#628, #626)
-        self.example_set = {1, 2, 3}
-        self.example_date = date(2026, 4, 12)
-        self.example_decimal = Decimal("3.14")
-
-        # Components
-        self.hero = HeroSection(
-            title="What's New in v0.4.2",
-            subtitle="Backend-Driven UI, Guided Tours, and 11 Bug Fixes",
-            icon="🚀",
-        )
-        self.back_btn = BackButton(href="/demos/")
+    # These types serialize correctly (#628, #626). Saved state is JSON, which
+    # has no set, so the set's members are kept as a sorted list and the
+    # handler works on them as a set.
+    example_set = state(default_factory=lambda: [1, 2, 3], persist="server", render=False)
+    example_date = state(date(2026, 4, 12))
+    example_decimal = state(Decimal("3.14"))
 
     # -- Phase 1a: push_commands demo --
 
@@ -104,8 +97,8 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
         Skip re-render since the effect is entirely client-side via
         push_commands — no template state changes to render."""
         self._skip_render = True
-        self._highlight_active = not self._highlight_active
-        if self._highlight_active:
+        self.highlight_active = not self.highlight_active
+        if self.highlight_active:
             chain = JS.add_class("demo-highlight", to="#highlight-target").dispatch(
                 "demo:flash", detail={"text": "Highlighted from Python!"}
             )
@@ -147,23 +140,30 @@ class WhatsNew042View(TutorialMixin, BaseViewWithNavbar):
 
     @event_handler
     def increment_private(self, **kwargs):
-        """Increments both public and private counters.
-        v0.4.2 fix: _internal_counter now survives across events."""
+        """Increments both the rendered and the server-only counter.
+        internal_counter is never rendered as a field, yet survives events."""
         self.count += 1
-        self._internal_counter += 1
+        self.internal_counter += 1
 
     @event_handler
     def add_to_set(self, **kwargs):
-        """Adds a value to the set. v0.4.2 fix: set() now serializes.
-        Note: set round-trips through JSON as a list, so we coerce back."""
-        if isinstance(self.example_set, list):
-            self.example_set = set(self.example_set)
-        self.example_set.add(len(self.example_set) + 1)
+        """Adds a value to the set. Saved state is JSON, so the members are
+        kept as a sorted list and handled here as a set."""
+        members = set(self.example_set)
+        members.add(len(members) + 1)
+        self.example_set = sorted(members)
 
     def get_context_data(self, **kwargs):
+        from djust_shared.components.ui import BackButton, HeroSection
+
         ctx = super().get_context_data(**kwargs)
-        ctx["internal_counter"] = self._internal_counter
-        if isinstance(self.example_set, list):
-            self.example_set = set(self.example_set)
+        # The server-only counter, handed over on purpose as a render value.
+        ctx["internal_counter"] = self.internal_counter
         ctx["set_display"] = sorted(self.example_set)
+        ctx["hero"] = HeroSection(
+            title="What's New in v0.4.2",
+            subtitle="Backend-Driven UI, Guided Tours, and 11 Bug Fixes",
+            icon="🚀",
+        )
+        ctx["back_btn"] = BackButton(href="/demos/")
         return ctx

@@ -8,7 +8,7 @@ that re-embed the regex literal can be caught by a CI grep.
 
 Run with::
 
-    pytest scripts/lib/test_retro_markers.py -v
+    pytest tests/test_retro_markers.py -v
 """
 
 from __future__ import annotations
@@ -74,7 +74,9 @@ def test_audit_script_uses_constant():
     Catches future regressions where the regex is copy-pasted back into the
     audit script (the failure mode #1249 was filed to prevent).
     """
-    audit_script = __import__("pathlib").Path(__file__).parent.parent / "audit-pipeline-bypass.py"
+    audit_script = (
+        __import__("pathlib").Path(__file__).parent.parent / "scripts" / "audit-pipeline-bypass.py"
+    )
     text = audit_script.read_text(encoding="utf-8")
     # The script must import RETRO_MARKER_REGEX from this module.
     assert "RETRO_MARKER_REGEX" in text, (

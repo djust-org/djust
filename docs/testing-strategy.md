@@ -91,6 +91,12 @@ final integration/release evidence must cover the final commit.
 These groups describe contracts, not ownership boundaries or a new selector.
 Test roots are historical locations, not clean unit/integration partitions.
 
+Every test file lives under one of the three roots (`tests/`, `python/tests/`,
+`python/djust/tests/`), which are both `testpaths` and the paths CI passes. A
+tracked test-shaped file anywhere else is collected by nothing, so
+`tests/test_ci_python_test_roots.py` fails on it unless it is listed there with
+the reason it is not a suite test (#4217).
+
 | Group | Entry points and cross-contract checks |
 | --- | --- |
 | Templates, filters, Unicode and bridge | Relevant files in `python/tests/`, renderer/source pins in `tests/`, bridge consumers in `python/djust/tests/`; compare Django and Rust behavior. Engine changes require full coverage. |

@@ -247,7 +247,7 @@ Relevant checks:
         {% for item in items %}
         <li data-key="{{ item.id }}">
             <span>{{ item.text }}</span>
-            <button dj-click="delete_item" data-dj-item-id="{{ item.id }}">
+            <button dj-click="delete_item" dj-value-item-id="{{ item.id }}">
                 Delete
             </button>
         </li>

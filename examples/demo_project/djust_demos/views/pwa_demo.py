@@ -11,6 +11,7 @@ Demonstrates:
 import json
 import time
 
+from djust import state
 from djust.decorators import event_handler
 from djust.pwa import PWAMixin
 from djust_shared.views import BaseViewWithNavbar
@@ -40,20 +41,10 @@ class PWADemoView(PWAMixin, BaseViewWithNavbar):
     pwa_background_color = "#f8fafc"
     pwa_display = "standalone"
 
-    def mount(self, request, **kwargs):
-        from djust_shared.components.ui import HeroSection, BackButton
-
-        # State — simple notes list to prove LiveView + PWA work together
-        self.notes = []
-        self.note_counter = 0
-
-        # Render components to HTML strings for reliable VDOM serialization
-        self.hero_html = HeroSection(
-            title="PWA Demo",
-            subtitle="Progressive Web App features with djust LiveView",
-            icon="📱",
-        ).render()
-        self.back_btn_html = BackButton(href="/demos/").render()
+    # State — simple notes list to prove LiveView + PWA work together.
+    # persist="server" keeps the notes across the HTTP fallback and a reconnect.
+    notes = state(default_factory=list, persist="server")
+    note_counter = state(0, persist="server", render=False)
 
     @event_handler
     def add_note(self, text: str = "", **kwargs):
@@ -78,13 +69,23 @@ class PWADemoView(PWAMixin, BaseViewWithNavbar):
         self.note_counter = 0
 
     def get_context_data(self, **kwargs):
+        from djust_shared.components.ui import HeroSection, BackButton
+
         context = super().get_context_data(**kwargs)
+
+        # Render components to HTML strings for reliable VDOM serialization
+        context["hero_html"] = HeroSection(
+            title="PWA Demo",
+            subtitle="Progressive Web App features with djust LiveView",
+            icon="📱",
+        ).render()
+        context["back_btn_html"] = BackButton(href="/demos/").render()
+        context["notes_count"] = len(self.notes)
 
         # PWAMixin already adds pwa_config to context
         # Add a formatted JSON preview for display
         pwa_config = context.get("pwa_config", {})
-        self.manifest_preview = json.dumps(pwa_config, indent=2)
-        context["manifest_preview"] = self.manifest_preview
+        context["manifest_preview"] = json.dumps(pwa_config, indent=2)
 
         # Render PWA head HTML via Django's template engine and pass as
         # context variable.  The Rust VDOM engine can't reliably process
@@ -98,9 +99,8 @@ class PWADemoView(PWAMixin, BaseViewWithNavbar):
         pwa_head_tpl = (
             "{% load djust_pwa %}{% djust_pwa_head name=pwa_name theme_color=pwa_theme_color %}"
         )
-        self.pwa_head_html = Template(pwa_head_tpl).render(
+        context["pwa_head_html"] = Template(pwa_head_tpl).render(
             DjangoContext({"pwa_name": self.pwa_name, "pwa_theme_color": self.pwa_theme_color})
         )
-        context["pwa_head_html"] = self.pwa_head_html
 
         return context

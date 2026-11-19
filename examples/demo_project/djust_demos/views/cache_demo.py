@@ -2,6 +2,7 @@
 Cache Demo - demonstrates @cache decorator with debounced search
 """
 
+from djust import state
 from djust.decorators import cache, debounce
 from djust.decorators import event_handler
 from djust_shared.views import BaseViewWithNavbar
@@ -40,18 +41,24 @@ class CacheDemoView(BaseViewWithNavbar):
 
     template_name = "demos/cache.html"
 
+    # persist="server": all four survive the HTTP fallback and a reconnect.
+    query = state("", persist="server")
+    results = state(default_factory=list, persist="server")
+    server_calls = state(0, persist="server")
+    total_searches = state(0, persist="server")
+
     # Code example stored as class attribute
-    PYTHON_EXAMPLE = '''from djust import LiveView
-from djust.decorators import cache, debounce
+    PYTHON_EXAMPLE = '''from djust import LiveView, state
+from djust.decorators import cache, debounce, event_handler
 
 class CacheDemoView(LiveView):
     template_name = "cache.html"
 
-    def mount(self, request):
-        self.query = ""
-        self.results = []
-        self.server_calls = 0
+    query = state("", persist="server")
+    results = state(default_factory=list, persist="server")
+    server_calls = state(0, persist="server")
 
+    @event_handler
     @debounce(wait=0.5)
     @cache(ttl=300, key_params=["query"])
     def search(self, query: str = "", **kwargs):
@@ -62,35 +69,10 @@ class CacheDemoView(LiveView):
                            if query.lower() in p.lower()]
         self.server_calls += 1'''
 
-    def mount(self, request):
-        from djust_shared.components.ui import CodeBlock, HeroSection, BackButton, FeatureCard, FeatureGrid
-
-        # State
-        self.query = ""
-        self.results = []
-        self.server_calls = 0
-        self.total_searches = 0
-
-        # Components
-        self.hero = HeroSection(
-            title="Cache Demo",
-            subtitle="Search products - repeat searches are cached client-side for 5 minutes",
-            icon="💾"
-        )
-
-        self.code = CodeBlock(code=self.PYTHON_EXAMPLE, language="python", filename="views.py")
-
-        self.features = FeatureGrid(features=[
-            FeatureCard(icon="⏱️", title="500ms Debounce", description="Waits for user to stop typing before searching"),
-            FeatureCard(icon="💾", title="5min TTL Cache", description="Caches responses client-side for 5 minutes"),
-            FeatureCard(icon="⚡", title="<1ms Cache Hits", description="Repeat searches return instantly from cache"),
-            FeatureCard(icon="📉", title="87% Reduction", description="Typical usage reduces server calls by 87%"),
-        ])
-
-        self.back_btn = BackButton(href="/demos/")
-
     def get_context_data(self, **kwargs):
         """Add computed values to context"""
+        from djust_shared.components.ui import CodeBlock, HeroSection, BackButton, FeatureCard, FeatureGrid
+
         context = super().get_context_data(**kwargs)
 
         # Calculate cache efficiency
@@ -102,6 +84,20 @@ class CacheDemoView(LiveView):
             cache_efficiency = 0
 
         context['cache_efficiency'] = cache_efficiency
+        # Presentation components: built per render, never part of the view's state.
+        context['hero'] = HeroSection(
+            title="Cache Demo",
+            subtitle="Search products - repeat searches are cached client-side for 5 minutes",
+            icon="💾",
+        )
+        context['code'] = CodeBlock(code=self.PYTHON_EXAMPLE, language="python", filename="views.py")
+        context['features'] = FeatureGrid(features=[
+            FeatureCard(icon="⏱️", title="500ms Debounce", description="Waits for user to stop typing before searching"),
+            FeatureCard(icon="💾", title="5min TTL Cache", description="Caches responses client-side for 5 minutes"),
+            FeatureCard(icon="⚡", title="<1ms Cache Hits", description="Repeat searches return instantly from cache"),
+            FeatureCard(icon="📉", title="87% Reduction", description="Typical usage reduces server calls by 87%"),
+        ])
+        context['back_btn'] = BackButton(href="/demos/")
         return context
 
     @event_handler

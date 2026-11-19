@@ -10,7 +10,11 @@ still INERT (#2680, #2699): they stamp metadata nothing in the shipped client
 reads, so those handlers behave exactly as they would undecorated.
 """
 
+from typing import Any
+
+from djust import state
 from djust_shared.views import BaseViewWithNavbar
+from ._rows import RowById
 from djust.decorators import event_handler
 from djust.decorators import debounce
 from djust_shared.components.ui import HeroSection
@@ -32,16 +36,13 @@ class MaintenanceListView(BaseViewWithNavbar):
     """
     template_name = 'rentals/maintenance_list.html'
 
-    def mount(self, request, **kwargs):
-        """Initialize maintenance list state"""
-        # Filter state
-        self.search_query = ""
-        self.filter_status = "pending"  # pending (open+in_progress), all, open, in_progress, completed, cancelled
-        self.filter_priority = "all"
-        self.sort_by = "created"
-
-        # Load requests
-        self._refresh_requests()
+    # Search and filter inputs; persist="server" keeps them across the HTTP
+    # fallback and a reconnect. The list is queried per render from them.
+    search_query = state("", persist="server")
+    # pending (open+in_progress), all, open, in_progress, completed, cancelled
+    filter_status = state("pending", persist="server")
+    filter_priority = state("all", persist="server")
+    sort_by = state("created", persist="server")
 
     def _refresh_requests(self):
         """Refresh maintenance requests based on current filters"""
@@ -86,8 +87,6 @@ class MaintenanceListView(BaseViewWithNavbar):
         elif self.sort_by == "property":
             requests = requests.order_by('property__name')
 
-        # Store as private variable to avoid auto-JIT serialization
-        # We'll assign to self.requests in get_context_data() instead
         self._requests = requests
 
     @event_handler
@@ -95,32 +94,25 @@ class MaintenanceListView(BaseViewWithNavbar):
     def search(self, query: str = "", **kwargs):
         """Search requests with debouncing"""
         self.search_query = query
-        self._refresh_requests()
 
     @event_handler
     def filter_by_status(self, status: str = "all", **kwargs):
         """Filter requests by status (with client state sync)"""
         self.filter_status = status
-        self._refresh_requests()
 
     @event_handler
     def filter_by_priority(self, priority: str = "all", **kwargs):
         """Filter requests by priority"""
         self.filter_priority = priority
-        self._refresh_requests()
 
     @event_handler
     def sort_requests(self, sort: str = "created", **kwargs):
         """Sort requests"""
         self.sort_by = sort
-        self._refresh_requests()
 
     def get_context_data(self, **kwargs):
         """Add maintenance list context"""
-        # Store requests as instance variable for JIT serialization
-        self.requests = self._requests
-
-        # Call parent - JIT serializes 'requests' with Rust + auto-generates 'requests_count'
+        self._refresh_requests()
         context = super().get_context_data(**kwargs)
 
         # Create page header (do this in get_context_data so it's available for every render)
@@ -213,35 +205,42 @@ class MaintenanceDetailView(BaseViewWithNavbar):
 
     def mount(self, request, pk=None, **kwargs):
         """Initialize maintenance detail view"""
-        self.request_id = pk
+        self._pk = pk
+
+    def _load(self):
+        # Read on every render, not kept from mount(): between events the HTTP
+        # fallback restores a saved model as its field dict, not a row.
+        pk = self._pk
+        self._request_id = pk
 
         # Load request
         try:
-            self.maintenance_request = MaintenanceRequest.objects.select_related(
+            self._maintenance_request = MaintenanceRequest.objects.select_related(
                 'property', 'tenant__user'
             ).get(pk=pk)
         except MaintenanceRequest.DoesNotExist:
-            self.maintenance_request = None
-            self.error_message = f"Maintenance request with ID {pk} not found"
+            self._maintenance_request = None
+            self._error_message = f"Maintenance request with ID {pk} not found"
             return
 
     def get_context_data(self, **kwargs):
         """Add maintenance detail context"""
+        self._load()
         context = super().get_context_data(**kwargs)
 
-        if not self.maintenance_request:
-            context['error_message'] = self.error_message
+        if not self._maintenance_request:
+            context['error_message'] = self._error_message
             return context
 
         # Create page header
         page_header = PageHeader(
-            title=self.maintenance_request.title,
-            subtitle=f"{self.maintenance_request.property.name} • Created {self.maintenance_request.created_at.strftime('%b %d, %Y')}",
+            title=self._maintenance_request.title,
+            subtitle=f"{self._maintenance_request.property.name} • Created {self._maintenance_request.created_at.strftime('%b %d, %Y')}",
             icon="wrench",
             actions=[
                 {
                     "label": "Update Request",
-                    "url": f"/rentals/maintenance/{self.maintenance_request.pk}/update/",
+                    "url": f"/rentals/maintenance/{self._maintenance_request.pk}/update/",
                     "icon": "edit",
                     "variant": "secondary"
                 }
@@ -249,18 +248,18 @@ class MaintenanceDetailView(BaseViewWithNavbar):
         )
 
         # Create status and priority badges
-        status_badge = StatusBadge(status=self.maintenance_request.status).render()
-        priority_badge = StatusBadge(status=self.maintenance_request.priority).render()
+        status_badge = StatusBadge(status=self._maintenance_request.status).render()
+        priority_badge = StatusBadge(status=self._maintenance_request.priority).render()
 
         # Calculate time metrics
-        if self.maintenance_request.completed_at:
+        if self._maintenance_request.completed_at:
             time_to_complete = (
-                self.maintenance_request.completed_at - self.maintenance_request.created_at
+                self._maintenance_request.completed_at - self._maintenance_request.created_at
             ).days
         else:
             time_to_complete = None
 
-        days_open = (timezone.now() - self.maintenance_request.created_at).days
+        days_open = (timezone.now() - self._maintenance_request.created_at).days
 
         context.update({
             # Components (rendered to HTML strings)
@@ -271,7 +270,7 @@ class MaintenanceDetailView(BaseViewWithNavbar):
             # Request data
             # Not 'request': that name is the HttpRequest in every template
             # context, and it wins over a view's key (#3994).
-            'maintenance_request': self.maintenance_request,
+            'maintenance_request': self._maintenance_request,
             'time_to_complete': time_to_complete,
             'days_open': days_open,
         })
@@ -292,67 +291,70 @@ class MaintenanceUpdateView(BaseViewWithNavbar):
     """
     template_name = 'rentals/maintenance_update.html'
 
+    # Set by the handlers and rendered through get_context_data(). The request
+    # itself is read from the database on every mount, and each handler saves
+    # its change, so the database carries it between events.
+    success_message = state("", render=False)
+    error_message = state("", render=False)
+
+    # Read by id on every turn (see ._rows).
+    _maintenance_request = RowById(
+        "_request_id",
+        lambda pk: MaintenanceRequest.objects.select_related('property', 'tenant__user')
+        .filter(pk=pk)
+        .first(),
+    )
+
     def mount(self, request, pk=None, **kwargs):
         """Initialize maintenance update view"""
-        self.request_id = pk
-
-        # Load request
-        try:
-            self.maintenance_request = MaintenanceRequest.objects.select_related(
-                'property', 'tenant__user'
-            ).get(pk=pk)
-        except MaintenanceRequest.DoesNotExist:
-            self.maintenance_request = None
+        self._request_id = pk
+        if self._maintenance_request is None:
             self.error_message = f"Maintenance request with ID {pk} not found"
-            return
-
-        # Form state
-        self.success_message = ""
-        self.error_message = ""
 
     @event_handler
     def update_status(self, status: str = "", **kwargs):
         """Update request status"""
         if status and status in dict(MaintenanceRequest.STATUS_CHOICES):
-            self.maintenance_request.status = status
+            self._maintenance_request.status = status
 
             # Set completed timestamp if marking as completed
-            if status == 'completed' and not self.maintenance_request.completed_at:
-                self.maintenance_request.completed_at = timezone.now()
+            if status == 'completed' and not self._maintenance_request.completed_at:
+                self._maintenance_request.completed_at = timezone.now()
 
-            self.maintenance_request.save()
-            self.success_message = f"Status updated to {self.maintenance_request.get_status_display()}"
+            self._maintenance_request.save()
+            self.success_message = f"Status updated to {self._maintenance_request.get_status_display()}"
 
     @event_handler
     def update_priority(self, priority: str = "", **kwargs):
         """Update request priority"""
         if priority and priority in dict(MaintenanceRequest.PRIORITY_CHOICES):
-            self.maintenance_request.priority = priority
-            self.maintenance_request.save()
-            self.success_message = f"Priority updated to {self.maintenance_request.get_priority_display()}"
+            self._maintenance_request.priority = priority
+            self._maintenance_request.save()
+            self.success_message = f"Priority updated to {self._maintenance_request.get_priority_display()}"
 
     @event_handler
-    def update_details(self, assigned_to="", estimated_cost=None, actual_cost=None, notes="", **kwargs):
+    def update_details(self, assigned_to: str = "", estimated_cost: Any = None, actual_cost: Any = None,
+                       notes: str = "", **kwargs):
         """Update request details"""
         try:
             if assigned_to:
-                self.maintenance_request.assigned_to = assigned_to
+                self._maintenance_request.assigned_to = assigned_to
 
             if estimated_cost:
-                self.maintenance_request.estimated_cost = float(estimated_cost)
+                self._maintenance_request.estimated_cost = float(estimated_cost)
 
             if actual_cost:
-                self.maintenance_request.actual_cost = float(actual_cost)
+                self._maintenance_request.actual_cost = float(actual_cost)
 
             if notes:
                 # Append to existing notes
                 timestamp = timezone.now().strftime("%Y-%m-%d %H:%M")
-                if self.maintenance_request.notes:
-                    self.maintenance_request.notes += f"\n\n[{timestamp}] {notes}"
+                if self._maintenance_request.notes:
+                    self._maintenance_request.notes += f"\n\n[{timestamp}] {notes}"
                 else:
-                    self.maintenance_request.notes = f"[{timestamp}] {notes}"
+                    self._maintenance_request.notes = f"[{timestamp}] {notes}"
 
-            self.maintenance_request.save()
+            self._maintenance_request.save()
             self.success_message = "Details updated successfully"
 
         except Exception as e:
@@ -362,19 +364,19 @@ class MaintenanceUpdateView(BaseViewWithNavbar):
         """Add update form context"""
         context = super().get_context_data(**kwargs)
 
-        if not self.maintenance_request:
+        if not self._maintenance_request:
             context['error_message'] = self.error_message
             return context
 
         # Create page header
         page_header = PageHeader(
-            title=f"Update: {self.maintenance_request.title}",
-            subtitle=self.maintenance_request.property.name,
+            title=f"Update: {self._maintenance_request.title}",
+            subtitle=self._maintenance_request.property.name,
             icon="wrench",
             actions=[
                 {
                     "label": "View Details",
-                    "url": f"/rentals/maintenance/{self.maintenance_request.pk}/",
+                    "url": f"/rentals/maintenance/{self._maintenance_request.pk}/",
                     "icon": "eye",
                     "variant": "secondary"
                 }
@@ -388,7 +390,7 @@ class MaintenanceUpdateView(BaseViewWithNavbar):
             # Request data
             # Not 'request': that name is the HttpRequest in every template
             # context, and it wins over a view's key (#3994).
-            'maintenance_request': self.maintenance_request,
+            'maintenance_request': self._maintenance_request,
             'success_message': self.success_message,
             'error_message': self.error_message,
             'status_choices': MaintenanceRequest.STATUS_CHOICES,
@@ -410,68 +412,67 @@ class MaintenanceFormView(BaseViewWithNavbar):
     """
     template_name = 'rentals/maintenance_form.html'
 
+    # Read by id on every turn (see ._rows).
+    _maintenance_request = RowById(
+        "_request_id",
+        lambda pk: MaintenanceRequest.objects.select_related('property', 'tenant__user')
+        .filter(pk=pk)
+        .first(),
+    )
+
+    success_message = state("", render=False)
+    error_message = state("", render=False)
+    validation_errors = state(default_factory=dict, render=False)
+
     def mount(self, request, pk=None, **kwargs):
         """Initialize maintenance form"""
-        self.request_id = pk
-        self.is_edit = pk is not None
+        self._request_id = pk
+        self._is_edit = pk is not None
 
-        if self.is_edit:
-            # Load existing request
-            try:
-                self.maintenance_request = MaintenanceRequest.objects.select_related(
-                    'property', 'tenant__user'
-                ).get(pk=pk)
-            except MaintenanceRequest.DoesNotExist:
-                self.maintenance_request = None
-                self.error_message = f"Maintenance request with ID {pk} not found"
-                return
-        else:
-            # New request - initialize with defaults
-            self.maintenance_request = None
-
-        # Form state
-        self.success_message = ""
-        self.error_message = ""
-        self.validation_errors = {}
+        if self._is_edit and self._maintenance_request is None:
+            self.error_message = f"Maintenance request with ID {pk} not found"
+            return
 
         # Initialize hero
-        title = "Edit Maintenance Request" if self.is_edit else "Create Maintenance Request"
-        self.hero = HeroSection(
+        title = "Edit Maintenance Request" if self._is_edit else "Create Maintenance Request"
+        self._hero = HeroSection(
             title=title,
             subtitle="Fill in request details",
             icon="🔧"
         )
 
         # Load properties and tenants for dropdowns
-        self.properties = Property.objects.all().order_by('name')
-        self.tenants = Tenant.objects.select_related('user').all().order_by('user__last_name')
+        self._properties = Property.objects.all().order_by('name')
+        self._tenants = Tenant.objects.select_related('user').all().order_by('user__last_name')
 
-    def save_request(self, property_id=None, tenant_id=None, title="", description="",
-                    priority="medium", status="open", assigned_to="",
-                    estimated_cost=None, actual_cost=None, notes="", **kwargs):
+    @event_handler
+    def save_request(self, property_id: Any = None, tenant_id: Any = None, title: str = "",
+                     description: str = "", priority: str = "medium", status: str = "open",
+                     assigned_to: str = "", estimated_cost: Any = None, actual_cost: Any = None,
+                     notes: str = "", **kwargs):
         """Save maintenance request (create or update)"""
         try:
-            if self.is_edit and self.maintenance_request:
+            if self._is_edit and self._maintenance_request:
                 # Update existing request
                 if property_id:
-                    self.maintenance_request.property = Property.objects.get(pk=property_id)
+                    self._maintenance_request.property = Property.objects.get(pk=property_id)
                 if tenant_id:
-                    self.maintenance_request.tenant = Tenant.objects.get(pk=tenant_id)
+                    self._maintenance_request.tenant = Tenant.objects.get(pk=tenant_id)
 
-                self.maintenance_request.title = title
-                self.maintenance_request.description = description
-                self.maintenance_request.priority = priority
-                self.maintenance_request.status = status
-                self.maintenance_request.assigned_to = assigned_to
+                self._maintenance_request.title = title
+                self._maintenance_request.description = description
+                self._maintenance_request.priority = priority
+                self._maintenance_request.status = status
+                self._maintenance_request.assigned_to = assigned_to
 
                 if estimated_cost:
-                    self.maintenance_request.estimated_cost = float(estimated_cost)
+                    self._maintenance_request.estimated_cost = float(estimated_cost)
                 if actual_cost:
-                    self.maintenance_request.actual_cost = float(actual_cost)
+                    self._maintenance_request.actual_cost = float(actual_cost)
                 if notes:
-                    self.maintenance_request.notes = notes
+                    self._maintenance_request.notes = notes
 
-                self.maintenance_request.save()
+                self._maintenance_request.save()
                 self.success_message = "Maintenance request updated successfully!"
             else:
                 # Create new request
@@ -482,7 +483,7 @@ class MaintenanceFormView(BaseViewWithNavbar):
                 property_obj = Property.objects.get(pk=property_id)
                 tenant_obj = Tenant.objects.get(pk=tenant_id) if tenant_id else None
 
-                self.maintenance_request = MaintenanceRequest.objects.create(
+                created = MaintenanceRequest.objects.create(
                     property=property_obj,
                     tenant=tenant_obj,
                     title=title,
@@ -496,8 +497,8 @@ class MaintenanceFormView(BaseViewWithNavbar):
                 )
 
                 self.success_message = "Maintenance request created successfully!"
-                self.is_edit = True
-                self.request_id = self.maintenance_request.id
+                self._is_edit = True
+                self._request_id = created.id
 
             self.error_message = ""
             self.validation_errors = {}
@@ -516,13 +517,13 @@ class MaintenanceFormView(BaseViewWithNavbar):
         context.update({
             # Not 'request': that name is the HttpRequest in every template
             # context, and it wins over a view's key (#3994).
-            'maintenance_request': self.maintenance_request,
-            'is_edit': self.is_edit,
+            'maintenance_request': self._maintenance_request,
+            'is_edit': self._is_edit,
             'success_message': self.success_message,
             'error_message': self.error_message,
             'validation_errors': self.validation_errors,
-            'properties': self.properties,
-            'tenants': self.tenants,
+            'properties': self._properties,
+            'tenants': self._tenants,
             'status_choices': MaintenanceRequest.STATUS_CHOICES,
             'priority_choices': MaintenanceRequest.PRIORITY_CHOICES,
         })
@@ -541,33 +542,38 @@ class MaintenanceDeleteView(BaseViewWithNavbar):
     """
     template_name = 'rentals/maintenance_delete.html'
 
+    # Read by id on every turn (see ._rows).
+    _maintenance_request = RowById(
+        "_request_id",
+        lambda pk: MaintenanceRequest.objects.select_related('property', 'tenant__user')
+        .filter(pk=pk)
+        .first(),
+    )
+
+    deleted = state(False, persist="server", render=False)
+    success_message = state("", render=False)
+    error_message = state("", render=False)
+
     def mount(self, request, pk=None, **kwargs):
         """Initialize maintenance delete view"""
-        self.request_id = pk
+        self._request_id = pk
 
-        try:
-            self.maintenance_request = MaintenanceRequest.objects.select_related(
-                'property', 'tenant__user'
-            ).get(pk=pk)
-        except MaintenanceRequest.DoesNotExist:
-            self.maintenance_request = None
+        if self._maintenance_request is None:
             self.error_message = f"Maintenance request with ID {pk} not found"
             return
 
-        self.deleted = False
-        self.error_message = ""
-
         # Initialize hero
-        self.hero = HeroSection(
-            title=f"Delete: {self.maintenance_request.title}",
-            subtitle=self.maintenance_request.property.name,
+        self._hero = HeroSection(
+            title=f"Delete: {self._maintenance_request.title}",
+            subtitle=self._maintenance_request.property.name,
             icon="🔧"
         )
 
+    @event_handler
     def confirm_delete(self):
         """Delete the maintenance request"""
         try:
-            self.maintenance_request.delete()
+            self._maintenance_request.delete()
             self.deleted = True
             self.success_message = "Maintenance request deleted successfully!"
         except Exception as e:
@@ -580,7 +586,7 @@ class MaintenanceDeleteView(BaseViewWithNavbar):
         context.update({
             # Not 'request': that name is the HttpRequest in every template
             # context, and it wins over a view's key (#3994).
-            'maintenance_request': self.maintenance_request,
+            'maintenance_request': self._maintenance_request,
             'deleted': self.deleted,
             'error_message': self.error_message,
         })

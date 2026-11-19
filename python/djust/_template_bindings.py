@@ -131,7 +131,11 @@ DIRECTIVES: dict[str, Directive] = {
     "dj-dialog-close-event": Directive("raw", "fixed", owner_context=False),
     "dj-viewport-top": Directive("raw", "fixed", ("edge",), owner_context=False),
     "dj-viewport-bottom": Directive("raw", "fixed", ("edge",), owner_context=False),
-    "dj-mutation": Directive("raw", "fixed", ("mutation",), owner_context=False),
+    # Every name the client may add (37-dj-mutation.js); ``_payload`` narrows
+    # it to the set the element's dj-mutation-attr selects (#4225).
+    "dj-mutation": Directive(
+        "raw", "fixed", ("mutation", "attrs", "added", "removed"), owner_context=False
+    ),
     "dj-copy-event": Directive("raw", "fixed", ("text",), owner_context=False),
 }
 
@@ -201,9 +205,10 @@ NON_EVENT_ATTRIBUTES = frozenset(
 
 #: Only these support a JS command list (``[["push", {...}], ...]``).
 _JS_COMMAND_DIRECTIVES = frozenset({"dj-click"})
-#: Payloads that are not fully known: every name the client may add is listed,
-#: but some are sent only sometimes (e.g. ``attrs`` or ``added``/``removed``).
-_PARTIAL_FIXED = frozenset({"dj-mutation"})
+#: dj-mutation sends ``attrs`` when dj-mutation-attr lists an attribute and
+#: ``added``/``removed`` otherwise (37-dj-mutation.js).
+_MUTATION_ATTRIBUTES = ("mutation", "attrs")
+_MUTATION_CHILDREN = ("mutation", "added", "removed")
 _FORM_FIELD_TAGS = frozenset({"input", "select", "textarea"})
 _NON_DATA_INPUTS = frozenset({"submit", "button", "reset", "image"})
 _VOID = frozenset(
@@ -933,8 +938,17 @@ def _payload(
             payload.generated_complete = complete
         else:
             payload.generated_complete = False
-    elif base in _PARTIAL_FIXED:
-        payload.generated_complete = False
+    elif base == "dj-mutation":
+        attr_list = element.attr("dj-mutation-attr")
+        if element.dynamic_attrs or (attr_list is not None and is_dynamic(attr_list)):
+            # Which set is sent is decided at render time: only ``mutation``
+            # is certain, and a missing name is not reported.
+            payload.generated = ("mutation",)
+            payload.generated_complete = False
+        elif attr_list is not None and any(s.strip() for s in attr_list.split(",")):
+            payload.generated = _MUTATION_ATTRIBUTES
+        else:
+            payload.generated = _MUTATION_CHILDREN
     return payload
 
 

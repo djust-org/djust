@@ -32,13 +32,15 @@ Fires a server event when the marked element's attributes or children change, vi
 ```
 
 ```python
+from typing import Optional
+
 from djust import LiveView
 from djust.decorators import event_handler
 
 class ChartView(LiveView):
     @event_handler
-    def handle_change(self, mutation: str = "", attrs: list = None,
-                       added: int = 0, removed: int = 0, **kwargs):
+    def handle_change(self, mutation: str, attrs: Optional[list[str]] = None,
+                       added: int = 0, removed: int = 0):
         # mutation is "attributes" or "childList"
         # attrs is the list of changed attribute names (when mutation=="attributes")
         # added/removed is the child-count delta (when mutation=="childList")
@@ -62,6 +64,7 @@ document.addEventListener('dj-mutation-fire', (e) => {
 
 - Don't list sensitive attributes (e.g. a password input's `value`) in `dj-mutation-attr`. The attribute name is included in the server payload — not the value, but still noisy for audit logs.
 - Bursts of mutations are coalesced into a single server event via `dj-mutation-debounce` (milliseconds). Default 150 ms is a good balance for typical chart re-renders.
+- The event runs on the page's view, even when the element sits inside a component or a `{% live_render %}` child (it carries no owner context), and the browser follows that view's handler contract (#4225). A handler under the strict parameter policy receives only the generated values it declares (`mutation`, `attrs`, `added`, `removed`), plus the element's `dj-value-*` arguments; the `dj-mutation-fire` event's `detail.payload` is unchanged.
 
 ---
 
@@ -610,6 +613,16 @@ native `close` event, and reset the flag there:
 def close_modal(self, **kwargs):
     self.modal_open = False
 ```
+
+The close event runs on the page's view, even when the dialog sits inside a
+component or a `{% live_render %}` child (it carries no owner context), and the
+browser follows that view's handler contract (#4225). A handler under the strict
+parameter policy receives the dialog's `dj-value-*` arguments. Inside a component
+the two ways to close therefore reach different owners: a `dj-click` close (×)
+button carries the component's id and runs on the component, while the native
+close (Escape, a `method="dialog"` button, `dialog.close()`) sends
+`dj-dialog-close-event` to the page's view. Define the close handler on the
+owner each path reaches.
 
 ### Scope
 

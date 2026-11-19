@@ -114,7 +114,7 @@ container.addEventListener('dj-viewport', (e) => {
 });
 ```
 
-The named event is also sent to the server via `window.djust.handleEvent(event, { edge })`, over whichever transport is active (WebSocket, SSE or HTTP).
+The named event is also sent to the server via `window.djust.handleEvent(event, { edge })`, over whichever transport is active (WebSocket, SSE or HTTP). It carries no component or child context, so it runs on the page's view even when the element sits inside a component or a `{% live_render %}` child, and the browser follows that view's handler contract (#4225). A handler under the strict parameter policy receives `edge` only when it declares it, plus the container's `dj-value-*` arguments.
 
 ## Stream `limit` — Cap DOM growth
 

@@ -732,7 +732,7 @@ class SearchBox(LiveComponent):
             {% for result in results %}
                 <li dj-click="select_result"
                     data-component-id="{{ component_id }}"
-                    data-id="{{ result.id }}">
+                    dj-value-id="{{ result.id }}">
                     {{ result.name }}
                 </li>
             {% endfor %}
@@ -747,7 +747,7 @@ class SearchBox(LiveComponent):
         self.search_fn = kwargs.get("search_fn")  # Callable for searching
 
     @event_handler()
-    def on_search(self, value="", **kwargs):
+    def on_search(self, value: str):
         self.query = value
         if len(value) >= 2 and self.search_fn:
             self.loading = True
@@ -758,7 +758,7 @@ class SearchBox(LiveComponent):
         self.trigger_update()
 
     @event_handler()
-    def select_result(self, id=None, **kwargs):
+    def select_result(self, id: int):
         self.send_parent("result_selected", {"id": id})
 
     def get_context_data(self):
@@ -1941,7 +1941,7 @@ def status_moves(assigns):
 ```django
 {# myapp/components/status_moves.html #}
 <section class="moves">
-  {% for move in block.moves %}<button type="button" dj-click="move" data-to="{{ move.key }}">{{ move.label }}</button>{% endfor %}
+  {% for move in block.moves %}<button type="button" dj-click="move" dj-value-to="{{ move.key }}">{{ move.label }}</button>{% endfor %}
 </section>
 ```
 

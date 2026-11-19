@@ -109,6 +109,19 @@ app. It includes the template backend, allowed LiveView modules, WebSocket
 routing, local static-file serving, and development settings. SQLite is the
 initial database; the default starter's list lives in LiveView state.
 
+The generated settings do not choose an event parameter policy yet. The
+guides' examples are written for the strict policy, so add it to
+`settings.py` (if the project already has a `LIVEVIEW_CONFIG`, add the key
+to it):
+
+```python
+LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}
+```
+
+Under it a handler's annotated signature decides what an event may carry;
+see [Typed event parameters](../core-concepts/events.md#typed-event-parameters-strict-policy).
+It becomes the only behaviour before 2.0.0 final.
+
 ### Choose features at creation time
 
 ```bash
@@ -248,6 +261,12 @@ ASGI_APPLICATION = "myproject.asgi.application"
 # "djust" admits djust's own LiveViews (component and theme galleries, admin
 # extensions): an explicit list replaces the default, which includes it.
 LIVEVIEW_ALLOWED_MODULES = ["myapp.views", "djust"]
+
+# Strict event parameters: a handler's annotated signature decides what an
+# event may carry. The examples in djust's docs are written for it; it
+# becomes the only behaviour before 2.0.0 final (until then the default is
+# the 1.x policy).
+LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}
 
 # Suitable for one local development process.
 CHANNEL_LAYERS = {

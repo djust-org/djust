@@ -109,7 +109,8 @@ def _submittable(field: Any, value: Any) -> Any:
 
 #: ADR-038 E2-1: the wizard's render-only context keys. The flat
 #: ``<field>_choices`` aliases depend on each step's runtime form fields, so
-#: they cannot be declared; explicit views render ``form_choices`` only.
+#: they cannot be declared here; ``get_context_data`` adds them as plain
+#: context entries (#4177).
 WIZARD_PROVIDER = ProviderContract(
     "djust.wizard",
     rendered=frozenset(
@@ -585,16 +586,6 @@ class WizardMixin:
                 if rendered_filter is None or fname in rendered_filter:
                     field_html[fname] = self.as_live_field(fname, event_name="validate_field")
 
-        # Expose choices as flat top-level vars too (e.g. borough_choices)
-        # so templates can use either form_choices.borough or borough_choices.
-        from ._exposure import uses_legacy_exposure
-
-        flat_choices = (
-            {f"{k}_choices": v for k, v in form_choices.items()}
-            if uses_legacy_exposure(self)
-            else {}
-        )
-
         provide_context_items(
             self,
             context,
@@ -618,9 +609,21 @@ class WizardMixin:
                 "field_html": field_html,
                 "step_data": dict(step_data),
                 "step_errors": step_errors.get(current_name, {}),
-                **flat_choices,
             },
         )
+        # The choices as flat names too (``borough_choices``), so a template
+        # can read either that or ``form_choices.borough`` (#4177). They
+        # depend on the current step's form, so they cannot be provider keys
+        # declared on the class: they are plain context entries, like what a
+        # view's own ``get_context_data()`` returns. A name the context
+        # already holds (a declared field, a provider key such as
+        # ``form_choices`` for a field named ``form``) is left as it is, and
+        # a view's own ``get_context_data()`` can still replace one after
+        # ``super()``.
+        for fname, choices in form_choices.items():
+            flat_name = f"{fname}_choices"
+            if flat_name not in context:
+                context[flat_name] = choices
         return context
 
     # ------------------------------------------------------------------

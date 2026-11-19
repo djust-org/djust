@@ -3,6 +3,7 @@ Unit tests for Django ORM Query Optimizer
 """
 
 from django.test import TestCase
+from django.test.utils import isolate_apps
 from djust.optimization.query_optimizer import (
     analyze_queryset_optimization,
     optimize_queryset,
@@ -124,9 +125,15 @@ class QueryAnalysisTestCase(TestCase):
         assert len(result["select_related"]) == 0
         assert len(result["prefetch_related"]) == 0
 
+    @isolate_apps("djust_rentals")
     def test_djust_annotations_detected(self):
         """Test that _djust_annotations on a model are picked up as annotations."""
         from django.db.models import Count, Q
+
+        # isolate_apps: the subclass below is a multi-table child of Property.
+        # Registered in the global app registry it would stay there for the rest
+        # of the process, and every later Property.delete() would cascade into
+        # its table, which does not exist.
 
         # Create a temporary model subclass with _djust_annotations
         class AnnotatedProperty(Property):

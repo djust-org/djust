@@ -202,32 +202,10 @@ fallback has no reconnect, so it never fires recovery.
 
 #### Upgrading a 1.x recovery handler
 
-1.x delivered the values as `_form_values` / `_data_attrs` and ran the handler
-under the legacy parameter policy whatever the project used. A strict
-signature cannot declare `_` names, so the handler changes:
-
-```python
-# 1.x
-@event_handler()
-def restore_state(self, _form_values=None, _data_attrs=None, **kwargs):
-    fv = _form_values or {}
-    da = _data_attrs or {}
-    ...
-
-# 2.0
-@event_handler(parameter_policy="strict")
-def restore_state(self, form_values: dict[str, Any], data_attrs: dict[str, str]):
-    fv = form_values
-    da = data_attrs
-    ...
-```
-
-`parameter_policy="strict"` is not needed when the project sets
-`LIVEVIEW_CONFIG["event_parameter_policy"] = "strict"`. `manage.py check`
-reports a recovery handler that still reads `_form_values` / `_data_attrs`,
-from its signature or from `**kwargs`, and one that declares the new names
-under the legacy policy (`djust.V031`), and names the new signature. Until the
-handler changes, a legacy-policy handler keeps receiving the 1.x envelope.
+A 1.x recovery handler read `_form_values` / `_data_attrs`, names a strict
+signature cannot declare. `manage.py check` reports one that still does
+(`djust.V031`) and names the new signature; the before-and-after is in
+[Migrating to djust 2.0](migrating-to-2.0.md#2-make-event-handlers-strict).
 
 ## SSE Transport
 
@@ -276,11 +254,11 @@ class EditorView(LiveView):
     body = state("")
 
     @event_handler()
-    def validate_title(self, value="", **kwargs):
+    def validate_title(self, value: str):
         self.title = value
 
     @event_handler()
-    def preview(self, value="", **kwargs):
+    def preview(self, value: str):
         self.body = value
 
     @event_handler(parameter_policy="strict")

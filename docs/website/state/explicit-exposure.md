@@ -7,9 +7,8 @@ so. This is the default since djust 2.0; a view does not have to ask for it.
 
 Before 2.0 the default was the `legacy` policy, in which every public attribute
 you set on `self` became template context, and much of it also ended up in
-session state and the client state mirror. A view can still state
-`exposure_policy = "legacy"` to keep that behaviour while it is migrated. See
-[Keeping the legacy policy](#keeping-the-legacy-policy).
+session state and the client state mirror. To move a view written for djust
+1.x, see [Migrating a view](#migrating-a-view).
 
 ```python
 from djust import LiveView, event_handler
@@ -97,8 +96,7 @@ token = state("", persist="server", render=False)  # handlers only, never templa
 - Every declared field is template context unless it says `render=False`. Use
   that for a value only handlers need. Declare a large field the template never
   reads `render=False`: everything in the render context is fingerprinted for
-  change detection on every turn. A legacy view refuses
-  `render=False`, because its attribute walk renders every public field.
+  change detection on every turn.
 
 - A field with no `persist=` is saved server-side with the rest of the view's
   state, bound to the session, the user, the tenant and the route.
@@ -351,6 +349,52 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   over WebSocket, SSE and the HTTP fallback. `persist=False` on the declaration
   opts out. See [Interactive Components](../guides/interactive-components.md#persistence-keyboard-and-security).
 
+- **Function views.** A function decorated with `@live_view(template_name=...)`
+  is an explicit view: the values it returns (usually `locals()`) are its
+  context, and the `@event_handler` callables it returns are its handlers,
+  strict or not. Names starting with an underscore, other callables, and the
+  request are not rendered. A returned LiveView setting (`login_required`,
+  `permission_required`, `login_url`, `template`, `template_name` ...)
+  configures the view and is applied before the page renders or a handler
+  runs; it is not a template name. The function body itself runs on every
+  request, so don't put side effects in it that only an allowed user should
+  cause. Returning `check_permissions`, `get_object` or `on_mount` is refused
+  with an `ImproperlyConfigured` error, because djust reads those only from a
+  `LiveView` class: subclass `LiveView`, or return `login_required` /
+  `permission_required`. `view`, `csrf_token`, `DATE_FORMAT` and `TIME_FORMAT`
+  keep djust's own values, and a returned `exposure_policy` is ignored. The view is
+  built for each request and the
+  function runs again every time, so nothing is kept between requests. It
+  answers the page GET and the HTTP fallback POST; a WebSocket or SSE mount is
+  refused with `View not found`, because the class it names is built inside
+  the request. Write a `LiveView` class for a page that keeps state or uses a
+  socket.
+
+  ```python
+  from djust import live_view
+  from djust.decorators import event_handler
+
+
+  @live_view(template_name="greeting.html")
+  def greeting(request):
+      name = request.GET.get("name", "world")
+      shouted = []
+
+      @event_handler
+      def shout(times: int = 1):
+          shouted.extend([name.upper()] * times)
+
+      return locals()
+  ```
+
+  ```html
+  <!-- greeting.html -->
+  <div dj-root>
+    <button dj-click="shout" dj-value-times="3">Shout</button>
+    {% for word in shouted %}<p>{{ word }}</p>{% endfor %}
+  </div>
+  ```
+
 ## Not supported under explicit exposure
 
 - **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare a
@@ -363,40 +407,25 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   renderer has no handler for these tags under either policy; they work only in
   templates rendered with Django's engine.
 
-## Keeping the legacy policy
-
-A view written for djust 1.x relies on the attribute walk: its template reads
-attributes that nothing supplies, and under the default they render empty,
-without an error. Until such a view is migrated, state the old policy on it:
-
-```python
-class OldView(LiveView):
-    exposure_policy = "legacy"
-```
-
-To keep a whole project on it for now, state it once on a base class your views
-inherit from. There is no setting that changes the default.
-
-Stating `"legacy"` raises a `DeprecationWarning` when the class is defined, once
-for each class that states it. The policy is removed in djust 2.0: the 2.0
-pre-releases still accept it, and 2.0.0 does not. The views djust itself ships
-that still state it (the admin change list and form,
-`TtydTerminalView`, the `@live_view` decorator) do not warn, since that line is
-not yours to change.
-
 ## Migrating a view
 
-1. State `exposure_policy = "legacy"` on the view (above), so it keeps working
-   while you change it.
-2. Run `python manage.py djust_exposure_inventory --view myapp.views.MyView`.
-   It lists the names legacy mode exports and where each one goes, and suggests
-   declarations. It never prints values and never instantiates the view.
-3. Declare the fields you meant to keep with `state()`, choosing `persist` and
+A view written for djust 1.x relies on the attribute walk: its template reads
+attributes that nothing supplies, and under explicit exposure they render
+empty, without an error. Move it one view at a time, preferably on 1.3.x before
+you upgrade ([Migrating to djust 2.0](../guides/migrating-to-2.0.md) is the
+full procedure, including what to do on a 2.0 pre-release with views you have
+not moved yet):
+
+1. Run `python manage.py djust_exposure_inventory --view myapp.views.MyView`.
+   It lists the names the 1.x policy exports and where each one goes, and
+   suggests declarations. It never prints values and never instantiates the
+   view.
+2. Declare the fields you meant to keep with `state()`, choosing `persist` and
    `client` for each one deliberately. A declared field renders without
    anything else.
-4. Return everything else the template reads (derived values, `@computed`
+3. Return everything else the template reads (derived values, `@computed`
    values, models loaded from a stored id) from `get_context_data()`.
-5. Remove the `exposure_policy` line, then test your reconnect and
+4. Test your reconnect and
    back-navigation flows. A template name that nothing supplies renders empty,
    so look at every page the view renders. Two things point at such a name:
    with `DEBUG = True` djust logs a warning (logger `djust.exposure`) the first
@@ -406,7 +435,7 @@ not yours to change.
    `render=False`, or one dropped by a `get_context_data()` that does not build
    on `super()`.
 
-**Cost.** An explicit WebSocket event costs roughly twice a legacy one, because
+**Cost.** An explicit WebSocket event costs roughly twice a djust 1.x one, because
 of the per-turn authorization and the state save. The measured numbers and
 their variance are in the ADR's
 [cost note](https://github.com/djust-org/djust/blob/main/docs/adr/notes/038-cost-measurement.md).

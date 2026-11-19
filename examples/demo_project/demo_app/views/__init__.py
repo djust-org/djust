@@ -11,7 +11,6 @@ from ..views_old import (
     CounterView,
     TodoView,
     ChatView,
-    ReactDemoView,
     PerformanceTestView,
     ProductDataTableView,
 )
@@ -101,7 +100,6 @@ __all__ = [
     'CounterView',
     'TodoView',
     'ChatView',
-    'ReactDemoView',
     'PerformanceTestView',
     'ProductDataTableView',
     'DemosIndexView',

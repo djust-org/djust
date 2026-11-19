@@ -50,9 +50,9 @@ pytestmark = pytest.mark.admin
 MODULE = __name__
 PACKAGE = Path(__file__).resolve().parents[1]
 
-#: The one framework class still stating a legacy mode: the ``@live_view``
-#: decorator's per-request class, which #4183 rewrites.
-STILL_LEGACY = {"live_view.py"}
+#: Framework files still stating a legacy mode: none since #4183 moved the
+#: ``@live_view`` decorator's per-request class.
+STILL_LEGACY: set = set()
 
 
 # --------------------------------------------------------------------------- #
@@ -60,12 +60,12 @@ STILL_LEGACY = {"live_view.py"}
 # --------------------------------------------------------------------------- #
 
 
-def _legacy_statements() -> dict[str, list[int]]:
+def _legacy_statements(package: Path = PACKAGE) -> dict[str, list[int]]:
     """Package files (tests excluded) whose class body assigns the legacy
     exposure policy, or that pass the legacy parameter policy to a call."""
     found: dict[str, list[int]] = {}
-    for source in sorted(PACKAGE.rglob("*.py")):
-        relative = source.relative_to(PACKAGE).as_posix()
+    for source in sorted(package.rglob("*.py")):
+        relative = source.relative_to(package).as_posix()
         if relative.startswith("tests/") or "/tests/" in relative:
             continue
         for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
@@ -89,10 +89,20 @@ def _legacy_statements() -> dict[str, list[int]]:
     return found
 
 
-def test_the_scan_finds_both_statement_forms():
-    """Not vacuous: the scan reports the one class #4183 still has to move."""
+def test_the_package_states_no_legacy_mode():
     found = _legacy_statements()
     assert set(found) == STILL_LEGACY, found
+
+
+def test_the_scan_finds_both_statement_forms(tmp_path):
+    """Not vacuous: with nothing left in the package, a stand-in package that
+    states both forms is reported."""
+    # Built from parts: this module states no legacy policy itself (the
+    # ledger in tests/legacy_exposure_ledger.py lists files that do).
+    statement = "exposure_policy = %r" % "legacy"
+    (tmp_path / "views.py").write_text("class V:\n    %s\n" % statement)
+    (tmp_path / "handlers.py").write_text('x = event_handler(parameter_policy="legacy")\n')
+    assert _legacy_statements(tmp_path) == {"views.py": [2], "handlers.py": [1]}
 
 
 # --------------------------------------------------------------------------- #
@@ -329,7 +339,11 @@ async def test_change_list_over_sse(site_urls, django_user_model):
     assert "1 selected" in json.dumps(answers[1])
 
 
-_EDITS = [("update_field", {"field": "name", "value": "edited"}), ("save_and_continue", {})]
+# Save carries the form's values (#4218): a Save without them saves nothing.
+_EDITS = [
+    ("validate_field", {"field": "name", "value": "edited"}),
+    ("save_and_continue", {"name": "edited"}),
+]
 
 
 @pytest.mark.django_db(transaction=True)

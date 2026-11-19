@@ -41,7 +41,7 @@ that must keep all view content out of the session declares no
 `persist="server"` fields for now.
 
 One more kind of state has its own road into the session: a lazy child view
-(`dj-lazy`) on the deprecated `exposure_policy = "legacy"`, over the page-POST
+(`dj-lazy`) still on the deprecated 1.x exposure policy, over the page-POST
 fallback. It does not go through the store either, so with a store named it is
 not saved at all: each fallback request mounts that child again, and one
 WARNING per child class says so.

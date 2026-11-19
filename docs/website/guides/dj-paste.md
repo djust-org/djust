@@ -13,6 +13,8 @@ Every chat app, rich-text editor, and data-import UI needs paste handling. `dj-p
 ```
 
 ```python
+from typing import Any
+
 from djust import LiveView
 from djust.decorators import event_handler
 
@@ -20,9 +22,7 @@ class ChatView(LiveView):
     template_name = "chat/room.html"
 
     @event_handler
-    def handle_paste(self, text: str = "", html: str = "",
-                     has_files: bool = False, files: list = None,
-                     **kwargs):
+    def handle_paste(self, text: str, html: str, has_files: bool, files: list[Any]):
         self.last_paste_preview = text[:200]
         if has_files:
             self.put_flash("info", "Received %d file(s) — uploading..." % len(files))

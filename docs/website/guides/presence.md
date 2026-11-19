@@ -307,8 +307,8 @@ class WhiteboardView(LiveCursorMixin, LiveView):
         })
 
     @event_handler()
-    def cursor_move(self, x=0, y=0, **kwargs):
-        self.handle_cursor_move(int(x), int(y))
+    def cursor_move(self, x: int, y: int):
+        self.handle_cursor_move(x, y)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)

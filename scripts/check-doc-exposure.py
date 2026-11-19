@@ -21,7 +21,7 @@ A class that states ``exposure_policy = "legacy"`` is the "before" half of
 migration material and is counted, not reported. ``<!-- doc-exposure-check:
 legacy -->`` on the line before a fence does the same for a block that shows
 the old behaviour without stating the policy; ``<!-- doc-snippet-check: skip
--->`` and ``anti-pattern`` are honoured too.
+-->``, ``anti-pattern`` and ``before`` are honoured too.
 
 Usage:
     python3 scripts/check-doc-exposure.py            # findings, exit 1 if any
@@ -57,6 +57,7 @@ _TOP_LEVEL_DOCS = ("README.md", "QUICKSTART.md", "CONTRIBUTING.md", "CLAUDE.md",
 _SKIP_MARKERS = {
     "<!-- doc-snippet-check: skip -->",
     "<!-- doc-snippet-check: anti-pattern -->",
+    "<!-- doc-snippet-check: before -->",
     "<!-- doc-exposure-check: legacy -->",
 }
 

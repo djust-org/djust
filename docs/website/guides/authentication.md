@@ -403,7 +403,7 @@ class SignInView(LiveView):
     error = state("")
 
     @event_handler
-    def check(self, username="", **kwargs):
+    def check(self, username: str):
         if not username:
             self.error = "Enter a username."
             return
@@ -424,7 +424,7 @@ class SignInView(LiveView):
 </div>
 ```
 
-The handler receives every field of the form, the password included, so don't store or log them; only the native POST to the login view should act on the credentials.
+Under the strict parameter policy the browser sends a form handler only the fields it declares, so `check` receives `username` and the password never reaches it. A handler that takes every field (`**fields: str`) receives the password too, so don't store or log what it gets; only the native POST to the login view should act on the credentials.
 
 Logging out is different: `logout()` flushes the session on the server, so the old key stops working at once and nothing has to reach the browser.
 

@@ -6465,10 +6465,13 @@ function _handleDjCopy(element, e) {
         element.textContent = feedbackText;
         setTimeout(function() { element.textContent = original; }, 1500);
 
-        // Optional server event for analytics
+        // Optional server event for analytics. It carries no owner context,
+        // so the server runs it on the page's view: a strict handler there
+        // gets `text` only when declared (#4225).
         const copyEvent = element.getAttribute('dj-copy-event');
         if (copyEvent) {
-            handleEvent(copyEvent, markSlotOf({ text: textToCopy }, element));
+            const strict = _strictBinding(element, copyEvent, { text: textToCopy }, [], null, true);
+            if (strict !== false) handleEvent(copyEvent, markSlotOf(strict || { text: textToCopy }, element));
         }
     });
 }
@@ -17326,10 +17329,13 @@ window.djust.bindModelElements = bindModelElements;
         if (!event) return;
         const params = Object.assign({}, args.value || {});
         // ADR-036 Q2: _target is a legacy-only generated key. The explicit
-        // push value is the application payload either way.
+        // push value is the application payload either way. The push carries
+        // no owner context, so the server runs it on the page's view: its
+        // contract decides (pageOwner, #4225).
         let strictPush = false;
         try {
-            strictPush = !!originEl && window.djust._resolveParameterContract(originEl, event).policy === 'strict';
+            strictPush = !!originEl &&
+                window.djust._resolveParameterContract(originEl, event, true).policy === 'strict';
         } catch (_) {
             strictPush = false;  // the server validates; an invalid scope rejects there
         }
@@ -19080,8 +19086,11 @@ window.djust.bindModelElements = bindModelElements;
         if (window.djust && typeof window.djust.handleEvent === 'function') {
             try {
                 // ADR-036: `edge` is a generated value; a strict handler gets it
-                // only when declared (plus its dj-value-* arguments).
-                const strictParams = window.djust._strictBinding(container, eventName, { edge }, []);
+                // only when declared (plus its dj-value-* arguments). The event
+                // carries no owner context, so the server runs it on the page's
+                // view: resolve that view's contract (pageOwner, #4225).
+                const strictParams = window.djust._strictBinding(container, eventName, { edge }, [],
+                    null, true);
                 if (strictParams !== false) {
                     const sent = strictParams || { edge };
                     if (typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(sent, container);
@@ -20137,7 +20146,12 @@ function _installCloseListenerOnce(el) {
         // loading-state and activity-gate machinery.
         const _handleEvent = globalThis.djust && globalThis.djust.handleEvent;
         if (typeof _handleEvent === 'function') {
-            _handleEvent(eventName, { _targetElement: el });
+            // No owner context: the server runs the event on the page's view,
+            // so a strict handler's dj-value-* arguments follow that view's
+            // contract (#4225).
+            const strict = globalThis.djust._strictBinding(el, eventName, {}, [], null, true);
+            if (strict === false) return;
+            _handleEvent(eventName, Object.assign(strict || {}, { _targetElement: el }));
         }
     });
 }
@@ -20551,10 +20565,15 @@ function _installDjMutationFor(el) {
         const proceed = el.dispatchEvent(ev);
         if (!proceed) return;
         // Route to the standard djust event pipeline so the server-side
-        // handler named in dj-mutation="..." actually runs.
+        // handler named in dj-mutation="..." actually runs. The event carries
+        // no owner context, so the server runs it on the page's view; a strict
+        // handler there gets the generated values it declares (#4225).
         if (globalThis.djust && typeof globalThis.djust.handleEvent === 'function') {
-            if (typeof globalThis.djust._markSlotOf === 'function') globalThis.djust._markSlotOf(payload, el);
-            globalThis.djust.handleEvent(handlerName, payload);
+            const strict = globalThis.djust._strictBinding(el, handlerName, payload, [], null, true);
+            if (strict === false) return;
+            const sent = strict || payload;
+            if (typeof globalThis.djust._markSlotOf === 'function') globalThis.djust._markSlotOf(sent, el);
+            globalThis.djust.handleEvent(handlerName, sent);
         }
     }
 

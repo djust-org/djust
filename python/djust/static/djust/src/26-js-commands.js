@@ -170,10 +170,13 @@
         if (!event) return;
         const params = Object.assign({}, args.value || {});
         // ADR-036 Q2: _target is a legacy-only generated key. The explicit
-        // push value is the application payload either way.
+        // push value is the application payload either way. The push carries
+        // no owner context, so the server runs it on the page's view: its
+        // contract decides (pageOwner, #4225).
         let strictPush = false;
         try {
-            strictPush = !!originEl && window.djust._resolveParameterContract(originEl, event).policy === 'strict';
+            strictPush = !!originEl &&
+                window.djust._resolveParameterContract(originEl, event, true).policy === 'strict';
         } catch (_) {
             strictPush = false;  // the server validates; an invalid scope rejects there
         }

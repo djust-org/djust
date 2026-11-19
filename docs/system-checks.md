@@ -1203,6 +1203,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   declared field counts as supplied, unless it is `state(render=False)` or the
   view's `get_context_data()` does not build on `super().get_context_data()`.
   T018 does not report it, because T018 counts an attribute as defined.
+  The check follows `get_context_data()` through `super()` into djust's own
+  classes. Each override supplies the keys of the dict it returns: a returned
+  literal, `super().get_context_data(name=...)` keywords, and the keys and
+  `name["key"] = ...` writes of a returned local bound to
+  `super().get_context_data(...)` or a literal. A local dict that is not
+  returned and code in a nested function supply nothing (#4224).
 - **Also detects** (#4054): a template name `X_count` that nothing supplies,
   when `X` is supplied (returned from `get_context_data()` or a declared
   field). djust 1.x generated `items_count` from a QuerySet or list `items`;
@@ -1217,7 +1223,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   [Migrating to djust 2.0](website/guides/migrating-to-2.0.md).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T027"]}`, or one name
   with a `{# djust_typecheck: noqa name #}` template comment
-- **Not checked**: a view that states `exposure_policy = "legacy"`; a view
+- **Not checked**: a view on the deprecated 1.x exposure policy (`djust.V028`); a view
   whose `get_context_data()` does more than return a literal dict or
   `super().get_context_data()` (its keys cannot be read statically); a
   template that uses `{% extends %}`; a name the template reads only through

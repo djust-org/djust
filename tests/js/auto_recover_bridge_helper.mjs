@@ -25,7 +25,8 @@ import fs from 'node:fs';
 import readline from 'node:readline';
 import { JSDOM, VirtualConsole } from 'jsdom';
 
-const [pagePath, transport] = process.argv.slice(2);
+// The page URL is optional (argv 3): the address the client mounts and posts to.
+const [pagePath, transport, pageUrl] = process.argv.slice(2);
 const out = message => process.stdout.write(JSON.stringify(message) + '\n');
 
 const virtualConsole = new VirtualConsole();
@@ -35,7 +36,7 @@ for (const level of ['warn', 'error']) {
 virtualConsole.on('jsdomError', error => out({op: 'log', level: 'jsdomError', text: String(error.message)}));
 
 const dom = new JSDOM(fs.readFileSync(pagePath, 'utf8'), {
-    url: 'http://testserver/4178/', runScripts: 'dangerously', virtualConsole,
+    url: pageUrl || 'http://testserver/4178/', runScripts: 'dangerously', virtualConsole,
 });
 const win = dom.window;
 if (!win.CSS) win.CSS = {};

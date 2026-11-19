@@ -49,7 +49,7 @@ config.set('use_websocket', False)
 
 ### Mount the SSE endpoint
 
-The SSE transport needs its URL patterns. Add them to your root URLconf:
+The SSE transport needs its URL patterns. A project made with `djust new` routes them already; in any other project, add them to your root URLconf:
 
 ```python
 from django.urls import include, path
@@ -160,11 +160,11 @@ The page POST has no channel from the server to the browser: `tick_interval`, `s
 
 ### What the page-POST fallback keeps between events
 
-Every POST to the page URL builds a fresh view instance. What it gets back depends on the view's exposure policy.
+Every POST to the page URL builds a fresh view instance and gets back the state the previous request saved.
 
 **How a POST builds the view.** As in 1.x, the view is rebuilt from the state the previous request saved (its public attributes, the `_private` attributes `mount()` created, its `state()` fields), and `mount()` does not run again; then `handle_params()` reads the URL and `handle_restore()` runs. `mount()` runs only when nothing is saved yet, or when something of the view could not be saved (a queryset, the request's user, a component, work `mount()` queued): then `mount()` re-creates it and the saved state is put back over it. Read what must be current on every request in `handle_restore()` or `get_context_data()`. The URL is read after the state is restored, as on the socket, so a value `handle_params()` derives from the URL takes the URL's value on every POST. Saving is server-side only; what reaches the template is still decided by [explicit exposure](../state/explicit-exposure.md).
 
-**A view that states `exposure_policy = "legacy"`** (deprecated) keeps nothing between requests in 2.0: every POST runs `mount()` and `handle_params()` again, applies the event and renders, so anything a handler set on `self` is back at its `mount()` value on the next POST. Until 2.0 such a view's public and private attributes and its components' state were saved in the session and put back instead of running `mount()`; that save, and `handle_restore()` for a legacy view, are gone (see [Migrating to 2.0](migrating-to-2.0.md#5-what-does-not-survive)). An interactive component (`DropdownMenu`) on such a view gets a new identity on each mount, so an event addressed to the one the previous answer rendered is refused with 400 `{"error": "Component not found"}`. On an explicit view it works over the fallback: its id is derived from its declaration and its state is saved with the view's declared state (see [Interactive Components](interactive-components.md#persistence-keyboard-and-security)).
+An interactive component (`DropdownMenu`) works over the fallback: its id is derived from its declaration and its state is saved with the view's declared state (see [Interactive Components](interactive-components.md#persistence-keyboard-and-security)). A view still on the 1.x exposure policy keeps none of this between requests; see [Migrating to djust 2.0](migrating-to-2.0.md#state-a-legacy-view-no-longer-keeps).
 
 Whenever the fallback runs `mount()` it then runs `handle_params(params, uri)`, as the GET and the socket mount do, with the POST's own query string (the browser posts to `window.location.href`, so `?scope=mine` is on the request). A page that reads its URL there meets the event with the state the browser shows, and the answer is computed against that page, not against `mount()`'s defaults.
 
@@ -199,7 +199,7 @@ A `live_redirect()` or `live_patch()` that a handler queues is returned in the a
 
 ### What of the view is kept in the session
 
-The view's state is kept in the Django session under djust's own keys (`_djust_auto_...` for the view's state, `_djust_explicit_...` for fields declared `persist="server"`, including the fields of an explicit embedded child). It is bound to the session, the user, the tenant and the route, expires after `DJUST_SERVER_STATE_MAX_AGE` (one hour), and needs a server-side session engine; with signed-cookie sessions nothing is saved. The 1.x `liveview_<path>` keys are never read. The 1.x setting that switched this off, `LIVEVIEW_CONFIG["view_state_in_session"] = False`, is refused at startup: delete it. A view that still states the deprecated `exposure_policy = "legacy"` saves nothing.
+The view's state is kept in the Django session under djust's own keys (`_djust_auto_...` for the view's state, `_djust_explicit_...` for fields declared `persist="server"`, including the fields of an explicit embedded child). It is bound to the session, the user, the tenant and the route, expires after `DJUST_SERVER_STATE_MAX_AGE` (one hour), and needs a server-side session engine; with signed-cookie sessions nothing is saved. The 1.x `liveview_<path>` keys are never read. The 1.x setting that switched this off, `LIVEVIEW_CONFIG["view_state_in_session"] = False`, is refused at startup: delete it.
 
 What is not saved: a `state(..., persist=False)` field, names on the sensitive-field list, and values that cannot be saved (which make the next request run `mount()` again). Saved state past 512 KB per view is refused whole, never saved in part.
 
@@ -215,9 +215,9 @@ So a list of children stays addressable while it changes: a row added in front o
 
 What carries over and what does not:
 
-- A child of a legacy page is re-created on each request, as it is on every parent render over HTTP: its state does not accumulate between events (two `inc` events on a counter child both answer `count=1`). Routing works; persistence does not. (In 1.x a sticky child that opted in with `enable_state_snapshot` was saved under its sticky key; 2.0 removed that, see [Sticky-Child State Persistence](sticky-child-persistence.md).) Make the child explicit and declare the fields it must keep, or use the WebSocket or SSE transport.
+- A routed child is re-created on each request, as it is on every parent render over HTTP: its state does not accumulate between events (two `inc` events on a counter child both answer `count=1`). Routing works; persistence does not. Use the WebSocket or SSE transport for a child that keeps state.
 - Each event re-renders the page once to register its children: a second `get_context_data` and a mount per child. Fine for a page; worth knowing for a page with many children.
-- An id that names no child of the page, an [explicit-exposure](../state/explicit-exposure.md) child, and any child of an explicit-exposure page are refused with `{"error": "Embedded view not found"}`. An explicit child's turn is authorized against the mount binding of a socket session, which a stateless request has not.
+- An id that names no child of the page, an [explicit-exposure](../state/explicit-exposure.md) child, and any child of an explicit-exposure page are refused with `{"error": "Embedded view not found"}`. An explicit child's turn is authorized against the mount binding of a socket session, which a stateless request has not. Explicit exposure is the default, so on the page-POST fallback only a page and child still on the 1.x exposure policy are routed; an explicit page with embedded children needs the WebSocket or SSE transport.
 - Views mounted beside the page view (lazy and batched views, see [Several LiveViews on One Page](multiple-views.md#transports)) are live over a WebSocket and over the SSE transport, which hosts them as views of its own. The page-POST fallback (a browser without `EventSource`) cannot host them: a lazy view is not hydrated, the client reports it (`djust:error`, `code: "view_unavailable"`), and an event from inside one is refused instead of being posted to the page.
 
 ## Behavior Differences
@@ -245,11 +245,11 @@ class CounterView(LiveView):
     count = state(0)
 
     @event_handler
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
 
     @event_handler
-    def decrement(self, **kwargs):
+    def decrement(self):
         self.count -= 1
 ```
 
@@ -315,7 +315,7 @@ class CounterView(LiveView):
 
 ## Automatic Fallback
 
-If the WebSocket exhausts its reconnect attempts and the SSE endpoint is mounted (`include(sse_urlpatterns)`), djust switches to the SSE transport automatically. Without SSE mounted there is no automatic fallback.
+If the WebSocket exhausts its reconnect attempts, djust switches to the SSE transport automatically whenever the browser has `EventSource`. The client does not know whether the SSE endpoint is mounted: without `include(sse_urlpatterns)` its stream GET gets a 404, the client marks the transport disabled and adds `dj-disconnected`, and events do nothing.
 
 ## Troubleshooting
 

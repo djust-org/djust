@@ -79,10 +79,11 @@ class BaseViewWithNavbar(LiveView):
     Base view that provides a navbar to all child views.
 
     For LiveView, we need to explicitly provide the navbar since LiveView
-    doesn't use Django's context processors.
+    doesn't use Django's context processors. The navbar is render-only
+    context: each subclass declares its own state with ``state()``.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     # A base class, not a page: V001/V002 do not apply (not inherited).
     abstract = True
 

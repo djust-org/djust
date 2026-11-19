@@ -946,6 +946,8 @@ HOOKS: Dict[str, str] = {
     "FormMixin.as_live": "unwrapped:template-time:called by the {% live_form %} tag, at template time: no step is open, so a queryset the form's fields evaluate (a ModelChoiceField) is read without the wrapper scope",
     "FormMixin.as_live_field": "unwrapped:template-time:called by the {% live_field %} tag, at template time: no step is open, so a queryset the field evaluates (a ModelChoiceField) is read without the wrapper scope",
     "AdminFormMixin._create_form": "inside:mount@admin_ext/forms.py::AdminFormMixin.mount",
+    # An @event_handler since #4218 (the override was undeclared, so refused).
+    "AdminFormMixin.validate_field": "stepped:event",
     "AdminFormMixin.get_field_value": "inside:render|none@admin_ext/views.py::ModelListView.get_context_data",
     "AdminTailwindAdapter.render_field": "unwrapped:template-time:called while as_live_field renders a field at template time: no step is open",
     "BaseAdapter._merge_widget_attrs": "unwrapped:template-time:called while the form adapter renders a widget at template time: no step is open",
@@ -1716,6 +1718,12 @@ EXPECTED_AUTH_SINKS: Dict[Tuple[str, str, str], Optional[str]] = {
     # (an ordinary lookup, under the mount step), not the view hook.
     ("admin_ext/forms.py", "mount", "get_object"): None,
     ("admin_ext/views.py", "mount", "get_object"): None,
+    # The delete page loads its row by key in the event handler (an ordinary lookup, under
+    # the event step): over the HTTP fallback ``self.object`` is restored state (#4218).
+    ("admin_ext/views.py", "confirm_delete", "get_object"): None,
+    # The delete page's own hook loads the row through the ModelAdmin (#4218): the call is
+    # ``ModelAdmin.get_object``, inside the view hook the auth step already wraps.
+    ("admin_ext/views.py", "get_object", "get_object"): None,
 }
 
 _TEARDOWN_HOOKS = {"_cleanup_uploads", "_cleanup_on_unregister", "_on_sticky_unmount"}

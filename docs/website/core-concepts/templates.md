@@ -29,11 +29,11 @@ Every LiveView template needs two things:
 ## Event Directives
 
 ```html
-<!-- Click: data-* attributes become handler kwargs -->
+<!-- Click: dj-value-* attributes become handler kwargs -->
 <button dj-click="increment">+</button>
-<button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
+<button dj-click="delete" dj-value-item-id="{{ item.id }}">Delete</button>
 
-<!-- Input: fires after typing pauses (300 ms default debounce), passes value= and _target= -->
+<!-- Input: fires after typing pauses (300 ms default debounce), passes value= (and field=) to a handler that declares them -->
 <input type="text" dj-input="search" value="{{ query }}" />
 
 <!-- Change: fires on blur or select change -->
@@ -92,7 +92,7 @@ Add `data-key` on list items to enable optimal VDOM diffing when items reorder:
 {% for item in items %}
 <div data-key="{{ item.id }}">
     {{ item.name }}
-    <button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
+    <button dj-click="delete" dj-value-item-id="{{ item.id }}">Delete</button>
 </div>
 {% endfor %}
 ```

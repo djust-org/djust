@@ -175,10 +175,16 @@ async def _runtime_request_path(url: str) -> str:
 async def _sse_import_verdict(view_path: str) -> bool:
     from djust.sse import SSESession
 
+    from django.contrib.sessions.backends.cache import SessionStore
+
     session = SSESession(str(uuid.uuid4()))
     session._owner_user_pk = 7
     request = RequestFactory().get("/")
-    request.session = MagicMock()
+    # A real server-side session: the demo view declares state(persist="server")
+    # (#4187), and a mount refuses a session that cannot hold it. The cache store
+    # needs no database access in this async test.
+    request.session = SessionStore()
+    request.session.create()
     request.user = MagicMock(is_authenticated=False, pk=7)
     session._request = request
     await session.runtime.dispatch_mount(

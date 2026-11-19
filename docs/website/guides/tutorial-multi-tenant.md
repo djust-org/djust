@@ -249,7 +249,7 @@ Three protective layers in this view:
     {% for account in accounts %}
       <li dj-key="{{ account.id }}" class="account {% if account.id == selected_id %}is-selected{% endif %}">
         <button type="button" dj-click="select_account"
-                data-account-id="{{ account.id }}">
+                dj-value-account-id="{{ account.id }}">
           {{ account.name }}
           <span class="balance">${{ account.balance }}</span>
         </button>

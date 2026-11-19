@@ -322,9 +322,10 @@ def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None
     .. deprecated:: 2.0
        ``exposure_policy = "legacy"``. Removed in 2.0.0.
 
-    A class shipped in djust that states ``"legacy"`` (the ``@live_view``
-    decorator's class, until #4183) does not warn, here or through a subclass:
-    that statement is not the application's to change.
+    A class shipped in djust that states ``"legacy"`` does not warn, here or
+    through a subclass: that statement is not the application's to change.
+    None does any more (#4185, #4183); the exemption stays until the policy
+    itself is removed.
     """
     if at_class_statement:
         owners = [cls] if "exposure_policy" in cls.__dict__ else []
@@ -1600,6 +1601,83 @@ class LiveView(
         self._object = None
 
 
+#: Access hooks djust reads from a view's CLASS, never from the instance: a
+#: function view cannot supply them, and setting one on the view would be
+#: ignored, leaving the page open while it looks gated (#4183).
+_FUNCTION_VIEW_REFUSED = ("check_permissions", "get_object", "on_mount")
+
+
+def _refuse_function_view_access_hooks(func: Callable[..., Any], result: Mapping[str, Any]) -> None:
+    """Refuse a returned access hook a function view cannot apply (#4183)."""
+    from django.core.exceptions import ImproperlyConfigured
+
+    for name in _FUNCTION_VIEW_REFUSED:
+        if name in result:
+            raise ImproperlyConfigured(
+                "@live_view function %s returns %r, which djust reads only from a LiveView "
+                "class, so it would not protect the page. Write a LiveView subclass that "
+                "defines %s, or return login_required / permission_required instead."
+                % (getattr(func, "__qualname__", func), name, name)
+            )
+
+
+def _function_view_configuration(result: Mapping[str, Any]) -> frozenset:
+    """The returned names that configure a function view instead of rendering (#4183).
+
+    A public, non-callable value whose name is a ``LiveView`` class attribute
+    (``login_required``, ``permission_required``, ``login_url``, ``template``,
+    ``template_name`` ...) is set on the view, as it always was, before the
+    view's access checks run, so a function view can still require a login or
+    a permission or choose its template. It is not a template name.
+    ``exposure_policy`` is not applied: a function view is explicit.
+    """
+    from ._class_snapshot import namespace
+
+    view_names: Set[str] = set()
+    for base in LiveView.__mro__:
+        view_names.update(namespace(base))
+    return frozenset(
+        key
+        for key, value in result.items()
+        if type(key) is str
+        and not key.startswith("_")
+        and key != "exposure_policy"
+        and not callable(value)
+        and key in view_names
+    )
+
+
+def _function_view_context(result: Mapping[str, Any], view_class: type) -> Dict[str, Any]:
+    """The template names a function view's returned mapping supplies (#4183).
+
+    The names the attribute walk rendered when these values were set as view
+    attributes: no private (``_``-prefixed) name, nothing callable, and no
+    module, class or request object. Also left out: the view's configuration
+    (:func:`_function_view_configuration`), and the names djust supplies itself
+    (``view``, ``streams``, and the framework providers' ``csrf_token``,
+    ``DATE_FORMAT`` and ``TIME_FORMAT``), which the template keeps reading
+    from djust.
+    """
+    import types
+
+    from django.http import HttpRequest
+
+    from ._exposure import provider_owners
+
+    skip = (types.ModuleType, type, HttpRequest)
+    supplied = {"view", "streams", "exposure_policy"} | set(provider_owners(view_class))
+    supplied |= _function_view_configuration(result)
+    return {
+        key: value
+        for key, value in result.items()
+        if type(key) is str
+        and not key.startswith("_")
+        and key not in supplied
+        and not callable(value)
+        and not isinstance(value, skip)
+    }
+
+
 def live_view(
     template_name: Optional[str] = None, template: Optional[str] = None
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -1611,15 +1689,19 @@ def live_view(
         def counter_view(request):
             count = 0
 
-            def increment():
-                nonlocal count
-                count += 1
-
-            def decrement():
-                nonlocal count
-                count -= 1
+            @event_handler
+            def increment(**kwargs):
+                ...
 
             return locals()
+
+    The view uses explicit exposure (#4183): the values the function returns
+    are its context, and the callables it returns are its handlers. A returned
+    LiveView setting (``login_required``, ``permission_required``,
+    ``template`` ...) configures the view before its access checks run. A function
+    view runs over the page GET and the HTTP POST fallback. It is built per
+    request, so it has no class a WebSocket or SSE mount can name, and it keeps
+    no state between requests: the function runs again for every request.
 
     Args:
         template_name: Path to Django template
@@ -1633,9 +1715,15 @@ def live_view(
         def wrapper(request: Any, *args: Any, **kwargs: Any) -> Any:
             # Create a dynamic LiveView class
             class DynamicLiveView(LiveView):
-                # The decorated function's returned locals are set as view
-                # attributes below and rendered by the attribute walk.
-                exposure_policy = "legacy"
+                # The decorated function's returned values are this view's
+                # context; it declares no state (#4183).
+                exposure_policy = "explicit"
+                _djust_function_context: Dict[str, Any] = {}
+
+                def get_context_data(self, **context_kwargs: Any) -> Dict[str, Any]:
+                    context = super().get_context_data(**context_kwargs)
+                    context.update(type(self)._djust_function_context)
+                    return context
 
             if template_name:
                 DynamicLiveView.template_name = template_name
@@ -1647,10 +1735,18 @@ def live_view(
             # Execute the function to get initial state
             result = func(request, *args, **kwargs)
             if isinstance(result, dict):
+                _refuse_function_view_access_hooks(func, result)
+                # The class is built for this request alone, so its context
+                # is too. Callables stay view attributes: they are the
+                # function's event handlers. So do the view's configuration
+                # values (``login_required``, ``template`` ...), set here,
+                # before get()/post() run the view's access checks.
+                DynamicLiveView._djust_function_context = _function_view_context(
+                    result, DynamicLiveView
+                )
+                configuration = _function_view_configuration(result)
                 for key, value in result.items():
-                    if not callable(value):
-                        setattr(view, key, value)
-                    else:
+                    if callable(value) or key in configuration:
                         setattr(view, key, value)
 
             # Handle the request

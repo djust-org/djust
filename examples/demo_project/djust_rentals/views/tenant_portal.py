@@ -4,12 +4,23 @@ Tenant Portal Views
 Tenant-facing views for lease info, payments, and maintenance requests.
 """
 
+from djust import state
 from djust_shared.views import BaseViewWithNavbar
+from ._rows import RowById
 from djust.decorators import event_handler
 from djust.decorators import debounce
 from django.utils import timezone
 from ..models import Tenant, Lease, Payment, MaintenanceRequest, Property
 from ..components import PageHeader
+
+
+def _first_tenant_id():
+    """The demo's tenant: the first one (a real app reads request.user)."""
+    return Tenant.objects.order_by('pk').values_list('pk', flat=True).first()
+
+
+def _tenant_row(pk):
+    return Tenant.objects.select_related('user').filter(pk=pk).first()
 
 
 class TenantDashboardView(BaseViewWithNavbar):
@@ -25,32 +36,33 @@ class TenantDashboardView(BaseViewWithNavbar):
     """
     template_name = 'rentals/tenant_dashboard.html'
 
-    def mount(self, request, **kwargs):
-        """Initialize tenant dashboard"""
+    def _load(self):
+        # Read on every render, not kept from mount(): between events the HTTP
+        # fallback restores a saved model as its field dict, not a row.
         # In real app, get tenant from request.user
         # For demo, we'll load first tenant
         # .first() returns None on an empty table rather than raising, so test
         # for it: a bare except here never ran and the page 500'd (#3994).
-        self.tenant = Tenant.objects.select_related('user').first()
-        self.error_message = ""
-        if self.tenant is None:
-            self.error_message = "No tenant profile found"
+        self._tenant = Tenant.objects.select_related('user').first()
+        self._error_message = ""
+        if self._tenant is None:
+            self._error_message = "No tenant profile found"
             return
 
         # Load tenant data
-        self.current_lease = self.tenant.get_current_lease() if self.tenant else None
-        self.current_property = self.tenant.get_current_property() if self.tenant else None
+        self._current_lease = self._tenant.get_current_lease() if self._tenant else None
+        self._current_property = self._tenant.get_current_property() if self._tenant else None
 
-        if self.current_lease:
+        if self._current_lease:
             # Recent payments
-            self.recent_payments = Payment.objects.filter(
-                lease=self.current_lease
+            self._recent_payments = Payment.objects.filter(
+                lease=self._current_lease
             ).order_by('-payment_date')[:5]
 
             # Calculate rent due
             from datetime import date
             today = date.today()
-            due_day = self.current_lease.rent_due_day
+            due_day = self._current_lease.rent_due_day
             if today.day < due_day:
                 next_due_date = today.replace(day=due_day)
             else:
@@ -59,28 +71,29 @@ class TenantDashboardView(BaseViewWithNavbar):
                 next_year = today.year + (1 if next_month == 1 else 0)
                 next_due_date = today.replace(month=next_month, year=next_year, day=due_day)
 
-            self.next_due_date = next_due_date
-            self.days_until_due = (next_due_date - today).days
+            self._next_due_date = next_due_date
+            self._days_until_due = (next_due_date - today).days
         else:
-            self.recent_payments = []
-            self.next_due_date = None
-            self.days_until_due = None
+            self._recent_payments = []
+            self._next_due_date = None
+            self._days_until_due = None
 
         # Maintenance requests
-        self.maintenance_requests = MaintenanceRequest.objects.filter(
-            tenant=self.tenant
-        ).order_by('-created_at')[:5] if self.tenant else []
+        self._maintenance_requests = MaintenanceRequest.objects.filter(
+            tenant=self._tenant
+        ).order_by('-created_at')[:5] if self._tenant else []
 
     def get_context_data(self, **kwargs):
         """Add tenant dashboard context"""
+        self._load()
         context = super().get_context_data(**kwargs)
 
-        if not self.tenant:
-            context['error_message'] = self.error_message
+        if not self._tenant:
+            context['error_message'] = self._error_message
             return context
 
         # Create page header
-        title = f"Welcome, {self.tenant.user.get_full_name()}" if self.tenant else "Tenant Portal"
+        title = f"Welcome, {self._tenant.user.get_full_name()}" if self._tenant else "Tenant Portal"
         page_header = PageHeader(
             title=title,
             subtitle="Your rental information and services",
@@ -88,9 +101,9 @@ class TenantDashboardView(BaseViewWithNavbar):
         )
 
         # Count maintenance by status over all of the tenant's requests:
-        # self.maintenance_requests is the sliced "recent 5", and a sliced
+        # self._maintenance_requests is the sliced "recent 5", and a sliced
         # queryset cannot be filtered again (#3994).
-        all_requests = MaintenanceRequest.objects.filter(tenant=self.tenant)
+        all_requests = MaintenanceRequest.objects.filter(tenant=self._tenant)
         maintenance_stats = {
             'open': all_requests.filter(status='open').count(),
             'in_progress': all_requests.filter(status='in_progress').count(),
@@ -99,13 +112,13 @@ class TenantDashboardView(BaseViewWithNavbar):
 
         context.update({
             'page_header': page_header.render(),
-            'tenant': self.tenant,
-            'current_lease': self.current_lease,
-            'current_property': self.current_property,
-            'recent_payments': self.recent_payments,
-            'next_due_date': self.next_due_date,
-            'days_until_due': self.days_until_due,
-            'maintenance_requests': self.maintenance_requests,
+            'tenant': self._tenant,
+            'current_lease': self._current_lease,
+            'current_property': self._current_property,
+            'recent_payments': self._recent_payments,
+            'next_due_date': self._next_due_date,
+            'days_until_due': self._days_until_due,
+            'maintenance_requests': self._maintenance_requests,
             'maintenance_stats': maintenance_stats,
         })
 
@@ -123,51 +136,51 @@ class TenantMaintenanceListView(BaseViewWithNavbar):
     """
     template_name = 'rentals/tenant_maintenance_list.html'
 
+    # persist="server" keeps the filter across the HTTP fallback and a
+    # reconnect; the list is queried per render from it.
+    filter_status = state("all", persist="server")
+    # Read by id on every turn (see ._rows).
+    _tenant = RowById("_tenant_id", _tenant_row)
+
     def mount(self, request, **kwargs):
         """Initialize tenant maintenance list"""
         # Get tenant from request.user (for demo, use first tenant)
         # .first() returns None on an empty table rather than raising, so test
         # for it: a bare except here never ran and the page 500'd (#3994).
-        self.tenant = Tenant.objects.select_related('user').first()
-        self.error_message = ""
-        if self.tenant is None:
-            self.error_message = "No tenant profile found"
+        self._tenant_id = _first_tenant_id()
+        self._error_message = ""
+        if self._tenant is None:
+            self._error_message = "No tenant profile found"
             return
-
-        # Filter state
-        self.filter_status = "all"
-
-        # Load requests
-        self._refresh_requests()
 
     def _refresh_requests(self):
         """Refresh maintenance requests"""
-        if not self.tenant:
-            self.requests = []
+        if not self._tenant:
+            self._requests = []
             return
 
         requests = MaintenanceRequest.objects.filter(
-            tenant=self.tenant
+            tenant=self._tenant
         )
 
         # Apply status filter
         if self.filter_status != "all":
             requests = requests.filter(status=self.filter_status)
 
-        self.requests = requests.order_by('-created_at')
+        self._requests = requests.order_by('-created_at')
 
     @event_handler
     def filter_by_status(self, status: str = "all", **kwargs):
         """Filter requests by status"""
         self.filter_status = status
-        self._refresh_requests()
 
     def get_context_data(self, **kwargs):
         """Add maintenance list context"""
+        self._refresh_requests()
         context = super().get_context_data(**kwargs)
 
-        if not self.tenant:
-            context['error_message'] = self.error_message
+        if not self._tenant:
+            context['error_message'] = self._error_message
             return context
 
         # Create page header
@@ -179,8 +192,8 @@ class TenantMaintenanceListView(BaseViewWithNavbar):
 
         context.update({
             'page_header': page_header.render(),
-            'requests': self.requests,
-            'total_count': self.requests.count() if self.requests else 0,
+            'requests': self._requests,
+            'total_count': self._requests.count() if self._requests else 0,
             'filter_status': self.filter_status,
             'status_choices': MaintenanceRequest.STATUS_CHOICES,
         })
@@ -199,35 +212,39 @@ class TenantMaintenanceCreateView(BaseViewWithNavbar):
     """
     template_name = 'rentals/tenant_maintenance_create.html'
 
+    # Set by submit_request and rendered through get_context_data().
+    success_message = state("", render=False)
+    error_message = state("", render=False)
+    # Read by id on every turn (see ._rows).
+    _tenant = RowById("_tenant_id", _tenant_row)
+    _current_property = RowById(
+        "_tenant_id", lambda pk: getattr(_tenant_row(pk), "get_current_property", lambda: None)()
+    )
+
     def mount(self, request, **kwargs):
         """Initialize maintenance creation form"""
         # Get tenant from request.user (for demo, use first tenant)
         # .first() returns None on an empty table rather than raising, so test
         # for it: a bare except here never ran and the page 500'd (#3994).
-        self.tenant = Tenant.objects.select_related('user').first()
+        self._tenant_id = _first_tenant_id()
         self.error_message = ""
-        if self.tenant is None:
+        if self._tenant is None:
             self.error_message = "No tenant profile found"
             return
 
-        self.current_property = self.tenant.get_current_property() if self.tenant else None
-
-        # Form state
-        self.success_message = ""
-        self.error_message = ""
-
     @event_handler
-    def submit_request(self, title="", description="", priority="medium", **kwargs):
+    def submit_request(self, title: str = "", description: str = "", priority: str = "medium",
+                       **kwargs):
         """Submit new maintenance request"""
-        if not self.tenant or not self.current_property:
+        if not self._tenant or not self._current_property:
             self.error_message = "No active lease found"
             return
 
         try:
             # Create maintenance request
             request_obj = MaintenanceRequest.objects.create(
-                property=self.current_property,
-                tenant=self.tenant,
+                property=self._current_property,
+                tenant=self._tenant,
                 title=title,
                 description=description,
                 priority=priority,
@@ -244,7 +261,7 @@ class TenantMaintenanceCreateView(BaseViewWithNavbar):
         """Add form context"""
         context = super().get_context_data(**kwargs)
 
-        if not self.tenant:
+        if not self._tenant:
             context['error_message'] = self.error_message
             return context
 
@@ -252,7 +269,7 @@ class TenantMaintenanceCreateView(BaseViewWithNavbar):
         from ..components import PageHeader
         page_header = PageHeader(
             title="Submit Maintenance Request",
-            subtitle=f"Report an issue with {self.current_property.name if self.current_property else 'your property'}",
+            subtitle=f"Report an issue with {self._current_property.name if self._current_property else 'your property'}",
             icon="wrench"
         )
 
@@ -261,8 +278,8 @@ class TenantMaintenanceCreateView(BaseViewWithNavbar):
             'page_header': page_header.render(),
 
             # Form data
-            'tenant': self.tenant,
-            'current_property': self.current_property,
+            'tenant': self._tenant,
+            'current_property': self._current_property,
             'success_message': self.success_message,
             'error_message': self.error_message,
             'priority_choices': MaintenanceRequest.PRIORITY_CHOICES,
@@ -283,33 +300,35 @@ class TenantPaymentsView(BaseViewWithNavbar):
     """
     template_name = 'rentals/tenant_payments.html'
 
-    def mount(self, request, **kwargs):
-        """Initialize tenant payments view"""
+    def _load(self):
+        # Read on every render, not kept from mount(): between events the HTTP
+        # fallback restores a saved model as its field dict, not a row.
         # Get tenant from request.user (for demo, use first tenant)
         # .first() returns None on an empty table rather than raising, so test
         # for it: a bare except here never ran and the page 500'd (#3994).
-        self.tenant = Tenant.objects.select_related('user').first()
-        self.error_message = ""
-        if self.tenant is None:
-            self.error_message = "No tenant profile found"
+        self._tenant = Tenant.objects.select_related('user').first()
+        self._error_message = ""
+        if self._tenant is None:
+            self._error_message = "No tenant profile found"
             return
 
         # Load payment history
-        self.current_lease = self.tenant.get_current_lease() if self.tenant else None
+        self._current_lease = self._tenant.get_current_lease() if self._tenant else None
 
-        if self.current_lease:
-            self.payments = Payment.objects.filter(
-                lease=self.current_lease
+        if self._current_lease:
+            self._payments = Payment.objects.filter(
+                lease=self._current_lease
             ).order_by('-payment_date')
         else:
-            self.payments = []
+            self._payments = []
 
     def get_context_data(self, **kwargs):
         """Add payments context"""
+        self._load()
         context = super().get_context_data(**kwargs)
 
-        if not self.tenant:
-            context['error_message'] = self.error_message
+        if not self._tenant:
+            context['error_message'] = self._error_message
             return context
 
         # Create page header
@@ -321,8 +340,8 @@ class TenantPaymentsView(BaseViewWithNavbar):
 
         # Calculate payment statistics
         from django.db.models import Sum, Count
-        if self.payments:
-            payment_stats = self.payments.aggregate(
+        if self._payments:
+            payment_stats = self._payments.aggregate(
                 total_paid=Sum('amount'),
                 payment_count=Count('id')
             )
@@ -330,13 +349,13 @@ class TenantPaymentsView(BaseViewWithNavbar):
             payment_stats = {'total_paid': 0, 'payment_count': 0}
 
         # Calculate expected payments
-        if self.current_lease:
+        if self._current_lease:
             from datetime import date
 
-            start_date = self.current_lease.start_date
-            end_date = min(self.current_lease.end_date, date.today())
+            start_date = self._current_lease.start_date
+            end_date = min(self._current_lease.end_date, date.today())
             months_elapsed = (end_date.year - start_date.year) * 12 + end_date.month - start_date.month + 1
-            expected_total = months_elapsed * float(self.current_lease.monthly_rent)
+            expected_total = months_elapsed * float(self._current_lease.monthly_rent)
             balance = expected_total - float(payment_stats['total_paid'] or 0)
         else:
             expected_total = 0
@@ -344,9 +363,9 @@ class TenantPaymentsView(BaseViewWithNavbar):
 
         context.update({
             'page_header': page_header.render(),
-            'tenant': self.tenant,
-            'current_lease': self.current_lease,
-            'payments': self.payments,
+            'tenant': self._tenant,
+            'current_lease': self._current_lease,
+            'payments': self._payments,
             'total_paid': payment_stats['total_paid'] or 0,
             'payment_count': payment_stats['payment_count'] or 0,
             'expected_total': expected_total,

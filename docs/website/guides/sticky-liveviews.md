@@ -43,7 +43,7 @@ class AudioPlayerView(LiveView):
     is_playing = state(False)
 
     @event_handler
-    def toggle_play(self, **kwargs):
+    def toggle_play(self):
         self.is_playing = not self.is_playing
 ```
 

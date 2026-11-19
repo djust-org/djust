@@ -87,8 +87,15 @@ covered are:
 - keyboard, paste and polling;
 - `dj-window-*`/`dj-document-*`, click-away, shortcuts, mouse enter/leave and
   `dj-mounted`;
-- form recovery, native dropdown observations, JS-command `push` and
-  `dj-viewport`.
+- form recovery, native dropdown observations, JS-command `push`,
+  `dj-viewport`, `dj-mutation`, `dj-copy-event` and `dj-dialog-close-event`
+  (#4225).
+
+A binding sent without owner context (`dj-viewport-*`, `dj-mutation`,
+`dj-copy-event`, `dj-dialog-close-event`, JS-command `push`, `dj-auto-recover`)
+runs on the page's view wherever its element sits, so it resolves the page
+view's contract (`pageOwner`), not the nearest component's or embedded
+child's (#4178, #4225).
 
 **Outcomes.** A strict binding is collected by `_collectStrictEventParams` with
 the generated values its handler declares, or all of them for a `**`

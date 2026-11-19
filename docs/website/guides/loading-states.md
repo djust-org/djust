@@ -107,7 +107,7 @@ class ReportView(LiveView):
     error = state("")
 
     @event_handler()
-    def generate_report(self, **kwargs):
+    def generate_report(self):
         self.generating = True        # Shows spinner immediately
         self.error = ""
         self.start_async(self._do_generate)
@@ -166,10 +166,9 @@ The first response carries `async_pending: true` whenever the handler queued bac
 
 ```python
 @event_handler()
-def start_export(self, **kwargs):
-    fmt = kwargs.get("format", "csv")
+def start_export(self, format: str = "csv"):
     self.exporting = True
-    self.start_async(self._run_export, format=fmt)
+    self.start_async(self._run_export, format=format)
 
 def _run_export(self, format="csv"):
     self.data = expensive_export(format)
@@ -211,7 +210,7 @@ class ContentView(LiveView):
 
     @event_handler
     @background
-    def generate_content(self, prompt: str = "", **kwargs):
+    def generate_content(self, prompt: str = ""):
         """Entire method runs in background thread."""
         self.generating = True
         try:
@@ -231,7 +230,7 @@ The `@background` decorator:
 @event_handler
 @debounce(wait=0.5)
 @background
-def auto_save(self, **kwargs):
+def auto_save(self):
     # Debounced and runs in background
     self.save_draft()
 ```
@@ -247,7 +246,7 @@ Both `start_async()` and `@background` support named tasks for tracking and canc
 
 ```python
 @event_handler
-def start_export(self, **kwargs):
+def start_export(self):
     self.exporting = True
     self.start_async(self._run_export, format="csv", name="export")
 
@@ -256,7 +255,7 @@ def _run_export(self, format="csv"):
     self.exporting = False
 
 @event_handler
-def cancel_export(self, **kwargs):
+def cancel_export(self):
     self.cancel_async("export")  # Cancel the named task
     self.exporting = False
     self.status = "Cancelled"
@@ -267,12 +266,12 @@ With `@background`, the task name is automatically set to the handler's function
 ```python
 @event_handler
 @background
-def generate_report(self, **kwargs):
+def generate_report(self):
     # Task name is "generate_report"
     ...
 
 @event_handler
-def cancel_report(self, **kwargs):
+def cancel_report(self):
     self.cancel_async("generate_report")
 ```
 
@@ -293,17 +292,15 @@ Async code in a view sometimes starts a task of its own: a follower launched
 from an `async def mount`, a loop started by an async push handler. Start it with
 `self.create_task(coro)` (or register a task made elsewhere with
 `self.track_task(task)`) and it lives as long as the view's `start_async` work:
-`cancel_async_all()` cancels it, an explicit-exposure view's disposal on
-disconnect or navigation cancels it, and so does a legacy view's close when the
-view sets `cancel_async_on_disconnect = True`. A task created with plain
-`asyncio.create_task()` is not tracked and keeps running.
+`cancel_async_all()` cancels it, and so does the view's disposal when its
+socket or SSE stream closes or it is navigated away from. A task created with
+plain `asyncio.create_task()` is not tracked and keeps running.
 
 ```python
 from djust import LiveView, apush_to_view, state
 
 
 class RunView(LiveView):
-    cancel_async_on_disconnect = True
     events = state(default_factory=list)
 
     async def mount(self, request, run_id=None, **kwargs):
@@ -368,7 +365,7 @@ class ReportView(LiveView):
         return super().get_context_data(status=status, **kwargs)
 
     @event_handler
-    def generate(self, **kwargs):
+    def generate(self):
         self.generating = True
         self.start_async(self._do_generate)
 
@@ -443,7 +440,7 @@ from asgiref.sync import sync_to_async
 
 class ImportView(LiveView):  # AsyncWorkMixin + StreamingMixin are built in
     @event_handler()
-    def start_import(self, **kwargs):
+    def start_import(self):
         self.importing = True
         self.start_async(self._do_import)
 

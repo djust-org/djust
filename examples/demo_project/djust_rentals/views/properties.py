@@ -4,6 +4,7 @@ Property Management Views
 CRUD operations for rental properties with search, filter, and real-time updates.
 """
 
+from djust import state
 from djust_shared.views import BaseViewWithNavbar
 from djust.decorators import debounce, event_handler
 from djust_shared.components.ui import HeroSection
@@ -24,16 +25,12 @@ class PropertyListView(BaseViewWithNavbar):
     """
     template_name = 'rentals/property_list.html'
 
-    def mount(self, request, **kwargs):
-        """Initialize property list state"""
-        # Search and filter state
-        self.search_query = ""
-        self.filter_status = "all"
-        self.filter_type = "all"
-        self.sort_by = "name"
-
-        # Load properties
-        self._refresh_properties()
+    # Search and filter inputs; persist="server" keeps them across the HTTP
+    # fallback and a reconnect. The list is queried per render from them.
+    search_query = state("", persist="server")
+    filter_status = state("all", persist="server")
+    filter_type = state("all", persist="server")
+    sort_by = state("name", persist="server")
 
     def _refresh_properties(self):
         """Refresh property list based on current filters"""
@@ -65,8 +62,6 @@ class PropertyListView(BaseViewWithNavbar):
         elif self.sort_by == "bedrooms":
             properties = properties.order_by('-bedrooms')
 
-        # Store as private variable to avoid auto-JIT serialization
-        # We'll assign to self.properties in get_context_data() instead
         self._properties = properties
 
     @event_handler()
@@ -74,34 +69,25 @@ class PropertyListView(BaseViewWithNavbar):
     def search(self, query: str = "", **kwargs):
         """Search properties with debouncing"""
         self.search_query = query
-        self._refresh_properties()
 
     @event_handler()
     def filter_by_status(self, status: str = "all", **kwargs):
         """Filter properties by status"""
         self.filter_status = status
-        self._refresh_properties()
 
     @event_handler()
     def filter_by_type(self, property_type: str = "all", **kwargs):
         """Filter properties by type"""
         self.filter_type = property_type
-        self._refresh_properties()
 
     @event_handler()
     def sort_properties(self, sort: str = "name", **kwargs):
         """Sort properties"""
         self.sort_by = sort
-        self._refresh_properties()
 
     def get_context_data(self, **kwargs):
         """Add property list context"""
-        # Store properties as instance variable for JIT serialization
-        # JIT will extract ALL paths from template including computed properties
-        # and auto-apply select_related optimizations
-        self.properties = self._properties
-
-        # Call parent - JIT serializes 'properties' with Rust + auto-generates 'properties_count'
+        self._refresh_properties()
         context = super().get_context_data(**kwargs)
 
         # Create page header (do this in get_context_data so it's available for every render)
@@ -159,8 +145,6 @@ class PropertyListView(BaseViewWithNavbar):
             'stat_cards': stat_cards_html,
             'property_table': property_table.render(),
 
-            # NOTE: Don't add 'properties' - parent already serialized it via JIT!
-            # GENERIC OPTIMIZATION: Parent auto-generates 'properties_count' from len(properties)
             'occupied_count': occupied_count,
             'available_count': available_count,
             'maintenance_count': maintenance_count,
@@ -191,47 +175,54 @@ class PropertyDetailView(BaseViewWithNavbar):
 
     def mount(self, request, pk=None, **kwargs):
         """Initialize property detail view"""
-        self.property_id = pk
+        self._pk = pk
+
+    def _load(self):
+        # Read on every render, not kept from mount(): between events the HTTP
+        # fallback restores a saved model as its field dict, not a row.
+        pk = self._pk
+        self._property_id = pk
 
         # Load property
         try:
-            self.property = Property.objects.get(pk=pk)
+            self._property = Property.objects.get(pk=pk)
         except Property.DoesNotExist:
-            self.property = None
-            self.error_message = f"Property with ID {pk} not found"
+            self._property = None
+            self._error_message = f"Property with ID {pk} not found"
             return
 
         # Load related data
-        self.current_lease = self.property.get_current_lease()
-        self.current_tenant = self.property.get_current_tenant()
-        self.lease_history = Lease.objects.filter(property=self.property).order_by('-start_date')
-        self.maintenance_history = MaintenanceRequest.objects.filter(
-            property=self.property
+        self._current_lease = self._property.get_current_lease()
+        self._current_tenant = self._property.get_current_tenant()
+        self._lease_history = Lease.objects.filter(property=self._property).order_by('-start_date')
+        self._maintenance_history = MaintenanceRequest.objects.filter(
+            property=self._property
         ).order_by('-created_at')[:10]
 
     def get_context_data(self, **kwargs):
         """Add property detail context"""
+        self._load()
         context = super().get_context_data(**kwargs)
 
-        if not self.property:
-            context['error_message'] = self.error_message
+        if not self._property:
+            context['error_message'] = self._error_message
             return context
 
         # Create page header (do this in get_context_data so it's available for every render)
         page_header = PageHeader(
-            title=self.property.name,
-            subtitle=self.property.address,
+            title=self._property.name,
+            subtitle=self._property.address,
             icon="home",
             actions=[
                 {
                     "label": "Edit Property",
-                    "url": f"/rentals/properties/{self.property.pk}/edit/",
+                    "url": f"/rentals/properties/{self._property.pk}/edit/",
                     "icon": "edit",
                     "variant": "secondary"
                 },
                 {
                     "label": "Delete",
-                    "url": f"/rentals/properties/{self.property.pk}/delete/",
+                    "url": f"/rentals/properties/{self._property.pk}/delete/",
                     "icon": "trash-2",
                     "variant": "destructive"
                 }
@@ -239,16 +230,16 @@ class PropertyDetailView(BaseViewWithNavbar):
         )
 
         # Create status badge
-        status_badge = StatusBadge(status=self.property.status).render()
+        status_badge = StatusBadge(status=self._property.status).render()
 
         # Calculate financial metrics
         from django.db.models import Sum
-        total_income = self.lease_history.aggregate(
+        total_income = self._lease_history.aggregate(
             total=Sum('monthly_rent')
         )['total'] or 0
 
         # Parse amenities (comma-separated string to list)
-        amenities_list = [a.strip() for a in self.property.amenities.split(',') if a.strip()]
+        amenities_list = [a.strip() for a in self._property.amenities.split(',') if a.strip()]
 
         context.update({
             # Components (rendered to HTML strings)
@@ -256,11 +247,11 @@ class PropertyDetailView(BaseViewWithNavbar):
             'status_badge': status_badge,
 
             # Property data
-            'property': self.property,
-            'current_lease': self.current_lease,
-            'current_tenant': self.current_tenant,
-            'lease_history': self.lease_history,
-            'maintenance_history': self.maintenance_history,
+            'property': self._property,
+            'current_lease': self._current_lease,
+            'current_tenant': self._current_tenant,
+            'lease_history': self._lease_history,
+            'maintenance_history': self._maintenance_history,
             'total_income': total_income,
             'amenities': amenities_list,
         })
@@ -280,49 +271,43 @@ class PropertyFormView(BaseViewWithNavbar):
     """
     template_name = 'rentals/property_form.html'
 
+    # The edited property's id: from the URL, or set when a new property is
+    # saved. persist="server" keeps it across the HTTP fallback, so a second
+    # save updates that property instead of creating another.
+    property_id = state(None, persist="server", render=False)
+    success_message = state("", render=False)
+    error_message = state("", render=False)
+    validation_errors = state(default_factory=dict, render=False)
+
     def mount(self, request, pk=None, **kwargs):
         """Initialize property form"""
         self.property_id = pk
-        self.is_edit = pk is not None
-        # Set before the not-found return below: get_context_data reads them (#3994).
-        self.success_message = ""
-        self.error_message = ""
-        self.validation_errors = {}
+        if pk is not None and self._property() is None:
+            self.error_message = f"Property with ID {pk} not found"
 
-        if self.is_edit:
-            # Load existing property
-            try:
-                self.property = Property.objects.get(pk=pk)
-            except Property.DoesNotExist:
-                self.property = None
-                self.error_message = f"Property with ID {pk} not found"
-                return
-        else:
-            # New property - initialize with defaults
-            self.property = None
-
-        # Form state
-        self.success_message = ""
-        self.error_message = ""
-        self.validation_errors = {}
+    def _property(self):
+        """The edited property, or None for a new one."""
+        if self.property_id is None:
+            return None
+        return Property.objects.filter(pk=self.property_id).first()
 
     @event_handler()
     def save_property(self, **form_data):
         """Save property (create or update)"""
         try:
-            if self.is_edit and self.property:
+            prop = self._property()
+            if prop is not None:
                 # Update existing property
                 for field, value in form_data.items():
-                    if hasattr(self.property, field):
-                        setattr(self.property, field, value)
-                self.property.save()
+                    if hasattr(prop, field):
+                        setattr(prop, field, value)
+                prop.save()
                 self.success_message = "Property updated successfully!"
             else:
                 # Create new property
-                self.property = Property.objects.create(**form_data)
+                prop = Property.objects.create(**form_data)
                 self.success_message = "Property created successfully!"
-                self.is_edit = True
-                self.property_id = self.property.id
+                self.property_id = prop.id
 
             self.error_message = ""
             self.validation_errors = {}
@@ -333,10 +318,11 @@ class PropertyFormView(BaseViewWithNavbar):
     def get_context_data(self, **kwargs):
         """Add form context"""
         context = super().get_context_data(**kwargs)
+        is_edit = self.property_id is not None
 
         # Create page header
-        title = "Edit Property" if self.is_edit else "Add New Property"
-        subtitle = "Update property details" if self.is_edit else "Fill in property details"
+        title = "Edit Property" if is_edit else "Add New Property"
+        subtitle = "Update property details" if is_edit else "Fill in property details"
         page_header = PageHeader(
             title=title,
             subtitle=subtitle,
@@ -348,8 +334,8 @@ class PropertyFormView(BaseViewWithNavbar):
             'page_header': page_header.render(),
 
             # Form data
-            'property': self.property,
-            'is_edit': self.is_edit,
+            'property': self._property(),
+            'is_edit': is_edit,
             'success_message': self.success_message,
             'error_message': self.error_message,
             'validation_errors': self.validation_errors,
@@ -371,44 +357,38 @@ class PropertyDeleteView(BaseViewWithNavbar):
     """
     template_name = 'rentals/property_delete.html'
 
+    # deleted/messages are set by confirm_delete and rendered through
+    # get_context_data(); the property and its counts are read per render.
+    deleted = state(False, persist="server", render=False)
+    success_message = state("", render=False)
+    error_message = state("", render=False)
+
     def mount(self, request, pk=None, **kwargs):
         """Initialize property delete view"""
-        self.property_id = pk
-        # Set before the not-found return below: get_context_data reads them (#3994).
-        self.has_active_lease = False
-        self.lease_count = 0
-        self.maintenance_count = 0
-        self.deleted = False
-
-        try:
-            self.property = Property.objects.get(pk=pk)
-        except Property.DoesNotExist:
-            self.property = None
+        self._property_id = pk
+        if self._property() is None:
             self.error_message = f"Property with ID {pk} not found"
-            return
 
-        # Check for related data
-        self.has_active_lease = Lease.objects.filter(
-            property=self.property,
-            status='active'
-        ).exists()
+    def _property(self):
+        return Property.objects.filter(pk=self._property_id).first()
 
-        self.lease_count = Lease.objects.filter(property=self.property).count()
-        self.maintenance_count = MaintenanceRequest.objects.filter(property=self.property).count()
-
-        self.deleted = False
-        self.error_message = ""
+    def _has_active_lease(self, prop):
+        return Lease.objects.filter(property=prop, status='active').exists()
 
     @event_handler()
     def confirm_delete(self):
         """Delete the property"""
-        if self.has_active_lease:
+        prop = self._property()
+        if prop is None:
+            return
+        if self._has_active_lease(prop):
             self.error_message = "Cannot delete property with active lease. Please terminate the lease first."
             return
 
         try:
-            self.property.delete()
+            prop.delete()
             self.deleted = True
+            self.error_message = ""
             self.success_message = "Property deleted successfully!"
         except Exception as e:
             self.error_message = f"Error deleting property: {str(e)}"
@@ -416,12 +396,15 @@ class PropertyDeleteView(BaseViewWithNavbar):
     def get_context_data(self, **kwargs):
         """Add delete confirmation context"""
         context = super().get_context_data(**kwargs)
+        prop = self._property()
 
         context.update({
-            'property': self.property,
-            'has_active_lease': self.has_active_lease,
-            'lease_count': self.lease_count,
-            'maintenance_count': self.maintenance_count,
+            'property': prop,
+            'has_active_lease': prop is not None and self._has_active_lease(prop),
+            'lease_count': Lease.objects.filter(property=prop).count() if prop else 0,
+            'maintenance_count': (
+                MaintenanceRequest.objects.filter(property=prop).count() if prop else 0
+            ),
             'deleted': self.deleted,
             'error_message': self.error_message,
         })
