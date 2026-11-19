@@ -263,7 +263,7 @@ so the removed row disappears without any manual refresh.
               <button
                 type="button"
                 dj-click="remove_member"
-                data-member-id:int="{{ member.id }}"
+                dj-value-member-id:int="{{ member.id }}"
                 class="btn-danger"
               >Remove</button>
             {% endif %}

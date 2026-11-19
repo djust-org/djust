@@ -357,10 +357,9 @@ still need pagination or virtualization.
     next request; paginate the rows, or opt out. Rows of other pages that the
     record keeps are left out the same way when they do not fit, or beyond
     512 of them (also logged once).
-  - A view that states `exposure_policy = "legacy"` (deprecated, see
-    [explicit exposure](../state/explicit-exposure.md)) keeps its menus'
-    random ids and saves nothing: on the HTTP fallback their events are
-    refused.
+  - All of this needs [explicit exposure](../state/explicit-exposure.md), the
+    default. A view still on the 1.x exposure policy keeps random menu ids and
+    saves nothing ([Migrating to djust 2.0](migrating-to-2.0.md#state-a-legacy-view-no-longer-keeps)).
 - **Upgrading from an earlier 2.0 pre-release.**
   - A view that declares an interactive component runs `mount()` on every
     HTTP-fallback POST, also for an event on the view itself and for a request
@@ -372,8 +371,7 @@ still need pagination or virtualization.
     from it, escape it (`CSS.escape(id)` in JavaScript); `getElementById()`,
     `popovertarget` and attribute selectors in quotes take it as it is.
   - A collection whose state is saved takes keys of at most 128 characters
-    (`persist=False`, and a view with `exposure_policy = "legacy"`, keep no
-    limit).
+    (`persist=False` keeps no limit).
 - **Keyboard and focus.**
   - A server-owned menu's trigger and items are ordinary buttons: Tab to
     them, and press Enter or Space.

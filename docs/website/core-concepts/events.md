@@ -6,17 +6,23 @@ djust uses `dj-*` HTML attributes to bind server-side Python handlers to client-
 
 | Attribute                     | Fires when                       | Handler receives                  |
 | ----------------------------- | -------------------------------- | --------------------------------- |
-| `dj-click="handler"`          | Element is clicked               | `data-*` attrs as kwargs          |
-| `dj-input="handler"`          | Input value changes (`input` event; text inputs debounced 300 ms by default) | `value=` string, `_target=` name  |
-| `dj-change="handler"`         | Input/select loses focus         | `value=` string, `_target=` name  |
-| `dj-submit="handler"`         | Form is submitted                | All named fields as kwargs        |
-| `dj-keydown.enter="handler"`  | Enter key pressed                | `**kwargs`                        |
-| `dj-keydown.escape="handler"` | Escape key pressed               | `**kwargs`                        |
+| `dj-click="handler"`          | Element is clicked               | `dj-value-*` attrs as kwargs      |
+| `dj-input="handler"`          | Input value changes (`input` event; text inputs debounced 300 ms by default) | `value=` string, `field=` name    |
+| `dj-change="handler"`         | Input/select loses focus         | `value=` string, `field=` name    |
+| `dj-submit="handler"`         | Form is submitted                | The named fields as kwargs        |
+| `dj-keydown.enter="handler"`  | Enter key pressed                | `key`, `code` + `dj-value-*`      |
+| `dj-keydown.escape="handler"` | Escape key pressed               | `key`, `code` + `dj-value-*`      |
 | `dj-window-keydown="handler"` | Keydown on `window`              | `key`, `code` + `dj-value-*`     |
 | `dj-document-click="handler"` | Click on `document`              | `clientX`, `clientY` + `dj-value-*` |
 | `dj-click-away="handler"`     | Click outside element            | `dj-value-*` attrs as kwargs      |
 | `dj-shortcut="bindings"`      | Keyboard shortcut matched        | `key`, `code`, `shortcut`         |
 | `dj-mounted="handler"`        | Element enters DOM (after patch) | `dj-value-*` attrs as kwargs      |
+
+A handler receives the `dj-value-*` arguments of its element, always, and the
+values the browser generates for the event (`value`, `field`, form fields,
+`key`, `code`) only when it declares a parameter of that name or a `**`
+catch-all. That is the strict parameter policy, which the examples in these
+guides use; see [Typed event parameters](#typed-event-parameters-strict-policy).
 
 ## Defining Handlers
 
@@ -32,35 +38,41 @@ class MyView(LiveView):
     items = state(default_factory=list)
 
     @event_handler()
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
 
     @event_handler()
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str):
         """dj-input/dj-change: current input value arrives as 'value'."""
         self.query = value
 
     @event_handler()
-    def delete(self, item_id: int = 0, **kwargs):
-        """data-item-id="{{ item.id }}" becomes item_id=5 (auto-coerced)."""
+    def delete(self, item_id: int):
+        """dj-value-item-id="{{ item.id }}" becomes item_id=5 (converted by the annotation)."""
         self.items = [i for i in self.items if i["id"] != item_id]
 
     @event_handler()
-    def save(self, **form_data):
-        """dj-submit: all named form fields arrive as kwargs."""
+    def save(self, **form_data: str):
+        """dj-submit: every named form field arrives through the typed catch-all."""
         name = form_data.get("name", "")
         email = form_data.get("email", "")
 ```
 
-**Rules** (the default, legacy parameter policy; for closed, typed signatures
-see [Typed event parameters](#typed-event-parameters-strict-policy)):
+**Rules** (the strict parameter policy; see
+[Typed event parameters](#typed-event-parameters-strict-policy)):
 
+- Annotate every parameter: the signature is the event's contract, and an
+  event that does not fit it is rejected before the handler runs
 - Declare the parameters the binding sends; `manage.py check` reports a binding
   its handler would reject (`djust.T020`)
-- Under the legacy policy, `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names
-- Give a parameter a default when a binding may omit it (`value: str = ""`)
-- Use type hints for automatic coercion (`item_id: int` converts `"5"` → `5`)
-- `value` is the magic parameter name for `dj-input` and `dj-change`
+- Pass arguments with `dj-value-*` attributes; `data-*` attributes are not
+  arguments
+- Give a parameter a default only when a binding may omit it
+- Annotations convert the value (`item_id: int` converts `"5"` → `5`)
+- `value` is the parameter name for the current value of a `dj-input` or
+  `dj-change` element, and `field` for its `name`
+- A form handler declares the fields it uses, or takes them all with a typed
+  catch-all (`**form_data: str`)
 
 ## Template Bindings
 
@@ -70,16 +82,16 @@ see [Typed event parameters](#typed-event-parameters-strict-policy)):
 <!-- Simple click -->
 <button dj-click="increment">+</button>
 
-<!-- Pass data via data-* attributes -->
-<button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
+<!-- Pass an argument via a dj-value-* attribute -->
+<button dj-click="delete" dj-value-item-id="{{ item.id }}">Delete</button>
 ```
 
-`data-*` attributes are converted: `data-item-id` → `item_id`. See [Data Attribute Naming Convention](#data-attribute-naming-convention) for full details.
+`dj-value-*` attributes are converted: `dj-value-item-id` → `item_id`. See [Event arguments (`dj-value-*`)](#event-arguments-dj-value) for full details.
 
 ### Inline handler arguments
 
 For literal one-shot values, you can pass arguments to the handler
-inline using function-call syntax in the directive — no `data-*`
+inline using function-call syntax in the directive — no `dj-value-*`
 attribute needed:
 
 ```html
@@ -105,7 +117,7 @@ def add_to_cart(self, sku: str, quantity: int):
     ...
 ```
 
-Use `data-*` attributes when the value comes from a template
+Use `dj-value-*` attributes when the value comes from a template
 expression (`{{ item.id }}`); use inline args when the value is a
 literal known at template-author time. (Available since v0.1.7.)
 
@@ -153,8 +165,8 @@ literal known at template-author time. (Available since v0.1.7.)
 <!-- Fires when the pointer leaves the element -->
 <div dj-mouseenter="preview" dj-mouseleave="hide_preview">Hover me</div>
 
-<!-- data-* attributes and inline args work like every other directive -->
-<div dj-mouseenter="preview({{ item.id }})" data-item-id="{{ item.id }}">…</div>
+<!-- dj-value-* attributes and inline args work like every other directive -->
+<div dj-mouseenter="preview" dj-value-item-id="{{ item.id }}">…</div>
 ```
 
 `mouseenter` and `mouseleave` do **not bubble**: moving the pointer from an
@@ -199,14 +211,14 @@ Supported attributes:
 
 Key modifier filtering works the same as `dj-keydown`: `dj-window-keydown.escape="close"`.
 
-`dj-window-scroll` and `dj-window-resize` fire on every browser event. They are not throttled by default, and they ignore `dj-throttle`/`data-throttle` on the element. Scroll handlers receive `scrollX`/`scrollY`; resize handlers receive `innerWidth`/`innerHeight`. Rate-limit them with the handler decorator:
+`dj-window-scroll` and `dj-window-resize` fire on every browser event. They are not throttled by default, and they ignore `dj-throttle` on the element. Scroll handlers receive `scrollX`/`scrollY`; resize handlers receive `innerWidth`/`innerHeight`. Rate-limit them with the handler decorator:
 
 ```python
 from djust.decorators import event_handler, throttle
 
 @event_handler()
 @throttle(interval=0.15)
-def on_scroll(self, scrollY: int = 0, **kwargs):
+def on_scroll(self, scrollY: int = 0):
     self.scroll_pos = scrollY
 ```
 
@@ -247,9 +259,9 @@ Shortcuts are automatically skipped when the user is typing in form inputs (inpu
 
 Handler receives `key`, `code`, and `shortcut` (the matched binding string, e.g., `"ctrl+k"`) as event params, along with any `dj-value-*` attributes.
 
-## Form Field Targeting (`_target`)
+## Form Field Targeting (`field`)
 
-When multiple form fields share one handler (e.g., `dj-change="validate"`), the `_target` parameter tells the server which field triggered the event. This enables efficient per-field validation without needing a separate handler per field.
+When multiple form fields share one handler (e.g., `dj-change="validate"`), the `field` parameter tells the server which field triggered the event. This enables efficient per-field validation without needing a separate handler per field.
 
 ```html
 <form>
@@ -260,16 +272,14 @@ When multiple form fields share one handler (e.g., `dj-change="validate"`), the 
 
 ```python
 @event_handler()
-def validate(self, value: str = "", _target: str = "", **kwargs):
-    if _target == "email":
+def validate(self, value: str, field: str):
+    if field == "email":
         self.email_error = "" if "@" in value else "Invalid email"
-    elif _target == "username":
+    elif field == "username":
         self.username_error = "" if len(value) >= 3 else "Too short"
 ```
 
-`_target` is the triggering element's `name` attribute (falling back to `id`, then `null`). It is included automatically in `dj-change`, `dj-input`, and `dj-submit` (submitter button name) events. Matches Phoenix LiveView's `_target` convention.
-
-`_target` is sent to legacy-policy handlers only. A strict handler uses `field` or an explicit `dj-value-*` argument instead.
+`field` names the triggering element: its `data-field` attribute, else its `name`, else its `id` without a leading `id_` (Django's prefix), else `null`. The browser sends it with a `dj-change` or `dj-input` event when the handler declares it, as it does `value`.
 
 ## Preventing Double Submits
 
@@ -323,7 +333,7 @@ Fire a server event when an element enters the DOM after a VDOM patch:
 
 ```python
 @event_handler()
-def on_chart_ready(self, chart_type: str = "", **kwargs):
+def on_chart_ready(self, chart_type: str = ""):
     self.chart_data = load_chart_data(chart_type)
 ```
 
@@ -355,7 +365,7 @@ Apply debounce or throttle to any `dj-*` event attribute directly in HTML, givin
 <input dj-input="validate" dj-debounce="blur" />
 ```
 
-`dj-debounce` and `dj-throttle` work with all event types: `dj-click`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`. Each element gets its own independent timer. `data-debounce`/`data-throttle` are legacy spellings honoured only on `dj-input`; use `dj-debounce`/`dj-throttle` everywhere.
+`dj-debounce` and `dj-throttle` work with all event types: `dj-click`, `dj-change`, `dj-input`, `dj-keydown`, `dj-keyup`. Each element gets its own independent timer. `data-debounce`/`data-throttle` are older spellings honoured only on `dj-input`; use `dj-debounce`/`dj-throttle` everywhere.
 
 ### Python Decorators
 
@@ -367,14 +377,14 @@ from djust.decorators import event_handler, debounce, throttle
 # Wait 500ms after the last keystroke before firing
 @event_handler()
 @debounce(wait=0.5)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str):
     self.query = value
     self._refresh()
 
 # Fire at most once per second
 @event_handler()
 @throttle(interval=1.0)
-def on_scroll(self, scrollY: int = 0, **kwargs):
+def on_scroll(self, scrollY: int = 0):
     self.scroll_pos = scrollY
 ```
 
@@ -403,7 +413,7 @@ When rendering lists that can reorder, add `data-key` for optimal VDOM diffing:
 {% for item in items %}
 <div data-key="{{ item.id }}">
     {{ item.name }}
-    <button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
+    <button dj-click="delete" dj-value-item-id="{{ item.id }}">Delete</button>
 </div>
 {% endfor %}
 ```
@@ -546,110 +556,105 @@ Key behavior:
 - Multiple independent `dj-auto-recover` elements can coexist on the same page
 - Use for complex state (drag positions, canvas state, multi-step wizard progress) that form replay cannot restore
 
-## Data Attribute Naming Convention
+## Event arguments (`dj-value-*`)
 
-When you add `data-*` attributes to an element with a `dj-click` (or any `dj-*` event), djust automatically extracts them and passes them as keyword arguments to your Python handler. The conversion follows two rules:
+A `dj-value-*` attribute on an element with a `dj-click` (or any `dj-*` event)
+becomes a keyword argument of the handler. The name follows two rules:
 
-1. **The `data-` prefix is stripped** — `data-item-id` becomes `item-id`
+1. **The `dj-value-` prefix is stripped** — `dj-value-item-id` becomes `item-id`
 2. **Dashes become underscores** — `item-id` becomes `item_id`
 
-So `data-item-id="5"` arrives in your handler as `item_id="5"`.
+So `dj-value-item-id="5"` arrives in your handler as `item_id`. The form
+matches Phoenix LiveView's `phx-value-*`.
 
 ### Basic example
 
 ```html
-<button dj-click="delete" data-item-id="{{ item.id }}" data-category="{{ item.category }}">
+<button dj-click="delete" dj-value-item-id="{{ item.id }}" dj-value-category="{{ item.category }}">
     Delete
 </button>
 ```
 
 ```python
 @event_handler()
-def delete(self, item_id: int = 0, category: str = "", **kwargs):
-    # data-item-id="5"      → item_id=5   (coerced to int via type hint)
-    # data-category="draft"  → category="draft"
+def delete(self, item_id: int, category: str):
+    # dj-value-item-id="5"      → item_id=5   (converted by the annotation)
+    # dj-value-category="draft" → category="draft"
     self.items = [i for i in self.items if i["id"] != item_id]
 ```
 
-### Type coercion
+### Type conversion
 
-All `data-*` values are strings in HTML. djust provides two ways to coerce them:
-
-**Python type hints (server-side)** — add a type annotation to the handler parameter. djust inspects the annotation and coerces the string value automatically:
+Attribute values are text. The handler's annotation converts them, so no
+`int()` call is needed:
 
 ```python
 @event_handler()
-def update(self, count: int = 0, price: float = 0.0, enabled: bool = False, **kwargs):
-    # data-count="42"     → count=42
-    # data-price="19.99"  → price=19.99
-    # data-enabled="true" → enabled=True
+def update(self, count: int, price: float, enabled: bool, tags: list[str]):
+    # dj-value-count="42"           → count=42
+    # dj-value-price="19.99"        → price=19.99
+    # dj-value-enabled="true"       → enabled=True
+    # dj-value-tags:list='["a","b"]' → tags=["a", "b"]
     pass
 ```
 
-Supported Python types: `int`, `float`, `bool`, `str`, `list`, `List[T]`, `Optional[T]`.
+The accepted annotations and what each one accepts are listed under
+[Conversion rules](#conversion-rules).
 
-**Type-hint suffixes (client-side)** — append a colon and type to the attribute name to coerce *before* sending to the server:
+**Wire hints (client-side)** — a colon and a type after the attribute name
+convert the value in the browser, before it is sent:
 
 ```html
 <button dj-click="update"
-        data-count:int="42"
-        data-price:float="19.99"
-        data-enabled:bool="true"
-        data-tags:json='["a", "b"]'
-        data-items:list="a,b,c">
+        dj-value-count:int="42"
+        dj-value-price:float="19.99"
+        dj-value-enabled:bool="true"
+        dj-value-tags:list='["a", "b"]'>
     Update
 </button>
 ```
 
 | Suffix | Converts to | Example |
 |--------|------------|---------|
-| `:int` / `:integer` | Number (integer) | `data-count:int="42"` → `42` |
-| `:float` / `:number` | Number (float) | `data-price:float="19.99"` → `19.99` |
-| `:bool` / `:boolean` | Boolean | `data-active:bool="true"` → `true` |
-| `:json` / `:object` / `:array` | Parsed JSON | `data-config:json='{"a":1}'` → `{"a": 1}` |
-| `:list` | Comma-separated array | `data-tags:list="a,b,c"` → `["a", "b", "c"]` |
+| `:int` / `:integer` | Number (integer) | `dj-value-count:int="42"` → `42` |
+| `:float` / `:number` | Number (float) | `dj-value-price:float="19.99"` → `19.99` |
+| `:bool` / `:boolean` | Boolean (`true`/`false`, `1`/`0`, `yes`/`no`, `on`/`off`) | `dj-value-active:bool="true"` → `true` |
+| `:list` / `:array` | A JSON array | `dj-value-tags:list='["a","b"]'` → `["a", "b"]` |
+| `:json` | Any JSON value | `dj-value-ids:json='[1, 2]'` → `[1, 2]` |
 
-Both approaches work together: client-side suffixes convert before sending, and Python type hints coerce on arrival. If you use both, the Python coercion acts on the already-converted value.
+A hint is optional, because the annotation converts the text anyway. A hint
+that contradicts the annotation (`:int` on a `str` parameter), and a value the
+hint cannot parse (`dj-value-n:int="12abc"`), are rejected in the browser
+before anything is sent.
 
-### The `dj-value-*` alternative
+### `data-*` attributes are not arguments
 
-`dj-value-*` attributes work the same way as `data-*` but take precedence when both are present. They match Phoenix LiveView's `phx-value-*` convention:
-
-```html
-<button dj-click="select" dj-value-item-id:int="{{ item.id }}">
-    Select
-</button>
-```
-
-`dj-value-item-id` → `item_id` (same dash-to-underscore rule). The `dj-value-*` form is preferred for event parameters because it avoids collisions with third-party libraries that also use `data-*` attributes.
-
-### Internal attributes are excluded
-
-djust skips its own internal `data-*` attributes so they don't leak into your handler kwargs:
-
-- `data-liveview-*`, `data-live-*`, `data-djust-*` — framework internals
-- `data-loading`, `data-component-id` — component machinery
-
-`data-key` is **not** skipped. If the keyed element itself carries a `dj-*` event, the handler receives `key=`, so accept `**kwargs` or use `dj-key` (also a VDOM list diffing key) instead.
+`data-*` attributes on an event element are not sent to the handler. Keep
+them for your own JavaScript and CSS. A few are djust markers that change how
+the event is sent, not what it carries: `data-component-id` routes the event
+to a component, and `data-debounce` / `data-throttle` on a `dj-input` element
+are older spellings of `dj-debounce` / `dj-throttle`.
 
 ### Quick reference
 
 | HTML attribute | Python kwarg | Notes |
 |---|---|---|
-| `data-item-id="5"` | `item_id="5"` | Dashes → underscores |
-| `data-item-id:int="5"` | `item_id=5` | Client-side coercion |
-| `data-user-name="Jo"` | `user_name="Jo"` | Multi-word names |
-| `data-x="1"` | `x="1"` | Single-char names work |
-| `data-dj-preset="dark"` | `preset="dark"` | `dj_` prefix stripped |
-| `dj-value-section="hero"` | `section="hero"` | `dj-value-*` form |
+| `dj-value-item-id="5"` | `item_id` | Dashes → underscores; `item_id: int` receives `5` |
+| `dj-value-item-id:int="5"` | `item_id=5` | Client-side conversion |
+| `dj-value-user-name="Jo"` | `user_name="Jo"` | Multi-word names |
+| `dj-value-x="1"` | `x` | Single-char names work |
+| `dj-value-section="hero"` | `section="hero"` | |
 
 ## Typed event parameters (strict policy)
 
 Under the strict parameter policy, the handler's Python signature is the
 event's contract. Named parameters, their annotations and their defaults
 decide what an event may carry. Values are converted exactly, and an event
-that doesn't fit is rejected before your code runs. Legacy remains the
-default. Opt in per handler, or for the whole project:
+that doesn't fit is rejected before your code runs. The examples in these
+guides are written for it. In 2.0.0rc1 it is still an opt-in; it becomes the
+only behaviour before 2.0.0 final
+([#4171](https://github.com/djust-org/djust/issues/4171)). Turn it on for the
+whole project:
 
 <!-- djust-example: skip -- settings fragment: the project-wide policy switch -->
 <!-- doc-snippet-check: skip -->
@@ -657,8 +662,7 @@ default. Opt in per handler, or for the whole project:
 LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}
 ```
 
-`@event_handler(parameter_policy="strict")` opts one handler in, and
-`parameter_policy="legacy"` opts one out of a strict project.
+or for one handler with `@event_handler(parameter_policy="strict")`.
 
 ### Example: typed click arguments
 
@@ -780,13 +784,9 @@ parameter and expected type, never the submitted value.
 
 ### Migrating a handler
 
-1. Annotate every named parameter, removing defaults that only existed to
-   hide missing input.
-2. Replace `data-*` arguments (and any leftover `dj-params`) with `dj-value-*`, and
-   `_target` with `field` or a `dj-value-*` argument.
-3. Add `parameter_policy="strict"`, drop `**kwargs` unless the handler
-   really takes an open payload, and run `manage.py check`: C022 and
-   V016, V018 and V031 report what strict dispatch would reject.
+Converting a 1.x handler (its `data-*` arguments, `**kwargs` and defaults) is
+covered step by step in
+[Migrating to djust 2.0](../guides/migrating-to-2.0.md#2-make-event-handlers-strict).
 
 ## Next Steps
 

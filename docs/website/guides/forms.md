@@ -22,7 +22,7 @@ class TodoView(LiveView):
     items = state(default_factory=list)
 
     @event_handler()
-    def add_item(self, title="", **kwargs):
+    def add_item(self, title: str):
         if title.strip():
             self.items.append(title.strip())
 ```
@@ -44,7 +44,7 @@ class TodoView(LiveView):
 
 That's it. `dj-submit` prevents the default submit, collects all form fields via `FormData`, and sends them to your handler as keyword arguments. The view re-renders automatically.
 
-> **Strict parameter policy.** Under the opt-in strict parameter policy (`@event_handler(parameter_policy="strict")`, ADR-036), the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields (and the pressed submit button's `name=value`) for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. `_target` is never sent: use `field` or a `dj-value-*` argument. Legacy handlers (the default) receive the same values as before, with one change: a repeated field name on `dj-submit`, and a `dj-change` / `dj-input` / `dj-blur` / `dj-focus` on a group of same-named checkboxes or a `<select multiple>`, now arrive as a **list** (see [Fields with several values](#fields-with-several-values)). A strict `dj-submit` handler therefore gets only the fields it names, or all of them through `**form_data`.
+> **Strict parameter policy.** The examples in this guide use the strict parameter policy (ADR-036; turned on with `LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}`, see [Installation](../getting-started/installation.md#3-configure-django) and [Typed event parameters](../core-concepts/events.md#typed-event-parameters-strict-policy)): the browser sends a generated value only if the handler declares a parameter with that name, or has a `**` catch-all. Generated values are `value` and `field` for `dj-input`/`dj-change`, the form fields (and the pressed submit button's `name=value`) for `dj-submit`, and `key`/`code` for keyboard events. `dj-value-*` arguments are always sent, and one that reuses a generated name is rejected. A repeated field name on `dj-submit`, and a `dj-change` / `dj-input` / `dj-blur` / `dj-focus` on a group of same-named checkboxes or a `<select multiple>`, arrive as a **list** (see [Fields with several values](#fields-with-several-values)). A `dj-submit` handler therefore gets only the fields it names, or all of them through `**form_data: str`.
 
 
 ## HTTP fallback does not require a second view
@@ -254,10 +254,6 @@ and neither is a name the transports read as protocol: `event` and `params` (the
 fallback treats a body containing `event` as its `{event, params}` envelope, so a button
 of that name would re-route the call), `component_id`, `view_id`, `csrfmiddlewaretoken`
 and `constructor` / `prototype`. A button that shares a field's name joins it as a list.
-
-Legacy handlers (the default) are unchanged: the pressed button is reported as
-`_target` (its `name`, else its `id`) and no new field is sent, because a legacy closed
-signature rejects an unexpected parameter.
 
 ## Real-Time Validation
 
@@ -603,9 +599,12 @@ same arguments as keywords (`add_row(ItemFormSet, data, prefix="items", instance
 Clear the form back to its initial state:
 
 ```python
+from typing import Any
+
+
 @event_handler()
-def submit_and_reset(self, **kwargs):
-    self.submit_form(**kwargs)
+def submit_and_reset(self, **form_data: Any):
+    self.submit_form(**form_data)
     if self.is_valid:
         self.reset_form()
 ```

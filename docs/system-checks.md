@@ -1223,7 +1223,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   [Migrating to djust 2.0](website/guides/migrating-to-2.0.md).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T027"]}`, or one name
   with a `{# djust_typecheck: noqa name #}` template comment
-- **Not checked**: a view that states `exposure_policy = "legacy"`; a view
+- **Not checked**: a view on the deprecated 1.x exposure policy (`djust.V028`); a view
   whose `get_context_data()` does more than return a literal dict or
   `super().get_context_data()` (its keys cannot be read statically); a
   template that uses `{% extends %}`; a name the template reads only through

@@ -246,7 +246,7 @@ class TenantSwitcherView(TenantMixin, LiveView):
     tenant_required = False  # allow mount before a tenant is chosen — see below
 
     @event_handler()
-    def choose_tenant(self, value: str = "", **kwargs):
+    def choose_tenant(self, value: str):
         self.set_tenant(value)      # authoritative: updates self.tenant now
         self.projects = Project.objects.filter(tenant_id=self.tenant.id)
 ```

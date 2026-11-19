@@ -99,7 +99,7 @@ class PhotosView(UploadMixin, LiveView):
         return {**super().get_context_data(**kwargs), "upload": self._upload}
 
     @event_handler()
-    def photos_uploaded(self, count=0, **kwargs):
+    def photos_uploaded(self, count: int):
         for entry in self.consume_uploaded_entries("photos"):
             ...  # as above: entry.safe_client_name, never entry.client_name
 ```
