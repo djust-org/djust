@@ -28,10 +28,8 @@ If you are already on a 2.0 pre-release with views you have not migrated,
 state `exposure_policy = "legacy"` on them, or once on a base class they
 inherit from, and then migrate them one at a time. Without it an unmigrated
 view renders the names nothing supplies as empty, with no error. No setting
-changes the default. The views djust itself ships that still state it (the
-admin change list and form, `TtydTerminalView`, the `@live_view` decorator) do
-not warn, since that line is not yours to change. The 2.0 pre-releases accept
-the policy and 2.0.0 does not, so this is only a stopgap
+changes the default. The 2.0 pre-releases accept the policy and 2.0.0 does
+not, so this is only a stopgap
 ([section 4](#4-still-to-be-removed-before-the-final-release)).
 
 Stating `"legacy"` raises a `DeprecationWarning` when the class is defined. If
@@ -1022,4 +1020,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 3c550e6896a2 -->
+<!-- generated-doc prose-sha256: 28fc3b7332cc -->

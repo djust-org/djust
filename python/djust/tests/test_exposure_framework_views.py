@@ -75,6 +75,8 @@ EXPLICIT = {
     "components/gallery/live_views.py:OverlayGalleryView",
     "components/gallery/live_views.py:TypographyGalleryView",
     "components/interactive_examples.py:DropdownMenuExample",
+    # Built per request by the function-based @live_view decorator (#4183).
+    "live_view.py:DynamicLiveView",
     # #4185: a documented base class; a subclass lists what its own template
     # reads in get_context_data() (test_a_terminal_subclass_* below).
     "components/ttyd/terminal.py:TtydTerminalView",
@@ -88,14 +90,7 @@ EXPLICIT = {
 #: the class body, so a changed default does not convert them), each with what
 #: it relies on that explicit exposure does not offer yet. Not a place for
 #: "not converted yet".
-LEGACY = {
-    "live_view.py:DynamicLiveView": (
-        "The class the function-based @live_view decorator builds per request. The "
-        "decorated function returns its locals and they are set as view attributes "
-        "for the attribute walk to render; there is no declared context to give it "
-        "until #4183 rewrites the decorator."
-    ),
-}
+LEGACY = {}
 
 
 #: Built inside a function on each call, so there is no class to import.

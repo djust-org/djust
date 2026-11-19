@@ -349,6 +349,52 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   over WebSocket, SSE and the HTTP fallback. `persist=False` on the declaration
   opts out. See [Interactive Components](../guides/interactive-components.md#persistence-keyboard-and-security).
 
+- **Function views.** A function decorated with `@live_view(template_name=...)`
+  is an explicit view: the values it returns (usually `locals()`) are its
+  context, and the `@event_handler` callables it returns are its handlers,
+  strict or not. Names starting with an underscore, other callables, and the
+  request are not rendered. A returned LiveView setting (`login_required`,
+  `permission_required`, `login_url`, `template`, `template_name` ...)
+  configures the view and is applied before the page renders or a handler
+  runs; it is not a template name. The function body itself runs on every
+  request, so don't put side effects in it that only an allowed user should
+  cause. Returning `check_permissions`, `get_object` or `on_mount` is refused
+  with an `ImproperlyConfigured` error, because djust reads those only from a
+  `LiveView` class: subclass `LiveView`, or return `login_required` /
+  `permission_required`. `view`, `csrf_token`, `DATE_FORMAT` and `TIME_FORMAT`
+  keep djust's own values, and a returned `exposure_policy` is ignored. The view is
+  built for each request and the
+  function runs again every time, so nothing is kept between requests. It
+  answers the page GET and the HTTP fallback POST; a WebSocket or SSE mount is
+  refused with `View not found`, because the class it names is built inside
+  the request. Write a `LiveView` class for a page that keeps state or uses a
+  socket.
+
+  ```python
+  from djust import live_view
+  from djust.decorators import event_handler
+
+
+  @live_view(template_name="greeting.html")
+  def greeting(request):
+      name = request.GET.get("name", "world")
+      shouted = []
+
+      @event_handler
+      def shout(times: int = 1):
+          shouted.extend([name.upper()] * times)
+
+      return locals()
+  ```
+
+  ```html
+  <!-- greeting.html -->
+  <div dj-root>
+    <button dj-click="shout" dj-value-times="3">Shout</button>
+    {% for word in shouted %}<p>{{ word }}</p>{% endfor %}
+  </div>
+  ```
+
 ## Not supported under explicit exposure
 
 - **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare a
