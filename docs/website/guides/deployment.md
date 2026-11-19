@@ -479,6 +479,8 @@ server {
 }
 ```
 
+The `location /` block also carries djust's SSE transport (`/djust/sse/<session>/`), which the client falls back to when a WebSocket cannot connect. A project made with `djust new` routes it; any other project adds `path("djust/", include(sse_urlpatterns))` to its root URLconf (see [Mount the SSE endpoint](http-only-mode.md#mount-the-sse-endpoint)). The stream answers with `X-Accel-Buffering: no`, so nginx does not buffer it. Its GET and its message POSTs must reach the same **process**: an SSE session lives in the memory of the process that opened the stream (`_sse_sessions` in `djust/sse.py`). `ip_hash` above pins a client to one upstream entry, not to one process, so it is enough only when each entry is a single worker. With several workers behind one entry (`uvicorn --workers 4`, gunicorn `-w 4`), give each worker its own upstream entry and hash on the SSE session id, or send `/djust/sse/` to a single-worker backend (see [Multi-process deployments](../../sse-transport.md#multi-process-deployments)).
+
 ### Serving the app under a path prefix
 
 When the app lives under a prefix (`https://example.com/app/`, set with

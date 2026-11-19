@@ -218,7 +218,10 @@ def test_bare_project_has_a_placeholder_and_no_demo(tmp_path):
     assert "class ChildView(LiveView)" in views
     assert "theme_packs" not in views
     assert "add_item" not in views
-    assert "from django.urls import path\n" in (project / "child" / "urls.py").read_text()
+    urls = (project / "child" / "urls.py").read_text()
+    assert "djust.theming.urls" not in urls
+    # Bare still serves every transport: the SSE views are routed (#4216).
+    assert 'path("djust/", include(sse_urlpatterns))' in urls
     assert 'dj-click="ping"' in index
     assert "theme_head" not in base
     assert '"djust.components"' not in (project / "child" / "settings.py").read_text()

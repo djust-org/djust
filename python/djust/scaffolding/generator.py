@@ -261,7 +261,8 @@ def _build_context(
         "theming_context_processor": T.THEMING_CONTEXT_PROCESSOR if demo else "",
         "theming_settings": T.THEMING_SETTINGS if demo else "",
         "theming_urls": T.THEMING_URLS if demo else "",
-        "urls_import": "include, path" if demo else "path",
+        "sse_url_import": T.SSE_URL_IMPORT,
+        "sse_url": T.SSE_URL_ENTRY,
         "bare": bare,
         "admin_template_backend": admin_template_backend,
         "admin_url_import": admin_url_import,
@@ -700,13 +701,15 @@ def _create_schema_files(
     first_view = urls_imports[0] if urls_imports else ctx["view_class"]
     urls_content = '"""URL configuration for %s project."""\n\n' % app_name
     urls_content += "from django.contrib import admin\n"
-    urls_content += "from django.urls import path\n\n"
+    urls_content += "from django.urls import include, path\n"
+    urls_content += T.SSE_URL_IMPORT + "\n"
     urls_content += "from .views import %s\n\n" % ", ".join(urls_imports)
     urls_content += "urlpatterns = [\n"
     urls_content += '    path("admin/", admin.site.urls),\n'
     urls_content += '    path("", %s.as_view(), name="index"),\n' % first_view
     for pat in urls_patterns:
         urls_content += pat + "\n"
+    urls_content += T.SSE_URL_ENTRY
     urls_content += "]\n"
     # The schema writer overwrites the URLconf wholesale, so the auth routes
     # the standard path splices in via URLS_PY's %(extra_urls)s must be

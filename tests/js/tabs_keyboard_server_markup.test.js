@@ -1,7 +1,7 @@
 /**
  * `{% tabs %}` keyboard behaviour on the markup the server renders
  * (tests/js/fixtures/tabs_server_markup.html, pinned to the server's output by
- * python/djust/components/tests/test_tabs_keyboard_and_label.py).
+ * python/djust/tests/components/test_tabs_keyboard_and_label.py).
  *
  * WAI-ARIA tabs pattern, manual activation:
  *  - one Tab stop, the selected tab (server-rendered roving tabindex);
