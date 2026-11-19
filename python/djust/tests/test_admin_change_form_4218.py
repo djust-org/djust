@@ -97,11 +97,45 @@ class GuardedAdmin(DjustModelAdmin):
 GUARDED_SITE = DjustAdminSite(name="change_form_4218_guarded")
 GUARDED_SITE.register(Property, GuardedAdmin)
 
+
+class HiddenForm(forms.ModelForm):
+    class Meta:
+        model = Property
+        fields = "__all__"
+
+
+class HiddenAdmin(DjustModelAdmin):
+    """The form declares every field; the admin shows only the required ones."""
+
+    form = HiddenForm
+    fields = list(REQUIRED)
+
+
+HIDDEN_SITE = DjustAdminSite(name="change_form_4218_hidden")
+HIDDEN_SITE.register(Property, HiddenAdmin)
+
+
+class RowCheckedDeleteAdmin(DjustModelAdmin):
+    """A delete permission that reads the row."""
+
+    def has_delete_permission(self, request, obj=None):
+        if obj is not None and obj.name == "protected":
+            return False
+        return super().has_delete_permission(request, obj)
+
+
+ROW_DELETE_SITE = DjustAdminSite(name="change_form_4218_row_delete")
+ROW_DELETE_SITE.register(Property, RowCheckedDeleteAdmin)
+
 urlpatterns = [
     path("x4218-admin/", SITE.urls),
     path("x4218-radio/", RADIO_SITE.urls),
     path("x4218-guarded/", GUARDED_SITE.urls),
+    path("x4218-hidden/", HIDDEN_SITE.urls),
+    path("x4218-rowdelete/", ROW_DELETE_SITE.urls),
 ]
+HIDDEN_LIST = "/x4218-hidden/djust_rentals/property/"
+ROW_DELETE_LIST = "/x4218-rowdelete/djust_rentals/property/"
 RADIO_LIST = "/x4218-radio/djust_rentals/property/"
 GUARDED_LIST = "/x4218-guarded/djust_rentals/property/"
 DELETE_VIEW = "djust.admin_ext.views.ModelDeleteView"
@@ -349,13 +383,21 @@ class _Run:
         if self.transport == "websocket":
             async with _Socket(_session_cookie(self.browser)) as ws:
                 await ws.mount(self.view, self.url)
-                for name, params in events:
+                for item in events:
+                    if callable(item):  # something else happens between events
+                        await item()
+                        continue
+                    name, params = item
                     await ws.send({"type": "event", "event": name, "params": params})
                     self.answers.append(await self._ws_answer(ws))
         elif self.transport == "sse":
             await self._sse(events)
         else:
-            for name, params in events:
+            for item in events:
+                if callable(item):
+                    await item()
+                    continue
+                name, params = item
                 answer = await sync_to_async(_post)(self.browser, self.url, name, params, self._tab)
                 self.navigation.extend(
                     n["path"]
@@ -401,7 +443,11 @@ class _Run:
         try:
             mounted = await self._sse_next(frames, ("mount", "error"))
             assert mounted["type"] == "mount", mounted
-            for name, params in events:
+            for item in events:
+                if callable(item):
+                    await item()
+                    continue
+                name, params = item
                 posted = await sync_to_async(_sse_request)(
                     "POST",
                     f"/djust/sse/{sid}/message/",
@@ -670,3 +716,139 @@ async def test_delete_removes_the_row_and_goes_to_the_change_list(
     assert not _refusals(answers), answers
     assert not await sync_to_async(Property.objects.filter(pk=row.pk).exists)()
     assert run.navigation == [LIST], (run.navigation, answers)
+
+
+# --------------------------------------------------------------------------- #
+# Readonly, excluded and hidden fields are not form fields (Django's admin form)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_a_readonly_or_excluded_change_made_meanwhile_survives_a_save(
+    site_urls, django_user_model, transport
+):
+    """The readonly ``city`` is text read from the row, not a form field, so a Save does not
+    write the value the page was loaded with over a change made since."""
+    row = await _seed()
+    await sync_to_async(Property.objects.filter(pk=row.pk).update)(description="kept")
+    browser = await _staff(django_user_model)
+    run = _Run(transport, browser, DETAIL_VIEW, "%s%d/change/" % (GUARDED_LIST, row.pk))
+    html = await run.html()
+    page = _Page(html)
+    assert "city" not in {c["attrs"]["name"] for c in page.controls}
+    assert re.search(r"City</span>\s*<div[^>]*>\s*<p[^>]*>Austin</p>", html), "city not shown"
+    _, save = submit_event(page, {"name": "Typed name"}, "save_and_continue")
+    await sync_to_async(Property.objects.filter(pk=row.pk).update)(city="Dallas", description="new")
+    answers = await run.play([("save_and_continue", save)])
+    assert not _refusals(answers), answers
+    saved = await sync_to_async(
+        lambda: Property.objects.values_list("name", "city", "description").get(pk=row.pk)
+    )()
+    assert saved == ("Typed name", "Dallas", "new")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_an_add_page_with_a_required_readonly_field_saves(
+    site_urls, django_user_model, transport
+):
+    """``city`` is required on the model and readonly in the admin: the add page has no input
+    for it, and the Save is not refused for it."""
+    browser = await _staff(django_user_model)
+    run = _Run(transport, browser, CREATE_VIEW, GUARDED_LIST + "add/")
+    page = _Page(await run.html())
+    typed = {k: v for k, v in REQUIRED.items() if k != "city"}
+    _, save = submit_event(page, typed, "save_and_continue")
+    answers = await run.play([("save_and_continue", save)])
+    assert not _refusals(answers), answers
+    assert await sync_to_async(lambda: list(Property.objects.values_list("name", "city")))() == [
+        (REQUIRED["name"], "")
+    ]
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_a_forged_frame_does_not_write_a_field_the_admin_does_not_show(
+    site_urls, django_user_model, transport, policy
+):
+    """The custom form declares ``status`` and ``description``; ``ModelAdmin.fields`` leaves
+    them off the page, so they are not the client's to write."""
+    row = await _seed()
+    browser = await _staff(django_user_model)
+    run = _Run(transport, browser, DETAIL_VIEW, "%s%d/change/" % (HIDDEN_LIST, row.pk))
+    page = _Page(await run.html())
+    names = {c["attrs"]["name"] for c in page.controls}
+    assert not names & {"status", "description"}, names
+    _, save = submit_event(page, {"name": "Typed name"}, "save_and_continue")
+    answers = await run.play(
+        [
+            ("validate_field", {"field": "status", "value": "maintenance"}),
+            ("save_and_continue", {**save, "status": "maintenance", "description": "forged"}),
+        ]
+    )
+    assert not _refusals(answers), answers
+    saved = await sync_to_async(
+        lambda: Property.objects.values_list("name", "status", "description").get(pk=row.pk)
+    )()
+    assert saved == ("Typed name", "available", "")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+@pytest.mark.parametrize("name, allowed", [("Seed house", True), ("protected", False)])
+async def test_a_delete_permission_that_reads_the_row(
+    site_urls, django_user_model, transport, name, allowed
+):
+    """``has_delete_permission(request, obj)`` gets the row on every transport (over the HTTP
+    fallback it got the view's restored state)."""
+    row = await _seed()
+    browser = await _staff(django_user_model)
+    run = _Run(transport, browser, DELETE_VIEW, "%s%d/delete/" % (ROW_DELETE_LIST, row.pk))
+    await run.html()
+
+    async def rename() -> None:
+        # What the permission reads changes after the page mounted: the row decides the delete.
+        await sync_to_async(Property.objects.filter(pk=row.pk).update)(name=name)
+
+    if transport == "http":
+        await rename()
+        response = await sync_to_async(run.browser.post)(
+            run.url,
+            data="{}",
+            content_type="application/json",
+            HTTP_X_DJUST_EVENT="confirm_delete",
+            HTTP_X_DJUST_TAB=run._tab,
+        )
+        assert response.status_code in (200, 403), response.content[:300]
+        refused = response.status_code == 403
+        if not refused:
+            run.navigation.extend(
+                n["path"]
+                for n in json.loads(response.content).get("_navigation", [])
+                if n["action"] == "live_redirect"
+            )
+    else:
+        refused = bool(_refusals(await run.play([rename, ("confirm_delete", {})])))
+    exists = await sync_to_async(Property.objects.filter(pk=row.pk).exists)()
+    if allowed:
+        assert not refused and not exists
+        assert run.navigation == [ROW_DELETE_LIST]
+    else:
+        assert refused and exists and run.navigation == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_a_save_carrying_only_fields_the_page_does_not_edit_saves_nothing(
+    site_urls, django_user_model, transport
+):
+    """Values for readonly or hidden names are not the form's values: such a Save is a Save
+    without them, and says so."""
+    row = await _seed()
+    browser = await _staff(django_user_model)
+    run = _Run(transport, browser, DETAIL_VIEW, "%s%d/change/" % (HIDDEN_LIST, row.pk))
+    await run.html()
+    answers = await run.play([("save_and_continue", {"status": "maintenance"})])
+    assert "nothing was saved" in _text(answers), answers
+    assert await sync_to_async(lambda: Property.objects.get(pk=row.pk).status)() == "available"

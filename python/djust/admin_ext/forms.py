@@ -109,6 +109,12 @@ class AdminFormMixin(FormMixin):
             if data
             else form_class(instance=self.object)
         )
+        # Only what the page lets the person edit is a form field, as in Django's admin: a
+        # readonly field is shown from the row, an excluded one and one the ModelAdmin does not
+        # show are not on the page, and none of them is bound, validated or saved (#4218).
+        editable = self._editable_field_names()
+        for name in [n for n in form.fields if n not in editable]:
+            del form.fields[name]
         # What is seeded WITHOUT its stored value would be saved as empty by an untouched re-post:
         # a disabled form field keeps its initial value (the same call ``FormMixin.get_form()`` makes).
         protect_blanked_floor_columns(form)
@@ -276,8 +282,22 @@ class AdminFormMixin(FormMixin):
         """The ModelAdmin's form class for the object being edited (``form_class`` is unset here)."""
         return self._model_admin.get_form(self.request, self.object)
 
+    def _shown_field_names(self) -> Optional[FrozenSet[str]]:
+        """The fields the ModelAdmin puts on the page: its ``fieldsets`` (``fields`` by default).
+        None for an admin object that has no fieldsets (no restriction beyond its form)."""
+        admin = getattr(self, "_model_admin", None)
+        if admin is None or not hasattr(admin, "get_fieldsets"):
+            return None
+        request, obj = getattr(self, "request", None), getattr(self, "object", None)
+        names: set = set()
+        for _name, options in admin.get_fieldsets(request, obj):
+            for entry in options.get("fields", ()):
+                # A tuple is several fields on one line (Django's fieldsets).
+                names.update(entry if isinstance(entry, (list, tuple)) else (entry,))
+        return frozenset(names)
+
     def _readonly_or_excluded_names(self) -> FrozenSet[str]:
-        """The ModelAdmin's readonly and excluded fields: not the client's to send (#4218)."""
+        """The ModelAdmin's readonly and excluded fields."""
         admin = getattr(self, "_model_admin", None)
         request, obj = getattr(self, "request", None), getattr(self, "object", None)
         names: set = set()
@@ -288,10 +308,24 @@ class AdminFormMixin(FormMixin):
         return frozenset(names)
 
     def _editable_field_names(self) -> FrozenSet[str]:
-        """The form fields the page renders as inputs: not the ModelAdmin's readonly fields, nor
-        its excluded ones (a custom ``ModelAdmin.form`` may still declare them)."""
+        """The fields a person edits on this page, the only ones a submission can write (#4218).
+
+        The fields the ModelAdmin shows (``fieldsets`` / ``fields``) that its form class declares,
+        less its readonly and excluded fields: Django's admin form. A field a custom
+        ``ModelAdmin.form`` declares but the admin does not show is not editable, so a forged
+        frame cannot write it. Read from the form CLASS: ``_create_form`` prunes its form to
+        this set.
+        """
+        admin = getattr(self, "_model_admin", None)
+        if admin is None:
+            return frozenset()
+        form_class = admin.get_form(getattr(self, "request", None), getattr(self, "object", None))
+        declared = getattr(form_class, "base_fields", {})
+        shown = self._shown_field_names()
         withheld = self._readonly_or_excluded_names()
-        return frozenset(name for name in self._create_form().fields if name not in withheld)
+        return frozenset(
+            name for name in declared if (shown is None or name in shown) and name not in withheld
+        )
 
     def _declared_field_names(self) -> FrozenSet[str]:
         """The fields of the ModelAdmin form (``form_class`` is unset here), which are not the
@@ -327,11 +361,6 @@ class AdminFormMixin(FormMixin):
         if not name:
             return
         field_name = name
-        # Not a readonly or excluded field: the page renders no input for it, and what is
-        # stored here is saved (#4218).
-        if field_name in self._readonly_or_excluded_names():
-            logger.debug("validate_field ignored a field that is not editable here")
-            return
 
         # Ensure form state is initialized
         if not hasattr(self, "form_data"):

@@ -690,24 +690,22 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             raise PermissionDenied("You do not have permission to save this object.")
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
-        readonly_fields = self._model_admin.get_readonly_fields(self.request, self.object)
-        # An excluded field is not on the page (a custom ``ModelAdmin.form`` may still declare
-        # it); a readonly one is shown. Neither is saved from a submission (#4218).
-        shown = self._editable_field_names() | set(readonly_fields)
+        readonly_fields = set(self._model_admin.get_readonly_fields(self.request, self.object))
 
+        # Each shown field is an input when the form has it (the editable ones), or text read
+        # from the row when it is readonly; an excluded field is not on the page (#4218).
         fieldsets_data: List[Dict[str, Any]] = []
         for fieldset_name, fieldset_options in self._model_admin.get_fieldsets(
             self.request, self.object
         ):
             fields_data: List[Dict[str, Any]] = []
             for field_name in fieldset_options.get("fields", []):
-                if (
-                    self.form_instance
-                    and field_name in self.form_instance.fields
-                    and field_name in shown
-                ):
+                if field_name in readonly_fields:
+                    readonly_html = self._readonly_field_html(field_name)
+                    if readonly_html is not None:
+                        fields_data.append({"name": field_name, "html": readonly_html})
+                elif self.form_instance and field_name in self.form_instance.fields:
                     field_info = self.get_field_info(field_name)
-                    is_readonly = field_name in readonly_fields
 
                     field_html = self.as_live_field(
                         field_name,
@@ -719,7 +717,6 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
                         is_datetime=field_info.get("is_datetime", False),
                         is_time=field_info.get("is_time", False),
                         input_type=field_info.get("input_type"),
-                        readonly=is_readonly,
                         render_label=True,
                         render_errors=True,
                         render_help_text=True,
@@ -768,6 +765,36 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             else None,
             "change_form_widgets": change_form_widgets,
         }
+
+    def _readonly_field_html(self, field_name: str) -> Optional[str]:
+        """A readonly model field, as text from the row (it is not a form field, #4218)."""
+        from django.core.exceptions import FieldDoesNotExist
+        from django.utils.html import escape
+
+        from djust.frameworks import get_adapter
+        from djust.serialization import model_field_value_withheld
+
+        try:
+            model_field = self._model._meta.get_field(field_name)
+        except FieldDoesNotExist:
+            return None
+        obj = self.object
+        value: Any = None
+        if obj is not None and not model_field_value_withheld(self._model, field_name):
+            if getattr(model_field, "choices", None):
+                value = getattr(obj, f"get_{field_name}_display", lambda: None)()
+            else:
+                value = getattr(obj, field_name, None)
+            if isinstance(value, bool):
+                value = "Yes" if value else "No"
+        adapter = get_adapter("admin_tailwind")
+        label = str(getattr(model_field, "verbose_name", field_name)).capitalize()
+        return (
+            f'<div class="{adapter.WRAPPER_CLASS}">'  # type: ignore[attr-defined]
+            f'<span class="{adapter.LABEL_CLASS}">{escape(label)}</span>'  # type: ignore[attr-defined]
+            f'<div class="mt-1">{adapter._render_readonly(field_name, value)}</div>'  # type: ignore[attr-defined]
+            "</div>"
+        )
 
     def _save_errors(self) -> List[str]:
         """What a failed Save tells the person: the refusal, and the form's own errors."""
@@ -827,12 +854,11 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
         self.redirect_url = None
         self.error_message = ""
 
+        # The form holds only the fields the page lets the person edit (``_create_form``): a
+        # value sent for any other name (readonly, excluded, not shown) is not the form's.
         fields = self._create_form().fields
-        # Only what the page lets the person edit: a readonly field is shown, not submitted, and
-        # a value a forged frame sends for it (or for an excluded one) is not saved.
-        editable = self._editable_field_names()
-        received = {name: value for name, value in form_values.items() if name in editable}
-        if editable and not received:
+        received = {name: value for name, value in form_values.items() if name in fields}
+        if fields and not received:
             logger.warning(
                 "djust admin: a Save for %s carried none of the form's values; nothing was saved",
                 sanitize_for_log(self._model._meta.label),
@@ -843,8 +869,8 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
 
         # A field the submission leaves out means what it means in a native post: an unchecked
         # checkbox is not in the form data, and is False.
-        for name in editable:
-            if name not in received and isinstance(fields[name].widget, CheckboxInput):
+        for name, form_field in fields.items():
+            if name not in received and isinstance(form_field.widget, CheckboxInput):
                 received[name] = False
         adding = self.object is None or getattr(self.object, "pk", None) is None
         self.submit_form(**received)
@@ -907,8 +933,12 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
         self.object_str = str(self.object)
 
     def get_object(self) -> Any:
-        """The object being deleted."""
-        return getattr(self, "object", None)
+        """The row being deleted, loaded by its key through the ModelAdmin's queryset.
+
+        Not ``self.object``: over the HTTP fallback that is the view's restored state, not a
+        model instance, and the object permission (``has_delete_permission(request, obj)``) and
+        the delete read the row (#4218)."""
+        return self._model_admin.get_object(self.request, self.object_id)
 
     def has_object_permission(self, request: Any, obj: Any) -> bool:
         """The confirmation page and the delete need the ModelAdmin delete permission."""
@@ -929,11 +959,10 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
     @event_handler
     def confirm_delete(self) -> None:
         """Confirm and execute deletion."""
-        if not self._model_admin.has_delete_permission(self.request, self.object):
-            raise PermissionDenied("You do not have permission to delete this object.")
-        # The row, by its key: ``self.object`` is not a model instance on every transport (the
-        # HTTP fallback rebuilds the view from its saved state).
-        obj = self._model_admin.get_object(self.request, self.object_id)
+        # The row by its key (``get_object``). An event has already been authorized against it
+        # (the view's object permission is ``has_delete_permission(request, row)``); the check
+        # here is for a direct call, and reads the same row.
+        obj = self.get_object()
         if obj is None:
             raise Http404("No such object.")
         if not self._model_admin.has_delete_permission(self.request, obj):

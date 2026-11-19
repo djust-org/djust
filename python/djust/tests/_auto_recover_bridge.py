@@ -53,7 +53,8 @@ class Browser:
         self.backlog: list[dict[str, Any]] = []
 
     @classmethod
-    async def open(cls, html: str, transport: str) -> "Browser":
+    async def open(cls, html: str, transport: str, url: Optional[str] = None) -> "Browser":
+        """``url``: the page's address (``http://testserver/4178/`` by default)."""
         directory = Path(tempfile.mkdtemp(prefix="djust-4178-"))
         page = directory / "page.html"
         page.write_text(html, encoding="utf-8")
@@ -62,6 +63,7 @@ class Browser:
             HELPER,
             str(page),
             transport,
+            *([url] if url else []),
             cwd=str(REPO),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,

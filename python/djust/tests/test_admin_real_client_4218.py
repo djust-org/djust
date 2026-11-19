@@ -15,9 +15,13 @@ from urllib.parse import urlsplit
 import pytest
 from asgiref.sync import sync_to_async
 from django.conf import settings
+from channels.testing import WebsocketCommunicator
 from django.contrib.sessions.backends.db import SessionStore
+from django.db import connection, models
 from django.test import Client, RequestFactory
-from django.urls import resolve
+from django.urls import path, resolve
+
+from djust.admin_ext import DjustAdminSite, DjustModelAdmin
 
 from djust.tests._auto_recover_bridge import Browser
 from djust.tests.test_admin_change_form_4218 import (  # noqa: F401  (fixture)
@@ -186,3 +190,165 @@ async def test_delete_with_the_real_client(django_user_model):
     assert answer["status"] == 200, answer
     assert _navigation(answer) == [LIST]
     assert not await sync_to_async(Property.objects.filter(pk=row.pk).exists)()
+
+
+# --------------------------------------------------------------------------- #
+# A nullable boolean, with the real client on every transport
+# --------------------------------------------------------------------------- #
+
+
+class Flagged(models.Model):
+    name = models.CharField(max_length=50)
+    maybe = models.BooleanField(null=True)
+
+    class Meta:
+        app_label = "djust_rentals"
+
+
+class FlaggedAdmin(DjustModelAdmin):
+    pass
+
+
+FLAG_SITE = DjustAdminSite(name="real_client_4218_flags")
+FLAG_SITE.register(Flagged, FlaggedAdmin)
+urlpatterns = [path("x4218-flags/", FLAG_SITE.urls)]
+FLAGS = "/x4218-flags/djust_rentals/flagged/"
+SAVES = ("save", "save_and_continue", "save_and_add_another")
+
+
+@pytest.fixture
+def flag_urls(settings, transactional_db, monkeypatch):
+    from djust.routing import _reset_route_map_cache
+    from djust.tests import _auto_recover_bridge as bridge
+
+    settings.ROOT_URLCONF = __name__
+    settings.ALLOWED_HOSTS = ["testserver", "example.com"]
+    settings.LIVEVIEW_ALLOWED_MODULES = ["djust", __name__]
+    _reset_route_map_cache()
+    with connection.schema_editor() as editor:
+        editor.create_model(Flagged)
+    # The SSE requests the bridge builds are the signed-in person's.
+    original = bridge._sse_request
+
+    def as_person(method, url, session, body=None):
+        request = original(method, url, session, body)
+        request.user = PERSON[0]
+        return request
+
+    monkeypatch.setattr(bridge, "_sse_request", as_person)
+    yield
+    with connection.schema_editor() as editor:
+        editor.delete_model(Flagged)
+    _reset_route_map_cache()
+
+
+PERSON: list = [None]
+
+
+async def _ws_mounted(browser: Browser, admin: "Admin"):
+    """The page's socket, answered by the real consumer as the signed-in person."""
+    from djust.tests._auto_recover_bridge import _pump_socket
+    from djust.websocket import LiveViewConsumer
+
+    connect = await browser.expect(lambda m: m["op"] == "ws_connect", "the client's socket")
+    socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    socket.scope.update(session=SessionStore(admin.key), user=admin.user, tenant=None)
+    assert (await socket.connect())[0]
+    await browser.tell(op="ws_open", id=connect["id"])
+    await _pump_socket(browser, connect["id"], socket)
+    mount = await browser.expect(
+        lambda m: m["op"] == "ws_send" and json.loads(m["data"]).get("type") == "mount",
+        "the client's mount frame",
+    )
+    await socket.send_to(text_data=mount["data"])
+    # Until the client has the mount (the server may take longer than a quiet window).
+    for _ in range(100):
+        await _pump_socket(browser, connect["id"], socket)
+        if await browser.eval(
+            "!!(window.djust.liveViewInstance && window.djust.liveViewInstance.viewMounted)"
+        ):
+            return connect["id"], socket
+    raise AssertionError("the client never mounted")
+
+
+async def _real_save(transport: str, admin: "Admin", url: str, typed: dict, button) -> list:
+    """Open ``url`` in the real client on ``transport``, type, press ``button``.
+    Returns the events the client sent, as (name, params)."""
+    from djust.tests._auto_recover_bridge import SSEServer, ws_forward
+
+    if transport == "http":
+        answers = await _save_on(admin, url, typed, button)
+        return [(a["event"], a["params"]) for a in answers]
+    html = await sync_to_async(admin.page)(url)
+    browser = await Browser.open(html, transport, "http://testserver" + url)
+    sent: list = []
+    try:
+        if transport == "ws":
+            socket_id, socket = await _ws_mounted(browser, admin)
+            await browser.eval(TYPE % json.dumps(typed))
+            assert await browser.eval(INVALID) == "[]"
+            await browser.eval(PRESS % json.dumps(button))
+            while not sent or sent[-1][0] not in SAVES:
+                frame = await browser.expect(
+                    lambda m: m["op"] == "ws_send" and json.loads(m["data"]).get("type") == "event",
+                    "an event frame",
+                )
+                data = json.loads(frame["data"])
+                sent.append((data["event"], data["params"]))
+                await ws_forward(browser, socket_id, socket, frame)
+            await socket.disconnect()
+        else:
+            server = SSEServer(browser, SessionStore(admin.key))
+            try:
+                await server.open_stream()
+                await server.answer_posts(lambda body: body.get("type") == "mount")
+                await browser.eval(TYPE % json.dumps(typed))
+                assert await browser.eval(INVALID) == "[]"
+                await browser.eval(PRESS % json.dumps(button))
+                while not sent or sent[-1][0] not in SAVES:
+                    body = await server.answer_posts(lambda body: body.get("type") == "event")
+                    sent.append((body["event"], body["params"]))
+            finally:
+                await server.drop()
+    finally:
+        await browser.close()
+    return sent
+
+
+def _flag(value):
+    return Flagged.objects.create(name="seed", maybe=value)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("flag_urls")
+@pytest.mark.parametrize("transport", ["ws", "sse", "http"])
+@pytest.mark.parametrize("stored", [True, False, None])
+async def test_an_untouched_nullable_boolean_keeps_its_value(django_user_model, transport, stored):
+    """Django's three-way select (Unknown / Yes / No): a Save that does not touch it keeps
+    True, False and None. A checkbox saved None over a stored True."""
+    admin = await _admin(django_user_model)
+    PERSON[0] = admin.user
+    row = await sync_to_async(_flag)(stored)
+    url = "%s%d/change/" % (FLAGS, row.pk)
+    sent = await _real_save(transport, admin, url, {"name": "renamed"}, "save_and_continue")
+    assert sent[-1][0] == "save" and "save_and_continue" in sent[-1][1], sent
+    saved = await sync_to_async(
+        lambda: Flagged.objects.values_list("name", "maybe").get(pk=row.pk)
+    )()
+    assert saved == ("renamed", stored)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.usefixtures("flag_urls")
+@pytest.mark.parametrize("transport", ["ws", "sse", "http"])
+@pytest.mark.parametrize("choice, expected", [("true", True), ("false", False), ("unknown", None)])
+async def test_each_nullable_boolean_choice_is_saved(
+    django_user_model, transport, choice, expected
+):
+    admin = await _admin(django_user_model)
+    PERSON[0] = admin.user
+    start = {True: False, False: True, None: True}[expected]
+    row = await sync_to_async(_flag)(start)
+    url = "%s%d/change/" % (FLAGS, row.pk)
+    await _real_save(transport, admin, url, {"maybe": choice}, "save_and_continue")
+    assert await sync_to_async(lambda: Flagged.objects.get(pk=row.pk).maybe)() is expected

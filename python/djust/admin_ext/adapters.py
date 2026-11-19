@@ -259,6 +259,26 @@ class AdminTailwindAdapter(TailwindAdapter):
         html += " />"
         return html
 
+    def _render_null_boolean(
+        self, field: forms.Field, field_name: str, value: Any, has_errors: bool
+    ) -> str:
+        """A nullable boolean as Django's three-way select (``NullBooleanSelect``): Unknown, Yes,
+        No. A checkbox has no "unknown", so an untouched Save stored None over True (#4218)."""
+        if value in (True, "true", "True", "1", 1):
+            current = "true"
+        elif value in (False, "false", "False", "0", 0):
+            current = "false"
+        else:
+            current = "unknown"
+        field_class = self.FIELD_CLASS_INVALID if has_errors else self.SELECT_CLASS
+        html = f'<select name="{field_name}" id="id_{field_name}" class="{field_class}" '
+        html += 'dj-change="validate_field">'
+        for option, label in (("unknown", "Unknown"), ("true", "Yes"), ("false", "No")):
+            selected = " selected" if option == current else ""
+            html += f'<option value="{option}"{selected}>{label}</option>'
+        html += "</select>"
+        return html
+
     def _render_standard_field(
         self,
         field: forms.Field,
@@ -268,6 +288,8 @@ class AdminTailwindAdapter(TailwindAdapter):
         **kwargs: Any,
     ) -> str:
         """Render standard input/textarea/select field."""
+        if isinstance(field, forms.NullBooleanField):
+            return self._render_null_boolean(field, field_name, value, has_errors)
         field_class = self.get_field_class(field, has_errors)
         field_type = self._get_field_type(field)
         if field_type == "checkbox_multiple":
