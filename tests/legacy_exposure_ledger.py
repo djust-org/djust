@@ -374,7 +374,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "tests/benchmarks/test_exposure_cost.py",
         "tests/benchmarks/test_model_backed_render_2532.py",
         "tests/integration/multinode/app/views.py",
-        "tests/integration/multinode/survival_table.py",
         "tests/integration/test_hvr_flow.py",
         "tests/integration/test_lazy_streaming_flow.py",
         "tests/integration/test_object_permission_event.py",
