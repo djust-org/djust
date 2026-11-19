@@ -276,6 +276,18 @@ class AdminFormMixin(FormMixin):
         """The ModelAdmin's form class for the object being edited (``form_class`` is unset here)."""
         return self._model_admin.get_form(self.request, self.object)
 
+    def _editable_field_names(self) -> FrozenSet[str]:
+        """The form fields the page renders as inputs: not the ModelAdmin's readonly fields, nor
+        its excluded ones (a custom ``ModelAdmin.form`` may still declare them)."""
+        fields = self._create_form().fields
+        admin = getattr(self, "_model_admin", None)
+        if admin is None:
+            return frozenset(fields)
+        request, obj = getattr(self, "request", None), getattr(self, "object", None)
+        readonly = set(admin.get_readonly_fields(request, obj) or ())
+        exclude = set(admin.get_exclude(request, obj) or ())
+        return frozenset(name for name in fields if name not in readonly and name not in exclude)
+
     def _declared_field_names(self) -> FrozenSet[str]:
         """The fields of the ModelAdmin form (``form_class`` is unset here), which are not the
         client's to add: they do not count toward ``max_form_fields`` (#3834)."""
@@ -310,6 +322,11 @@ class AdminFormMixin(FormMixin):
         if not name:
             return
         field_name = name
+        # Only a field the person can edit: not a readonly or excluded one (the page renders no
+        # input for it), and not a name the form does not have.
+        if field_name not in self._editable_field_names():
+            logger.debug("validate_field ignored a field that is not editable here")
+            return
 
         # Ensure form state is initialized
         if not hasattr(self, "form_data"):

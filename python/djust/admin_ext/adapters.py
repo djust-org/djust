@@ -274,6 +274,12 @@ class AdminTailwindAdapter(TailwindAdapter):
             # The base adapter renders this as a checkbox group; the admin
             # keeps its select (many-to-many fields take the options path).
             field_type = "select"
+        elif field_type == "radio":
+            # One radio per choice, the current value checked (Django's RadioSelect). The admin
+            # renders the label itself, so the group is named by aria-label.
+            return self._render_choice_group(
+                field, field_name, value, has_errors, "radio", **{**kwargs, "render_label": False}
+            )
 
         if field_type == "textarea":
             html = f'<textarea name="{field_name}" id="id_{field_name}" class="{field_class}" '
@@ -311,14 +317,26 @@ class AdminTailwindAdapter(TailwindAdapter):
             return html
 
         else:
-            # Standard input field
+            # Standard input field. A zero is a value (``0`` bedrooms), not an empty field: in
+            # the change form's <form> an emptied required input would block every Save.
+            shown = "" if value is None else str(value)
             html = f'<input type="{field_type}" name="{field_name}" id="id_{field_name}" '
-            html += f'value="{escape(str(value) if value else "")}" class="{field_class}" '
+            html += f'value="{escape(shown)}" class="{field_class}" '
             html += 'dj-input="validate_field"'
+            # The constraints Django's widget carries (a DecimalField's ``step``, a CharField's
+            # ``maxlength``): without its ``step`` a number input refuses "1.5", and the form
+            # would not submit.
+            for name in _CONSTRAINT_ATTRS:
+                if name in field.widget.attrs:
+                    html += f' {name}="{escape(str(field.widget.attrs[name]))}"'
             if field.required:
                 html += " required"
             html += " />"
             return html
+
+
+#: Widget attributes that are input constraints the browser enforces on submit.
+_CONSTRAINT_ATTRS = ("step", "min", "max", "maxlength", "minlength")
 
 
 def register_admin_adapters() -> None:

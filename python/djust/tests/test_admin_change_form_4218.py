@@ -15,13 +15,16 @@ event the page never sends, which is how the refusal went unseen.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import uuid
 from decimal import Decimal
 from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
+from django import forms
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.test import Client
@@ -30,7 +33,7 @@ from django.urls import path
 from djust.admin_ext import DjustAdminSite, DjustModelAdmin
 from djust.config import config
 from djust.tests.test_admin_page_render import _Socket, _session_cookie
-from djust.tests.test_framework_classes_explicit_4185 import _post, _sse, _tab
+from djust.tests.test_framework_classes_explicit_4185 import _post, _sse_request, _tab
 from djust_rentals.models import Property
 
 pytestmark = pytest.mark.admin
@@ -59,7 +62,49 @@ class PropertyAdmin(DjustModelAdmin):
 SITE = DjustAdminSite(name="change_form_4218_admin")
 SITE.register(Property, PropertyAdmin)
 
-urlpatterns = [path("x4218-admin/", SITE.urls)]
+
+class RadioForm(forms.ModelForm):
+    class Meta:
+        model = Property
+        fields = list(REQUIRED) + ["pet_friendly"]
+        widgets = {"property_type": forms.RadioSelect}
+
+
+class RadioAdmin(DjustModelAdmin):
+    """A required choice field drawn as radios (Django's ``RadioSelect``)."""
+
+    form = RadioForm
+
+
+RADIO_SITE = DjustAdminSite(name="change_form_4218_radio")
+RADIO_SITE.register(Property, RadioAdmin)
+
+
+class GuardedForm(forms.ModelForm):
+    class Meta:
+        model = Property
+        fields = list(REQUIRED) + ["description"]
+
+
+class GuardedAdmin(DjustModelAdmin):
+    """``city`` is readonly; ``description`` is excluded, though the custom form declares it."""
+
+    form = GuardedForm
+    readonly_fields = ["city"]
+    exclude = ["description"]
+
+
+GUARDED_SITE = DjustAdminSite(name="change_form_4218_guarded")
+GUARDED_SITE.register(Property, GuardedAdmin)
+
+urlpatterns = [
+    path("x4218-admin/", SITE.urls),
+    path("x4218-radio/", RADIO_SITE.urls),
+    path("x4218-guarded/", GUARDED_SITE.urls),
+]
+RADIO_LIST = "/x4218-radio/djust_rentals/property/"
+GUARDED_LIST = "/x4218-guarded/djust_rentals/property/"
+DELETE_VIEW = "djust.admin_ext.views.ModelDeleteView"
 
 LIST = "/x4218-admin/djust_rentals/property/"
 DETAIL_VIEW = "djust.admin_ext.views.ModelDetailView"
@@ -275,11 +320,16 @@ _ANSWERS = ("patch", "html_update", "noop", "error", "permission_denied", "navig
 
 
 class _Run:
-    """One page session over one transport: renders, then events built from the page."""
+    """One page session over one transport: renders, then events built from the page.
+
+    ``answers`` holds the answer to each event; ``navigation`` every ``live_redirect`` path
+    the server sent (a ``navigation`` frame on the socket and the stream, ``_navigation`` on
+    the HTTP fallback's answer)."""
 
     def __init__(self, transport: str, browser: Client, view: str, url: str):
         self.transport, self.browser, self.view, self.url = transport, browser, view, url
         self.answers: List[dict] = []
+        self.navigation: List[str] = []
 
     async def html(self) -> str:
         page = await sync_to_async(self.browser.get)(self.url)
@@ -287,31 +337,104 @@ class _Run:
         self._tab = _tab(page)
         return page.content.decode()
 
+    def _seen(self, frame: dict) -> bool:
+        """Record a navigation frame; True when ``frame`` answers the event."""
+        if frame.get("type") == "navigation":
+            if frame.get("action") == "live_redirect":
+                self.navigation.append(frame["path"])
+            return False
+        return frame.get("type") in _ANSWERS
+
     async def play(self, events: list) -> List[dict]:
         if self.transport == "websocket":
             async with _Socket(_session_cookie(self.browser)) as ws:
                 await ws.mount(self.view, self.url)
                 for name, params in events:
                     await ws.send({"type": "event", "event": name, "params": params})
-                    self.answers.append(await _ws_answer(ws))
+                    self.answers.append(await self._ws_answer(ws))
         elif self.transport == "sse":
-            key = self.browser.cookies[settings.SESSION_COOKIE_NAME].value
-            mounted, answers = await _sse(self.view, self.url, key, events)
-            assert mounted["type"] == "mount", mounted
-            self.answers.extend(answers)
+            await self._sse(events)
         else:
             for name, params in events:
                 answer = await sync_to_async(_post)(self.browser, self.url, name, params, self._tab)
+                self.navigation.extend(
+                    n["path"]
+                    for n in answer.get("_navigation", [])
+                    if n["action"] == "live_redirect"
+                )
                 self.answers.append(answer)
         return self.answers
 
+    async def _ws_answer(self, ws) -> dict:
+        """The event's answer, then whatever else the server sent for that turn."""
+        answer = None
+        navigated = len(self.navigation)
+        for _ in range(30):
+            settled = answer is not None or len(self.navigation) > navigated
+            if settled and await ws.comm.receive_nothing(timeout=0.3):
+                # A live_redirect leaves the view: it may send no render at all.
+                return answer or {"type": "navigation"}
+            frame = await ws.comm.receive_json_from(timeout=10)
+            if self._seen(frame) and answer is None:
+                answer = frame
+        raise AssertionError("no answer frame")
 
-async def _ws_answer(ws) -> dict:
-    for _ in range(30):
-        frame = await ws.comm.receive_json_from(timeout=10)
-        if frame.get("type") in _ANSWERS:
-            return frame
-    raise AssertionError("no answer frame")
+    async def _sse(self, events: list) -> None:
+        from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+
+        key = self.browser.cookies[settings.SESSION_COOKIE_NAME].value
+        sid = str(uuid.uuid4())
+        opened = await sync_to_async(_sse_request)(
+            "GET", f"/djust/sse/{sid}/", {"view": self.view, "_djust_url": self.url}, key
+        )
+        response = await DjustSSEStreamView().get(opened, session_id=sid)
+        assert response.status_code == 200
+        stream = response._iterator
+        frames: "asyncio.Queue[dict]" = asyncio.Queue()
+
+        async def read() -> None:
+            async for chunk in stream:
+                if chunk.startswith("data:"):
+                    await frames.put(json.loads(chunk[len("data:") :]))
+
+        reader = asyncio.ensure_future(read())
+        try:
+            mounted = await self._sse_next(frames, ("mount", "error"))
+            assert mounted["type"] == "mount", mounted
+            for name, params in events:
+                posted = await sync_to_async(_sse_request)(
+                    "POST",
+                    f"/djust/sse/{sid}/message/",
+                    {"type": "event", "event": name, "params": params},
+                    key,
+                )
+                answer = await DjustSSEMessageView().post(posted, session_id=sid)
+                assert answer.status_code in (200, 202, 204), answer.content
+                self.answers.append(await self._sse_next(frames, _ANSWERS))
+        finally:
+            _sse_sessions.pop(sid, None)
+            reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
+            await stream.aclose()
+
+    async def _sse_next(self, frames, types) -> dict:
+        """The next frame of ``types``, then whatever else the server sent for that turn."""
+        answer = None
+        navigated = len(self.navigation)
+        while True:
+            timeout = 0.3 if answer is not None or len(self.navigation) > navigated else 10
+            try:
+                frame = await asyncio.wait_for(frames.get(), timeout)
+            except asyncio.TimeoutError:
+                if answer is None and len(self.navigation) > navigated:
+                    return {"type": "navigation"}
+                if answer is None:
+                    raise AssertionError("no %s frame" % (types,))
+                return answer
+            if frame.get("type") == "navigation":
+                self._seen(frame)
+            elif answer is None and frame.get("type") in types:
+                answer = frame
 
 
 def _refusals(answers: List[dict]) -> List[dict]:
@@ -445,3 +568,105 @@ async def test_each_button_goes_where_it_says(
         assert navigation == [] and "Changes saved successfully" in answers[-1]["html"], answers
     else:
         assert len(navigation) == 1 and navigation[0].endswith(goes_to), answers
+
+
+# --------------------------------------------------------------------------- #
+# Review of #4218: add-page navigation, readonly fields, radios, delete
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_add_then_continue_goes_to_the_new_rows_change_page(
+    site_urls, django_user_model, transport, policy
+):
+    """As in Django: the add page does not stay an add page (its next Save would add again)."""
+    browser = await _staff(django_user_model)
+    run = _Run(transport, browser, CREATE_VIEW, LIST + "add/")
+    page = _Page(await run.html())
+    typed = {**REQUIRED, **EDITS}
+    await run.play([submit_event(page, typed, "save_and_continue")])
+    row = await sync_to_async(Property.objects.get)()
+    assert run.navigation == ["%s%d/change/" % (LIST, row.pk)], run.answers
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_continue_on_a_change_page_stays(site_urls, django_user_model, transport):
+    row = await _seed()
+    browser = await _staff(django_user_model)
+    run = _Run(transport, browser, DETAIL_VIEW, "%s%d/change/" % (LIST, row.pk))
+    page = _Page(await run.html())
+    await run.play([submit_event(page, EDITS, "save_and_continue")])
+    assert run.navigation == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_a_forged_frame_does_not_write_readonly_or_excluded_fields(
+    site_urls, django_user_model, transport, policy
+):
+    row = await _seed()
+    await sync_to_async(Property.objects.filter(pk=row.pk).update)(description="kept")
+    browser = await _staff(django_user_model)
+    run = _Run(transport, browser, DETAIL_VIEW, "%s%d/change/" % (GUARDED_LIST, row.pk))
+    page = _Page(await run.html())
+    names = {c["attrs"]["name"] for c in page.controls}
+    assert "city" not in names and "description" not in names, names  # shown, not inputs
+    _, save = submit_event(page, {"name": "Typed name"}, "save_and_continue")
+    forged = [
+        ("validate_field", {"field": "city", "value": "Forged"}),
+        ("validate_field", {"field": "description", "value": "Forged"}),
+        ("save_and_continue", {**save, "city": "Forged", "description": "Forged"}),
+    ]
+    answers = await run.play(forged)
+    assert not _refusals(answers), answers
+    saved = await sync_to_async(
+        lambda: Property.objects.values_list("name", "city", "description").get(pk=row.pk)
+    )()
+    assert saved == ("Typed name", "Austin", "kept")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_a_radio_choice_field_renders_every_choice_and_saves(
+    site_urls, django_user_model, transport
+):
+    """One radio per choice, the stored value checked; the form submits (a lone unchecked
+    required radio blocked every Save). A zero is shown, not emptied."""
+    row = await _seed()
+    await sync_to_async(Property.objects.filter(pk=row.pk).update)(bedrooms=0)
+    browser = await _staff(django_user_model)
+    run = _Run(transport, browser, DETAIL_VIEW, "%s%d/change/" % (RADIO_LIST, row.pk))
+    page = _Page(await run.html())
+    radios = [c["attrs"] for c in page.controls if c["attrs"]["name"] == "property_type"]
+    values = [a["value"] for a in radios if a["value"]]
+    assert values == [v for v, _ in Property.PROPERTY_TYPES], radios
+    assert [a["value"] for a in radios if "checked" in a] == ["house"], radios
+    assert page.control("bedrooms")["attrs"]["value"] == "0"
+    # The form's own submission: the checked radio's value, as FormData sends it.
+    _, save = submit_event(page, {"name": "Typed name"}, "save_and_continue")
+    save["property_type"] = "condo"
+    answers = await run.play(
+        [
+            ("validate_field", {"field": "property_type", "value": "condo"}),
+            ("save_and_continue", save),
+        ]
+    )
+    assert not _refusals(answers), answers
+    assert await _saved(row.pk) == ("Typed name", "condo", False)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("transport", TRANSPORTS)
+async def test_delete_removes_the_row_and_goes_to_the_change_list(
+    site_urls, django_user_model, transport
+):
+    row = await _seed()
+    browser = await _staff(django_user_model)
+    run = _Run(transport, browser, DELETE_VIEW, "%s%d/delete/" % (LIST, row.pk))
+    await run.html()
+    answers = await run.play([("confirm_delete", {})])
+    assert not _refusals(answers), answers
+    assert not await sync_to_async(Property.objects.filter(pk=row.pk).exists)()
+    assert run.navigation == [LIST], (run.navigation, answers)

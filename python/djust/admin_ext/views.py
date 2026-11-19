@@ -691,6 +691,9 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         readonly_fields = self._model_admin.get_readonly_fields(self.request, self.object)
+        # An excluded field is not on the page (a custom ``ModelAdmin.form`` may still declare
+        # it); a readonly one is shown. Neither is saved from a submission (#4218).
+        shown = self._editable_field_names() | set(readonly_fields)
 
         fieldsets_data: List[Dict[str, Any]] = []
         for fieldset_name, fieldset_options in self._model_admin.get_fieldsets(
@@ -698,7 +701,11 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
         ):
             fields_data: List[Dict[str, Any]] = []
             for field_name in fieldset_options.get("fields", []):
-                if self.form_instance and field_name in self.form_instance.fields:
+                if (
+                    self.form_instance
+                    and field_name in self.form_instance.fields
+                    and field_name in shown
+                ):
                     field_info = self.get_field_info(field_name)
                     is_readonly = field_name in readonly_fields
 
@@ -821,8 +828,11 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
         self.error_message = ""
 
         fields = self._create_form().fields
-        received = {name: value for name, value in form_values.items() if name in fields}
-        if fields and not received:
+        # Only what the page lets the person edit: a readonly field is shown, not submitted, and
+        # a value a forged frame sends for it (or for an excluded one) is not saved.
+        editable = self._editable_field_names()
+        received = {name: value for name, value in form_values.items() if name in editable}
+        if editable and not received:
             logger.warning(
                 "djust admin: a Save for %s carried none of the form's values; nothing was saved",
                 sanitize_for_log(self._model._meta.label),
@@ -833,16 +843,27 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
 
         # A field the submission leaves out means what it means in a native post: an unchecked
         # checkbox is not in the form data, and is False.
-        for name, form_field in fields.items():
-            if name not in received and isinstance(form_field.widget, CheckboxInput):
+        for name in editable:
+            if name not in received and isinstance(fields[name].widget, CheckboxInput):
                 received[name] = False
+        adding = self.object is None or getattr(self.object, "pk", None) is None
         self.submit_form(**received)
 
-        if self.save_success and then != "save_and_continue":
+        if not self.save_success:
+            self.is_saving = False
+            return
+        info = (
+            f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}"
+        )
+        if then == "save_and_continue":
+            # Staying on an add page would add the row again on the next Save (the HTTP fallback
+            # builds the page afresh): go to the new object's change page, as Django does.
+            if adding and self.object is not None:
+                self.redirect_url = reverse(f"{info}_change", args=[self.object.pk])
+        else:
             page = "add" if then == "save_and_add_another" else "changelist"
-            self.redirect_url = reverse(
-                f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}_{page}"
-            )
+            self.redirect_url = reverse(f"{info}_{page}")
+        if self.redirect_url:
             # Navigation every transport carries; the template's former inline
             # ``<script>`` read a ``redirect_url`` the context never held.
             self.live_redirect(self.redirect_url)
@@ -910,12 +931,21 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
         """Confirm and execute deletion."""
         if not self._model_admin.has_delete_permission(self.request, self.object):
             raise PermissionDenied("You do not have permission to delete this object.")
+        # The row, by its key: ``self.object`` is not a model instance on every transport (the
+        # HTTP fallback rebuilds the view from its saved state).
+        obj = self._model_admin.get_object(self.request, self.object_id)
+        if obj is None:
+            raise Http404("No such object.")
+        if not self._model_admin.has_delete_permission(self.request, obj):
+            raise PermissionDenied("You do not have permission to delete this object.")
         self.is_deleting = True
-        self.object.delete()
+        obj.delete()
         self.redirect_url = reverse(
             f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}_changelist"
         )
         self.is_deleting = False
+        # Navigation every transport carries; the template's inline ``<script>`` never ran.
+        self.live_redirect(self.redirect_url)
 
 
 class LoginView(_AdminRegistryMixin, DjangoLoginView):
