@@ -13,7 +13,7 @@
       "hashes": [
         {
           "alg": "SHA-384",
-          "content": "7758b2448389ca8975422f7904e65744588f3f8cc2be0339aab6697ce6509b47f88be6a4fca3e5381714c7d44d9abbb9"
+          "content": "7c3491a6315f4160c3a52efe98dd9368b144412eec29a7f2bcf728b4ffdb3ecc7ff28639e8ee7b6f1e760a3d02e7f071"
         }
       ],
       "name": "admin-css",
@@ -2174,7 +2174,7 @@
     "properties": [
       {
         "name": "djust:manifest-digest",
-        "value": "557f0adb95016193f0a02875ef5f22574558b8b0f0007f6badd7c6f2597b08b8"
+        "value": "3f6651ed16ce69b0fc8d5c6b2c76400065f221a467d1b2eb88667bedcc1bb975"
       }
     ],
     "tools": {
