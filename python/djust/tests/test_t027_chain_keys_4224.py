@@ -25,6 +25,8 @@ from djust.checks.templates import _get_context_data_chain_keys
 
 
 class UnrelatedLocalDict(LiveView):
+    exposure_policy = "explicit"
+
     def get_context_data(self, **kwargs: Any) -> dict:
         ctx = super().get_context_data(**kwargs)
         row: dict = {}
@@ -34,6 +36,8 @@ class UnrelatedLocalDict(LiveView):
 
 
 class NestedHelper(LiveView):
+    exposure_policy = "explicit"
+
     def get_context_data(self, **kwargs: Any) -> dict:
         ctx = super().get_context_data(**kwargs)
 
@@ -47,6 +51,8 @@ class NestedHelper(LiveView):
 
 
 class LiteralLocal(LiveView):
+    exposure_policy = "explicit"
+
     def get_context_data(self, **kwargs: Any) -> dict:
         ctx = {"first": 1, **super().get_context_data(**kwargs)}
         ctx["second"] = 2
@@ -54,6 +60,8 @@ class LiteralLocal(LiveView):
 
 
 class SuperNotReturned(LiveView):
+    exposure_policy = "explicit"
+
     def get_context_data(self, **kwargs: Any) -> dict:
         ctx = super().get_context_data(**kwargs)
         ctx["dropped"] = 1
@@ -61,6 +69,8 @@ class SuperNotReturned(LiveView):
 
 
 class Rebound(LiveView):
+    exposure_policy = "explicit"
+
     def _other(self) -> tuple:
         return {}, None
 
@@ -72,6 +82,8 @@ class Rebound(LiveView):
 
 
 class SpreadIntoReturnedLiteral(LiveView):
+    exposure_policy = "explicit"
+
     def get_context_data(self, **kwargs: Any) -> dict:
         ctx = super().get_context_data(**kwargs)
         ctx["total"] = 1
@@ -97,17 +109,23 @@ class SpreadTotalPage(LiveView):
 class LiteralParent(LiveView):
     """A parent (like several shipped djust views) that returns a literal dict."""
 
+    exposure_policy = "explicit"
+
     def get_context_data(self, **kwargs: Any) -> dict:
         return {"parent_literal": 1}
 
 
 class ChildOfLiteralParent(LiteralParent):
+    exposure_policy = "explicit"
+
     def get_context_data(self, **kwargs: Any) -> dict:
         return super().get_context_data(child_kwarg=2, **kwargs)
 
 
 class ChildWithoutSuper(LiteralParent):
     """An override that does not call super(): the parent's names stop here."""
+
+    exposure_policy = "explicit"
 
     def get_context_data(self, **kwargs: Any) -> dict:
         return {"own": 1}
