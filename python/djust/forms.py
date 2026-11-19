@@ -790,13 +790,15 @@ class FormMixin:
         POSITIONAL CALLERS: ``field`` is the first parameter, so
         ``validate_field("email", "text")`` binds ``field_name="text"`` and
         leaves ``value`` as ``None`` — a filled field then reports "required".
-        Call with keywords. The order is deliberate: djust admin's own adapters
-        emit ``validate_field('<name>', value)`` (``admin_ext/adapters.py``, 8
-        sites), whose second positional token is the literal string
-        ``"value"``; with ``field`` first that junk lands in ``field_name`` and
-        the real value survives as a keyword. Under the previous order it
+        Call with keywords. The order is deliberate: a template written as
+        ``validate_field('<name>', value)`` (djust admin's own adapters were,
+        until #4218) sends the literal string ``"value"`` as its second
+        positional token; with ``field`` first that junk lands in ``field_name``
+        and the real value survives as a keyword. Under the previous order it
         overwrote the real value, so the admin validated the string "value" on
-        every change.
+        every change. Bind it by name alone (``dj-input="validate_field"``): the
+        client generates ``field`` and ``value``, and under the strict parameter
+        policy a positional token that is also a generated name is refused.
 
         Args:
             field: Name of the field to validate — what the client sends

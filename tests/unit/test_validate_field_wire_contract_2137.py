@@ -169,8 +169,9 @@ def test_admin_form_mixin_still_accepts_the_legacy_key():
 
 
 def test_the_admin_adapter_positional_shape_keeps_the_real_value():
-    # `admin_ext/adapters.py` emits `validate_field('<name>', value)` at 8
-    # sites; the bare `value` token arrives as the literal string "value" in
+    # `admin_ext/adapters.py` emitted `validate_field('<name>', value)` until
+    # #4218 (it now binds by name alone), and a template may still be written
+    # that way; the bare `value` token arrives as the literal string "value" in
     # positional slot 1, with the REAL value as a keyword. `field` being first
     # is what makes the junk land in `field_name` instead of overwriting the
     # value — which is what it did before this change, so the admin validated

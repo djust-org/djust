@@ -339,7 +339,11 @@ async def test_change_list_over_sse(site_urls, django_user_model):
     assert "1 selected" in json.dumps(answers[1])
 
 
-_EDITS = [("update_field", {"field": "name", "value": "edited"}), ("save_and_continue", {})]
+# Save carries the form's values (#4218): a Save without them saves nothing.
+_EDITS = [
+    ("validate_field", {"field": "name", "value": "edited"}),
+    ("save_and_continue", {"name": "edited"}),
+]
 
 
 @pytest.mark.django_db(transaction=True)
