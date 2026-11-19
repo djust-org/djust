@@ -10,16 +10,7 @@ use crate::object_key::ObjectKey;
 use crate::Value;
 use std::mem::size_of;
 
-/// Heap bytes of a hashbrown table (`HashMap`, `HashSet`, `AHashMap`) with
-/// `capacity` usable slots of `entry` bytes each: the bucket array plus one
-/// control byte per bucket and one trailing control group.
-pub fn table_bytes(capacity: usize, entry: usize) -> usize {
-    if capacity == 0 {
-        return 0;
-    }
-    let buckets = (capacity * 8 / 7 + 1).next_power_of_two();
-    buckets * (entry + 1) + 16
-}
+pub use djust_base::retained::table_bytes;
 
 fn key_bytes(key: &ObjectKey) -> usize {
     match key {

@@ -352,6 +352,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "djust_base"
+version = "2.0.0-rc.1"
+dependencies = [
+ "pyo3",
+ "thiserror",
+]
+
+[[package]]
 name = "djust_components"
 version = "2.0.0-rc.1"
 dependencies = [
@@ -372,6 +380,7 @@ version = "2.0.0-rc.1"
 dependencies = [
  "ahash",
  "criterion",
+ "djust_base",
  "indexmap",
  "once_cell",
  "pyo3",
@@ -437,7 +446,7 @@ version = "2.0.0-rc.1"
 dependencies = [
  "ahash",
  "criterion",
- "djust_core",
+ "djust_base",
  "html5ever",
  "markup5ever_rcdom",
  "proptest",

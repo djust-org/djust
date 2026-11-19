@@ -127,6 +127,7 @@ BLAST_RADIUS_FILES = frozenset(
 # Blast radius too: ``DJUST_PREPUSH_TARGETED=1`` trades them for the direct
 # selection.
 BLAST_RADIUS_PREFIXES = (
+    "crates/djust_base/src/",
     "crates/djust_core/src/",
     "crates/djust_templates/src/",
     "crates/djust_vdom/src/",
@@ -141,7 +142,7 @@ FULL_SUITE_BRANCH_RE = re.compile(r"flip|routing|convergence", re.IGNORECASE)
 
 # Workspace-wide cargo run when these change.
 CARGO_WORKSPACE_FILES = frozenset({"Cargo.toml", "Cargo.lock"})
-CARGO_WORKSPACE_CRATES = frozenset({"djust_core"})
+CARGO_WORKSPACE_CRATES = frozenset({"djust_base", "djust_core"})
 
 
 @dataclass

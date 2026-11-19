@@ -1,6 +1,8 @@
 //! Error types for djust
 
+#[cfg(feature = "python")]
 use pyo3::exceptions::{PyRecursionError, PyRuntimeError};
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 use thiserror::Error;
 
@@ -119,6 +121,7 @@ pub enum DjangoRustError {
     /// `RuntimeError` (a 500) before this variant existed. The attribute walk
     /// uses this variant so a property raising `PermissionDenied` still
     /// renders as 403.
+    #[cfg(feature = "python")]
     #[error("{0}")]
     PythonException(PyErr),
 
@@ -126,6 +129,7 @@ pub enum DjangoRustError {
     IoError(#[from] std::io::Error),
 }
 
+#[cfg(feature = "python")]
 impl From<DjangoRustError> for PyErr {
     fn from(err: DjangoRustError) -> PyErr {
         match err {
@@ -309,6 +313,7 @@ impl DjangoRustError {
                     end,
                 }
             }
+            #[cfg(feature = "python")]
             (DjangoRustError::PythonException(error), Some(span)) => {
                 Python::attach(|py| {
                     if let Ok(dict) = error.value(py).getattr("__dict__") {
@@ -336,6 +341,7 @@ impl DjangoRustError {
     }
 }
 
+#[cfg(feature = "python")]
 impl From<PyErr> for DjangoRustError {
     fn from(err: PyErr) -> Self {
         DjangoRustError::PythonError(err.to_string())

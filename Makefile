@@ -374,6 +374,11 @@ check-no-default-features: ## Build + test djust_templates without the liveview 
 		echo "$(RED)djust_vdom / djust_components still in the no-default-features graph — 'optional = true' lost?$(NC)"; exit 1; \
 	fi
 	@PYO3_PYTHON=$(EMBEDDABLE_PYTHON) cargo test -p djust_templates --no-default-features
+	@echo "$(YELLOW)Phase 4: djust_vdom without the python feature (no PyO3 in the graph)$(NC)"
+	@if cargo tree -p djust_vdom --no-default-features -e normal | grep -E 'pyo3|djust_core'; then \
+		echo "$(RED)PyO3 or djust_core is in djust_vdom's no-default-features graph — the Python-free build is broken$(NC)"; exit 1; \
+	fi
+	@cargo test -p djust_vdom --no-default-features
 
 .PHONY: test-python
 test-python: ## Run Python tests

@@ -6,7 +6,8 @@
 // PyResult type annotations are required by PyO3 API
 #![allow(clippy::useless_conversion)]
 
-use djust_core::Result;
+use djust_base::Result;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
@@ -275,7 +276,7 @@ pub fn splice_loop_placeholders(
 /// and `render_with_diff` falls back to a full parse.
 fn roots_are_whitespace_splice_safe(roots: &[VNode]) -> bool {
     let block_element = |n: &VNode| {
-        !n.is_text() && !n.is_comment() && !djust_core::html_whitespace::is_inline_level_tag(&n.tag)
+        !n.is_text() && !n.is_comment() && !djust_base::html_whitespace::is_inline_level_tag(&n.tag)
     };
     match (roots.first(), roots.last()) {
         (Some(first), Some(last)) => block_element(first) && block_element(last),
@@ -941,7 +942,7 @@ pub fn cache_ignore_subtree_html_in(node: &mut VNode, ns: Namespace) {
 
 /// Where a node sits, as the serializer sees it.
 ///
-/// Raw-text elements (`djust_core::raw_text`: `script`, `style`, `noscript`,
+/// Raw-text elements (`djust_base::raw_text`: `script`, `style`, `noscript`,
 /// `xmp`, `iframe`, `noembed`, `noframes`, `plaintext`) are written exactly
 /// as the HTML serialization algorithm writes them: in the HTML namespace
 /// their text goes out verbatim, as the parser kept it (escaping it again
@@ -1009,7 +1010,7 @@ impl Place {
 
     /// How `element`, placed here, writes its content.
     fn content_of(self, element: &VNode) -> Content {
-        let raw_text = djust_core::raw_text::is_raw_text_element(&element.tag);
+        let raw_text = djust_base::raw_text::is_raw_text_element(&element.tag);
         // `title` and `textarea` (RCDATA): the tokenizer reads their content
         // as text too, but decodes references, so escaped text is exact.
         let rcdata = ["title", "textarea"]
@@ -1807,7 +1808,7 @@ fn collect_text_nodes<'a>(
 /// neighbouring node whenever the counts drifted.
 ///
 /// A changed node must:
-/// * not be in a raw-text element (`djust_core::raw_text`): its bytes are
+/// * not be in a raw-text element (`djust_base::raw_text`): its bytes are
 ///   not escaped text, and decoding `&lt;` there would put markup into a
 ///   `<script>` or `<style>`;
 /// * get text that a parser reads back exactly: the new run, decoded, must
@@ -1839,7 +1840,7 @@ fn plan_text_only_update(vdom: &VNode, old_html: &str, new_html: &str) -> Option
         // Whitespace-only text is never foster-parented and never changed
         // here (see below), and it may sit in an element the source only
         // implies (`<tbody>`).
-        if !djust_core::html_whitespace::is_html_whitespace_only(text)
+        if !djust_base::html_whitespace::is_html_whitespace_only(text)
             && !open[index].is_some_and(|tag| tag.eq_ignore_ascii_case(parent_tag))
         {
             return None;
@@ -1855,7 +1856,7 @@ fn plan_text_only_update(vdom: &VNode, old_html: &str, new_html: &str) -> Option
         if old_run != new_run {
             // A run with no text node behind it gaining text is structural.
             let (path, parent_tag, old_text) = nodes.get(node_index)?;
-            if old_run.is_empty() || djust_core::raw_text::is_raw_text_element(parent_tag) {
+            if old_run.is_empty() || djust_base::raw_text::is_raw_text_element(parent_tag) {
                 return None;
             }
             let new_text = html_unescape(new_run);
@@ -1865,8 +1866,8 @@ fn plan_text_only_update(vdom: &VNode, old_html: &str, new_html: &str) -> Option
             if html_escape(&new_text) != *new_run
                 || new_text.contains(['\r', '\0'])
                 || (drops_leading_newline && new_text.starts_with('\n'))
-                || djust_core::html_whitespace::is_html_whitespace_only(old_text)
-                || djust_core::html_whitespace::is_html_whitespace_only(&new_text)
+                || djust_base::html_whitespace::is_html_whitespace_only(old_text)
+                || djust_base::html_whitespace::is_html_whitespace_only(&new_text)
             {
                 return None;
             }
@@ -2039,6 +2040,7 @@ pub fn parse_html_fragment(html: &str, context_tag: &str) -> Result<Vec<VNode>> 
 }
 
 /// Python bindings
+#[cfg(feature = "python")]
 #[pyclass(from_py_object)]
 // PyVNode is taken by value in add_child(); keep the FromPyObject derive (pyo3 0.29 made it opt-in)
 #[derive(Clone)]
@@ -2046,6 +2048,7 @@ pub struct PyVNode {
     inner: VNode,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl PyVNode {
     #[new]
@@ -2069,6 +2072,7 @@ impl PyVNode {
     }
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
     let (old, _) = parse_html_with_namespace(&old_html)?;
@@ -2079,6 +2083,7 @@ fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
         .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
 }
 
+#[cfg(feature = "python")]
 #[pymodule]
 fn djust_vdom(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyVNode>()?;
@@ -2472,7 +2477,7 @@ mod tests {
         // `noscript` is read as markup (scripting disabled).
         let img = "<img src=x onerror=alert(1)>";
         let rcdata = ["title", "textarea"];
-        for tag in djust_core::raw_text::RAW_TEXT_ELEMENTS
+        for tag in djust_base::raw_text::RAW_TEXT_ELEMENTS
             .into_iter()
             .chain(rcdata)
         {

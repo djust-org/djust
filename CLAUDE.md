@@ -74,6 +74,7 @@ djust/
 │   ├── djust_live/         # PyO3 bindings — the entry point
 │   │                       #   (pyproject `manifest-path`; module `djust._rust`)
 │   ├── djust_components/   # Rust-backed components
+│   ├── djust_base/         # Python-free base: error type, HTML whitespace/raw-text rules
 │   ├── djust_core/         # Core types, serialization, context
 │   ├── djust_templates/    # Rust template engine
 │   └── djust_vdom/         # Virtual DOM + diffing
