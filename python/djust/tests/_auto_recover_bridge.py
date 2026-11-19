@@ -161,6 +161,17 @@ async def ws_connect(
         "the client's mount frame",
     )
     await socket.send_to(text_data=mount["data"])
+    # Wait for the server's answer to the mount itself, not for a quiet spell: on
+    # a loaded machine the answer can take longer than _pump_socket's 0.2 s, and
+    # a directive fired before the page is mounted is ignored by the client.
+    while True:
+        output = await socket.receive_output(timeout=WAIT_S)
+        if output.get("type") == "websocket.close":
+            await browser.tell(op="ws_close", id=connect["id"], code=output.get("code", 1000))
+            break
+        await browser.tell(op="ws_message", id=connect["id"], data=output["text"])
+        if json.loads(output["text"]).get("type") in ("mount", "error"):
+            break
     await _pump_socket(browser, connect["id"], socket)
     return connect["id"], socket
 
