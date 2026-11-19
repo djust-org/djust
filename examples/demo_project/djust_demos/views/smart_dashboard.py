@@ -19,7 +19,7 @@ a mechanism that does not run.
 """
 
 import random
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, debounce, throttle, cache
 from djust_shared.views import BaseViewWithNavbar
 
@@ -31,6 +31,21 @@ class SmartDashboardView(BaseViewWithNavbar):
     Demonstrates how @client_state enables complex UIs with zero JavaScript.
     """
     template_name = 'demos/smart_dashboard.html'
+
+    # get_context_data() hands every value to the template (render=False keeps
+    # each out of the default render); persist="server" keeps them across the
+    # HTTP fallback and a reconnect.
+    temperature = state(72.0, persist="server", render=False)
+    humidity = state(45.0, persist="server", render=False)
+    target_temp = state(72.0, persist="server", render=False)
+    heat_index = state(0, persist="server", render=False)
+    comfort_level = state("", persist="server", render=False)
+    energy_cost = state(0.0, persist="server", render=False)
+    temperature_celsius = state(0.0, persist="server", render=False)
+    heat_index_celsius = state(0.0, persist="server", render=False)
+    devices = state(default_factory=list, persist="server", render=False)
+    filter = state("all", persist="server", render=False)  # all, active, offline
+    auto_simulate = state(False, persist="server", render=False)
 
     def mount(self, request, **kwargs):
         """Initialize dashboard state"""

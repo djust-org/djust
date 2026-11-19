@@ -15,6 +15,7 @@ from django.test.utils import CaptureQueriesContext
 from django.contrib.auth.models import User
 from datetime import date, timedelta
 
+from djust import state
 from djust.testing import LiveViewTestClient
 
 from djust_rentals.views.dashboard import RentalDashboardView
@@ -147,27 +148,25 @@ class RentalDashboardJITTestCase(TestCase):
         assert context['monthly_income'] > 0
         assert len(context['properties']) > 0
 
+        # Explicit exposure hands the template native model instances; the
+        # renderer reads the attributes the template names.
         prop = context['properties'][0]
-        assert 'name' in prop
-        assert 'address' in prop
-        assert 'monthly_rent' in prop
-        assert 'status' in prop
+        for field in ('name', 'address', 'monthly_rent', 'status'):
+            assert hasattr(prop, field), field
 
         # Check maintenance list
         maintenance_list = context['pending_maintenance']
         if len(maintenance_list) > 0:
             req = maintenance_list[0]
-            assert 'title' in req
-            assert 'property_name' in req
-            assert 'priority' in req
+            for field in ('title', 'property_name', 'priority'):
+                assert hasattr(req, field), field
 
         # Check expiring leases
         expiring = context['expiring_soon']
         if len(expiring) > 0:
             lease = expiring[0]
-            assert 'property_name' in lease
-            assert 'tenant_name' in lease
-            assert 'end_date' in lease
+            for field in ('property_name', 'tenant_name', 'end_date'):
+                assert hasattr(lease, field), field
 
     def test_dashboard_search_performance(self):
         """Test search functionality with debouncing."""
@@ -225,7 +224,7 @@ class RentalDashboardJITTestCase(TestCase):
             # Check all expected fields are present
             expected_fields = ['name', 'address', 'monthly_rent', 'status', 'status_display']
             for field in expected_fields:
-                assert field in prop, f"Missing field: {field}"
+                assert hasattr(prop, field), f"Missing field: {field}"
 
         if len(context['expiring_soon']) > 0:
             lease = context['expiring_soon'][0]
@@ -233,7 +232,7 @@ class RentalDashboardJITTestCase(TestCase):
             # Check all expected fields
             expected_fields = ['pk', 'property_name', 'tenant_name', 'end_date', 'days_until_expiration']
             for field in expected_fields:
-                assert field in lease, f"Missing field: {field}"
+                assert hasattr(lease, field), f"Missing field: {field}"
 
 
 class MaintenanceRequestJITTestCase(TestCase):
@@ -346,7 +345,8 @@ class JITEdgeCasesTestCase(TestCase):
         from djust.live_view import LiveView
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            leases = state()
             template_string = "{% for lease in leases %}{{ lease.id }}{% endfor %}"
 
             def mount(self, request):
@@ -387,7 +387,8 @@ class JITEdgeCasesTestCase(TestCase):
             )
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            leases = state()
             template_string = "{% for lease in leases %}{{ lease.property.name }}{% endfor %}"
 
             def mount(self, request):
@@ -428,7 +429,8 @@ class JITEdgeCasesTestCase(TestCase):
             )
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
+            leases = state()
             template_string = "{% for lease in leases %}{{ lease.status }}{% endfor %}"
 
             def mount(self, request):

@@ -253,7 +253,7 @@
                 <span class="feature-label label-bugfix">Bug Fixes</span>
                 <h3>State Management & Serialization</h3>
                 <p class="subtitle">
-                    11 bugs fixed — private attributes survive events, set/Decimal/date serialize correctly,
+                    11 bugs fixed — server-only state survives events, set/Decimal/date serialize correctly,
                     VDOM patcher handles text nodes and autofocus, debug panel SVG renders properly.
                 </p>
 
@@ -263,7 +263,7 @@
                         <div class="value">{{ count }}</div>
                     </div>
                     <div class="state-card">
-                        <div class="label">Private _counter</div>
+                        <div class="label">Server-only counter</div>
                         <div class="value">{{ internal_counter }}</div>
                     </div>
                     <div class="state-card">

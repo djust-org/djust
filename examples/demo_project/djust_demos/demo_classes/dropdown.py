@@ -32,7 +32,7 @@ def select_item(self, item: str = "", **kwargs):
     {% if dropdown_open %}
     <div class="dropdown-menu">
         {% for item in dropdown_items %}
-        <div dj-click="select_item" data-item="{{ item }}">
+        <div dj-click="select_item" dj-value-item="{{ item }}">
             {{ item }}
         </div>
         {% endfor %}

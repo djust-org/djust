@@ -132,7 +132,8 @@
                                     <span class="code-badge-modern">Python</span>
                                 </div>
                                 <div class="code-block-modern">
-                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView
+                                    <pre style="margin: 0; padding: 1rem; background: var(--color-bg); border-radius: 0 0 var(--radius-md) var(--radius-md);"><code class="language-python">from djust import LiveView, state
+from djust.decorators import event_handler
 import datetime
 
 class ChatView(LiveView):
@@ -142,18 +143,13 @@ class ChatView(LiveView):
     """
     template_name = "demos/chat.html"
 
-    def mount(self, request, **kwargs):
-        self.messages = []
-        self.username = (
-            request.user.username
-            if request.user.is_authenticated
-            else "Guest"
-        )
+    messages = state(default_factory=list, persist="server")
 
-    def send_message(self, message=""):
+    @event_handler
+    def send_message(self, message: str = ""):
         if message.strip():
             self.messages.append({
-                'user': self.username,
+                'user': self.request.user.get_username() or "Guest",
                 'text': message,
                 'time': datetime.datetime.now()
                     .strftime("%H:%M"),

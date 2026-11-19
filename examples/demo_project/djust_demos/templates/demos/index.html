@@ -364,9 +364,6 @@
                     <a href="/demos/chat/" class="docs-nav-link">💬 Live Chat</a>
                 </li>
                 <li class="docs-nav-item">
-                    <a href="/demos/react/" class="docs-nav-link">⚛️ React Integration</a>
-                </li>
-                <li class="docs-nav-item">
                     <a href="/demos/performance/" class="docs-nav-link">⚡ Performance Test</a>
                 </li>
                 <li class="docs-nav-item">
@@ -475,7 +472,7 @@
                         {% if dropdown_open %}
                         <div class="dropdown-menu">
                             {% for item in dropdown_items %}
-                            <div dj-click="select_item" data-item="{{ item }}" class="dropdown-item">
+                            <div dj-click="select_item" dj-value-item="{{ item }}" class="dropdown-item">
                                 {{ item }}
                             </div>
                             {% endfor %}
@@ -728,15 +725,6 @@
                             <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">💬</div>
                             <div style="font-weight: 600;">Live Chat</div>
                             <div style="font-size: 0.875rem; color: var(--color-text-muted);">Real-time messaging</div>
-                        </div>
-                    </a>
-                </div>
-                <div class="col-md-4">
-                    <a href="/demos/react/" style="text-decoration: none; color: var(--color-text);">
-                        <div style="padding: 1rem; background: var(--color-bg); border: 1px solid var(--color-border); border-radius: var(--radius-md); transition: all 0.2s;" onmouseover="this.style.borderColor='var(--color-accent)'" onmouseout="this.style.borderColor='var(--color-border)'">
-                            <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">⚛️</div>
-                            <div style="font-weight: 600;">React Integration</div>
-                            <div style="font-size: 0.875rem; color: var(--color-text-muted);">Hybrid server/client</div>
                         </div>
                     </a>
                 </div>

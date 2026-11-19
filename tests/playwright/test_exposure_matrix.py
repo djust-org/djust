@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """ADR-038 E5: explicit exposure in a real browser, over WebSocket and SSE.
 
-Drives ``/demos/exposure/`` (explicit policy) and its legacy twin
-``/demos/exposure-legacy/`` on the demo server through mount, events,
+Drives ``/demos/exposure/`` (explicit policy) on the demo server through mount, events,
 background work, a failing handler under DEBUG, ``url_change``, a socket
 reconnect, cross-worker restore (a second server process on the same database)
 and live back-navigation. After each flow it asserts at every destination the
@@ -29,9 +28,14 @@ list) must be in no session under either policy and transport, and at no
 destination of the explicit view. The rule is ``_exposure_session_contract.stored_session_failures``. ``E5_ERROR_SENTINEL`` (a handler failure) follows Django (ADR-038 D-a):
 under DEBUG the explicit view's error frame must carry it, in production it
 must reach no frame, page or log. Run the server with ``DJUST_DEMO_DEBUG=0``
-and this script with ``E5_DEBUG=0`` for the production contract. The legacy
-twin is the control in each mode: its DEBUG error frame, or its production
-log, carries the error sentinel.
+and this script with ``E5_DEBUG=0`` for the production contract. Under DEBUG
+the explicit view's own error frame is the control: it must carry the error
+sentinel, which proves the frame capture sees what reaches the client. In
+either mode, with ``E5_SERVER_LOG`` set, the failing handler's
+``E5_LOG_CONTROL`` line must be in the server log, which proves the log checks
+read a log this flow wrote to. (The
+legacy twin that used to be the control in both modes went with the legacy
+policy in 2.0, #4187.)
 
 Over real SSE (the transport is pinned and checked, #3097), an explicit view's
 ``start_async`` result used to fail: the background task inherited the event
@@ -70,6 +74,8 @@ DEMO_DIR = os.environ.get("E5_DEMO_DIR", "examples/demo_project")
 
 # Never reach any destination, in either mode.
 SENTINELS = ("E5_UNDECLARED_SENTINEL", "E5_PRIVATE_SENTINEL")
+#: Logged by the failing handler before it raises (djust_demos.views.exposure_demo).
+LOG_CONTROL = "E5_LOG_CONTROL"
 ERROR_SENTINEL = "E5_ERROR_SENTINEL"
 # The server's mode (E5_DEBUG=0 when it runs with DJUST_DEMO_DEBUG=0). Errors
 # follow Django (ADR-038 D-a): detail under DEBUG, value-free in production.
@@ -109,8 +115,7 @@ def reachable(url):
 def session_dump(session_key):
     """This flow's stored session rows, decoded (values included).
 
-    Only the flow's own session: the legacy twin legitimately stores its public
-    attributes, so reading every row would blame the explicit view for them.
+    Only the flow's own session: another flow's rows are not this view's.
     """
     sys.path.insert(0, os.path.abspath(DEMO_DIR))
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "demo_project.settings")
@@ -195,9 +200,10 @@ async def wait_mounted(page):
     )
 
 
-async def run_flow(browser, transport, policy, failures, notes):
+async def run_flow(browser, transport, failures, notes):
+    policy = "explicit"
     label = f"{policy}/{transport}"
-    path = "/demos/exposure/" if policy == "explicit" else "/demos/exposure-legacy/"
+    path = "/demos/exposure/"
     context = await browser.new_context()
     frames = []
     if transport == "sse":
@@ -263,104 +269,95 @@ async def run_flow(browser, transport, policy, failures, notes):
 
     all_frames = "\n".join(await received())
     html = await page.content()
-    if policy == "legacy":
-        # Harness control: under DEBUG the legacy error frame carries the
-        # detail, proving the frame capture sees it (in production the log
-        # control below does the same).
-        if DEBUG and ERROR_SENTINEL not in all_frames:
-            failures.append(f"{label}: control failed, legacy DEBUG error frame lacks the sentinel")
-    else:
-        for sentinel in SENTINELS:
-            if sentinel in html:
-                failures.append(f"{label}: {sentinel} in page HTML")
-            if sentinel in all_frames:
-                failures.append(f"{label}: {sentinel} in received frames")
-        if DEBUG and ERROR_SENTINEL not in all_frames:
-            failures.append(f"{label}: DEBUG error frame lacks the Django-like detail (D-a)")
-        if not DEBUG:
-            if ERROR_SENTINEL in all_frames:
-                failures.append(f"{label}: production error frame carries the exception text")
-            if ERROR_SENTINEL in html:
-                failures.append(f"{label}: production page HTML carries the exception text")
+    for sentinel in SENTINELS:
+        if sentinel in html:
+            failures.append(f"{label}: {sentinel} in page HTML")
+        if sentinel in all_frames:
+            failures.append(f"{label}: {sentinel} in received frames")
+    if DEBUG and ERROR_SENTINEL not in all_frames:
+        failures.append(f"{label}: DEBUG error frame lacks the Django-like detail (D-a)")
+    if not DEBUG:
+        if ERROR_SENTINEL in all_frames:
+            failures.append(f"{label}: production error frame carries the exception text")
+        if ERROR_SENTINEL in html:
+            failures.append(f"{label}: production page HTML carries the exception text")
 
-        if transport == "websocket":
-            # Reconnect: declared server state survives, nothing else does.
-            await page.evaluate("() => window.djust.liveViewInstance.ws.close()")
-            await page.wait_for_timeout(1500)
-            await wait_mounted(page)
-            try:
-                await wait_text(page, "#matrix-count", "12", timeout=10000)
-            except Exception:
-                failures.append(
-                    f"{label}: reconnect did not restore count=12 "
-                    f"(got {await text(page, '#matrix-count')!r})"
-                )
+    if transport == "websocket":
+        # Reconnect: declared server state survives, nothing else does.
+        await page.evaluate("() => window.djust.liveViewInstance.ws.close()")
+        await page.wait_for_timeout(1500)
+        await wait_mounted(page)
+        try:
+            await wait_text(page, "#matrix-count", "12", timeout=10000)
+        except Exception:
+            failures.append(
+                f"{label}: reconnect did not restore count=12 "
+                f"(got {await text(page, '#matrix-count')!r})"
+            )
 
-            # Cross-worker: a WebSocket mount of the same session on a second
-            # process (same database) restores declared state. A full page
-            # load mounts fresh by design, so this exercises the reconnect path.
-            if reachable(SECOND + path):
-                ws_url = SECOND.replace("http", "ws", 1) + "/ws/live/"
-                view = "djust_demos.views.exposure_demo.ExposureMatrixView"
-                frame = await page.evaluate(CROSS_WORKER_MOUNT, [ws_url, view, path])
-                if frame.get("type") == "mount" and ">12<" in (frame.get("html") or ""):
-                    notes.append(f"{label}: cross-worker WebSocket restore on {SECOND} verified")
-                else:
-                    failures.append(
-                        f"{label}: cross-worker restore failed: {json.dumps(frame)[:300]}"
-                    )
-                for sentinel in SENTINELS:
-                    if sentinel in json.dumps(frame):
-                        failures.append(f"{label}: {sentinel} in the cross-worker mount frame")
+        # Cross-worker: a WebSocket mount of the same session on a second
+        # process (same database) restores declared state. A full page
+        # load mounts fresh by design, so this exercises the reconnect path.
+        if reachable(SECOND + path):
+            ws_url = SECOND.replace("http", "ws", 1) + "/ws/live/"
+            view = "djust_demos.views.exposure_demo.ExposureMatrixView"
+            frame = await page.evaluate(CROSS_WORKER_MOUNT, [ws_url, view, path])
+            if frame.get("type") == "mount" and ">12<" in (frame.get("html") or ""):
+                notes.append(f"{label}: cross-worker WebSocket restore on {SECOND} verified")
             else:
-                notes.append(f"{label}: cross-worker NOT RUN ({SECOND} unreachable)")
-
-            # Live back-navigation restores the client-persisted page field.
-            await page.click("#matrix-away")
-            await page.wait_for_timeout(1500)
-            await page.go_back()
-            await page.wait_for_timeout(1500)
-            try:
-                await wait_text(page, "#matrix-page", "2", timeout=8000)
-                notes.append(f"{label}: back-navigation restored page=2")
-            except Exception:
-                failures.append(
-                    f"{label}: back-navigation did not restore page=2 "
-                    f"(got {await text(page, '#matrix-page')!r})"
-                )
-
-            all_frames = "\n".join(await received())
+                failures.append(f"{label}: cross-worker restore failed: {json.dumps(frame)[:300]}")
             for sentinel in SENTINELS:
-                if sentinel in all_frames:
-                    failures.append(f"{label}: {sentinel} in frames after reconnect/navigation")
-
-        stored = await asyncio.to_thread(session_dump, await session_key_of(context))
-        if not stored:
-            failures.append(f"{label}: no stored session found for this flow")
-        logged = log_tail(start)
-        if SERVER_LOG:
-            for sentinel in SENTINELS:
-                if sentinel in logged:
-                    failures.append(f"{label}: {sentinel} in the server log")
-            if not DEBUG and ERROR_SENTINEL in logged:
-                failures.append(f"{label}: production log carries the exception text")
+                if sentinel in json.dumps(frame):
+                    failures.append(f"{label}: {sentinel} in the cross-worker mount frame")
         else:
-            notes.append(f"{label}: server log NOT CHECKED (E5_SERVER_LOG unset)")
+            notes.append(f"{label}: cross-worker NOT RUN ({SECOND} unreachable)")
 
-    if policy == "legacy" and not DEBUG and SERVER_LOG:
-        # Harness control for production mode: legacy logs the detail.
-        if ERROR_SENTINEL not in log_tail(start):
-            failures.append(f"{label}: control failed, legacy production log lacks the detail")
+        # Live back-navigation restores the client-persisted page field.
+        await page.click("#matrix-away")
+        await page.wait_for_timeout(1500)
+        await page.go_back()
+        await page.wait_for_timeout(1500)
+        try:
+            await wait_text(page, "#matrix-page", "2", timeout=8000)
+            notes.append(f"{label}: back-navigation restored page=2")
+        except Exception:
+            failures.append(
+                f"{label}: back-navigation did not restore page=2 "
+                f"(got {await text(page, '#matrix-page')!r})"
+            )
 
-    # The stored session's own contract: the floor value for both policies,
-    # the saved-state envelope for the explicit view.
+        all_frames = "\n".join(await received())
+        for sentinel in SENTINELS:
+            if sentinel in all_frames:
+                failures.append(f"{label}: {sentinel} in frames after reconnect/navigation")
+
+    stored = await asyncio.to_thread(session_dump, await session_key_of(context))
+    if not stored:
+        failures.append(f"{label}: no stored session found for this flow")
+    logged = log_tail(start)
+    if SERVER_LOG:
+        # Positive control, in both modes: the failing handler logs LOG_CONTROL
+        # before it raises, so the checks below read a log this flow wrote to
+        # (in production this replaces the legacy twin's control, which logged
+        # the error detail).
+        if LOG_CONTROL not in logged:
+            failures.append(f"{label}: control failed, {LOG_CONTROL} not in the server log")
+        for sentinel in SENTINELS:
+            if sentinel in logged:
+                failures.append(f"{label}: {sentinel} in the server log")
+        if not DEBUG and ERROR_SENTINEL in logged:
+            failures.append(f"{label}: production log carries the exception text")
+    else:
+        notes.append(f"{label}: server log NOT CHECKED (E5_SERVER_LOG unset)")
+
+    # The stored session's own contract: the floor value, and the saved-state
+    # envelope for the explicit view.
     rows = await asyncio.to_thread(session_dump, await session_key_of(context))
     failures.extend(stored_session_failures(label, policy, rows))
-    if policy != "legacy":
-        # The floor value at every client-facing destination and the log.
-        seen = "\n".join(await received()) + (await page.content()) + log_tail(start)
-        if FLOOR_SENTINEL in seen:
-            failures.append(f"{label}: {FLOOR_SENTINEL} in the page, a frame or the server log")
+    # The floor value at every client-facing destination and the log.
+    seen = "\n".join(await received()) + (await page.content()) + log_tail(start)
+    if FLOOR_SENTINEL in seen:
+        failures.append(f"{label}: {FLOOR_SENTINEL} in the page, a frame or the server log")
 
     watch.check(transport, label, failures)
     await context.close()
@@ -371,11 +368,10 @@ async def main():
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         for transport in ("websocket", "sse"):
-            for policy in ("explicit", "legacy"):
-                try:
-                    await run_flow(browser, transport, policy, failures, notes)
-                except Exception as exc:  # a stuck step is a failure, reported by name
-                    failures.append(f"{policy}/{transport}: flow did not complete: {exc!r}")
+            try:
+                await run_flow(browser, transport, failures, notes)
+            except Exception as exc:  # a stuck step is a failure, reported by name
+                failures.append(f"explicit/{transport}: flow did not complete: {exc!r}")
         await browser.close()
     for note in notes:
         print("  -", note)

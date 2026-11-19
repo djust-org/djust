@@ -116,7 +116,7 @@ class HomeSearchDemo(LiveView):
         self.filtered_items = self.items.copy()
 
     @event_handler
-    def filter_items(self, value="", **kwargs):
+    def filter_items(self, value: str = "", **kwargs):
         self.search_query = value
         query_lower = value.lower()
         if query_lower:
@@ -255,7 +255,7 @@ class HomeTodoDemo(LiveView):
                         type="checkbox"
                         {% if todo.done %}checked{% endif %}
                         dj-change="toggle_todo"
-                        data-id="{{ todo.id }}"
+                        dj-value-id="{{ todo.id }}"
                     />
                     <label class="form-check-label {% if todo.done %}text-decoration-line-through text-muted{% endif %}">
                         {{ todo.text }}
@@ -263,7 +263,7 @@ class HomeTodoDemo(LiveView):
                 </div>
                 <button
                     dj-click="delete_todo"
-                    data-id="{{ todo.id }}"
+                    dj-value-id="{{ todo.id }}"
                     class="btn btn-sm btn-outline-danger"
                 >
                     🗑️
@@ -297,7 +297,7 @@ class HomeTodoDemo(LiveView):
         self.next_id = 3
 
     @event_handler
-    def add_todo(self, text="", **kwargs):
+    def add_todo(self, text: str = "", **kwargs):
         if text.strip():
             self.todos.append({
                 'id': self.next_id,
@@ -308,16 +308,16 @@ class HomeTodoDemo(LiveView):
             del self.todos[:-MAX_TODOS]  # keep the newest MAX_TODOS
 
     @event_handler
-    def toggle_todo(self, id=None, **kwargs):
-        todo_id = int(id or kwargs.get('todo_id', 0))
+    def toggle_todo(self, id: int = 0, **kwargs):
+        todo_id = id
         for todo in self.todos:
             if todo['id'] == todo_id:
                 todo['done'] = not todo['done']
                 break
 
     @event_handler
-    def delete_todo(self, id=None, **kwargs):
-        todo_id = int(id or kwargs.get('todo_id', 0))
+    def delete_todo(self, id: int = 0, **kwargs):
+        todo_id = id
         self.todos = [t for t in self.todos if t['id'] != todo_id]
 
     @event_handler

@@ -2,7 +2,7 @@
 Live Demos - interactive examples showcasing Django Rust Live features
 """
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from djust._rust import fast_json_dumps
 from django.http import JsonResponse
@@ -16,10 +16,21 @@ class DemosIndexShadcnView(BaseViewWithNavbar):
     """shadcn/ui Design: Modern component system"""
     template_name = 'demos/index_shadcn.html'
 
-    def mount(self, request, **kwargs):
-        # Demo instances are lightweight and recreated on every access
-        # State is stored directly on this view (counter, dropdown_open, etc.)
-        pass
+    # The embedded demos keep their state on this view (the demo classes are
+    # lightweight and rebuilt on every access). persist="server" keeps each
+    # value across the HTTP fallback and a reconnect.
+    counter = state(0, persist="server")
+    dropdown_open = state(False, persist="server")
+    selected_item = state("Select an option...", persist="server")
+    dropdown_items = state(
+        default_factory=lambda: ["Python", "JavaScript", "Rust", "Go", "TypeScript"]
+    )
+    debounce_query = state("", persist="server")
+    debounce_count = state(0, persist="server")
+    cache_query = state("", persist="server")
+    cache_results = state(default_factory=list, persist="server")
+    cache_server_calls = state(0, persist="server")
+    cache_total_searches = state(0, persist="server")
 
     def _get_demos(self):
         """Get or create demo instances (always fresh, never serialized)"""
@@ -101,6 +112,20 @@ class DemosIndexView(DemosIndexShadcnView):
     """
     template_name = 'demos/index.html'
 
+    # An exposure grant is not inherited: the embedded demos' fields again.
+    counter = state(0, persist="server")
+    dropdown_open = state(False, persist="server")
+    selected_item = state("Select an option...", persist="server")
+    dropdown_items = state(
+        default_factory=lambda: ["Python", "JavaScript", "Rust", "Go", "TypeScript"]
+    )
+    debounce_query = state("", persist="server")
+    debounce_count = state(0, persist="server")
+    cache_query = state("", persist="server")
+    cache_results = state(default_factory=list, persist="server")
+    cache_server_calls = state(0, persist="server")
+    cache_total_searches = state(0, persist="server")
+
 
 class DemosIndexDesign1View(BaseViewWithNavbar):
     """Design Proposal 1: Modern Card-Based Layout"""
@@ -111,15 +136,57 @@ class DemosIndexDesign2View(DemosIndexShadcnView):
     """Design Proposal 2: Showcase/Portfolio Style"""
     template_name = 'demos/index_design2.html'
 
+    # An exposure grant is not inherited: the embedded demos' fields again.
+    counter = state(0, persist="server")
+    dropdown_open = state(False, persist="server")
+    selected_item = state("Select an option...", persist="server")
+    dropdown_items = state(
+        default_factory=lambda: ["Python", "JavaScript", "Rust", "Go", "TypeScript"]
+    )
+    debounce_query = state("", persist="server")
+    debounce_count = state(0, persist="server")
+    cache_query = state("", persist="server")
+    cache_results = state(default_factory=list, persist="server")
+    cache_server_calls = state(0, persist="server")
+    cache_total_searches = state(0, persist="server")
+
 
 class DemosIndexDesign3View(DemosIndexShadcnView):
     """Design Proposal 3: Interactive Playground"""
     template_name = 'demos/index_design3.html'
 
+    # An exposure grant is not inherited: the embedded demos' fields again.
+    counter = state(0, persist="server")
+    dropdown_open = state(False, persist="server")
+    selected_item = state("Select an option...", persist="server")
+    dropdown_items = state(
+        default_factory=lambda: ["Python", "JavaScript", "Rust", "Go", "TypeScript"]
+    )
+    debounce_query = state("", persist="server")
+    debounce_count = state(0, persist="server")
+    cache_query = state("", persist="server")
+    cache_results = state(default_factory=list, persist="server")
+    cache_server_calls = state(0, persist="server")
+    cache_total_searches = state(0, persist="server")
+
 
 class DemosIndexHybridView(DemosIndexShadcnView):
     """Hybrid Design: Showcase + Playground"""
     template_name = 'demos/index_design_hybrid.html'
+
+    # An exposure grant is not inherited: the embedded demos' fields again.
+    counter = state(0, persist="server")
+    dropdown_open = state(False, persist="server")
+    selected_item = state("Select an option...", persist="server")
+    dropdown_items = state(
+        default_factory=lambda: ["Python", "JavaScript", "Rust", "Go", "TypeScript"]
+    )
+    debounce_query = state("", persist="server")
+    debounce_count = state(0, persist="server")
+    cache_query = state("", persist="server")
+    cache_results = state(default_factory=list, persist="server")
+    cache_server_calls = state(0, persist="server")
+    cache_total_searches = state(0, persist="server")
 
 
 class TodoView(BaseViewWithNavbar):
@@ -128,12 +195,11 @@ class TodoView(BaseViewWithNavbar):
     """
     template_name = "demos/todo.html"
 
-    def mount(self, request, **kwargs):
-        self.todos = []
-        self.next_id = 1
+    todos = state(default_factory=list, persist="server")
+    next_id = state(1, persist="server", render=False)
 
     @event_handler
-    def add_todo(self, text="", **kwargs):
+    def add_todo(self, text: str = "", **kwargs):
         if text.strip():
             self.todos.append({
                 'id': self.next_id,
@@ -143,21 +209,21 @@ class TodoView(BaseViewWithNavbar):
             self.next_id += 1
 
     @event_handler
-    def toggle_todo(self, id=None, **kwargs):
-        # Accept both 'id' and 'todo_id' for backwards compatibility
-        item_id = id or kwargs.get('todo_id')
-        if item_id:
-            for todo in self.todos:
-                if todo['id'] == int(item_id):
-                    todo['done'] = not todo['done']
-                    break
+    def toggle_todo(self, id: int = 0, **kwargs):
+        for todo in self.todos:
+            if todo['id'] == id:
+                todo['done'] = not todo['done']
+                break
 
     @event_handler
-    def delete_todo(self, id=None, **kwargs):
-        # Accept both 'id' and 'todo_id' for backwards compatibility
-        item_id = id or kwargs.get('todo_id')
-        if item_id:
-            self.todos = [todo for todo in self.todos if todo['id'] != int(item_id)]
+    def delete_todo(self, id: int = 0, **kwargs):
+        self.todos = [todo for todo in self.todos if todo['id'] != id]
+
+    def get_context_data(self, **kwargs):
+        done = sum(1 for todo in self.todos if todo['done'])
+        return super().get_context_data(
+            active_count=len(self.todos) - done, done_count=done, **kwargs
+        )
 
 
 class ChatView(BaseViewWithNavbar):
@@ -166,12 +232,11 @@ class ChatView(BaseViewWithNavbar):
     """
     template_name = "demos/chat.html"
 
-    def mount(self, request, **kwargs):
-        self.messages = []
-        self.next_id = 1
+    messages = state(default_factory=list, persist="server")
+    next_id = state(1, persist="server", render=False)
 
     @event_handler
-    def send_message(self, message="", **kwargs):
+    def send_message(self, message: str = "", **kwargs):
         # The form's input is named "message" (it used to arrive as nothing).
         if message.strip():
             self.messages.append({
@@ -183,54 +248,22 @@ class ChatView(BaseViewWithNavbar):
             self.next_id += 1
 
 
-class ReactDemoView(BaseViewWithNavbar):
-    """
-    React-like UI demo showcasing hybrid server/client patterns
-    """
-    template_name = "demos/react.html"
-
-    def mount(self, request, **kwargs):
-        self.server_count = 0
-        self.client_count = 0
-        self.todo_items = []
-        self.next_id = 1
-
-    @event_handler
-    def increment_server(self):
-        """Server-side counter increment"""
-        self.server_count += 1
-
-    @event_handler
-    def add_todo_item(self, text="", **kwargs):
-        """Add todo item from server-side"""
-        if text.strip():
-            self.todo_items.append({
-                'id': self.next_id,
-                'text': text,
-                'done': False,
-            })
-            self.next_id += 1
-
-    def get_context_data(self, **kwargs):
-        """Add React demo context"""
-        context = super().get_context_data(**kwargs)
-        context['server_count'] = self.server_count
-        context['client_count'] = self.client_count
-        context['todos'] = self.todo_items
-        return context
-
-
 class PerformanceTestView(BaseViewWithNavbar):
     """
     Performance test demo - stress testing VDOM diffing with large lists
     """
     template_name = "demos/performance.html"
 
+    # The item list is server-side working data, kept in private attributes
+    # that mount() creates (automatic server state saves them between events),
+    # never a persist="server" field: a thousand items exceed what a persisted
+    # field may hold. get_context_data() renders the filtered items and counts.
+    filter_text = state("", persist="server")
+    sort_by = state("name", persist="server")
+
     def mount(self, request, **kwargs):
-        self.items = []
-        self.next_id = 1
-        self.filter_text = ""
-        self.sort_by = "name"
+        self._items = []
+        self._next_id = 1
 
     @event_handler
     def add_items_10(self):
@@ -251,99 +284,99 @@ class PerformanceTestView(BaseViewWithNavbar):
         """Helper to add N items"""
         import datetime
         for i in range(count):
-            self.items.append({
-                'id': self.next_id,
-                'name': f'Item {self.next_id}',
+            self._items.append({
+                'id': self._next_id,
+                'name': f'Item {self._next_id}',
                 'timestamp': datetime.datetime.now().strftime('%H:%M:%S'),
                 'selected': False,
                 'priority': False,
             })
-            self.next_id += 1
+            self._next_id += 1
 
     @event_handler
     def clear_all(self):
         """Clear all items"""
-        self.items = []
+        self._items = []
 
     @event_handler
-    def filter_items(self, value="", **kwargs):
+    def filter_items(self, value: str = "", **kwargs):
         """Update filter text"""
         self.filter_text = value
 
     @event_handler
-    def sort_items(self, value="", **kwargs):
+    def sort_items(self, value: str = "", **kwargs):
         """Update sort order"""
         self.sort_by = value
         if self.sort_by == "name":
-            self.items.sort(key=lambda x: x['name'])
+            self._items.sort(key=lambda x: x['name'])
         elif self.sort_by == "timestamp":
-            self.items.sort(key=lambda x: x['timestamp'])
+            self._items.sort(key=lambda x: x['timestamp'])
         elif self.sort_by == "priority":
-            self.items.sort(key=lambda x: x['priority'], reverse=True)
+            self._items.sort(key=lambda x: x['priority'], reverse=True)
 
     @event_handler
     def select_all(self):
         """Select all filtered items"""
         filtered = self._get_filtered_items()
-        for item in self.items:
+        for item in self._items:
             if item in filtered:
                 item['selected'] = True
 
     @event_handler
     def deselect_all(self):
         """Deselect all items"""
-        for item in self.items:
+        for item in self._items:
             item['selected'] = False
 
     @event_handler
     def delete_selected(self):
         """Delete all selected items"""
-        self.items = [item for item in self.items if not item['selected']]
+        self._items = [item for item in self._items if not item['selected']]
 
     @event_handler
     def toggle_priority_selected(self):
         """Toggle priority for all selected items"""
-        for item in self.items:
+        for item in self._items:
             if item['selected']:
                 item['priority'] = not item['priority']
 
     @event_handler
-    def toggle_item(self, id=None, **kwargs):
+    def toggle_item(self, id: int = 0, **kwargs):
         """Toggle item selection"""
         if id:
-            for item in self.items:
-                if item['id'] == int(id):
+            for item in self._items:
+                if item['id'] == id:
                     item['selected'] = not item['selected']
                     break
 
     @event_handler
-    def toggle_priority(self, id=None, **kwargs):
+    def toggle_priority(self, id: int = 0, **kwargs):
         """Toggle item priority"""
         if id:
-            for item in self.items:
-                if item['id'] == int(id):
+            for item in self._items:
+                if item['id'] == id:
                     item['priority'] = not item['priority']
                     break
 
     @event_handler
-    def delete_item(self, id=None, **kwargs):
+    def delete_item(self, id: int = 0, **kwargs):
         """Delete a single item"""
         if id:
-            self.items = [item for item in self.items if item['id'] != int(id)]
+            self._items = [item for item in self._items if item['id'] != id]
 
     def _get_filtered_items(self):
         """Get items matching current filter"""
         if self.filter_text:
-            return [item for item in self.items if self.filter_text.lower() in item['name'].lower()]
-        return self.items
+            return [item for item in self._items if self.filter_text.lower() in item['name'].lower()]
+        return self._items
 
     def get_context_data(self, **kwargs):
         """Add computed context data"""
         context = super().get_context_data(**kwargs)
         filtered = self._get_filtered_items()
         context['items'] = filtered
-        context['item_count'] = len(self.items)
-        context['selected_count'] = sum(1 for item in self.items if item['selected'])
+        context['item_count'] = len(self._items)
+        context['selected_count'] = sum(1 for item in self._items if item['selected'])
         context['filter_text'] = self.filter_text
         context['sort_by'] = self.sort_by
         return context
@@ -354,6 +387,9 @@ class ProductDataTableView(BaseViewWithNavbar):
     Product data table demo - showcasing data visualization and table rendering
     """
     template_name = "demos/datatable.html"
+
+    # Sample rows generated once per view; the template reads products_json.
+    products = state(default_factory=list, render=False)
 
     def mount(self, request, **kwargs):
         self.products = self._generate_sample_products(20)

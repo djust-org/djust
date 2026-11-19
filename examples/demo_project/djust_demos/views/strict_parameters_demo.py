@@ -3,8 +3,8 @@
 Exercised by ``tests/playwright/test_strict_parameters.py`` over WebSocket,
 SSE and HTTP-only transports. Every handler records what it received in
 ``result`` and counts its calls, so a rejected event is visible as an
-unchanged count. ``legacy_click`` is the control: its legacy payload still
-carries ``data-*`` attributes.
+unchanged count. The ``pick`` button also carries a ``data-item-id``, which
+a strict handler never receives: the click picks the ``dj-value-*`` item.
 """
 
 from djust import LiveView
@@ -37,7 +37,3 @@ class StrictParametersView(LiveView):
     @event_handler(parameter_policy="strict")
     def save(self, title: str) -> None:
         self._record("save:%s" % title)
-
-    @event_handler(parameter_policy="legacy")
-    def legacy_click(self, **kwargs) -> None:
-        self._record("legacy:%s" % ",".join(sorted(kwargs)))

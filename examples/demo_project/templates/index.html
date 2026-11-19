@@ -688,11 +688,11 @@ export default function ProductList() {
                         {% if demo_todos %}
                             {% for todo in demo_todos %}
                             <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; background: var(--color-bg-elevated); border: 1px solid var(--color-border); border-radius: var(--radius-sm);">
-                                <input type="checkbox" {% if todo.done %}checked{% endif %} dj-change="toggle_todo" data-index="{{ forloop.counter0 }}" style="cursor: pointer;">
+                                <input type="checkbox" {% if todo.done %}checked{% endif %} dj-change="toggle_todo" dj-value-index="{{ forloop.counter0 }}" style="cursor: pointer;">
                                 <span style="flex: 1; color: var(--color-text); font-size: 0.875rem; {% if todo.done %}text-decoration: line-through; opacity: 0.6;{% endif %}">
                                     {{ todo.text }}
                                 </span>
-                                <button dj-click="delete_todo" data-index="{{ forloop.counter0 }}" style="background: transparent; border: 1px solid var(--color-border); color: var(--color-error); padding: 0.375rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.75rem; cursor: pointer; transition: all var(--transition-fast);" onmouseover="this.style.background='var(--color-error)'; this.style.color='white'; this.style.borderColor='var(--color-error)';" onmouseout="this.style.background='transparent'; this.style.color='var(--color-error)'; this.style.borderColor='var(--color-border)';">
+                                <button dj-click="delete_todo" dj-value-index="{{ forloop.counter0 }}" style="background: transparent; border: 1px solid var(--color-border); color: var(--color-error); padding: 0.375rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.75rem; cursor: pointer; transition: all var(--transition-fast);" onmouseover="this.style.background='var(--color-error)'; this.style.color='white'; this.style.borderColor='var(--color-error)';" onmouseout="this.style.background='transparent'; this.style.color='var(--color-error)'; this.style.borderColor='var(--color-border)';">
                                     Delete
                                 </button>
                             </div>

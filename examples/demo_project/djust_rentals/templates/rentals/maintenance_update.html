@@ -34,7 +34,7 @@
           {% for val, label in status_choices %}
           <button
             dj-click="update_status"
-            data-status="{{ val }}"
+            dj-value-status="{{ val }}"
             class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
             {% if maintenance_request.status == val %}
               {% if val == 'completed' %}
@@ -75,7 +75,7 @@
           {% for val, label in priority_choices %}
           <button
             dj-click="update_priority"
-            data-priority="{{ val }}"
+            dj-value-priority="{{ val }}"
             class="inline-flex items-center gap-2 px-4 py-2 rounded-md font-medium transition-colors border
             {% if maintenance_request.priority == val %}
               {% if val == 'urgent' %}
