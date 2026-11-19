@@ -276,17 +276,22 @@ class AdminFormMixin(FormMixin):
         """The ModelAdmin's form class for the object being edited (``form_class`` is unset here)."""
         return self._model_admin.get_form(self.request, self.object)
 
+    def _readonly_or_excluded_names(self) -> FrozenSet[str]:
+        """The ModelAdmin's readonly and excluded fields: not the client's to send (#4218)."""
+        admin = getattr(self, "_model_admin", None)
+        request, obj = getattr(self, "request", None), getattr(self, "object", None)
+        names: set = set()
+        for hook in ("get_readonly_fields", "get_exclude"):
+            of = getattr(admin, hook, None)
+            if of is not None:
+                names.update(of(request, obj) or ())
+        return frozenset(names)
+
     def _editable_field_names(self) -> FrozenSet[str]:
         """The form fields the page renders as inputs: not the ModelAdmin's readonly fields, nor
         its excluded ones (a custom ``ModelAdmin.form`` may still declare them)."""
-        fields = self._create_form().fields
-        admin = getattr(self, "_model_admin", None)
-        if admin is None:
-            return frozenset(fields)
-        request, obj = getattr(self, "request", None), getattr(self, "object", None)
-        readonly = set(admin.get_readonly_fields(request, obj) or ())
-        exclude = set(admin.get_exclude(request, obj) or ())
-        return frozenset(name for name in fields if name not in readonly and name not in exclude)
+        withheld = self._readonly_or_excluded_names()
+        return frozenset(name for name in self._create_form().fields if name not in withheld)
 
     def _declared_field_names(self) -> FrozenSet[str]:
         """The fields of the ModelAdmin form (``form_class`` is unset here), which are not the
@@ -322,9 +327,9 @@ class AdminFormMixin(FormMixin):
         if not name:
             return
         field_name = name
-        # Only a field the person can edit: not a readonly or excluded one (the page renders no
-        # input for it), and not a name the form does not have.
-        if field_name not in self._editable_field_names():
+        # Not a readonly or excluded field: the page renders no input for it, and what is
+        # stored here is saved (#4218).
+        if field_name in self._readonly_or_excluded_names():
             logger.debug("validate_field ignored a field that is not editable here")
             return
 
