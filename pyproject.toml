@@ -202,7 +202,6 @@ testpaths = ["tests", "python/tests", "python/djust/tests"]
 pythonpath = [".", "examples/demo_project"]
 DJANGO_SETTINGS_MODULE = "demo_project.settings"
 addopts = [
-    "--verbose",
     "--strict-markers",
     "--tb=short",
     "--ignore=tests/playwright",  # Manual tests, not for CI

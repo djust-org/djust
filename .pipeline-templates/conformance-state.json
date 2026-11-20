@@ -12,6 +12,8 @@
       "name": "Environment Check",
       "status": "pending",
       "verdict": null,
+      "run_as": "inline",
+      "model": "haiku",
       "checklist": [
         {
           "action": "git fetch origin",
@@ -44,6 +46,8 @@
       "name": "Change Detection",
       "status": "pending",
       "verdict": null,
+      "run_as": "inline",
+      "model": "haiku",
       "checklist": [
         {
           "action": "git diff --name-only against target",
@@ -60,6 +64,8 @@
       "name": "Conflict Check",
       "status": "pending",
       "verdict": null,
+      "run_as": "inline",
+      "model": "haiku",
       "checklist": [
         {
           "action": "git diff --check",
@@ -80,6 +86,7 @@
       "name": "Planning",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "checklist": [
         {
           "action": "NAME THE FAMILY: a `--label` of Django's `template_tests` (e.g. `template_tests.syntax_tests.test_autoescape`) or a test-id prefix (e.g. `template_tests.filter_tests.test_escape`). Write it verbatim into the plan; every later stage filters on it.",
@@ -202,6 +209,7 @@
       "name": "Test Execution",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -230,6 +238,7 @@
       "name": "Self-Review",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -318,6 +327,7 @@
       "name": "Security Check",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -343,6 +353,7 @@
       "name": "Documentation",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "checklist": [
         {
           "action": "read .pipeline-state/<branch>-plan.md for the family, the final cell table and the blocked cells",
@@ -408,6 +419,7 @@
       "name": "Commit & PR",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "checklist": [
         {
           "action": "read .pipeline-state/<branch>-changes.txt for list of files modified by implementation",
@@ -471,6 +483,7 @@
       "name": "Code Review",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "run_as": "subagent",
       "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. This is a CONFORMANCE PR: it turns one family of Django template-suite cells green. Review the FAMILY once, adversarially, in your OWN git worktree (`git worktree add`, then `make worktree-env` there; NEVER `git config` or `git checkout` the main checkout — #1804). BUDGET (#1211): cap the final review comment at 350 words. Step 0: read .pipeline-state/*-plan.md for the family label, the cell table and the reference file:line. Step 1: `git diff {pr_target_branch}...HEAD`; read changed files; use docs/PULL_REQUEST_CHECKLIST.md as the framework. Step 2: EMPIRICAL — run the family: `scripts/run-django-template-suite.py run --label <family> --parsed-output /tmp/family.txt --quiet`; every cell the plan expected to flip must be OK and every blocked cell must carry a reason. Step 3: EMPIRICAL — whole-suite ratchet: `make django-template-suite` then `scripts/run-django-template-suite.py compare --json .django-src/last-run.json` must say `OK: no drop`; diff per-cell states against origin/{pr_target_branch}'s run and confirm no cell outside the family moved down. Step 4: GATE-OFF (#1468, #2129): remove the fix (assert the mutation text was found and the source changed; count errors as well as failures; if the module did not build the measurement is INVALID) and confirm at least one djust pytest case and at least one family cell go red. Step 5: PARITY — for the rule lifted, construct 2-3 inputs the family does NOT cover (encoded variants for anything escaping-related, #1825; the value-axis bisection for value-dependent rules) and compare djust's output with Django's in-process. Step 6: correctness, security (only the shapes the plan documented), single-sink (#1646), quality, docs (baseline JSON + claim line + generated lists must agree: `scripts/generate-template-backend-lists.py --cross-check .django-src/last-run.txt`). Step 7: run the scoped pytest selection (`scripts/select-tests.py`) and report. Step 8: decide APPROVE/REQUEST_CHANGES/COMMENT. Step 9 MANDATORY: `gh pr review {pr_number} --comment --body '<review under 350 words>'` (--request-changes when REQUEST_CHANGES). Remove your worktree when done. Step 10: output the verdict.",
       "checklist": [
@@ -534,6 +547,8 @@
       "name": "Review Verdict",
       "status": "pending",
       "verdict": null,
+      "run_as": "inline",
+      "model": "haiku",
       "note": "Verdict is determined by the Code Review subagent above. If APPROVE, proceed to Merge. If REQUEST_CHANGES, fix issues, re-commit, re-push, re-run Code Review.",
       "checklist": [
         {
@@ -551,6 +566,7 @@
       "name": "Merge PR",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "run_as": "subagent",
       "subagent_prompt": "Merge PR #{pr_number} in {project_path}. Step 0: Run 'gh pr checks {pr_number}' — verify CI green. If pre-existing failure, document with gh pr comment before merging. Step 1: Run gh pr merge {pr_number} --squash --delete-branch. Do NOT run gh pr review --approve (GitHub blocks self-approval). Output PR_MERGED or MERGE_FAILED.",
       "checklist": [
@@ -575,6 +591,7 @@
       "name": "Retrospective",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "run_as": "subagent",
       "subagent_prompt": "Write retrospective for conformance family: {task_description}. Count the row as ONE finding and N PRs if it chained (#2142); record cells turned green, cells blocked, and whether the loop stopped on green or on blocked. Project: {project_path}. PR #{pr_number}. Run 'gh pr view {pr_number} --json commits,title,body' to get PR details (branch deleted after merge). Rate quality 1-5, what went well, lessons learned, improvements. STEP A (MANDATORY): use the Write tool to create pr/feedback/retro-{pr_number}.md with the full retro body — DO NOT use bash heredoc (`cat > file <<EOF`), which fails silently under zsh `set -o noclobber` and leaves stale content (#1245). The Write tool bypasses shell redirection. STEP B (MANDATORY): post via `gh pr comment {pr_number} --body-file pr/feedback/retro-{pr_number}.md` — DO NOT use `--body \"$(cat ...)\"`, which dutifully posts whatever the file currently contains (e.g., a leftover Stage 11 review) when STEP A silently failed. The `--body-file` form passes the file path directly; gh re-reads it at post time. STEP C (MANDATORY): verify with `gh pr view {pr_number} --json comments` that at least one comment matches the audit-script retro-marker regex — see `scripts/lib/retro_markers.py:RETRO_MARKER_REGEX` for the canonical pattern (single source of truth per #1249). The regex matches headings/sentinels like `Retrospective`, `Quality: <digit>`, `Lessons learned`, `RETRO_COMPLETE`, `What went well` (case-insensitive). MANDATORY: Append to .pipeline-log.md (create if needed, ensure in .gitignore). Your FINAL output line MUST be exactly 'RETRO_COMPLETE'.",
       "checklist": [
