@@ -12,6 +12,8 @@
       "name": "Inventory Changes",
       "status": "pending",
       "verdict": null,
+      "run_as": "inline",
+      "model": "haiku",
       "checklist": [
         {
           "action": "git status — list all modified, added, deleted, and untracked files",
@@ -52,6 +54,7 @@
       "name": "Test Execution",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -78,6 +81,7 @@
       "name": "Self-Review",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -141,6 +145,7 @@
       "name": "Security Check",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -166,6 +171,7 @@
       "name": "Documentation",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "checklist": [
         {
           "action": "add/update docstrings for new/modified public APIs",
@@ -196,6 +202,7 @@
       "name": "Commit & PR",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "checklist": [
         {
           "action": "read .pipeline-state/<branch>-changes.txt for list of files",
@@ -289,6 +296,8 @@
       "name": "Review Verdict",
       "status": "pending",
       "verdict": null,
+      "run_as": "inline",
+      "model": "haiku",
       "note": "If APPROVE, proceed to Merge. If REQUEST_CHANGES, fix issues, re-commit, re-push, re-run stage 7.",
       "checklist": [
         {
@@ -306,6 +315,7 @@
       "name": "Merge PR",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "run_as": "subagent",
       "subagent_prompt": "Merge PR #{pr_number} in {project_path}. Step 0: Run 'gh pr checks {pr_number}' — verify CI green. If pre-existing failure, document with gh pr comment before merging. Step 1: Run gh pr merge {pr_number} --squash --delete-branch. Do NOT run gh pr review --approve (GitHub blocks self-approval). Output PR_MERGED or MERGE_FAILED.",
       "checklist": [
@@ -330,6 +340,7 @@
       "name": "Retrospective",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "run_as": "subagent",
       "subagent_prompt": "Write retrospective for: {task_description}. Project: {project_path}. PR #{pr_number}. Run 'gh pr view {pr_number} --json commits,title,body' to get PR details. Rate quality 1-5, what went well, lessons learned, improvements. MANDATORY: Post retro as gh pr comment {pr_number} --body '<formatted retro>'. MANDATORY: Append to .pipeline-log.md (create if needed, ensure in .gitignore). Your FINAL output line MUST be exactly 'RETRO_COMPLETE'.",
       "checklist": [

@@ -176,3 +176,12 @@ djust developers, commit them — `.pipeline-templates/` is tracked.
 For truly-generic improvements (not specific to djust's
 framework-plus-downstream-apps topology), contribute upstream to
 `johnrtipton/pipeline-skills` instead.
+
+## Stage runners and models (token budget)
+
+Every spawned stage agent loads `CLAUDE.md`, the session hooks' context and its
+tool list before it starts. Mechanical stages (Environment Check, Change Detection,
+Conflict Check, Review Verdict, Inventory Changes) carry `"run_as": "inline"`: the
+orchestrator runs them itself, no spawn. Read-mostly stages carry `"model": "sonnet"`;
+Planning, Implementation and Code Review carry no `model` and use the session default.
+`pipeline-run` and `pipeline.py` honour both fields; `--agent-model` overrides them.
