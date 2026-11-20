@@ -35,6 +35,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.git_env import isolated_git_env
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/test.yml"
 DURATIONS = ROOT / ".test_durations"
@@ -451,12 +453,13 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
         # from the MAIN checkout while importing python/djust/tests/conftest.py
         # by path from THIS tree — ImportPathMismatchError, shard collection
         # fails, and the pre-push suite blocks every worktree push.
-        env={
-            **os.environ,
-            "PYTHONPATH": os.pathsep.join(
+        # isolated_git_env: the probe runs git; under a hook GIT_DIR names the
+        # real repository (#3179).
+        env=isolated_git_env(
+            PYTHONPATH=os.pathsep.join(
                 filter(None, ["python", ".", os.environ.get("PYTHONPATH", "")])
             ),
-        },
+        ),
         timeout=180,
     )
     assert proc.returncode == 0, (
