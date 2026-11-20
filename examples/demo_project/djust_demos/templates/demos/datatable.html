@@ -751,7 +751,12 @@ class ProductDataTableView(LiveView):
                 });
 
                 if (response.ok) {
-                    const data = await response.json();
+                    const answer = await response.json();
+                    // The handlers send rows + stats via push_event("products_updated").
+                    const pushed = (answer._push_events || []).find(
+                        (e) => e.event === 'products_updated'
+                    );
+                    const data = (pushed && pushed.payload) || {};
 
                     // Update stats
                     if (data.stats) {
