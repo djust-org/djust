@@ -182,6 +182,8 @@ framework-plus-downstream-apps topology), contribute upstream to
 Every spawned stage agent loads `CLAUDE.md`, the session hooks' context and its
 tool list before it starts. Mechanical stages (Environment Check, Change Detection,
 Conflict Check, Review Verdict, Inventory Changes) carry `"run_as": "inline"`: the
-orchestrator runs them itself, no spawn. Read-mostly stages carry `"model": "sonnet"`;
-Planning, Implementation and Code Review carry no `model` and use the session default.
+orchestrator runs them itself, no spawn. Planning and the review stages (Self-Review,
+Security Check, Code Review) carry `"model": "opus"`, escalated to `fable` for a
+security-class or Python/Rust-boundary change; Implementation uses the session default;
+the rest carry `"model": "sonnet"`.
 `pipeline-run` and `pipeline.py` honour both fields; `--agent-model` overrides them.

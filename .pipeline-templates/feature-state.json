@@ -86,6 +86,7 @@
       "name": "Planning",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "checklist": [
         {
           "action": "VERIFY ARTIFACT BEFORE PLANNING (#1210, v0.9.5 retro Action Tracker #191): for feature work, write a failing test or doc-snippet exercising the desired behavior so the plan reflects what users will observe; for security work, read the actual code at any cited line and confirm the alert's premise. Plan can ONLY lock in design AFTER the artifact exists. The reproducer-first discipline is generalizable from PR #1206 (bugfix) to feature work too — the artifact pins the contract.",
@@ -218,7 +219,7 @@
       "name": "Self-Review",
       "status": "pending",
       "verdict": null,
-      "model": "sonnet",
+      "model": "opus",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -297,7 +298,7 @@
       "name": "Security Check",
       "status": "pending",
       "verdict": null,
-      "model": "sonnet",
+      "model": "opus",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -443,6 +444,7 @@
       "name": "Code Review",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "run_as": "subagent",
       "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. BUDGET (#1211, v0.9.5 retro Action Tracker #192): cap your final review comment at 350 words. Feature PRs allow exploration of edge cases tied to the planned feature only — do NOT spelunk for additional edge cases beyond what the plan scope covers. For security-related changes, enumerate at most the attack shapes the plan documented. PR #1201's reviewer stalled at the 10-min watchdog mid-tangent on backslash-injection; tight scoped reviews find real gaps without watchdog risk. Step 0: Read .pipeline-state/*-plan.md for the original plan. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists — use as review framework. Step 2: Cross-ref plan vs implementation — verify every planned deliverable was implemented. Step 2b: Cross-ref the plan's test list against actual test files — every test the plan specified must exist. Step 3: Review for correctness, security (XSS, injection, secrets exposure — only the shapes the plan documented), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 3b (claims, #3739): for every measured number, 'every/never/only' statement and 'the cause' claim in the PR body, changelog fragments and docstrings, re-run the command or open the file:line that would show it; a claim you cannot reproduce is a finding (pattern unverified-claim). Step 3c (baselines, #3753): if a baseline, snapshot or ratchet file changed (a CSV, a JSON scoreboard, a count pinned in a test), diff it per row and classify every row that moved as an artifact of the fix or a real regression, with the reason; a regenerated baseline is not evidence by itself. Step 4: Do NOT run the whole suite locally (tests/local_load_guard.py refuses it outside CI; CI runs the full matrix on the PR head): read the head's CI result with `gh pr checks {pr_number}`, and run only the tests the diff adds or changes (nice -n 10, -n 2 at most), then report pass/fail. Step 5: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 6 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review under 350 words>'. If REQUEST_CHANGES use --request-changes. Save to pr/feedback/ if dir exists. Step 7: Output verdict.",
       "checklist": [

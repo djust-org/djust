@@ -81,7 +81,7 @@
       "name": "Self-Review",
       "status": "pending",
       "verdict": null,
-      "model": "sonnet",
+      "model": "opus",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -145,7 +145,7 @@
       "name": "Security Check",
       "status": "pending",
       "verdict": null,
-      "model": "sonnet",
+      "model": "opus",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -253,6 +253,7 @@
       "name": "Code Review",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "run_as": "subagent",
       "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists. Step 2: Review for correctness, security (XSS, injection, secrets exposure), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 3: Do NOT run the whole suite locally (tests/local_load_guard.py refuses it outside CI; CI runs the full matrix on the PR head): read the head's CI result with `gh pr checks {pr_number}`, and run only the tests the diff adds or changes (nice -n 10, -n 2 at most), then report pass/fail. Step 4: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 5 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review with checklist>'. If REQUEST_CHANGES use --request-changes. Step 6: Output verdict.",
       "checklist": [
