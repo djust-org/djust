@@ -240,6 +240,18 @@ jobs:
           fi
           cargo test -p djust_templates --no-default-features --release
 
+      - name: VDOM without the python feature
+        run: |
+          # A Rust host with no Python interpreter depends on djust_vdom with
+          # default-features = false. Neither PyO3 nor djust_core (which
+          # always carries PyO3) may be in that graph. PYO3_PYTHON is
+          # deliberately not set: this build must not need an interpreter.
+          if cargo tree -p djust_vdom --no-default-features -e normal | grep -E 'pyo3|djust_core'; then
+            echo "::error::PyO3 or djust_core is in djust_vdom's no-default-features graph"
+            exit 1
+          fi
+          cargo test -p djust_vdom --no-default-features --release
+
       - name: Run Rust linter
         run: |
           export PYO3_PYTHON=$(pwd)/.venv/bin/python

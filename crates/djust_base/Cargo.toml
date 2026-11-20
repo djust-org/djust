@@ -1,0 +1,18 @@
+[package]
+name = "djust_base"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+# Off by default: this crate is the Python-free base. `djust_core` turns it on.
+default = []
+python = ["dep:pyo3"]
+
+[dependencies]
+pyo3 = { workspace = true, optional = true }
+thiserror.workspace = true
