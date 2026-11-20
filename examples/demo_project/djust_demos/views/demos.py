@@ -2,6 +2,8 @@
 Live Demos - interactive examples showcasing Django Rust Live features
 """
 
+import random
+
 from djust import LiveView, state
 from djust.decorators import event_handler
 from djust._rust import fast_json_dumps
@@ -389,18 +391,46 @@ class ProductDataTableView(BaseViewWithNavbar):
     template_name = "demos/datatable.html"
 
     # Sample rows generated once per view; the template reads products_json.
-    products = state(default_factory=list, render=False)
+    # persist="server" keeps the rows across the HTTP POST the page's buttons
+    # send, so successive clicks accumulate instead of re-mounting 20 rows.
+    products = state(default_factory=list, render=False, persist="server")
 
     def mount(self, request, **kwargs):
         self.products = self._generate_sample_products(20)
 
-    def _generate_sample_products(self, count):
+    @event_handler
+    def add_sample_products(self, **kwargs):
+        """Append 10 rows, ids continuing after the current highest id."""
+        start_id = max((p['id'] for p in self.products), default=0) + 1
+        self.products = self.products + self._generate_sample_products(10, start_id=start_id)
+        self._push_table()
+
+    @event_handler
+    def clear_products(self, **kwargs):
+        """Remove every row."""
+        self.products = []
+        self._push_table()
+
+    @event_handler
+    def toggle_inactive(self, **kwargs):
+        """Flip the active flag on up to 5 random rows."""
+        flip = set(random.sample(range(len(self.products)), min(5, len(self.products))))
+        self.products = [
+            {**p, 'active': not p.get('active', False)} if i in flip else p
+            for i, p in enumerate(self.products)
+        ]
+        self._push_table()
+
+    def _push_table(self):
+        """Send the rows and stats to the page's React table (handleAction)."""
+        self.push_event("products_updated", {"products": self.products, "stats": self._get_stats()})
+
+    def _generate_sample_products(self, count, start_id=1):
         """Generate sample product data"""
-        import random
         categories = ['Electronics', 'Clothing', 'Food', 'Books', 'Tools', 'Toys']
         products = []
 
-        for i in range(1, count + 1):
+        for i in range(start_id, start_id + count):
             price = round(random.uniform(9.99, 999.99), 2)
             stock = random.randint(0, 200)
             products.append({

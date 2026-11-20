@@ -387,6 +387,71 @@ def plan_asgi(project: Project) -> Tuple[Optional[FileChange], Step, Optional[st
     return None, Step(name, ATTENTION, "customized; merge the djust ASGI app by hand"), new
 
 
+def _root_urlconf(source: str) -> Optional[str]:
+    """The literal ``ROOT_URLCONF = "x.y"`` in a settings source, or None."""
+    try:
+        tree = ast.parse(source.lstrip("\ufeff"))
+    except (SyntaxError, ValueError):
+        return None
+    found = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if any(isinstance(t, ast.Name) and t.id == "ROOT_URLCONF" for t in targets):
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                found = value.value
+    return found
+
+
+def plan_urls(project: Project) -> Tuple[Step, Optional[str]]:
+    """Whether the project's URLconf routes djust's SSE transport (#4242).
+
+    ``djust init`` never edits the URLconf (it may be anything ROOT_URLCONF
+    names); when it does not mention ``sse_urlpatterns`` it prints the lines to
+    add instead. The check is textual: a URLconf that routes SSE through
+    another module it includes gets the note as advice, never an error.
+    """
+    try:
+        settings_source = _read(project.settings_path)
+    except (OSError, UnicodeDecodeError):
+        settings_source = ""
+    module = _root_urlconf(settings_source)
+    if module:
+        base = project.root.joinpath(*module.split("."))
+        path = base.with_suffix(".py")
+        if not path.is_file() and (base / "__init__.py").is_file():
+            path = base / "__init__.py"  # ROOT_URLCONF names a package (urls/__init__.py)
+    else:
+        path = project.settings_path.with_name("urls.py")
+        module = "%s.urls" % project.package if project.package else "urls"
+    try:
+        name = str(path.relative_to(project.root))
+    except ValueError:
+        name = module
+    text = None
+    if path.is_file():
+        try:
+            text = _read(path)
+        except (OSError, UnicodeDecodeError):
+            text = None
+    if text is not None and ("sse_urlpatterns" in text or "djust.sse" in text):
+        return Step(name, UNCHANGED, "routes djust's SSE transport"), None
+    where = name if text is not None else "%s (the URLconf, %s)" % (name, module)
+    note = (
+        "%s does not route djust's SSE transport. The client falls back to it when a "
+        "WebSocket cannot connect, and gets a 404 without it. djust init does not edit "
+        "URLconfs; add:\n\n"
+        "from django.urls import include, path\n"
+        "%s\n"
+        "urlpatterns += [%s]" % (where, T.SSE_URL_IMPORT.rstrip("\n"), T.SSE_URL_ROUTE)
+    )
+    return Step(name, SKIPPED, "add djust's SSE route yourself (see below)"), note
+
+
 _REQUIREMENT_NAME_RE = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _REQUIREMENT_EXTRAS_RE = re.compile(r"^\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*\[([^\]]*)\]")
 _INCLUDE_RE = re.compile(r"^\s*(?:-r|--requirement)[\s=]+(\S+)")
@@ -860,6 +925,10 @@ def init_project(
     result.steps.append(step)
     if snippet:
         result.notes.append("%s is customized. Merge in:\n\n%s" % (step.name, snippet))
+    step, urls_note = plan_urls(project)
+    result.steps.append(step)
+    if urls_note:
+        result.notes.append(urls_note)
     requirements_change = None
     if install and action.kind == "requirements":
         needed = hash_locked_requirements(root)

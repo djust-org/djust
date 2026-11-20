@@ -159,6 +159,7 @@ in [Rendering your other templates with djust](#rendering-your-other-templates-w
 | --- | --- |
 | `settings.py` | Appends a marked block that adds `channels` and `djust` to `INSTALLED_APPS` (unless already listed, by name or AppConfig path), sets `ASGI_APPLICATION`, and sets an in-memory `CHANNEL_LAYERS` unless you already configure one. `TEMPLATES` is not edited: `init` reports the entry that puts `DjustTemplateBackend` first and prints it, and `djust init --templates` appends it for you (see [Rendering your other templates with djust](#rendering-your-other-templates-with-djust)). Running `init` again leaves the file unchanged. |
 | `asgi.py` | Replaces Django's default file with one that routes LiveView WebSockets and serves static files under Uvicorn. A customized `asgi.py`, or a default one pointing at a different settings module, is left alone; `init` prints the code to merge instead. |
+| `urls.py` | Not edited. If the URLconf (`ROOT_URLCONF`) does not route `djust.sse.sse_urlpatterns`, `init` prints the lines to add, so a client that falls back to SSE does not get a 404. |
 | Packages | Adds `djust`, `channels`, and `uvicorn[standard]`: with `uv add` in a uv project, or by adding missing lines to `requirements.txt` and installing into the project's `.venv`. For Poetry, or a project with neither, it prints the command to run. |
 | Check | Runs `manage.py check` once the packages are installed. |
 
