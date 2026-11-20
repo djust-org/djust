@@ -427,7 +427,6 @@ class ProductDataTableView(BaseViewWithNavbar):
 
     def _generate_sample_products(self, count, start_id=1):
         """Generate sample product data"""
-        import random
         categories = ['Electronics', 'Clothing', 'Food', 'Books', 'Tools', 'Toys']
         products = []
 

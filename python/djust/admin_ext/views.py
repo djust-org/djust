@@ -817,7 +817,7 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
         Escaping: the label and the value go through ``format_html`` (``conditional_escape``),
         so a plain string returned by the method is escaped; a value the ModelAdmin author
         marked safe (``format_html`` / ``mark_safe``) renders as HTML, exactly as Django's
-        ``AdminReadonlyField.contents``. The callable runs only with the object this view
+        read-only field display in ``django.contrib.admin.helpers``. The callable runs only with the object this view
         already authorized, never on the add page (shown as ``-``). Unlike a model field,
         ``model_field_value_withheld`` does not apply: the method is developer code that shows
         what it chooses (Django parity). A name that resolves to nothing stays off the page.
@@ -840,7 +840,7 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             empty = get_empty()
         display: Any = empty
         if obj is not None:
-            # Django's AdminReadonlyField.contents shows the empty value when the lookup
+            # Django's admin read-only field display shows the empty value when the lookup
             # raises these, instead of failing the page (e.g. a method touching a missing
             # related row).
             try:
