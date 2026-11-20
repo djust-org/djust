@@ -818,6 +818,9 @@ _AUDITED = sorted(
 )
 
 
+# A whole-tree pin over the audited keys; one case is recorded just over the slow-tier
+# second (#4051), so it stays in the PR tier.
+@pytest.mark.pr_tier
 @pytest.mark.parametrize("key", _AUDITED)
 def test_every_inside_disposition_matches_what_ran(recording, key):
     disposition = HOOKS[key]
