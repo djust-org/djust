@@ -58,11 +58,6 @@ ALLOWED: dict[str, str] = {
         "recorded per test), so it needs the whole payload sweep, which a PR only samples; "
         "the site audit beside it is pr_tier"
     ),
-    "python/tests/test_marked_safe_attribute_sweep_4009.py::test_the_marked_safe_breakouts_are_exactly_the_known_ones": (
-        "explicitly @pytest.mark.slow by its author: it renders every tag with a marked-safe "
-        "value in each argument (about 10 s recorded); the per-inclusion-tag cases beside it run "
-        "on every PR, and the push to main and the nightly run this one"
-    ),
 }
 
 

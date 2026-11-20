@@ -875,6 +875,8 @@ class TestBridgedLibraryFilters:
             result = rendered_filters["djust_only"][name]
             assert result == "OK:", (name, result)
 
+    # A closed-set pin recorded over the slow-tier second; it stays in the PR tier (#4051).
+    @pytest.mark.pr_tier
     def test_bridged_line_names_exactly_the_filters_that_behave_that_way(
         self, gen, report, rendered_filters
     ):
