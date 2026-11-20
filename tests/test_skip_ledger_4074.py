@@ -154,8 +154,13 @@ def test_the_django6_job_runs_every_listed_skip_on_61_and_gates_the_merge():
     install = _step(job, "Install Python dependencies, Django 6.1")
     assert '"Django~=6.1.0"' in install["run"] and 'startswith("6.1.")' in install["run"]
     run = _step(job, "Run on Django 6.1")
-    groups = jobs["python-tests"]["strategy"]["matrix"]["group"]
-    assert f'"$lists" -ne {len(groups)}' in run["run"], "every shard's list must be present"
+    # Every shard's list must be present: as many lists as the shard list the matrix expands.
+    assert jobs["python-tests"]["strategy"]["matrix"]["group"] == (
+        "${{ fromJSON(needs.changes.outputs.python_shards) }}"
+    )
+    assert run["env"]["SHARDS"] == "${{ needs.changes.outputs.python_shards }}"
+    assert '"$lists" -ne "$expected"' in run["run"], "every shard's list must be present"
+    assert "len(json.loads(sys.argv[1]))" in run["run"]
     assert "DJUST_ONLY_IDS_FILE" in run["env"] and '> "$DJUST_ONLY_IDS_FILE"' in run["run"]
     assert "tests/ python/tests/ python/djust/tests/" in run["run"]
     summary = jobs["test-summary"]

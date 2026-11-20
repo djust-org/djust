@@ -133,7 +133,8 @@ class TestTheDefaultMatchesCI:
         import yaml
 
         workflow = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())
-        groups = workflow["jobs"]["python-tests"]["strategy"]["matrix"]["group"]
+        select = next(s for s in workflow["jobs"]["changes"]["steps"] if s.get("id") == "select")
+        groups = json.loads(select["env"]["FULL_SHARDS"])
         parser_default = mtd.build_parser().get_default("expect")
         assert parser_default == len(groups), (parser_default, groups)
 
