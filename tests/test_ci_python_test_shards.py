@@ -86,6 +86,20 @@ def test_matrix_groups_are_exactly_one_through_n() -> None:
     )
 
 
+def test_django6_job_expects_one_skip_list_per_shard() -> None:
+    """python-tests-django6-only refuses to run unless every shard uploaded its skip list.
+
+    A count below the shard number would let it run on a partial list (green, but missing
+    the tests a dead shard skipped); a count above it fails every run.
+    """
+    runs = "\n".join(
+        step.get("run") or "" for step in _jobs()["python-tests-django6-only"]["steps"]
+    )
+    m = re.search(r'"\$lists" -ne (\d+)', runs)
+    assert m, "the skip-list count check is gone from python-tests-django6-only"
+    assert int(m.group(1)) == len(_matrix_groups()), (m.group(1), _matrix_groups())
+
+
 def test_splits_flag_equals_the_number_of_matrix_groups() -> None:
     cmd = _pytest_command()
     m = re.search(r"--splits\s+(\d+)", cmd)
