@@ -723,7 +723,7 @@ def test_pr_ci_hands_the_change_status_to_the_path_rules():
     )
     assert "--name-status --no-renames" in lister["run"]
     assert "$RUNNER_TEMP/changed-status.txt" in lister["run"]
-    shards = [s for s in steps if "--splits 4" in str(s.get("run", ""))]
+    shards = [s for s in steps if "--splits " in str(s.get("run", ""))]
     assert shards, "no pytest-split shard step found"
     for step in shards:
         assert step["env"][early_tier.CHANGED_STATUS_FILE_ENV].endswith("/changed-status.txt")

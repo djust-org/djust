@@ -1,6 +1,6 @@
 """The per-shard durations merge, and what it refuses (#2584).
 
-``scripts/merge-test-durations.py`` unions the four ``.test_durations``
+``scripts/merge-test-durations.py`` unions the per-shard ``.test_durations``
 artifacts CI's ``python-tests`` shards upload into the file that decides how
 the next run deals those same shards. Every refusal below is a way of writing
 a file that LOOKS fresh and silently count-balances part of the suite — the
@@ -51,7 +51,7 @@ def _shards(tmp_path: Path) -> list[Path]:
 class TestUnion:
     def test_four_disjoint_shards_union_into_one_file(self, tmp_path: Path) -> None:
         out = tmp_path / "merged.json"
-        rc = mtd.main([*[str(p) for p in _shards(tmp_path)], "-o", str(out)])
+        rc = mtd.main([*[str(p) for p in _shards(tmp_path)], "-o", str(out), "--expect", "4"])
         assert rc == 0
         assert json.loads(out.read_text()) == {
             "tests/test_a.py::test_1": 1.0,
@@ -65,7 +65,9 @@ class TestUnion:
         diffs line-by-line against the committed one instead of as one blob.
         """
         out = tmp_path / "merged.json"
-        assert mtd.main([*[str(p) for p in _shards(tmp_path)], "-o", str(out)]) == 0
+        assert (
+            mtd.main([*[str(p) for p in _shards(tmp_path)], "-o", str(out), "--expect", "4"]) == 0
+        )
         text = out.read_text()
         assert text.endswith("}\n")
         keys = [ln.split('"')[1] for ln in text.splitlines() if ln.startswith("    ")]
@@ -79,16 +81,16 @@ class TestRefusals:
         shards = _shards(tmp_path)
         _write(tmp_path, "s4.json", {"tests/test_a.py::test_1": 9.0})
         out = tmp_path / "merged.json"
-        rc = mtd.main([*[str(p) for p in shards], "-o", str(out)])
+        rc = mtd.main([*[str(p) for p in shards], "-o", str(out), "--expect", "4"])
         assert rc == 1
         assert not out.exists()
 
-    def test_fewer_than_four_inputs_is_refused(self, tmp_path: Path) -> None:
-        """A cancelled shard leaves a quarter of the suite unrecorded, and
+    def test_fewer_inputs_than_expected_is_refused(self, tmp_path: Path) -> None:
+        """A cancelled shard leaves its share of the suite unrecorded, and
         pytest-split count-balances exactly those ids."""
         shards = _shards(tmp_path)[:3]
         out = tmp_path / "merged.json"
-        assert mtd.main([*[str(p) for p in shards], "-o", str(out)]) == 1
+        assert mtd.main([*[str(p) for p in shards], "-o", str(out), "--expect", "4"]) == 1
         assert not out.exists()
 
     def test_expect_override_allows_a_deliberate_partial(self, tmp_path: Path) -> None:
@@ -113,15 +115,27 @@ class TestRefusals:
         shards = _shards(tmp_path)
         _write(tmp_path, "s4.json", bad)
         out = tmp_path / "merged.json"
-        assert mtd.main([*[str(p) for p in shards], "-o", str(out)]) == 1
+        assert mtd.main([*[str(p) for p in shards], "-o", str(out), "--expect", "4"]) == 1
         assert not out.exists()
 
     def test_an_unreadable_input_is_refused_not_skipped(self, tmp_path: Path) -> None:
         shards = _shards(tmp_path)
         (tmp_path / "s4.json").write_text("{not json", encoding="utf-8")
         out = tmp_path / "merged.json"
-        assert mtd.main([*[str(p) for p in shards], "-o", str(out)]) == 1
+        assert mtd.main([*[str(p) for p in shards], "-o", str(out), "--expect", "4"]) == 1
         assert not out.exists()
+
+
+class TestTheDefaultMatchesCI:
+    def test_default_expect_is_the_number_of_ci_shards(self) -> None:
+        """`make test-durations-from-ci` relies on the default; a default below the
+        shard count would accept a partial set, one above it refuses every run."""
+        import yaml
+
+        workflow = yaml.safe_load((ROOT / ".github/workflows/test.yml").read_text())
+        groups = workflow["jobs"]["python-tests"]["strategy"]["matrix"]["group"]
+        parser_default = mtd.build_parser().get_default("expect")
+        assert parser_default == len(groups), (parser_default, groups)
 
 
 class TestAgainstTheCommittedFile:

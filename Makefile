@@ -464,13 +464,13 @@ test-durations: ## Regenerate .test_durations for the CI pytest-split shards (on
 	@echo "$(YELLOW)NOTE: these are THIS machine's times. CI balances on the runner's —$(NC)"
 	@echo "$(YELLOW)prefer 'make test-durations-from-ci RUN=<id>' (#2584).$(NC)"
 
-# Rebuild .test_durations from a CI run's four shard artifacts (#2584).
+# Rebuild .test_durations from a CI run's shard artifacts (#2584).
 #
 # The committed file decides how CI deals its shards, so it has to be measured
 # on the runner: recorded locally, the py3.12 shards took 182/235/584/204s of
 # pytest against 280/278/328/193s recorded — per-shard factors of 2.6x to 7.1x,
 # so no local run can balance this runner. Every python-tests shard uploads
-# what it measured; this unions the four.
+# what it measured; this unions them.
 #
 # RUN defaults to the newest completed test.yml run on main.
 RUN ?=
@@ -506,13 +506,13 @@ test-collected-floor: ## Regenerate .test_collected_floor from a real collection
 		| tail -2
 	@echo "$(GREEN)Wrote .test_collected_floor — commit it.$(NC)"
 
-# Run one CI shard exactly as the workflow does (default: shard 1 of 4).
+# Run one CI shard exactly as the workflow does (default: shard 1 of 8).
 # `make test-shard GROUP=3` for another shard.
 GROUP ?= 1
 .PHONY: test-shard
-test-shard: ## Run one of the 4 CI pytest-split shards locally (GROUP=N)
+test-shard: ## Run one of the 8 CI pytest-split shards locally (GROUP=N)
 	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto \
-		--splits 4 --group $(GROUP) --splitting-algorithm least_duration \
+		--splits 8 --group $(GROUP) --splitting-algorithm least_duration \
 		--durations-path .test_durations
 
 .PHONY: test-js

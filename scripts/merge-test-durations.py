@@ -11,7 +11,7 @@ the runner.
 So CI records it instead. Each `python-tests` shard runs with
 ``--store-durations --clean-durations``, which makes pytest-split rewrite the
 durations file at sessionfinish holding EXACTLY the tests that shard ran, and
-uploads it as ``test-durations-shard-N``. The four are disjoint and their
+uploads it as ``test-durations-shard-N``. The shards are disjoint and their
 union is the whole suite, measured on the runner.
 
 This script performs that union, and refuses rather than writing a file that
@@ -25,7 +25,7 @@ would silently unbalance the shards:
 * a non-numeric or negative duration is not a duration.
 
 A partial merge is worse than no merge: it looks like a fresh file and
-count-balances the ids it is missing. Hence ``--expect N`` (default 4), which
+count-balances the ids it is missing. Hence ``--expect N`` (default 8), which
 fails when fewer than N inputs are given.
 
 Usage::
@@ -80,7 +80,7 @@ def merge(sources: dict[str, dict[str, float]]) -> dict[str, float]:
     return merged
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("inputs", nargs="+", type=Path, help="per-shard durations files")
     parser.add_argument(
@@ -89,11 +89,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--expect",
         type=int,
-        default=4,
-        help="required number of inputs (default 4: the four CI shards). "
+        default=8,
+        help="required number of inputs (default 8: the eight CI shards). "
         "A partial merge count-balances every id it is missing.",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     if len(args.inputs) < args.expect:
         print(
