@@ -157,7 +157,10 @@ def test_the_demo_is_clean_under_strict_event_parameters():
             if m.id in ("djust.V016", "djust.T019", "djust.T020", "djust.V029")
         ]
     demo = re.compile(r"(?<![\w.])(?:%s)[./][\w./]+" % "|".join(map(re.escape, DEMO_APPS)))
-    assert [line for line in found if demo.search(line)] == []
+    # A view class defined by a docs snippet (tests/test_doc_snippets_execute.py,
+    # module ``doc_snippet_*``) can name a demo template and outlive its test in
+    # the same xdist worker; it is not a demo view, so its findings don't count.
+    assert [line for line in found if demo.search(line) and "doc_snippet_" not in line] == []
 
 
 # --------------------------------------------------------------------------- #
