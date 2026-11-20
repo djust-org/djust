@@ -339,7 +339,11 @@ def test_ci_pytest_steps_arm_the_floor(workflow: str, job: str | None, step_name
     ]
     assert len(steps) == 1, f"{workflow}: expected one '{step_name}' step, found {len(steps)}"
     (step,) = steps
-    assert str(step.get("env", {}).get(FLOOR_ENV)) == "1", (
+    # python-tests disarms the floor only for a pull request's selected test files
+    # (`python_paths` non-empty): the floor counts the whole collection, and a run of
+    # every root (the merge queue, pushes, the nightly) always arms it.
+    armed = {"1", "${{ needs.changes.outputs.python_paths == '' && '1' || '0' }}"}
+    assert str(step.get("env", {}).get(FLOOR_ENV)) in armed, (
         f"{workflow} '{step_name}' does not set {FLOOR_ENV}=1 — the floor is unarmed there"
     )
     # #1713: a red guard must actually fail the job — no continue-on-error on

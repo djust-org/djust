@@ -141,6 +141,36 @@ review finds shared/transitive impact the selector cannot see, force full checks
 DJUST_PREPUSH_FULL=1 bash scripts/pre-push-pytest.sh
 ```
 
+### Pull-request CI runs the selection (`--ci`)
+
+An unlabelled pull request runs only the Python test files `scripts/select-tests.py --ci`
+selects, as one `python-tests` shard. The merge queue, pushes, the nightly, a PR labelled
+`full-tests`, and any pull request the selector answers `FULL` run every root as eight shards.
+A consumer the selection misses therefore fails in the merge queue, before merge, one run
+later than it would have.
+
+`--ci` is the targeted mode (`DJUST_PREPUSH_TARGETED=1`: blast-radius paths and transitive
+impact select their direct consumers) with four more rules:
+
+- CI configuration (`.github/workflows/`, `.pre-commit-config.yaml`, `Makefile`) selects the
+  tests that name it instead of forcing `FULL`.
+- A doc (`*.md`, `*.rst`) no test names is classified, and any doc change adds the tests that
+  scan every doc (their text globs `*.md`).
+- A test-support module (a non-test module under a test root) selects the tests that name it,
+  directly or through other support modules. It is still `FULL` when a `conftest.py` or
+  `pyproject.toml` names it: a plugin, fixture or settings module reaches every test.
+- Every selection adds the whole-tree merge gates (`MERGE_GATES` in the `Makefile`).
+
+Dependencies (`pyproject.toml`, `uv.lock`, `Cargo.lock`), a `conftest.py`, a package
+`__init__.py`, the branch-name rule and an unclassified path still run everything. Measured on
+the 80 commits to `main` before it shipped, 34 would have run a selection, at a median of about
+7% of the fast tier's recorded time and at most 41%. The rest ran everything, most often for a
+dependency or `conftest.py` change.
+
+The `changes` job writes the decision as two outputs: `python_shards` (`FULL_SHARDS`, or `[1]`)
+and `python_paths` (the selected files, or empty for every root). The collected-count floor is
+off for a selected run, and the Django 6.1 job accepts an empty skip list from one.
+
 ## CI change scope and the merge queue
 
 `.github/workflows/test.yml` listens to `merge_group` (so GitHub's merge queue can
@@ -210,12 +240,12 @@ minutes, the timeout only bounds it.
 
 | event | interpreters x Django x shards | tier (`-m`) | exhaustive sweeps |
 |---|---|---|---|
-| pull request | 3.12 x Django 5.2 x 4, + the Django-6-only job, + 3.14t smoke | `not nightly and not slow` | sampled |
-| merge queue | same as a pull request | `not nightly and not slow` | sampled |
-| push to `main` | same as a pull request | `not nightly` (slow tier included) | sampled |
-| nightly `main-health` (07:00 UTC) | serial suite on 3.12, plus `test.yml` called with the full matrix (3.12-3.15 x 5.2/6.0/6.1 x 4) | serial: everything; matrix: `not nightly` | serial: **every unit**; matrix: sampled |
+| pull request | 3.12 x Django 5.2 x 8, or the selected files as 1 shard (see "Pull-request CI runs the selection"), + the Django-6-only job, + 3.14t smoke | `not nightly and not slow` | sampled |
+| merge queue | 3.12 x Django 5.2 x 8, + the Django-6-only job, + 3.14t smoke | `not nightly and not slow` | sampled |
+| push to `main` | same as the merge queue | `not nightly` (slow tier included) | sampled |
+| nightly `main-health` (07:00 UTC) | serial suite on 3.12, plus `test.yml` called with the full matrix (3.12-3.15 x 5.2/6.0/6.1 x 8) | serial: everything; matrix: `not nightly` | serial: **every unit**; matrix: sampled |
 | manual `test.yml` dispatch | full matrix | `not nightly` | every unit (untick `full_sweeps` to sample) |
-| PR labelled `full-tests` | 3.12 x Django 5.2 x 4 + the Django-6-only job | `not nightly` | every unit |
+| PR labelled `full-tests` | 3.12 x Django 5.2 x 8 + the Django-6-only job | `not nightly` | every unit |
 
 **One Django series before merge.** The shards run on Django 5.2 (the LTS, and what the dev
 environment uses). About two hundred tests exist only on Django 6 (template partials, the 6.1 CSP
@@ -224,7 +254,7 @@ on 5.2)` runs them: each 5.2 shard writes the node id of every test it skipped
 (`tests/skip_ledger.py`: a skip marker, a module that skips itself at import, a fixture or a test
 body that skips, all alike; not an xfail, not a sweep case the sample left out), and that job runs
 exactly those on Django 6.1, after the shards. A new Django-6-only file needs no registration. It
-refuses to run with fewer than four shard lists or an empty one, and `test-summary` requires it.
+refuses to run with fewer lists than shards, or with an empty one from a full run, and `test-summary` requires it.
 A test skipped there too was skipped on every cell; `-rs` lists it with its reason.
 `tests/test_skip_ledger_4074.py` pins the ledger and the wiring. The trade: a break that shows only
 on Django 6.0, and a 6.x-only break in a test that also runs (and passes) on 5.2, are found by the
