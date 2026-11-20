@@ -448,7 +448,7 @@ test-harness: ## Validate and time doctor scenarios and CI shard collection
 		tests/test_ci_python_test_shards.py tests/test_collect_test_shards.py \
 		tests/test_corpus_shards.py tests/test_corpus_shards_url_sweep_3781.py -q --durations=10
 
-# CI runs python-tests as four pytest-split shards balanced by the durations
+# CI runs python-tests as eight pytest-split shards balanced by the durations
 # recorded in .test_durations (committed). pytest-split falls back to
 # splitting by test COUNT when an entry is missing, so a stale file only
 # unbalances the shards — it never drops a test. Refresh it when the suite
