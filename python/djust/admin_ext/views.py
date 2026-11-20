@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth import logout
 from django.contrib.auth.views import LoginView as DjangoLoginView
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import ForeignKey, OneToOneField, Q
 from django.forms import CheckboxInput
@@ -703,7 +703,13 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
                 if field_name in readonly_fields:
                     readonly_html = self._readonly_field_html(field_name)
                     if readonly_html is not None:
-                        fields_data.append({"name": field_name, "html": readonly_html})
+                        # A callable entry is not serializable view state: name it (#4244).
+                        fields_data.append(
+                            {
+                                "name": getattr(field_name, "__name__", str(field_name)),
+                                "html": readonly_html,
+                            }
+                        )
                 elif self.form_instance and field_name in self.form_instance.fields:
                     field_info = self.get_field_info(field_name)
 
@@ -766,18 +772,27 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             "change_form_widgets": change_form_widgets,
         }
 
-    def _readonly_field_html(self, field_name: str) -> Optional[str]:
-        """A readonly model field, as text from the row (it is not a form field, #4218)."""
+    def _readonly_field_html(self, field_name: Any) -> Optional[str]:
+        """A readonly entry, as text (it is not a form field, #4218).
+
+        A model field is read from the row. Any other ``readonly_fields`` entry -- a
+        ModelAdmin method, a model attribute/method or a callable -- is shown as Django's
+        admin shows it (#4244): the label from ``short_description`` /
+        ``@admin.display(description=...)`` or the name, the value from calling it with
+        the object. See ``_readonly_callable_html``.
+        """
         from django.core.exceptions import FieldDoesNotExist
         from django.utils.html import escape
 
         from djust.frameworks import get_adapter
         from djust.serialization import model_field_value_withheld
 
+        if not isinstance(field_name, str):
+            return self._readonly_callable_html(field_name)
         try:
             model_field = self._model._meta.get_field(field_name)
         except FieldDoesNotExist:
-            return None
+            return self._readonly_callable_html(field_name)
         obj = self.object
         value: Any = None
         if obj is not None and not model_field_value_withheld(self._model, field_name):
@@ -795,6 +810,58 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             f'<div class="mt-1">{adapter._render_readonly(field_name, value)}</div>'  # type: ignore[attr-defined]
             "</div>"
         )
+
+    def _readonly_callable_html(self, name: Any) -> Optional[str]:
+        """A readonly entry that is not a model field, rendered as Django's admin does (#4244).
+
+        Escaping: the label and the value go through ``format_html`` (``conditional_escape``),
+        so a plain string returned by the method is escaped; a value the ModelAdmin author
+        marked safe (``format_html`` / ``mark_safe``) renders as HTML, exactly as Django's
+        ``AdminReadonlyField.contents``. The callable runs only with the object this view
+        already authorized, never on the add page (shown as ``-``). Unlike a model field,
+        ``model_field_value_withheld`` does not apply: the method is developer code that shows
+        what it chooses (Django parity). A name that resolves to nothing stays off the page.
+        """
+        from django.contrib.admin.utils import display_for_value, label_for_field, lookup_field
+        from django.utils.html import format_html
+        from django.utils.text import capfirst
+
+        from djust.frameworks import get_adapter
+
+        try:
+            label = label_for_field(name, self._model, self._model_admin)
+        except AttributeError:
+            logger.debug("readonly field %s resolves to nothing; not shown", sanitize_for_log(name))
+            return None
+        obj = self.object
+        empty: Any = "-"
+        get_empty = getattr(self._model_admin, "get_empty_value_display", None)
+        if callable(get_empty):
+            empty = get_empty()
+        display: Any = empty
+        if obj is not None:
+            # Django's AdminReadonlyField.contents shows the empty value when the lookup
+            # raises these, instead of failing the page (e.g. a method touching a missing
+            # related row).
+            try:
+                _f, attr, value = lookup_field(name, obj, self._model_admin)
+            except (AttributeError, ValueError, ObjectDoesNotExist):
+                display = empty
+            else:
+                if getattr(attr, "boolean", False):
+                    display = "Yes" if value else ("No" if value is not None else empty)
+                else:
+                    display = display_for_value(value, empty)
+        adapter = get_adapter("admin_tailwind")
+        html: str = format_html(
+            '<div class="{}"><span class="{}">{}</span>'
+            '<div class="mt-1"><p class="py-2 text-gray-900">{}</p></div></div>',
+            adapter.WRAPPER_CLASS,  # type: ignore[attr-defined]
+            adapter.LABEL_CLASS,  # type: ignore[attr-defined]
+            capfirst(label),
+            display,
+        )
+        return html
 
     def _save_errors(self) -> List[str]:
         """What a failed Save tells the person: the refusal, and the form's own errors."""
