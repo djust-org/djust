@@ -931,10 +931,17 @@ class RustBridgeMixin:
             # ({{ workspace.memberships.count }}, the #1985 symptom). Without
             # this, only request-scoped models (excluded from normalize) ever
             # reached the sidecar.
+            # #4241: a top-level QuerySet is captured too. The normalize loop
+            # below iterates this same object, filling its result cache, so the
+            # sidecar copy answers ``{{ qs.count }}`` / ``.exists`` / ``.first``
+            # / ``.last`` (a miss on the eager row list) with no extra query.
             from django.db.models import Model as _DjModel
+            from django.db.models import QuerySet as _DjQuerySet
 
             _raw_models_for_sidecar = {
-                _key: _val for _key, _val in full_context.items() if isinstance(_val, _DjModel)
+                _key: _val
+                for _key, _val in full_context.items()
+                if isinstance(_val, (_DjModel, _DjQuerySet))
             }
 
             for _key, _val in list(full_context.items()):
