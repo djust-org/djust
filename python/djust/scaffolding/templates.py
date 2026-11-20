@@ -434,10 +434,11 @@ application = get_wsgi_application()
 # writer in generator.py) route it, so every project serves a view over
 # WebSocket, SSE and the HTTP fallback.
 SSE_URL_IMPORT = "from djust.sse import sse_urlpatterns\n"
+SSE_URL_ROUTE = 'path("djust/", include(sse_urlpatterns))'
 SSE_URL_ENTRY = (
     "    # djust's SSE transport: the client falls back to it when a WebSocket\n"
     "    # cannot connect.\n"
-    '    path("djust/", include(sse_urlpatterns)),\n'
+    "    %s,\n" % SSE_URL_ROUTE
 )
 
 URLS_PY = """\

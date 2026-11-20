@@ -256,7 +256,9 @@ to run before `make dev`.
 marked settings block (apps, `ASGI_APPLICATION`, and a channel layer; it does
 not edit `TEMPLATES` unless you pass `--templates`), a djust `asgi.py` (only when the existing one is
 Django's default for the same settings module), the `djust`, `channels`, and
-`uvicorn[standard]` packages, and a final `manage.py check`. A package the
+`uvicorn[standard]` packages, and a final `manage.py check`. It does not edit
+`urls.py`: when the URLconf does not route djust's SSE transport
+(`djust.sse.sse_urlpatterns`), `init` prints the lines to add. A package the
 project already declares keeps its specifier: on a uv project `init` runs
 `uv add` only for the ones missing from `[project].dependencies`, and on a
 `requirements.txt` project it appends only the missing lines. A declared
