@@ -124,7 +124,8 @@ def authorize_event(view: Any, request: Any, binding: StateBinding) -> Any:
     """Authorize a fresh request against immutable mounted identity.
 
     The SSE endpoint path is not the view route. Copy routing metadata (path,
-    resolver match, slot and query string) from the trusted mount, while retaining the current request's principal/session/host.
+    resolver match, slot and query string) from the trusted mount, while
+    retaining the current request's principal/session/host.
     TenantMixin resolvers run again instead of using their mount-time cache.
     Exceptions deliberately propagate to the runtime's static denial envelope.
     """

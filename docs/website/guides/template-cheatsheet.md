@@ -569,11 +569,13 @@ not once per request like classic Django. For hot views, precompute in
 template auto-calls an ORM method). Auto-call is always on; 2.0 removed
 the `template_auto_call` kill switch.
 
-The exception is a QuerySet you put in the context yourself: `{{ qs.count }}`,
-`{{ qs.exists }}`, `{{ qs.first }}` and `{{ qs.last }}` are answered from the
-rows the render already fetched for it, with no extra query (#4241). The
-per-event warning above still applies to a manager or relation method such as
-`{{ workspace.memberships.count }}`.
+The exception is a QuerySet you put in the context yourself: `{{ qs.count }}`
+and `{{ qs.exists }}` are answered from the rows the render already fetched
+for it, with no extra query (#4241). `{{ qs.first }}` and `{{ qs.last }}`
+render too, but they are Django's own methods and query as Django does:
+`last` runs one query every render, and `first` runs one unless the QuerySet
+is ordered. The per-event warning above still applies to them, and to a
+manager or relation method such as `{{ workspace.memberships.count }}`.
 
 ### Objects resolve like Django (ADR-027)
 

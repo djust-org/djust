@@ -91,6 +91,32 @@ _MISSING = object()
 _NORMALIZE_DEPTH_LIMIT = 3
 
 
+def _template_reads_queryset_method(view: Any, name: str) -> bool:
+    """Whether the view's template reads ``count`` / ``exists`` / ``first`` /
+    ``last`` directly off the context name *name* (#4241).
+
+    The JIT keeps an evaluated QuerySet for the render sidecar on exactly this
+    condition; the native render's capture of a context QuerySet uses it too,
+    so no other QuerySet attribute (``.query``) becomes reachable. An
+    unreadable template reads nothing.
+    """
+    from ..optimization.codegen import ALL_CHAIN_METHODS
+    from .jit import (
+        _cached_extract_template_variables,
+        _jit_template_content,
+        _paths_for_variable,
+    )
+
+    try:
+        content = _jit_template_content(view)
+    except Exception:  # noqa: BLE001 -- no template source means no capture
+        return False
+    if not content:
+        return False
+    paths = _paths_for_variable(_cached_extract_template_variables(content), name)
+    return bool(set(ALL_CHAIN_METHODS) & {p.split(".")[0] for p in paths})
+
+
 def _normalize_db_values(value: Any, depth: int = 0) -> Any:
     """Recursively normalize raw Django DB values (Model / QuerySet /
     list[Model] / list[list[Model]]) into JSON-serializable dicts.
@@ -931,17 +957,23 @@ class RustBridgeMixin:
             # ({{ workspace.memberships.count }}, the #1985 symptom). Without
             # this, only request-scoped models (excluded from normalize) ever
             # reached the sidecar.
-            # #4241: a top-level QuerySet is captured too. The normalize loop
-            # below iterates this same object, filling its result cache, so the
-            # sidecar copy answers ``{{ qs.count }}`` / ``.exists`` / ``.first``
-            # / ``.last`` (a miss on the eager row list) with no extra query.
+            # #4241: a top-level QuerySet is captured too, but only when the
+            # template reads ``{{ qs.count }}`` / ``.exists`` / ``.first`` /
+            # ``.last`` on it -- the same condition the JIT uses. Holding every
+            # QuerySet would make its other attributes (``{{ qs.query }}``)
+            # reachable through the sidecar walk. The normalize loop below
+            # iterates this same object, filling its result cache, so
+            # ``count`` / ``exists`` cost no extra query; ``first`` / ``last``
+            # are Django's own methods and query as Django does (``last``
+            # always, ``first`` on an unordered QuerySet).
             from django.db.models import Model as _DjModel
             from django.db.models import QuerySet as _DjQuerySet
 
             _raw_models_for_sidecar = {
                 _key: _val
                 for _key, _val in full_context.items()
-                if isinstance(_val, (_DjModel, _DjQuerySet))
+                if isinstance(_val, _DjModel)
+                or (isinstance(_val, _DjQuerySet) and _template_reads_queryset_method(self, _key))
             }
 
             for _key, _val in list(full_context.items()):

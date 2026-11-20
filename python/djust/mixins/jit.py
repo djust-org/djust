@@ -1192,8 +1192,10 @@ class JITMixin:
             # top-level QuerySet. The rows ship as a list, which cannot answer
             # the method (``list.count`` needs an argument in Django too), so the
             # evaluated QuerySet itself goes to the render sidecar. Its
-            # ``_result_cache`` is full (``items = list(queryset)`` above), so the
-            # method answers from the fetched rows with no extra query. Pass
+            # ``_result_cache`` is full (``items = list(queryset)`` above), so
+            # ``count`` / ``exists`` answer from the fetched rows with no extra
+            # query. ``first`` / ``last`` are Django's own methods and query as
+            # Django does: ``last`` always, ``first`` on an unordered QuerySet. Pass
             # ``queryset`` -- the evaluated (possibly optimize_queryset-cloned)
             # object -- not the caller's unevaluated one. A row field named like
             # a method (``u.count`` in a loop) extracts the same path; holding

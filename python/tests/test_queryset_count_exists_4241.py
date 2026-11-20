@@ -170,7 +170,8 @@ LIVEVIEWS = [p for p in NATIVE if p.id.startswith("LiveView")]
 @pytest.mark.django_db
 class TestNoExtraQuery4241:
     """``count`` / ``exists`` are answered from the rows the render already
-    fetched: the page costs the queries ``{{ qs|length }}`` costs, no more."""
+    fetched: the page costs the queries ``{{ qs|length }}`` costs, no more.
+    ``first`` / ``last`` cost what Django's own methods cost; pinned below."""
 
     @pytest.mark.parametrize("render", LIVEVIEWS)
     @pytest.mark.parametrize("shape", list(SHAPES))
@@ -184,6 +185,49 @@ class TestNoExtraQuery4241:
         with CaptureQueriesContext(connection) as measured:
             render(SOURCES[name], SHAPES[shape]())
         assert len(measured) == len(baseline), [q["sql"] for q in measured.captured_queries]
+
+    @pytest.mark.parametrize("render", LIVEVIEWS)
+    @pytest.mark.parametrize("shape", list(SHAPES))
+    @pytest.mark.parametrize("method", ["count", "exists"])
+    def test_count_exists_cost_zero_extra(self, users, render, shape, method) -> None:
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as baseline:
+            render("[{% for u in qs %}{{ u.username }},{% endfor %}]", SHAPES[shape]())
+        with CaptureQueriesContext(connection) as measured:
+            render(
+                "[{{ qs.%s }}:{%% for u in qs %%}{{ u.username }},{%% endfor %%}]" % method,
+                SHAPES[shape](),
+            )
+        assert len(measured) - len(baseline) == 0, [q["sql"] for q in measured.captured_queries]
+
+    @pytest.mark.parametrize("render", LIVEVIEWS)
+    @pytest.mark.parametrize(
+        "qs_factory, method, extra",
+        [
+            # Django's own behaviour, pinned: on an ordered QuerySet ``first``
+            # slices ``self``, which the filled result cache answers (no
+            # query); ``last`` runs on ``reverse()``, a fresh clone (one
+            # query). Unordered, both run on an ``order_by("pk")`` clone.
+            pytest.param(lambda: User.objects.all().order_by("pk"), "first", 0, id="ordered-first"),
+            pytest.param(lambda: User.objects.all().order_by("pk"), "last", 1, id="ordered-last"),
+            pytest.param(lambda: User.objects.all(), "first", 1, id="unordered-first"),
+            pytest.param(lambda: User.objects.all(), "last", 1, id="unordered-last"),
+        ],
+    )
+    def test_first_last_query_as_django_does(
+        self, users, render, qs_factory, method, extra
+    ) -> None:
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        loop = "[{% for u in qs %}{{ u.username }},{% endfor %}]"
+        with CaptureQueriesContext(connection) as baseline:
+            render(loop, {"qs": qs_factory()})
+        with CaptureQueriesContext(connection) as measured:
+            render("[{{ qs.%s.username }}]" % method + loop, {"qs": qs_factory()})
+        assert len(measured) - len(baseline) == extra, [q["sql"] for q in measured.captured_queries]
 
 
 @pytest.mark.django_db
@@ -210,3 +254,11 @@ class TestSidecarProtections4241:
     def test_delete_is_refused(self, secret_users, render) -> None:
         render("[{{ qs.delete }}][{{ qs.count }}]", _full())
         assert User.objects.count() == 2
+
+    @pytest.mark.parametrize("render", LIVEVIEWS)
+    def test_query_attribute_does_not_render_sql(self, secret_users, render) -> None:
+        """Only a QuerySet the template reads a #4241 method on is held for the
+        sidecar walk, so ``{{ qs.query }}`` alone cannot reach the SQL."""
+        got = html_lib.unescape(render("[{{ qs.query }}]", _full()))
+        assert "SELECT" not in got.upper(), got
+        assert "auth_user" not in got, got
