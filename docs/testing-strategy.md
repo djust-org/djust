@@ -157,7 +157,7 @@ A consumer the selection misses therefore fails in the merge queue, before merge
 later than it would have.
 
 `--ci` is the targeted mode (`DJUST_PREPUSH_TARGETED=1`: blast-radius paths and transitive
-impact select their direct consumers) with four more rules:
+impact select their direct consumers) with five more rules:
 
 - CI configuration (`.github/workflows/`, `.pre-commit-config.yaml`, `Makefile`) selects the
   tests that name it instead of forcing `FULL`.
@@ -167,6 +167,9 @@ impact select their direct consumers) with four more rules:
   directly or through other support modules. It is still `FULL` when a `conftest.py` or
   `pyproject.toml` names it: a plugin, fixture or settings module reaches every test.
 - Every selection adds the whole-tree merge gates (`MERGE_GATES` in the `Makefile`).
+- Every selection adds the test files with a strict xfail (`xfail(..., strict=True)`): they go
+  red when a fix makes them pass, often through code they never name (#4259). They do not
+  turn an empty selection into a run, and do not change a `FULL` answer.
 
 Dependencies (`pyproject.toml`, `uv.lock`, `Cargo.lock`), a `conftest.py`, a package
 `__init__.py`, the branch-name rule and an unclassified path still run everything. Measured on
