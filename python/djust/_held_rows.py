@@ -990,6 +990,12 @@ def _stamp_property(instance: Any, name: Optional[str]) -> None:
     (``sync_to_async``, ``contextvars.copy_context().run``) has the writer set, its
     reads reach R, and the value is known. A plain ``threading.Thread`` has no
     writer, so its value was read through no recorder: unknown, whenever it ran.
+
+    Two threads filling the same Django ``cached_property`` at once can land their
+    stamps in a different order from their ``__dict__`` writes (Django's descriptor does
+    not lock), so the name may end up known while the dict holds the plain thread's value.
+    That race is Django's own (the two values come from one computation each); it is
+    narrow and not closed here.
     """
     if not name:
         return
@@ -1015,26 +1021,57 @@ _CACHED_PROPERTY_GET_PARAMETERS = ["instance", "cls"]
 
 
 def _check_wrapped_signature(
-    what: str, function: Any, expected: List[str], *, skip: int = 0
+    what: str,
+    function: Any,
+    expected: List[str],
+    *,
+    own_module: str,
+    call_arity: int,
+    skip: int = 0,
 ) -> None:
+    """Refuse a signature djust's wrapper cannot call.
+
+    Django's (or the stdlib's) own function must have exactly the parameters the wrapper
+    was written against: a change there means a different Django. A function from any
+    other module is a library's wrapper around it (a profiler, a query cache), which
+    djust wraps in turn: it only has to accept the call the wrapper forwards
+    (``call_arity`` positional arguments, ``self`` included).
+    """
     import inspect
 
     from django import get_version
     from django.core.exceptions import ImproperlyConfigured
 
+    origin = "%s.%s" % (
+        getattr(function, "__module__", "?"),
+        getattr(function, "__qualname__", repr(function)),
+    )
     try:
-        found = list(inspect.signature(function).parameters)[skip:]
+        signature = inspect.signature(function)
+        found: Optional[List[str]] = list(signature.parameters)[skip:]
     except (TypeError, ValueError):
+        signature = None
         found = None
-    # A cached_property's second parameter is named ``cls`` by Django and ``owner`` by
-    # functools: compare the arity and the first name only.
-    if found is None or len(found) != len(expected) or found[:1] != expected[:1]:
+    if getattr(function, "__module__", None) == own_module:
+        # A cached_property's second parameter is named ``cls`` by Django and ``owner``
+        # by functools: compare the arity and the first name only.
+        ok = found is not None and len(found) == len(expected) and found[:1] == expected[:1]
+    else:
+        ok = signature is not None
+        if signature is not None:
+            try:
+                signature.bind(*([object()] * call_arity))
+            except TypeError:
+                ok = False
+    if not ok:
         raise ImproperlyConfigured(
-            "djust's held-row refresh (#4112) wraps %s, whose parameters are %r on Django %s "
-            "where %r were expected. Use a djust release that supports this Django: without the "
-            "wrapper a view cannot tell which QuerySets and cached properties it filled itself, "
-            "and would keep stale rows after a write (#4210)."
-            % (what, found, get_version(), expected)
+            "djust's held-row refresh (#4112) wraps %s, which is %s with parameters %r on "
+            "Django %s where %r (or anything that accepts %d positional arguments, for a "
+            "library's own wrapper) were expected. Without the wrapper a view cannot tell "
+            "which QuerySets and cached properties it filled itself, and would keep stale "
+            "rows after a write (#4210). If %s is a library's replacement, it must accept "
+            "the original's arguments; otherwise use a djust release that supports this "
+            "Django." % (what, origin, found, get_version(), expected, call_arity, origin)
         )
 
 
@@ -1054,7 +1091,13 @@ def install_fill_stamps() -> None:
 
     original = QuerySet._fetch_all
     if not getattr(original, "_djust_held_rows", False):
-        _check_wrapped_signature("QuerySet._fetch_all", original, _FETCH_ALL_PARAMETERS)
+        _check_wrapped_signature(
+            "QuerySet._fetch_all",
+            original,
+            _FETCH_ALL_PARAMETERS,
+            own_module="django.db.models.query",
+            call_arity=1,
+        )
         if "_result_cache" not in vars(QuerySet()):
             from django.core.exceptions import ImproperlyConfigured
 
@@ -1084,6 +1127,8 @@ def install_fill_stamps() -> None:
             "%s.%s.__get__" % (descriptor.__module__, descriptor.__qualname__),
             get,
             _CACHED_PROPERTY_GET_PARAMETERS,
+            own_module=descriptor.__module__,
+            call_arity=3,  # (self, instance, owner): what the descriptor protocol passes
             skip=1,
         )
         descriptor.__get__ = _wrap_property_get(get, name_attr)  # type: ignore[method-assign,assignment]
@@ -1091,8 +1136,12 @@ def install_fill_stamps() -> None:
 
 def _wrap_property_get(get: Callable[..., Any], name_attr: str) -> Callable[..., Any]:
     @functools.wraps(get)
-    def __get__(self: Any, instance: Any, cls: Any = None) -> Any:  # noqa: dead-method-allowed
-        value = get(self, instance, cls)
+    def __get__(  # noqa: dead-method-allowed
+        self: Any, instance: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        # Forwarded as given: the owner is ``cls`` for Django's and ``owner`` for the
+        # stdlib's, and a caller may pass it by keyword.
+        value = get(self, instance, *args, **kwargs)
         if instance is not None:
             _stamp_property(instance, getattr(self, name_attr, None))
         return value

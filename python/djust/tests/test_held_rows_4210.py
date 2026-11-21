@@ -161,10 +161,44 @@ def test_install_refuses_a_changed_fetch_all_signature(monkeypatch):
     def _fetch_all(self, chunk_size):  # what a Django that changed the method would define
         raise AssertionError("not called")
 
-    monkeypatch.setattr(QuerySet, "_fetch_all", _fetch_all)
-    with pytest.raises(ImproperlyConfigured, match=r"#4112\) wraps QuerySet\._fetch_all"):
-        _held_rows.install_fill_stamps()
-    assert QuerySet._fetch_all is _fetch_all  # nothing was wrapped on top of it
+    with monkeypatch.context() as patch:
+        patch.setattr(QuerySet, "_fetch_all", _fetch_all)
+        with pytest.raises(ImproperlyConfigured, match=r"#4112\) wraps QuerySet\._fetch_all"):
+            _held_rows.install_fill_stamps()
+        assert QuerySet._fetch_all is _fetch_all  # nothing was wrapped on top of it
+
+
+def test_a_library_wrapper_without_functools_wraps_installs_fine(monkeypatch):
+    """A profiler or query cache that replaced ``_fetch_all`` with ``(self, *a, **kw)``
+    must not stop the app from starting (S3): its signature is not Django's, but it
+    accepts the one argument djust's wrapper forwards."""
+    calls = []
+    real = QuerySet._fetch_all
+
+    def library_fetch_all(self, *args, **kwargs):
+        calls.append(1)
+        return real(self, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(QuerySet, "_fetch_all", library_fetch_all)
+        _held_rows.install_fill_stamps()  # raised ImproperlyConfigured before the fix
+        installed = QuerySet._fetch_all
+        assert installed is not library_fetch_all
+        assert getattr(installed, "_djust_held_rows", False)
+        assert len(list(Group.objects.all())) >= 0  # evaluates through both wrappers
+        assert calls
+    assert QuerySet._fetch_all is real
+
+
+def test_the_refusal_names_the_function_it_found(monkeypatch):
+    def _fetch_all(self, chunk_size):
+        raise AssertionError("not called")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(QuerySet, "_fetch_all", _fetch_all)
+        with pytest.raises(ImproperlyConfigured) as raised:
+            _held_rows.install_fill_stamps()
+    assert __name__ in str(raised.value)  # the module that defined what it found
 
 
 def test_install_refuses_a_changed_cached_property_signature(monkeypatch):
@@ -173,9 +207,29 @@ def test_install_refuses_a_changed_cached_property_signature(monkeypatch):
     def __get__(self, instance):
         raise AssertionError("not called")
 
-    monkeypatch.setattr(functools.cached_property, "__get__", __get__)
-    with pytest.raises(ImproperlyConfigured, match=r"cached_property\.__get__"):
-        _held_rows.install_fill_stamps()
+    with monkeypatch.context() as patch:
+        patch.setattr(functools.cached_property, "__get__", __get__)
+        with pytest.raises(ImproperlyConfigured, match=r"cached_property\.__get__"):
+            _held_rows.install_fill_stamps()
+
+
+def test_the_wrapped_get_forwards_the_owner_however_it_is_passed():
+    """N1: a caller may pass the owner by the stdlib's keyword (``owner=``) or Django's
+    (``cls=``): the wrapper must not name it."""
+    import functools
+
+    class Plain:
+        @functools.cached_property
+        def std(self):
+            return 1
+
+        @cached_property
+        def dj(self):
+            return 2
+
+    plain = Plain()
+    assert functools.cached_property.__get__(Plain.__dict__["std"], plain, owner=Plain) == 1
+    assert cached_property.__get__(Plain.__dict__["dj"], plain, cls=Plain) == 2
 
 
 def test_install_is_idempotent():
