@@ -158,7 +158,8 @@ def build(
 
 
 #: payloads beyond the call fuzz's, for the tokenizer states (a scheme split by white space, a
-#: character reference to complete, the end tag of a raw-text element)
+#: character reference to complete, the end tag of a raw-text element) and a path ``safe_url``
+#: passes whose first character, cut off, uncovers a scheme (#4212)
 PAYLOADS = (
     *fuzz.PAYLOADS,
     " \tjava\nscript:INJ()",
@@ -171,6 +172,7 @@ PAYLOADS = (
     "6;avascript:INJ()",
     ";avascript:INJ()",
     "text/html,<x>",
+    "/javascript:INJ()",
 )
 
 
