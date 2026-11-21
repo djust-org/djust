@@ -2210,9 +2210,10 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         ``http_only`` also adds ``data-djust-transport="http"``: the page's view
         has no class a socket can mount (a ``@live_view`` function view), so the
         client sends its events over the HTTP fallback and opens no socket
-        (#4236).
+        (#4236). A root whose author declared ``dj-view`` keeps it and still
+        gets the marker, first in its tag (#4236 review N6).
         """
-        from .._rust import dj_root_stamp_offsets
+        from .._rust import dj_root_stamp_offsets, root_element_span
 
         attr = ' dj-view="%s"' % _html_escape(view_path, quote=True)
         if http_only:
@@ -2228,11 +2229,24 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         # authenticated the page root. Other output retains its own provenance.
         if trusted:
             attr = RenderedHTML(attr, root_spans=((0, len(attr.encode("utf-8"))),))
+        inserts = [(at, attr) for at in dj_root_stamp_offsets(html)]
+        if not inserts and http_only:
+            # No root without dj-view: the page root declares its own. Mark
+            # it right after its tag name; the view path stays the author's.
+            span = root_element_span(html, True)
+            if span is not None:
+                at = span[0] + 1
+                while at < len(html) and not (html[at].isspace() or html[at] in "/>"):
+                    at += 1
+                marker = ' data-djust-transport="http"'
+                if trusted:
+                    marker = RenderedHTML(marker, root_spans=((0, len(marker.encode("utf-8"))),))
+                inserts.append((at, marker))
         parts: list[str] = []
         last = 0
-        for insert_at in dj_root_stamp_offsets(html):
+        for insert_at, text in inserts:
             parts.append(html[last:insert_at])
-            parts.append(attr)
+            parts.append(text)
             last = insert_at
         if not parts:
             return html

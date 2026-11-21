@@ -370,7 +370,8 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   built for each request and the
   function runs again every time, so nothing is kept between requests. It
   answers the page GET and the HTTP fallback POST. Its page marks the root
-  `data-djust-transport="http"`, so the client sends events over the HTTP
+  `data-djust-transport="http"` (also a root that declares its own
+  `dj-view`, and a `dj-lazy` root), so the client sends events over the HTTP
   fallback and opens no socket (#4236); a WebSocket or SSE mount naming the
   class is still refused with `View not found`, because the class is built
   inside the request. Write a `LiveView` class for a page that keeps state or

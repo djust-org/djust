@@ -63,6 +63,20 @@ def test_stamp_http_only_adds_the_transport_marker():
     )
 
 
+def test_stamp_http_only_marks_a_root_that_declares_its_own_dj_view():
+    """#4236 review N6: a function-view template that declares ``dj-view`` on
+    its root itself still gets the transport marker (the view path is not
+    stamped over the author's); without ``http_only`` nothing changes."""
+    html = '<main class="a" dj-root dj-view="app.views.Fn">x</main>'
+    assert TemplateMixin._stamp_dj_view(html, "views.Page", http_only=True) == (
+        '<main data-djust-transport="http" class="a" dj-root dj-view="app.views.Fn">x</main>'
+    )
+    assert TemplateMixin._stamp_dj_view(html, "views.Page") == html
+    assert TemplateMixin._stamp_dj_view("<p>no root</p>", "views.Page", http_only=True) == (
+        "<p>no root</p>"
+    )
+
+
 def test_stamp_does_not_touch_bogus_comments_or_unterminated_tags():
     html = '<?x "<div dj-root>" ?><p title="never><main dj-root>'
     assert TemplateMixin._stamp_dj_view(html, "views.Page") == html
