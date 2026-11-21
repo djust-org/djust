@@ -1059,6 +1059,26 @@ engine (every socket render).
   A single `{% dj_radio %}` is still one loose radio: put it inside your own
   `<fieldset><legend>`.
 
+### `{% data_table %}`: one implementation on both engines (#3869)
+
+`{% data_table %}` is drawn by one implementation, the native handler (`DataTableHandler` in
+`djust/components/rust_handlers.py`), under Django's template engine and under the Rust engine. The
+Django engine's tag takes the same arguments and calls the handler with them, so a template draws
+the same markup, and every feature the tag accepts is available under DjangoTemplates: expandable
+rows (`on_table_expand`), editable columns and rows, export and import, column reordering,
+resizing and visibility, density, grouping, copy, row drag, frozen columns, virtual scroll,
+footer aggregations, conditional formatting. Rows and columns reach the handler the way the Rust
+engine hands them (a model is its serialised dict, so the exposure floor applies).
+
+`djust_components/table.html` no longer exists: a project override of it has no effect, and the
+filters only it used (`table_cell`, `table_href`, `table_has_href`, `table_width`,
+`table_width_attrs`) are removed. The markup is the handler's, not the old template's (no whitespace between elements,
+`data-row-key` on rows, the handler's classes and wrappers); CSS or tests written against the old
+markup may need new selectors. A table with `row_click_event` or `row_url` loads
+`/static/djust_components/data-table-row-click.js` with a fixed `/static/` prefix, as the handler
+always did; a project with another `STATIC_URL` serves that file from `/static/` or loads it
+itself.
+
 ### `{% data_table %}` row-level navigation (#1111)
 
 Two ways to make whole rows clickable for navigation. Both render
@@ -1131,16 +1151,12 @@ def get_context_data(self, **kwargs):
 
 A column can be a link too: `{"key": "claim_number", "label": "Claim #", "link": "claim_url",
 "link_class": "text-blue"}` draws the cell as `<a href>` of the row's `claim_url` value
-(`link_class` is optional). `row_url` and `link` are drawn the same way by the first render
-(Django's template engine) and by every render after the socket opens (the native handler), with
-two exceptions: the URL goes through the same scheme allowlist on the server, so `javascript:`,
-`data:` and other non-navigation schemes become `#` before they reach the page, and a `None` /
-`""` / `0` / `False` `row_url` or `link` draws nothing (it is not the key `"None"`). A row whose
-URL value is `None`, missing or blank has no URL: the cell is plain text and the row is not
-clickable, on both engines (#3895). One exception remains: a `row_url` given as a template
-VARIABLE that holds the text `"0"`, `"None"` or `"False"`, over rows that have a key spelled that
-way, makes a clickable row in the Python tag but not natively, because the native handler re-types
-the text it is handed (#3882, #3883).
+(`link_class` is optional). `row_url` and `link` are drawn the same way by every render (one
+implementation on both engines, below), with two rules: the URL goes through the same scheme
+allowlist on the server, so `javascript:`, `data:` and other non-navigation schemes become `#`
+before they reach the page, and a `None` / `""` / `0` / `False` `row_url` or `link` draws nothing
+(it is not the key `"None"`). A row whose URL value is `None`, missing or blank has no URL: the
+cell is plain text and the row is not clickable (#3895).
 
 A column given as a bare name is the column with that key and label: `columns=["claim_number",
 "status"]` draws the same table as `[{"key": "claim_number", "label": "claim_number"}, {"key":

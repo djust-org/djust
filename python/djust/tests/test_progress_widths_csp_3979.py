@@ -220,9 +220,9 @@ def test_the_data_table_loading_skeleton_has_no_inline_style():
     _assert_defined(_CATALOG_CSS, [100])
 
 
-def test_the_table_template_loading_skeleton_has_no_inline_style():
-    source = _Path(_rh.__file__).resolve().parent / "templates" / "djust_components" / "table.html"
-    lines = [ln for ln in source.read_text().splitlines() if "skeleton-line" in ln]
+def test_the_django_engine_data_table_loading_skeleton_has_no_inline_style():
+    html = _tag("{% data_table rows=rows columns=cols loading=True %}", rows=[], cols=[])
+    lines = re.findall(r'<div class="[^"]*skeleton-line[^"]*"[^>]*>', html)
     assert len(lines) == 5
     assert all("style=" not in ln and "dj-progress-w-100" in ln for ln in lines), lines
 

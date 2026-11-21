@@ -154,9 +154,9 @@ class TestEveryTag:
             engines[name.split("@")[0]] |= keys
         assert engines["django"] == sample and engines["rust"] == sample
         assert reached["rust"] == sample
-        # the Django engine draws ``data_table`` through its inclusion template, which needs
-        # rows and columns the per-argument call does not give it (swept by the inclusion test)
-        assert reached["django"] == sample - {"djust_components:data_table"}
+        # ``data_table`` is one implementation on both engines (#3869), so the Django engine
+        # reaches an attribute with it too
+        assert reached["django"] == sample
 
     @pytest.mark.pr_tier
     def test_the_sweep_finds_a_raw_attribute_on_each_engine(self, monkeypatch):
