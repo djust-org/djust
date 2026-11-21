@@ -104,7 +104,7 @@ On failure the response body is:
 | 401 | `unauthenticated` | No auth class accepted the request |
 | 401 | `login_required` | View requires login but the user isn't authenticated |
 | 403 | `csrf_failed` | Session auth without a valid CSRF token |
-| 403 | `permission_denied` | `@permission_required` / `check_view_auth` denied |
+| 403 | `permission_denied` | `@permission_required` / `check_view_auth` denied, or `PermissionDenied` raised in `mount()`, the handler, `api_response()` or `serialize=`. The message is always "Permission denied"; the exception's text goes to the server log only. |
 | 404 | `unknown_view` | No view registered under that slug |
 | 404 | `unknown_handler` | No handler by that name on the view |
 | 404 | `handler_not_exposed` | Handler exists but lacks `expose_api=True` |
