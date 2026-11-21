@@ -112,6 +112,21 @@ describe('#4236 a page that asks for the HTTP transport', () => {
         expect(allowlistWarnings()).toEqual([]);
     });
 
+    it('a lazy marked root hydrates over HTTP: no WebSocket, no allowlist warning', async () => {
+        // Review S2: a dj-lazy root starts no page transport, so its hydration
+        // must read the marker itself.
+        const LAZY = '<div dj-root dj-lazy="click" dj-view="djust.live_view.DynamicLiveView" '
+            + 'data-djust-transport="http" data-djust-lazy-id="lazy-1"><p>x</p></div>';
+        const { window, counts, allowlistWarnings } = mountPage(LAZY);
+        expect(counts.ws).toBe(0);
+        window.document.querySelector('[dj-lazy]').dispatchEvent(new window.Event('click'));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(counts.ws).toBe(0);
+        expect(counts.sse).toBe(0);
+        expect(counts.fetch).toBe(1);
+        expect(allowlistWarnings()).toEqual([]);
+    });
+
     it('an unmarked page still opens a WebSocket', () => {
         const { counts } = mountPage(UNMARKED);
         expect(counts.ws).toBe(1);

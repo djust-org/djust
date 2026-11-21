@@ -147,10 +147,18 @@ const lazyHydrationManager = {
 
         if (globalThis.djustDebug) console.log(`[LiveView:lazy] Hydrating: ${viewPath}`);
 
+        // #4236: a root marked data-djust-transport="http" (a @live_view
+        // function view) has no class any socket or stream can mount. A lazy
+        // root started no page transport, so the marker is read here, before
+        // the SSE and WebSocket branches; the HTTP-only transport is started
+        // so its events skip the refused-mount warning too.
+        const httpMarked = element.getAttribute('data-djust-transport') === 'http';
+        if (httpMarked && !liveViewWS) _startHttpOnlyTransport();
+
         // Over SSE the view mounts with a frame of its own beside the page
         // view, once the page view is mounted (#3252): the stream is the
         // session's, there is no socket to connect.
-        if (liveViewWS && liveViewWS.transportName === 'sse' && liveViewWS.enabled) {
+        if (!httpMarked && liveViewWS && liveViewWS.transportName === 'sse' && liveViewWS.enabled) {
             if (liveViewWS.viewMounted) {
                 this.mountElement(element, viewPath);
             } else {
@@ -160,7 +168,7 @@ const lazyHydrationManager = {
         }
 
         // Ensure WebSocket is connected (skip in HTTP-only mode)
-        if (window.DJUST_USE_WEBSOCKET === false || (liveViewWS && liveViewWS.httpOnly === true)) {
+        if (httpMarked || window.DJUST_USE_WEBSOCKET === false || (liveViewWS && liveViewWS.httpOnly === true)) {
             const viewId = element.getAttribute('data-djust-lazy-id');
             if (viewId) {
                 // Only the keyed address emitted by the server's provenance
