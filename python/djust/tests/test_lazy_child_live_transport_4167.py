@@ -20,7 +20,9 @@ from django.test import RequestFactory, override_settings
 from djust import LiveView, event_handler
 from djust.decorators import state
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
+# asyncio_mode = "auto" runs the async tests; an asyncio mark would also land on
+# the sync test below and warn (#4167 review N3).
+pytestmark = [pytest.mark.django_db(transaction=True)]
 
 MODULE = __name__
 PATH = "/lazy-4167/"
@@ -67,6 +69,18 @@ class RefusedChild(LazyChild):
 
 class RefusedPage(LazyPage):
     template_name = "lazy_4167_refused.html"
+    n = state(0, persist="server")
+
+
+class FailingChild(LazyChild):
+    count = state(0)
+
+    def mount(self, request, **kwargs):
+        raise RuntimeError("secret detail")
+
+
+class FailingNoIdPage(LazyPage):
+    template_name = "lazy_4167_failing_noid.html"
     n = state(0, persist="server")
 
 
@@ -123,10 +137,12 @@ def staged(monkeypatch, settings, tmp_path):
         ("lazy_4167_page.html", "LazyChild", "lz"),
         ("lazy_4167_refused.html", "RefusedChild", "lz"),
         ("lazy_4167_legacy.html", "LegacyLazyChild", "ll"),
+        ("lazy_4167_failing_noid.html", "FailingChild", None),
     ):
+        id_kwarg = f' view_id="{view_id}"' if view_id else ""
         (tmp_path / name).write_text(
             "{% load live_tags %}<html><body><div dj-root>Page={{ n }}"
-            f'{{% live_render "{MODULE}.{child}" lazy=True view_id="{view_id}" %}}'
+            f'{{% live_render "{MODULE}.{child}" lazy=True{id_kwarg} %}}'
             "</div></body></html>"
         )
 
@@ -216,11 +232,18 @@ async def test_lazy_legacy_child_routes_over_websocket_after_page_get():
 
 
 async def test_lazy_child_refused_at_socket_mount_shows_failure_not_a_route():
+    from django.utils.html import escape
+
+    # The HTTP fill's text for a denial, on both transports (#4167 review N2).
+    # The socket frame's HTML is re-serialized, so its quotes are not entities.
+    denied = "child %r denied access" % f"{MODULE}.RefusedChild"
     key = await sync_to_async(new_session)()
     with override_settings(**WS_SETTINGS):
+        html = await sync_to_async(page_get)(RefusedPage, key)
+        assert escape(denied) in html, html
         comm, frame = await connect(key, "RefusedPage", prerendered=False)
         try:
-            assert "Lazy child lz failed." in frame["html"], frame["html"]
+            assert denied in frame["html"], frame["html"]
             assert "Traceback" not in frame["html"] and "login" not in frame["html"].lower()
             reply = await event_reply(comm, "increment", view_id="lz")
             assert reply["type"] == "error" and reply["error"] == "Embedded view not found"
@@ -273,3 +296,20 @@ def test_renders_lazy_inline_walks_to_the_root():
     root = Node(live=True)
     assert _renders_lazy_inline(Node(Node(root)))
     assert not _renders_lazy_inline(Node(Node(Node())))
+
+
+async def test_failed_lazy_child_without_view_id_names_no_empty_id():
+    """#4167 review N1: a child with no ``view_id=`` that fails on the socket
+    reads "Lazy child failed.", not an empty id; no exception text."""
+    key = await sync_to_async(new_session)()
+    with override_settings(**WS_SETTINGS):
+        comm, frame = await connect(key, "FailingNoIdPage", prerendered=False)
+        await comm.disconnect()
+    assert "Lazy child failed." in frame["html"], frame["html"]
+    assert "Lazy child  failed" not in frame["html"]
+    assert "secret detail" not in frame["html"] and "RuntimeError" not in frame["html"]
+
+
+def test_module_does_not_mark_its_sync_test_asyncio():
+    """#4167 review N3: no module-wide asyncio mark (it warns on a sync test)."""
+    assert all(mark.name != "asyncio" for mark in pytestmark)
