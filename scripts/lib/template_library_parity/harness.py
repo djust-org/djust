@@ -164,6 +164,9 @@ def configure_django() -> None:
         ],
         ALLOWED_HOSTS=["*"],
         ROOT_URLCONF=urls.__name__,
+        # A theme pack, so ``theme_framework_overrides`` (which prints nothing without one,
+        # ``if not state.pack: return ""``) draws something and the row compares output (#3663).
+        LIVEVIEW_CONFIG={"theme": {"pack": "corporate"}},
     )
     django.setup()
 
