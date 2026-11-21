@@ -96,7 +96,7 @@ def _liveview_legacy_render(source: str, context: dict) -> str:
     """The deprecated 1.x attribute walk: the QuerySet is a view attribute (JIT path)."""
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "legacy"  # legacy subject: #4241 parity under the legacy arm
 
         def mount(self, request, **kwargs):
             for name, value in context.items():
