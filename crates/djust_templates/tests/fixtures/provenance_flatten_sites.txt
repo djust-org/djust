@@ -19,7 +19,7 @@ format!("#c{}:{}", python_float_repr(real), python_float_repr(imag))
 Some(EqClass::Mapping) => format!("m{}", e.repr),
 _ => format!("o{value:?}"),
 Err(_) => format!("d{text}"),
-Value::String(s) | Value::SafeString(s) => format!("s{s}"),
+Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => format!("s{s}"),
 other => format!("o{other:?}"),
 return "#nan".to_string();
 return "#0".to_string();

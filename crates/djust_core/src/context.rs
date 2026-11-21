@@ -2215,7 +2215,7 @@ impl Context {
         let (prefix, last) = key.rsplit_once('.')?;
         let index = last.parse::<usize>().ok()?;
         let base = match self.get(prefix) {
-            Some(Value::String(s) | Value::SafeString(s)) => s.clone(),
+            Some(Value::String(s) | Value::SafeString(s) | Value::ModelName(s)) => s.clone(),
             // A non-string prefix is not this step's business — `get` has
             // already tried every arm that applies to it.
             //
@@ -2229,7 +2229,7 @@ impl Context {
             // the intent without depending on that invariant being noticed.
             Some(_) => return None,
             None => match self.string_index(prefix)? {
-                Value::String(s) | Value::SafeString(s) => s,
+                Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => s,
                 _ => return None,
             },
         };

@@ -224,7 +224,7 @@ pub struct InputSafety {
 /// grapheme-cluster count would be a different, wronger one.
 pub fn python_len(value: &Value) -> Option<usize> {
     match value {
-        Value::String(s) | Value::SafeString(s) => Some(s.chars().count()),
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => Some(s.chars().count()),
         Value::List(l) | Value::Tuple(l) | Value::NamedTuple { items: l, .. } => Some(l.len()),
         // `len(d.keys())` is the entry count, not the repr's length.
         Value::DictView { items, .. } => Some(items.len()),
@@ -295,7 +295,7 @@ pub fn python_len(value: &Value) -> Option<usize> {
 /// [`Encoded::consume_live_items`]: djust_core::Encoded::consume_live_items
 pub fn iter_values(value: &Value) -> Result<Option<Vec<Value>>> {
     Ok(match value {
-        Value::String(s) | Value::SafeString(s) => {
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
             Some(s.chars().map(|c| Value::String(c.to_string())).collect())
         }
         Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
@@ -522,7 +522,10 @@ fn builtin_produced_safe(
         "add" => {
             input_safety.container
                 && (arg_was_quoted || arg_type.is_safe)
-                && matches!(result, Value::String(_) | Value::SafeString(_))
+                && matches!(
+                    result,
+                    Value::String(_) | Value::SafeString(_) | Value::ModelName(_)
+                )
         }
         // The three EXTRACTORS, and the THIRD consumer of the item grant
         // (#2299). Django's bodies are `value[0]`, `value[-1]` and
@@ -1878,7 +1881,9 @@ fn apply_builtin_filter(
                 context
                     .and_then(|ctx| ctx.get("DATE_FORMAT"))
                     .and_then(|v| match v {
-                        Value::String(s) | Value::SafeString(s) => Some(s.as_str()),
+                        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
+                            Some(s.as_str())
+                        }
                         _ => None,
                     })
             } else {
@@ -1943,7 +1948,9 @@ fn apply_builtin_filter(
                 context
                     .and_then(|ctx| ctx.get("TIME_FORMAT"))
                     .and_then(|v| match v {
-                        Value::String(s) | Value::SafeString(s) => Some(s.as_str()),
+                        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
+                            Some(s.as_str())
+                        }
                         _ => None,
                     })
             } else {
@@ -2632,8 +2639,8 @@ fn add_values(value: &Value, arg: &Value) -> Result<Value> {
             Value::SafeString(format!("{lhs}{rhs}"))
         }
         (
-            Value::String(lhs) | Value::SafeString(lhs),
-            Value::String(rhs) | Value::SafeString(rhs),
+            Value::String(lhs) | Value::SafeString(lhs) | Value::ModelName(lhs),
+            Value::String(rhs) | Value::SafeString(rhs) | Value::ModelName(rhs),
         ) => Value::String(format!("{lhs}{rhs}")),
         (Value::List(lhs), Value::List(rhs)) => {
             Value::List(lhs.iter().chain(rhs).cloned().collect())
@@ -2954,7 +2961,7 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
     };
 
     match value {
-        Value::String(s) | Value::SafeString(s) => {
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
             let chars: Vec<char> = s.chars().collect();
             let picked: String = slice_positions(start, stop, step, chars.len())
                 .into_iter()
@@ -3930,7 +3937,7 @@ fn iso_8601(dt: &DateTime<chrono::FixedOffset>, time_only: bool) -> String {
 /// is the filter's first line — so they answer `""` whatever the format says.
 fn django_literal_only_format(value: &Value, format_str: &str) -> String {
     if matches!(value, Value::None | Value::Missing)
-        || matches!(value, Value::String(s) | Value::SafeString(s) if s.is_empty())
+        || matches!(value, Value::String(s) | Value::SafeString(s) | Value::ModelName(s) if s.is_empty())
     {
         return String::new();
     }
@@ -4623,7 +4630,9 @@ fn value_to_json(value: &Value) -> String {
         Value::BigInt(d) if is_json_int_literal(d) => d.clone(),
         Value::BigInt(d) => format!("\"{}\"", json_string_body(d)),
         Value::Decimal(d) => format!("\"{}\"", json_string_body(d)),
-        Value::String(s) | Value::SafeString(s) => format!("\"{}\"", json_string_body(s)),
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
+            format!("\"{}\"", json_string_body(s))
+        }
         // THE #2448 fix, and the only place in the engine that reads the
         // encoder spelling. `DjangoJSONEncoder.default` is not `str()`: it is
         // `isoformat()` with the microseconds truncated to milliseconds and a
@@ -5753,7 +5762,7 @@ fn pluralize(value: &Value, arg: &str) -> String {
         // A STRING is `float(s)`, and on failure it is the `ValueError` arm —
         // which does NOT fall through to `len()`. `float` accepts surrounding
         // whitespace, `inf` and `nan`, and so does Rust's parse.
-        Value::String(s) | Value::SafeString(s) => {
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
             return match s.trim().parse::<f64>() {
                 Ok(f) => pick(f == 1.0),
                 Err(_) => String::new(),
@@ -5798,12 +5807,14 @@ fn int_digits_of(value: &Value, string_float_ok: bool) -> Option<String> {
         Value::BigInt(d) => Some(d.clone()),
         // `int(True)` is 1 in Python.
         Value::Bool(b) => Some(if *b { "1" } else { "0" }.to_string()),
-        Value::String(s) | Value::SafeString(s) => python_int_str(s).or_else(|| {
-            string_float_ok
-                .then(|| s.trim().parse::<f64>().ok())
-                .flatten()
-                .and_then(djust_core::decimal::python_float_trunc_digits)
-        }),
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
+            python_int_str(s).or_else(|| {
+                string_float_ok
+                    .then(|| s.trim().parse::<f64>().ok())
+                    .flatten()
+                    .and_then(djust_core::decimal::python_float_trunc_digits)
+            })
+        }
         // `int(None)`, `int([1])`, `int({})` all raise.
         _ => None,
     }
@@ -5994,14 +6005,14 @@ pub(crate) fn python_type_name(value: &Value) -> &str {
         Value::Decimal(_) => djust_core::decimal_type_name(),
         Value::None => "NoneType",
         // Django's `string_if_invalid`, which is a `str`. See the doc above.
-        Value::String(_) | Value::SafeString(_) | Value::Missing => "str",
+        Value::String(_) | Value::SafeString(_) | Value::ModelName(_) | Value::Missing => "str",
         Value::List(_) => "list",
         Value::Tuple(_) => "tuple",
         Value::NamedTuple { name, .. } => name,
         Value::Object(map) => {
             if value.object_str().is_some() {
                 match map.get(&djust_core::object_key::ObjectKey::Str("__model__".into())) {
-                    Some(Value::String(name)) => name,
+                    Some(Value::String(name) | Value::ModelName(name)) => name,
                     _ => "object",
                 }
             } else {
@@ -6174,7 +6185,7 @@ pub(crate) fn python_getitem(
         items.get(usize::try_from(at).ok()?).cloned()
     }
     match value {
-        Value::String(s) | Value::SafeString(s) => {
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
             let chars: Vec<char> = s.chars().collect();
             Ok(nth(&chars, index).map(|c| Value::String(c.to_string())))
         }
@@ -7041,6 +7052,7 @@ mod tests {
             Value::Float(_) => "Float",
             Value::String(_) => "String",
             Value::SafeString(_) => "SafeString",
+            Value::ModelName(_) => "ModelName",
             Value::List(_) => "List",
             Value::Tuple(_) => "Tuple",
             Value::NamedTuple { .. } => "NamedTuple",
@@ -7065,6 +7077,7 @@ mod tests {
             Value::Float(1.5),
             Value::String("<b>".to_string()),
             Value::SafeString("<b>".to_string()),
+            Value::ModelName("<b>".to_string()),
             Value::List(vec![Value::String("<b>".to_string())]),
             Value::Tuple(vec![Value::String("<b>".to_string())]),
             Value::Object(Default::default()),
@@ -7177,9 +7190,9 @@ mod tests {
             }
         }
         assert_eq!(
-            iterating, 8,
-            "the iterating set is exactly String / SafeString / List / Tuple / Object / \
-             Missing / DictView, plus an iterating Encoded (#2466) — a \
+            iterating, 9,
+            "the iterating set is exactly String / SafeString / ModelName (#3947) / List / \
+             Tuple / Object / Missing / DictView, plus an iterating Encoded (#2466) — a \
              change here is a change to what #2283 and #2466 fixed",
         );
         // The half that makes "exhaustive" true rather than aspirational: every
@@ -7189,7 +7202,7 @@ mod tests {
         let seen: std::collections::BTreeSet<&str> = variants.iter().map(variant_name).collect();
         assert_eq!(
             seen.len(),
-            14,
+            15,
             "every `Value` variant needs a sample above; saw {seen:?}",
         );
     }
@@ -8166,7 +8179,7 @@ mod tests {
             ("id", Value::Integer(1)),
             ("pk", Value::Integer(1)),
             ("__str__", Value::String(text.to_string())),
-            ("__model__", Value::String("Account".to_string())),
+            ("__model__", Value::ModelName("Account".to_string())),
             ("owner_code", Value::String("SENTINEL-A".to_string())),
             ("get_note_text", Value::String("SENTINEL-B".to_string())),
         ] {
@@ -8212,7 +8225,7 @@ mod tests {
         for (k, v) in [
             ("pk", Value::Integer(1)),
             ("__str__", Value::SafeString(text.to_string())),
-            ("__model__", Value::String("Account".to_string())),
+            ("__model__", Value::ModelName("Account".to_string())),
             ("owner_code", Value::String("SENTINEL-A".to_string())),
         ] {
             m.insert(djust_core::ObjectKey::Str(k.to_string()), v);

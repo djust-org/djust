@@ -15,7 +15,7 @@ fn model_value() -> Value {
         ("id", Value::Integer(1)),
         ("pk", Value::Integer(1)),
         ("__str__", Value::String("Account:a1".to_string())),
-        ("__model__", Value::String("Account".to_string())),
+        ("__model__", Value::ModelName("Account".to_string())),
         ("owner_code", Value::String("SENTINEL-A".to_string())),
         ("get_note_text", Value::String("SENTINEL-B".to_string())),
     ] {
@@ -99,7 +99,7 @@ fn a_model_with_a_safe_text_has_no_dict_methods_either() {
     for (key, value) in [
         ("pk", Value::Integer(1)),
         ("__str__", Value::SafeString("<b>a1</b>".to_string())),
-        ("__model__", Value::String("Safe".to_string())),
+        ("__model__", Value::ModelName("Safe".to_string())),
         ("owner_code", Value::String("SENTINEL-A".to_string())),
     ] {
         map.insert(ObjectKey::Str(key.to_string()), value);

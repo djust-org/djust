@@ -3757,7 +3757,9 @@ fn static_lazy_tree(
             let name =
                 match djust_templates::renderer::resolve_template_reference(token, &Context::new())
                 {
-                    Ok(Value::String(name) | Value::SafeString(name)) => name,
+                    Ok(Value::String(name) | Value::SafeString(name) | Value::ModelName(name)) => {
+                        name
+                    }
                     _ => return Ok(None),
                 };
             let Ok(name) = djust_templates::inheritance::construct_relative_path_allow_recursion(
@@ -3981,7 +3983,7 @@ fn needs_lazy_tree_uncached(
             lazy_dependencies(&layer.nodes, &mut parents);
             for parent in parents {
                 watch_lazy_selector(&parent.operand, selectors)?;
-                if let Ok(Value::String(name) | Value::SafeString(name)) =
+                if let Ok(Value::String(name) | Value::SafeString(name) | Value::ModelName(name)) =
                     djust_templates::renderer::resolve_template_reference(&parent.operand, context)
                 {
                     for dir in dirs {
@@ -4028,7 +4030,7 @@ fn needs_lazy_tree_uncached(
             return Ok(true);
         };
         let candidates = match value {
-            Value::String(name) | Value::SafeString(name) => vec![name],
+            Value::String(name) | Value::SafeString(name) | Value::ModelName(name) => vec![name],
             Value::List(values) => values.iter().map(|v| v.to_string()).collect(),
             _ => Vec::new(),
         };

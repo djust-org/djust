@@ -163,6 +163,21 @@ pub(crate) const ENCODED_TAG: &str = "__djust_encoded__";
 /// Django means both variants stay `null`.
 pub(crate) const MISSING_TAG: &str = "__djust_missing__";
 
+/// The binary-format tag for a [`Value::ModelName`] (#3947): a one-key map with a string
+/// payload, like [`DECIMAL_TAG`]. Untagged, the marker would come back from a msgpack state
+/// round trip as a plain [`Value::String`] and every model map would read as a dict after one
+/// cache hit. JSON writes the plain string (the client wire is unchanged).
+///
+/// Unlike the older tags, DATA cannot mint this one: a user map whose only key is this tag (or
+/// [`ESCAPED_MAP_TAG`]) is written under [`ESCAPED_MAP_TAG`] and read back as that map, so a
+/// stored JSON column cannot become a model marker through a state round trip.
+pub(crate) const MODEL_NAME_TAG: &str = "__djust_model_name__";
+
+/// The escape wrapper for a user map whose only key is [`MODEL_NAME_TAG`] or this tag (#3947).
+/// The payload is a two-element list `[key, value]` rather than a map, so the inner map is never
+/// itself read for a tag on the way back.
+pub(crate) const ESCAPED_MAP_TAG: &str = "__djust_escaped_map__";
+
 /// The [`MISSING_TAG`] value, for tests outside the crate. `#[doc(hidden)]`,
 /// not API — same rationale as [`decimal_tag`].
 #[doc(hidden)]
@@ -249,6 +264,13 @@ pub enum Value {
     String(String),
     /// Runtime SafeData string. Serialized as plain text; wire data cannot mint safety.
     SafeString(String),
+    /// The `__model__` value of a SERIALIZED MODEL map (#3947): the model class name, stamped by
+    /// `serialization.model_identity` as a `ModelName` (a `str` subclass). It reads and renders
+    /// exactly as a [`Value::String`] everywhere; only [`Value::model_str`] asks for it, so a dict
+    /// from user data that carries a plain text `__model__` beside `__str__` and `pk` stays a
+    /// dict. JSON writes the plain string (client wire unchanged); a binary encoding tags it under
+    /// `MODEL_NAME_TAG`.
+    ModelName(String),
     List(Vec<Value>),
     /// A Python tuple. Separate from `List` only so it can render with
     /// parentheses, which `str()` distinguishes (#2203).
@@ -1697,7 +1719,12 @@ impl Serialize for Value {
             Value::Bool(b) => serializer.serialize_bool(*b),
             Value::Integer(i) => serializer.serialize_i64(*i),
             Value::Float(f) => serializer.serialize_f64(*f),
-            Value::String(st) | Value::SafeString(st) => serializer.serialize_str(st),
+            Value::ModelName(st) if !serializer.is_human_readable() => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(MODEL_NAME_TAG, st)?;
+                m.end()
+            }
+            Value::String(st) | Value::SafeString(st) | Value::ModelName(st) => serializer.serialize_str(st),
             // A tuple keeps its identity in binary formats only (#2276) — see
             // `TUPLE_TAG` for why JSON deliberately stays an array.
             Value::NamedTuple {
@@ -1716,6 +1743,23 @@ impl Serialize for Value {
             }
             Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
                 items.serialize(serializer)
+            }
+            // A user map that would read back as a tag the data must not mint (#3947).
+            Value::Object(o)
+                if !serializer.is_human_readable()
+                    && o.len() == 1
+                    && o.keys().next().is_some_and(|k| {
+                        matches!(k, ObjectKey::Str(s) if s == MODEL_NAME_TAG || s == ESCAPED_MAP_TAG)
+                    }) =>
+            {
+                let (key, value) = o.iter().next().expect("len checked");
+                let key = match key {
+                    ObjectKey::Str(s) => s.as_str(),
+                    _ => unreachable!("matched a string key above"),
+                };
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(ESCAPED_MAP_TAG, &(key, value))?;
+                m.end()
             }
             Value::Object(o) => o.serialize(serializer),
             // A view is built by `Context::dict_view` during a render and is
@@ -1951,6 +1995,19 @@ impl<'de> Deserialize<'de> for Value {
                 if obj.len() == 1 {
                     if let Some(Value::String(d)) = obj.get(DECIMAL_TAG) {
                         return Ok(Value::Decimal(d.clone()));
+                    }
+                    // The model-name marker (#3947): a string payload, like the Decimal tag.
+                    if let Some(Value::String(d)) = obj.get(MODEL_NAME_TAG) {
+                        return Ok(Value::ModelName(d.clone()));
+                    }
+                    // A user map the writer escaped: `[key, value]`, read back as that one-key
+                    // map with no tag interpretation of the key.
+                    if let Some(Value::List(pair)) = obj.get(ESCAPED_MAP_TAG) {
+                        if let [Value::String(key), value] = pair.as_slice() {
+                            let mut inner = IndexMap::new();
+                            inner.insert(ObjectKey::Str(key.clone()), value.clone());
+                            return Ok(Value::Object(inner));
+                        }
                     }
                     // The binary-format missing-key tag (#2484). Same shape,
                     // and the payload is `nil` — which reaches here as
@@ -3248,7 +3305,7 @@ impl Value {
             // written on the digits anyway rather than through a parse that
             // gives `inf` for a 400-digit value.
             Value::BigInt(d) => d.bytes().any(|b| b.is_ascii_digit() && b != b'0'),
-            Value::String(s) | Value::SafeString(s) => !s.is_empty(),
+            Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => !s.is_empty(),
             // Python's own `bool(o)`, asked at the conversion and carried
             // (#2458). #2448 read `!e.display.is_empty()` here — always true
             // for this family — which kept `bool(timedelta(0))` at `True`
@@ -3497,7 +3554,9 @@ impl Value {
             // The text is never marked safe by being printed from here: it is escaped like any
             // other text unless the renderer is told otherwise.
             Value::Object(o) => match o.get("__str__") {
-                Some(Value::String(s) | Value::SafeString(s)) => Some(s.as_str()),
+                Some(Value::String(s) | Value::SafeString(s) | Value::ModelName(s)) => {
+                    Some(s.as_str())
+                }
                 _ => None,
             },
             _ => None,
@@ -3514,15 +3573,17 @@ impl Value {
     /// `json_script`, `.items` / `.keys` / `.values`, iteration, `stringformat` mapping specs,
     /// `in`, `pluralize`) go by this stricter shape, so a dict from user data that happens to
     /// carry a text `__str__` key (a stored JSON column) keeps being a dict there. Any dict can
-    /// still carry all three keys: this narrows the accident, it does not make the marker
-    /// unforgeable.
+    /// still carry all three keys as DATA: the `__model__` value must be a
+    /// [`Value::ModelName`], which only `serialization.model_identity` produces (a `ModelName`
+    /// `str` subclass on the Python side) and which no wire format mints from a plain string, so
+    /// a user dict with a text `__model__` beside `__str__` and `pk` is a dict here (#3947).
     pub fn model_str(&self) -> Option<&str> {
         let text = self.object_str()?;
         let Value::Object(o) = self else {
             return None;
         };
         match (o.get("__model__"), o.get("pk")) {
-            (Some(Value::String(_) | Value::SafeString(_)), Some(_)) => Some(text),
+            (Some(Value::ModelName(_)), Some(_)) => Some(text),
             _ => None,
         }
     }
@@ -3604,7 +3665,7 @@ impl Value {
     /// top-level one.
     pub fn py_repr(&self) -> String {
         match self {
-            Value::String(s) | Value::SafeString(s) => py_repr_string(s),
+            Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => py_repr_string(s),
             // `repr(Decimal('19.99'))` is `Decimal('19.99')`, so a Decimal
             // nested in a list or dict renders the constructor form while a
             // top-level one renders bare digits — the same str/repr split that
@@ -3684,7 +3745,7 @@ impl fmt::Display for Value {
             // `numberformat.format` short-circuits an `int` before it reaches
             // either rule, and its non-grouping path is `str(number)` (#2260).
             Value::BigInt(d) => write!(f, "{d}"),
-            Value::String(s) | Value::SafeString(s) => write!(f, "{s}"),
+            Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => write!(f, "{s}"),
             // The display spelling is `str(o)`; only `json_script` reads the
             // other one.
             //
@@ -4411,6 +4472,9 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // characters until the stack overflowed (#2555). It crosses
             // lossily instead — see `py_string_lossy`.
             let s = py_string_lossy(&s)?;
+            if is_model_name(&ob.to_owned()) {
+                return Ok(Value::ModelName(s));
+            }
             let safe = python_string_is_safe(&ob.to_owned());
             Ok(if safe {
                 Value::SafeString(s)
@@ -4687,6 +4751,31 @@ fn floored_model_proxy<'py>(ob: &Bound<'py, PyAny>) -> Option<Bound<'py, PyAny>>
 ///
 /// One cached class and one `isinstance`, asked only of an object that already carries
 /// `__djust_serialize__` (a djust proxy), so an ordinary value never pays for it.
+/// The cached `djust.serialization.ModelName` class (#3947), or `None` when it cannot be imported.
+fn model_name_class(py: Python<'_>) -> Option<&'static Py<PyAny>> {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    CLASS
+        .get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+            Ok(py
+                .import("djust.serialization")?
+                .getattr("ModelName")?
+                .unbind())
+        })
+        .ok()
+}
+
+/// Is this `str` a `ModelName` (the `__model__` marker of a serialized model, #3947)? Asked only
+/// of a `str` SUBCLASS instance, so a plain `str` never pays for the lookup.
+fn is_model_name(ob: &Bound<'_, PyAny>) -> bool {
+    if ob.is_exact_instance_of::<PyString>() {
+        return false;
+    }
+    match model_name_class(ob.py()) {
+        Some(class) => ob.get_type().is(class.bind(ob.py())),
+        None => false,
+    }
+}
+
 fn is_model_floor_proxy(ob: &Bound<'_, PyAny>) -> bool {
     static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
     let py = ob.py();
@@ -6039,6 +6128,12 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::SafeString(s) => py
                 .import("django.utils.safestring")?
                 .call_method1("mark_safe", (s,)),
+            // Back to a `ModelName`, so a map that crosses to Python and back (a bridged
+            // handler's binding, `regroup`) is still read as a model (#3947).
+            Value::ModelName(s) => match model_name_class(py) {
+                Some(class) => class.bind(py).call1((s,)),
+                None => Ok(s.into_pyobject(py)?.to_owned().into_any()),
+            },
             // Temporal values retain their Python type for arithmetic and
             // custom filters. Only validated temporal handles cross here;
             // opaque objects and carried collections keep their display-string
@@ -6834,7 +6929,7 @@ mod tests {
         };
         let text = Value::String("bob".to_string());
         let safe = Value::SafeString("<b>bob</b>".to_string());
-        let class = Value::String("Account".to_string());
+        let class = Value::ModelName("Account".to_string());
         let pk = Value::Integer(1);
         let full = build(&[
             ("pk", pk.clone()),
@@ -6858,6 +6953,12 @@ mod tests {
             build(&[
                 ("__str__", text.clone()),
                 ("__model__", Value::Integer(5)),
+                ("pk", pk.clone()),
+            ]),
+            // #3947: a plain-text `__model__` is DATA, not the marker.
+            build(&[
+                ("__str__", text.clone()),
+                ("__model__", Value::String("Account".to_string())),
                 ("pk", pk.clone()),
             ]),
             build(&[

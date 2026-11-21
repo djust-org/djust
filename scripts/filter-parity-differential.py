@@ -3088,6 +3088,8 @@ def _value_variant(obj: object) -> str:
     if isinstance(obj, float):
         return "Float"
     if isinstance(obj, str):
+        if type(obj).__name__ == "ModelName" and type(obj).__module__ == "djust.serialization":
+            return "ModelName"  # #3947: checked before the SafeString/String split, as Rust does
         return "SafeString" if isinstance(obj, SafeData) else "String"
     if isinstance(obj, tuple):
         fields = getattr(obj, "_fields", None)
@@ -3364,15 +3366,28 @@ def _required_value_truthiness() -> dict[str, str]:
     }
 
 
-#: Keyed by MEMBER, built from the two reason tables above so a variant added
+#: Variants that read as ANOTHER variant in every arm, so their truthiness IS
+#: that variant's (whose two inhabitants the corpus sweeps). Each names the
+#: variant it aliases and why it is not a corpus row of its own.
+VALUE_TRUTHINESS_ALIAS = {
+    "ModelName": (
+        "#3947: the `__model__` VALUE `model_identity` stamps inside a model map; every arm "
+        "reads it as `String`, and only `Value::model_str` asks for the variant"
+    ),
+}
+
+
+#: Keyed by MEMBER, built from the reason tables above so a variant added
 #: to the enum inherits nothing by accident.
 VALUE_TRUTHINESS_EXEMPT = {
     f"{channel}:{outcome}:{answer}": (
         VALUE_TRUTHINESS_NOT_INHABITABLE.get(outcome)
+        or VALUE_TRUTHINESS_ALIAS.get(outcome)
         or VALUE_TRUTHINESS_ONE_ANSWER[(outcome, answer)]
     )
     for channel, outcome, answer in _value_truthiness_members()
     if outcome in VALUE_TRUTHINESS_NOT_INHABITABLE
+    or outcome in VALUE_TRUTHINESS_ALIAS
     or (outcome, answer) in VALUE_TRUTHINESS_ONE_ANSWER
 }
 
