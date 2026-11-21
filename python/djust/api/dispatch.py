@@ -49,12 +49,15 @@ logger = logging.getLogger(__name__)
 
 
 def _permission_denied(owners: tuple, exc: PermissionDenied) -> JsonResponse:
-    """A 403 that never carries the exception's text (#4170, owner decision #4046).
+    """A 403 that never carries the exception's text (#4170).
 
-    WebSocket and SSE send a fixed message for ``PermissionDenied``; the HTTP
-    API and ``@server_function`` do the same. The text goes to the server log
-    only, through the exposure-policy gate (value-free for a nonlegacy owner
-    outside DEBUG).
+    WebSocket and SSE answer ``PermissionDenied`` with a fixed "Permission
+    denied" frame under every policy, DEBUG included (``runtime.py``); the
+    HTTP API and ``@server_function`` now do the same (transport parity).
+    Other error detail follows ADR-038 D-a (revised): detailed under DEBUG,
+    value-free in production, through ``diagnostics_policy_allows``. The
+    text goes to the server log only, through that gate (value-free for a
+    nonlegacy owner outside DEBUG).
     """
     from .._exposure_diagnostics import log_failure_for
 

@@ -1,11 +1,13 @@
 """#4170: the HTTP API and ``@server_function`` answer ``PermissionDenied``
 with the fixed message "Permission denied", never the exception's text.
 
-WebSocket and SSE already send a fixed message; this pins the HTTP transport
-to the same rule (owner decision on #4046: no exception detail reaches any
-client, under any policy, DEBUG included). The text goes to the server log
-only, through ``log_failure_for`` (so it is value-free in production for a
-nonlegacy view, and present under DEBUG).
+WebSocket and SSE always answer ``PermissionDenied`` with a fixed
+"Permission denied", under every policy, DEBUG included; this pins the HTTP
+transport to the same rule (WS/SSE parity). Other exception detail follows
+ADR-038 D-a, revised (``docs/adr/038-explicit-context-and-state-exposure.md``):
+Django-like detail under DEBUG, value-free in production. The text goes to
+the server log only, through ``log_failure_for`` (so it is value-free in
+production for a nonlegacy view, and present under DEBUG).
 """
 
 from __future__ import annotations

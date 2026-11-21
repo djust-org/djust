@@ -1354,8 +1354,9 @@ def _assert_package_sites_classified(scan, classified, what):
             )
     problems += [f"{rel}: module no longer exists" for rel in sorted(set(classified) - seen)]
     assert not problems, (
-        f"{what} interpolating an exception must send no detail (owner decision on "
-        "#4046), or be classified with a 'gated: ' / 'framework-only: ' reason: "
+        f"{what} interpolating an exception must send no detail to an explicit view "
+        "outside DEBUG (ADR-038 D-a, revised; docs/adr/038-explicit-context-and-state-"
+        "exposure.md), or be classified with a 'gated: ' / 'framework-only: ' reason: "
         + "; ".join(problems)
     )
 
