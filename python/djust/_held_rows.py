@@ -24,7 +24,9 @@ The rule, the same on every transport:
   (:func:`reads_unknown`), and whenever the view holds a cached property value
   or evaluated rows that were filled while nothing recorded (a QuerySet
   filled outside every step and render of the view's tree, a cached property
-  not computed in one).
+  not computed in one, or computed in a thread that did not carry the step's
+  context: a plain ``threading.Thread`` the handler started, whose reads never
+  reach R).
 * **Decision.** When W is known, R is known and they do not meet, nothing is
   reset and a handler that changed nothing answers ``noop``, as before #4112.
   Otherwise everything the view holds is read again before its next render:
@@ -52,8 +54,13 @@ once), every item but plain values. A turn that wrote nothing walks nothing,
 and a write whose tables meet the read set needs no walk to decide: a QuerySet
 is stamped when it fills (with a token of the view whose recorded step or
 render filled it, never reused in the process, from a wrapper around
-``QuerySet._fetch_all``; a copy or an unpickled QuerySet has no stamp) and the
-cached properties a step or render fills are noted then. Not reset: model instances, lists of rows,
+``QuerySet._fetch_all``; a copy or an unpickled QuerySet has no stamp) and a
+cached property is noted when it fills, by a wrapper around the two
+``cached_property`` descriptors' ``__get__`` (a non-data descriptor: it runs
+only on a fill): noted only when the context filling it is the view's own
+recorded step or render (:func:`_stamp_property`), so provenance does not
+depend on timing. A ``cached_property`` subclass that overrides ``__get__``
+without calling the base is never noted: unknown, so refreshed more, never less. Not reset: model instances, lists of rows,
 ``select_for_update()`` QuerySets, ``frozen_rows``.
 
 The recorder is one Django ``execute_wrapper`` at index 0 (the outermost) of
@@ -224,7 +231,7 @@ _writer: contextvars.ContextVar[Optional[_Writer]] = contextvars.ContextVar(
 class _Reads:
     """What a view's own code and renders read."""
 
-    __slots__ = ("ref", "token", "tables", "unknown", "complete", "known", "dropped")
+    __slots__ = ("ref", "token", "tables", "unknown", "complete", "known", "dropped", "stamped")
 
     def __init__(self, ref: Any) -> None:
         self.ref = ref
@@ -234,6 +241,8 @@ class _Reads:
         self.complete = False  # one render finished under recording
         self.known: FrozenSet[str] = frozenset()  # cached properties filled while recording
         self.dropped: FrozenSet[str] = frozenset()  # emptied by a reset in this step
+        # cached properties whose latest fill ran in this view's own recorded step or render
+        self.stamped: Set[str] = set()
 
 
 #: ``id(view) -> [weakref, tables or None, generation]``: writes not yet rendered.
@@ -911,6 +920,7 @@ def reads_unknown(view: Any) -> None:
         if entry is not None and entry.ref() is view:
             entry.complete = False
             entry.known = frozenset()
+            entry.stamped = set()
 
 
 def render_completed(view: Any) -> None:
@@ -943,7 +953,9 @@ def _properties_filled(view: Any, before: FrozenSet[str]) -> None:
         if entry is not None:
             # Filled inside: new since the step began, or emptied by a reset in
             # it (a reset inside a render: the render refilled it).
-            filled = (now - before) | (now & entry.dropped)
+            # Only what a context of this view's own filled (:func:`_stamp_property`):
+            # a value a plain thread computed read through no recorder.
+            filled = ((now - before) | (now & entry.dropped)) & entry.stamped
             entry.known = filled | (now & entry.known)
             entry.dropped = frozenset()
 
@@ -966,23 +978,123 @@ def _stamp_fill(queryset: Any) -> None:
         pass  # not weakly referable: no stamp, so it reads as filled outside
 
 
+def _stamp_property(instance: Any, name: Optional[str]) -> None:
+    """A ``cached_property`` just filled on ``instance``: record whether the context
+    that computed it is ``instance``'s own recorded step or render.
+
+    The context decides, not the timing: a thread that carries the step's context
+    (``sync_to_async``, ``contextvars.copy_context().run``) has the writer set, its
+    reads reach R, and the value is known. A plain ``threading.Thread`` has no
+    writer, so its value was read through no recorder: unknown, whenever it ran.
+    """
+    if not name:
+        return
+    writer = _writer.get()
+    if writer is not None and writer.ref() is instance:
+        with _lock:
+            entry = _reads_entry(instance)
+            if entry is not None:
+                entry.stamped.add(name)
+        return
+    entry = _read_sets.get(id(instance))
+    if entry is not None and entry.ref() is instance:
+        with _lock:
+            entry.stamped.discard(name)
+            if name in entry.known:
+                entry.known = entry.known - {name}
+
+
+#: What the wrappers below were written against. A change fails ``ready()`` instead of
+#: silently recording nothing.
+_FETCH_ALL_PARAMETERS = ["self"]
+_CACHED_PROPERTY_GET_PARAMETERS = ["instance", "cls"]
+
+
+def _check_wrapped_signature(
+    what: str, function: Any, expected: List[str], *, skip: int = 0
+) -> None:
+    import inspect
+
+    from django import get_version
+    from django.core.exceptions import ImproperlyConfigured
+
+    try:
+        found = list(inspect.signature(function).parameters)[skip:]
+    except (TypeError, ValueError):
+        found = None
+    # A cached_property's second parameter is named ``cls`` by Django and ``owner`` by
+    # functools: compare the arity and the first name only.
+    if found is None or len(found) != len(expected) or found[:1] != expected[:1]:
+        raise ImproperlyConfigured(
+            "djust's held-row refresh (#4112) wraps %s, whose parameters are %r on Django %s "
+            "where %r were expected. Use a djust release that supports this Django: without the "
+            "wrapper a view cannot tell which QuerySets and cached properties it filled itself, "
+            "and would keep stale rows after a write (#4210)."
+            % (what, found, get_version(), expected)
+        )
+
+
 def install_fill_stamps() -> None:
-    """Wrap ``QuerySet._fetch_all`` once to call :func:`_stamp_fill` when it fills."""
+    """Wrap ``QuerySet._fetch_all`` and the ``cached_property`` descriptors' ``__get__``
+    once, to note which view's step or render filled them.
+
+    Both are private or process-wide seams, so their signatures are checked first and a
+    change raises ``ImproperlyConfigured`` at startup rather than recording nothing (#4210).
+    ``QuerySet._fetch_all`` stays a wrapper: a checkpoint design (refresh every held
+    QuerySet at the end of a writing turn's render, R unknown until the first one) would
+    cost one refresh-everything on each view's first write, where the wrapper costs about
+    0.04 us per evaluation.
+    """
     from django.db.models.query import QuerySet
+    from django.utils.functional import cached_property as django_cached_property
 
     original = QuerySet._fetch_all
-    if getattr(original, "_djust_held_rows", False):
-        return
+    if not getattr(original, "_djust_held_rows", False):
+        _check_wrapped_signature("QuerySet._fetch_all", original, _FETCH_ALL_PARAMETERS)
+        if "_result_cache" not in vars(QuerySet()):
+            from django.core.exceptions import ImproperlyConfigured
 
-    @functools.wraps(original)
-    def _fetch_all(self: Any) -> None:  # noqa: dead-method-allowed (installed on QuerySet)
-        filling = self._result_cache is None
-        original(self)
-        if filling:
-            _stamp_fill(self)
+            raise ImproperlyConfigured(
+                "djust's held-row refresh (#4112) reads QuerySet._result_cache, which this "
+                "Django's QuerySet no longer sets in __init__ (#4210)."
+            )
 
-    _fetch_all._djust_held_rows = True  # type: ignore[attr-defined]
-    QuerySet._fetch_all = _fetch_all  # type: ignore[method-assign]
+        @functools.wraps(original)
+        def _fetch_all(self: Any) -> None:  # noqa: dead-method-allowed (installed on QuerySet)
+            filling = self._result_cache is None
+            original(self)
+            if filling:
+                _stamp_fill(self)
+
+        _fetch_all._djust_held_rows = True  # type: ignore[attr-defined]
+        QuerySet._fetch_all = _fetch_all  # type: ignore[method-assign]
+
+    for descriptor, name_attr in (
+        (django_cached_property, "name"),
+        (functools.cached_property, "attrname"),
+    ):
+        get = descriptor.__get__
+        if getattr(get, "_djust_held_rows", False):
+            continue
+        _check_wrapped_signature(
+            "%s.%s.__get__" % (descriptor.__module__, descriptor.__qualname__),
+            get,
+            _CACHED_PROPERTY_GET_PARAMETERS,
+            skip=1,
+        )
+        descriptor.__get__ = _wrap_property_get(get, name_attr)  # type: ignore[method-assign,assignment]
+
+
+def _wrap_property_get(get: Callable[..., Any], name_attr: str) -> Callable[..., Any]:
+    @functools.wraps(get)
+    def __get__(self: Any, instance: Any, cls: Any = None) -> Any:  # noqa: dead-method-allowed
+        value = get(self, instance, cls)
+        if instance is not None:
+            _stamp_property(instance, getattr(self, name_attr, None))
+        return value
+
+    __get__._djust_held_rows = True  # type: ignore[attr-defined]
+    return __get__
 
 
 def _unrecorded_properties(view: Any, known: FrozenSet[str]) -> bool:
