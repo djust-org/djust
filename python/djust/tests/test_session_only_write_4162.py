@@ -262,6 +262,10 @@ def _tab_and_saves(monkeypatch):
 
 
 def _url(view: type) -> str:
+    # A view of another module's test (#4168) names its own page.
+    own = getattr(view, "page_url", None)
+    if own:
+        return own
     return {
         WithComponent: "/with-component/",
         WithSticky: "/with-sticky/",
@@ -343,7 +347,7 @@ async def _ws_mount(view: type, key: str) -> Any:
     await comm.send_json_to(
         {
             "type": "mount",
-            "view": f"{MODULE}.{view.__name__}",
+            "view": f"{view.__module__}.{view.__qualname__}",
             "url": _url(view),
             "tab": harness.TAB,
         }
@@ -404,7 +408,11 @@ async def sse_turns(
     stream = await sync_to_async(request)(
         "GET",
         f"/djust/sse/{sid}/",
-        {"view": f"{MODULE}.{view.__name__}", "_djust_url": _url(view), "_djust_tab": harness.TAB},
+        {
+            "view": f"{view.__module__}.{view.__qualname__}",
+            "_djust_url": _url(view),
+            "_djust_tab": harness.TAB,
+        },
     )
     response = await DjustSSEStreamView().get(stream, session_id=sid)
     assert response.status_code == 200

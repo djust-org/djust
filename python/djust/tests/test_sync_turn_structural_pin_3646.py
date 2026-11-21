@@ -570,6 +570,9 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "the multi-loop runner's own event-loop thread"
     ),
     ("push.py", "_sync_presence_scope_group", "_presence_probe"): leaf(),
+    # #4168: a turn's handler session writes, and the legacy socket session's tracking.
+    ("runtime.py", "store_turn_session_writes", "_store_session_writes_sync"): plumbing(_SESSION),
+    ("runtime.py", "ViewRuntime._dispatch_mount_body", "track_session"): plumbing(_SESSION),
     ("runtime.py", "_spawn_save", "detached(run)"): plumbing(_SAVE),
     ("runtime.py", "_SaveExecutor.submit", "_run_with_connection_hygiene"): outside(
         "the request-scoped save executor's submit(); the callable it runs is _spawn_save's run (plumbing, above)"

@@ -138,6 +138,8 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         # #4255: reauth_on_event (turns.reauth) re-checks legacy views only; the SSE
         # re-check must see the mount request's path and query like WS and HTTP do.
         "python/djust/tests/test_sse_reauth_mount_request_4255.py",
+        # #4168: legacy socket turns store their handlers' session writes.
+        "python/djust/tests/test_session_only_write_4168.py",
         # #4112: rows a legacy view publishes refresh after a write, as explicit ones do.
         "python/djust/tests/test_held_rows_4112.py",
         # #4185: djust.V032 names an admin widget that states the legacy policy.

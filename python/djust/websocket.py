@@ -2353,6 +2353,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 self._end_explicit_turn(view)
             if not committed:
                 return
+        else:
+            from .runtime import store_turn_session_writes
+
+            await store_turn_session_writes(view)  # #4168
 
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
@@ -5550,7 +5554,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # No frame of its own (#3034): a push has no ``ref`` to
                     # acknowledge, and a bare noop let the client end an
                     # in-flight user event's loading state early. Queued side
-                    # effects still go out.
+                    # effects still go out, and the hooks' session writes are
+                    # stored (#4168).
+                    await self._store_no_frame_session_writes(view, "push")
                     await self._flush_all_pending()
                     return
 
@@ -5681,7 +5687,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # No frame of its own (#3034): a push has no ``ref`` to
                     # acknowledge, and a bare noop let the client end an
                     # in-flight user event's loading state early. Queued side
-                    # effects still go out.
+                    # effects still go out, and the hooks' session writes are
+                    # stored (#4168).
+                    await self._store_no_frame_session_writes(view, "push")
                     await self._flush_all_pending()
                     return
                 rendered = await self._finish_offloaded_render(view, result)
@@ -5774,6 +5782,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     _discard_baseline(view)
                 return None
             snapshot_fields = committed
+        elif not result.explicit and result.render and self.view_instance is view:
+            # A legacy view's hook session writes, before the frame (#4168).
+            from .runtime import store_turn_session_writes
+
+            await store_turn_session_writes(view, "push")
         if result.render_error is not None:
             raise result.render_error
         if self.view_instance is not view or rendered is None:
@@ -6187,7 +6200,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # is consumed here either way.
             if _resolve_skip_render(self.view_instance):
                 # No noop frame for a notification (#3034), as for
-                # server_push; queued side effects still go out.
+                # server_push; queued side effects still go out, and the
+                # hook's session writes are stored (#4168).
+                await self._store_no_frame_session_writes(view, "db_notify")
                 await self._flush_all_pending()
                 return
 
@@ -6223,6 +6238,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             self._render_lock.release()
             if dispatch_work and self.view_instance is view:
                 await self._dispatch_async_work(event_name=None)
+
+    @staticmethod
+    async def _store_no_frame_session_writes(view: Any, source: str) -> None:
+        """A server-originated turn that renders nothing has no commit: store
+        what its hooks wrote to ``request.session`` anyway, for both exposure
+        policies (#4168). Free when nothing was written."""
+        from .runtime import store_turn_session_writes
+
+        await store_turn_session_writes(view, source)
 
     def _log_handle_info_failure(self, view: Any, exc: BaseException) -> None:
         self._log_view_hook_failure(
@@ -6320,7 +6344,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 return
             if not result.render:
                 # No noop frame for a notification (#3034); queued side
-                # effects still go out.
+                # effects still go out, and the hook's session writes are
+                # stored (#4168).
+                await self._store_no_frame_session_writes(view, "db_notify")
                 await self._flush_all_pending()
                 return
             rendered = await self._finish_offloaded_render(view, result)
@@ -6352,6 +6378,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if committed is None:
                 return None
             snapshot_fields = committed
+        else:
+            # A legacy view's hook session writes, before the frame (#4168).
+            from .runtime import store_turn_session_writes
+
+            await store_turn_session_writes(view, "push")
         with _tenant_context(getattr(view, "_tenant", None)):
             rendered = await render_background(view, runtime)
         if self.view_instance is not view:
@@ -6535,6 +6566,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     "[djust] Tick on %s skipped render via _skip_render",
                     self.view_instance.__class__.__name__,
                 )
+                await self._store_no_frame_session_writes(view, "tick")  # #4168
                 await self._flush_all_pending()
                 return False
 
@@ -6555,6 +6587,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     "[djust] Tick on %s produced no state changes, skipping render",
                     self.view_instance.__class__.__name__,
                 )
+                await self._store_no_frame_session_writes(view, "tick")  # #4168
                 await self._flush_all_pending()
                 return False
 
@@ -6631,6 +6664,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     if decision["skip"]
                     else "produced no state changes, skipping render",
                 )
+                await self._store_no_frame_session_writes(view, "tick")  # #4168
                 await self._flush_all_pending()
                 return False
             rendered = await self._finish_offloaded_render(view, result)

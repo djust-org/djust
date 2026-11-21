@@ -458,6 +458,54 @@ def _save_session_writes(view: Any) -> None:
     save_session_writes(getattr(request, "session", None))
 
 
+def _turn_session(view: Any) -> Any:
+    """The session a turn's handlers write through ``self.request.session``:
+    an explicit view's authorized turn request, a legacy view's mount request
+    (the socket's long-lived session object, tracked at mount, #4168)."""
+    from ._exposure import uses_legacy_exposure
+
+    if uses_legacy_exposure(view):
+        request = getattr(view, "request", None)
+    else:
+        request = getattr(view, "_djust_event_request", None)
+    return getattr(request, "session", None)
+
+
+def _store_session_writes_sync(session: Any, source: str) -> None:
+    from django.contrib.sessions.backends.base import UpdateError
+
+    from ._session_merge import save_session_writes
+    from .state_store import StateSuperseded
+
+    try:
+        save_session_writes(session)
+    except (LateSaveDropped, StateSuperseded, UpdateError):
+        # Logged out (the row is gone) or the tab restored elsewhere while the
+        # turn ran: nothing is revived, nothing more is written.
+        logger.debug("Session writes of a %s turn dropped: the session moved on", source)
+    except Exception:  # noqa: BLE001 — storage errors can carry server-only values
+        logger.warning("Session writes of a %s turn were not stored", source)
+
+
+async def store_turn_session_writes(view: Any, source: str = "event") -> None:
+    """Store what a turn's hooks wrote to ``request.session`` (#4162, #4168).
+
+    For a turn that has no commit of its own: a legacy view's turn (its saves
+    stay best-effort: a failed save is logged, the frame still goes), and a
+    tick, push or ``db_notify`` turn of either policy that renders nothing.
+    Merged with what other requests stored meanwhile. Costs nothing, not even
+    a thread hop, when the session is untracked or nothing but djust's own
+    keys changed. Never raises.
+    """
+    from ._session_merge import TrackedSessionData
+
+    session = _turn_session(view)
+    data = getattr(session, "_session_cache", None)
+    if type(data) is not TrackedSessionData or not data.has_foreign_changes():
+        return
+    await sync_to_async(_store_session_writes_sync)(session, source)
+
+
 def _is_refusal(exc: BaseException) -> bool:
     """Whether a flush's authorization failed because the turn is refused (the
     session logged out or rotated, the identity changed, permission revoked),
@@ -3601,6 +3649,13 @@ class ViewRuntime(RuntimeTurnPort):
             # The Django session key the view mounted under; None/empty for an
             # anonymous session.
             session_obj = getattr(request, "session", None)
+            if uses_legacy_exposure(view_instance):
+                # A legacy view's handlers write through this object for the
+                # life of the socket: record those writes so each turn can
+                # store them, merged (#4168). Reads the session once.
+                from ._session_merge import track_session
+
+                await sync_to_async(track_session)(session_obj)
             view_instance._django_session_key = (
                 getattr(session_obj, "session_key", None) if session_obj is not None else None
             )
@@ -4005,6 +4060,10 @@ class ViewRuntime(RuntimeTurnPort):
             view_instance, request=request, mounted=False
         ):
             return
+        if uses_legacy_exposure(view_instance):
+            # What a legacy mount() / handle_params() wrote to the socket's
+            # session is stored before the mount frame (#4168).
+            await store_turn_session_writes(view_instance, "mount")
 
         # ---- Mount-frame wire version (#1917, Finding C) ----
         # ``next_mount_version`` stamps the baseline the client calibrates to. WS:
@@ -4589,6 +4648,9 @@ class ViewRuntime(RuntimeTurnPort):
                 view.__dict__["_djust_auto_changed"] = None
             if not committed:
                 return
+        else:
+            # A legacy view's handler session writes, before the frame (#4168).
+            await store_turn_session_writes(target_view)
 
         snapshot_fields = await self._explicit_event_snapshot(view)
 
@@ -4909,6 +4971,8 @@ class ViewRuntime(RuntimeTurnPort):
             if not await self.commit_explicit_turn(view, source="event", children=False):
                 return
             snapshot_fields = await self._explicit_event_snapshot(view)
+        else:
+            await store_turn_session_writes(view)  # #4168
 
         # _resolve_skip_render owns the skip decision (#2834/#2847) — the same
         # resolution as dispatch_event / server_push / db_notify / tick. This
@@ -5403,6 +5467,8 @@ class ViewRuntime(RuntimeTurnPort):
                 if not await self.commit_explicit_turn(view, source="event"):
                     return True
                 snapshot_fields = await self._explicit_event_snapshot(view)
+            else:
+                await store_turn_session_writes(view)  # #4168
 
         from ._async_batch import AsyncBatch
 
@@ -6388,6 +6454,8 @@ class ViewRuntime(RuntimeTurnPort):
         from .state_store import StateSuperseded
 
         if uses_legacy_exposure(view):
+            # A legacy view's handler session writes, best-effort (#4168).
+            await store_turn_session_writes(view, source)
             return True
         # The one place a socket turn's save is decided (``_save_policy``):
         # immediate (below) unless the project set an interval and nothing
@@ -8345,6 +8413,12 @@ class ViewRuntime(RuntimeTurnPort):
         view = self.view_instance
         if not view:
             return
+        from ._exposure import uses_legacy_exposure
+
+        if uses_legacy_exposure(view):
+            # An explicit turn committed before it got here; a legacy one
+            # stores its hooks' session writes before the frame (#4168).
+            await store_turn_session_writes(view, source)
         if hasattr(view, "_sync_state_to_rust"):
             await sync_to_async(view._sync_state_to_rust)()
         html, patches, version = await sync_to_async(view.render_with_diff)()
@@ -8714,6 +8788,8 @@ class ViewRuntime(RuntimeTurnPort):
                     return
                 if not render:
                     # No frame of its own (#3034): a push has no ``ref`` to acknowledge.
+                    # Its hooks' session writes are still stored (#4168).
+                    await store_turn_session_writes(view, "push")
                     await self._flush_all_pending()
                     return
                 snapshot_fields = None
@@ -8826,6 +8902,9 @@ class ViewRuntime(RuntimeTurnPort):
                 if self.view_instance is not view:
                     return False
                 if _resolve_skip_render(view):
+                    # No frame, no commit: the hook's session writes are
+                    # still stored (#4168).
+                    await store_turn_session_writes(view, "tick")
                     await self._flush_all_pending()
                     return False
                 force_full_html = getattr(view, "_force_full_html", False)
@@ -8834,6 +8913,7 @@ class ViewRuntime(RuntimeTurnPort):
                     and not force_full_html
                     and not rows_written(view)
                 ):
+                    await store_turn_session_writes(view, "tick")
                     await self._flush_all_pending()
                     return False
                 snapshot_fields = None
