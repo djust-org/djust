@@ -520,16 +520,7 @@ def test_the_kitchen_sink_modal_opens(transport):
     assert "has been opened 2 time" in json.dumps(answers[1]), answers[1]
 
 
-#: Stream ops (``stream_to``) are sent over the WebSocket only
-#: (``StreamingMixin._send_stream_ops``); an SSE view's stream is dropped and its
-#: ``dj-update="ignore"`` target keeps its first render. A framework parity gap,
-#: not this demo's: strict, so the case fails once SSE carries streams.
-SSE_STREAMS = pytest.mark.xfail(
-    reason="stream ops reach the WebSocket only, not SSE (framework parity gap)", strict=True
-)
-
-
-@pytest.mark.parametrize("transport", ["ws", pytest.param("sse", marks=SSE_STREAMS), "http"])
+@pytest.mark.parametrize("transport", ["ws", "sse", "http"])
 def test_the_markdown_stream_starts(transport, monkeypatch):
     """``start_stream`` streams the reply into the page (a short reply here)."""
     from djust.testing import close_live_pages, open_live_page

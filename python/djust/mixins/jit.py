@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Tuple, c
 from .._render_caches import render_caches_enabled
 from .._rust import extract_item_key_only_reads, extract_template_variables
 from ..optimization.codegen import (
+    ALL_CHAIN_METHODS,
     all_methods_need_rows,
     all_row_cap,
     compile_serializer,
@@ -464,7 +465,7 @@ def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]
     return (kind, ident, tuple(get_template_dirs()))
 
 
-def keep_rows_for_all_methods(view: Any, name: str, rows: List[Any]) -> None:
+def keep_rows_for_all_methods(view: Any, name: str, rows: Any) -> None:
     """Remember the evaluated rows of a top-level context value whose template
     reads a relation both as rows and through a QuerySet method (#3801).
 
@@ -474,7 +475,9 @@ def keep_rows_for_all_methods(view: Any, name: str, rows: List[Any]) -> None:
     (``_sync_state_to_rust``) holds them under the context name, and the engine's
     guarded getattr walk -- the one ``DjustTemplateBackend`` renders through, with
     its ``alters_data`` / ``do_not_call_in_templates`` refusals and the
-    serialization floor -- reads ``users.N.groups.all.count`` from them. Written
+    serialization floor -- reads ``users.N.groups.all.count`` from them. It also
+    holds an evaluated top-level QuerySet whose template reads one of its methods
+    (``{{ qs.count }}``, #4241); its filled result cache answers it. Written
     to ``__dict__`` so it is not state; ``get_context_data`` resets it per render.
     """
     view.__dict__.setdefault("_all_method_rows", {})[name] = rows
@@ -1185,6 +1188,23 @@ class JITMixin:
             result = serialize_queryset(items, paths_for_var, all_row_cap())
             if "." not in variable_name and all_methods_need_rows(model_class, paths_for_var):
                 keep_rows_for_all_methods(self, variable_name, items)
+            # #4241: ``{{ qs.count }}`` / ``.exists`` / ``.first`` / ``.last`` on a
+            # top-level QuerySet. The rows ship as a list, which cannot answer
+            # the method (``list.count`` needs an argument in Django too), so the
+            # evaluated QuerySet itself goes to the render sidecar. Its
+            # ``_result_cache`` is full (``items = list(queryset)`` above), so
+            # ``count`` / ``exists`` answer from the fetched rows with no extra
+            # query. ``first`` / ``last`` are Django's own methods and query as
+            # Django does: ``last`` always, ``first`` on an unordered QuerySet. Pass
+            # ``queryset`` -- the evaluated (possibly optimize_queryset-cloned)
+            # object -- not the caller's unevaluated one. A row field named like
+            # a method (``u.count`` in a loop) extracts the same path; holding
+            # the QuerySet is harmless then, since the eager list wins every
+            # direct hit and the sidecar only serves misses.
+            if "." not in variable_name and set(ALL_CHAIN_METHODS) & {
+                p.split(".")[0] for p in paths_for_var
+            }:
+                keep_rows_for_all_methods(self, variable_name, queryset)
 
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)

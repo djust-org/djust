@@ -132,6 +132,9 @@ REMAINING_4082: dict[str, str] = {
 #: and later tests OF the legacy policy (each statement gives its reason inline).
 OTHER_LEGACY_FILES: frozenset[str] = frozenset(
     {
+        # #4241: qs.count / qs.exists render on the native renderer under the legacy
+        # policy too, until the legacy arm is removed.
+        "python/tests/test_queryset_count_exists_4241.py",
         # #4112: rows a legacy view publishes refresh after a write, as explicit ones do.
         "python/djust/tests/test_held_rows_4112.py",
         # #4185: djust.V032 names an admin widget that states the legacy policy.

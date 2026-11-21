@@ -45,6 +45,7 @@ def _make_view():
         "_flush_stream_batch",
         "_send_terminal_stream_op",
         "_send_or_queue_stream_op",
+        "_stream_send_target",
     ):
         setattr(view, name, getattr(StreamingMixin, name).__get__(view))
     return view
@@ -469,3 +470,84 @@ def test_liveview_exposes_both_stream_apis_without_shadowing():
     assert inspect.iscoroutinefunction(LiveView.astream_insert)
     assert not hasattr(StreamingMixin, "stream_insert")
     assert not hasattr(StreamingMixin, "stream_delete")
+
+
+# -- #4232: stream ops reach SSE clients --------------------------------------
+
+
+class _FakeSSEParent:
+    """A stand-in SSE session: ``push`` records the frames its queue would get."""
+
+    def __init__(self):
+        self.pushed = []
+
+    def push(self, msg):
+        self.pushed.append(msg)
+
+
+def _sse_view():
+    """A view mounted on a (fake) SSE session, sending through the real transport."""
+    from djust.runtime import SSESessionTransport
+
+    view = _make_view()
+    session = _FakeSSEParent()
+    session.view_instance = view
+    session.runtime = type("Runtime", (), {"transport": SSESessionTransport(session)})()
+    view._sse_session = session
+    return view, session
+
+
+_OPS = [
+    ("stream_start", ("s",), {}),
+    ("stream_to", ("s",), {"html": "<p>x</p>"}),
+    ("stream_text", ("s", "hi"), {}),
+    ("astream_insert", ("s", "<li>a</li>"), {}),
+    ("astream_delete", ("s", "#a"), {}),
+    ("stream_error", ("s", "oops"), {}),
+    ("stream_done", ("s",), {}),
+]
+
+
+@pytest.mark.parametrize("name,args,kwargs", _OPS, ids=[o[0] for o in _OPS])
+def test_stream_op_frame_over_sse_matches_websocket(name, args, kwargs):
+    ws_view = _make_view()
+    ws_view._ws_consumer = FakeConsumer()
+    asyncio.run(getattr(ws_view, name)(*args, **kwargs))
+
+    sse_view, session = _sse_view()
+    asyncio.run(getattr(sse_view, name)(*args, **kwargs))
+
+    assert ws_view._ws_consumer.sent_messages, name
+    assert session.pushed == ws_view._ws_consumer.sent_messages
+
+
+def test_stream_ops_not_sent_for_a_view_the_sse_session_no_longer_serves():
+    view, session = _sse_view()
+    session.view_instance = object()  # replaced by a live_redirect
+    asyncio.run(view.stream_to("s", html="<p>x</p>"))
+    asyncio.run(view.stream_done("s"))
+    assert session.pushed == []
+
+
+def test_websocket_consumer_wins_over_sse_session():
+    view, session = _sse_view()
+    view._ws_consumer = FakeConsumer()
+    asyncio.run(view.stream_done("s"))
+    assert len(view._ws_consumer.sent_messages) == 1
+    assert session.pushed == []
+
+
+def test_slot_view_stream_frame_carries_target_id():
+    from djust._sse_slots import SSESlotSession
+    from djust.runtime import SSESessionTransport
+
+    parent = _FakeSSEParent()
+    slot = SSESlotSession(parent, "side")
+    view = _make_view()
+    slot.view_instance = view
+    slot.runtime = type("Runtime", (), {"transport": SSESessionTransport(slot)})()
+    view._sse_session = slot
+    asyncio.run(view.stream_done("s"))
+    assert len(parent.pushed) == 1
+    assert parent.pushed[0]["type"] == "stream"
+    assert parent.pushed[0]["target_id"] == "side"

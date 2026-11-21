@@ -24,7 +24,7 @@ Usage:
 import asyncio
 import logging
 import time
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, Dict, List, Optional, TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +123,8 @@ class StreamingMixin:
             target: CSS selector for the container to update (e.g., "#message-list")
             html: Optional pre-rendered HTML fragment to send directly
         """
-        if not self._ws_consumer:
-            logger.warning("stream_to() called but no WebSocket consumer attached")
+        if self._stream_send_target() is None:
+            logger.warning("stream_to() called but no live transport (WebSocket or SSE) attached")
             return
 
         now = time.monotonic()
@@ -170,7 +170,7 @@ class StreamingMixin:
             at: "append" or "prepend"
             target: CSS selector (defaults to [dj-stream='name'])
         """
-        if not self._ws_consumer:
+        if self._stream_send_target() is None:
             return
 
         op = {
@@ -196,7 +196,7 @@ class StreamingMixin:
             mode: "append", "replace", or "prepend"
             target: CSS selector (defaults to [dj-stream='name'])
         """
-        if not self._ws_consumer:
+        if self._stream_send_target() is None:
             return
 
         op = {
@@ -224,7 +224,7 @@ class StreamingMixin:
             error: Error message to display
             target: CSS selector (defaults to [dj-stream='name'])
         """
-        if not self._ws_consumer:
+        if self._stream_send_target() is None:
             return
 
         op = {
@@ -246,7 +246,7 @@ class StreamingMixin:
             stream_name: Logical name for the stream
             target: CSS selector (defaults to [dj-stream='name'])
         """
-        if not self._ws_consumer:
+        if self._stream_send_target() is None:
             return
 
         op = {
@@ -267,7 +267,7 @@ class StreamingMixin:
             stream_name: Logical name for the stream
             target: CSS selector (defaults to [dj-stream='name'])
         """
-        if not self._ws_consumer:
+        if self._stream_send_target() is None:
             return
 
         op = {
@@ -289,7 +289,7 @@ class StreamingMixin:
             stream_name: Logical name for the stream
             selector: CSS selector of element to remove
         """
-        if not self._ws_consumer:
+        if self._stream_send_target() is None:
             return
 
         op = {
@@ -452,12 +452,34 @@ class StreamingMixin:
         # Fallback: return full HTML
         return html
 
+    def _stream_send_target(self) -> Optional[Callable[[Dict[str, Any]], Awaitable[None]]]:
+        """The sink stream frames go to, or ``None`` (#4232).
+
+        WebSocket first (``_ws_consumer.send_json``); else the SSE session's
+        runtime transport, but only while that session still serves this view
+        (a view replaced by ``live_redirect`` keeps ``_sse_session`` and must not
+        write into the new page's queue). The SSE path goes through the runtime
+        transport, so a slot's session stamps ``target_id`` like the WS slot.
+        The HTTP fallback has neither: stream ops are a no-op there.
+        """
+        consumer = self.__dict__.get("_ws_consumer")
+        if consumer is not None:
+            return consumer.send_json  # type: ignore[no-any-return]
+        session = self.__dict__.get("_sse_session")
+        if session is None or getattr(session, "view_instance", None) is not self:
+            return None
+        runtime = getattr(session, "runtime", None)
+        if runtime is None:
+            return None
+        return runtime.transport.send  # type: ignore[no-any-return]
+
     async def _send_stream_ops(self, stream_name: str, ops: List[dict]) -> None:
-        """Send stream operations over WebSocket."""
-        if not self._ws_consumer:
+        """Send stream operations over the live transport (WebSocket or SSE)."""
+        send = self._stream_send_target()
+        if send is None:
             return
 
-        await self._ws_consumer.send_json(
+        await send(
             {
                 "type": "stream",
                 "stream": stream_name,

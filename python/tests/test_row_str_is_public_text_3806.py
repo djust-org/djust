@@ -271,13 +271,10 @@ class TestStrOfAQuerySetsFirstAndLastShipsOnTheBackend:
 
 
 class TestALiveViewsTopLevelQuerySetFirst:
-    """Measured while writing this file, and NOT part of #3806: a LiveView attribute that is a
-    QuerySet, read as ``{{ rows.first }}`` / ``{{ rows.last }}``, renders nothing (Django and the
-    backend print the row). It withholds more than the documented behaviour, never less, so it is a
-    parity gap and not a leak. A strict xfail: when it is fixed this goes red and the documents'
-    list of paths that ship ``str(row)`` must gain the LiveView spelling."""
+    """A LiveView attribute that is a QuerySet, read as ``{{ rows.first }}``, prints the row as
+    Django and the backend do (#4241; a strict xfail until then). It ships ``str(row)``, so it is
+    on the documents' list of paths that do (SECURE_DEFAULTS.md, SECURITY_GUIDELINES.md)."""
 
-    @pytest.mark.xfail(strict=True, reason="LiveView: top-level QuerySet .first/.last render empty")
     def test_it_prints_the_row_like_django(self, rows):
         out = _liveview_render("{{ rows.first }}", {"rows": StrDenied.objects.order_by("pk")})
         assert _text(out) == f"alpha[{SECRET}]"

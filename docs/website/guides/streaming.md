@@ -84,7 +84,7 @@ render; see [`mount()`](../api-reference/liveview.md#mountrequest-kwargs).
 
 ## Core Methods
 
-All streaming methods are `async` and require a WebSocket connection.
+All streaming methods are `async` and work over a WebSocket or SSE connection; on the HTTP fallback they are a no-op (the page shows the final render).
 
 ### `stream_text(stream_name, text, mode="append", target=None)`
 

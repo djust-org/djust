@@ -123,8 +123,9 @@ def reload_request_session(mounted: Any) -> Any:
 def authorize_event(view: Any, request: Any, binding: StateBinding) -> Any:
     """Authorize a fresh request against immutable mounted identity.
 
-    The SSE endpoint path is not the view route. Copy routing metadata from the
-    trusted mount, while retaining the current request's principal/session/host.
+    The SSE endpoint path is not the view route. Copy routing metadata (path,
+    resolver match, slot and query string) from the trusted mount, while
+    retaining the current request's principal/session/host.
     TenantMixin resolvers run again instead of using their mount-time cache.
     Exceptions deliberately propagate to the runtime's static denial envelope.
     """
@@ -188,6 +189,12 @@ def _event_request(view: Any, request: Any, binding: StateBinding) -> Any:
     # A view beside the page view (#3252) is bound to its own slot.
     request._djust_slot_target = getattr(mounted, "_djust_slot_target", None)
     request.resolver_match = mounted.resolver_match
+    # The page query is routing metadata too (#4231): an SSE event arrives
+    # as a POST to /djust/sse/<id>/message/, whose own query never counts.
+    # ``copy`` is shallow, so assign a new META rather than mutate the
+    # live request's (or the mount's) dict.
+    request.GET = mounted.GET.copy()
+    request.META = {**request.META, "QUERY_STRING": mounted.META.get("QUERY_STRING", "")}
     resolver = getattr(view, "resolve_tenant", None)
     if callable(resolver):
         request.tenant = resolver(request)

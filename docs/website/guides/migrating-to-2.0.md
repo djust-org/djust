@@ -130,7 +130,9 @@ Django template, and that is the only place it is.
 **No generated `_count` names.** Under the 1.3 default a QuerySet or list in
 the context as `items` also gave the template `items_count`. Explicit exposure
 does not generate it, so `{{ items_count }}` renders empty. Write
-`{{ items|length }}` instead (it works on a QuerySet and on a list), or return
+`{{ items|length }}` instead (it works on a QuerySet and on a list), or, for a
+QuerySet, `{{ items.count }}` (answered from the rows already fetched, no extra
+query), or return
 `items_count` from `get_context_data()`. With `DEBUG = True` djust logs a
 warning on the `djust.exposure` logger that names the template's
 `items_count` and points at `{{ items|length }}`, once per view and name, and
@@ -1020,4 +1022,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 28fc3b7332cc -->
+<!-- generated-doc prose-sha256: c19d4e083bd3 -->
