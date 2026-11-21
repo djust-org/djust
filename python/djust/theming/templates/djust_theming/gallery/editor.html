@@ -1,4 +1,4 @@
-{% load theme_tags theme_components %}<!DOCTYPE html>
+{% load theme_tags theme_components djust_attrs %}<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -273,7 +273,7 @@
   <nav class="gallery-topbar">
     <a href="/" class="gallery-topbar-brand">djust-theming</a>
     <span class="gallery-topbar-sep">|</span>
-    {% if components_gallery_url %}<a href="{{ components_gallery_url }}">Components</a>{% endif %}
+    {% if components_gallery_url %}<a href="{{ components_gallery_url|djust_url_attr }}">Components</a>{% endif %}
     <span class="gallery-topbar-sep">|</span>
     <a href="{% url 'djust_theming:gallery' %}">Gallery</a>
     <a href="{% url 'djust_theming:components' %}">Catalogue</a>
@@ -290,7 +290,7 @@
       <select id="editor-ds-select" class="editor-select">
         <option value="">Custom</option>
         {% for ds_name, ds in design_systems.items %}
-        <option value="{{ ds_name }}">{{ ds.display_name }}</option>
+        <option value="{{ ds_name|force_escape }}">{{ ds.display_name }}</option>
         {% endfor %}
       </select>
       <p class="ds-description" id="ds-description"></p>
@@ -299,7 +299,7 @@
       <label for="editor-preset-select" style="font-size:0.75rem;color:hsl(var(--muted-foreground));">Color Preset</label>
       <select id="editor-preset-select" class="editor-select" style="margin-bottom:1rem;">
         {% for preset in presets %}
-        <option value="{{ preset.name }}" {% if preset.name == current_preset %}selected{% endif %}>{{ preset.display_name }}</option>
+        <option value="{{ preset.name|force_escape }}" {% if preset.name == current_preset %}selected{% endif %}>{{ preset.display_name }}</option>
         {% endfor %}
       </select>
 
