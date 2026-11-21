@@ -629,3 +629,24 @@ def test_push_state_websocket_wins_over_sse_and_stamps_consumer_counter(monkeypa
 
     assert consumer.sent_messages == [{"type": "patch", "patches": [{"op": "x"}], "version": 42}]
     assert session.pushed == []
+
+
+def test_push_state_websocket_html_update_stamps_consumer_counter(monkeypatch):
+    """No patches: the WebSocket ``html_update`` frame carries the consumer's next
+    version too, not the Rust one (#1788 HIDDEN #2, #4256)."""
+    from djust import _background_render
+
+    monkeypatch.setattr(_background_render, "render_contract_fields", lambda v, rt: {})
+    view, session = _sse_view()
+    _push_state_view(view, patches=None, rust_version=7)
+    consumer = FakeConsumer()
+    versions = iter([42, 43])
+    consumer._next_version = lambda: next(versions)
+    view._ws_consumer = consumer
+
+    asyncio.run(view.push_state())
+
+    assert consumer.sent_messages == [
+        {"type": "html_update", "html": "<div>x</div>", "version": 42}
+    ]
+    assert session.pushed == []

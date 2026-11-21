@@ -47,7 +47,7 @@ URL = PATH + "?org=acme"
 
 
 class OrgReauthView(LiveView):
-    exposure_policy = "legacy"  # reauth_on_event re-checks legacy views only
+    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
     login_required = True
     template = "<div dj-root><p>{{ count }}</p></div>"
 

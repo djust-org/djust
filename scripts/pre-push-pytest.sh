@@ -61,9 +61,10 @@ export PYTHONPATH="${WT:+$WT:}."
 # state_backends/, the engine crates' src/), it prints the direct selection
 # instead (changed tests, tests named after or importing a changed module,
 # basename mentions) and says on stderr which FULL reasons it waived. Harness
-# changes, the branch-name rule and unclassified paths still run FULL, and an
-# empty direct selection still runs the full fast tier. CI stays the
-# authoritative full run. Use it on a loaded machine, never to hide a failure.
+# changes, the branch-name rule and unclassified paths still answer FULL, and
+# they and an empty direct selection take the bounded fallback above (#4253:
+# the early tier, with no direct files). CI stays the authoritative full run.
+# Use it on a loaded machine, never to hide a failure.
 FALLBACK=0
 FALLBACK_WHY=""
 DIRECT=()
@@ -137,7 +138,8 @@ if [ "$FALLBACK" = "1" ]; then
     echo "pre-push: CI runs the full suite on the PR. DJUST_PREPUSH_FULL=1 (with the developer's approval) runs everything here."
 fi
 
-# Fast tier for the full-suite fallback: with no targeted selection, skip the
+# Fast tier for the old full fallback (only when select-tests.py is absent; an
+# empty or FULL selection takes the bounded fallback above, #4253): skip the
 # duration-derived `slow` tier (tests/slow_tier.py — > 1s in .test_durations,
 # ~1.6% of tests carrying ~82% of the time). A targeted selection keeps its
 # slow tests (they are about the change); DJUST_PREPUSH_FULL=1 runs everything;
