@@ -505,7 +505,6 @@ def test_unparseable_production_import_graph_requires_full():
         "requirements-dev.txt",
         "crates/djust_components/Cargo.toml",
         ".test_collected_floor",
-        ".test_durations",
         "scripts/pre-push-cargo-test.sh",
     ],
 )

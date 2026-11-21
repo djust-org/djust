@@ -555,6 +555,17 @@ def test_early_only_runs_exactly_the_ledger_pr_tier_and_rule_pins(project, monke
     assert "test_unit" not in out
 
 
+def test_early_include_keeps_a_direct_file_whole_and_nothing_else(project, monkeypatch):
+    # The pre-push bounded fallback (#4253) passes its direct selection this way.
+    res = _inner(project, monkeypatch, "-v", "--early-include", "test_gate.py", only=True)
+    out = res.stdout.str()
+    res.assert_outcomes(passed=4)
+    for name in ("test_pin", "test_unit", "test_slow_promoted", "test_slow_pr_tier"):
+        assert f"{name} PASSED" in out, name  # the sweep too: the change names this file
+    assert "test_fast" not in out and "test_slow_plain" not in out
+    res.stdout.fnmatch_lines(["*+ 1 direct file(s)*"])
+
+
 def test_the_junit_report_carries_node_ids_and_tiers(project, monkeypatch):
     report = project.path / "j.xml"
     _inner(project, monkeypatch, f"--junitxml={report}")

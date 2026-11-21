@@ -113,7 +113,8 @@ FULL_SUITE_FILES = frozenset(
         "scripts/pre-push-cargo-test.sh",
         "scripts/embeddable-python.sh",
         ".test_collected_floor",
-        ".test_durations",
+        # Not ``.test_durations`` (#4253): it only re-tiers tests and rebalances shards, and the
+        # tests that read it name it, so rule (c) selects them.
         "examples/demo_project/demo_project/settings.py",
     }
 )
