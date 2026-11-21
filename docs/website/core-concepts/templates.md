@@ -237,7 +237,8 @@ lists in `djust_exclude_fields`, as a value or as a key, and `str(value)` does n
 guarantee is per *field*: a method or property that computes from an excluded field is a result like any
 other. With `last_name` excluded, `value.get_full_name()` on a proxy, and the `get_full_name` value of a
 LiveView `dict`, still contain the last name, so do not rely on `djust_exclude_fields` to hide what a
-method derives from the field.
+method derives from the field. The system check [`djust.S015`](../guides/error-codes.md#s015-computed-member-reads-an-excluded-field) reports a `get_*()` method or
+property that reads an excluded field (#3955).
 
 **What differs today.** The LiveView `dict` is not a fixed shape: its keys are what the template names.
 A single model the template names nothing on is the identity keys (`id`, `pk`, `__str__`, `__model__`);
