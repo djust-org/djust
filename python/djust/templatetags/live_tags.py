@@ -1659,7 +1659,7 @@ def _authorize_reused_child(
         raise PermissionDenied("Access denied for embedded view.") from None
     if auth_redirect is not None:
         deny()
-        raise TemplateSyntaxError(
+        raise _LiveRenderDenied(
             "{%% live_render %%} target %r denied access: the child view "
             "requires auth/permissions that the parent's request does not "
             "satisfy (login redirect: %s)" % (view_path, auth_redirect)
@@ -1668,7 +1668,7 @@ def _authorize_reused_child(
         enforce_object_permission(child, request)
     except Exception:  # noqa: BLE001 — broken predicates must not permit reuse
         deny()
-        raise TemplateSyntaxError(
+        raise _LiveRenderDenied(
             "{%% live_render %%} target %r denied access: object-level permission "
             "check failed for the requested object." % view_path
         ) from None
@@ -2013,14 +2013,92 @@ def _render_sticky_child_html(
     )
 
 
+class _LiveRenderDenied(TemplateSyntaxError):
+    """``{% live_render %}``'s refusal of a child the request may not see (its
+    auth posture or object permission). Still a ``TemplateSyntaxError`` for
+    every caller; the live lazy path tells it from a failure (#4167 review N2)."""
+
+
 class _LazyFillRefused(PermissionError):
     """The refusal of a lazy explicit child's fill (#4154): the only
     ``PermissionError`` whose text its envelope shows."""
 
 
 def _lazy_failure_body(escaped_id: str) -> str:
-    """A lazy explicit child's failure envelope body: no exception type or text."""
+    """A lazy explicit child's failure envelope body: no exception type or text.
+    Without an id (a live child whose tag has no ``view_id=``) it names none."""
+    if not escaped_id:
+        return '<dj-error aria-live="polite">Lazy child failed.</dj-error>'
     return '<dj-error aria-live="polite">Lazy child ' + escaped_id + " failed.</dj-error>"
+
+
+def _lazy_denied_body(view_path: str) -> str:
+    """The envelope of a lazy child its request may not see: the HTTP fill's
+    refusal text (``_LazyFillRefused``), on every transport (#4167 review N2)."""
+    text: str = escape("child %r denied access" % view_path)
+    return '<dj-error aria-live="polite">' + text + "</dj-error>"
+
+
+def _renders_lazy_inline(parent: Any) -> bool:
+    """Whether a ``lazy=`` child of ``parent`` is rendered in place (#4167).
+
+    True when the root of ``parent``'s view tree (a lazy tag in an embedded
+    child's template has that child as its parent) is mounted by a live
+    runtime (``ViewRuntime.dispatch_mount`` stamps ``_djust_live_runtime``).
+    """
+    view = parent
+    seen = set()
+    while view is not None and id(view) not in seen:
+        seen.add(id(view))
+        if getattr(view, "__dict__", {}).get("_djust_live_runtime"):
+            return True
+        view = getattr(view, "_parent_view", None)
+    return False
+
+
+def _render_lazy_inline(
+    context: Context,
+    view_path: str,
+    preferred_view_id: Any,
+    kwargs: Dict[str, Any],
+    parent: Any,
+) -> Any:
+    """Render a ``lazy=`` child in place on a live connection (#4167).
+
+    The child goes through the same path as a child without ``lazy=``: view
+    auth, ``mount()``, the explicit identity checks, object permission and
+    registration on ``parent``, so its events route. A refused or failing
+    child keeps the lazy contract (ADR-015): the page renders, the slot shows
+    the error envelope the lazy fill would (no exception text), and the child
+    is not registered.
+    """
+    before = set(parent.__dict__.get("_child_views", {}) or {})
+    extra: Dict[str, Any] = {} if preferred_view_id is None else {"view_id": preferred_view_id}
+    try:
+        return live_render(context, view_path, **kwargs, **extra)
+    except Exception as exc:  # noqa: BLE001 — shown as the lazy failure envelope
+        for added in set(parent.__dict__.get("_child_views", {}) or {}) - before:
+            parent._unregister_child(added)
+        from .._exposure_diagnostics import log_failure_for
+
+        try:
+            child_cls: Any = resolve_live_view_class(view_path)
+        except Exception:  # noqa: BLE001 — resolution already succeeded once
+            child_cls = parent
+        log_failure_for(
+            logger,
+            (child_cls,),
+            exc,
+            "live_render lazy child %s refused on a live transport",
+            view_path,
+            traceback=True,
+        )
+        from django.http import Http404
+
+        if isinstance(exc, (_LiveRenderDenied, PermissionDenied, PermissionError, Http404)):
+            # A denial reads as the HTTP fill's denial (#4167 review N2).
+            return mark_safe(_lazy_denied_body(view_path))  # noqa: S308 — escaped above
+        return mark_safe(_lazy_failure_body(escape(preferred_view_id or "")))  # noqa: S308
 
 
 def _lazy_fill_request(request: Any) -> Any:
@@ -2611,6 +2689,13 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 "dict — got %r." % lazy_kwarg
             )
 
+        # #4167: on a live connection (WebSocket, SSE) nothing would run the
+        # thunk, and the socket's view must hold the child to route its
+        # events: render it in place, with the non-lazy mount checks. The
+        # page GET (plain and streaming) still defers.
+        if _renders_lazy_inline(parent):
+            return _render_lazy_inline(context, view_path, preferred_view_id, kwargs, parent)
+
         # Capture state for the thunk closure now (before kwargs may
         # be mutated by the eager branch path).
         captured_kwargs = dict(kwargs)
@@ -2995,7 +3080,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     #     raises PermissionDenied for authenticated users without perms.
     auth_redirect = check_view_auth(child, request)
     if auth_redirect is not None:
-        raise TemplateSyntaxError(
+        raise _LiveRenderDenied(
             "{%% live_render %%} target %r denied access: the child view "
             "requires auth/permissions that the parent's request does not "
             "satisfy (login redirect: %s)" % (view_path, auth_redirect)
@@ -3098,7 +3183,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     try:
         enforce_object_permission(child, request)
     except PermissionDenied:
-        raise TemplateSyntaxError(
+        raise _LiveRenderDenied(
             "{%% live_render %%} target %r denied access: object-level permission "
             "check failed for the requested object." % view_path
         )

@@ -522,7 +522,9 @@ RESOURCED: dict[str, tuple[str, ...]] = {
     ),
 }
 
-#: Directories the scan skips: tests, and ``djust/theming`` (its list lives in the guard's own test).
+#: Directories the scan skips: tests, and ``djust/theming``, whose audited sites are listed in
+#: ``python/tests/test_safe_markup_guard_3766.py`` (``AUDITED``); the two lists together are every
+#: flagged function of the package (``test_safe_markup_audit_3774.TestScanSet``, #4212).
 EXCLUDED_PARTS = frozenset({"tests", "theming"})
 
 

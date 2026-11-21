@@ -69,6 +69,13 @@ parses and the client uses to `replaceWith` the slot.
 
 Several lazy children render in parallel (`asyncio.as_completed()`).
 
+Only the page GET defers. When the WebSocket (or SSE) connection mounts the
+view, a lazy child is mounted, authorized and registered in place like a
+child without `lazy=`, so its events route over that connection; a child
+denied there renders `child '<view path>' denied access`, as the HTTP fill
+does, any other failure `Lazy child <id> failed.` (`Lazy child failed.` when
+the tag has no `view_id=`), and it is not routable (#4167).
+
 The slot can carry a placeholder: `lazy={"placeholder": ...}`. It follows Django's own escaping
 rule. A marked-safe value (`mark_safe(...)`, `format_html(...)`, anything with `__html__`) is
 markup and is spliced in as written; a plain `str` is text and is escaped, so a placeholder built

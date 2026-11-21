@@ -337,7 +337,14 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   of these, or whose `mount()` raises `Http404` or `PermissionDenied`, shows
   `child '<view path>' denied access` in the slot. Any other failure shows
   `Lazy child <id> failed.`, without the exception. The page still renders. Like other non-sticky children it may not declare persisted
-  fields, and `sticky=True` with `lazy=True` is refused.
+  fields, and `sticky=True` with `lazy=True` is refused. `lazy=` defers
+  only the page GET: over the WebSocket or SSE the child is mounted when the
+  socket mounts its parent, with the same checks as a child without `lazy=`,
+  so its events route (#4167). A child denied there (login, permissions,
+  object permission, a `mount()` raising `Http404` or `PermissionDenied`)
+  shows `child '<view path>' denied access` as on the page GET; any other
+  failure shows `Lazy child <id> failed.` (`Lazy child failed.` when the tag
+  has no `view_id=`). Either way it receives no events.
 - **Tenancy.** The configured tenant resolver is applied to every request,
   including WebSocket mounts, whether or not `TenantMiddleware` is installed.
 - **Invalidation.** Change detection is unchanged. After mutating an object in
@@ -365,10 +372,13 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   keep djust's own values, and a returned `exposure_policy` is ignored. The view is
   built for each request and the
   function runs again every time, so nothing is kept between requests. It
-  answers the page GET and the HTTP fallback POST; a WebSocket or SSE mount is
-  refused with `View not found`, because the class it names is built inside
-  the request. Write a `LiveView` class for a page that keeps state or uses a
-  socket.
+  answers the page GET and the HTTP fallback POST. Its page marks the root
+  `data-djust-transport="http"` (also a root that declares its own
+  `dj-view`, and a `dj-lazy` root), so the client sends events over the HTTP
+  fallback and opens no socket (#4236); a WebSocket or SSE mount naming the
+  class is still refused with `View not found`, because the class is built
+  inside the request. Write a `LiveView` class for a page that keeps state or
+  uses a socket.
 
   ```python
   from djust import live_view

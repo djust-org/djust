@@ -94,7 +94,7 @@ REMAINING_4082: dict[str, str] = {
         "migrated; one case stays legacy: an unhandled async failure ends loading with a named source=async frame on legacy views only"
     ),
     "python/djust/tests/test_event_loop_offload_3074.py": (
-        "migrated; the one-hop push case also runs a legacy view: legacy subject, the one-hop push turn serves both policies (#4152)"
+        "migrated; the one-hop push, tick and db_notify cases also run a legacy view: legacy subject, the one-hop server-originated turns serve both policies (#4152, #4166)"
     ),
     "python/djust/tests/test_event_reauth_1777.py": (
         "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
@@ -138,6 +138,10 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         # #4255: reauth_on_event (turns.reauth) re-checks legacy views only; the SSE
         # re-check must see the mount request's path and query like WS and HTTP do.
         "python/djust/tests/test_sse_reauth_mount_request_4255.py",
+        # #4167: a legacy lazy child routes over the socket like an explicit one.
+        "python/djust/tests/test_lazy_child_live_transport_4167.py",
+        # #4168: legacy socket turns store their handlers' session writes.
+        "python/djust/tests/test_session_only_write_4168.py",
         # #4112: rows a legacy view publishes refresh after a write, as explicit ones do.
         "python/djust/tests/test_held_rows_4112.py",
         # #4185: djust.V032 names an admin widget that states the legacy policy.

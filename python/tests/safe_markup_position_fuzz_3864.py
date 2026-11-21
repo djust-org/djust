@@ -286,6 +286,25 @@ def browser_available() -> bool:
     return bool(_shutil.which("node")) and (_ROOT / "node_modules" / "jsdom").is_dir()
 
 
+#: Set in the CI job that installs jsdom (#4212): there a missing browser oracle is a failure.
+REQUIRE_BROWSER_ENV = "DJUST_REQUIRE_BROWSER_ORACLE"
+
+
+def require_browser() -> None:
+    """Return when the browser oracle can run; otherwise skip the test, or fail it where
+    :data:`REQUIRE_BROWSER_ENV` is ``1`` (a skip there would hide that the rows never ran)."""
+    import os
+
+    import pytest
+
+    if browser_available():
+        return
+    message = "node and jsdom are not installed here (npm ci)"
+    if os.environ.get(REQUIRE_BROWSER_ENV) == "1":
+        pytest.fail(message + f"; {REQUIRE_BROWSER_ENV}=1 requires them")
+    pytest.skip(message)
+
+
 def browser_verdicts(
     htmls: list[str], deadline: float = 120, heap_mb: int = 1024
 ) -> list[list[str]]:

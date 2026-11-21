@@ -180,6 +180,9 @@ def test_turn_end_paths_use_single_flush_helper():
         # db_notify routes to each listening view (#3252); the per-view body
         # does the apply + render + flush.
         "_db_notify_locked",
+        # The worker pool's one-hop tick and db_notify turns (#4166).
+        "_run_db_notify_turn_offloaded",
+        "_run_tick_turn_offloaded",
         "_run_async_work_body",
     ):
         src = inspect.getsource(getattr(ws_mod.LiveViewConsumer, name))

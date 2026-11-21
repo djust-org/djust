@@ -74,6 +74,12 @@ class _OffloadView(LiveView):
         self.label = room
         self.push_scope = room
 
+    _listen_channels = frozenset({"offload_3074"})
+
+    def handle_info(self, message):
+        _note("hook")
+        self.label = message.get("payload", {}).get("label", self.label)
+
     def _sync_state_to_rust(self, *args, **kwargs):
         _note("render")
         if getattr(self, "_explode", False):
@@ -91,6 +97,33 @@ class _LegacyOffloadView(_OffloadView):
         '<div dj-root dj-view="djust.tests.test_event_loop_offload_3074._LegacyOffloadView">'
         "<b>{{ count }}</b><i>{{ label }}</i></div>"
     )
+
+
+class _TickOffloadView(_OffloadView):
+    """Ticks once with a change, then ticks with nothing to render (#4166)."""
+
+    tick_interval = 400
+    template = (
+        '<div dj-root dj-view="djust.tests.test_event_loop_offload_3074._TickOffloadView">'
+        "<b>{{ count }}</b><i>{{ label }}</i></div>"
+    )
+
+    def handle_tick(self):
+        _note("hook")
+        if self.label == "start":
+            self.label = "ticked"
+
+
+class _LegacyTickOffloadView(_TickOffloadView):
+    exposure_policy = "legacy"  # legacy subject: the one-hop tick turn serves both policies
+    template = (
+        '<div dj-root dj-view="djust.tests.test_event_loop_offload_3074._LegacyTickOffloadView">'
+        "<b>{{ count }}</b><i>{{ label }}</i></div>"
+    )
+
+
+TICK_VIEW = f"{__name__}._TickOffloadView"
+LEGACY_TICK_VIEW = f"{__name__}._LegacyTickOffloadView"
 
 
 @pytest.fixture(params=[None, 2], ids=["stock", "pool"])
@@ -329,3 +362,137 @@ async def test_a_render_error_still_runs_the_hooks_queued_work(pool, caplog, set
             await comm.disconnect()
     assert _SEEN.get("background"), "the hook's start_async work never ran"
     assert "render exploded" in caplog.text
+
+
+def _receive_source(communicator, source):
+    async def receive():
+        for _ in range(8):
+            frame = await communicator.receive_json_from(timeout=30)
+            if frame.get("type") == "patch" and frame.get("source") == source:
+                return frame
+        raise AssertionError(f"no {source!r} patch")
+
+    return receive()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view", [TICK_VIEW, LEGACY_TICK_VIEW], ids=["explicit", "legacy"])
+async def test_tick_turn_is_one_hop_with_the_pool(pool, spies, hops, view):
+    """#4166: with the pool on, a tick's authorization, ``handle_tick``,
+    change detection and render are ONE hop, as the push turn's are (#4152);
+    an explicit root adds only its state save."""
+    loop_thread = threading.get_ident()
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        comm = await _connect(view)
+        try:
+            _SEEN.clear()
+            del hops[:]
+            frame = await _receive_source(comm, "tick")
+            turn_hops = list(hops)
+            seen = {k: list(v) for k, v in _SEEN.items()}
+        finally:
+            await comm.disconnect()
+    assert "ticked" in json.dumps(frame["patches"])
+    hook = seen["hook"][0]
+    render = seen["render"][0]
+    assert hook != loop_thread
+    if pool:
+        assert render == hook
+        assert turn_hops == (["turn", "run"] if view == TICK_VIEW else ["turn"]), turn_hops
+    else:
+        assert "turn" not in turn_hops, turn_hops
+
+
+async def _notify(label):
+    from channels.layers import get_channel_layer
+
+    await get_channel_layer().group_send(
+        "djust_db_notify_offload_3074",
+        {"type": "db_notify", "channel": "offload_3074", "payload": {"label": label}},
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("view", [VIEW, LEGACY_VIEW], ids=["explicit", "legacy"])
+async def test_db_notify_turn_is_one_hop_with_the_pool(pool, spies, hops, view):
+    """#4166: with the pool on, a ``db_notify`` turn's connection check,
+    authorization, ``handle_info`` and render are ONE hop, and the message
+    takes no separate Channels connection-check hop."""
+    loop_thread = threading.get_ident()
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        comm = await _connect(view)
+        try:
+            _SEEN.clear()
+            before = spies["aclose"]
+            del hops[:]
+            await _notify("notified")
+            frame = await _receive_source(comm, "broadcast")
+            aclose_calls = spies["aclose"] - before
+            turn_hops = list(hops)
+        finally:
+            await comm.disconnect()
+    assert frame["broadcast"] is True
+    assert "notified" in json.dumps(frame["patches"])
+    (hook,) = _SEEN["hook"]
+    (render,) = _SEEN["render"]
+    assert hook != loop_thread
+    if pool:
+        assert _SEEN["close_old_connections"] == [hook]
+        assert render == hook
+        assert aclose_calls == 0
+        assert turn_hops == (["turn", "run"] if view == VIEW else ["turn"]), turn_hops
+    else:
+        assert aclose_calls == 1
+
+
+class _AsyncInfoView(_OffloadView):
+    template = (
+        '<div dj-root dj-view="djust.tests.test_event_loop_offload_3074._AsyncInfoView">'
+        "<b>{{ count }}</b><i>{{ label }}</i></div>"
+    )
+
+    async def handle_info(self, message):
+        _note("hook")
+        self.label = message.get("payload", {}).get("label", self.label)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_db_notify_with_async_handle_info_keeps_the_stock_turn(monkeypatch, spies, hops):
+    """An ``async def`` ``handle_info`` keeps the stock turn with the pool on;
+    ``dispatch`` skipped Channels' connection check, so that turn runs it,
+    once."""
+    import channels.db
+
+    from djust import worker_pool
+
+    turn_checks = []
+    real_aclose = channels.db.aclose_old_connections
+
+    async def aclose_old_connections():
+        turn_checks.append(1)
+        return await real_aclose()
+
+    monkeypatch.setattr(channels.db, "aclose_old_connections", aclose_old_connections)
+    monkeypatch.setitem(djust_config._config, "worker_threads", 2)
+    monkeypatch.setattr(worker_pool, "_pool", [])
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        comm = await _connect(f"{__name__}._AsyncInfoView")
+        try:
+            _SEEN.clear()
+            before = spies["aclose"]
+            del hops[:]
+            del turn_checks[:]
+            await _notify("async-notified")
+            frame = await _receive_source(comm, "broadcast")
+            aclose_calls = spies["aclose"] - before
+            turn_hops = list(hops)
+        finally:
+            await comm.disconnect()
+    assert "async-notified" in json.dumps(frame["patches"])
+    assert aclose_calls == 0
+    # The stock turn's own check, made once (Channels' was skipped).
+    assert turn_checks == [1], turn_checks
+    assert "turn" not in turn_hops, turn_hops

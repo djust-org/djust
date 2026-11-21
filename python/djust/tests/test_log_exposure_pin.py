@@ -21,6 +21,12 @@ traceback=...)`` inside a runtime turn, or the consumer's
 legacy message, level and traceback unchanged. Sites are keyed by enclosing function and
 the first 48 characters of the message literal, so line drift does not matter.
 The per-site evidence is in docs/adr/notes/038-exposure-sink-inventory.md.
+
+Client frames and HTTP response bodies (``JsonResponse``, ``HttpResponse*``,
+``StreamingHttpResponse``, the API envelope ``api_error``) that interpolate an
+exception are pinned package-wide too (#4170), including a one-step flow
+through a name assigned from the exception inside the handler; see
+``CLIENT_FRAME_CLASSIFIED`` and ``HTTP_RESPONSE_CLASSIFIED``.
 """
 
 import ast
@@ -1172,24 +1178,75 @@ def f(self):
 
 
 # --------------------------------------------------------------------------
-# Client frames that interpolate an exception reach the browser, not just the
-# log. Direct interpolation (the exception name inside the send call's
-# arguments) is pinned the same way; an indirect flow such as
-# ``detail = str(exc)`` passed later is not visible to this scan.
+# Client frames and HTTP response bodies that interpolate an exception reach
+# the client, not just the log (#4170). Both are pinned package-wide. A site is
+# a sink call inside an ``except ... as name:`` block whose arguments mention
+# the exception, directly or through a name assigned from it inside the same
+# handler (``detail = str(exc)`` then ``JsonResponse({"error": detail})``). A
+# value produced by a GATE_CALLS call (``handle_exception``, the policy gate) is
+# already gated and does not taint. Not seen: flows across functions or through
+# attributes (an exception stored on ``self``, returned from a helper).
+#
+# Every site found must be classified with a reason that starts with
+# "gated: " (reachable only where exception details are allowed) or
+# "framework-only: " (the text cannot derive from application values). An
+# ungated site is fixed, not listed. The tables are the derived site list; no
+# count is asserted anywhere.
 # --------------------------------------------------------------------------
 
 CLIENT_FRAME_SENDERS = {"send_error", "send_json", "send"}
+HTTP_RESPONSE_SINKS = {"JsonResponse", "StreamingHttpResponse", "api_error"}
+GATE_CALLS = {"handle_exception"}
+CLASSIFICATION_PREFIXES = ("gated: ", "framework-only: ")
 
-# The time-travel jump/replay and bug-capture share handlers that filled the
-# websocket.py table were removed in 2.0 (#4184). The empty tables still pin
-# both modules: a new exception-interpolating client frame fails the test.
-CLIENT_FRAME_LEGACY_GATED = {
-    "websocket.py": {},
-    "runtime.py": {},
+CLIENT_FRAME_CLASSIFIED = {
+    "websocket.py": {
+        ("receive", "send_error", "e"): (
+            "framework-only: the JSONDecodeError of the client's own frame, and only "
+            "under DEBUG (_safe_error)"
+        ),
+    },
+}
+
+HTTP_RESPONSE_CLASSIFIED = {
+    "bug_capture_views.py": {
+        ("replay_view", "HttpResponseBadRequest", "exc"): (
+            "framework-only: the decode error of the client's own blob, escaped, on a "
+            "route behind _prod_gate_open()"
+        ),
+    },
+    "mixins/request.py": {
+        ("_post_turn_body", "JsonResponse", "refused_by_store"): (
+            "framework-only: StateStoreError.user_message is a class constant"
+        ),
+        ("_post_turn_body", "JsonResponse", "refused"): (
+            "framework-only: StateLimitExceeded.user_message is framework text naming "
+            "the declared field and its limit"
+        ),
+        ("_post_turn_body", "JsonResponse", "e"): (
+            "gated: reached only when diagnostics_policy_allows(self) and settings.DEBUG "
+            "(decision D-a)"
+        ),
+    },
+    "theming/gallery/views.py": {
+        ("_serve_liveview", "HttpResponseNotFound", "exc"): (
+            "framework-only: the framework gallery views' Http404, carrying the "
+            "requested name, escaped"
+        ),
+    },
 }
 
 
-def _exception_interpolating_client_frames(source: str) -> set:
+def _call_name(node):
+    func = node.func
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return None
+
+
+def _exception_interpolating_calls(source: str, is_sink) -> set:
     tree = ast.parse(source)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
 
@@ -1200,38 +1257,129 @@ def _exception_interpolating_client_frames(source: str) -> set:
                 return node
         return None
 
-    sites = set()
+    def mentions(value, names):
+        return any(isinstance(sub, ast.Name) and sub.id in names for sub in ast.walk(value))
+
+    def is_gate_call(value):
+        return isinstance(value, ast.Call) and _call_name(value) in GATE_CALLS
+
+    taint_cache: dict = {}
+
+    def tainted(handler):
+        """The except-name plus every name assigned from it in the handler."""
+        if handler in taint_cache:
+            return taint_cache[handler]
+        names = {handler.name}
+        assigns = []
+        for stmt in handler.body:
+            for sub in ast.walk(stmt):
+                if isinstance(sub, ast.Assign):
+                    targets = [t for t in sub.targets if isinstance(t, ast.Name)]
+                elif isinstance(sub, (ast.AnnAssign, ast.AugAssign)) and isinstance(
+                    sub.target, ast.Name
+                ):
+                    targets = [sub.target]
+                else:
+                    continue
+                if targets and sub.value is not None and not is_gate_call(sub.value):
+                    assigns.append((targets, sub.value))
+        changed = True
+        while changed:
+            changed = False
+            for targets, value in assigns:
+                if mentions(value, names):
+                    for target in targets:
+                        if target.id not in names:
+                            names.add(target.id)
+                            changed = True
+        taint_cache[handler] = names
+        return names
+
+    found = []
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-            continue
-        if node.func.attr not in CLIENT_FRAME_SENDERS:
-            continue
-        names = set()
-        cursor = node
-        while cursor in parents:
-            cursor = parents[cursor]
-            if isinstance(cursor, ast.ExceptHandler) and cursor.name:
-                names.add(cursor.name)
-        if not names:
+        if not (isinstance(node, ast.Call) and is_sink(node)):
             continue
         values = list(node.args) + [kw.value for kw in node.keywords]
-        if any(
-            isinstance(sub, ast.Name) and sub.id in names for v in values for sub in ast.walk(v)
-        ):
-            fn = enclosing(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            sites.add((fn.name if fn else "<module>", node.func.attr))
+        cursor = node
+        exc_name = None
+        while cursor in parents and exc_name is None:
+            cursor = parents[cursor]
+            if isinstance(cursor, ast.ExceptHandler) and cursor.name:
+                names = tainted(cursor)
+                if any(mentions(v, names) and not is_gate_call(v) for v in values):
+                    exc_name = cursor.name
+        if exc_name is None:
+            continue
+        fn = enclosing(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        found.append((node.lineno, fn.name if fn else "<module>", _call_name(node), exc_name))
+    # A repeated key carries an ordinal, as in _exception_carrying_log_sites.
+    sites: set = set()
+    seen: dict = {}
+    for _lineno, *key in sorted(found):
+        key = tuple(key)
+        ordinal = seen.get(key, 0)
+        seen[key] = ordinal + 1
+        sites.add(key if ordinal == 0 else (*key, ordinal))
     return sites
 
 
-@pytest.mark.parametrize("module", sorted(CLIENT_FRAME_LEGACY_GATED))
-def test_every_exception_interpolating_client_frame_is_classified(module):
-    found = _exception_interpolating_client_frames((PACKAGE / module).read_text())
-    declared = set(CLIENT_FRAME_LEGACY_GATED[module])
-    assert found == declared, (
-        f"{module}: client frames interpolating an exception must be gated for "
-        f"nonlegacy owners and classified here. New: {sorted(found - declared)}; "
-        f"stale: {sorted(declared - found)}"
+def _is_client_frame_sink(node) -> bool:
+    return isinstance(node.func, ast.Attribute) and node.func.attr in CLIENT_FRAME_SENDERS
+
+
+def _is_http_response_sink(node) -> bool:
+    name = _call_name(node)
+    return name is not None and (name in HTTP_RESPONSE_SINKS or name.startswith("HttpResponse"))
+
+
+def _exception_interpolating_client_frames(source: str) -> set:
+    return _exception_interpolating_calls(source, _is_client_frame_sink)
+
+
+def _exception_interpolating_http_responses(source: str) -> set:
+    return _exception_interpolating_calls(source, _is_http_response_sink)
+
+
+def _assert_package_sites_classified(scan, classified, what):
+    problems = []
+    seen = set()
+    for rel, path in _package_modules():
+        seen.add(rel)
+        found = scan(path.read_text())
+        declared = set(classified.get(rel, {}))
+        if found != declared:
+            problems.append(
+                f"{rel}: new {sorted(found - declared, key=str)}; "
+                f"stale {sorted(declared - found, key=str)}"
+            )
+    problems += [f"{rel}: module no longer exists" for rel in sorted(set(classified) - seen)]
+    assert not problems, (
+        f"{what} interpolating an exception must send no detail to an explicit view "
+        "outside DEBUG (ADR-038 D-a, revised; docs/adr/038-explicit-context-and-state-"
+        "exposure.md), or be classified with a 'gated: ' / 'framework-only: ' reason: "
+        + "; ".join(problems)
     )
+
+
+@pytest.mark.pr_tier
+def test_every_exception_interpolating_client_frame_is_classified():
+    _assert_package_sites_classified(
+        _exception_interpolating_client_frames, CLIENT_FRAME_CLASSIFIED, "Client frames"
+    )
+
+
+@pytest.mark.pr_tier
+def test_every_exception_interpolating_http_response_is_classified():
+    _assert_package_sites_classified(
+        _exception_interpolating_http_responses, HTTP_RESPONSE_CLASSIFIED, "HTTP response bodies"
+    )
+
+
+def test_frame_and_response_classifications_state_a_reason():
+    for table in (CLIENT_FRAME_CLASSIFIED, HTTP_RESPONSE_CLASSIFIED):
+        for module, sites in table.items():
+            for key, reason in sites.items():
+                assert reason.startswith(CLASSIFICATION_PREFIXES), (module, key, reason)
 
 
 def test_client_frame_scanner_sees_direct_interpolation():
@@ -1242,8 +1390,66 @@ async def f(self):
     except Exception as exc:
         await self.send_error("x: %s" % exc)
         await self.send_error("generic")
+
+async def g(self):
+    try:
+        pass
+    except Exception as e:
+        error_msg = f"bad: {e}"
+        await self.send_error(error_msg)
 """
-    assert _exception_interpolating_client_frames(sample) == {("f", "send_error")}
+    assert _exception_interpolating_client_frames(sample) == {
+        ("f", "send_error", "exc"),
+        ("g", "send_error", "e"),
+    }
+
+
+def test_http_response_scanner_sees_each_form():
+    sample = """
+def a(request):
+    try:
+        pass
+    except Exception as exc:
+        return JsonResponse({"e": str(exc)})
+
+def b(request):
+    try:
+        pass
+    except PermissionDenied as exc:
+        return api_error(403, "k", str(exc))
+
+def c(request):
+    try:
+        pass
+    except ValueError as exc:
+        return HttpResponseBadRequest("x %s" % exc)
+
+def d(request):
+    try:
+        pass
+    except Exception as exc:
+        detail = str(exc)
+        return JsonResponse({"error": detail})
+
+def gated(self):
+    try:
+        pass
+    except Exception as exc:
+        response = handle_exception(exc)
+        return JsonResponse(response)
+
+def generic(request):
+    try:
+        pass
+    except Exception as exc:
+        return JsonResponse({"error": "x"})
+"""
+    assert _exception_interpolating_http_responses(sample) == {
+        ("a", "JsonResponse", "exc"),
+        ("b", "api_error", "exc"),
+        ("c", "HttpResponseBadRequest", "exc"),
+        ("d", "JsonResponse", "exc"),
+    }
 
 
 # --------------------------------------------------------------------------

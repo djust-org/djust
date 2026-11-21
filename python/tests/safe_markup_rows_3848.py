@@ -963,9 +963,17 @@ row(
 )
 row(
     "composite: an attribute fragment built in place and placed between attributes",
+    _URL + "def f(x, c):\n    title = f' title=\"{safe_url(x)}\"' if c else ''\n"
+    "    return mark_safe(f'<div class=\"a\"{title}>go</div>')\n",
+    False,
+)
+# the same fragment as a ``style`` value: a checked URL is no CSS value (``/a);color:red`` passes
+# safe_url), so it is reported (#4212 item 7; this row read ``style`` before and was cleared)
+row(
+    "composite: a style fragment of a checked URL built in place, placed between attributes",
     _URL + "def f(x, c):\n    style = f' style=\"background:{safe_url(x)}\"' if c else ''\n"
     "    return mark_safe(f'<div class=\"a\"{style}>go</div>')\n",
-    False,
+    True,
 )
 row(
     "composite: '' + safe_url(x) placed in text",

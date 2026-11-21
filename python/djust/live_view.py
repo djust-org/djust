@@ -1700,8 +1700,10 @@ def live_view(
     LiveView setting (``login_required``, ``permission_required``,
     ``template`` ...) configures the view before its access checks run. A function
     view runs over the page GET and the HTTP POST fallback. It is built per
-    request, so it has no class a WebSocket or SSE mount can name, and it keeps
-    no state between requests: the function runs again for every request.
+    request, so it has no class a WebSocket or SSE mount can name: its page marks
+    its root ``data-djust-transport="http"`` and the client sends events over
+    the HTTP fallback directly, opening no socket (#4236). It keeps no state
+    between requests: the function runs again for every request.
 
     Args:
         template_name: Path to Django template
@@ -1719,6 +1721,9 @@ def live_view(
                 # context; it declares no state (#4183).
                 exposure_policy = "explicit"
                 _djust_function_context: Dict[str, Any] = {}
+                # No class a socket can mount: the page tells the client to
+                # use the HTTP fallback directly (#4236).
+                _djust_http_transport = True
 
                 def get_context_data(self, **context_kwargs: Any) -> Dict[str, Any]:
                     context = super().get_context_data(**context_kwargs)

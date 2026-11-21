@@ -11,7 +11,18 @@ import logging
 import msgpack
 import uuid
 import weakref
-from typing import Any, Awaitable, Callable, ContextManager, Deque, Dict, List, Optional, Tuple
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    ContextManager,
+    Deque,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Tuple,
+)
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
@@ -532,6 +543,19 @@ def _compute_changed_keys(pre: Dict[str, Any], post: Dict[str, Any]) -> set[str]
     return changed
 
 
+class _OffloadedTurn(NamedTuple):
+    """What one worker-pool hop of a server-originated turn produced (#4166)."""
+
+    failures: List[BaseException]
+    applied: bool
+    render: bool
+    #: The hop's render: None (none ran), False (parameter contracts
+    #: unavailable) or a :class:`BackgroundRender`.
+    rendered: Any
+    render_error: Optional[BaseException]
+    explicit: bool
+
+
 def _has_async_push_hook(view: Any, event: Dict[str, Any]) -> bool:
     """Whether the hook a server push names is an ``async def``.
 
@@ -918,24 +942,29 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 binding.release()
 
     async def dispatch(self, message: Dict[str, Any]) -> None:
-        """Channels' dispatch, minus one hop for ``server_push`` with the pool on.
+        """Channels' dispatch, minus one hop for ``server_push`` and
+        ``db_notify`` with the pool on.
 
         Channels runs ``aclose_old_connections()``, a ``sync_to_async`` hop,
         before EVERY message. With the worker pool on (#3074) a
-        ``server_push`` message skips that hop here: the push turn runs
-        Django's ``close_old_connections()`` itself, on the session's thread
-        and before any hook can touch the database (inside the offloaded
-        turn's single hop, or as the stock turn's first step). A push that is
-        skipped (the session's own broadcast) or deferred does no DB work, so
-        it needs no check. Every other message, and every message with the
+        ``server_push`` or (#4166) ``db_notify`` message skips that hop here:
+        the turn runs Django's ``close_old_connections()`` itself, on the
+        session's thread and before any hook can touch the database (inside
+        the offloaded turn's single hop, or as the stock turn's first step).
+        A push or notification that is skipped (the session's own broadcast,
+        a user event in progress, the render lock held) or deferred does no
+        DB work, so it needs no check. Every other message, and every message with the
         pool off, goes through Channels unchanged.
         """
         msg_type = message.get("type")
-        if msg_type == "server_push":
+        if msg_type in ("server_push", "db_notify"):
             from .worker_pool import offload_enabled
 
             if offload_enabled():
-                await self.server_push(message)
+                if msg_type == "server_push":
+                    await self.server_push(message)
+                else:
+                    await self.db_notify(message)
                 return
         elif msg_type == "websocket.receive":
             # Pool on (#3095): the connection check is deferred to the
@@ -1550,7 +1579,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     if self.view_instance is not view:
                         return
                     # Re-render and send patches (mirrors the server_push path)
-                    rendered = await self._render_background(view)
+                    rendered = await self._render_background(view, "async")
                     if rendered is None:
                         return
                     html, patches = rendered.html, rendered.patches
@@ -1686,7 +1715,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         :meth:`_run_async_work` and :meth:`_settle_cancelled_async`. Arms
         recovery so ``_recovery_version`` tracks this frame (#1817).
         """
-        rendered = await self._render_background(view)
+        rendered = await self._render_background(view, "async")
         if rendered is None:
             return
         html, patches = rendered.html, rendered.patches
@@ -2324,6 +2353,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 self._end_explicit_turn(view)
             if not committed:
                 return
+        else:
+            from .runtime import store_turn_session_writes
+
+            await store_turn_session_writes(view)  # #4168
 
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
@@ -5521,7 +5554,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # No frame of its own (#3034): a push has no ``ref`` to
                     # acknowledge, and a bare noop let the client end an
                     # in-flight user event's loading state early. Queued side
-                    # effects still go out.
+                    # effects still go out, and the hooks' session writes are
+                    # stored (#4168).
+                    await self._store_no_frame_session_writes(view, "push")
                     await self._flush_all_pending()
                     return
 
@@ -5597,35 +5632,18 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         update is full HTML), as a withheld stock frame does. An explicit root
         whose ``check_permissions`` is ``async def`` keeps the stock path.
         """
-        from ._exposure import uses_legacy_exposure
+        from ._view_hooks import _hook_step
+        from .sync_turn import run_sync_step
 
         try:
             dispatch_work = False
             try:
                 if self.view_instance is not view:
                     return
-                runtime = getattr(self, "_runtime", None)
-                tenant = getattr(view, "_tenant", None)
-                explicit = not uses_legacy_exposure(view)
 
-                def turn() -> Tuple[List[BaseException], bool, bool, Any, Any, bool]:
-                    from django.db import close_old_connections
-
-                    from ._view_hooks import _hook_step
-                    from .sync_turn import run_sync_step
-
-                    close_old_connections()
+                def push_turn() -> Tuple[List[BaseException], bool, bool]:
                     failures: List[BaseException] = []
                     applied = render = False
-                    if explicit:
-                        # One fresh authority for the whole push turn (ADR-038
-                        # E3-3), before any hook, as the stock turn does.
-                        try:
-                            if runtime is None:
-                                raise PermissionError("no runtime owns this view")
-                            runtime.authorize_explicit_turn_sync(view)
-                        except Exception:  # noqa: BLE001 — never stringified
-                            return failures, False, False, None, None, False
                     for event in events:
                         if self.view_instance is not view:
                             break
@@ -5643,39 +5661,19 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         applied = True
                         if not _resolve_skip_render(view):
                             render = True
-                    rendered: Any = None
-                    render_error: Any = None
-                    if applied and render and self.view_instance is view:
-                        try:
-                            with _tenant_context(tenant):
-                                rendered = render_background_sync(view, runtime) or False
-                        except Exception as exc:  # noqa: BLE001 - re-raised on the loop
-                            render_error = exc
-                    return failures, applied, render, rendered, render_error, True
+                    return failures, applied, render
 
-                try:
-                    (
-                        failures,
-                        applied,
-                        render,
-                        rendered,
-                        render_error,
-                        authorized,
-                    ) = await settle_render_operation(sync_to_async(turn)())
-                except asyncio.CancelledError:
-                    _discard_baseline(view)
-                    raise
-                if not authorized:
-                    await self._deny_explicit_consumer_turn(view)
+                result = await self._run_offloaded_turn(view, push_turn)
+                if result is None:
                     return
-                for exc in failures:
+                for exc in result.failures:
                     self._log_view_hook_failure(
                         view, exc, "Error in server_push: %s", exc, traceback=True
                     )
                 # Set before a render error surfaces, as the stock turn does:
                 # start_async work the hooks queued still runs (finally below).
-                dispatch_work = applied
-                if self.view_instance is not view or not applied:
+                dispatch_work = result.applied
+                if self.view_instance is not view or not result.applied:
                     return
                 # A hook that changed ``push_scope`` moves the session's
                 # scoped-push groups now, under the render lock (#3004) --
@@ -5683,49 +5681,20 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 from .push import sync_push_scope_groups
 
                 await sync_push_scope_groups(self, view)
-                snapshot_fields: Dict[str, Any] = {}
-                if explicit and render and self.view_instance is view:
-                    # Commit before the frame. The stock turn commits before it
-                    # renders, so a render that raised still leaves the hooks'
-                    # state saved: commit before that error surfaces too.
-                    committed = await self._commit_explicit_background_turn(view)
-                    if committed is None:
-                        if rendered:
-                            _discard_baseline(view)
-                        return
-                    snapshot_fields = committed
-                if render_error is not None:
-                    raise render_error
                 if self.view_instance is not view:
                     return
-                if not render:
+                if not result.render:
                     # No frame of its own (#3034): a push has no ``ref`` to
                     # acknowledge, and a bare noop let the client end an
                     # in-flight user event's loading state early. Queued side
-                    # effects still go out.
+                    # effects still go out, and the hooks' session writes are
+                    # stored (#4168).
+                    await self._store_no_frame_session_writes(view, "push")
                     await self._flush_all_pending()
                     return
-                if rendered is None:
-                    return  # the view was replaced before the render
-                if rendered is False:
-                    logger.warning("Background render parameter contracts unavailable")
-                    await self.send_error(
-                        "Render parameter contracts unavailable.",
-                        code="render_error",
-                        source="async",
-                        _exc_info=(None, None, None),
-                    )
-                    return
-                if rendered.send_fields and runtime is not None:
-                    runtime._parameter_contracts_active = True
-                if snapshot_fields:
-                    from dataclasses import replace
-
-                    rendered = replace(
-                        rendered,
-                        send_fields={**rendered.send_fields, "snapshot_fields": snapshot_fields},
-                    )
-                await self._send_broadcast_render(rendered)
+                rendered = await self._finish_offloaded_render(view, result)
+                if rendered is not None:
+                    await self._send_broadcast_render(rendered)
             finally:
                 self._end_explicit_turn(view)
                 self._render_lock.release()
@@ -5733,6 +5702,116 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     await self._dispatch_async_work(event_name=None)
         except Exception as e:
             self._log_view_hook_failure(view, e, "Error in server_push: %s", e, traceback=True)
+
+    async def _run_offloaded_turn(
+        self, view: Any, body: Callable[[], Tuple[List[BaseException], bool, bool]]
+    ) -> Optional["_OffloadedTurn"]:
+        """Run one server-originated turn in ONE worker hop (#3074, #4152, #4166).
+
+        The shared core of the worker pool's push, tick and ``db_notify``
+        turns. On the session's thread, in a single ``sync_to_async`` hop:
+        Django's stale DB-connection check; for an explicit (ADR-038) root, a
+        fresh authorization (a refusal runs nothing else); ``body()``, the
+        turn's own hooks, which returns ``(failures, applied, render)``; then,
+        when something applied and asked for a render, the render and diff.
+
+        Returns None when the explicit root was refused (the stock denial has
+        been sent), else an :class:`_OffloadedTurn`. A cancelled hop drops the
+        diff baseline, since its render may have run. The caller holds the
+        render lock and finishes with :meth:`_finish_offloaded_render`.
+        """
+        from ._exposure import uses_legacy_exposure
+
+        runtime = getattr(self, "_runtime", None)
+        tenant = getattr(view, "_tenant", None)
+        explicit = not uses_legacy_exposure(view)
+
+        def turn() -> Optional[_OffloadedTurn]:
+            from django.db import close_old_connections
+
+            close_old_connections()
+            if explicit:
+                # One fresh authority for the whole turn (ADR-038 E3-3),
+                # before any hook, as the stock turn does.
+                try:
+                    if runtime is None:
+                        raise PermissionError("no runtime owns this view")
+                    runtime.authorize_explicit_turn_sync(view)
+                except Exception:  # noqa: BLE001 — never stringified
+                    return None
+            failures, applied, render = body()
+            rendered: Any = None
+            render_error: Optional[BaseException] = None
+            if applied and render and self.view_instance is view:
+                try:
+                    with _tenant_context(tenant):
+                        rendered = render_background_sync(view, runtime) or False
+                except Exception as exc:  # noqa: BLE001 - re-raised on the loop
+                    render_error = exc
+            return _OffloadedTurn(failures, applied, render, rendered, render_error, explicit)
+
+        try:
+            result = await settle_render_operation(sync_to_async(turn)())
+        except asyncio.CancelledError:
+            _discard_baseline(view)
+            raise
+        if result is None:
+            await self._deny_explicit_consumer_turn(view)
+        return result
+
+    async def _finish_offloaded_render(
+        self, view: Any, result: "_OffloadedTurn", source: str = "push"
+    ) -> Optional[BackgroundRender]:
+        """The loop-side tail of an offloaded turn that asked for a render.
+
+        An explicit root's declared state is committed before the frame. The
+        stock turn commits before it renders, so a render that raised still
+        leaves the hooks' state saved: commit before that error surfaces too.
+        The render already ran in the hop, so a commit that fails or is
+        deferred withholds the frame and discards the unseen diff baseline
+        (the next update is full HTML), as a withheld stock frame does.
+        Returns the render to send, or None when there is nothing to send.
+        ``source`` names the turn (``"push"``, ``"tick"``, ``"db_notify"``) in
+        a legacy view's session-write log.
+        """
+        runtime = getattr(self, "_runtime", None)
+        rendered: Any = result.rendered
+        snapshot_fields: Dict[str, Any] = {}
+        if result.explicit and result.render and self.view_instance is view:
+            committed = await self._commit_explicit_background_turn(view)
+            if committed is None:
+                if rendered:
+                    _discard_baseline(view)
+                return None
+            snapshot_fields = committed
+        elif not result.explicit and result.render and self.view_instance is view:
+            # A legacy view's hook session writes, before the frame (#4168).
+            from .runtime import store_turn_session_writes
+
+            await store_turn_session_writes(view, source)
+        if result.render_error is not None:
+            raise result.render_error
+        if self.view_instance is not view or rendered is None:
+            return None  # the view was replaced before (or after) the render
+        if rendered is False:
+            logger.warning("Background render parameter contracts unavailable")
+            await self.send_error(
+                "Render parameter contracts unavailable.",
+                code="render_error",
+                source="async",
+                _exc_info=(None, None, None),
+            )
+            return None
+        if rendered.send_fields and runtime is not None:
+            runtime._parameter_contracts_active = True
+        if snapshot_fields:
+            from dataclasses import replace
+
+            rendered = replace(
+                rendered, send_fields={**rendered.send_fields, "snapshot_fields": snapshot_fields}
+            )
+        final: BackgroundRender = rendered
+        return final
 
     async def _commit_explicit_background_turn(self, view: Any) -> Optional[Dict[str, Any]]:
         """Commit a server-originated turn on an explicit root, before its frame.
@@ -6072,10 +6151,27 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     async def _db_notify_locked(self, view: Any, message: Dict[str, Any]) -> None:
         """The locked part of :meth:`_db_notify_to_view` (a ``push``/``db_notify`` turn).
 
-        Caller holds ``_render_lock``; this always releases it.
+        Caller holds ``_render_lock``; this always releases it. With the
+        worker pool on, a sync ``handle_info`` on a view that is legacy or
+        whose ``check_permissions`` is sync takes the one-hop turn
+        (:meth:`_run_db_notify_turn_offloaded`, #4166).
         """
+        from .worker_pool import offload_enabled
+
+        pooled = offload_enabled()
+        if pooled and self._offloads_server_turn(view, "info"):
+            await self._run_db_notify_turn_offloaded(view, message)
+            return
         dispatch_work = False
         try:
+            if pooled:
+                # ``dispatch`` skipped Channels' per-message DB-connection
+                # check for this message (#4166): run it once, before any
+                # hook touches the DB, inside the ``try`` so the render lock
+                # is released whatever it raises.
+                from channels.db import aclose_old_connections
+
+                await aclose_old_connections()
             if self.view_instance is not view:
                 return
             if not await self._authorize_explicit_consumer_turn(view):
@@ -6088,14 +6184,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # lock is released (#2955).
                     dispatch_work = True
                 except Exception as exc:  # noqa: BLE001
-                    self._log_view_hook_failure(
-                        view,
-                        exc,
-                        "db_notify: handle_info raised on %s: %s",
-                        view.__class__.__name__,
-                        exc,
-                        traceback=True,
-                    )
+                    self._log_handle_info_failure(view, exc)
                     return
 
             if self.view_instance is not view:
@@ -6113,11 +6202,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # is consumed here either way.
             if _resolve_skip_render(self.view_instance):
                 # No noop frame for a notification (#3034), as for
-                # server_push; queued side effects still go out.
+                # server_push; queued side effects still go out, and the
+                # hook's session writes are stored (#4168).
+                await self._store_no_frame_session_writes(view, "db_notify")
                 await self._flush_all_pending()
                 return
 
-            rendered = await self._render_background(view)
+            rendered = await self._render_background(view, "db_notify")
             if rendered is None:
                 return
             html, patches = rendered.html, rendered.patches
@@ -6143,33 +6234,143 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     source="broadcast",
                     **rendered.send_fields,
                 )
-
-            # v0.7.0 — If handle_info flipped an activity to visible,
-            # drain its queue in the same round-trip. The flush is
-            # async and awaited inline. Safe no-op when no deferred
-            # events exist.
-            if hasattr(self.view_instance, "_flush_deferred_activity_events"):
-                try:
-                    await self.view_instance._flush_deferred_activity_events(self)
-                except Exception as exc:  # noqa: BLE001
-                    self._log_view_hook_failure(
-                        view,
-                        exc,
-                        "dj_activity: deferred-event flush raised (db_notify path)",
-                        traceback=True,
-                    )
+            await self._flush_notify_activity(view)
         finally:
             self._end_explicit_turn(view)
             self._render_lock.release()
             if dispatch_work and self.view_instance is view:
                 await self._dispatch_async_work(event_name=None)
 
-    async def _render_background(self, view: Any) -> Optional[BackgroundRender]:
+    @staticmethod
+    async def _store_no_frame_session_writes(view: Any, source: str) -> None:
+        """A server-originated turn that renders nothing has no commit: store
+        what its hooks wrote to ``request.session`` anyway, for both exposure
+        policies (#4168). Free when nothing was written."""
+        from .runtime import store_turn_session_writes
+
+        await store_turn_session_writes(view, source)
+
+    def _log_handle_info_failure(self, view: Any, exc: BaseException) -> None:
+        self._log_view_hook_failure(
+            view,
+            exc,
+            "db_notify: handle_info raised on %s: %s",
+            view.__class__.__name__,
+            exc,
+            traceback=True,
+        )
+
+    async def _flush_notify_activity(self, view: Any) -> None:
+        """After a ``db_notify`` frame: drain the deferred events of an
+        activity ``handle_info`` flipped to visible, in the same round-trip
+        (v0.7.0). A safe no-op when no deferred events exist."""
+        current = self.view_instance
+        if current is not None and hasattr(current, "_flush_deferred_activity_events"):
+            try:
+                await current._flush_deferred_activity_events(self)
+            except Exception as exc:  # noqa: BLE001
+                self._log_view_hook_failure(
+                    view,
+                    exc,
+                    "dj_activity: deferred-event flush raised (db_notify path)",
+                    traceback=True,
+                )
+
+    @staticmethod
+    def _offloads_server_turn(view: Any, hook_role: str) -> bool:
+        """Whether a tick or ``db_notify`` turn takes the pool's one hop (#4166).
+
+        ``hook_role`` is ``"tick"`` or ``"info"`` (the view's ``handle_<role>``).
+        Called with the pool on. An ``async def`` hook must run on the loop,
+        and an explicit root whose ``check_permissions`` is ``async def`` is
+        authorized on the loop before its hook: both keep the stock path, as
+        for the push turn (#4152).
+        """
+        from ._exposure import uses_legacy_exposure
+        from .auth.core import has_async_check_permissions
+
+        if view is None:
+            return False
+        if not (uses_legacy_exposure(view) or not has_async_check_permissions(view)):
+            return False
+        hook = getattr(view, "handle_" + hook_role, None)
+        return not (hook is not None and callable(hook) and is_async_hook(hook))
+
+    async def _run_db_notify_turn_offloaded(self, view: Any, message: Dict[str, Any]) -> None:
+        """One worker hop for a ``db_notify`` turn (#4166, worker pool on).
+
+        :meth:`_db_notify_locked` through :meth:`_run_offloaded_turn`: the
+        connection check, an explicit root's authorization, ``handle_info``,
+        the skip decision and the render run in ONE hop; an explicit root's
+        commit runs on the loop before the frame, and a failed commit
+        withholds the frame and drops the diff baseline. Same contract as the
+        stock turn: releases ``_render_lock``; a raising ``handle_info`` is
+        logged, renders nothing and dispatches no work.
+        """
+        from ._view_hooks import _hook_step
+        from .sync_turn import run_sync_step
+
+        dispatch_work = False
+        try:
+            if self.view_instance is not view:
+                return
+            handler = getattr(view, "handle_info", None)
+            has_handler = bool(handler and callable(handler))
+
+            def notify_turn() -> Tuple[List[BaseException], bool, bool]:
+                if handler is not None and has_handler:
+                    try:
+                        # The stock turn reaches it through ``call_hook``: the
+                        # same ``hook`` step (#3646).
+                        run_sync_step(view, _hook_step(handler), handler, message)
+                    except Exception as exc:  # noqa: BLE001 - logged on the loop
+                        return [exc], False, False
+                return [], True, not _resolve_skip_render(view)
+
+            result = await self._run_offloaded_turn(view, notify_turn)
+            if result is None:
+                return
+            if result.failures:
+                self._log_handle_info_failure(view, result.failures[0])
+                return
+            # start_async work handle_info queued runs once the lock is
+            # released (#2955).
+            dispatch_work = has_handler
+            if self.view_instance is not view:
+                return
+            # handle_info may have moved the session (#3004).
+            from .push import sync_push_scope_groups
+
+            await sync_push_scope_groups(self, view)
+            if self.view_instance is not view:
+                return
+            if not result.render:
+                # No noop frame for a notification (#3034); queued side
+                # effects still go out, and the hook's session writes are
+                # stored (#4168).
+                await self._store_no_frame_session_writes(view, "db_notify")
+                await self._flush_all_pending()
+                return
+            rendered = await self._finish_offloaded_render(view, result, "db_notify")
+            if rendered is None:
+                return
+            await self._send_broadcast_render(rendered)
+            await self._flush_notify_activity(view)
+        finally:
+            self._end_explicit_turn(view)
+            self._render_lock.release()
+            if dispatch_work and self.view_instance is view:
+                await self._dispatch_async_work(event_name=None)
+
+    async def _render_background(
+        self, view: Any, source: str = "push"
+    ) -> Optional[BackgroundRender]:
         """Capture one background render under the caller's existing render lock.
 
         A nonlegacy root's turn was authorized at its start; its declared state
         is committed here, before the frame, and a failed save withholds the
-        render (ADR-038 E3).
+        render (ADR-038 E3). ``source`` names the turn in a legacy view's
+        session-write log.
         """
         if self.view_instance is not view:
             return None
@@ -6182,6 +6383,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if committed is None:
                 return None
             snapshot_fields = committed
+        else:
+            # A legacy view's hook session writes, before the frame (#4168).
+            from .runtime import store_turn_session_writes
+
+            await store_turn_session_writes(view, source)
         with _tenant_context(getattr(view, "_tenant", None)):
             rendered = await render_background(view, runtime)
         if self.view_instance is not view:
@@ -6319,56 +6525,25 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     async def _tick_locked(self, view: Any) -> bool:
         """The locked part of :meth:`_tick_once` (a ``push``/``tick`` turn).
 
-        Caller holds ``_render_lock``; this always releases it.
+        Caller holds ``_render_lock``; this always releases it. With the
+        worker pool on, a sync ``handle_tick`` on a view that is legacy or
+        whose ``check_permissions`` is sync takes the one-hop turn
+        (:meth:`_run_tick_turn_offloaded`, #4166).
         """
+        from .worker_pool import offload_enabled
+
+        if offload_enabled() and self._offloads_server_turn(view, "tick"):
+            return await self._run_tick_turn_offloaded(view)
         dispatch_work = False
         try:
             if self.view_instance is not view:
                 return False
             if not await self._authorize_explicit_consumer_turn(view):
                 return False
-            from .worker_pool import offload_enabled
+            # Snapshot state before tick to detect changes
+            pre_assigns = _snapshot_assigns(self.view_instance)
 
-            # Worker pool on (#3095): the change-detection snapshots and the
-            # skip decision run on the session's thread, in the same hop as
-            # handle_tick, instead of on the event loop around it. The render
-            # lock is held across the hop, so nothing else changes the view
-            # between the snapshots and the call. ``offloaded`` is None with
-            # the pool off, else (skip_render, unchanged). The decision is
-            # taken before sync_push_scope_groups below rather than after it,
-            # which is the same: that sync only joins and leaves groups.
-            offloaded: Optional[Tuple[bool, bool]] = None
-            if offload_enabled():
-                from .sync_turn import run_sync_step
-
-                tick_view = self.view_instance
-
-                def tick_turn() -> Tuple[bool, bool, Optional[BaseException]]:
-                    before = _snapshot_assigns(tick_view)
-                    run_sync_step(tick_view, "tick", tick_view.handle_tick)
-                    # handle_tick ran: a later failure is reported after the
-                    # caller marks its queued work for dispatch, as in the
-                    # stock path.
-                    try:
-                        if _resolve_skip_render(tick_view):
-                            return True, False, None
-                        if getattr(tick_view, "_force_full_html", False):
-                            return False, False, None
-                        unchanged = before == _snapshot_assigns(tick_view)
-                        return False, unchanged and not rows_written(tick_view), None
-                    except Exception as exc:  # noqa: BLE001 - re-raised on the loop
-                        return False, False, exc
-
-                skip, unchanged, after_error = await sync_to_async(tick_turn)()
-                offloaded = (skip, unchanged)
-                if after_error is not None:
-                    dispatch_work = True
-                    raise after_error
-            else:
-                # Snapshot state before tick to detect changes
-                pre_assigns = _snapshot_assigns(self.view_instance)
-
-                await call_tick(self.view_instance)
+            await call_tick(self.view_instance)
             # start_async work handle_tick queued runs once the lock is
             # released (#2955).
             dispatch_work = True
@@ -6391,11 +6566,12 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # (#1981) wins over _skip_render — a handler that explicitly
             # asked for a forced full-HTML render must not be silently
             # dropped by a concurrently-set _skip_render.
-            if offloaded[0] if offloaded is not None else _resolve_skip_render(self.view_instance):
+            if _resolve_skip_render(self.view_instance):
                 logger.debug(
                     "[djust] Tick on %s skipped render via _skip_render",
                     self.view_instance.__class__.__name__,
                 )
+                await self._store_no_frame_session_writes(view, "tick")  # #4168
                 await self._flush_all_pending()
                 return False
 
@@ -6405,56 +6581,132 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # in-place mutation inside handle_tick is invisible to the
             # snapshot, so without this guard the hatch would be
             # silently dropped on the tick path (#1646 parallel-path).
-            if offloaded is not None:
-                unchanged = offloaded[1]
-            else:
-                force_full_html = getattr(self.view_instance, "_force_full_html", False)
-                post_assigns = _snapshot_assigns(self.view_instance)
-                unchanged = (
-                    pre_assigns == post_assigns
-                    and not force_full_html
-                    and not rows_written(self.view_instance)
-                )
-            if unchanged:
+            force_full_html = getattr(self.view_instance, "_force_full_html", False)
+            post_assigns = _snapshot_assigns(self.view_instance)
+            if (
+                pre_assigns == post_assigns
+                and not force_full_html
+                and not rows_written(self.view_instance)
+            ):
                 logger.debug(
                     "[djust] Tick on %s produced no state changes, skipping render",
                     self.view_instance.__class__.__name__,
                 )
+                await self._store_no_frame_session_writes(view, "tick")  # #4168
                 await self._flush_all_pending()
                 return False
 
-            rendered = await self._render_background(view)
+            rendered = await self._render_background(view, "tick")
             if rendered is None:
                 return False
-            html, patches = rendered.html, rendered.patches
-
-            if patches is not None:
-                if isinstance(patches, str):
-                    patches = fast_json_loads(patches)
-                # Render-send: arm recovery so _recovery_version
-                # tracks this tick's version (#1817). ``html`` is the
-                # pre-strip render from render_with_diff() above.
-                await self._send_update(
-                    patches=patches,
-                    version=self._next_version_armed(html),
-                    event_name="tick",
-                    source="tick",
-                    **rendered.send_fields,
-                )
-                return True
-            await self._send_update(
-                html=rendered.content,
-                version=self._next_version_armed(html),
-                event_name="tick",
-                source="tick",
-                **rendered.send_fields,
-            )
+            await self._send_tick_render(rendered)
             return True
         finally:
             self._end_explicit_turn(view)
             self._render_lock.release()
             if dispatch_work and self.view_instance is view:
                 await self._dispatch_async_work(event_name=None)
+
+    async def _run_tick_turn_offloaded(self, view: Any) -> bool:
+        """One worker hop for a tick turn (#4166, worker pool on).
+
+        :meth:`_tick_locked` through :meth:`_run_offloaded_turn`: an explicit
+        root's authorization, the change-detection snapshots around
+        ``handle_tick``, the skip decision and the render run in ONE hop (the
+        render lock is held across it, so nothing else changes the view
+        between the snapshots and the call); an explicit root's commit runs on
+        the loop before the frame, and a failed commit withholds the frame and
+        drops the diff baseline. Same contract as the stock tick: releases
+        ``_render_lock``; ``handle_tick`` raising propagates and dispatches no
+        work; a failure after it ran dispatches its work, then propagates.
+        """
+        from .sync_turn import run_sync_step
+
+        dispatch_work = False
+        try:
+            if self.view_instance is not view:
+                return False
+            decision = {"skip": False}
+
+            def tick_turn() -> Tuple[List[BaseException], bool, bool]:
+                before = _snapshot_assigns(view)
+                run_sync_step(view, "tick", view.handle_tick)
+                # handle_tick ran: a later failure is reported after the
+                # caller marks its queued work for dispatch, as in the stock
+                # path.
+                try:
+                    if _resolve_skip_render(view):
+                        decision["skip"] = True
+                        return [], True, False
+                    if getattr(view, "_force_full_html", False):
+                        return [], True, True
+                    unchanged = before == _snapshot_assigns(view) and not rows_written(view)
+                    return [], True, not unchanged
+                except Exception as exc:  # noqa: BLE001 - re-raised on the loop
+                    return [exc], True, False
+
+            result = await self._run_offloaded_turn(view, tick_turn)
+            if result is None:
+                return False
+            # start_async work handle_tick queued runs once the lock is
+            # released (#2955).
+            dispatch_work = True
+            if result.failures:
+                raise result.failures[0]
+            if self.view_instance is not view:
+                return False
+            # handle_tick may have moved the session (#3004).
+            from .push import sync_push_scope_groups
+
+            await sync_push_scope_groups(self, view)
+            if self.view_instance is not view:
+                return False
+            if not result.render:
+                logger.debug(
+                    "[djust] Tick on %s %s",
+                    view.__class__.__name__,
+                    "skipped render via _skip_render"
+                    if decision["skip"]
+                    else "produced no state changes, skipping render",
+                )
+                await self._store_no_frame_session_writes(view, "tick")  # #4168
+                await self._flush_all_pending()
+                return False
+            rendered = await self._finish_offloaded_render(view, result, "tick")
+            if rendered is None:
+                return False
+            await self._send_tick_render(rendered)
+            return True
+        finally:
+            self._end_explicit_turn(view)
+            self._render_lock.release()
+            if dispatch_work and self.view_instance is view:
+                await self._dispatch_async_work(event_name=None)
+
+    async def _send_tick_render(self, rendered: BackgroundRender) -> None:
+        """Send a tick's render, tagged ``source="tick"`` (#560)."""
+        html, patches = rendered.html, rendered.patches
+        if patches is not None:
+            if isinstance(patches, str):
+                patches = fast_json_loads(patches)
+            # Render-send: arm recovery so _recovery_version tracks this
+            # tick's version (#1817). ``html`` is the pre-strip render from
+            # render_with_diff().
+            await self._send_update(
+                patches=patches,
+                version=self._next_version_armed(html),
+                event_name="tick",
+                source="tick",
+                **rendered.send_fields,
+            )
+            return
+        await self._send_update(
+            html=rendered.content,
+            version=self._next_version_armed(html),
+            event_name="tick",
+            source="tick",
+            **rendered.send_fields,
+        )
 
     @classmethod
     async def broadcast_reload(cls, file_path: str) -> None:

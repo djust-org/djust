@@ -1,4 +1,4 @@
-{% extends "djust_admin/base.html" %}
+{% extends "djust_admin/base.html" %}{% load djust_attrs %}
 
 {% block breadcrumb_items %}
 <span class="mx-2 text-gray-400">/</span>
@@ -37,8 +37,8 @@
         </div>
         {# A native progress element: a width set in a style attribute is refused by a strict CSP (#3979). #}
         <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-            <progress class="w-full h-3 bg-indigo-600 transition-all" value="{{ percent }}" max="100"
-                      aria-label="{% if action_label %}{{ action_label }}{% else %}Running action{% endif %}">{{ percent }}%</progress>
+            <progress class="w-full h-3 bg-indigo-600 transition-all" value="{{ percent|force_escape }}" max="100"
+                      aria-label="{% if action_label %}{{ action_label|force_escape }}{% else %}Running action{% endif %}">{{ percent }}%</progress>
         </div>
 
         {% if message %}
@@ -54,7 +54,7 @@
             </button>
             {% endif %}
             {% if done and redirect_url %}
-            <a href="{{ redirect_url }}"
+            <a href="{{ redirect_url|djust_url_attr }}"
                class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
                 Back to list
             </a>

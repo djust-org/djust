@@ -207,8 +207,8 @@ def _log_unobserved_save_failure(work: "asyncio.Future[None]") -> None:
     """Report a save failure nobody is waiting for any more (value-free)."""
     if work.cancelled() or work.exception() is None:
         return
-    if isinstance(work.exception(), LateSaveDropped):
-        return  # a logged-out session, already reported at debug (#3247)
+    if isinstance(work.exception(), (LateSaveDropped, _WorkReleased)):
+        return  # a logged-out session (#3247), or released work (#4211): nothing failed
     logger.warning("State save failed after its turn stopped waiting")
 
 
@@ -456,6 +456,91 @@ def _save_session_writes(view: Any) -> None:
 
     request = getattr(view, "_djust_event_request", None)
     save_session_writes(getattr(request, "session", None))
+
+
+def _save_session_writes_unless(view: Any, released: Callable[[], bool]) -> None:
+    """:func:`_save_session_writes`, unless the work no longer belongs to the
+    live view (#4211). The check and the save are one thread step, so a
+    teardown run in that executor cannot fall between them."""
+    if released():
+        return
+    _save_session_writes(view)
+
+
+class _WorkReleased(Exception):
+    """A background result's save found, as its first step, that the work no
+    longer belongs to the live view (#4211): nothing was written."""
+
+
+def _unless_released(
+    save: Callable[[], None], released: Optional[Callable[[], bool]]
+) -> Callable[[], None]:
+    """``save``, preceded IN ITS OWN THREAD STEP by the ``released`` check, so
+    a teardown that lands while the save waits for its thread (unbounded on
+    the WebSocket) cannot fall between the check and the write (#4211)."""
+    if released is None:
+        return save
+
+    def run() -> None:
+        if released():
+            raise _WorkReleased
+        save()
+
+    return run
+
+
+def _turn_session(view: Any) -> Any:
+    """The session a turn's handlers write through ``self.request.session``:
+    an explicit view's authorized turn request, a legacy view's mount request
+    (the socket's long-lived session object, tracked at mount, #4168)."""
+    from ._exposure import uses_legacy_exposure
+
+    if uses_legacy_exposure(view):
+        request = getattr(view, "request", None)
+    else:
+        request = getattr(view, "_djust_event_request", None)
+    return getattr(request, "session", None)
+
+
+def _store_session_writes_sync(session: Any, source: str) -> None:
+    from django.contrib.sessions.backends.base import UpdateError
+
+    from ._session_merge import save_session_writes
+    from .state_store import StateSuperseded
+
+    try:
+        save_session_writes(session)
+    except (LateSaveDropped, StateSuperseded, UpdateError):
+        # Logged out (the row is gone) or the tab restored elsewhere while the
+        # turn ran: nothing is revived, nothing more is written.
+        logger.debug("Session writes of a %s turn dropped: the session moved on", source)
+    except Exception:  # noqa: BLE001 — storage errors can carry server-only values
+        logger.warning("Session writes of a %s turn were not stored", source)
+
+
+async def store_turn_session_writes(view: Any, source: str = "event") -> None:
+    """Store what a turn's hooks wrote to ``request.session`` (#4162, #4168).
+
+    For a turn that has no commit of its own: a legacy view's turn (its saves
+    stay best-effort: a failed save is logged, the frame still goes), and a
+    tick, push or ``db_notify`` turn of either policy that renders nothing.
+    Merged with what other requests stored meanwhile. Costs nothing, not even
+    a thread hop, when the session is untracked or nothing but djust's own
+    keys changed. Never raises.
+    """
+    from ._session_merge import TrackedSessionData
+
+    session = _turn_session(view)
+    data = getattr(session, "_session_cache", None)
+    if type(data) is not TrackedSessionData or not data.has_foreign_changes():
+        return
+    if not getattr(session, "session_key", None):
+        # A socket mounted without a session cookie (an anonymous legacy
+        # view): saving would create a session row whose key no browser ever
+        # receives, one orphan per socket (#4168 review N5). The writes stay
+        # on the socket's session object only.
+        return
+    await sync_to_async(_store_session_writes_sync)(session, source)
 
 
 def _is_refusal(exc: BaseException) -> bool:
@@ -3525,6 +3610,10 @@ class ViewRuntime(RuntimeTurnPort):
         on_view_instantiated = getattr(self.transport, "on_view_instantiated", None)
         if on_view_instantiated is not None:
             on_view_instantiated(view_instance)
+        # #4167: a live runtime mounted this view, so a ``lazy=`` child in its
+        # templates is rendered (and registered) in place: nothing on a live
+        # connection runs the page GET's deferred fill.
+        view_instance.__dict__["_djust_live_runtime"] = True
 
         self.view_instance = view_instance
 
@@ -3601,6 +3690,13 @@ class ViewRuntime(RuntimeTurnPort):
             # The Django session key the view mounted under; None/empty for an
             # anonymous session.
             session_obj = getattr(request, "session", None)
+            if uses_legacy_exposure(view_instance):
+                # A legacy view's handlers write through this object for the
+                # life of the socket: record those writes so each turn can
+                # store them, merged (#4168). Reads the session once.
+                from ._session_merge import track_session
+
+                await sync_to_async(track_session)(session_obj)
             view_instance._django_session_key = (
                 getattr(session_obj, "session_key", None) if session_obj is not None else None
             )
@@ -4005,6 +4101,10 @@ class ViewRuntime(RuntimeTurnPort):
             view_instance, request=request, mounted=False
         ):
             return
+        if uses_legacy_exposure(view_instance):
+            # What a legacy mount() / handle_params() wrote to the socket's
+            # session is stored before the mount frame (#4168).
+            await store_turn_session_writes(view_instance, "mount")
 
         # ---- Mount-frame wire version (#1917, Finding C) ----
         # ``next_mount_version`` stamps the baseline the client calibrates to. WS:
@@ -4589,6 +4689,9 @@ class ViewRuntime(RuntimeTurnPort):
                 view.__dict__["_djust_auto_changed"] = None
             if not committed:
                 return
+        else:
+            # A legacy view's handler session writes, before the frame (#4168).
+            await store_turn_session_writes(target_view)
 
         snapshot_fields = await self._explicit_event_snapshot(view)
 
@@ -4909,6 +5012,8 @@ class ViewRuntime(RuntimeTurnPort):
             if not await self.commit_explicit_turn(view, source="event", children=False):
                 return
             snapshot_fields = await self._explicit_event_snapshot(view)
+        else:
+            await store_turn_session_writes(view)  # #4168
 
         # _resolve_skip_render owns the skip decision (#2834/#2847) — the same
         # resolution as dispatch_event / server_push / db_notify / tick. This
@@ -5403,6 +5508,8 @@ class ViewRuntime(RuntimeTurnPort):
                 if not await self.commit_explicit_turn(view, source="event"):
                     return True
                 snapshot_fields = await self._explicit_event_snapshot(view)
+            else:
+                await store_turn_session_writes(view)  # #4168
 
         from ._async_batch import AsyncBatch
 
@@ -6351,6 +6458,7 @@ class ViewRuntime(RuntimeTurnPort):
         children: bool = True,
         async_batch: Optional[str] = None,
         async_result: bool = False,
+        released: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """Persist an authorized explicit turn before any success frame.
 
@@ -6379,6 +6487,12 @@ class ViewRuntime(RuntimeTurnPort):
         full HTML. Storage that keeps missing the deadline, or a catch-up that
         cannot finish, ends in the terminal reload error. A refused save
         (identity changed) or a storage exception is terminal too.
+
+        ``released`` (background results, #4211): True once the work no longer
+        belongs to the live view. Checked as the first step of each save's own
+        thread step (and of the deferred path's check), so a teardown that
+        lands while the save waits for its thread stores nothing; the turn
+        then returns False without a frame or an error.
         """
         from ._exposure import ExposureError, uses_legacy_exposure
         from ._exposure_sessions import StateLimitExceeded
@@ -6388,6 +6502,8 @@ class ViewRuntime(RuntimeTurnPort):
         from .state_store import StateSuperseded
 
         if uses_legacy_exposure(view):
+            # A legacy view's handler session writes, best-effort (#4168).
+            await store_turn_session_writes(view, source)
             return True
         # The one place a socket turn's save is decided (``_save_policy``):
         # immediate (below) unless the project set an interval and nothing
@@ -6397,7 +6513,7 @@ class ViewRuntime(RuntimeTurnPort):
         extra = self._explicit_error_fields(view, source=source, async_batch=async_batch)
         if mode == DEFERRED:
             return await self._defer_explicit_turn(
-                view, extra, children=children, async_batch=async_batch
+                view, extra, children=children, async_batch=async_batch, released=released
             )
         if self._state_dirty_view is view:
             # Earlier turns' changes are in memory only: this turn's "nothing
@@ -6410,9 +6526,11 @@ class ViewRuntime(RuntimeTurnPort):
                 raise ExposureError("Explicit persistence requires current authorization")
             await _run_explicit_save(
                 self,
-                lambda: self._save_explicit_root(view, request),
+                _unless_released(lambda: self._save_explicit_root(view, request), released),
                 deadline=self._explicit_save_deadline(),
             )
+        except _WorkReleased:
+            return False
         except ExplicitSaveDeferred as deferred:
             # The turn's values are on the view; the store has them only once
             # this save lands (#4095 reads it).
@@ -6444,7 +6562,7 @@ class ViewRuntime(RuntimeTurnPort):
                 self._mark_state_dirty(view)
                 if children:
                     return await self._persist_explicit_children_after_event(
-                        view, async_batch=async_batch
+                        view, async_batch=async_batch, released=released
                     )
                 return True
             return await self._refuse_over_limit_turn(view, refused, extra)
@@ -6482,7 +6600,9 @@ class ViewRuntime(RuntimeTurnPort):
         self._explicit_save_succeeded()
         self._state_saved(view)
         if children:
-            return await self._persist_explicit_children_after_event(view, async_batch=async_batch)
+            return await self._persist_explicit_children_after_event(
+                view, async_batch=async_batch, released=released
+            )
         return True
 
     # ------------------------------------------------------------------ #
@@ -6496,6 +6616,7 @@ class ViewRuntime(RuntimeTurnPort):
         *,
         children: bool,
         async_batch: Optional[str],
+        released: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """A turn whose save is left to the flush: it writes nothing and
         holds no storage wait before its frame.
@@ -6505,6 +6626,10 @@ class ViewRuntime(RuntimeTurnPort):
         and the child tree's own save, which is declared state. The view is
         marked changed when the turn changed it (or cannot tell), and the
         first such turn arms the one-shot timer.
+
+        ``released`` (see :meth:`commit_explicit_turn`): checked in the check's
+        thread step and again on the loop before the change is marked owed, so
+        work torn down meanwhile leaves nothing for a flush to store (#4211).
         """
         from ._automatic_state import turn_changed_state
         from ._exposure import ExposureError
@@ -6518,11 +6643,17 @@ class ViewRuntime(RuntimeTurnPort):
         request = getattr(view, "_djust_event_request", None)
 
         def check() -> None:
+            if released is not None and released():
+                raise _WorkReleased
             if request is None or request_binding(request) != self._explicit_mount_binding:
                 raise ExposureError("Explicit persistence requires current authorization")
 
         try:
             await sync_to_async(check)()
+            if released is not None and released():
+                raise _WorkReleased
+        except _WorkReleased:
+            return False
         except Exception:  # noqa: BLE001 — identity errors may carry values; never logged
             view._force_full_html = True
             logger.warning(
@@ -6536,7 +6667,9 @@ class ViewRuntime(RuntimeTurnPort):
         if turn_changed_state(view):
             self._mark_state_dirty(view)
         if children:
-            return await self._persist_explicit_children_after_event(view, async_batch=async_batch)
+            return await self._persist_explicit_children_after_event(
+                view, async_batch=async_batch, released=released
+            )
         return True
 
     def _mark_state_dirty(self, view: Any) -> None:
@@ -7085,12 +7218,15 @@ class ViewRuntime(RuntimeTurnPort):
         request: Any = None,
         async_batch: Optional[str] = None,
         mounted: bool = True,
+        released: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """Save the authorized child tree before acknowledging a parent event.
 
         ``mounted=False`` is the mount path: the browser has no page yet, so a
         deferred save there cannot be caught up and stays the terminal
         reload error it was before #3200.
+
+        ``released``: as for :meth:`commit_explicit_turn` (#4211).
         """
         from ._exposure import ExposureError, uses_legacy_exposure
 
@@ -7115,9 +7251,11 @@ class ViewRuntime(RuntimeTurnPort):
                 raise ExposureError("Child persistence requires current authorization")
             await _run_explicit_save(
                 self,
-                lambda: self._save_explicit_children(view, request),
+                _unless_released(lambda: self._save_explicit_children(view, request), released),
                 deadline=self._explicit_save_deadline(),
             )
+        except _WorkReleased:
+            return False
         except ExplicitSaveDeferred as deferred:
             if not mounted:
                 # No mount frame will be sent, so there is nothing to catch up.
@@ -8203,6 +8341,18 @@ class ViewRuntime(RuntimeTurnPort):
         # state was announced.
         if _consume_async_cancel(view, task_name):
             return
+        # The root twin of ``_child_async._check_owner`` (#4211): a teardown
+        # (disconnect, owner replacement, disposal) advances the work
+        # generation. Work cancelled by it keeps nothing: no session write,
+        # no view state, no frame.
+        generation = getattr(view, "_async_work_generation", 0)
+
+        def released() -> bool:
+            return (
+                self.view_instance is not view
+                or bool(getattr(view, "_djust_child_disposed", False))
+                or getattr(view, "_async_work_generation", 0) != generation
+            )
 
         async with self._explicit_event_lock, self.transport.event_context(view):
             try:
@@ -8235,8 +8385,8 @@ class ViewRuntime(RuntimeTurnPort):
                 traceback=True,
             )
 
-        if self.view_instance is not view:
-            logger.debug("Explicit background result discarded after owner replacement")
+        if released():
+            logger.debug("Explicit background result discarded after teardown or owner replacement")
             return
         # Cancelled while running: skip the result handler and render (#2969).
         if _consume_async_cancel(view, task_name):
@@ -8252,6 +8402,10 @@ class ViewRuntime(RuntimeTurnPort):
                         if self.view_instance is view:
                             await self.deny_explicit_turn()
                         return
+                    if released():
+                        # Torn down while the result was authorized: nothing
+                        # is carried, handled, saved or sent (#4211).
+                        return
                     from ._session_merge import carry_session_writes
 
                     carry_session_writes(
@@ -8266,7 +8420,7 @@ class ViewRuntime(RuntimeTurnPort):
                         # other effects stand too, and the fallback, which runs
                         # the work inside its request, keeps them (#4162).
                         try:
-                            await sync_to_async(_save_session_writes)(view)
+                            await sync_to_async(_save_session_writes_unless)(view, released)
                         except Exception as exc:  # noqa: BLE001 — storage errors carry values
                             from ._exposure_diagnostics import log_failure_for
 
@@ -8305,9 +8459,11 @@ class ViewRuntime(RuntimeTurnPort):
                         # Legacy parity: an unhandled failure renders nothing.
                         await keep_session_writes()
                         return
-                    if self.view_instance is not view:
+                    if released():
                         return
-                    if not await self.commit_explicit_turn(view, source="async", async_result=True):
+                    if not await self.commit_explicit_turn(
+                        view, source="async", async_result=True, released=released
+                    ):
                         return
                     snapshot_fields = await self._explicit_event_snapshot(view)
                     await self._render_async_result(event_name, snapshot_fields=snapshot_fields)
@@ -8345,6 +8501,12 @@ class ViewRuntime(RuntimeTurnPort):
         view = self.view_instance
         if not view:
             return
+        from ._exposure import uses_legacy_exposure
+
+        if uses_legacy_exposure(view):
+            # An explicit turn committed before it got here; a legacy one
+            # stores its hooks' session writes before the frame (#4168).
+            await store_turn_session_writes(view, source)
         if hasattr(view, "_sync_state_to_rust"):
             await sync_to_async(view._sync_state_to_rust)()
         html, patches, version = await sync_to_async(view.render_with_diff)()
@@ -8714,6 +8876,8 @@ class ViewRuntime(RuntimeTurnPort):
                     return
                 if not render:
                     # No frame of its own (#3034): a push has no ``ref`` to acknowledge.
+                    # Its hooks' session writes are still stored (#4168).
+                    await store_turn_session_writes(view, "push")
                     await self._flush_all_pending()
                     return
                 snapshot_fields = None
@@ -8826,6 +8990,9 @@ class ViewRuntime(RuntimeTurnPort):
                 if self.view_instance is not view:
                     return False
                 if _resolve_skip_render(view):
+                    # No frame, no commit: the hook's session writes are
+                    # still stored (#4168).
+                    await store_turn_session_writes(view, "tick")
                     await self._flush_all_pending()
                     return False
                 force_full_html = getattr(view, "_force_full_html", False)
@@ -8834,6 +9001,7 @@ class ViewRuntime(RuntimeTurnPort):
                     and not force_full_html
                     and not rows_written(view)
                 ):
+                    await store_turn_session_writes(view, "tick")
                     await self._flush_all_pending()
                     return False
                 snapshot_fields = None

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import html
+import re
 
 from django.utils.safestring import mark_safe
 
@@ -625,3 +626,416 @@ def native_handler_findings(only=None, value=None) -> tuple[dict, set]:
                 if hits:
                     found[("native", tag, key, shape)] = hits
     return found, rendered
+
+
+# --------------------------------------------------------------------------------------------
+# Page templates (#4157): the admin, allauth / djust_auth, bug-capture replay and gallery pages.
+# --------------------------------------------------------------------------------------------
+
+#: Template directories swept, relative to the package (``python/djust``), and the template-name
+#: prefix each holds. Globbed, so a new template in them is swept without being listed.
+PAGE_TEMPLATE_DIRS = (
+    ("admin_ext/templates", "djust_admin/"),
+    ("auth/templates", "allauth/elements/"),
+    ("auth/templates", "djust_auth/"),
+    ("templates", "djust/bug_capture/"),
+    ("components/templates", "djust_components/gallery/"),
+    ("theming/templates", "djust_theming/gallery/"),
+)
+
+#: Attributes whose value is navigated to: they go through ``djust_url_attr``.
+URL_ATTRS = frozenset({"href", "action", "src", "formaction"})
+#: The filters that escape an attribute value whatever it is marked as.
+ATTR_ESCAPES = frozenset({"force_escape", "djust_url_attr", "djust_handler_arg"})
+
+
+def _package_root():
+    from pathlib import Path
+
+    return Path(__file__).resolve().parents[1] / "djust"
+
+
+def page_templates() -> tuple[str, ...]:
+    """Every swept page template, by template name."""
+    root = _package_root()
+    names = []
+    for base, prefix in PAGE_TEMPLATE_DIRS:
+        top = root / base
+        names += [p.relative_to(top).as_posix() for p in sorted((top / prefix).rglob("*.html"))]
+    return tuple(sorted(names))
+
+
+def page_template_path(name: str):
+    root = _package_root()
+    for base, prefix in PAGE_TEMPLATE_DIRS:
+        if name.startswith(prefix):
+            return root / base / name
+    raise KeyError(name)
+
+
+def page_attr_tokens(source: str) -> list[dict]:
+    """Each ``{{ }}`` written inside a start tag: ``line``, ``attr``, ``expression``,
+    ``position`` (``(start, end)`` in ``source``) and ``leading`` (nothing of the value precedes
+    it: no text, no ``{% url %}`` / ``{% static %}``).
+
+    The Django lexer splits the source; TEXT tokens drive a small HTML state machine (in a tag,
+    in a quoted or unquoted attribute value, in a comment, in a ``<script>`` / ``<style>`` body).
+    A ``{{ }}`` in a tag but outside any value (``<div {{ attrs }}>``) has ``attr`` ``<bare>``.
+    """
+    from django.template.base import DebugLexer, TokenType
+
+    slots: list[dict] = []
+    state = "text"  # text | tag | value_dq | value_sq | value_bare | comment | raw
+    raw_end = ""
+    attr = ""
+    name_buf = ""
+    after_eq = False
+    has_content = False
+    pending_lt = False
+    in_value = ("value_dq", "value_sq", "value_bare")
+    for token in DebugLexer(source).tokenize():
+        if token.token_type == TokenType.VAR:
+            if state == "tag" and after_eq:
+                state, after_eq, has_content = "value_bare", False, False
+            if state == "tag" or state in in_value:
+                slots.append(
+                    {
+                        "line": token.lineno,
+                        "attr": (attr if state in in_value else "<bare>").lower(),
+                        "expression": token.contents.strip(),
+                        "position": token.position,
+                        "leading": state in in_value and not has_content,
+                    }
+                )
+                if state in in_value:
+                    has_content = True
+            continue
+        if token.token_type == TokenType.BLOCK:
+            if state in in_value and token.contents.split()[:1] in (["url"], ["static"]):
+                has_content = True
+            elif state == "text" and pending_lt:
+                # ``<{% if x %}a href=...{% else %}button{% endif %}``: a tag whose name a tag
+                # chooses is still a tag.
+                state, attr, name_buf, after_eq, raw_end = "tag", "", "", False, ""
+            pending_lt = False
+            continue
+        pending_lt = False
+        if token.token_type != TokenType.TEXT:
+            continue
+        text = token.contents
+        pending_lt = state == "text" and text.endswith("<")
+        i = 0
+        while i < len(text):
+            ch = text[i]
+            if state == "text":
+                if text.startswith("<!--", i):
+                    state, i = "comment", i + 4
+                    continue
+                if (
+                    ch == "<"
+                    and i + 1 < len(text)
+                    and (text[i + 1].isalpha() or text[i + 1] == "/")
+                ):
+                    j = i + 1
+                    while j < len(text) and (text[j].isalnum() or text[j] in "/-"):
+                        j += 1
+                    tagname = text[i + 1 : j].lower()
+                    raw_end = f"</{tagname}" if tagname in ("script", "style") else ""
+                    state, attr, name_buf, after_eq, i = "tag", "", "", False, j
+                    continue
+            elif state == "comment":
+                if text.startswith("-->", i):
+                    state, i = "text", i + 3
+                    continue
+            elif state == "raw":
+                if text.lower().startswith(raw_end, i):
+                    state, raw_end = "text", ""
+                    continue
+            elif state == "tag":
+                if ch == ">":
+                    state = "raw" if raw_end else "text"
+                elif ch == "=":
+                    attr, name_buf, after_eq = name_buf or attr, "", True
+                elif ch in "\"'" and after_eq:
+                    state, after_eq, has_content = (
+                        ("value_dq" if ch == '"' else "value_sq"),
+                        False,
+                        False,
+                    )
+                elif ch.isspace():
+                    if name_buf:
+                        attr, name_buf = name_buf, ""
+                elif after_eq:
+                    state, after_eq, has_content = "value_bare", False, True
+                else:
+                    name_buf += ch
+            elif state == "value_dq":
+                if ch == '"':
+                    state = "tag"
+                else:
+                    has_content = True
+            elif state == "value_sq":
+                if ch == "'":
+                    state = "tag"
+                else:
+                    has_content = True
+            elif state == "value_bare":
+                if ch.isspace():
+                    state = "tag"
+                elif ch == ">":
+                    state = "raw" if raw_end else "text"
+                else:
+                    has_content = True
+            i += 1
+    return slots
+
+
+def page_attr_slots(source: str) -> list[tuple[int, str, str]]:
+    """``[(line, attribute, expression)]`` of :func:`page_attr_tokens`."""
+    return [(t["line"], t["attr"], t["expression"]) for t in page_attr_tokens(source)]
+
+
+def _last_filter(expression: str) -> str:
+    parts = expression.split("|")
+    return parts[-1].split(":")[0].strip() if len(parts) > 1 else ""
+
+
+def page_slot_findings(source: str) -> list[str]:
+    """Each attribute slot of ``source`` that does not escape its value whatever it is marked
+    as: the last filter is not ``force_escape`` / ``djust_url_attr``, or the value of a URL
+    attribute starts with a slot that does not end in ``djust_url_attr`` (a slot after a literal
+    ``?next=`` or a ``{% url %}`` cannot set the scheme, so ``force_escape`` is enough there)."""
+    out = []
+    for slot in page_attr_tokens(source):
+        line, attr, expression = slot["line"], slot["attr"], slot["expression"]
+        last = _last_filter(expression)
+        if attr in URL_ATTRS and slot["leading"]:
+            if last != "djust_url_attr":
+                out.append(f"line {line}: {attr}={{{{ {expression} }}}} (URL)")
+        elif last not in ATTR_ESCAPES:
+            out.append(f"line {line}: {attr}={{{{ {expression} }}}}")
+    return out
+
+
+#: Attributes a probe does not have: its own, and the markers Django's variable resolution
+#: reads off a value (a probe answering them would be recorded as data the template reads).
+_PROBE_OPAQUE = frozenset({"path", "trace", "do_not_call_in_templates", "alters_data"})
+
+
+class PageProbe(str):
+    """A context value for a page template that IS :data:`ATTR_PAYLOAD_TEXT`, marked safe,
+    wherever the template writes it, and a container wherever the template looks inside it:
+    ``probe.x`` / ``probe["x"]`` / ``probe.0`` is another probe, ``{% for %}`` sees two of them.
+
+    No per-template context is written by hand: every variable a template reads is a probe, so
+    every slot is driven (each branch an ``{% if %}`` on a probe takes; comparisons with a literal
+    are false). Each probe records the path the template read it by, which
+    :func:`materialise` turns into plain dicts and lists for the Rust engine.
+    """
+
+    def __new__(cls, path: tuple = (), trace: set | None = None):
+        probe = super().__new__(cls, ATTR_PAYLOAD_TEXT)
+        probe.path = path
+        probe.trace = set() if trace is None else trace
+        probe.trace.add(path)
+        return probe
+
+    def __html__(self):  # marked safe, like ``mark_safe(ATTR_PAYLOAD_TEXT)``
+        return str.__str__(self)
+
+    def __str__(self):
+        return str.__str__(self)
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return [PageProbe(self.path + ("*",), self.trace) for _ in range(2)]
+        return PageProbe(self.path + (str(key),), self.trace)
+
+    def __getattr__(self, name):
+        if name.startswith("__") or name in _PROBE_OPAQUE:
+            raise AttributeError(name)
+        return PageProbe(self.path + (name,), self.trace)
+
+    def __iter__(self):
+        return iter([PageProbe(self.path + ("*",), self.trace) for _ in range(2)])
+
+    def __len__(self):
+        return 2
+
+    def __call__(self, *args, **kwargs):
+        # A method the template or a tag calls (``form.non_field_errors``) answers the probe.
+        return self
+
+    def __bool__(self):
+        return True
+
+
+_NAME_RE = re.compile(r"\{[{%]\s*(.*?)\s*[}%]\}", re.S)
+_LITERAL_RE = re.compile(r"(['\"]).*?\1")
+_IDENT_RE = re.compile(r"(?<![\w.|:])([A-Za-z_]\w*)")
+_TEMPLATE_REF_RE = re.compile(r"\{%\s*(?:extends|include)\s+[\"']([^\"']+)[\"']")
+
+
+def _template_variable_names(name: str, seen: set | None = None) -> set:
+    """Every identifier a template (and the templates it extends or includes by a literal name)
+    names inside ``{{ }}`` / ``{% %}``: the context keys that get a probe. A key only Python code
+    reads (a tag's ``context.get("theme_manager")``) is not one, so the tag keeps its default."""
+    seen = set() if seen is None else seen
+    if name in seen:
+        return set()
+    seen.add(name)
+    try:
+        source = _page_engine().get_template(name).source
+    except Exception:  # noqa: BLE001 - a template the engine cannot load names nothing
+        return set()
+    names = set()
+    for body in _NAME_RE.findall(source):
+        names |= set(_IDENT_RE.findall(_LITERAL_RE.sub("", body)))
+    for ref in _TEMPLATE_REF_RE.findall(source):
+        names |= _template_variable_names(ref, seen)
+    return names
+
+
+class _ProbeContext(dict):
+    """A context dict that answers each of ``names`` with a probe (Django asks ``key in ctx``
+    before ``ctx[key]``, so both say yes); ``fixed`` values are given as they are."""
+
+    def __init__(self, trace: set, names=None, fixed=None):
+        super().__init__(fixed or {})
+        self.trace = trace
+        self.names = names
+
+    def __contains__(self, key):
+        return dict.__contains__(self, key) or self.names is None or key in self.names
+
+    def __missing__(self, key):
+        value = PageProbe((key,), self.trace)
+        self[key] = value
+        return value
+
+
+def materialise(trace: set) -> dict:
+    """The paths a probe context was read by, as nested dicts and lists whose leaves are the
+    marked-safe payload: what the Rust engine (which takes real containers) is given."""
+    tree: dict = {}
+    for path in sorted(trace, key=len):
+        node = tree
+        for part in path:
+            node = node.setdefault(part, {})
+
+    def build(node):
+        if not node:
+            return attr_payload()
+        if "*" in node:
+            item = build(node["*"])
+            return [item, item]
+        return {k: build(v) for k, v in node.items()}
+
+    return {k: build(v) for k, v in tree.items()}
+
+
+#: The stand-in for django-allauth's ``{% load allauth %}`` (``slot`` renders its default
+#: body), so ``allauth/elements/*`` render without allauth installed; also the URLconf the
+#: pages render under (:data:`PAGE_URLCONF`).
+ALLAUTH_STUB = "page_sweep_support_4157"
+PAGE_URLCONF = "page_sweep_support_4157"
+
+#: Values framework code (a tag, ``{% live_render %}``, ``{% url %}``) consumes as objects:
+#: given as they are, never a probe.
+PAGE_FIXED = {
+    "form": None,
+    "opts": None,  # set to ``Group._meta`` in :func:`page_render` (the support site has it)
+    "messages": (),
+    "change_form_widgets": (),
+    "change_list_widgets": (),
+}
+
+
+def _page_engine():
+    """A Django engine over the project's template settings plus :data:`ALLAUTH_STUB`."""
+    from django.template import Engine, engines
+
+    base = engines["django"].engine
+    return Engine(
+        dirs=list(base.dirs),
+        app_dirs=base.app_dirs,
+        context_processors=[],
+        debug=False,
+        loaders=None if base.app_dirs else base.loaders,
+        string_if_invalid="",
+        file_charset=base.file_charset,
+        libraries={**base.libraries, "allauth": ALLAUTH_STUB},
+        builtins=[b for b in base.builtins if b not in Engine.default_builtins],
+        autoescape=True,
+    )
+
+
+def _page_request():
+    from django.contrib.auth.models import AnonymousUser
+    from django.test import RequestFactory
+
+    request = RequestFactory().get("/")
+    request.user = AnonymousUser()
+    request.session = {}
+    return request
+
+
+def page_render(name: str, fixed: dict | None = None) -> tuple[dict, dict]:
+    """``({engine: markup}, {engine: error})`` for one page template.
+
+    Two passes. The first renders with every context key the template names as a
+    :class:`PageProbe` (``fixed`` keys, ``request`` and ``csrf_token`` excepted: framework code
+    reads them), and ``{% auth_context %}`` answering a probe too, which records what the
+    template reads. That trace is then :func:`materialise`-d into plain dicts and lists whose
+    leaves are the marked-safe payload, and THAT context is what is judged: Django renders it
+    through the loader (``{% extends %}`` / ``{% include %}`` resolve as in a project), and the
+    ``djust_admin`` pages, LiveView templates the Rust engine renders in production, also go
+    through ``render_template_with_dirs``. (A probe is a ``str``, so a tag that treats a string
+    argument as "not a list" would be judged on a value no caller passes.)"""
+    from unittest.mock import patch
+
+    from django.contrib.auth.models import Group
+    from django.template import Context
+    from page_sweep_support_4157 import ADMIN_SITE_NAME
+
+    fixed = {**PAGE_FIXED, "opts": Group._meta, "admin_site_name": ADMIN_SITE_NAME, **(fixed or {})}
+    out: dict = {}
+    errors: dict = {}
+    trace: set = set()
+    values = {"request": _page_request(), "csrf_token": "csrf-token-4157", **fixed}
+    probes = _ProbeContext(trace, _template_variable_names(name) - set(values), values)
+    engine = _page_engine()
+    build_auth = "djust.auth.templatetags.djust_auth.build_auth"
+    try:
+        with patch(build_auth, lambda *_a, **_k: PageProbe(("auth",), trace)):
+            engine.get_template(name).render(Context(probes))
+    except Exception as exc:  # noqa: BLE001 - reported by the caller's non-vacuity check
+        errors["trace"] = f"{type(exc).__name__}: {exc}"
+        return out, errors
+    data = materialise(trace - {("request",), ("csrf_token",)})
+    auth = data.pop("auth", {})
+    try:
+        with patch(build_auth, lambda *_a, **_k: auth):
+            out["django"] = str(engine.get_template(name).render(Context({**data, **values})))
+    except Exception as exc:  # noqa: BLE001
+        errors["django"] = f"{type(exc).__name__}: {exc}"
+    if name.startswith("djust_admin/"):
+        from djust import _rust
+        from djust.template_libraries import install_loader
+
+        install_loader()
+        source = page_template_path(name).read_text()
+        dirs = [str(page_template_path(name).parents[1])]
+        try:
+            out["rust"] = str(_rust.render_template_with_dirs(source, {**data, **fixed}, dirs))
+        except Exception as exc:  # noqa: BLE001
+            errors["rust"] = f"{type(exc).__name__}: {exc}"
+    return out, errors
+
+
+def page_findings(name: str, fixed: dict | None = None) -> tuple[dict, dict, dict]:
+    """``({engine: findings}, {engine: reached}, {engine: error})`` for one page template."""
+    out, errors = page_render(name, fixed)
+    found = {engine: attr_findings(markup) for engine, markup in out.items()}
+    reached = {engine: reaches_an_attribute(markup) for engine, markup in out.items()}
+    return {k: v for k, v in found.items() if v}, reached, errors
