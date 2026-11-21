@@ -205,10 +205,13 @@ What it does NOT see (probed, and pinned in ``KNOWN_MISSES`` of its test)
   holds one), its ``__dict__``, or ``helper.__code__ = ...``: pass B does not follow a call of it (its
   result is an unknown call's). Replacing it from ANOTHER file is not seen: like a subclass there,
   that is the developer's own code.
-* What the walk does not model: a ``style`` ATTRIBUTE (escaped values sit there in eleven functions
-  of the tree; ``safe_css_*`` is the rule for CSS); attributes a browser does not treat as URLs
-  (``data-url``: the client code that reads one decides); the result of an unknown call
-  (``functools.partial(...)(x)``), as before; and a developer's own ``__format__`` or ``int``
+* A ``style`` ATTRIBUTE is CSS (#4212): an HTML escaper's output there is reported (``;`` and
+  ``url(...)`` pass HTML escaping); a value escaper's (``safe_css_*``, and ``safe_url``, which the
+  guard reads as the same class) is not.
+* What the walk does not model: attributes a browser does not treat as URLs (``data-url``: the
+  client code that reads one decides); the result of an unknown call (``functools.partial(...)(x)``:
+  ``partial(mark_safe, ...)`` is a sink already, a partial of anything else is an unknown call);
+  and a developer's own ``__format__`` or ``int``
   subclass behind a numeric format spec or an ``isinstance`` check (like a subclass in another file,
   that is the developer's own code, not request data). A metaclass data descriptor of a class attribute's name is not missed: ``cls.X`` /
   ``C.X`` of a class with a metaclass (or any class keyword) is not trusted (``self.X`` is, since an
@@ -780,7 +783,11 @@ def refusal(text: str) -> str:
         if spelling[i] in _SYMBOLS and not _walk_one(spelling[: i + 1])[0]:
             front = spelling[:i]
             ok, state = _walk_one(front)
-            where = _Module._html_context(_mapped(front)) if ok and state != "unknown" else None  # noqa: SLF001
+            where = (
+                _Module._html_context(_mapped(front), css=True)  # noqa: SLF001
+                if ok and state != "unknown"
+                else None
+            )
             if not ok or state == "unknown":
                 place = "after a part whose effect on the position is not known"
             elif where == "url":
@@ -791,6 +798,8 @@ def refusal(text: str) -> str:
                 place = f"in a <{where}> body"
             elif where == "srcdoc":
                 place = "in srcdoc"
+            elif where == "css":
+                place = "in a style attribute"
             elif where == "unquoted" or state == "unquoted":
                 place = "in an unquoted attribute value"
             elif state == "tag":
@@ -920,7 +929,7 @@ def _walk_tail(text: str) -> tuple[bool, str, int]:
     i, n = 0, len(text)
 
     def where_at(k: int) -> str | None:
-        return _Module._html_context(_mapped(text[ctx:k]))  # noqa: SLF001
+        return _Module._html_context(_mapped(text[ctx:k]), css=True)  # noqa: SLF001
 
     while i < n:
         ch = text[i]
@@ -955,9 +964,10 @@ def _walk_tail(text: str) -> tuple[bool, str, int]:
                 )
             elif ch == SYM_VALUE:
                 # ``raw`` with ``where`` None is a JSON data block's body: never run
-                allowed = (state in ("text", "quoted", "comment") and where in (None, "url")) or (
-                    state == "raw" and (plain_body or where is None)
-                )
+                # (a CSS escaper's output, ``safe_css_*``, is what a ``style`` value takes)
+                allowed = (
+                    state in ("text", "quoted", "comment") and where in (None, "url", "css")
+                ) or (state == "raw" and (plain_body or where is None))
             elif ch == SYM_ESCAPED:
                 allowed = state in ("text", "quoted", "comment") and where is None
                 allowed = allowed or (state == "raw" and (plain_body or where is None))
@@ -1097,6 +1107,16 @@ def _walk_tail(text: str) -> tuple[bool, str, int]:
     if state == "bogus":
         state = "comment"
     return ok, state, ctx
+
+
+def _cut_class(cls: str) -> str:
+    """What is left of a part of class ``cls`` once characters are cut out of it (a slice, a
+    ``strip`` / ``replace`` whose arguments are not read): no more than was there, so the same
+    class, except that a checked URL (``SYM_VALUE``) is only escaped text after a cut: cutting
+    ``/`` off ``safe_url('/javascript:x')`` uncovers the scheme it judged as a path (#4212)."""
+    if cls == SYM_VALUE:
+        return SYM_ESCAPED
+    return cls if cls in (SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
 
 
 def _text_class(text: str) -> str:
@@ -3062,13 +3082,9 @@ class _Module:
                         found.append(kind + "*")
                 if level:
                     break
-        # the strictest first: a value that may be JSON-in-script (text only) in one case and a
-        # value escaper's output (a quoted value too) in another is placed as the JSON one (#3864)
-        for kind in (
-            ("json*", "json", "sens*", "sens")
-            if self.call_binding
-            else ("json*", "sens*", "json", "sens")  # pass A: as it was
-        ):
+        # one order for both passes: pass B's own order changed no verdict, the position pass
+        # judges each part where it lands (#4212)
+        for kind in ("json*", "sens*", "json", "sens"):
             if kind in found:
                 return kind
         return None
@@ -3115,8 +3131,6 @@ class _Module:
             values, _ = self._bindings(e, e.id, owner, sc)
             if len(values) == 1 and isinstance(values[0], ast.expr):
                 return self._leaf_text(values[0], owner, d)
-            if len(values) == 1 and isinstance(values[0], _Actual):
-                return self._leaf_text(values[0].expr, values[0].scope, d)
         if (
             isinstance(e, ast.Call)
             and isinstance(e.func, ast.Attribute)
@@ -3133,13 +3147,9 @@ class _Module:
             local = self._local_function(e.func, sc)
             if local is not None:
                 fn, fscope = local
-                # the same answer every time it is asked at this depth, unless a call binding is
-                # read (only while ``_returns_tainted`` judges a call): remembered then (#3864)
-                memo = (
-                    ("leaf", id(fn), d)
-                    if self._actuals and not self._reads_a_binding(fscope)
-                    else None
-                )
+                # the same answer every time it is asked at this depth (it reads no call
+                # binding, #4212): remembered while ``_returns_tainted`` judges a call (#3864)
+                memo = ("leaf", id(fn), d) if self._actuals else None
                 if memo is not None and memo in self._memo_text:
                     return self._memo_text[memo]
                 returns = [
@@ -3357,21 +3367,51 @@ class _Module:
 
     def _format_args_misplaced(self, call: ast.Call, sc: _Scope, name: str) -> str:
         """``format_html(fmt, *args)`` / ``format_html_join(sep, fmt, rows)``: each argument
-        (``conditional_escape``-d by Django) read where it lands in the literal format string.
-        A reason when one lands where its text may not sit (#3864), else ``""``."""
+        (``conditional_escape``-d by Django) read where it lands in the format string.
+        A reason when one lands where its text may not sit (#3864), else ``""``.
+
+        A format string held in a name, chosen by a branch or passed in is read like any other
+        text (#4212): each spelling is judged; one the guard cannot spell out, with an argument
+        to place, is reported."""
         position = FORMAT_SINK_ARG.get(name, 0)
         fmt = call.args[position] if len(call.args) > position else None
-        if not (isinstance(fmt, ast.Constant) and isinstance(fmt.value, str)) or self._has_star(
-            call
-        ):
+        if fmt is None or isinstance(fmt, ast.Starred):
             return ""
+        if isinstance(fmt, ast.Constant) and isinstance(fmt.value, str):
+            return self._format_spelling_misplaced(fmt.value, call, sc, name)
+        to_place = len(call.args) > position + 1 or bool(call.keywords)
+        spellings = _expand(self._text_b(fmt, sc))
+        if spellings is None or any(set(t) & _CONTROL for t in spellings):
+            if to_place:
+                return (
+                    "format string the guard cannot read [position: its arguments are not placed]"
+                )
+            return ""
+        for spelling in spellings:
+            reason = self._format_spelling_misplaced(spelling, call, sc, name)
+            if reason:
+                return reason
+        return ""
+
+    def _format_spelling_misplaced(
+        self, fmt_value: str, call: ast.Call, sc: _Scope, name: str
+    ) -> str:
+        """:meth:`_format_args_misplaced` for one spelling of the format string. An argument
+        that cannot be located (after a ``*seq``, or a name a ``**map`` may hold) is read as
+        escaped text, which is what ``format_html`` makes of it (#4212)."""
+        position = FORMAT_SINK_ARG.get(name, 0)
         try:
-            fields = list(string.Formatter().parse(fmt.value))
+            fields = list(string.Formatter().parse(fmt_value))
         except ValueError:
             return ""
         keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+        double_star = any(kw.arg is None for kw in call.keywords)
         rows = (
             call.args[position + 1] if name == "format_html_join" and len(call.args) > 2 else None
+        )
+        positional = call.args[position + 1 :]
+        first_star = next(
+            (i for i, a in enumerate(positional) if isinstance(a, ast.Starred)), len(positional)
         )
         out, auto = [], 0
         for literal, field, spec, conv in fields:
@@ -3389,7 +3429,7 @@ class _Module:
             if rows is not None:
                 texts = (
                     self._element_texts(rows, sc, 0, unpack=True, index=index)
-                    if index is not None
+                    if index is not None and not isinstance(rows, ast.Starred)
                     else None
                 )
                 value = (
@@ -3405,16 +3445,17 @@ class _Module:
                     )
                 )
             else:
-                arg = (
-                    keywords.get(key)
-                    if key is not None
-                    else (
-                        call.args[position + 1 + index]
-                        if position + 1 + index < len(call.args)
-                        else None
-                    )
-                )
-                if arg is None:
+                located = True
+                if key is not None:
+                    arg = keywords.get(key)
+                    located = arg is not None or not double_star
+                elif index is not None and index >= first_star:
+                    arg, located = None, first_star == len(positional)
+                else:
+                    arg = positional[index] if index is not None else None
+                if not located:
+                    value = SYM_ESCAPED  # a ``*seq`` / ``**map`` element, escaped by format_html
+                elif arg is None:
                     value = SYM_UNKNOWN
                 elif self._checked_url(arg, sc):
                     value = SYM_VALUE
@@ -3433,7 +3474,7 @@ class _Module:
         text = "".join(out)
         if _walk(text)[0]:
             return ""
-        return f"format string {fmt.value[:60]!r} [position: {refusal(text)}]"
+        return f"format string {fmt_value[:60]!r} [position: {refusal(text)}]"
 
     def _ordered_pieces(self, use: ast.Name, owner: _Scope, values: list, d: int) -> str | None:
         """``s = '<a'`` then ``if c: s += f' title="{v}"'`` then ``s += '>'`` in one function, no
@@ -3929,7 +3970,7 @@ class _Module:
                 cls = _text_class(base)
                 if cls == SYM_DIGITS:
                     return SYM_WORDS  # a slice of digits may be nothing at all
-                return cls if cls in (SYM_VALUE, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
+                return _cut_class(cls)
             if isinstance(e.slice, ast.Constant) and type(e.slice.value) is int:
                 base = T(e.value, sc, d)
                 if base and not any(ch in _CONTROL for ch in base):
@@ -4143,11 +4184,10 @@ class _Module:
                 ):
                     # what it removes or matches is not known: what it leaves is no more than
                     # what was there (the new text was checked above)
-                    cls = _text_class(base)
-                    return cls if cls in (SYM_VALUE, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
+                    return _cut_class(_text_class(base))
                 if attr in PURE_TRANSFORMS and args:
-                    cls = _text_class(base)  # ``strip(chars)`` removes characters, adds none
-                    return cls if cls in (SYM_VALUE, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
+                    # ``strip(chars)`` removes characters, adds none
+                    return _cut_class(_text_class(base))
                 spellings = _expand(base)
                 if spellings is None:
                     return SYM_UNKNOWN
@@ -4357,7 +4397,7 @@ class _Module:
         return state
 
     @staticmethod
-    def _html_context(prefix: str, quoted: bool = False) -> str | None:
+    def _html_context(prefix: str, quoted: bool = False, css: bool = False) -> str | None:
         """Where HTML escaping is NOT enough for the next field after ``prefix`` (#3864), or ``None``:
         ``"script"`` / ``"style"`` (the body of that element: entities are not decoded, the text is
         code), ``"handler"`` (the quoted value of an ``on*`` attribute: the HTML parser decodes
@@ -4370,7 +4410,9 @@ class _Module:
         Names are matched in lower case; an attribute name ends at white space, ``/``, ``=`` or ``>``,
         an unquoted value at white space or ``>``. ``"unquoted"`` is an unquoted attribute value
         (``title={escape(x)}``: a space in ``x`` starts a new attribute). A ``<script>`` whose literal
-        ``type`` is a JSON data block is not a script body.
+        ``type`` is a JSON data block is not a script body. With ``css`` (the position walk asks),
+        the quoted value of a ``style`` attribute is ``"css"``: a CSS declaration list, where HTML
+        escaping does not stop ``;`` or ``url(...)`` (#4212).
         """
         ws = " \t\n\r\f"
         i, n = 0, len(prefix)
@@ -4456,6 +4498,8 @@ class _Module:
                         return "url-code"
                     if _URL_LEAD.fullmatch(decoded) is not None:
                         return "url"
+                if css and attr == "style":
+                    return "css"
                 return "value" if quoted else None
         return (None if inert else raw) or None
 
@@ -5107,15 +5151,6 @@ class _Module:
         if not isinstance(entry, _Param):
             return values
         return [bound[name] if v is entry else v for v in values]
-
-    def _reads_a_binding(self, fscope: _Scope) -> bool:
-        """``fscope`` or a scope around it (a closure reads it) is bound by a call being judged."""
-        scope: _Scope | None = fscope
-        while scope is not None:
-            if id(scope) in self._actuals:
-                return True
-            scope = scope.parent
-        return False
 
     def _ctx(self, owner: _Scope) -> int:
         """Tells apart judgements of one name under different call bindings (cycle keys)."""

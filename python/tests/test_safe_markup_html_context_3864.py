@@ -159,14 +159,13 @@ class TestThePositionReader:
 # ---------------------------------------------------------------------------
 
 HTML_ONLY = ("escape", "cond_escape", "attr_text")
-#: Unsafe when run and still cleared (the same on ``main``): anything in a ``style`` attribute (CSS:
-#: eleven sites of the tree put an escaped value there; ``safe_css_*`` is the rule). An HTML escaper
-#: between attributes, as an attribute or a tag name is reported since the position walk
-#: (``_walk``, #3864): it reads comments and data blocks, which is what made the position flag
-#: correct sites of the tree before.
-REMAINING = {
-    *((s, "style_attr") for s in ("escape", "attr_text", "url")),
-}
+#: Unsafe when run and still cleared: a URL checker's output in a ``style`` attribute. The guard
+#: reads one value escaper class for ``safe_url`` and ``safe_css_*`` (``SYM_VALUE``), and the CSS
+#: one is the rule there; an HTML escaper there is reported since #4212. An HTML escaper between
+#: attributes, as an attribute or a tag name is reported since the position walk (``_walk``,
+#: #3864): it reads comments and data blocks, which is what made the position flag correct sites
+#: of the tree before.
+REMAINING = {("url", "style_attr")}
 #: Flagged although no payload of the fuzz gets through: an escaped value inside a quoted JS string
 #: of a script body (a trailing backslash still eats the closing quote), and a context-sensitive
 #: escaper in a comment (flagged by ``main`` too: a comment is no position it knows).
@@ -217,6 +216,8 @@ class TestEveryPlacement:
             (s, p) for s in ("escape", "cond_escape") for p in ("between", "attr_name", "tag_name")
         }
         expected |= {("cond_escape", "comment")}
+        # an HTML escaper's output in a style attribute: CSS (#4212)
+        expected |= {(s, "style_attr") for s in ("escape", "attr_text")}
         assert new == expected
 
 

@@ -246,13 +246,18 @@ ROWS: dict[str, tuple[str, bool]] = {
     ),
 }
 
-KNOWN_GAPS: dict[str, tuple[str]] = {
-    # CSS: an escaped value in a ``style`` attribute (``safe_css_*`` is the rule for CSS; eleven
-    # sites of the tree put an escaped value there, see ``REMAINING`` of the HTML-context test)
-    "a helper's style attribute with an escaped value": (
-        "def css(u):\n    return f'<b style=\"color:{u}\">b</b>'\ndef f(x):\n    return mark_safe(css(escape(x)))\n",
-    ),
-}
+KNOWN_GAPS: dict[str, tuple[str]] = {}
+
+#: The last known gap, an escaped value in CSS, is reported since #4212: a ``style`` attribute's
+#: value is CSS to the position walk (``safe_css_*`` is the rule there).
+ROWS.update(
+    {
+        "a helper's style attribute with an escaped value": (
+            "def css(u):\n    return f'<b style=\"color:{u}\">b</b>'\ndef f(x):\n    return mark_safe(css(escape(x)))\n",
+            True,
+        ),
+    }
+)
 
 #: Known gaps until the position walk (#3864): the result of a helper placed in a larger string is
 #: read where it lands (``_Module._misplaces``), so an escaper inside it is placed too.
@@ -471,9 +476,9 @@ class TestTheRowsAreTrue:
 
 
 class TestKnownGaps:
-    """Unsafe when run and cleared, here AND by the guard of ``main``: an escaped value in CSS. The
-    result of a helper placed in a larger string is read where it lands since the position walk
-    (#3864); what is left is the context the walk does not model (a ``style`` attribute)."""
+    """Unsafe when run and cleared, here AND by the guard of ``main``. None is left: the result
+    of a helper placed in a larger string is read where it lands since the position walk (#3864),
+    and a ``style`` attribute is CSS since #4212. A new gap goes in :data:`KNOWN_GAPS`."""
 
     @pytest.mark.parametrize("label", sorted(KNOWN_GAPS))
     def test_the_gap_is_real(self, label):
