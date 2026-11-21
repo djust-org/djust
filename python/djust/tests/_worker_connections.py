@@ -16,6 +16,11 @@ tests call ``sync_to_async`` outside a ``ThreadSensitiveContext``::
     async def close_worker_connections(transactional_db):
         async with close_new_worker_connections():
             yield
+
+Use it only beside a database fixture (``transactional_db`` here): dropping the worker
+thread's sqlite3 handle to the shared-cache in-memory database is safe only because the
+main thread's connection, opened by that fixture, keeps the database alive. Without one the
+last handle closing would drop the test database.
 """
 
 from __future__ import annotations

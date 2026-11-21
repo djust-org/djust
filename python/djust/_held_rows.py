@@ -86,7 +86,7 @@ import uuid
 import weakref
 from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Set, Tuple, TypeVar
 
-from ._component_ids import render_ids
+from ._component_ids import note_rendered, render_ids
 
 logger = logging.getLogger(__name__)
 
@@ -854,8 +854,9 @@ def recorded_render(method: Callable[..., _T]) -> Callable[..., _T]:
     def render(self: Any, *args: Any, **kwargs: Any) -> _T:
         current = _writer.get()
         if current is not None and current.ref() is self:
+            note_rendered()
             return method(self, *args, **kwargs)  # nested: the outer render records
-        with writes_by(self, writes=False), render_ids(self):
+        with writes_by(self, writes=False), render_ids(self, carry_over=True):
             result = method(self, *args, **kwargs)
         render_completed(self)
         return result

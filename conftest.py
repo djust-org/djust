@@ -139,6 +139,10 @@ def _import_asgi_application_under_the_real_settings():
     was then the one to import it, so every later socket opened through
     ``ASGI_APPLICATION`` (``LivePage.connect``) got its handshake denied (close code
     1000). Which test imported it first depends on how xdist dealt out the tests.
+
+    A test that drops ``demo_project.asgi`` from ``sys.modules`` and imports it again
+    under an override would freeze the restricted list again, for every later test in
+    its process: such a test must restore the module it removed.
     """
     try:
         from django.conf import settings

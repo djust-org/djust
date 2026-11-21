@@ -376,17 +376,47 @@ class TestVendoredLeaflet:
             in tags
         )
 
-    def test_the_startup_check_finds_the_declaration(self):
+    @staticmethod
+    def _findings_about_leaflet():
+        """The startup checks' findings that concern this declaration, not every finding:
+        ``check_required_assets`` walks all ``Component`` subclasses alive in the process,
+        so a stray test class naming an undeclared asset must not fail this test (#4262)."""
         from djust.checks.assets import (
             check_asset_files,
             check_asset_manifests,
             check_required_assets,
         )
 
-        assert (
+        findings = (
             check_asset_manifests(None) + check_asset_files(None) + check_required_assets(None)
-            == []
         )
+        return [
+            m
+            for m in findings
+            if any(
+                part in m.msg
+                for part in ("'leaflet'", "vendor/leaflet", "components.map_picker.MapPicker")
+            )
+        ]
+
+    def test_the_startup_check_finds_the_declaration(self):
+        assert self._findings_about_leaflet() == []
+
+    def test_a_stray_component_naming_an_undeclared_asset_is_not_this_tests_business(self):
+        from djust.components.base import Component
+
+        class Stray(Component):
+            requires_assets = ("nobody-declares-this",)
+            template = "<div></div>"
+
+        from djust.checks.assets import check_required_assets
+
+        assert any("Stray" in m.msg for m in check_required_assets(None))  # it is alive and seen
+        assert self._findings_about_leaflet() == []
+        del Stray
+        import gc
+
+        gc.collect()
 
 
 class TestScriptAndCatalogue:
