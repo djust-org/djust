@@ -45,9 +45,12 @@ What happens to a slot
         references decoded, tab / newline / carriage return dropped, leading whitespace
         dropped), reaches a character that cannot be part of a scheme before any slot
         (``href="/search?q={{ q }}"``, ``href="http://{{ host }}/"``): nothing in the slot can
-        change it, so it is escaped, not judged. ``{% url %}`` and ``{% static %}`` print a path
-        from the project's configuration and count as such a literal when outside every block;
-        comments and ``... as var`` tags print nothing and are skipped;
+        change it, so it is escaped, not judged. A character reference the literal leaves
+        unfinished does not fix it (``href="&#10{{ s }}"``, ``href="javascript&{{ s }}"``): the
+        slot's text can complete it, so the value is judged, decoded as assembled (literal text
+        and each slot's escaped text together, #3923). ``{% url %}`` and ``{% static %}`` print
+        a path from the project's configuration and count as such a literal when outside every
+        block; comments and ``... as var`` tags print nothing and are skipped;
       - a path whose slot is first, or after only scheme characters (``href="{{ s }}:x"``,
         ``href="java{{ b }}"``, ``href="&#106;ava{{ s }}"``), is judged as one value with the
         text after it and with the other slots;
@@ -207,6 +210,13 @@ _PATH_TAGS = frozenset({"url", "static"})
 _MAX_PATHS = 64
 #: Characters a browser drops from a URL before it reads the scheme.
 _DROP_WS = {ord("\t"): None, ord("\n"): None, ord("\r"): None}
+
+#: A character reference at the end of literal text that what follows could still complete
+#: (``&``, ``&#``, ``&#10``, ``&#x6``, ``&colon``): the slot's escaped text keeps digits, ``#``,
+#: ``;`` and letters (#3923). Broad on purpose: a prefix it matches is judged, not fixed.
+_OPEN_REF = re.compile(r"&#?[0-9A-Za-z]*\Z")
+
+#: A tag that assigns its output to a variable instead of printing it (``{% url "x" as u %}``).
 #: A tag that assigns its output to a variable instead of printing it (``{% url "x" as u %}``).
 _AS_VAR = re.compile(r"\sas\s+\w+\s*-?%\}$")
 #: What the first slot of a refused path becomes (the rest become nothing).
@@ -731,8 +741,10 @@ class _Unknown(Exception):
 
 
 def _normal(text: str) -> str:
-    """A literal as a browser reads it before it looks for a scheme: character references
-    decoded, tab / newline / carriage return dropped."""
+    """Text as a browser reads it before it looks for a scheme: character references decoded,
+    tab / newline / carriage return dropped. It is applied to the value as assembled (literal
+    text and each slot's escaped text joined), never to a literal on its own: a literal ending in
+    an unfinished reference (``&#10``) is completed by the slot's text (#3923)."""
     return html.unescape(text).translate(_DROP_WS)
 
 
@@ -753,28 +765,43 @@ def _openers(parts: tuple[Part, ...]) -> frozenset[str]:
     return frozenset(n[3:] for n in names if n.startswith("end") and n[3:])
 
 
-def _fixed(path: tuple[tuple[str, str], ...]) -> bool:
-    """Whether a literal at the start of ``path`` already fixes the value, before any slot.
+def _fixes(raw: str) -> bool:
+    """Whether literal text AS WRITTEN fixes the value, whatever follows it.
 
     Browsers drop leading whitespace and control characters; a scheme starts with a letter and
-    goes on with letters, digits and ``+ - .`` up to the ``:``. The first literal character
-    that is not part of that (``/``, ``?``, ``:``, a digit first ...) fixes the value as a
-    relative URL or as the scheme the literal itself spells, whatever follows. A slot reached
-    while everything before it could still be the start of a scheme can choose the scheme.
+    goes on with letters, digits and ``+ - .`` up to the ``:``. The first character that is not
+    part of that (``/``, ``?``, ``:``, a digit first ...) fixes the value as a relative URL or as
+    the scheme the literal itself spells. The text is read decoded (:func:`_normal`), less a
+    trailing character reference that what follows could still complete (:data:`_OPEN_REF`):
+    ``&`` + ``colon;`` is ``:``, so ``javascript&`` does not fix the value (#3923).
     """
+    match = _OPEN_REF.search(raw)
+    if match:
+        raw = raw[: match.start()]
     started = False
+    for ch in _normal(raw):
+        if not started:
+            if ch <= " ":
+                continue
+            if not (ch.isascii() and ch.isalpha()):
+                return True
+            started = True
+        elif ch not in _SCHEME_CHARS:
+            return True
+    return False
+
+
+def _fixed(path: tuple[tuple[str, str], ...]) -> bool:
+    """Whether the literals at the start of ``path`` already fix the value, before any slot
+    (:func:`_fixes` of them joined, as written). A slot reached while everything before it could
+    still be the start of a scheme, or of a character reference, can choose the scheme. A path
+    with no slot is fixed.
+    """
+    prefix = []
     for kind, text in path:
         if kind != "lit":
-            return False
-        for ch in text:
-            if not started:
-                if ch <= " ":
-                    continue
-                if not (ch.isascii() and ch.isalpha()):
-                    return True
-                started = True
-            elif ch not in _SCHEME_CHARS:
-                return True
+            return _fixes("".join(prefix))
+        prefix.append(text)
     return True
 
 
@@ -801,7 +828,8 @@ def _paths(
         while i < len(parts):
             part = parts[i]
             if part.kind == "lit":
-                paths = [p + (("lit", _normal(part.text)),) for p in paths]
+                # as written: decoded only once joined with what follows it (#3923)
+                paths = [p + (("lit", part.text),) for p in paths]
             elif part.kind == "var":
                 name = part.text[2:-2].strip()
                 if (
@@ -870,22 +898,16 @@ def _maybe_chooses(parts: tuple[Part, ...]) -> bool:
     slot, or a printing tag this module does not know, can choose it.
     """
     openers = _openers(parts)
-    depth, started = 0, False
+    depth, prefix = 0, ""
     for part in parts:
         if part.kind == "var":
             return True
         if part.kind == "lit":
             if depth:
                 continue
-            for ch in _normal(part.text):
-                if not started:
-                    if ch <= " ":
-                        continue
-                    if not (ch.isascii() and ch.isalpha()):
-                        return False
-                    started = True
-                elif ch not in _SCHEME_CHARS:
-                    return False
+            prefix += part.text
+            if _fixes(prefix):
+                return False
             continue
         name = _token_name(part)
         if name in openers:
@@ -1201,8 +1223,11 @@ def _allowed(attr: str, kind: str, assembled: str) -> bool:
 def _refused(group: Group, path: tuple[tuple[str, str], ...], texts: dict[str, str]) -> bool:
     if _fixed(path):
         return False
-    assembled = "".join(v if k == "lit" else texts[v] for k, v in path)
-    return not _allowed(group.attr, group.kind, assembled)
+    # the value as the browser receives it (literal text, each slot's text escaped as
+    # ``force_escape`` prints it), decoded as a whole: a reference a literal leaves open is
+    # completed by the slot's text (#3923)
+    printed = "".join(v if k == "lit" else html.escape(texts[v]) for k, v in path)
+    return not _allowed(group.attr, group.kind, _normal(printed))
 
 
 def _neutralise(group: Group, texts: dict[str, str], owner: str = "") -> None:
