@@ -160,7 +160,7 @@ const lazyHydrationManager = {
         }
 
         // Ensure WebSocket is connected (skip in HTTP-only mode)
-        if (window.DJUST_USE_WEBSOCKET === false) {
+        if (window.DJUST_USE_WEBSOCKET === false || (liveViewWS && liveViewWS.httpOnly === true)) {
             const viewId = element.getAttribute('data-djust-lazy-id');
             if (viewId) {
                 // Only the keyed address emitted by the server's provenance

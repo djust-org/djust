@@ -111,16 +111,10 @@ function reinitLiveViewForTurboNav() {
         lazyHydrationManager.register(container);
     });
 
-    // Only initialize WebSocket if there are eager containers
-    if (eagerContainers.length > 0) {
-        if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Initializing new WebSocket connection');
-        // Initialize WebSocket
-        liveViewWS = new LiveViewWebSocket();
-        window.djust.liveViewInstance = liveViewWS;
-        liveViewWS.connect();
-
-        // Start heartbeat
-        liveViewWS.startHeartbeat();
+    // The page's transport, chosen as on the first load: the HTTP marker
+    // (#4236), use_websocket: false, SSE, or a WebSocket.
+    if (_startPageTransport(eagerContainers)) {
+        if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Started the page transport');
     } else if (lazyContainers.length > 0) {
         if (globalThis.djustDebug) console.log('[LiveView:TurboNav] Deferring WebSocket connection until lazy elements are needed');
     } else {

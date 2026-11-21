@@ -515,7 +515,12 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // `sendTeardownEvent`. That says nothing about the socket's health, so
     // warning here would be wrong AND would burn the once-per-session flag,
     // silencing a later genuine degraded mount — inverting the point of #1674.
-    if (!teardown && !_djustHttpFallbackWarned) {
+    //
+    // #4236: nor when the page CHOSE the HTTP transport (a function view's
+    // `data-djust-transport="http"` root, or `use_websocket: False`): no mount
+    // was rejected, so the allowlist hint would point at the wrong cause.
+    const httpChosen = !!(liveViewWS && liveViewWS.httpOnly === true);
+    if (!teardown && !httpChosen && !_djustHttpFallbackWarned) {
         _djustHttpFallbackWarned = true;
         console.warn(
             '[LiveView] Events are falling back to full-page HTTP re-renders '

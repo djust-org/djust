@@ -683,7 +683,9 @@ class RequestMixin:
         def get_template(self) -> str: ...
 
         @staticmethod
-        def _stamp_dj_view(html: str, view_path: str, *, trusted: bool = False) -> str: ...
+        def _stamp_dj_view(
+            html: str, view_path: str, *, trusted: bool = False, http_only: bool = False
+        ) -> str: ...
 
         def handle_params(self, params: Dict[str, Any], uri: str) -> None: ...
 
@@ -1032,6 +1034,9 @@ class RequestMixin:
         # however it is written (any element, any other attributes), and only
         # where the author did not declare dj-view themselves (#2981).
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
+        # A view no socket can mount (a ``@live_view`` function view) asks the
+        # client for the HTTP fallback instead (#4236).
+        http_only = bool(getattr(type(self), "_djust_http_transport", False))
         if page_root:
             # Authenticate before stamping; only the framework-generated view
             # attribute on this already validated page may gain provenance.
@@ -1040,9 +1045,9 @@ class RequestMixin:
             authenticated_root_shell(
                 html, list(cast("RenderedHTML", html).root_spans), exact_range=authenticated_root
             )
-            html = self._stamp_dj_view(html, view_path, trusted=True)
+            html = self._stamp_dj_view(html, view_path, trusted=True, http_only=http_only)
         else:
-            html = self._stamp_dj_view(html, view_path)
+            html = self._stamp_dj_view(html, view_path, http_only=http_only)
 
         # ADR-036: the page's own owner contracts, for events sent before a
         # socket mounts or over the HTTP fallback. Emitted outside dj-root so

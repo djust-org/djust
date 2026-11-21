@@ -369,10 +369,12 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   keep djust's own values, and a returned `exposure_policy` is ignored. The view is
   built for each request and the
   function runs again every time, so nothing is kept between requests. It
-  answers the page GET and the HTTP fallback POST; a WebSocket or SSE mount is
-  refused with `View not found`, because the class it names is built inside
-  the request. Write a `LiveView` class for a page that keeps state or uses a
-  socket.
+  answers the page GET and the HTTP fallback POST. Its page marks the root
+  `data-djust-transport="http"`, so the client sends events over the HTTP
+  fallback and opens no socket (#4236); a WebSocket or SSE mount naming the
+  class is still refused with `View not found`, because the class is built
+  inside the request. Write a `LiveView` class for a page that keeps state or
+  uses a socket.
 
   ```python
   from djust import live_view

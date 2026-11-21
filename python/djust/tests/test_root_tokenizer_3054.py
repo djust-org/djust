@@ -51,6 +51,18 @@ def test_stamp_targets_the_real_attribute_after_an_unquoted_quote():
     )
 
 
+def test_stamp_http_only_adds_the_transport_marker():
+    """#4236: a function view's root also asks for the HTTP transport; the
+    default stamp is unchanged."""
+    html = "<div dj-root>x</div>"
+    assert TemplateMixin._stamp_dj_view(html, "views.Page", http_only=True) == (
+        '<div dj-root dj-view="views.Page" data-djust-transport="http">x</div>'
+    )
+    assert TemplateMixin._stamp_dj_view(html, "views.Page") == (
+        '<div dj-root dj-view="views.Page">x</div>'
+    )
+
+
 def test_stamp_does_not_touch_bogus_comments_or_unterminated_tags():
     html = '<?x "<div dj-root>" ?><p title="never><main dj-root>'
     assert TemplateMixin._stamp_dj_view(html, "views.Page") == html
