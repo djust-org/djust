@@ -1211,6 +1211,12 @@ class RustLiveView:
         """
         ...
 
+    def set_render_handles(self, values: Dict[str, Any]) -> None:
+        """Attach the render-time handle overlay (#3936,
+        ``LIVEVIEW_CONFIG["state_models_as_handles"]``): floored model handles
+        bound above the state for each render. Called on every sync; an empty
+        dict clears it."""
+        ...
     def set_raw_py_values(self, values: Dict[str, Any]) -> None:
         """
         Attach raw Python objects for ``getattr``-fallback lookups.

@@ -175,6 +175,33 @@ def _holds_db_value(value: Any, depth: int = 0) -> bool:
     return False
 
 
+def state_models_as_handles_enabled() -> bool:
+    """``LIVEVIEW_CONFIG["state_models_as_handles"]`` (#3936, default off)."""
+    try:
+        from ..config import get_config
+
+        return bool(get_config().get("state_models_as_handles", False))
+    except Exception:  # noqa: BLE001 -- config access is defensive; off is the safe answer
+        return False
+
+
+def _state_model_values(context: Any) -> Dict[str, Any]:
+    """The top-level context values that hold a model (a ``Model``, a ``QuerySet``, a list or
+    tuple containing a ``Model``), for the render-time handle overlay (#3936). Empty when the
+    flag is off, so the default path pays one config read."""
+    if not state_models_as_handles_enabled():
+        return {}
+    from django.db.models import QuerySet
+
+    out: Dict[str, Any] = {}
+    for key, value in context.items():
+        if isinstance(value, (models.Model, QuerySet)) or (
+            isinstance(value, (list, tuple)) and any(isinstance(v, models.Model) for v in value)
+        ):
+            out[key] = value
+    return out
+
+
 def _jit_serialization_enabled() -> bool:
     """``LIVEVIEW_CONFIG['jit_serialization']`` (default ``True``).
 
@@ -728,6 +755,11 @@ class ContextMixin:
         # inside dicts will NOT trigger JIT; they are handled later by
         # _deep_serialize_dict() which falls back to DjangoJSONEncoder when
         # template_content is None.
+        # #3936 (``state_models_as_handles``): the raw top-level model values,
+        # captured before the JIT replaces them with dicts, for the render-time
+        # handle overlay. Rebuilt every render, never state.
+        self.__dict__["_state_model_raw"] = _state_model_values(context)
+
         has_db_values = False
         if _jit_serialization_enabled():
             for val in context.values():

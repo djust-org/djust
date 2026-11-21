@@ -797,7 +797,11 @@ def _clear_live_handles(view_instance: Any) -> None:
     # discipline per render (`set_raw_py_values` is called on every sync
     # INCLUDING the empty case, so a stale entry cannot survive); the handles
     # are the value-borne half, which no per-render call reaches.
-    for name, args in (("clear_live_handles", ()), ("set_raw_py_values", ({},))):
+    for name, args in (
+        ("clear_live_handles", ()),
+        ("set_raw_py_values", ({},)),
+        ("set_render_handles", ({},)),  # #3936: the overlay holds floored handles too
+    ):
         method = getattr(rust_view, name, None)
         if method is None:
             continue

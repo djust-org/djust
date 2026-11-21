@@ -623,6 +623,8 @@ the content of a field.
 
 ## Addendum (#3949, #3936): a render-time handle overlay for a model held as state (Accepted, to be built for 1.4.0)
 
+**Implemented (#3936, train 2.0-ah) behind `LIVEVIEW_CONFIG["state_models_as_handles"]`, default off.** `RustLiveView.set_render_handles` carries the floored handles, bound in a scope above the state at each render entry (`render_result`, `render_binary_diff`, `prepare_partial_page`, `render_with_diff_detached`); `python/tests/test_state_models_as_handles_3936.py` and `test_state_models_as_handles_equivalence_3936.py` pin the invariants below. Legacy captures the raw value at the top-level key only (a model inside a dict keeps its dict). **The actor entry (decision 3) no longer exists:** `use_actors` was removed in 2.0 (`REMOVED_VIEW_ATTRIBUTES`, "the Tokio actor system was removed"), so there is no second render path to mirror.
+
 **Status: Accepted (maintainer decision, 2026-11-10). Nothing in this addendum is implemented yet; it is built for 1.4.0, not in a 1.3.x patch.** Maintainer decision recorded on #3949: the behaviour is pinned and documented now (`python/tests/test_custom_callable_model_argument_3949.py`, the guide section "What a custom filter or tag receives for a model"), and the real fix is taken together with #3936, under this addendum.
 
 ### The problem, measured on 1.3.1

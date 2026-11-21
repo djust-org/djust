@@ -445,6 +445,12 @@ pub struct RustLiveViewBackend {
     /// Not persisted across MessagePack serialize/deserialize —
     /// Python re-populates it on each sync cycle.
     raw_py_values: Option<HashMap<String, Py<PyAny>>>,
+    /// Render-time handle overlay (#3936, `LIVEVIEW_CONFIG["state_models_as_handles"]`):
+    /// floored model handles for the state keys that hold a model, bound in a scope ABOVE the
+    /// state for each render, so a direct read, a filter operand and a custom callable see the
+    /// handle while `state` (msgpack, change detection, JSON) keeps the serialized dict.
+    /// Transient like `raw_py_values`: never serialized, re-set on every sync.
+    render_handles: Option<Vec<(String, Value)>>,
     /// Per-item loop render cache (#1967). PERSISTENT across
     /// `render_with_diff` calls — a content-hash → rendered-fragment map that
     /// lets a pure reorder of a keyed list reuse every item subtree instead of
@@ -524,6 +530,7 @@ impl RustLiveViewBackend {
             accumulate_ids: HashSet::new(),
             accumulate_dropped: 0,
             raw_py_values: None,
+            render_handles: None,
             // Default-OFF (#1967 / split-foundation #1122); flipped by
             // set_loop_render_cache_enabled from the Python config flag.
             loop_render_cache: LoopRenderCache::new(false),
@@ -839,6 +846,25 @@ impl RustLiveViewBackend {
         }
     }
 
+    /// Attach the render-time handle overlay (#3936). Python calls this on EVERY sync (an
+    /// empty map with the flag off), so a key that left state leaves no stale handle. Each value
+    /// is converted once here: a floored model proxy becomes its handle, and a raw model is
+    /// re-floored by the conversion itself (defence in depth). A value that fails to convert is
+    /// dropped, so its key renders from the serialized dict (fail closed).
+    fn set_render_handles(&mut self, values: HashMap<String, Bound<'_, PyAny>>) {
+        self.pending_partial_page = None;
+        let mut handles: Vec<(String, Value)> = values
+            .into_iter()
+            .filter_map(|(k, v)| v.extract::<Value>().ok().map(|value| (k, value)))
+            .collect();
+        handles.sort_by(|a, b| a.0.cmp(&b.0));
+        self.render_handles = if handles.is_empty() {
+            None
+        } else {
+            Some(handles)
+        };
+    }
+
     /// Drop every ADR-027 live handle carried by this view's state (#2539).
     ///
     /// A handle is TRANSIENT by contract, and this is the teardown half of
@@ -861,6 +887,7 @@ impl RustLiveViewBackend {
     /// re-converts it (#2570; the Python bridge always syncs before the
     /// first render of a clone).
     fn clear_live_handles(&mut self) {
+        self.render_handles = None;
         for value in std::sync::Arc::make_mut(&mut self.state).values_mut() {
             clear_live_handles_in(value);
         }
@@ -1344,6 +1371,7 @@ impl RustLiveViewBackend {
                 });
                 context.set_raw_py_objects(cloned);
             }
+            self.apply_render_handles(&mut context);
 
             // Use template loader for {% include %} support
             let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
@@ -1447,6 +1475,7 @@ impl RustLiveViewBackend {
                 });
                 context.set_raw_py_objects(cloned);
             }
+            self.apply_render_handles(&mut context);
 
             // Phase 1: Template render (partial if cache available)
             let t_render_start = Instant::now();
@@ -2008,6 +2037,7 @@ impl RustLiveViewBackend {
             accumulate_ids: HashSet::new(),
             accumulate_dropped: 0,
             raw_py_values: None,
+            render_handles: None,
             // Transient cache — not deserialized; rebuilt fresh, default-OFF
             // until the Python flag re-enables it post-restore (#1967).
             loop_render_cache: LoopRenderCache::new(false),
@@ -2071,6 +2101,17 @@ impl RustLiveViewBackend {
 
 // Non-Python entry points
 impl RustLiveViewBackend {
+    /// Bind the render-time handle overlay (#3936) in a scope above the state, so a read of a
+    /// state model sees its floored handle and the state itself is untouched (no copy of the
+    /// shared map). Keys are never marked safe here: `safe_keys` names the state values.
+    fn apply_render_handles(&self, context: &mut Context) {
+        if let Some(handles) = &self.render_handles {
+            context.push();
+            for (key, value) in handles {
+                context.set(key.clone(), value.clone());
+            }
+        }
+    }
     /// Render once and classify only the output and templates actually loaded.
     /// In particular, do not evaluate dynamic include expressions in a planner.
     fn prepare_partial_page(&self) -> PyResult<PreparedPartialPage> {
@@ -2095,6 +2136,7 @@ impl RustLiveViewBackend {
             });
             context.set_raw_py_objects(cloned);
         }
+        self.apply_render_handles(&mut context);
         let possible = Arc::new(std::sync::atomic::AtomicBool::new(
             partial_def_may_contain_root(template.authored_nodes()),
         ));
@@ -2386,6 +2428,7 @@ impl RustLiveViewBackend {
                 });
                 context.set_raw_py_objects(cloned);
             }
+            self.apply_render_handles(&mut context);
 
             // Phase 1: Template render (partial if cache available)
             let t_render_start = Instant::now();

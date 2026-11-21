@@ -1128,6 +1128,22 @@ def navigation_title_variables(view: Any) -> Tuple[str, ...]:
         return ()
 
 
+def _title_value(value: Any) -> Any:
+    """A view value for the ``<title>`` render: its serialized dict, or with
+    ``state_models_as_handles`` on (#3936) a floored handle for a model, so the
+    title reads a model as the page body does. A floor that raises falls back
+    to the dict (fail closed)."""
+    from .mixins.context import _state_model_values
+    from .serialization import _protect_sidecar_tree, normalize_django_value
+
+    if _state_model_values({"v": value}):
+        try:
+            return _protect_sidecar_tree(value, 0, {}, set())
+        except Exception:  # noqa: BLE001 -- fail closed: the dict
+            pass
+    return normalize_django_value(value)
+
+
 def navigation_title(view: Any) -> Optional[str]:
     """The ``<title>`` the destination page would have on a full load (#3036).
 
@@ -1151,7 +1167,6 @@ def navigation_title(view: Any) -> Optional[str]:
         if "{" not in inner:
             return document_title(f"<head><title>{inner}</title></head>")
         from ._rust import extract_template_variables, render_template
-        from .serialization import normalize_django_value
 
         immutables = getattr(view, "_prev_context_immutables", None) or {}
         context: Dict[str, Any] = {}
@@ -1162,7 +1177,7 @@ def navigation_title(view: Any) -> Optional[str]:
                 value = view.__dict__[name]
                 if callable(value):
                     return None
-                context[name] = normalize_django_value(value)
+                context[name] = _title_value(value)
             else:
                 return None
         rendered = render_template(inner, context)

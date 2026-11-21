@@ -43,6 +43,7 @@ from ..render_env import apply_render_env
 from ..request_scoped import is_request_scoped_data
 from .. import _per_turn
 from .context import PROCESSOR_RECORD_ATTR, PROCESSOR_REPLAY_ATTR, _keeps_out_of_state
+from .context import _state_model_values
 from .context import _request_scoped_keys as request_scoped_keys
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,37 @@ def _queryset_row_walk_paths_for(view: Any) -> Dict[str, FrozenSet[str]]:
     except Exception:  # noqa: BLE001 -- no template source means no capture
         return {}
     return queryset_row_walk_paths(content)
+
+
+def _overlay_floor(value: Any, memo: Dict[Any, Any]) -> Any:
+    """The floor the overlay applies to one state value (#3936): the sidecar's tree floor."""
+    from ..serialization import _protect_sidecar_tree
+
+    return _protect_sidecar_tree(value, 0, memo, set())
+
+
+def _render_handles(raw: Dict[str, Any], full_context: Any, skip_keys: Any = ()) -> Dict[str, Any]:
+    """Floored handles for the render-time overlay (#3936).
+
+    Every value goes through ``_protect_sidecar_tree`` (one shared memo, so one
+    object is one proxy); a key whose floor raises is DROPPED, so it renders
+    from its serialized dict (fail closed). Only keys the context still
+    carries, and never a sidecar-only key.
+    """
+    if not raw:
+        return {}
+    memo: Dict[Any, Any] = {}
+    handles: Dict[str, Any] = {}
+    for key, value in raw.items():
+        if key not in full_context or key in skip_keys:
+            continue
+        try:
+            handles[key] = _overlay_floor(value, memo)
+        except Exception:  # noqa: BLE001 -- fail closed: the key keeps its dict
+            logging.getLogger("djust.rust_bridge").warning(
+                "state_models_as_handles: the floor refused %r; it renders from its dict", key
+            )
+    return handles
 
 
 def _normalize_db_values(value: Any, depth: int = 0) -> Any:
@@ -989,6 +1021,14 @@ class RustBridgeMixin:
 
             from .jit import rows_need_live_walk
 
+            # #3936: the raw model values behind state keys, for the render-time
+            # handle overlay (flag ``state_models_as_handles``). Legacy captured
+            # them before its JIT (context.py); an explicit context still holds
+            # them here, before the normalize loop below. Empty with the flag off.
+            _overlay_raw: Dict[str, Any] = dict(self.__dict__.pop("_state_model_raw", None) or {})
+            if type(full_context) is ExplicitRenderContext:
+                _overlay_raw.update(_state_model_values(full_context))
+
             _raw_models_for_sidecar = {}
             _qs_roots: Optional[FrozenSet[str]] = None
             _walk_paths: Optional[Dict[str, FrozenSet[str]]] = None
@@ -1728,6 +1768,14 @@ class RustBridgeMixin:
                         "set_raw_py_values failed; template getattr fallback disabled this cycle",
                         exc_info=True,
                     )
+
+            # #3936: the handle overlay, set on EVERY sync (empty with the flag
+            # off, or when no state key holds a model) so a key that left state
+            # leaves no stale handle.
+            if hasattr(self._rust_view, "set_render_handles"):
+                self._rust_view.set_render_handles(
+                    _render_handles(_overlay_raw, full_context, sidecar_only_keys)
+                )
 
             if user_changed is not None:
                 self._rust_view.set_changed_keys(user_changed)
