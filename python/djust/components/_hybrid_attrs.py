@@ -139,9 +139,13 @@ inside another block than its start tag (``{% if closed %}</textarea>{% endif %}
 ``<script>`` double-escape state (``<!--<script>``), which does not matter for the escaped text
 of ``<textarea>`` / ``<title>``. A ``<textarea>`` opened inside ``{% verbatim %}`` is followed.
 
-Every OTHER text slot (``<span>{{ text }}</span>``) is untouched: it keeps a marked-safe value's
-markup, as a Django template does (the #3898 rule; the difference to the Rust and custom paths of
-the same class is tracked in #3932).
+Every OTHER text slot (``<span>{{ text }}</span>``) is untouched by default: it keeps a marked-safe
+value's markup, as a Django template does (the #3898 rule). A :class:`~djust.components.base.Component`
+asks for more (``plan(..., text=True)``, #3932): its ordinary text slots are escaped whatever the
+value is marked as, like the same class drawn by its Rust instance, except the names in the class's
+``markup_slots`` (a parameter documented as markup: ``Modal`` body and footer). ``{{ v|safe }}``
+there is escaped too. A ``{% %}`` tag or a ``{% blocktranslate %}`` block in ordinary text is not a
+slot (what a tag prints there is the tag's own markup) and is not named by the warning.
 """
 
 from __future__ import annotations
@@ -281,7 +285,11 @@ class _Scanner:
     ``{% if %}`` around an attribute leaves the tag open across it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, text: bool = False, keep: frozenset[str] = frozenset()) -> None:
+        #: ``text``: a plain ``{{ }}`` in ORDINARY text is a slot like one in escaped text (#3932)
+        #: ... except a name in ``keep`` (a parameter the class declares as markup)
+        self.text = text
+        self.keep = keep
         self.state = "text"
         self.tag = ""
         self.name = ""
@@ -477,6 +485,11 @@ class _Scanner:
                 self.shapes.append("element name built by a tag")
             if self.raw in _ESCAPED_TEXT:
                 self._raw_atom(token, start, end, kind, self.raw)
+            elif self.text and not self.raw and kind == "var":
+                # A ``{% %}`` / ``{% blocktranslate %}`` here is not a slot: what a tag prints in
+                # ordinary text is the tag's own markup, and the translator's is kept.
+                if token[2:-2].strip() not in self.keep:
+                    self._raw_atom(token, start, end, kind, "text")
             return
         if s in ("dq", "sq", "unq"):
             self._flush()
@@ -494,9 +507,10 @@ class _Scanner:
             self.dynamic = True
 
 
-def _scan(template: str) -> _Scanner:
-    """The tokenizer's pass over ``template``: attribute values, raw-text slots and tags."""
-    scanner, pos = _Scanner(), 0
+def _scan(template: str, text: bool = False, keep: frozenset[str] = frozenset()) -> _Scanner:
+    """The tokenizer's pass over ``template``: attribute values, raw-text slots and tags.
+    ``text`` and ``keep`` are those of :func:`plan`."""
+    scanner, pos = _Scanner(text, keep), 0
     matches = list(_TOKEN.finditer(template))
 
     def closing(i: int, name: str) -> int | None:
@@ -995,9 +1009,14 @@ def _visible(text: str) -> bool:
 
 
 @functools.lru_cache(maxsize=512)
-def plan(template: str) -> Plan:
-    """The rewrite of ``template`` (cached per template string, a bounded LRU)."""
-    scan = _scan(template)
+def plan(template: str, text: bool = False, keep: frozenset[str] = frozenset()) -> Plan:
+    """The rewrite of ``template`` (cached per template string and flags, a bounded LRU).
+
+    ``text=True`` (a :class:`~djust.components.base.Component`'s template, #3932) escapes a
+    ``{{ }}`` in ORDINARY text as well, whatever its value is marked as, except a plain name in
+    ``keep`` (the class's ``markup_slots``). ``{% %}`` tags and translation blocks in ordinary
+    text are not slots and are left as they are."""
+    scan = _scan(template, text, keep)
     found = scan.values
     raw_tags = tuple(scan.raw_tags)
     includes, include_names = _includes(template)
@@ -1552,12 +1571,17 @@ def _warn_once(owner: str, rewrite: Plan) -> None:
 
 
 def harden_context(
-    template: str, context: dict[str, Any], owner: str = ""
+    template: str,
+    context: dict[str, Any],
+    owner: str = "",
+    *,
+    text: bool = False,
+    keep: frozenset[str] = frozenset(),
 ) -> tuple[str, dict[str, Any]]:
     """``(template, context)`` to hand the engine: the attribute slots of ``template`` rewritten
     and the values of the URL groups judged. ``context`` itself is not modified. ``owner`` is the
-    component class name, for the warning."""
-    rewrite = plan(template)
+    component class name, for the warning. ``text`` and ``keep``: see :func:`plan`."""
+    rewrite = plan(template, text, keep)
     _warn_once(owner, rewrite)
     if not (rewrite.groups or rewrite.raw):
         return rewrite.template, context

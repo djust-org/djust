@@ -124,6 +124,19 @@ def _unhardened(template: str, context: dict[str, Any]) -> str:
     return components_base._render_template_string(template, context)
 
 
+def _draw_keep(template: str, keep: set[str], **context: Any) -> str:
+    """A ``Component`` template drawn with ``markup_slots=keep``: the names in ``keep`` keep a
+    marked-safe value's markup in an ORDINARY text slot (#3932). A raw-text slot of the same name
+    is still escaped, so this tells where the scanner thinks the raw text ends."""
+
+    class Box(Component):
+        markup_slots = frozenset(keep)
+
+    Box.template = template
+    Box.get_context_data = lambda self: dict(context)  # type: ignore[method-assign]
+    return str(Box().render())
+
+
 @pytest.fixture
 def django_engine(monkeypatch):
     """Draw through Django's engine (the Rust engine refuses, as it does for a tag it lacks)."""
@@ -199,9 +212,10 @@ class TestEscapedText:
         assert "<i>" not in out and 'name="a"' in out, out
 
     def test_the_element_after_the_raw_one_is_ordinary_again(self) -> None:
-        out = _draw(
+        out = _draw_keep(
             "<textarea>{{ a }}</textarea><span>{{ b }}</span><title>{{ c }}</title>"
             "<span>{{ d }}</span>",
+            {"b", "d"},
             a=mark_safe("<i>a</i>"),
             b=mark_safe("<b>b</b>"),
             c=mark_safe("<i>c</i>"),
@@ -219,7 +233,9 @@ class TestEscapedText:
         """The slot after the element is an ordinary text slot again, whatever the end tag looks
         like: a scanner that missed the end would escape it (the case dropped from the search
         flag ``re.I`` is the upper-case one)."""
-        out = _draw(f"<textarea>a{end}<span>{{{{ b }}}}</span>", b=mark_safe("<b>b</b>"))
+        out = _draw_keep(
+            f"<textarea>a{end}<span>{{{{ b }}}}</span>", {"b"}, b=mark_safe("<b>b</b>")
+        )
         assert "<span><b>b</b></span>" in out, out
 
     def test_a_non_ascii_space_after_the_name_is_not_an_end_tag(self) -> None:
@@ -244,8 +260,9 @@ class TestEscapedText:
         """``</textarea{{ x }}>`` ends the element only if ``x`` is empty: the scanner cannot
         know, so it keeps reading inside the element. That fails SAFE (the slot after it is
         escaped, as if inside), and the real end tag after it ends the element for both."""
-        out = _draw(
+        out = _draw_keep(
             "<textarea>{{ a }}</textarea{{ x }}>{{ b }}</textarea>{{ c }}",
+            {"c"},
             a=mark_safe("<i>"),
             x="",
             b=mark_safe("<b>"),
@@ -281,7 +298,9 @@ class TestEscapedText:
         assert out.count("-->") == 1 and "<b onclick" not in out, (spelling, kind, out)
 
     def test_the_text_after_a_comment_is_ordinary_again(self) -> None:
-        out = _draw("<!-- {{ a }} --><span>{{ b }}</span>", a=mark_safe("<i>"), b=mark_safe("<b>"))
+        out = _draw_keep(
+            "<!-- {{ a }} --><span>{{ b }}</span>", {"b"}, a=mark_safe("<i>"), b=mark_safe("<b>")
+        )
         assert "<span><b></span>" in out and "&lt;i&gt;" in out, out
 
 
@@ -291,7 +310,7 @@ class TestOtherRawTextElementsKeepTheAuthorsMarkup:
 
     @pytest.mark.parametrize("kind", sorted(KINDS))
     @pytest.mark.parametrize("spelling", sorted(SPELLINGS))
-    @pytest.mark.parametrize("tag", OTHER_RAW_ELEMENTS + ("noscript",))
+    @pytest.mark.parametrize("tag", OTHER_RAW_ELEMENTS)
     def test_the_output_is_what_the_engine_alone_prints(
         self, tag: str, spelling: str, kind: str
     ) -> None:
@@ -317,6 +336,13 @@ class TestOtherRawTextElementsKeepTheAuthorsMarkup:
     def test_plaintext_swallows_the_rest_of_the_template(self) -> None:
         assert hybrid.slots('<plaintext><a href="{{ u }}">') == []
 
+    @pytest.mark.parametrize("kind", ["mark_safe", "safestring-subclass", "lazy-safe"])
+    def test_noscript_text_is_ordinary_text(self, kind: str) -> None:
+        """With scripting off ``<noscript>`` holds markup: it is not a raw-text element, so a
+        ``Component``'s text slot there is escaped like any other (#3932)."""
+        out = _draw("<noscript>{{ v }}</noscript>", v=KINDS[kind]("<b>x</b>"))
+        assert out == "<noscript>&lt;b&gt;x&lt;/b&gt;</noscript>", out
+
     def test_noscript_is_scanned_as_markup(self) -> None:
         """With scripting off ``<noscript>`` holds markup, and it always has been scanned: its
         attribute slots are judged."""
@@ -326,7 +352,8 @@ class TestOtherRawTextElementsKeepTheAuthorsMarkup:
 
 class TestOrdinaryTextIsUnchanged:
     """Only a value that carries a claim of being markup changes. Every ordinary value prints as it
-    did, in a raw-text element, and every other text slot keeps its markup."""
+    did, in a raw-text element, and in every other text slot. A marked-safe value's markup in an
+    ordinary text slot is the next class (``Component``) and the live classes' own tests."""
 
     ORDINARY = {
         "str": "a < b & 'c' \"d\"",
@@ -374,21 +401,6 @@ class TestOrdinaryTextIsUnchanged:
         dotted = _draw("<textarea>{{ o.v }}</textarea>", o=_Obj(value))
         assert plain == "<textarea>Jan. 2, 2026</textarea>"
         assert dotted == "<textarea>2026-01-02</textarea>"
-
-    @pytest.mark.parametrize("kind", ["mark_safe", "safestring-subclass", "lazy-safe"])
-    def test_an_ordinary_text_slot_keeps_a_marked_safe_values_markup(self, kind: str) -> None:
-        """Pinned, not changed: the difference to the Rust and custom paths is documented and
-        filed separately (the maintainers' decision on #3914)."""
-        marked = KINDS[kind]("<b>x</b>")
-        for template in (
-            "<span>{{ v }}</span>",
-            "<p><i>{{ v }}</i></p>",
-            "<div>{{ o.v }}</div>",
-            "<td>{{ v|default:'-' }}</td>",
-            "{{ v }}",
-        ):
-            out = _draw(template, v=marked, o=_Obj(marked))
-            assert "<b>x</b>" in out, (template, out)
 
     def test_a_plain_string_still_escapes_in_a_text_slot(self) -> None:
         assert _draw("<span>{{ v }}</span>", v="<b>x</b>") == "<span>&lt;b&gt;x&lt;/b&gt;</span>"
@@ -459,6 +471,60 @@ class TestOrdinaryTextIsUnchanged:
             KINDS["text-form-marked-safe"]("<b>"),
         ):
             assert hybrid.unmarked(value) == (True, value)
+
+
+class TestOrdinaryTextIsEscapedOnTheComponentPath:
+    """#3932: a ``Component`` drawn through its ``template`` escapes a marked-safe value in an
+    ORDINARY text slot, as its Rust instance does (``_rust_instance`` is ``None`` here: the
+    template path, which a lazy string or a class with no crate twin reaches). ``LiveComponent``
+    and ``BoundComponent`` inline templates keep the markup: children and nested components are
+    written into their text slots."""
+
+    TEMPLATES = (
+        "<span>{{ v }}</span>",
+        "<p><i>{{ v }}</i></p>",
+        "<div>{{ o.v }}</div>",
+        "<td>{{ v|default:'-' }}</td>",
+        "{{ v }}",
+        "<span>{{ v|safe }}</span>",
+        "<noscript>{{ v }}</noscript>",
+    )
+
+    @pytest.mark.parametrize("kind", ["mark_safe", "safestring-subclass", "lazy-safe"])
+    @pytest.mark.parametrize("template", TEMPLATES)
+    def test_a_marked_safe_value_is_escaped(self, template: str, kind: str) -> None:
+        marked = KINDS[kind]("<b>x</b>")
+        out = _draw(template, v=marked, o=_Obj(marked))
+        assert "&lt;b&gt;x&lt;/b&gt;" in out and "<b>x</b>" not in out, (template, out)
+
+    @pytest.mark.parametrize("name", sorted(TestOrdinaryTextIsUnchanged.ORDINARY))
+    def test_an_ordinary_value_prints_as_before(self, name: str) -> None:
+        value = TestOrdinaryTextIsUnchanged.ORDINARY[name]
+        template = "<span>{{ v }}</span>"
+        assert _draw(template, v=value) == _unhardened(template, {"v": value})
+
+    def test_a_markup_slot_keeps_the_markup_and_a_plain_value_there_prints_as_before(self) -> None:
+        marked = mark_safe("<b>x</b>")
+        assert _draw_keep("<i>{{ v }}</i>", {"v"}, v=marked) == "<i><b>x</b></i>"
+        assert _draw_keep("<i>{{ v }}</i>", {"v"}, v="a < b") == "<i>a &lt; b</i>"
+        # only the names listed: another slot of the same template is escaped
+        out = _draw_keep("<i>{{ v }}</i><u>{{ w }}</u>", {"v"}, v=marked, w=marked)
+        assert out == "<i><b>x</b></i><u>&lt;b&gt;x&lt;/b&gt;</u>"
+
+    def test_a_tag_in_ordinary_text_is_not_a_slot_and_is_not_named(self, caplog) -> None:
+        template = "<p>{% firstof v w %}</p>"
+        assert hybrid.plan(template, True).raw_tags == ()
+        with caplog.at_level(logging.WARNING, logger="djust.components._hybrid_attrs"):
+            _draw(template, v="", w="x")
+        assert "firstof" not in caplog.text
+
+    @pytest.mark.parametrize("kind", ["mark_safe", "safestring-subclass", "lazy-safe"])
+    def test_the_live_classes_keep_a_text_slots_markup(self, kind: str) -> None:
+        marked = KINDS[kind]("<b>x</b>")
+        for template in ("<span>{{ v }}</span>", "<div>{{ o.v }}</div>", "{{ v }}"):
+            for drawer in DRAWERS.values():
+                out = drawer(template, v=marked, o=_Obj(marked))
+                assert "<b>x</b>" in out, (template, out)
 
 
 class TestTheScanner:
@@ -871,7 +937,10 @@ class TestTranslationBlocks:
             "<p>{{ lab }}</p>"
         )
         out = self._draw(drawer, template, item=mark_safe("<b>x</b>"))
-        assert "<p>Del <b>x</b></p>" in out, out
+        if drawer == "Component":  # #3932: its text slot escapes what the block stored
+            assert "<p>Del &lt;b&gt;x&lt;/b&gt;</p>" in out, out
+        else:
+            assert "<p>Del <b>x</b></p>" in out, out
         assert hybrid.plan(self.LOAD + template).template == self.LOAD + template
 
     def test_the_legacy_form_is_left_alone_and_named(
@@ -1312,7 +1381,7 @@ class TestOneSink:
         import inspect
 
         sig = inspect.signature(components_base._render_inline_template)
-        assert list(sig.parameters) == ["template_str", "context", "owner"]
+        assert list(sig.parameters) == ["template_str", "context", "owner", "text", "keep"]
 
     # -- the census itself can fail ----------------------------------------------------------
 

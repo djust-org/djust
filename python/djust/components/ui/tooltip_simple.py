@@ -72,6 +72,10 @@ class Tooltip(Component):
 
     # Fallback: Hybrid rendering with template
     # Using Bootstrap 5 tooltip structure with data attributes
+    # #3932: parameters the constructor already ``conditional_escape``s (a plain string is
+    # escaped, a marked-safe one is developer markup): the template prints them as given.
+    markup_slots = frozenset({"content"})
+
     template = """<span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" data-bs-placement="{{ placement }}" data-bs-trigger="{{ trigger }}"{% if arrow %} data-bs-arrow="true"{% endif %} title="{{ text }}">{{ content }}</span>"""
 
     def __init__(

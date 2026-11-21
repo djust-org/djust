@@ -54,6 +54,10 @@ class Offcanvas(Component):
         ... )
     """
 
+    # #3932: parameters the constructor already ``conditional_escape``s (a plain string is
+    # escaped, a marked-safe one is developer markup): the template prints them as given.
+    markup_slots = frozenset({"body"})
+
     template = """<div class="offcanvas offcanvas-{{ placement }}{% if show %} show{% endif %}" tabindex="-1" id="{{ id }}" aria-labelledby="{{ id }}Label"{% if not backdrop %} data-bs-backdrop="false"{% endif %}>{% if title %}
     <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="{{ id }}Label">{{ title }}</h5>{% if dismissable %}

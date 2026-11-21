@@ -86,7 +86,14 @@ def _render_template_string(template_str: str, context: Dict[str, Any]) -> str:
     return cast(str, render_template_with_dirs(template_str, context, get_template_dirs()))
 
 
-def _render_inline_template(template_str: str, context: Dict[str, Any], owner: str = "") -> str:
+def _render_inline_template(
+    template_str: str,
+    context: Dict[str, Any],
+    owner: str = "",
+    *,
+    text: bool = False,
+    keep: frozenset = frozenset(),
+) -> str:
     """Render a component's INLINE ``template`` string: the one place it is done (#3900, #3913).
 
     ``Component`` (the hybrid path), ``LiveComponent`` and ``BoundComponent`` all draw their
@@ -94,13 +101,17 @@ def _render_inline_template(template_str: str, context: Dict[str, Any], owner: s
     page (``djust.components._hybrid_attrs``): the attribute slots are escaped whatever the value
     is marked as and a URL is checked against the scheme allowlist, and the text of a raw-text
     element (``<textarea>``, ``<title>``, ``<script>`` ...) is escaped because the text there can
-    end the element. Every other text slot keeps a marked-safe value's markup.
+    end the element. Every other text slot keeps a marked-safe value's markup, except for a
+    ``Component`` (``text=True``, #3932): its text slots are escaped whatever the value is marked
+    as, like its Rust instance, except the plain names in ``keep`` (``Component.markup_slots``).
+    ``LiveComponent`` and ``BoundComponent`` templates keep markup in a text slot: their children
+    and nested components are written there.
 
     ``owner`` is the component's class name, for the warning about what could not be made safe.
     Not applied: a ``template_name`` file (loaded by the project's loaders, with ``{% include %}``
     and ``{% extends %}``) and a LiveView's own template.
     """
-    template_str, context = harden_context(template_str, context, owner)
+    template_str, context = harden_context(template_str, context, owner, text=text, keep=keep)
     return _render_template_string(template_str, context)
 
 
@@ -318,6 +329,12 @@ class Component(TemplateMutatorGuard, ABC):
     #: is still seen, appending to it in place is not). Components that hold
     #: data declare theirs so a click never pays a ten-thousand-row walk.
     fingerprint_fields: Optional[Tuple[str, ...]] = None
+
+    #: Names of the template's parameters that are documented as MARKUP (#3932). Every other
+    #: text slot of ``template`` is escaped whatever the value is marked as, like the Rust
+    #: instance does. A class lists a parameter here only when its constructor escapes it itself
+    #: (so the value reaching the template is already safe) or documents it as markup.
+    markup_slots: ClassVar[frozenset] = frozenset()
 
     #: Names of declared third-party assets this component needs (ADR-040).
     #: Check djust.B007 fails when a name is not declared in any manifest.
@@ -621,9 +638,18 @@ class Component(TemplateMutatorGuard, ABC):
             # #3900: the attribute slots of this template follow the rule the Rust instance
             # and `_render_custom()` follow (escaped whatever the value is marked as; a URL
             # checked against the scheme allowlist). See `_render_inline_template`.
+            # #3932: a text slot is escaped too, like the Rust instance, except `markup_slots`.
             return cast(
                 str,
-                mark_safe(_render_inline_template(self.template, context, type(self).__name__)),
+                mark_safe(
+                    _render_inline_template(
+                        self.template,
+                        context,
+                        type(self).__name__,
+                        text=True,
+                        keep=type(self).markup_slots,
+                    )
+                ),
             )
 
         # 3. Fall back to custom Python rendering (flexible)
