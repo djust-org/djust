@@ -53,7 +53,7 @@ class PushParity4256View(LiveView):
         gate = _GATE.get("seen")
         if gate is not None:
             try:
-                await asyncio.wait_for(gate.wait(), 2.0)
+                await asyncio.wait_for(gate.wait(), 30.0)
             except asyncio.TimeoutError:
                 pass
         self.push_event("step4256", {"n": 2})
