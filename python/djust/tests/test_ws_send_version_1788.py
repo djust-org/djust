@@ -544,11 +544,19 @@ def test_every_client_checked_send_path_uses_next_version():
     )
 
     # HIDDEN #2 — streaming push_state must route through the consumer counter.
+    # #4256: push_state picks its transport once; over WS ``next_version`` is the
+    # consumer counter, and both frames stamp through it (SSE: the Rust version
+    # via ``next_client_version``, #1858). Behaviour is pinned by
+    # ``test_push_state_websocket_wins_over_sse_and_stamps_consumer_counter``.
     stream_src = without_prose(inspect.getsource(streaming_mod.StreamingMixin.push_state))
-    assert stream_src.count("self._ws_consumer._next_version()") >= 2, (
+    assert stream_src.count("return consumer._next_version()") == 1, (
+        "StreamingMixin.push_state's WebSocket branch MUST stamp the consumer counter "
+        "consumer._next_version() (HIDDEN #2, #1788)."
+    )
+    assert stream_src.count('"version": next_version(') == 2, (
         "StreamingMixin.push_state bypasses _send_update and sends patch + html_update "
-        "directly; both MUST stamp self._ws_consumer._next_version() (HIDDEN #2, #1788). "
-        f"Found {stream_src.count('self._ws_consumer._next_version()')} of 2."
+        "directly; both MUST stamp through the transport-chosen next_version (HIDDEN #2, "
+        f"#1788, #4256). Found {stream_src.count(chr(34) + 'version' + chr(34) + ': next_version(')} of 2."
     )
 
 

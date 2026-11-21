@@ -304,27 +304,47 @@ class StreamingMixin:
 
         Useful for long-running async operations that want to show
         intermediate state (e.g., "Analyzing..." → "Done").
+
+        Works over the WebSocket and SSE transports (#4256). On the HTTP
+        fallback there is no live channel: it logs a warning and returns.
         """
-        if not self._ws_consumer:
-            logger.warning("push_state() called but no WebSocket consumer attached")
+        from ._live_target import sse_runtime_for
+
+        consumer = self.__dict__.get("_ws_consumer")
+        sse_runtime = None if consumer is not None else sse_runtime_for(self)
+        if consumer is None and sse_runtime is None:
+            logger.warning("push_state() called but no live transport (WebSocket or SSE) attached")
             return
 
         from asgiref.sync import sync_to_async
         import json
 
-        # Re-render the full view. The Rust ``version`` is DISCARDED for the
-        # wire — this path bypasses ``_send_update`` and sends frames directly,
-        # but it is a client-CHECKED send path (the client writes
-        # ``clientVdomVersion = data.version`` at 02-response-handler.js:77), so
-        # both frames MUST stamp the consumer-owned monotonic counter
-        # (#1788, HIDDEN #2). Stamping the Rust version here would desync the
-        # client against every other send path.
+        # Re-render the full view. Over the WebSocket the Rust ``version`` is
+        # DISCARDED for the wire — this path bypasses ``_send_update`` and sends
+        # frames directly, but it is a client-CHECKED send path (the client
+        # writes ``clientVdomVersion = data.version`` at
+        # 02-response-handler.js:77), so both frames MUST stamp the
+        # consumer-owned monotonic counter (#1788, HIDDEN #2). Over SSE the
+        # client is calibrated to the Rust counter (#1858), so the transport's
+        # ``next_client_version`` returns the Rust version (#4256).
         # ADR-036: the rendered tree's public contracts travel with the frame
         # (captured in the same operation); a strict client invalidates its
         # scope on a DOM frame without them. Discovery failure withholds it.
         from ._background_render import direct_render_contract_fields
 
-        runtime = getattr(self._ws_consumer, "_runtime", None)
+        send: Callable[[Dict[str, Any]], Awaitable[None]]
+        if consumer is not None:
+            runtime = getattr(consumer, "_runtime", None)
+            send = consumer.send_json
+
+            def next_version(_html: str, _rust_version: int) -> int:
+                return consumer._next_version()  # type: ignore[no-any-return]
+
+        else:
+            runtime = sse_runtime
+            transport = sse_runtime.transport
+            send = transport.send
+            next_version = transport.next_client_version
 
         def render() -> Any:
             rendered = self.render_with_diff()
@@ -335,29 +355,35 @@ class StreamingMixin:
             logger.warning("push_state() withheld: render parameter contracts unavailable")
             return
         snapshot = contract_fields.get("parameter_contract_snapshot") or {}
+        # The SSE transport stamps from the pre-strip html; the version is taken
+        # at send time so WS keeps its counter order (#4256).
+        rendered_html = html
 
         if patches is not None:
             patch_list = json.loads(patches) if patches else []
-            await self._ws_consumer.send_json(
+            await send(
                 {
                     "type": "patch",
                     "patches": patch_list,
-                    "version": self._ws_consumer._next_version(),
+                    "version": next_version(rendered_html, _version),
                     **snapshot,
                 }
             )
         else:
             html = await sync_to_async(self._strip_comments_and_whitespace)(html)
             html = await sync_to_async(self._extract_liveview_content)(html)
-            await self._ws_consumer.send_json(
+            await send(
                 {
                     "type": "html_update",
                     "html": html,
-                    "version": self._ws_consumer._next_version(),
+                    "version": next_version(rendered_html, _version),
                     **snapshot,
                 }
             )
-        await self._ws_consumer._flush_push_events()
+        if consumer is not None:
+            await consumer._flush_push_events()
+        else:
+            await self.flush_push_events()
 
     def _normalize_stream_html(self, html: str) -> str:
         """Normalize a re-rendered stream fragment like the LiveView template (#2999).
@@ -462,13 +488,12 @@ class StreamingMixin:
         transport, so a slot's session stamps ``target_id`` like the WS slot.
         The HTTP fallback has neither: stream ops are a no-op there.
         """
+        from ._live_target import sse_runtime_for
+
         consumer = self.__dict__.get("_ws_consumer")
         if consumer is not None:
             return consumer.send_json  # type: ignore[no-any-return]
-        session = self.__dict__.get("_sse_session")
-        if session is None or getattr(session, "view_instance", None) is not self:
-            return None
-        runtime = getattr(session, "runtime", None)
+        runtime = sse_runtime_for(self)
         if runtime is None:
             return None
         return runtime.transport.send  # type: ignore[no-any-return]
