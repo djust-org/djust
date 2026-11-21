@@ -10,7 +10,11 @@ import sys
 from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Tuple, cast
 
 from .._render_caches import render_caches_enabled
-from .._rust import extract_item_key_only_reads, extract_template_variables
+from .._rust import (
+    extract_item_key_only_reads,
+    extract_own_reads,
+    extract_template_variables,
+)
 from ..optimization.codegen import (
     ALL_CHAIN_METHODS,
     all_methods_need_rows,
@@ -251,6 +255,47 @@ def _item_key_only_reads(template_content: str) -> dict:
     if len(_item_key_only_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
         _item_key_only_cache.clear()
     _item_key_only_cache[content_hash] = result
+    return result
+
+
+_queryset_method_roots_cache: Dict[str, FrozenSet[str]] = {}
+
+
+def queryset_method_roots(template_content: Optional[str]) -> FrozenSet[str]:
+    """Context names the template reads ``count`` / ``exists`` / ``first`` /
+    ``last`` directly off (#4241, #4258).
+
+    Read from ``extract_own_reads``, which does not file a ``{% for %}`` loop
+    row's reads under the iterable: ``{% for o in qs %}{{ o.first }}`` reads
+    ``first`` off a row, not off ``qs``, and must not make the QuerySet (and so
+    ``{{ qs.query }}``) reachable through the render sidecar. A ``{% with %}``
+    alias of the QuerySet still counts, since the alias is the value. A loop
+    variable that shadows a context name still counts for that name (the
+    extractor has no scoping). Cached per template hash; an empty or
+    unparseable template reads nothing (fail closed: no capture).
+    """
+    if not template_content:
+        return frozenset()
+    content_hash = _template_hash(template_content)
+    # One lookup, not `in` then `[]` (#3074).
+    try:
+        return _queryset_method_roots_cache[content_hash]
+    except KeyError:
+        pass
+    try:
+        own_reads = extract_own_reads(template_content)
+    except Exception:  # noqa: BLE001 -- an unparseable template reads nothing
+        logger.debug("extract_own_reads refused the template; no QuerySet capture")
+        own_reads = {}
+    methods = set(ALL_CHAIN_METHODS)
+    result = frozenset(
+        root
+        for root, paths in own_reads.items()
+        if any(path.split(".")[0] in methods for path in paths)
+    )
+    if len(_queryset_method_roots_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
+        _queryset_method_roots_cache.clear()
+    _queryset_method_roots_cache[content_hash] = result
     return result
 
 
@@ -1197,13 +1242,14 @@ class JITMixin:
             # query. ``first`` / ``last`` are Django's own methods and query as
             # Django does: ``last`` always, ``first`` on an unordered QuerySet. Pass
             # ``queryset`` -- the evaluated (possibly optimize_queryset-cloned)
-            # object -- not the caller's unevaluated one. A row field named like
-            # a method (``u.count`` in a loop) extracts the same path; holding
-            # the QuerySet is harmless then, since the eager list wins every
-            # direct hit and the sidecar only serves misses.
-            if "." not in variable_name and set(ALL_CHAIN_METHODS) & {
-                p.split(".")[0] for p in paths_for_var
-            }:
+            # object -- not the caller's unevaluated one. The method must be
+            # read on the QuerySet's own name (#4258): a loop row field named
+            # like a method (``{% for o in qs %}{{ o.first }}``) is filed under
+            # ``qs`` in ``paths_for_var`` too, and holding the QuerySet for it
+            # made ``{{ qs.query }}`` reachable through the sidecar.
+            if "." not in variable_name and variable_name in queryset_method_roots(
+                template_content
+            ):
                 keep_rows_for_all_methods(self, variable_name, queryset)
 
             # Check if Rust serializer captured all expected paths

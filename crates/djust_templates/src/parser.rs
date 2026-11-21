@@ -3201,6 +3201,57 @@ pub fn extract_item_key_only_reads(
     Ok(out)
 }
 
+/// The paths each context name reads ITSELF, per root (#4258).
+///
+/// The same walk as [`extract_template_variables`], except that a `{% for %}`
+/// loop variable's paths are NOT filed under the iterable. The JIT serializer
+/// needs that transfer (a row's fields), but it makes
+/// `{% for o in qs %}{{ o.first }}{% endfor %}` indistinguishable from
+/// `{{ qs.first }}`. This map tells them apart: the first files `first` under
+/// `o` only. A `{% with x=qs %}` alias keeps its transfer, since the alias IS
+/// the value. There is no scoping: a loop variable that shadows a context name
+/// (`{% for qs in groups %}{{ qs.first }}`) still files `first` under `qs`.
+pub fn extract_own_reads(template: &str) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    use std::collections::HashMap;
+
+    let tokens = crate::lexer::tokenize(template)?;
+    let nodes = parse(&tokens)?;
+    let mut variables: HashMap<String, Vec<String>> = HashMap::new();
+    {
+        let _walk = RawBodyWalk::enter();
+        let _own = OwnReadsWalk::enter();
+        extract_from_nodes(&nodes, &mut variables);
+    }
+    for paths in variables.values_mut() {
+        settle_paths(paths);
+    }
+    Ok(variables)
+}
+
+thread_local! {
+    /// Set while [`extract_own_reads`] walks a template.
+    static SKIP_LOOP_TRANSFER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Skip the `{% for %}` loop-variable transfer for [`extract_own_reads`].
+struct OwnReadsWalk {
+    previous: bool,
+}
+
+impl OwnReadsWalk {
+    fn enter() -> Self {
+        Self {
+            previous: SKIP_LOOP_TRANSFER.with(|flag| flag.replace(true)),
+        }
+    }
+}
+
+impl Drop for OwnReadsWalk {
+    fn drop(&mut self) {
+        SKIP_LOOP_TRANSFER.with(|flag| flag.set(self.previous));
+    }
+}
+
 thread_local! {
     /// Set while [`extract_template_variables`] walks a template.
     static WALK_RAW_BODIES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -3586,7 +3637,10 @@ fn extract_from_nodes(
                     .trim();
                 record_iterated(iterable, variables);
                 let single_var = var_names.len() == 1;
-                for var_name in var_names {
+                // `extract_own_reads` (#4258) keeps a row's reads on the loop
+                // variable only: the iterable did not read them itself.
+                let transfer = !SKIP_LOOP_TRANSFER.with(|flag| flag.get());
+                for var_name in var_names.iter().filter(|_| transfer) {
                     if let Some(loop_var_paths) = variables.get(var_name) {
                         // Transfer paths from loop variable to iterable (but keep loop var)
                         // Prepend the iterable suffix so paths are correctly nested.
@@ -7756,5 +7810,52 @@ mod tag_context_tests {
             let cache = slot.as_ref().expect("the outer cache is back");
             assert_eq!(cache.tokens_ptr, outer.as_ptr() as usize);
         });
+    }
+}
+
+#[cfg(test)]
+mod own_reads_tests_4258 {
+    use super::{extract_own_reads, extract_template_variables};
+
+    fn paths(template: &str, root: &str) -> Option<Vec<String>> {
+        extract_own_reads(template).unwrap().get(root).cloned()
+    }
+
+    #[test]
+    fn extract_own_reads_loop_row_read_stays_on_the_loop_variable() {
+        let t = "{% for o in orders %}{{ o.first }}{% endfor %}{{ orders.query }}";
+        assert_eq!(paths(t, "orders"), Some(vec!["query".to_string()]));
+        assert_eq!(paths(t, "o"), Some(vec!["first".to_string()]));
+        // The JIT's map still transfers the row read onto the iterable.
+        let full = extract_template_variables(t).unwrap();
+        assert!(full["orders"].contains(&"first".to_string()));
+    }
+
+    #[test]
+    fn extract_own_reads_keeps_the_with_alias_transfer() {
+        let t = "{% with x=orders %}{{ x.count }}{% endwith %}";
+        assert_eq!(paths(t, "orders"), Some(vec!["count".to_string()]));
+    }
+
+    #[test]
+    fn extract_own_reads_with_inside_loop_does_not_reach_the_iterable() {
+        let t = "{% for o in orders %}{% with y=o %}{{ y.first }}{% endwith %}{% endfor %}";
+        assert_eq!(paths(t, "o"), Some(vec!["first".to_string()]));
+        let orders = paths(t, "orders").unwrap_or_default();
+        assert!(!orders.iter().any(|p| p.starts_with("first")), "{orders:?}");
+    }
+
+    #[test]
+    fn extract_own_reads_direct_nested_read() {
+        let t = "{{ orders.first.name }}";
+        assert_eq!(paths(t, "orders"), Some(vec!["first.name".to_string()]));
+    }
+
+    #[test]
+    fn extract_own_reads_flag_is_restored_after_the_walk() {
+        let t = "{% for o in orders %}{{ o.first }}{% endfor %}";
+        let _ = extract_own_reads(t).unwrap();
+        let full = extract_template_variables(t).unwrap();
+        assert!(full["orders"].contains(&"first".to_string()));
     }
 }

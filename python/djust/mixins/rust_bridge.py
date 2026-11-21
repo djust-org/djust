@@ -3,7 +3,19 @@ RustBridgeMixin - Rust backend integration for LiveView.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
 
 from django.utils.datastructures import MultiValueDict
 from django.utils.safestring import SafeData
@@ -91,30 +103,22 @@ _MISSING = object()
 _NORMALIZE_DEPTH_LIMIT = 3
 
 
-def _template_reads_queryset_method(view: Any, name: str) -> bool:
-    """Whether the view's template reads ``count`` / ``exists`` / ``first`` /
-    ``last`` directly off the context name *name* (#4241).
+def _queryset_method_roots_for(view: Any) -> FrozenSet[str]:
+    """Context names the view's template reads ``count`` / ``exists`` /
+    ``first`` / ``last`` directly off (#4241, #4258).
 
     The JIT keeps an evaluated QuerySet for the render sidecar on exactly this
-    condition; the native render's capture of a context QuerySet uses it too,
-    so no other QuerySet attribute (``.query``) becomes reachable. An
-    unreadable template reads nothing.
+    condition (``queryset_method_roots``); the native render's capture of a
+    context QuerySet uses it too, so no other QuerySet attribute (``.query``)
+    becomes reachable. An unreadable template reads nothing.
     """
-    from ..optimization.codegen import ALL_CHAIN_METHODS
-    from .jit import (
-        _cached_extract_template_variables,
-        _jit_template_content,
-        _paths_for_variable,
-    )
+    from .jit import _jit_template_content, queryset_method_roots
 
     try:
         content = _jit_template_content(view)
     except Exception:  # noqa: BLE001 -- no template source means no capture
-        return False
-    if not content:
-        return False
-    paths = _paths_for_variable(_cached_extract_template_variables(content), name)
-    return bool(set(ALL_CHAIN_METHODS) & {p.split(".")[0] for p in paths})
+        return frozenset()
+    return queryset_method_roots(content)
 
 
 def _normalize_db_values(value: Any, depth: int = 0) -> Any:
@@ -959,7 +963,9 @@ class RustBridgeMixin:
             # reached the sidecar.
             # #4241: a top-level QuerySet is captured too, but only when the
             # template reads ``{{ qs.count }}`` / ``.exists`` / ``.first`` /
-            # ``.last`` on it -- the same condition the JIT uses. Holding every
+            # ``.last`` on its own name -- the same condition the JIT uses. A
+            # loop row's ``{{ o.first }}`` does not count (#4258). The answer
+            # is computed once per sync, and only when a QuerySet is present. Holding every
             # QuerySet would make its other attributes (``{{ qs.query }}``)
             # reachable through the sidecar walk. The normalize loop below
             # iterates this same object, filling its result cache, so
@@ -969,12 +975,16 @@ class RustBridgeMixin:
             from django.db.models import Model as _DjModel
             from django.db.models import QuerySet as _DjQuerySet
 
-            _raw_models_for_sidecar = {
-                _key: _val
-                for _key, _val in full_context.items()
-                if isinstance(_val, _DjModel)
-                or (isinstance(_val, _DjQuerySet) and _template_reads_queryset_method(self, _key))
-            }
+            _raw_models_for_sidecar = {}
+            _qs_roots: Optional[FrozenSet[str]] = None
+            for _key, _val in full_context.items():
+                if isinstance(_val, _DjModel):
+                    _raw_models_for_sidecar[_key] = _val
+                elif isinstance(_val, _DjQuerySet):
+                    if _qs_roots is None:
+                        _qs_roots = _queryset_method_roots_for(self)
+                    if _key in _qs_roots:
+                        _raw_models_for_sidecar[_key] = _val
 
             for _key, _val in list(full_context.items()):
                 _normalized = _normalize_db_values(_val)

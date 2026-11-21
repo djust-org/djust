@@ -7506,6 +7506,16 @@ fn extract_item_key_only_reads_py(py: Python, template: String) -> PyResult<Py<P
     })
 }
 
+/// The paths each context name reads itself, without a `{% for %}` loop
+/// variable's reads filed under its iterable (#4258). See
+/// `djust_templates::parser::extract_own_reads`.
+#[pyfunction(name = "extract_own_reads")]
+fn extract_own_reads_py(py: Python, template: String) -> PyResult<Py<PyAny>> {
+    guard_panic("extract_own_reads_py", move || {
+        paths_map_to_py(py, djust_templates::extract_own_reads(&template))
+    })
+}
+
 /// Collect the set of fields bound via static `dj-model="<field>"` from a raw
 /// template source string (and any `{% include %}`d templates resolvable in
 /// `template_dirs`).
@@ -7749,6 +7759,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // JIT auto-serialization
     m.add_function(wrap_pyfunction!(extract_template_variables_py, m)?)?;
     m.add_function(wrap_pyfunction!(extract_item_key_only_reads_py, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_own_reads_py, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_queryset_py, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_context_py, m)?)?;
 
