@@ -86,6 +86,8 @@ import uuid
 import weakref
 from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Set, Tuple, TypeVar
 
+from ._component_ids import render_ids
+
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
@@ -832,26 +834,28 @@ def attributed(view: Any, fn: Callable[..., _T], *, writes: bool = True) -> Call
 
 @contextlib.contextmanager
 def reading(view: Any) -> Iterator[None]:
-    """A render of ``view``: its reads count, its writes do not. Inside a step or a
+    """A render of ``view``: its reads count, its writes do not, and the components it
+    builds are numbered (:mod:`djust._component_ids`, #4114). Inside a step or a
     render of the same view already, that attribution stays."""
     current = _writer.get()
     if view is None or (current is not None and current.ref() is view):
         yield
         return
-    with writes_by(view, writes=False):
+    with writes_by(view, writes=False), render_ids(view):
         yield
 
 
 def recorded_render(method: Callable[..., _T]) -> Callable[..., _T]:
     """Decorate a view's render method: its reads enter the view's read set, and a
-    render that returns completes the set (see the module docstring)."""
+    render that returns completes the set (see the module docstring). The outermost
+    render also numbers the components it builds (:mod:`djust._component_ids`, #4114)."""
 
     @functools.wraps(method)
     def render(self: Any, *args: Any, **kwargs: Any) -> _T:
         current = _writer.get()
         if current is not None and current.ref() is self:
             return method(self, *args, **kwargs)  # nested: the outer render records
-        with writes_by(self, writes=False):
+        with writes_by(self, writes=False), render_ids(self):
             result = method(self, *args, **kwargs)
         render_completed(self)
         return result

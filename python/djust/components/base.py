@@ -1335,10 +1335,14 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         pass
 
     def _generate_id(self) -> str:
-        """Generate a unique component ID"""
+        """Generate a component ID: unique, and the same on every render of a view when
+        the component is built during one (#4114); random anywhere else."""
         import uuid
 
-        return f"{self.__class__.__name__.lower()}_{uuid.uuid4().hex[:8]}"
+        from .._component_ids import render_id
+
+        prefix = self.__class__.__name__.lower()
+        return render_id(prefix) or f"{prefix}_{uuid.uuid4().hex[:8]}"
 
     @alters_data
     def save_state(self) -> None:
