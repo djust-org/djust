@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import logging
 
 import pytest
@@ -12,6 +13,20 @@ from djust.assets.tags import asset_tags, asset_url, clear_integrity_cache
 from djust.tests._asset_fixtures import write_asset
 
 CONTENT = b"console.log(1);\n"
+
+
+@pytest.fixture(autouse=True)
+def release_component_classes():
+    """Drop the ``Component`` subclasses a test defined before the next test runs (#4262).
+
+    A class defined inside a test function sits in a reference cycle, so it stays in
+    ``Component.__subclasses__()`` until the cycle collector happens to run. Meanwhile
+    ``check_required_assets`` (B007) walks every subclass, and the classes here name
+    ``test-lib``, which no manifest declares: a later test that asserts the startup checks
+    are clean (``test_component_batch5_map_picker_2985``) failed or passed with GC timing.
+    """
+    yield
+    gc.collect()
 
 
 def _settings(tmp_path, **extra):
