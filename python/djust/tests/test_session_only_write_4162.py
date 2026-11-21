@@ -216,6 +216,27 @@ class Revocable(Plain):
             raise RuntimeError("the work failed after writing")
         return "done"
 
+    @event_handler()
+    def armed_ok_bg(self, **kwargs):
+        self.start_async(self._armed_ok_bg, name="w")
+
+    def _armed_ok_bg(self):
+        # Arms the #4211 save hold (:func:`_held_save_start`) for the result's commit.
+        HOLD["armed"] = True
+        self.request.session["late"] = "yes"
+        return "done"
+
+    @event_handler()
+    def armed_inc_bg(self, **kwargs):
+        self.start_async(self._armed_inc_bg, name="w")
+
+    def _armed_inc_bg(self):
+        # Changes the view only, so its result's save is deferred (interval set).
+        HOLD["armed"] = True
+        HOLD["view"] = self
+        self.count += 1
+        return "done"
+
 
 class RevocableHandled(Revocable):
     def handle_async_result(self, name, result=None, error=None):
@@ -986,6 +1007,10 @@ async def _teardown_while_held(transport: str, view: type, event_name: str) -> A
         saves = len(SAVES)
         HOLD["gate"].set()
         await _settle(settled)
+        held = HOLD.get("save")
+        if held is not None:
+            # A save whose start was held runs on after the turn stopped waiting.
+            await asyncio.wait({held}, timeout=HANG_S)
         return client, len(SAVES) - saves
 
 
@@ -1027,3 +1052,89 @@ async def test_work_finishing_after_teardown_keeps_nothing(transport, arm):
         seen = await sync_to_async(_read)(client)
     assert "late" not in seen, seen
     assert saves_after == 0
+
+
+@contextlib.contextmanager
+def _held_save_start() -> Iterator[None]:
+    """Hold the start of the next save the work arms (``HOLD["armed"]``) on the
+    loop until ``HOLD["gate"]``: the root save's thread step queued behind a
+    busy sync thread while the disconnect's teardown lands (#4211 review S1)."""
+    from djust import runtime
+
+    real = runtime._spawn_save
+
+    def spawn(run: Any) -> Any:
+        if not HOLD.pop("armed", None):
+            return real(run)
+
+        async def held() -> None:
+            HOLD["reached"].set()
+            await HOLD["gate"].wait()
+            await real(run)
+
+        HOLD["save"] = asyncio.ensure_future(held())
+        return HOLD["save"]
+
+    with mock.patch.object(runtime, "_spawn_save", spawn):
+        yield
+
+
+@contextlib.contextmanager
+def _held_deferred_check() -> Iterator[None]:
+    """Hold the deferred path's binding check (its one thread step) the work
+    arms, absorbing the teardown's cancellation (#4211 review S1)."""
+    from djust import runtime
+
+    real = runtime.sync_to_async
+
+    def s2a(func: Any, *args: Any, **kwargs: Any) -> Any:
+        wrapped = real(func, *args, **kwargs)
+        if getattr(func, "__name__", "") != "check" or not HOLD.pop("armed", None):
+            return wrapped
+
+        async def held(*a: Any, **kw: Any) -> Any:
+            HOLD["reached"].set()
+            await _absorbing_wait(HOLD["gate"])
+            return await wrapped(*a, **kw)
+
+        return held
+
+    with mock.patch.object(runtime, "sync_to_async", s2a):
+        yield
+
+
+@pytest.mark.parametrize("transport", ["ws", "sse"])
+async def test_success_save_started_after_teardown_keeps_nothing(transport):
+    """#4211 review S1: the result's commit passed its checks, but its save's
+    thread step started only after the disconnect's teardown. The save checks
+    the work still belongs to the live view as its first step: nothing is
+    stored."""
+    HOLD.pop("save", None)
+    with _settings(0), _held_save_start():
+        client, saves_after = await _teardown_while_held(transport, Revocable, "armed_ok_bg")
+        seen = await sync_to_async(_read)(client)
+    HOLD.pop("save", None)
+    assert "late" not in seen, seen
+    assert saves_after == 0
+
+
+async def test_deferred_success_after_teardown_keeps_nothing():
+    """#4211 review S1, the deferred-save path: the work is cancelled
+    (``cancel_async_all``: its generation moves on, the view stays live) while
+    the result's binding check waits for its thread. The result leaves no
+    change owed, so the close's flush stores nothing of it."""
+    HOLD.update(reached=asyncio.Event(), gate=asyncio.Event())
+    with _settings(30), _held_deferred_check(), _background_settled() as settled:
+        client = await sync_to_async(_page)(Revocable)
+        comm = await _ws_mount(Revocable, _key(client))
+        try:
+            # The starting turn changes nothing; let any flush it owes run first.
+            await harness.event(comm, "armed_inc_bg")
+            await asyncio.wait_for(HOLD["reached"].wait(), HANG_S)
+            HOLD.pop("view").cancel_async_all()
+            HOLD["gate"].set()
+            await _settle(settled)
+            SAVES.clear()
+        finally:
+            await comm.disconnect()
+    assert SAVES == []

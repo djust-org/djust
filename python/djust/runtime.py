@@ -207,8 +207,8 @@ def _log_unobserved_save_failure(work: "asyncio.Future[None]") -> None:
     """Report a save failure nobody is waiting for any more (value-free)."""
     if work.cancelled() or work.exception() is None:
         return
-    if isinstance(work.exception(), LateSaveDropped):
-        return  # a logged-out session, already reported at debug (#3247)
+    if isinstance(work.exception(), (LateSaveDropped, _WorkReleased)):
+        return  # a logged-out session (#3247), or released work (#4211): nothing failed
     logger.warning("State save failed after its turn stopped waiting")
 
 
@@ -465,6 +465,28 @@ def _save_session_writes_unless(view: Any, released: Callable[[], bool]) -> None
     if released():
         return
     _save_session_writes(view)
+
+
+class _WorkReleased(Exception):
+    """A background result's save found, as its first step, that the work no
+    longer belongs to the live view (#4211): nothing was written."""
+
+
+def _unless_released(
+    save: Callable[[], None], released: Optional[Callable[[], bool]]
+) -> Callable[[], None]:
+    """``save``, preceded IN ITS OWN THREAD STEP by the ``released`` check, so
+    a teardown that lands while the save waits for its thread (unbounded on
+    the WebSocket) cannot fall between the check and the write (#4211)."""
+    if released is None:
+        return save
+
+    def run() -> None:
+        if released():
+            raise _WorkReleased
+        save()
+
+    return run
 
 
 def _turn_session(view: Any) -> Any:
@@ -6430,6 +6452,7 @@ class ViewRuntime(RuntimeTurnPort):
         children: bool = True,
         async_batch: Optional[str] = None,
         async_result: bool = False,
+        released: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """Persist an authorized explicit turn before any success frame.
 
@@ -6458,6 +6481,12 @@ class ViewRuntime(RuntimeTurnPort):
         full HTML. Storage that keeps missing the deadline, or a catch-up that
         cannot finish, ends in the terminal reload error. A refused save
         (identity changed) or a storage exception is terminal too.
+
+        ``released`` (background results, #4211): True once the work no longer
+        belongs to the live view. Checked as the first step of each save's own
+        thread step (and of the deferred path's check), so a teardown that
+        lands while the save waits for its thread stores nothing; the turn
+        then returns False without a frame or an error.
         """
         from ._exposure import ExposureError, uses_legacy_exposure
         from ._exposure_sessions import StateLimitExceeded
@@ -6478,7 +6507,7 @@ class ViewRuntime(RuntimeTurnPort):
         extra = self._explicit_error_fields(view, source=source, async_batch=async_batch)
         if mode == DEFERRED:
             return await self._defer_explicit_turn(
-                view, extra, children=children, async_batch=async_batch
+                view, extra, children=children, async_batch=async_batch, released=released
             )
         if self._state_dirty_view is view:
             # Earlier turns' changes are in memory only: this turn's "nothing
@@ -6491,9 +6520,11 @@ class ViewRuntime(RuntimeTurnPort):
                 raise ExposureError("Explicit persistence requires current authorization")
             await _run_explicit_save(
                 self,
-                lambda: self._save_explicit_root(view, request),
+                _unless_released(lambda: self._save_explicit_root(view, request), released),
                 deadline=self._explicit_save_deadline(),
             )
+        except _WorkReleased:
+            return False
         except ExplicitSaveDeferred as deferred:
             # The turn's values are on the view; the store has them only once
             # this save lands (#4095 reads it).
@@ -6525,7 +6556,7 @@ class ViewRuntime(RuntimeTurnPort):
                 self._mark_state_dirty(view)
                 if children:
                     return await self._persist_explicit_children_after_event(
-                        view, async_batch=async_batch
+                        view, async_batch=async_batch, released=released
                     )
                 return True
             return await self._refuse_over_limit_turn(view, refused, extra)
@@ -6563,7 +6594,9 @@ class ViewRuntime(RuntimeTurnPort):
         self._explicit_save_succeeded()
         self._state_saved(view)
         if children:
-            return await self._persist_explicit_children_after_event(view, async_batch=async_batch)
+            return await self._persist_explicit_children_after_event(
+                view, async_batch=async_batch, released=released
+            )
         return True
 
     # ------------------------------------------------------------------ #
@@ -6577,6 +6610,7 @@ class ViewRuntime(RuntimeTurnPort):
         *,
         children: bool,
         async_batch: Optional[str],
+        released: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """A turn whose save is left to the flush: it writes nothing and
         holds no storage wait before its frame.
@@ -6586,6 +6620,10 @@ class ViewRuntime(RuntimeTurnPort):
         and the child tree's own save, which is declared state. The view is
         marked changed when the turn changed it (or cannot tell), and the
         first such turn arms the one-shot timer.
+
+        ``released`` (see :meth:`commit_explicit_turn`): checked in the check's
+        thread step and again on the loop before the change is marked owed, so
+        work torn down meanwhile leaves nothing for a flush to store (#4211).
         """
         from ._automatic_state import turn_changed_state
         from ._exposure import ExposureError
@@ -6599,11 +6637,17 @@ class ViewRuntime(RuntimeTurnPort):
         request = getattr(view, "_djust_event_request", None)
 
         def check() -> None:
+            if released is not None and released():
+                raise _WorkReleased
             if request is None or request_binding(request) != self._explicit_mount_binding:
                 raise ExposureError("Explicit persistence requires current authorization")
 
         try:
             await sync_to_async(check)()
+            if released is not None and released():
+                raise _WorkReleased
+        except _WorkReleased:
+            return False
         except Exception:  # noqa: BLE001 — identity errors may carry values; never logged
             view._force_full_html = True
             logger.warning(
@@ -6617,7 +6661,9 @@ class ViewRuntime(RuntimeTurnPort):
         if turn_changed_state(view):
             self._mark_state_dirty(view)
         if children:
-            return await self._persist_explicit_children_after_event(view, async_batch=async_batch)
+            return await self._persist_explicit_children_after_event(
+                view, async_batch=async_batch, released=released
+            )
         return True
 
     def _mark_state_dirty(self, view: Any) -> None:
@@ -7166,12 +7212,15 @@ class ViewRuntime(RuntimeTurnPort):
         request: Any = None,
         async_batch: Optional[str] = None,
         mounted: bool = True,
+        released: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """Save the authorized child tree before acknowledging a parent event.
 
         ``mounted=False`` is the mount path: the browser has no page yet, so a
         deferred save there cannot be caught up and stays the terminal
         reload error it was before #3200.
+
+        ``released``: as for :meth:`commit_explicit_turn` (#4211).
         """
         from ._exposure import ExposureError, uses_legacy_exposure
 
@@ -7196,9 +7245,11 @@ class ViewRuntime(RuntimeTurnPort):
                 raise ExposureError("Child persistence requires current authorization")
             await _run_explicit_save(
                 self,
-                lambda: self._save_explicit_children(view, request),
+                _unless_released(lambda: self._save_explicit_children(view, request), released),
                 deadline=self._explicit_save_deadline(),
             )
+        except _WorkReleased:
+            return False
         except ExplicitSaveDeferred as deferred:
             if not mounted:
                 # No mount frame will be sent, so there is nothing to catch up.
@@ -8404,7 +8455,9 @@ class ViewRuntime(RuntimeTurnPort):
                         return
                     if released():
                         return
-                    if not await self.commit_explicit_turn(view, source="async", async_result=True):
+                    if not await self.commit_explicit_turn(
+                        view, source="async", async_result=True, released=released
+                    ):
                         return
                     snapshot_fields = await self._explicit_event_snapshot(view)
                     await self._render_async_result(event_name, snapshot_fields=snapshot_fields)
