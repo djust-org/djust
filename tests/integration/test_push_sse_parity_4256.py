@@ -36,6 +36,7 @@ _GATE: dict = {}
 
 
 class PushParity4256View(LiveView):
+    exposure_policy = "explicit"
     template = '<div dj-root><p id="status">{{ status }}</p></div>'
     status = state("idle")
 
