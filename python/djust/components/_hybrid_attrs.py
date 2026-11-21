@@ -1492,7 +1492,7 @@ def _unscanned_includes(rewrite: Plan) -> int:
     return unresolved
 
 
-def _warn_once(owner: str, rewrite: Plan) -> None:
+def _warn_once(owner: str, rewrite: Plan, file: bool = False) -> None:
     """Name, once per class and set of findings, what djust could not make safe in a template:
     URL values escaped but not judged, unquoted values, tags that print text inside escaped
     text, shapes the scanner cannot follow like a browser does, and the ``{% include %}`` /
@@ -1503,6 +1503,8 @@ def _warn_once(owner: str, rewrite: Plan) -> None:
     above and a count. It is never an attribute VALUE, text between tags or anything from the
     context. An attribute NAME is template text: a template built per instance can carry
     runtime text in a name, so keep names static.
+
+    ``file`` is True for a ``template_name`` file (#3933): the warning says "template file".
     """
     if not (
         rewrite.unchecked_urls
@@ -1521,6 +1523,7 @@ def _warn_once(owner: str, rewrite: Plan) -> None:
     raw_tags = tuple((clean(e), clean(n)) for e, n in rewrite.raw_tags)
     key = (
         owner,
+        file,
         unchecked,
         unquoted,
         raw_tags,
@@ -1563,10 +1566,29 @@ def _warn_once(owner: str, rewrite: Plan) -> None:
     if not fragments:
         return
     logger.warning(
-        "%s: hybrid template parts djust cannot make safe: "
+        "%s: "
+        + ("template file" if file else "hybrid template")
+        + " parts djust cannot make safe: "
         + "; ".join(fragments)
         + (". To fix: " + ", ".join(advice) + "." if advice else "."),
         *args,
+    )
+
+
+def warn_unscanned_file(owner: str, template_name: str) -> None:
+    """Name, once per class and file, a ``template_name`` file whose source the template backend
+    does not expose: it is drawn without the rule. Only the class and template names (both are
+    code the project wrote) are logged, never a value."""
+    key = (owner, "unscanned file", template_name)
+    if key in _WARNED or len(_WARNED) >= _MAX_WARNED:
+        return
+    _WARNED.add(key)
+    logger.warning(
+        "%s: template file %s was not scanned (its source is not available from the template "
+        "backend), so its attribute and escaped-text slots follow Django's rule. To fix: use a "
+        "template backend that exposes the source, or an inline template.",
+        owner,
+        template_name,
     )
 
 
@@ -1577,12 +1599,14 @@ def harden_context(
     *,
     text: bool = False,
     keep: frozenset[str] = frozenset(),
+    file: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """``(template, context)`` to hand the engine: the attribute slots of ``template`` rewritten
     and the values of the URL groups judged. ``context`` itself is not modified. ``owner`` is the
-    component class name, for the warning. ``text`` and ``keep``: see :func:`plan`."""
+    component class name, for the warning. ``text`` and ``keep``: see :func:`plan`. ``file`` is
+    True when ``template`` is the source of a ``template_name`` file (the warning says so)."""
     rewrite = plan(template, text, keep)
-    _warn_once(owner, rewrite)
+    _warn_once(owner, rewrite, file)
     if not (rewrite.groups or rewrite.raw):
         return rewrite.template, context
     hardened = dict(context)

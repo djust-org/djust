@@ -1012,7 +1012,7 @@ class TestThePageShellAndComponents:
         assert text.count(REQUIRED) == 2 and "[NameMailPlanNote]" in text, text
 
     def test_a_template_name_component_reads_the_form(self):
-        from djust.components.base import _render_template_name_with_markers
+        from djust.components.base import _render_template_file
 
         loaders = [
             (
@@ -1032,11 +1032,10 @@ class TestThePageShellAndComponents:
             }
         ]
         with override_settings(TEMPLATES=templates):
-            out = _render_template_name_with_markers(
+            out = _render_template_file(
                 "form_component_3767.html",
                 {"form": _invalid(), "d": {"form": _invalid()}},
             )
-        assert out is not None
         text = _norm(out)
         assert text.count(REQUIRED) == 2 and "[NameMailPlanNote]" in text, text
 

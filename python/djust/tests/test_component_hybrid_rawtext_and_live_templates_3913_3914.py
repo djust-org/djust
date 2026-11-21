@@ -29,7 +29,10 @@ What each class proves:
   scanner cannot follow, and what the warning says.
 * ``TestInlineTemplateAttributes`` / ``TestLiveComponentTemplate`` / ``TestBoundComponentTemplate``:
   the rule for the other two inline templates, including what it changes in app-authored markup.
-* ``TestOneSink``: an AST census of every site that renders a component's inline template.
+* ``TestTemplateNameFile`` (#3933): the own source of a ``LiveComponent`` / ``BoundComponent``
+  ``template_name`` file follows the attribute and raw-text rule; ``{% extends %}`` / ``{% include %}``
+  content is not scanned and is named by the warning.
+* ``TestOneSink``: an AST census of every site that renders a component's inline template or file.
 """
 
 from __future__ import annotations
@@ -525,6 +528,147 @@ class TestOrdinaryTextIsEscapedOnTheComponentPath:
             for drawer in DRAWERS.values():
                 out = drawer(template, v=marked, o=_Obj(marked))
                 assert "<b>x</b>" in out, (template, out)
+
+
+@pytest.fixture
+def template_files(tmp_path):
+    """A template directory the project's loaders read: ``name -> source`` written by the test."""
+    from django.test import override_settings
+
+    from djust.utils import clear_template_dirs_cache
+
+    root = tmp_path / "templates"
+    root.mkdir()
+
+    def write(name: str, source: str) -> None:
+        (root / name).write_text(source)
+
+    templates = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [str(root)],
+            "APP_DIRS": False,
+            "OPTIONS": {},
+        }
+    ]
+    with override_settings(TEMPLATES=templates):
+        clear_template_dirs_cache()
+        try:
+            yield write
+        finally:
+            clear_template_dirs_cache()
+
+
+def _live_file(name: str, **context: Any) -> str:
+    class Box(LiveComponent):
+        template_name = name
+
+    Box.get_context_data = lambda self: dict(context)  # type: ignore[method-assign]
+    box = Box()
+    box._mounted = True
+    return str(box.render())
+
+
+def _bound_file(name: str, **state: Any) -> str:
+    state_cls = type("State", (TypedState,), {"__annotations__": {k: Any for k in state}})
+    box_cls = type("Box", (DescriptorLiveComponent,), {"State": state_cls, "template_name": name})
+    page_cls = type("Page", (LiveView,), {"exposure_policy": "explicit", "box": box_cls(**state)})
+    return str(page_cls().box)
+
+
+FILE_DRAWERS = {"LiveComponent": _live_file, "BoundComponent": _bound_file}
+
+
+@pytest.mark.parametrize("drawer", sorted(FILE_DRAWERS))
+class TestTemplateNameFile:
+    """#3933: the OWN source of a ``template_name`` file follows the attribute and raw-text rule
+    (``LiveComponent`` and ``BoundComponent``). A text slot keeps its markup. What the file gets
+    from ``{% extends %}`` / ``{% include %}`` is not scanned, and the warning says so."""
+
+    def test_an_attribute_and_a_raw_text_slot_are_escaped(self, drawer, template_files) -> None:
+        template_files("own.html", '<a title="{{ v }}">x</a><textarea>{{ v }}</textarea>')
+        out = FILE_DRAWERS[drawer]("own.html", v=mark_safe('"><b>x</b>'))
+        assert "<b>" not in out, out
+        assert _attrs(out, "a")["title"] == '"><b>x</b>', out
+        assert "&lt;b&gt;x&lt;/b&gt;</textarea>" in out, out
+
+    def test_a_text_slot_keeps_its_markup(self, drawer, template_files) -> None:
+        template_files("text.html", "<span>{{ v }}</span>")
+        out = FILE_DRAWERS[drawer]("text.html", v=mark_safe("<b>x</b>"))
+        assert "<span><b>x</b></span>" in out, out
+
+    def test_a_script_url_is_judged(self, drawer, template_files) -> None:
+        template_files("url.html", '<a href="{{ u }}">x</a>')
+        out = FILE_DRAWERS[drawer]("url.html", u="javascript:alert(1)")
+        assert _attrs(out, "a")["href"] == "#", out
+        assert _attrs(FILE_DRAWERS[drawer]("url.html", u="/ok?a=1"), "a")["href"] == "/ok?a=1"
+
+    def test_a_slot_the_child_writes_in_an_extending_file_is_escaped(
+        self, drawer, template_files, caplog
+    ) -> None:
+        template_files("base_t.html", "<main>{% block b %}{% endblock %}</main>")
+        template_files(
+            "child_t.html",
+            '{% extends "base_t.html" %}{% block b %}<textarea>{{ v }}</textarea>{% endblock %}',
+        )
+        with caplog.at_level(logging.WARNING, logger="djust.components._hybrid_attrs"):
+            out = FILE_DRAWERS[drawer]("child_t.html", v=mark_safe("</textarea><b>x</b>"))
+        assert "<b>" not in out and "<main>" in out, out
+        assert "&lt;/textarea&gt;" in out, out
+
+    def test_a_slot_in_the_parent_is_not_scanned_and_the_warning_names_the_extends(
+        self, drawer, template_files, caplog
+    ) -> None:
+        template_files(
+            "base_p.html", "<main><textarea>{{ v }}</textarea>{% block b %}{% endblock %}</main>"
+        )
+        template_files("child_p.html", '{% extends "base_p.html" %}{% block b %}x{% endblock %}')
+        with caplog.at_level(logging.WARNING, logger="djust.components._hybrid_attrs"):
+            out = FILE_DRAWERS[drawer]("child_p.html", v=mark_safe("</textarea><b>x</b>"))
+        assert "<b>x</b>" in out, out  # the documented boundary
+        assert "template file" in caplog.text and "extends" in caplog.text, caplog.text
+        assert "<b>" not in caplog.text
+
+    def test_an_include_is_not_scanned_and_is_named_once_per_class(
+        self, drawer, template_files, caplog
+    ) -> None:
+        template_files("part.html", '<i title="{{ v }}">p</i>')
+        template_files("host.html", '{% include "part.html" %}<u>h</u>')
+        with caplog.at_level(logging.WARNING, logger="djust.components._hybrid_attrs"):
+            out = FILE_DRAWERS[drawer]("host.html", v=mark_safe('"><b>x</b>'))
+            FILE_DRAWERS[drawer]("host.html", v=mark_safe("x"))
+        assert "<b>x</b>" in out, out  # the documented boundary
+        assert caplog.text.count("template file") == 1, caplog.text
+
+    def test_plain_values_print_as_the_unmodified_file_does(self, drawer, template_files) -> None:
+        from django.template.loader import render_to_string
+
+        source = (
+            '<a href="{{ u }}" title="{{ t }}">{{ t }}</a><textarea>{{ t }}</textarea>'
+            "{% if t %}<p>{{ n }}</p>{% endif %}"
+        )
+        template_files("plain.html", source)
+        ctx = {"u": "/a?b=1&c=2", "t": "a < b & 'c'", "n": 1234567}
+        out = FILE_DRAWERS[drawer]("plain.html", **ctx)
+        out = re.sub(r"<!--/?dj-if[^>]*-->", "", out)
+        assert _body(out) == render_to_string("plain.html", ctx), out
+
+    def test_the_if_markers_are_still_emitted(self, drawer, template_files) -> None:
+        template_files("marks.html", '<p title="{{ t }}">{% if t %}<b>on</b>{% endif %}</p>')
+        out = FILE_DRAWERS[drawer]("marks.html", t="x")
+        assert "<!--dj-if" in out and "<b>on</b>" in out, out
+
+    def test_a_file_whose_source_is_unavailable_is_drawn_and_named_once(
+        self, drawer, template_files, monkeypatch, caplog
+    ) -> None:
+        template_files("opaque.html", '<a title="{{ v }}">x</a>')
+        monkeypatch.setattr(components_base, "_load_template_source", lambda name: None)
+        with caplog.at_level(logging.WARNING, logger="djust.components._hybrid_attrs"):
+            out = FILE_DRAWERS[drawer]("opaque.html", v="ok")
+            FILE_DRAWERS[drawer]("opaque.html", v="ok")
+        assert 'title="ok"' in out, out
+        assert caplog.text.count("was not scanned") == 1, caplog.text
+        assert "opaque.html" in caplog.text
 
 
 class TestTheScanner:
@@ -1142,7 +1286,8 @@ SINK_NAMES = frozenset(
         "DjustTemplate",
     }
 )
-#: ... and those that render a template FILE (``template_name``), which the rule does not read (#3933).
+#: ... and those that render a template FILE (``template_name``): a component's own file goes through
+#: ``_render_template_file`` (#3933); a function component's file and the suspense fallback do not.
 FILE_NAMES = frozenset({"render_to_string", "get_template", "select_template"})
 
 
@@ -1292,9 +1437,14 @@ RENDER_SITES = {
     ): "the raw renderer itself, read only by _render_inline_template (pinned below)",
     (
         "components/base.py",
-        "_render_template_name_with_markers",
+        "_render_source_with_markers",
         "RustLiveView",
-    ): "renders a template_name FILE (#3933), not an inline template",
+    ): "renders the hardened source of a template_name FILE (#3933), not an inline template",
+    (
+        "components/base.py",
+        "_render_template_file",
+        "from_string",
+    ): "renders the hardened source of an {% extends %} template_name FILE through the backend",
 }
 
 #: Every call in the WHOLE package that renders a template string read off an object attribute
@@ -1305,10 +1455,13 @@ TEMPLATE_READS = {
     ("streaming.py", "_render_stream_fragment", "Template", "self.template"),
 }
 
-#: Every site that renders a template FILE, all outside the rule (#3933).
+#: Every site that renders a template FILE. A LiveComponent / BoundComponent ``template_name``
+#: goes through ``_render_template_file`` (its own source is hardened, #3933); the others are
+#: outside the rule.
 FILE_SITES = {
     ("components/base.py", "_load_template_source", "get_template"),
-    ("components/base.py", "render", "render_to_string"),
+    ("components/base.py", "_render_template_file", "get_template"),
+    ("components/base.py", "_render_template_file", "render_to_string"),
     ("components/suspense.py", "render", "render_to_string"),
     # a @component(template_name=...) function's own file (#4121)
     ("components/function_component.py", "_render_component", "render_to_string"),
@@ -1362,7 +1515,10 @@ class TestOneSink:
 
     def test_the_rule_is_applied_in_that_one_place(self) -> None:
         found = _tree_census((".",), frozenset({"harden_context"}))
-        assert found == {("components/base.py", "_render_inline_template", "harden_context")}
+        assert found == {
+            ("components/base.py", "_render_inline_template", "harden_context"),
+            ("components/base.py", "_render_template_file", "harden_context"),
+        }
 
     def test_every_inline_template_renderer_calls_the_helper(self) -> None:
         found = _tree_census((".",), frozenset({"_render_inline_template"}))
