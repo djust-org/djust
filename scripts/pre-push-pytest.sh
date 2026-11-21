@@ -135,7 +135,7 @@ if [ "$FALLBACK" = "1" ]; then
     _ndirect=0
     [ -n "${DIRECT[*]+x}" ] && _ndirect=${#DIRECT[@]}
     echo "pre-push: $FALLBACK_WHY; running the bounded early tier + $_ndirect directly selected file(s)."
-    echo "pre-push: CI runs the full suite on the PR. DJUST_PREPUSH_FULL=1 (with the developer's approval) runs everything here."
+    echo "pre-push: PR CI runs its selection; the merge queue runs the full suite. DJUST_PREPUSH_FULL=1 (with the developer's approval) runs everything here."
 fi
 
 # Fast tier for the old full fallback (only when select-tests.py is absent; an

@@ -130,7 +130,7 @@ Name globs and `-k` are exploration aids; they cannot prove subsystem completene
 - In the pre-push hook a FULL answer (or a selector that cannot run) runs a bounded
   tier, not every root (#4253): the early tier (`--early-only`, as `make test-early`)
   plus the direct selection (`DJUST_PREPUSH_TARGETED=1`, passed as `--early-include`).
-  CI runs the full suite on the PR; `DJUST_PREPUSH_FULL=1` runs everything locally,
+  PR CI runs its own selection and the merge queue runs the full suite; `DJUST_PREPUSH_FULL=1` runs everything locally,
   subject to the load guard's approval.
 - The CLI reads all production `python/djust` Python modules. If a production
   module statically imports a changed module, require FULL for transitive impact.
