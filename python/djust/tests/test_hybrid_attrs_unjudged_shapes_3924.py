@@ -181,3 +181,26 @@ def test_capped_dotted_slot_stays_listed():
     template = f'<a href="{CAPPED}{{{{ a.b }}}}">'
     plan = hybrid.plan(template)
     assert plan.groups == () and [t[:2] for t in plan.unchecked_urls] == [("a", "href")]
+
+
+# ---- a printed part before a fixing literal (#3923, review) ------------------------------------
+
+
+def test_capped_block_before_a_fixing_literal_is_not_free():
+    """``&`` printed inside a block, then ``#``: the literal alone does not fix the value."""
+    head = "".join("{% if e" + str(i) + " %}{% endif %}" for i in range(7))
+    tail = "".join("{% if b" + str(i) + " %}a{% else %}b{% endif %}" for i in range(7))
+    template = '<a href="' + head + "{% if x %}&{% endif %}#{{ s }}" + tail + '">'
+    plan = hybrid.plan(template)
+    (group,) = plan.groups
+    assert dict(group.roles).popitem()[1] == "tail" and not plan.unchecked_urls
+    href = _href(_draw(template, s="106;avascript:alert(1)", x=True)) or ""
+    assert not href.startswith("javascript:"), href
+
+
+def test_now_before_a_fixing_literal_is_not_free():
+    template = '<a href="{% now "&" %}#{{ s }}">'
+    (group,) = hybrid.plan(template).groups
+    assert dict(group.roles).popitem()[1] == "tail"
+    href = _href(_draw(template, s="106;avascript:alert(1)")) or ""
+    assert not href.startswith("javascript:"), href

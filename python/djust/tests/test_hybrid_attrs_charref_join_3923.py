@@ -112,3 +112,33 @@ def test_the_judged_value_matches_what_the_browser_reads(template, value, read):
     ((key, _name),) = group.slots
     for path in group.paths:
         assert not hybrid._refused(group, path, {key: value})
+
+
+#: ``(template, judged)``: text printed inside a block, or by a printing tag, BEFORE a literal
+#: that would fix the value on its own (``#``) is part of the assembled value: the ``&`` it may
+#: print joins the ``#`` and the slot's text into a reference. ``judged``: the slot is judged
+#: (False: the value is listed, escaped but not judged, with a warning).
+UNFIXED = [
+    ('<a href="{% if x %}&{% endif %}#{{ s }}">', True),
+    ('<a href="{% if x %}&{% endif %}#{{ s }}{% now "Y" %}">', True),
+    ('<a href="{% if x %}&{% endif %}#{{ s }}{% firstof a b %}">', False),
+]
+
+
+@pytest.mark.parametrize(("template", "judged"), UNFIXED)
+def test_a_block_before_a_fixing_literal_does_not_fix_the_value(template, judged):
+    value = "106;avascript:alert(1)"
+    plan = hybrid.plan(template)
+    if judged:
+        assert len(plan.groups) == 1 and plan.unchecked_urls == ()
+        href = (_href(_draw(template, s=value, x=True, a="", b="q")) or "").lower()
+        assert not href.translate(hybrid._DROP_WS).startswith("javascript:"), href
+    else:
+        assert plan.groups == ()
+        assert [u[:2] for u in plan.unchecked_urls] == [("a", "href")]
+
+
+def test_a_block_before_a_fixing_literal_keeps_a_good_value():
+    """Guard: a tail that cannot complete a reference (``/...``) is kept."""
+    template = '<a href="{% if x %}&{% endif %}#{{ s }}{% now "Y" %}">'
+    assert _href(_draw(template, s="/top", x=True)).startswith("&#/top")

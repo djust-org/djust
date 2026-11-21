@@ -954,19 +954,23 @@ def _paths(
 def _maybe_chooses(parts: tuple[Part, ...]) -> bool:
     """For a value whose shape ``_paths`` cannot follow: whether it can still choose the scheme.
 
-    Conservative: a literal fixes the value only at the top level (outside every block), and a
+    Conservative: a literal fixes the value only at the top level (outside every block) and only
+    while nothing else may have printed before it: text inside a block that may print before the
+    literal is part of the assembled value (``{% if x %}&{% endif %}#`` + ``106;...`` is
+    ``&#106;...``), so once such a part is passed no literal proves the value fixed (#3923). A
     slot, or a printing tag this module does not know, can choose it.
     """
     openers = _openers(parts)
-    depth, prefix = 0, ""
+    depth, prefix, exact = 0, "", True
     for part in parts:
         if part.kind == "var":
             return True
         if part.kind == "lit":
             if depth:
+                exact = exact and not _visible(part.text)
                 continue
             prefix += part.text
-            if _fixes(prefix):
+            if exact and _fixes(prefix):
                 return False
             continue
         name = _token_name(part)
@@ -977,11 +981,17 @@ def _maybe_chooses(parts: tuple[Part, ...]) -> bool:
         elif name in _BRANCH or _is_silent(part, name):
             continue
         elif name in _PATH_TAGS:
-            if not depth:
+            if not depth and exact:
                 return False
+            exact = False
         else:
             return True
     return False
+
+
+def _visible(text: str) -> bool:
+    """Whether literal text prints anything a browser reads (not only whitespace it drops)."""
+    return bool(text.translate(_DROP_WS).strip(" \f"))
 
 
 @functools.lru_cache(maxsize=512)
@@ -1215,8 +1225,10 @@ def _coarse(
     Each slot gets a role, from what may come before it, whatever branches are taken:
 
     * ``free``: the literal text outside every block before the value's FIRST slot
-      (``{% url %}`` / ``{% static %}`` read as ``/``) already fixes the value (:func:`_fixes`, which leaves out a reference the
-      slot could complete). Escaped, not judged.
+      (``{% url %}`` / ``{% static %}`` read as ``/``) already fixes the value (:func:`_fixes`,
+      which leaves out a reference the slot could complete), and nothing else printed before
+      it: text inside a block, a ``{% now %}`` or a ``{% cycle %}`` before the slot is not in
+      that prefix, so it may complete a reference with it (#3923). Escaped, not judged.
     * ``head``: nothing printed can come before it. Kept when its own text decides the scheme and
       the allowlist accepts it (:func:`_coarse_kept`).
     * ``tail``: anything else. Kept only when no prefix can make it choose a scheme or complete a
@@ -1225,21 +1237,24 @@ def _coarse(
     openers = _openers(parts)
     # ``prefix`` stops at the first slot: a slot's text between two literals could join them
     # into a scheme no single literal spells
-    depth, prefix, printed, before_slot = 0, "", False, True
+    # ``exact``: ``prefix`` is all that may print before the first slot
+    depth, prefix, printed, before_slot, exact = 0, "", False, True, True
     slots_: list[tuple[str, str]] = []
     roles: list[tuple[str, str]] = []
     for part in parts:
         if part.kind == "lit":
             if not depth and before_slot:
                 prefix += part.text
-            printed = printed or bool(part.text.translate(_DROP_WS).strip(" \f"))
+            elif before_slot and _visible(part.text):
+                exact = False
+            printed = printed or _visible(part.text)
             continue
         if part.kind == "var":
             name = part.text[2:-2].strip()
             if not _simple(name, bound):
                 return None
             key = f"djust_attr_{part.start}"
-            role = "free" if _fixes(prefix) else ("tail" if printed else "head")
+            role = "free" if exact and _fixes(prefix) else ("tail" if printed else "head")
             slots_.append((key, name))
             roles.append((key, role))
             printed, before_slot = True, False
@@ -1258,8 +1273,11 @@ def _coarse(
         elif name in _PATH_TAGS:
             if not depth and before_slot:
                 prefix += "/"
+            elif before_slot:
+                exact = False
             printed = True
         elif name in _COARSE_TAGS or (name == "cycle" and _cycle_literals(part) is not None):
+            exact = exact and not before_slot
             printed = True
         else:
             return None
