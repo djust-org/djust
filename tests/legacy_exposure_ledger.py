@@ -94,7 +94,7 @@ REMAINING_4082: dict[str, str] = {
         "migrated; one case stays legacy: an unhandled async failure ends loading with a named source=async frame on legacy views only"
     ),
     "python/djust/tests/test_event_loop_offload_3074.py": (
-        "migrated; the one-hop push case also runs a legacy view: legacy subject, the one-hop push turn serves both policies (#4152)"
+        "migrated; the one-hop push, tick and db_notify cases also run a legacy view: legacy subject, the one-hop server-originated turns serve both policies (#4152, #4166)"
     ),
     "python/djust/tests/test_event_reauth_1777.py": (
         "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
