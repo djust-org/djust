@@ -646,7 +646,7 @@ PAGE_TEMPLATE_DIRS = (
 #: Attributes whose value is navigated to: they go through ``djust_url_attr``.
 URL_ATTRS = frozenset({"href", "action", "src", "formaction"})
 #: The filters that escape an attribute value whatever it is marked as.
-ATTR_ESCAPES = frozenset({"force_escape", "djust_url_attr"})
+ATTR_ESCAPES = frozenset({"force_escape", "djust_url_attr", "djust_handler_arg"})
 
 
 def _package_root():

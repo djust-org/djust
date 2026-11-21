@@ -550,6 +550,37 @@ class TestEveryPageTemplate:
         for engine, markup in out.items():
             assert 'href="/admin/x/?a=1&amp;b=2"' in markup, engine
 
+    def test_a_handler_argument_keeps_its_string_on_both_engines(self, page_urls):
+        """N4 of the #4157 review: ``force_escape`` is HTML escaping, and the browser decodes it
+        before the client parses ``dj-click``: a ``'`` in a column or filter name ended the
+        argument string. ``djust_handler_arg`` backslash-escapes ``\\ ' "`` for the client's
+        parser (``parseArguments``: ``\\'`` is ``'``, ``\\\\`` is ``\\``) and then escapes HTML."""
+        from html.parser import HTMLParser
+
+        name = mark_safe('a\'b\\c" x="1')
+        out, errors = safe_sweep.page_render(
+            "djust_admin/model_list.html",
+            {
+                "columns": [{"name": name, "label": "L", "sortable": True}],
+                "filters": [{"name": name, "label": "F", "choices": [], "current_value": ""}],
+            },
+        )
+        assert errors == {}
+        assert set(out) == {"django", "rust"}
+        quoted = 'a\\\'b\\\\c\\" x=\\"1'  # each of \\ ' " behind a backslash
+        for engine, markup in out.items():
+            found: dict = {}
+
+            class _P(HTMLParser):
+                def handle_starttag(self, tag, attrs):
+                    for attr, value in attrs:
+                        if attr in ("dj-click", "dj-change") and "(" in (value or ""):
+                            found.setdefault(attr, []).append(value)
+
+            _P(convert_charrefs=True).feed(markup)
+            assert f"sort_by('{quoted}')" in found.get("dj-click", []), (engine, found)
+            assert f"apply_filter('{quoted}', value)" in found.get("dj-change", []), (engine, found)
+
     def test_the_page_sweep_sees_a_raw_attribute(self):
         """Gate off: ``provider.html`` without its filters is found by both instruments."""
         from django.template import Context
@@ -602,3 +633,17 @@ class TestEveryPageTemplate:
         from djust.templatetags.djust_attrs import djust_url_attr
 
         assert str(djust_url_attr(value)) == expected
+
+    def test_a_filter_library_bridged_past_the_djust_prefix_registers_no_tag(self):
+        """``_DJUST_FILTER_LIBRARIES`` skips the tag allowlist (``_DJUST_TAGS_BRIDGED``) for a
+        ``djust.templatetags`` library so its FILTERS bridge on ``{% load %}`` (#4157). That is
+        only right while the library has no tag: one added later would bridge unvetted."""
+        import importlib
+
+        from djust.template_libraries import _DJUST_FILTER_LIBRARIES
+
+        assert _DJUST_FILTER_LIBRARIES
+        for module in _DJUST_FILTER_LIBRARIES:
+            library = importlib.import_module(module).register
+            assert library.tags == {}, (module, sorted(library.tags))
+            assert library.filters, module
