@@ -1171,9 +1171,10 @@ class RequestMixin:
         template — and its `DOMContentLoaded` auto-scan already covers the
         activator running before the bundle defines ``lazyFill``.
 
-        Over a WebSocket or SSE stream the consumer or the chunk emitter runs
-        those thunks. On the plain page render (the page-POST fallback, for a
-        browser with neither WebSocket nor ``EventSource``) nothing did, so the
+        The streaming GET's chunk emitter runs those thunks; a live runtime
+        (WebSocket, SSE) renders the child in place instead (#4167). On the
+        plain page render (the page-POST fallback, for a browser with neither
+        WebSocket nor ``EventSource``) nothing did, so the
         slot stayed empty even though the server could render it. Running them
         here makes that transport host its lazy slots like the others.
 

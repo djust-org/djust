@@ -3573,6 +3573,10 @@ class ViewRuntime(RuntimeTurnPort):
         on_view_instantiated = getattr(self.transport, "on_view_instantiated", None)
         if on_view_instantiated is not None:
             on_view_instantiated(view_instance)
+        # #4167: a live runtime mounted this view, so a ``lazy=`` child in its
+        # templates is rendered (and registered) in place: nothing on a live
+        # connection runs the page GET's deferred fill.
+        view_instance.__dict__["_djust_live_runtime"] = True
 
         self.view_instance = view_instance
 

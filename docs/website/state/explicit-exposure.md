@@ -337,7 +337,11 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   of these, or whose `mount()` raises `Http404` or `PermissionDenied`, shows
   `child '<view path>' denied access` in the slot. Any other failure shows
   `Lazy child <id> failed.`, without the exception. The page still renders. Like other non-sticky children it may not declare persisted
-  fields, and `sticky=True` with `lazy=True` is refused.
+  fields, and `sticky=True` with `lazy=True` is refused. `lazy=` defers
+  only the page GET: over the WebSocket or SSE the child is mounted when the
+  socket mounts its parent, with the same checks as a child without `lazy=`,
+  so its events route (#4167). A child refused there shows
+  `Lazy child <id> failed.` and receives no events.
 - **Tenancy.** The configured tenant resolver is applied to every request,
   including WebSocket mounts, whether or not `TenantMiddleware` is installed.
 - **Invalidation.** Change detection is unchanged. After mutating an object in

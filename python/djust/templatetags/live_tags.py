@@ -2023,6 +2023,63 @@ def _lazy_failure_body(escaped_id: str) -> str:
     return '<dj-error aria-live="polite">Lazy child ' + escaped_id + " failed.</dj-error>"
 
 
+def _renders_lazy_inline(parent: Any) -> bool:
+    """Whether a ``lazy=`` child of ``parent`` is rendered in place (#4167).
+
+    True when the root of ``parent``'s view tree (a lazy tag in an embedded
+    child's template has that child as its parent) is mounted by a live
+    runtime (``ViewRuntime.dispatch_mount`` stamps ``_djust_live_runtime``).
+    """
+    view = parent
+    seen = set()
+    while view is not None and id(view) not in seen:
+        seen.add(id(view))
+        if getattr(view, "__dict__", {}).get("_djust_live_runtime"):
+            return True
+        view = getattr(view, "_parent_view", None)
+    return False
+
+
+def _render_lazy_inline(
+    context: Context,
+    view_path: str,
+    preferred_view_id: Any,
+    kwargs: Dict[str, Any],
+    parent: Any,
+) -> Any:
+    """Render a ``lazy=`` child in place on a live connection (#4167).
+
+    The child goes through the same path as a child without ``lazy=``: view
+    auth, ``mount()``, the explicit identity checks, object permission and
+    registration on ``parent``, so its events route. A refused or failing
+    child keeps the lazy contract (ADR-015): the page renders, the slot shows
+    the error envelope the lazy fill would (no exception text), and the child
+    is not registered.
+    """
+    before = set(parent.__dict__.get("_child_views", {}) or {})
+    extra: Dict[str, Any] = {} if preferred_view_id is None else {"view_id": preferred_view_id}
+    try:
+        return live_render(context, view_path, **kwargs, **extra)
+    except Exception as exc:  # noqa: BLE001 — shown as the lazy failure envelope
+        for added in set(parent.__dict__.get("_child_views", {}) or {}) - before:
+            parent._unregister_child(added)
+        from .._exposure_diagnostics import log_failure_for
+
+        try:
+            child_cls: Any = resolve_live_view_class(view_path)
+        except Exception:  # noqa: BLE001 — resolution already succeeded once
+            child_cls = parent
+        log_failure_for(
+            logger,
+            (child_cls,),
+            exc,
+            "live_render lazy child %s refused on a live transport",
+            view_path,
+            traceback=True,
+        )
+        return mark_safe(_lazy_failure_body(escape(preferred_view_id or "")))  # noqa: S308
+
+
 def _lazy_fill_request(request: Any) -> Any:
     """The request a lazy explicit child is filled under (#4154).
 
@@ -2610,6 +2667,13 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 "{%% live_render %%} lazy= accepts True, 'visible', or a "
                 "dict — got %r." % lazy_kwarg
             )
+
+        # #4167: on a live connection (WebSocket, SSE) nothing would run the
+        # thunk, and the socket's view must hold the child to route its
+        # events: render it in place, with the non-lazy mount checks. The
+        # page GET (plain and streaming) still defers.
+        if _renders_lazy_inline(parent):
+            return _render_lazy_inline(context, view_path, preferred_view_id, kwargs, parent)
 
         # Capture state for the thunk closure now (before kwargs may
         # be mutated by the eager branch path).
