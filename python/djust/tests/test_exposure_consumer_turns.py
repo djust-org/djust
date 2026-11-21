@@ -114,6 +114,9 @@ class _PushPaths:
             }
         }
         self.offloaded = 0
+        #: The one-hop tick and db_notify turns (#4166).
+        self.offloaded_tick = 0
+        self.offloaded_notify = 0
         #: For each server push the socket received: was the session on the pool?
         self.pushes_on_pool: list = []
 
@@ -133,6 +136,22 @@ def pool(request, monkeypatch):
         return await real(self, *args, **kwargs)
 
     monkeypatch.setattr(LiveViewConsumer, "_run_server_push_turn_offloaded", offloaded)
+    for name, counter in (
+        ("_run_tick_turn_offloaded", "offloaded_tick"),
+        ("_run_db_notify_turn_offloaded", "offloaded_notify"),
+    ):
+        real_turn = getattr(LiveViewConsumer, name, None)
+        if real_turn is None:
+            continue  # not offloaded at all: the count stays 0
+
+        def counted(real_turn=real_turn, counter=counter):
+            async def turn(self, *args, **kwargs):
+                setattr(paths, counter, getattr(paths, counter) + 1)
+                return await real_turn(self, *args, **kwargs)
+
+            return turn
+
+        monkeypatch.setattr(LiveViewConsumer, name, counted())
     real_push = LiveViewConsumer.server_push
 
     async def server_push(self, *args, **kwargs):
@@ -207,8 +226,8 @@ async def _wait_for(label):
         await asyncio.sleep(0.02)
 
 
-async def test_db_notify_mutation_is_persisted():
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+async def test_db_notify_mutation_is_persisted(pool):
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
         request = await sync_to_async(make_request)()
         socket, _ = await _connect(request, TurnView)
         try:
@@ -219,10 +238,12 @@ async def test_db_notify_mutation_is_persisted():
         finally:
             await socket.disconnect()
         assert ">9<" in await _restored_count(request, TurnView), "NOTIFY state not persisted"
+    assert pool.offloaded_notify == (1 if pool.size else 0), pool.offloaded_notify
 
 
-async def test_db_notify_on_a_revoked_session_is_denied():
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+async def test_db_notify_on_a_revoked_session_is_denied(pool):
+    """The pool's one-hop turn authorizes inside its hop (#4166)."""
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
         request = await sync_to_async(make_request)()
         socket, _ = await _connect(request, TurnView)
         try:
@@ -239,6 +260,7 @@ async def test_db_notify_on_a_revoked_session_is_denied():
             assert closed == {"type": "websocket.close", "code": 4403}
         finally:
             await socket.disconnect()
+    assert pool.offloaded_notify == (1 if pool.size else 0), pool.offloaded_notify
 
 
 async def test_server_push_mutation_is_persisted(pool):
@@ -412,8 +434,8 @@ async def test_push_turn_refreshes_the_client_snapshot(pool):
     assert pool.offloaded == (1 if pool.size else 0), pool.offloaded
 
 
-async def test_tick_mutation_is_persisted():
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+async def test_tick_mutation_is_persisted(pool):
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
         request = await sync_to_async(make_request)()
         socket, _ = await _connect(request, TickView)
         try:
@@ -423,6 +445,115 @@ async def test_tick_mutation_is_persisted():
         finally:
             await socket.disconnect()
         assert ">3<" in await _restored_count(request, TickView), "tick state not persisted"
+    assert pool.offloaded_tick >= (1 if pool.size else 0), pool.offloaded_tick
+    if not pool.size:
+        assert pool.offloaded_tick == 0, pool.offloaded_tick
+
+
+async def test_tick_on_a_revoked_session_is_denied(pool):
+    """A tick on an explicit root whose session was revoked runs no
+    ``handle_tick``, sends no render and gets the foreground denial, on both
+    tick paths (#4166: the pool's turn authorizes inside its hop)."""
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
+        request = await sync_to_async(make_request)()
+        socket, _ = await _connect(request, TickView)
+        try:
+            await sync_to_async(SessionStore(request.session.session_key).delete)()
+            frames, closed = await _collect(
+                socket, lambda frames: frames[-1:] and frames[-1]["type"] == "websocket.close"
+            )
+            assert "tick" not in RAN, "handle_tick ran without current authorization"
+            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            assert [f.get("code") for f in frames if f.get("type") == "error"] == [
+                "permission_denied"
+            ]
+            assert closed == {"type": "websocket.close", "code": 4403}
+        finally:
+            await socket.disconnect()
+    assert pool.offloaded_tick == (1 if pool.size else 0), pool.offloaded_tick
+
+
+class LabelTickView(LabelTurnView):
+    count = state(0, persist="server")
+    label = state("a", persist="server")
+    tick_interval = 300
+
+    def handle_tick(self):
+        if self.count != 4:
+            RAN.append("tick")
+            self.count = 4
+
+
+def _failing_save(monkeypatch):
+    from djust.runtime import ViewRuntime
+
+    real_save = ViewRuntime._save_explicit_root
+    fail = {"on": True}
+
+    def save(self, view, request):
+        if fail["on"]:
+            raise RuntimeError("storage down")
+        return real_save(self, view, request)
+
+    monkeypatch.setattr(ViewRuntime, "_save_explicit_root", save)
+    return fail
+
+
+async def test_tick_whose_save_fails_withholds_the_frame(pool, monkeypatch):
+    """A tick whose commit fails sends ``state_error`` and no render; the next
+    tick (forced to full HTML by the failure) brings the page up to the view.
+    The pool's turn rendered in its hop before the commit, so it must withhold
+    that render (#4166)."""
+    fail = _failing_save(monkeypatch)
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
+        request = await sync_to_async(make_request)()
+        socket, _ = await _connect(request, LabelTickView)
+        try:
+            frames = await receive_until(socket, has_type("error"), what="the tick's state_error")
+            fail["on"] = False
+            assert RAN == ["tick"], (RAN, frames)
+            assert [f.get("code") for f in frames if f.get("type") == "error"] == ["state_error"]
+            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            frames = await receive_until(socket, _update_from("tick"), what="the next tick")
+            updates = [f for f in frames if f.get("source") == "tick"]
+            last = updates[-1]
+            assert "4" in json.dumps(last.get("patches") or last.get("html")), updates
+        finally:
+            await socket.disconnect()
+        restored = await _restored_count(request, LabelTickView)
+        assert ">4<" in restored, restored
+    assert pool.offloaded_tick >= (1 if pool.size else 0), pool.offloaded_tick
+    if not pool.size:
+        assert pool.offloaded_tick == 0, pool.offloaded_tick
+
+
+async def test_db_notify_whose_save_fails_withholds_the_frame(pool, monkeypatch):
+    """As for push and tick: a NOTIFY turn whose commit fails withholds its
+    frame and, on the pool, its diff baseline (#4166)."""
+    from djust.push import apush_to_view
+
+    fail = _failing_save(monkeypatch)
+    path = __name__ + ".LabelTurnView"
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
+        request = await sync_to_async(make_request)()
+        socket, _ = await _connect(request, LabelTurnView)
+        try:
+            await _notify({"count": 4})
+            frames, closed = await _collect(socket, has_type("error"))
+            assert RAN == ["notify"] and closed is None, (RAN, frames)
+            assert [f.get("code") for f in frames if f.get("type") == "error"] == ["state_error"]
+            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            fail["on"] = False
+            await apush_to_view(path, handler="handle_label", payload={"label": "b"})
+            frames, _ = await _collect(socket, _UPDATE)
+            updates = [f for f in frames if f.get("type") in {"patch", "html_update"}]
+            assert len(updates) == 1, frames
+            assert "4" in json.dumps(updates[0]), updates
+        finally:
+            await socket.disconnect()
+        restored = await _restored_count(request, LabelTurnView)
+        assert ">4<" in restored and ">b<" in restored, restored
+    assert pool.offloaded_notify == (1 if pool.size else 0), pool.offloaded_notify
 
 
 @pytest.mark.parametrize("event,value", [("bump", 11), ("spawn", 13)])
@@ -571,10 +702,11 @@ class SnapshotNotifyView(TurnView):
         self.count = 1
 
 
-async def test_notify_turn_refreshes_the_client_snapshot():
+async def test_notify_turn_refreshes_the_client_snapshot(pool):
     """A NOTIFY turn that changes a ``persist="client"`` field carries the
-    refreshed signed token for the primary view (ADR-038 E3)."""
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+    refreshed signed token for the primary view (ADR-038 E3), on both
+    db_notify paths (#4166)."""
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS, **pool.settings):
         request = await sync_to_async(make_request)()
         socket, mount_frame = await _connect(request, SnapshotNotifyView)
         try:
@@ -587,3 +719,4 @@ async def test_notify_turn_refreshes_the_client_snapshot():
     token = updates[-1].get("state_snapshot_signed")
     assert isinstance(token, str) and token and token != mount_frame.get("state_snapshot_signed")
     assert updates[-1]["view"] == __name__ + ".SnapshotNotifyView"
+    assert pool.offloaded_notify == (1 if pool.size else 0), pool.offloaded_notify

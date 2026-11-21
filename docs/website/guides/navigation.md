@@ -488,6 +488,20 @@ or without `handle_async_result()`, as its other side effects stand; only the
 view's state is not saved. A turn that does not write the session adds no
 session write.
 
+The same holds for `handle_tick()`, a server-push handler and `handle_info()`
+when their turn renders nothing (nothing changed, or `_skip_render`), and for
+`handle_params()` on a client-side URL change, under either exposure policy.
+A legacy view (`exposure_policy = "legacy"`) stores its handlers' session
+writes over WebSocket and SSE too (#4168), merged as above, and best-effort: a
+save that fails is logged and the frame still goes. Its handlers write through
+the session object of the socket's mount, which the mount reads once to track
+it, so they read values as of the mount, not what another request stored
+since. A socket mounted without a session cookie (an anonymous visitor with
+no session yet) stores nothing: the browser could never receive the new
+session's key, so the writes stay on that socket's session object. A change
+through `.items()` or `.values()` is still not seen on any transport: assign
+the key.
+
 On the HTTP fallback the session is tracked from the start of the request.
 Its saves merge: a key another request stores while this
 one is handled survives, where the whole-session save before let it be

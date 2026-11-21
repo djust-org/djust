@@ -337,6 +337,8 @@ This method is optional. If it is not implemented, tasks still re-render when th
 
 A job started with `start_async()` or `@background` belongs to the connection that started it. If the browser reconnects, or the worker restarts, the job's result is not delivered to the new connection.
 
+A disconnect cancels the work, and cancelled work keeps nothing (#4211): a result that had not been stored before the connection's teardown stores no `request.session` write, no view state and sends no frame, whether the work succeeded or failed, over the WebSocket and SSE alike. Results stored before the teardown stand. Side effects outside djust (database rows, API calls) are not rolled back. Work that must finish after the user leaves belongs in a task queue.
+
 That matters because the loading flag is saved with the rest of the view's state, so it comes back with it, so the page shows a job as running that no longer exists. `mount()` cannot fix it, because restored state is applied after `mount()` returns. Clear the flag in `handle_restore()`, which runs once the restored values are in place:
 
 ```python

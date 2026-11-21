@@ -492,8 +492,9 @@ _PRESERVE = (
     "through discard_sticky_child (a leaf, so its teardown hooks are stepped here)"
 )
 _PUSH_TURN = (
-    "the one-hop server-push turn: the handler runs through run_sync_step with the "
-    "hook's step (#3646) and the render through render_background_sync"
+    "the one-hop server-originated turn (push, tick, db_notify; #4152, #4166): its "
+    "body runs each hook through run_sync_step with the hook's step (#3646; "
+    "handle_tick as the 'tick' step) and the render through render_background_sync"
 )
 
 
@@ -569,6 +570,9 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "the multi-loop runner's own event-loop thread"
     ),
     ("push.py", "_sync_presence_scope_group", "_presence_probe"): leaf(),
+    # #4168: a turn's handler session writes, and the legacy socket session's tracking.
+    ("runtime.py", "store_turn_session_writes", "_store_session_writes_sync"): plumbing(_SESSION),
+    ("runtime.py", "ViewRuntime._dispatch_mount_body", "track_session"): plumbing(_SESSION),
     ("runtime.py", "_spawn_save", "detached(run)"): plumbing(_SAVE),
     ("runtime.py", "_SaveExecutor.submit", "_run_with_connection_hygiene"): outside(
         "the request-scoped save executor's submit(); the callable it runs is _spawn_save's run (plumbing, above)"
@@ -706,7 +710,8 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     (
         "runtime.py",
         "ViewRuntime._execute_explicit_async_task.complete.keep_session_writes",
-        "_save_session_writes",
+        # Unless the work was torn down meanwhile (#4211).
+        "_save_session_writes_unless",
     ): plumbing(_SESSION),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "codec.capture"): plumbing(_RENDER),
     # The same three calls in one hop (#3997): the session binding read, then
@@ -800,9 +805,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("websocket.py", "LiveViewConsumer._handle_request_html_locked", "_sync_and_render"): plumbing(
         _RENDER
     ),
-    ("websocket.py", "LiveViewConsumer._tick_locked", "tick_turn"): plumbing(
-        "the offloaded tick: handle_tick runs through run_sync_step(..., 'tick', ...) in this function's own body"
-    ),
     ("websocket.py", "LiveViewConsumer._handle_upload_resume", "mgr.resume_entry"): plumbing(
         _SESSION
     ),
@@ -819,9 +821,7 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("websocket.py", "LiveViewConsumer._handle_request_html_locked", "contract_snapshot"): plumbing(
         _RENDER
     ),
-    ("websocket.py", "LiveViewConsumer._run_server_push_turn_offloaded", "turn"): plumbing(
-        _PUSH_TURN
-    ),
+    ("websocket.py", "LiveViewConsumer._run_offloaded_turn", "turn"): plumbing(_PUSH_TURN),
     ("websocket_utils.py", "_validate_event_security", "check_handler_permission"): leaf(),
     ("websocket_utils.py", "_post_only_rules_deny", "check_event_auth"): leaf(),
     ("websocket_utils.py", "_validate_event_security", "check_object_permission_for_event"): leaf(),

@@ -1431,6 +1431,23 @@ jobs:
             --cov-report=json:coverage-security.json \
             --cov-fail-under=75
 
+      # The safe-markup guard's browser (jsdom) rows and differential (#4212). They skip
+      # where node + jsdom are missing, and no other Python job installs them, so they
+      # never ran; DJUST_REQUIRE_BROWSER_ORACLE turns that skip into a failure here.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install JavaScript dependencies (jsdom)
+        run: npm ci
+
+      - name: Run the safe-markup guard's browser rows
+        run: |
+          DJUST_REQUIRE_BROWSER_ORACLE=1 PYTHONPATH=. .venv/bin/python -m pytest \
+            python/tests/test_safe_markup_position_3864.py -k browser -q -p no:cacheprovider
+
       - name: Upload security coverage report
         if: always()
         uses: actions/upload-artifact@v7

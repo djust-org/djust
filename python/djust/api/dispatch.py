@@ -48,6 +48,30 @@ from djust.websocket import _compute_changed_keys, _snapshot_assigns
 logger = logging.getLogger(__name__)
 
 
+def _permission_denied(owners: tuple, exc: PermissionDenied) -> JsonResponse:
+    """A 403 that never carries the exception's text (#4170).
+
+    WebSocket and SSE answer ``PermissionDenied`` with a fixed "Permission
+    denied" frame under every policy, DEBUG included (``runtime.py``); the
+    HTTP API and ``@server_function`` now do the same (transport parity).
+    Other error detail follows ADR-038 D-a (revised): detailed under DEBUG,
+    value-free in production, through ``diagnostics_policy_allows``. The
+    text goes to the server log only, through that gate (value-free for a
+    nonlegacy owner outside DEBUG).
+    """
+    from .._exposure_diagnostics import log_failure_for
+
+    log_failure_for(
+        logger,
+        owners,
+        exc,
+        "djust API: permission denied: %s",
+        sanitize_for_log(str(exc)),
+        level="info",
+    )
+    return api_error(403, "permission_denied", "Permission denied")
+
+
 def _caller_key(request: HttpRequest) -> str:
     """Per-caller key for the HTTP API, shared with WS/SSE (F27 + F28).
 
@@ -358,7 +382,7 @@ def _dispatch_api_authenticated(
     try:
         view = _instantiate_view(view_cls, request)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view_cls,), exc)
     except Exception as exc:
         from .._exposure_diagnostics import log_failure_for
 
@@ -376,7 +400,7 @@ def _dispatch_api_authenticated(
     try:
         redirect_url = check_view_auth(view, request, event=True)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
     if redirect_url:
         # View demands login — in HTTP land, this is 401 not a redirect.
         return api_error(401, "login_required", "Authentication required")
@@ -393,7 +417,7 @@ def _dispatch_api_authenticated(
     try:
         enforce_object_permission(view, request)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
 
     # 7. Look up handler + verify opt-in.
     handler = getattr(view, handler_name, None)
@@ -440,7 +464,7 @@ def _dispatch_api_authenticated(
     try:
         return_value = _call_possibly_async(handler, *call_args, **call_kwargs)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
     except Exception as exc:
         from .._exposure_diagnostics import log_failure_for
 
@@ -463,7 +487,7 @@ def _dispatch_api_authenticated(
     except PermissionDenied as exc:
         # Mirror the handler-invocation block: a PermissionDenied raised from
         # api_response() / serialize= must surface as 403, not 500.
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
     except TypeError as exc:
         from .._exposure_diagnostics import log_failure_for
 
@@ -626,7 +650,7 @@ def _dispatch_server_function_checked(
     try:
         view = _instantiate_view(view_cls, request)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view_cls,), exc)
     except Exception as exc:
         from .._exposure_diagnostics import log_failure_for
 
@@ -644,7 +668,7 @@ def _dispatch_server_function_checked(
     try:
         redirect_url = check_view_auth(view, request, event=True)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
     if redirect_url:
         return api_error(401, "login_required", "Authentication required")
 
@@ -658,7 +682,7 @@ def _dispatch_server_function_checked(
     try:
         enforce_object_permission(view, request)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
 
     # 6. Resolve the attribute and gate on @server_function metadata.
     fn = getattr(view, function_name, None)
@@ -696,7 +720,7 @@ def _dispatch_server_function_checked(
     try:
         result = _call_possibly_async(fn, *call_args, **call_kwargs)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
     except Exception as exc:
         from .._exposure_diagnostics import log_failure_for
 

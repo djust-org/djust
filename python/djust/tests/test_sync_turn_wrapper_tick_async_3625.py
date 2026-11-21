@@ -97,7 +97,7 @@ def probe():
 @pytest.fixture(params=[None, 2], ids=["stock", "pool"])
 def pool(request, monkeypatch):
     """The tick runs in two shapes: ``worker_threads`` off (``call_tick``) and on
-    (``tick_turn`` on the session's thread). Both must enter the step."""
+    (the one-hop tick turn's ``tick_turn`` on the session's thread, #4166). Both must enter the step."""
     from djust import worker_pool
 
     monkeypatch.setitem(djust_config._config, "worker_threads", request.param)
@@ -752,7 +752,11 @@ EXPECTED_HOOK_REFERENCES = {
     ): ("call_async_result"),
     # Consumer: the worker-pool tick enters the "tick" step with run_sync_step;
     # the stock tick goes through call_tick below.
-    ("websocket.py", "LiveViewConsumer._tick_locked.tick_turn", "handle_tick"): "run_sync_step",
+    (
+        "websocket.py",
+        "LiveViewConsumer._run_tick_turn_offloaded.tick_turn",
+        "handle_tick",
+    ): "run_sync_step",
     ("_view_hooks.py", "call_tick", "handle_tick"): "sync_step",
     # Runtime: the result turns of a start_async task, success and error arms,
     # and the explicit-exposure twin.

@@ -1,4 +1,4 @@
-{% extends "djust_components/gallery/_base.html" %}
+{% extends "djust_components/gallery/_base.html" %}{% load djust_attrs %}
 
 {% block title %}djust-components — Interactive Component Gallery{% endblock %}
 
@@ -13,7 +13,7 @@
         <input
             type="text"
             placeholder="Search components..."
-            value="{{ search_query }}"
+            value="{{ search_query|force_escape }}"
             dj-input="search"
             style="width: 100%; padding: 8px 12px 8px 36px; border: 1px solid var(--color-border);
                    border-radius: var(--radius-md, 8px); background: var(--color-bg-subtle);
@@ -36,7 +36,7 @@
 </p>
 <div class="category-grid">
     {% for comp in filtered_cards %}
-    <a class="category-card" href="{{ comp.url }}">
+    <a class="category-card" href="{{ comp.url|djust_url_attr }}">
         <h3 style="font-size: 0.95rem;">{{ comp.label }}</h3>
         <span class="count">{{ comp.category_label }}</span>
     </a>
@@ -45,7 +45,7 @@
 {% else %}
 <div class="category-grid">
     {% for cat in category_cards %}
-    <a class="category-card" href="{{ cat.url }}">
+    <a class="category-card" href="{{ cat.url|djust_url_attr }}">
         <h3>{{ cat.label }}</h3>
         <span class="count">{{ cat.count }} component{{ cat.count|pluralize }}</span>
     </a>

@@ -27,8 +27,8 @@
     {
       "label": "a URL attribute is not a position",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                    return \"url\"\n                return \"value\" if quoted else None",
-      "new": "                    return None\n                return \"value\" if quoted else None"
+      "old": "                    return \"url\"\n                if css and attr == \"style\":",
+      "new": "                    return None\n                if css and attr == \"style\":"
     },
     {
       "label": "only href is a URL attribute",

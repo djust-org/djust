@@ -1635,7 +1635,8 @@ function _nativeObservationReady() {
     if (navigator.onLine === false) return false;
     if (!liveViewWS) return !findPageViewContainer();
     if (!liveViewWS.enabled) {
-        return window.DJUST_USE_WEBSOCKET === false && !liveViewWS.eventSource;
+        return (liveViewWS.httpOnly === true || window.DJUST_USE_WEBSOCKET === false)
+            && !liveViewWS.eventSource;
     }
     const connection = liveViewWS.ws || liveViewWS.eventSource;
     return !!(liveViewWS.viewMounted && connection && connection.readyState === 1);

@@ -2194,7 +2194,9 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             return self.render(request)
 
     @staticmethod
-    def _stamp_dj_view(html: str, view_path: str, *, trusted: bool = False) -> str:
+    def _stamp_dj_view(
+        html: str, view_path: str, *, trusted: bool = False, http_only: bool = False
+    ) -> str:
         """Add ``dj-view="<view_path>"`` to every real ``dj-root`` open tag that
         has no ``dj-view`` of its own, so the client knows what to mount (#2981).
 
@@ -2204,10 +2206,18 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         Tags inside ``<script>``/``<style>`` bodies and HTML comments are text
         and are left alone (#2663). A ``<body dj-root>`` is stamped when it is the
         page's root (#3302).
+
+        ``http_only`` also adds ``data-djust-transport="http"``: the page's view
+        has no class a socket can mount (a ``@live_view`` function view), so the
+        client sends its events over the HTTP fallback and opens no socket
+        (#4236). A root whose author declared ``dj-view`` keeps it and still
+        gets the marker, first in its tag (#4236 review N6).
         """
-        from .._rust import dj_root_stamp_offsets
+        from .._rust import dj_root_stamp_offsets, root_element_span
 
         attr = ' dj-view="%s"' % _html_escape(view_path, quote=True)
+        if http_only:
+            attr += ' data-djust-transport="http"'
         # Where each stamp goes, from the one rendered-HTML root locator
         # (#3031): a dj-root inside an embedded {% live_render %} child is the
         # child's, not this view's (#3155) — stamping this view's path there
@@ -2219,11 +2229,24 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         # authenticated the page root. Other output retains its own provenance.
         if trusted:
             attr = RenderedHTML(attr, root_spans=((0, len(attr.encode("utf-8"))),))
+        inserts = [(at, attr) for at in dj_root_stamp_offsets(html)]
+        if not inserts and http_only:
+            # No root without dj-view: the page root declares its own. Mark
+            # it right after its tag name; the view path stays the author's.
+            span = root_element_span(html, True)
+            if span is not None:
+                at = span[0] + 1
+                while at < len(html) and not (html[at].isspace() or html[at] in "/>"):
+                    at += 1
+                marker = ' data-djust-transport="http"'
+                if trusted:
+                    marker = RenderedHTML(marker, root_spans=((0, len(marker.encode("utf-8"))),))
+                inserts.append((at, marker))
         parts: list[str] = []
         last = 0
-        for insert_at in dj_root_stamp_offsets(html):
+        for insert_at, text in inserts:
             parts.append(html[last:insert_at])
-            parts.append(attr)
+            parts.append(text)
             last = insert_at
         if not parts:
             return html

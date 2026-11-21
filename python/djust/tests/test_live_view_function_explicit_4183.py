@@ -180,7 +180,16 @@ REFUSED_HOOKS = {
 #: Handlers of the gated views that ran.
 BUMPED: list = []
 
+
+class _ClassPage(LiveView):
+    """A class view, for the #4236 guard: its root names no transport."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>class page</div>"
+
+
 urlpatterns = [
+    path("class-page/", _ClassPage.as_view()),
     path("fn/", counter),
     path("fn/<int:pk>/", counter),
     path("members/", members),
@@ -266,6 +275,24 @@ def test_the_page_get_renders_the_functions_values(fn_urls):
     assert "count=3 items=0 label=hi picked=- helper= pk=0" in html, html
     context = type(BUILT[-1])._djust_function_context
     assert "_hidden" not in context and "helper" not in context and "request" not in context
+
+
+@pytest.mark.django_db
+def test_the_function_view_root_asks_for_the_http_transport(fn_urls):
+    """#4236: no class a socket can mount, so the root tells the client to use
+    the HTTP fallback directly."""
+    import re
+
+    html = Client().get("/fn/").content.decode()
+    (root,) = re.findall(r"<[^>]*\bdj-view=[^>]*>", html)
+    assert 'data-djust-transport="http"' in root, root
+
+
+@pytest.mark.django_db
+def test_a_class_view_root_names_no_transport(fn_urls):
+    html = Client().get("/class-page/").content.decode()
+    assert 'dj-view="%s._ClassPage"' % MOD in html, html
+    assert "data-djust-transport" not in html
 
 
 @pytest.mark.django_db

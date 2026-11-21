@@ -93,9 +93,8 @@ assert not sys._is_gil_enabled(), "something re-enabled the GIL"
 
 With the pool on, djust also moves per-frame work off the event loop:
 - the pre-event snapshot of the view's state runs on the session's thread;
-- a server push runs as a single hop on the session's thread: the stale-connection check, the hooks and the render. For an [explicit-exposure](../state/explicit-exposure.md) view the hop also authorizes the turn against the current session, before any hook, and saving its declared state is a step of its own after the hop, before the frame is sent: a save that fails withholds the frame, as it does without the pool. A view whose `check_permissions` is `async def`, or whose push hook is, keeps one hop per step, because those run on the event loop;
-- for those pushes, when the frame carries nothing but patches, the rendered patch goes into it without being re-encoded on the loop;
-- a tick's change-detection snapshots run in the same hop as `handle_tick`;
+- a server push, a tick and a `db_notify` notification each run as a single hop on the session's thread: the stale-connection check, the hook (`handle_tick`, `handle_info` or the push handler), a tick's change-detection snapshots, and the render. For an [explicit-exposure](../state/explicit-exposure.md) view the hop also authorizes the turn against the current session, before any hook, and saving its declared state is a step of its own after the hop, before the frame is sent: a save that fails withholds the frame, as it does without the pool. A view whose `check_permissions` is `async def`, or whose hook is, keeps one hop per step, because those run on the event loop;
+- for pushes and notifications, when the frame carries nothing but patches, the rendered patch goes into it without being re-encoded on the loop;
 - Django's stale-connection check, which Channels 4.2+ runs in its own thread hop before every WebSocket frame, runs on the session's thread before its next task instead.
 
 Some per-event savings apply with or without the pool: the handler-permission and object-permission checks make no thread hop when there is nothing to check (no `@permission_required`, no `get_object` override), the handler's signature and type hints are worked out once per function, and `djust.layers.InMemoryChannelLayer` delivers a group send without creating a task per session.

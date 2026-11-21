@@ -34,8 +34,8 @@
     {
       "label": "a value that may be empty hides the start of a URL",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "        .replace(SYM_VALUE, \"\")\n        .replace(SYM_ESCAPED, \"\")",
-      "new": "        .replace(SYM_VALUE, \"x\")\n        .replace(SYM_ESCAPED, \"x\")"
+      "old": "        .replace(SYM_VALUE, \"\")\n        .replace(SYM_CSS, \"\")\n        .replace(SYM_ESCAPED, \"\")",
+      "new": "        .replace(SYM_VALUE, \"x\")\n        .replace(SYM_CSS, \"x\")\n        .replace(SYM_ESCAPED, \"x\")"
     },
     {
       "label": "several spellings are read as their class",
@@ -226,7 +226,7 @@
     {
       "label": "a padded escaper's output is unknown, not escaped text",
       "file": "scripts/lib/safe_markup_taint.py",
-      "old": "    if cls in (SYM_WORDS, SYM_VALUE, SYM_ESCAPED):\n        return cls  # spaces around",
+      "old": "    if cls in (SYM_WORDS, SYM_VALUE, SYM_CSS, SYM_ESCAPED):\n        return cls  # spaces around",
       "new": "    if False:\n        return cls  # spaces around"
     },
     {
@@ -348,6 +348,36 @@
       "file": "scripts/lib/safe_markup_taint.py",
       "old": "                if len(e.args) == 1 and isinstance(",
       "new": "                if False and len(e.args) == 1 and isinstance("
+    },
+    {
+      "label": "a slice of a checked URL is still a checked URL",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "    if cls == SYM_VALUE:\n        return SYM_ESCAPED\n    return cls if cls in (SYM_CSS, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN",
+      "new": "    return cls if cls in (SYM_VALUE, SYM_CSS, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN"
+    },
+    {
+      "label": "a format string held by a name is not read",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        to_place = len(call.args) > position + 1 or bool(call.keywords)\n",
+      "new": "        return \"\"\n"
+    },
+    {
+      "label": "star arguments are not placed",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if fmt is None or isinstance(fmt, ast.Starred):\n            return \"\"",
+      "new": "        if fmt is None or isinstance(fmt, ast.Starred) or self._has_star(call):\n            return \"\""
+    },
+    {
+      "label": "a checked URL fits a style value",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "                allowed = (state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\")) or (",
+      "new": "                allowed = (state in (\"text\", \"quoted\", \"comment\") and where in (None, \"url\", \"css\")) or ("
+    },
+    {
+      "label": "a CSS escaper's output is a checked URL",
+      "file": "scripts/lib/safe_markup_taint.py",
+      "old": "        if origin in CSS_ESCAPER_ORIGINS:\n            return SYM_CSS\n",
+      "new": "        if origin in CSS_ESCAPER_ORIGINS:\n            return SYM_VALUE\n"
     }
   ]
 }
