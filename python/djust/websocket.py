@@ -1579,7 +1579,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     if self.view_instance is not view:
                         return
                     # Re-render and send patches (mirrors the server_push path)
-                    rendered = await self._render_background(view)
+                    rendered = await self._render_background(view, "async")
                     if rendered is None:
                         return
                     html, patches = rendered.html, rendered.patches
@@ -1715,7 +1715,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         :meth:`_run_async_work` and :meth:`_settle_cancelled_async`. Arms
         recovery so ``_recovery_version`` tracks this frame (#1817).
         """
-        rendered = await self._render_background(view)
+        rendered = await self._render_background(view, "async")
         if rendered is None:
             return
         html, patches = rendered.html, rendered.patches
@@ -5760,7 +5760,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         return result
 
     async def _finish_offloaded_render(
-        self, view: Any, result: "_OffloadedTurn"
+        self, view: Any, result: "_OffloadedTurn", source: str = "push"
     ) -> Optional[BackgroundRender]:
         """The loop-side tail of an offloaded turn that asked for a render.
 
@@ -5771,6 +5771,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         deferred withholds the frame and discards the unseen diff baseline
         (the next update is full HTML), as a withheld stock frame does.
         Returns the render to send, or None when there is nothing to send.
+        ``source`` names the turn (``"push"``, ``"tick"``, ``"db_notify"``) in
+        a legacy view's session-write log.
         """
         runtime = getattr(self, "_runtime", None)
         rendered: Any = result.rendered
@@ -5786,7 +5788,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # A legacy view's hook session writes, before the frame (#4168).
             from .runtime import store_turn_session_writes
 
-            await store_turn_session_writes(view, "push")
+            await store_turn_session_writes(view, source)
         if result.render_error is not None:
             raise result.render_error
         if self.view_instance is not view or rendered is None:
@@ -6206,7 +6208,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 await self._flush_all_pending()
                 return
 
-            rendered = await self._render_background(view)
+            rendered = await self._render_background(view, "db_notify")
             if rendered is None:
                 return
             html, patches = rendered.html, rendered.patches
@@ -6349,7 +6351,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 await self._store_no_frame_session_writes(view, "db_notify")
                 await self._flush_all_pending()
                 return
-            rendered = await self._finish_offloaded_render(view, result)
+            rendered = await self._finish_offloaded_render(view, result, "db_notify")
             if rendered is None:
                 return
             await self._send_broadcast_render(rendered)
@@ -6360,12 +6362,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if dispatch_work and self.view_instance is view:
                 await self._dispatch_async_work(event_name=None)
 
-    async def _render_background(self, view: Any) -> Optional[BackgroundRender]:
+    async def _render_background(
+        self, view: Any, source: str = "push"
+    ) -> Optional[BackgroundRender]:
         """Capture one background render under the caller's existing render lock.
 
         A nonlegacy root's turn was authorized at its start; its declared state
         is committed here, before the frame, and a failed save withholds the
-        render (ADR-038 E3).
+        render (ADR-038 E3). ``source`` names the turn in a legacy view's
+        session-write log.
         """
         if self.view_instance is not view:
             return None
@@ -6382,7 +6387,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # A legacy view's hook session writes, before the frame (#4168).
             from .runtime import store_turn_session_writes
 
-            await store_turn_session_writes(view, "push")
+            await store_turn_session_writes(view, source)
         with _tenant_context(getattr(view, "_tenant", None)):
             rendered = await render_background(view, runtime)
         if self.view_instance is not view:
@@ -6591,7 +6596,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 await self._flush_all_pending()
                 return False
 
-            rendered = await self._render_background(view)
+            rendered = await self._render_background(view, "tick")
             if rendered is None:
                 return False
             await self._send_tick_render(rendered)
@@ -6667,7 +6672,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 await self._store_no_frame_session_writes(view, "tick")  # #4168
                 await self._flush_all_pending()
                 return False
-            rendered = await self._finish_offloaded_render(view, result)
+            rendered = await self._finish_offloaded_render(view, result, "tick")
             if rendered is None:
                 return False
             await self._send_tick_render(rendered)

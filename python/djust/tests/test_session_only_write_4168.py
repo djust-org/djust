@@ -21,6 +21,7 @@ import contextlib
 import json
 import uuid
 from typing import Any, Callable, Dict, Iterator
+from unittest import mock
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -100,6 +101,23 @@ class LegacyPushWriter(PushWriter):
     page_url = "/legacy-push-writer/"
 
 
+class LegacyRenderingWriter(LegacyPlain):
+    """A tick and a NOTIFY hook that write the session AND render (#4168 review N4)."""
+
+    exposure_policy = "legacy"  # legacy subject: #4168 a rendering turn logs its own source
+    page_url = "/legacy-rendering-writer/"
+    tick_interval = 150
+    _listen_channels = frozenset({"sow4168r"})
+
+    def handle_tick(self):
+        self.request.session["ticked"] = "yes"
+        self.count += 1
+
+    def handle_info(self, message):
+        self.request.session["notified"] = "yes"
+        self.count += 1
+
+
 class ParamsWriter(Plain):
     exposure_policy = "explicit"
     page_url = "/params/"
@@ -141,6 +159,7 @@ urlpatterns = [
         ParamsWriter,
         LegacyParamsWriter,
         LegacyLogout,
+        LegacyRenderingWriter,
     )
 ]
 
@@ -455,6 +474,41 @@ async def test_a_db_notify_that_renders_nothing_stores_the_session(policy, pool,
             await comm.disconnect()
         seen = await sync_to_async(_read)(client)
     assert seen.get("notified") == "yes", seen
+
+
+@pytest.mark.parametrize("pool", POOL)
+@pytest.mark.parametrize("turn", ["tick", "db_notify"])
+async def test_a_legacy_rendering_turn_stores_under_its_own_source(turn, pool, fresh_pool):
+    """#4168 review N4: a legacy tick or ``db_notify`` turn that renders stores
+    its session writes (and logs a failure) under its own source, not "push"."""
+    from channels.layers import get_channel_layer
+
+    from djust import runtime
+
+    sources = []
+    real = runtime.store_turn_session_writes
+
+    async def spy(view: Any, source: str = "event") -> None:
+        sources.append(source)
+        await real(view, source)
+
+    view = LegacyRenderingWriter
+    wanted = "ticked" if turn == "tick" else "notified"
+    with _settings(pool), mock.patch.object(runtime, "store_turn_session_writes", spy):
+        client = await sync_to_async(_page)(view)
+        key = _key(client)
+        comm = await _ws_mount(view, key)
+        try:
+            if turn == "db_notify":
+                await get_channel_layer().group_send(
+                    "djust_db_notify_sow4168r",
+                    {"type": "db_notify", "channel": "sow4168r", "payload": {}},
+                )
+            await _until_stored(key, lambda s: s.get(wanted) == "yes", f"the {turn}'s write")
+        finally:
+            await comm.disconnect()
+    assert turn in sources, sources
+    assert "push" not in sources, sources
 
 
 # -- 3. url_change → handle_params ---------------------------------------------
