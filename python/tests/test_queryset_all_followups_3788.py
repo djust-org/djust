@@ -58,8 +58,15 @@ from python.tests.test_queryset_all_floor_and_errors_3777 import (  # noqa: F401
 from python.tests.test_queryset_all_traversal_3777 import (  # noqa: F401
     _backend_render,
     _django_render,
-    _liveview_render,
     world,
+)
+
+# Kept on the legacy policy (#4069): a QuerySet reached through a container,
+# the row cap and a sliced operand are JIT features an explicit view (no JIT)
+# does not answer yet. The top-level loop-row walk runs explicit in
+# test_queryset_all_traversal_3777 / test_explicit_queryset_relation_walk_4069.
+from python.tests.test_queryset_all_traversal_3777 import (  # noqa: E402
+    _legacy_liveview_render as _liveview_render,
 )
 
 RENDERS = [

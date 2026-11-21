@@ -173,7 +173,10 @@ class TestASlicedListOfModelsOnTheBackend:
     @pytest.mark.parametrize("name", ["loop-only", "method-only"])
     def test_it_is_the_backend_only(self, world, name) -> None:
         """The control: the same template over the same list through a LiveView agrees."""
-        from python.tests.test_queryset_all_traversal_3777 import _liveview_render
+        # A sliced operand: the legacy LiveView (no loop alias on explicit, #4069).
+        from python.tests.test_queryset_all_traversal_3777 import (
+            _legacy_liveview_render as _liveview_render,
+        )
 
         source = CONTROLS[name]
         assert _got(_liveview_render, source, "list[Model]") == _django_render(

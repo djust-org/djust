@@ -121,6 +121,18 @@ def _queryset_method_roots_for(view: Any) -> FrozenSet[str]:
     return queryset_method_roots(content)
 
 
+def _queryset_row_walk_paths_for(view: Any) -> Dict[str, FrozenSet[str]]:
+    """The paths the view's template reads off each name, loop-row reads
+    included (#4069). An unreadable template reads nothing."""
+    from .jit import _jit_template_content, queryset_row_walk_paths
+
+    try:
+        content = _jit_template_content(view)
+    except Exception:  # noqa: BLE001 -- no template source means no capture
+        return {}
+    return queryset_row_walk_paths(content)
+
+
 def _normalize_db_values(value: Any, depth: int = 0) -> Any:
     """Recursively normalize raw Django DB values (Model / QuerySet /
     list[Model] / list[list[Model]]) into JSON-serializable dicts.
@@ -975,16 +987,52 @@ class RustBridgeMixin:
             from django.db.models import Model as _DjModel
             from django.db.models import QuerySet as _DjQuerySet
 
+            from .jit import rows_need_live_walk
+
             _raw_models_for_sidecar = {}
             _qs_roots: Optional[FrozenSet[str]] = None
+            _walk_paths: Optional[Dict[str, FrozenSet[str]]] = None
             for _key, _val in full_context.items():
                 if isinstance(_val, _DjModel):
                     _raw_models_for_sidecar[_key] = _val
-                elif isinstance(_val, _DjQuerySet):
+                    continue
+                _is_qs = isinstance(_val, _DjQuerySet)
+                if _is_qs:
                     if _qs_roots is None:
                         _qs_roots = _queryset_method_roots_for(self)
                     if _key in _qs_roots:
                         _raw_models_for_sidecar[_key] = _val
+                        continue
+                # #4069: a loop row's relation walk (``{% for u in users %}
+                # {{ u.groups.all }}``) is answered through the sidecar alias
+                # ``u -> users.<N>``; the normalized column dicts cannot answer
+                # it. Keep the EVALUATED ROWS (never the QuerySet, so
+                # ``{{ users.query }}`` stays unreachable, #4241) when the
+                # template walks past a row's columns. ``list(qs)`` fills the
+                # result cache the normalize loop below reads: no second query.
+                # The rows are floored with every other sidecar value below.
+                # Explicit only: legacy's JIT serialized these rows with their
+                # relation paths, and reaches here raw only when the JIT failed
+                # (logged there; a re-walk would raise the same error again).
+                if type(full_context) is not ExplicitRenderContext:
+                    continue
+                if _is_qs or (
+                    isinstance(_val, (list, tuple))
+                    and _val
+                    and any(isinstance(_r, _DjModel) for _r in _val)
+                ):
+                    if _walk_paths is None:
+                        _walk_paths = _queryset_row_walk_paths_for(self)
+                    _paths = _walk_paths.get(_key)
+                    if not _paths:
+                        continue
+                    _model_cls = (
+                        _val.model
+                        if _is_qs
+                        else next(type(_r) for _r in _val if isinstance(_r, _DjModel))
+                    )
+                    if rows_need_live_walk(_model_cls, _paths):
+                        _raw_models_for_sidecar[_key] = list(_val)
 
             for _key, _val in list(full_context.items()):
                 _normalized = _normalize_db_values(_val)

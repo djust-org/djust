@@ -67,6 +67,31 @@ def _body(html: str) -> str:
 
 
 def _liveview_render(source: str, context: dict) -> str:
+    # #4069: the default (explicit) policy, context supplied by
+    # ``get_context_data`` -- the shape an explicit view has.
+    class _V(LiveView):
+        exposure_policy = "explicit"
+
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx.update(context)
+            return ctx
+
+    _V.template = f"<div dj-root>{source}</div>"
+    client = LiveViewTestClient(_V)
+    client.mount()
+    return _body(client.render())
+
+
+def _legacy_liveview_render(source: str, context: dict) -> str:
+    """The legacy policy's LiveView, kept for the shapes an explicit view
+    does not answer yet: a loop over a FILTERED operand
+    (``users|slice:':2'``, ``dictsort``, ``{% with %}``, ``|first``) and a
+    model list nested in a dict. Neither reaches the render sidecar's loop
+    alias (#2504); the row capture of #4069 serves a top-level name only.
+    The state-model overlay (#3936, ``state_models_as_handles``) covers the
+    filtered operand."""
+
     class _V(LiveView):
         exposure_policy = "legacy"
 

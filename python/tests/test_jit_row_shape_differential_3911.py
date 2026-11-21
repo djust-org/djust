@@ -49,7 +49,7 @@ from djust import _rust
 from python.tests.test_queryset_all_traversal_3777 import (  # noqa: F401
     _backend_render,
     _django_render,
-    _liveview_render,
+    _legacy_liveview_render as _liveview_render,  # JIT row shape: legacy-only (#4069)
     _raw_render,
 )
 

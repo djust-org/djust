@@ -37,6 +37,7 @@ from django.contrib.auth.models import Permission, User
 from python.tests.test_queryset_all_traversal_3777 import (  # noqa: F401
     _backend_render,
     _django_render,
+    _legacy_liveview_render,
     _liveview_render,
     world,
 )
@@ -145,7 +146,10 @@ class TestWhatAgreesSoTheBoundaryIsTheFilter:
     @pytest.mark.parametrize("read", list(READS))
     def test_a_liveview_over_the_same_list_agrees(self, world, op, read) -> None:
         source = _source(FILTERED[op], read)
-        assert _got(_liveview_render, source, "list[Model]") == _expected(source, "list[Model]")
+        # Filtered operand: no loop alias on an explicit view (#2504, #4069).
+        assert _got(_legacy_liveview_render, source, "list[Model]") == _expected(
+            source, "list[Model]"
+        )
 
     @pytest.mark.parametrize("op", list(FILTERED))
     def test_a_row_field_agrees_under_every_filter(self, world, op) -> None:
@@ -199,7 +203,8 @@ class TestANestedNameIsTheSameGap:
         assert got == _django_render(source, _nested(shape)) == "[staff,ops,][staff,][]"
 
     def test_a_liveview_agrees_on_the_nested_list(self, world) -> None:
-        got = html_lib.unescape(_liveview_render(NESTED, _nested("list[Model]")))
+        # Nested in a dict: no top-level row capture on an explicit view (#4069).
+        got = html_lib.unescape(_legacy_liveview_render(NESTED, _nested("list[Model]")))
         assert got == _django_render(NESTED, _nested("list[Model]")) == "[staff,ops,][staff,]"
 
 

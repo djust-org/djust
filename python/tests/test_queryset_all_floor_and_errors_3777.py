@@ -40,6 +40,7 @@ from djust import _rust
 from python.tests.test_queryset_all_traversal_3777 import (
     _backend_render,
     _django_render,
+    _legacy_liveview_render,
     _liveview_render,
 )
 
@@ -325,7 +326,8 @@ class TestARaisingAllIsNotSilent3777:
         monkeypatch.setattr(User.groups.related_manager_cls, "get_queryset", boom)
         source = "{% for u in users %}{{ u.username }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]{% endfor %}"
         with caplog.at_level(logging.DEBUG):
-            _liveview_render(source, {"users": User.objects.order_by("pk")})
+            # The JIT handler is the legacy policy's (#4069).
+            _legacy_liveview_render(source, {"users": User.objects.order_by("pk")})
         # djust 2.0 does not fall back to another serializer (#3546): the failure is reported
         # as "JIT auto-serialization failed" at WARNING, with the database error chained.
         logged = [r for r in caplog.records if r.levelno >= logging.WARNING]

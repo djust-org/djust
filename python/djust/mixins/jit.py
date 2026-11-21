@@ -299,6 +299,58 @@ def queryset_method_roots(template_content: Optional[str]) -> FrozenSet[str]:
     return result
 
 
+_queryset_row_walk_cache: Dict[str, Dict[str, FrozenSet[str]]] = {}
+
+
+def queryset_row_walk_paths(template_content: Optional[str]) -> Dict[str, FrozenSet[str]]:
+    """The paths the template reads off each context name, row reads included
+    (#4069).
+
+    ``extract_template_variables`` files a ``{% for u in users %}`` loop row's
+    reads under the iterable (``users: groups.all``) and drops numeric index
+    segments (``users.0.groups.all`` -> ``groups.all``). An explicit view's
+    native render uses it to decide which supplied QuerySet / model list must
+    keep its evaluated rows for the render sidecar: a relation walk off a row
+    (``u.groups.all``, ``u.groups.count``, ``{{ u.groups }}``) is answered only
+    by a live row, never by the serialized column dict. Cached per template
+    hash; an empty or unparseable template reads nothing (fail closed: no
+    capture).
+    """
+    if not template_content:
+        return {}
+    content_hash = _template_hash(template_content)
+    try:
+        return _queryset_row_walk_cache[content_hash]
+    except KeyError:
+        pass
+    try:
+        variables = extract_template_variables(template_content)
+    except Exception:  # noqa: BLE001 -- an unparseable template reads nothing
+        logger.debug("extract_template_variables refused the template; no row capture")
+        variables = {}
+    result = {root: frozenset(p for p in paths if p) for root, paths in variables.items() if paths}
+    if len(_queryset_row_walk_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
+        _queryset_row_walk_cache.clear()
+    _queryset_row_walk_cache[content_hash] = result
+    return result
+
+
+def rows_need_live_walk(model_class: Any, paths: FrozenSet[str]) -> bool:
+    """Does any of *paths* walk past a row's serialized columns (#4069)?
+
+    A path of two or more parts (``groups.all``, ``profile.name``) does; so
+    does a single part that names a related manager or a method of the row
+    model (``{{ u.groups }}``, ``{{ u.get_full_name }}``), read off the class
+    without calling anything. A plain column (``username``) does not.
+    """
+    for path in paths:
+        if "." in path:
+            return True
+        if model_class is not None and _names_a_callable(model_class, path):
+            return True
+    return False
+
+
 def _many_relation_model(model_class: Any, name: str) -> Any:
     """The model of the rows ``model_class().<name>.all`` yields, or ``None``."""
     for field in model_class._meta.get_fields():
