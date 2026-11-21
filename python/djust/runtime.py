@@ -458,6 +458,15 @@ def _save_session_writes(view: Any) -> None:
     save_session_writes(getattr(request, "session", None))
 
 
+def _save_session_writes_unless(view: Any, released: Callable[[], bool]) -> None:
+    """:func:`_save_session_writes`, unless the work no longer belongs to the
+    live view (#4211). The check and the save are one thread step, so a
+    teardown run in that executor cannot fall between them."""
+    if released():
+        return
+    _save_session_writes(view)
+
+
 def _turn_session(view: Any) -> Any:
     """The session a turn's handlers write through ``self.request.session``:
     an explicit view's authorized turn request, a legacy view's mount request
@@ -8275,6 +8284,18 @@ class ViewRuntime(RuntimeTurnPort):
         # state was announced.
         if _consume_async_cancel(view, task_name):
             return
+        # The root twin of ``_child_async._check_owner`` (#4211): a teardown
+        # (disconnect, owner replacement, disposal) advances the work
+        # generation. Work cancelled by it keeps nothing: no session write,
+        # no view state, no frame.
+        generation = getattr(view, "_async_work_generation", 0)
+
+        def released() -> bool:
+            return (
+                self.view_instance is not view
+                or bool(getattr(view, "_djust_child_disposed", False))
+                or getattr(view, "_async_work_generation", 0) != generation
+            )
 
         async with self._explicit_event_lock, self.transport.event_context(view):
             try:
@@ -8307,8 +8328,8 @@ class ViewRuntime(RuntimeTurnPort):
                 traceback=True,
             )
 
-        if self.view_instance is not view:
-            logger.debug("Explicit background result discarded after owner replacement")
+        if released():
+            logger.debug("Explicit background result discarded after teardown or owner replacement")
             return
         # Cancelled while running: skip the result handler and render (#2969).
         if _consume_async_cancel(view, task_name):
@@ -8324,6 +8345,10 @@ class ViewRuntime(RuntimeTurnPort):
                         if self.view_instance is view:
                             await self.deny_explicit_turn()
                         return
+                    if released():
+                        # Torn down while the result was authorized: nothing
+                        # is carried, handled, saved or sent (#4211).
+                        return
                     from ._session_merge import carry_session_writes
 
                     carry_session_writes(
@@ -8338,7 +8363,7 @@ class ViewRuntime(RuntimeTurnPort):
                         # other effects stand too, and the fallback, which runs
                         # the work inside its request, keeps them (#4162).
                         try:
-                            await sync_to_async(_save_session_writes)(view)
+                            await sync_to_async(_save_session_writes_unless)(view, released)
                         except Exception as exc:  # noqa: BLE001 — storage errors carry values
                             from ._exposure_diagnostics import log_failure_for
 
@@ -8377,7 +8402,7 @@ class ViewRuntime(RuntimeTurnPort):
                         # Legacy parity: an unhandled failure renders nothing.
                         await keep_session_writes()
                         return
-                    if self.view_instance is not view:
+                    if released():
                         return
                     if not await self.commit_explicit_turn(view, source="async", async_result=True):
                         return

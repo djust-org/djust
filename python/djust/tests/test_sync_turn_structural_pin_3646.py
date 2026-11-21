@@ -710,7 +710,8 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     (
         "runtime.py",
         "ViewRuntime._execute_explicit_async_task.complete.keep_session_writes",
-        "_save_session_writes",
+        # Unless the work was torn down meanwhile (#4211).
+        "_save_session_writes_unless",
     ): plumbing(_SESSION),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "codec.capture"): plumbing(_RENDER),
     # The same three calls in one hop (#3997): the session binding read, then
