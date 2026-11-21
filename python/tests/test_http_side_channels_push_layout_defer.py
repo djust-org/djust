@@ -37,6 +37,16 @@ class SideChannelView(LiveView):
         self.push_event("toast", {"text": "hi"})
 
     @event_handler()
+    async def flush_mid_handler(self, **kwargs):
+        # #4256: no WS consumer and no SSE session — flush_push_events and
+        # push_state must leave the queued events for the POST answer.
+        self.message = "Flushed"
+        self.push_event("step", {"n": 1})
+        await self.flush_push_events()
+        await self.push_state()
+        self.push_event("step", {"n": 2})
+
+    @event_handler()
     def run_js(self, **kwargs):
         from djust.js import JS
 
@@ -117,6 +127,15 @@ class TestPushEvents:
         [event] = data["_push_events"]
         assert event["event"] == "djust:exec"
         assert event["payload"]["ops"]
+
+    def test_flush_and_push_state_leave_events_for_the_answer(self):
+        """#4256: the fallback has no live channel; queued events ride the POST answer."""
+        view, data = _post("flush_mid_handler")
+        assert data["_push_events"] == [
+            {"event": "step", "payload": {"n": 1}},
+            {"event": "step", "payload": {"n": 2}},
+        ]
+        assert view._pending_push_events == []
 
     def test_no_key_without_push_events(self):
         _, data = _post("noop")

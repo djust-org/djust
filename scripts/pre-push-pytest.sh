@@ -44,9 +44,16 @@ export PYTHONPATH="${WT:+$WT:}."
 # tests that read renderer.rs etc.) and answers FULL for anything with
 # whole-suite blast radius (conftest/pyproject/hook changes, djust_core,
 # the package roots, a routing/flip/convergence branch, an empty selection).
-# When the selector is absent or cannot run, the full suite runs: a narrower
-# run that was never chosen is worse than a slow one. DJUST_PREPUSH_FULL=1
-# forces the full suite by hand.
+#
+# A FULL answer, or a selector that cannot run, does NOT run every root here
+# (#4253): tests/local_load_guard.py refuses a local run over 5,000 tests
+# without the developer's approval, so that push could never pass. It runs a
+# bounded tier instead — the early tier (`make test-early`: ledger entries,
+# pr_tier tests, path-rule pins; `--early-only` is guard-exempt) plus the
+# direct selection (DJUST_PREPUSH_TARGETED=1, passed as --early-include) — and
+# says that CI runs the rest. DJUST_PREPUSH_FULL=1 forces the full suite by
+# hand (the guard's approval still governs it). Only when select-tests.py is
+# absent altogether does the old full fallback apply.
 #
 # DJUST_PREPUSH_TARGETED=1 narrows it the other way, by hand: when the selector
 # would answer FULL only because of transitive impact or a blast-radius path
@@ -54,9 +61,13 @@ export PYTHONPATH="${WT:+$WT:}."
 # state_backends/, the engine crates' src/), it prints the direct selection
 # instead (changed tests, tests named after or importing a changed module,
 # basename mentions) and says on stderr which FULL reasons it waived. Harness
-# changes, the branch-name rule and unclassified paths still run FULL, and an
-# empty direct selection still runs the full fast tier. CI stays the
-# authoritative full run. Use it on a loaded machine, never to hide a failure.
+# changes, the branch-name rule and unclassified paths still answer FULL, and
+# they and an empty direct selection take the bounded fallback above (#4253:
+# the early tier, with no direct files). CI stays the authoritative full run.
+# Use it on a loaded machine, never to hide a failure.
+FALLBACK=0
+FALLBACK_WHY=""
+DIRECT=()
 if [ -f scripts/select-tests.py ] && [ "${DJUST_PREPUSH_FULL:-}" != "1" ]; then
     SEL_OUT="$(mktemp)"
     if bash scripts/run-with-venv-python.sh scripts/select-tests.py >"$SEL_OUT"; then
@@ -75,15 +86,60 @@ if [ -f scripts/select-tests.py ] && [ "${DJUST_PREPUSH_FULL:-}" != "1" ]; then
             done < "$SEL_OUT"
             if [ "${#SELECTED[@]}" -gt 0 ]; then
                 PATHS=("${SELECTED[@]}")
+            else
+                FALLBACK=1
+                FALLBACK_WHY="select-tests printed no selection"
+            fi
+        else
+            FALLBACK=1
+            FALLBACK_WHY="select-tests answered FULL (reason above)"
+            # The direct selection: what DJUST_PREPUSH_TARGETED=1 would run. A FULL or NONE
+            # answer there (a harness change, unclassified paths) leaves it empty.
+            if DJUST_PREPUSH_TARGETED=1 bash scripts/run-with-venv-python.sh scripts/select-tests.py >"$SEL_OUT"; then
+                _first="$(head -n 1 "$SEL_OUT")"
+                if [ "$_first" != "FULL" ] && [ "$_first" != "NONE" ]; then
+                    while IFS= read -r _sel; do
+                        [ -n "$_sel" ] && DIRECT+=("$_sel")
+                    done < "$SEL_OUT"
+                fi
             fi
         fi
     else
-        echo "select-tests.py could not run — running the full suite."
+        FALLBACK=1
+        FALLBACK_WHY="select-tests.py could not run"
     fi
     rm -f "$SEL_OUT"
 fi
 
-# Fast tier for the full-suite fallback: with no targeted selection, skip the
+# The bounded fallback (#4253): early tier + direct selection, never every root.
+EARLY_ARGS=()
+if [ "$FALLBACK" = "1" ]; then
+    EARLY=()
+    _early_out="$(bash scripts/run-with-venv-python.sh scripts/promotion_ledger.py early-files 2>/dev/null)" || _early_out=""
+    while IFS= read -r _sel; do
+        [ -n "$_sel" ] && EARLY+=("$_sel")
+    done <<<"$_early_out"
+    # No early-file list: collect the roots, still under --early-only (bounded, guard-exempt).
+    [ "${#EARLY[@]}" -eq 0 ] && EARLY=(tests/ python/tests/ python/djust/tests/)
+    PATHS=("${EARLY[@]}")
+    EARLY_ARGS=(--early-only)
+    for _d in ${DIRECT[@]+"${DIRECT[@]}"}; do
+        _seen=0
+        for _p in "${PATHS[@]}"; do
+            [ "$_p" = "$_d" ] && _seen=1 && break
+        done
+        [ "$_seen" = "0" ] && PATHS+=("$_d")
+        EARLY_ARGS+=(--early-include "$_d")
+    done
+    export DJUST_SWEEP_SAMPLE=1
+    _ndirect=0
+    [ -n "${DIRECT[*]+x}" ] && _ndirect=${#DIRECT[@]}
+    echo "pre-push: $FALLBACK_WHY; running the bounded early tier + $_ndirect directly selected file(s)."
+    echo "pre-push: PR CI runs its selection; the merge queue runs the full suite. DJUST_PREPUSH_FULL=1 (with the developer's approval) runs everything here."
+fi
+
+# Fast tier for the old full fallback (only when select-tests.py is absent; an
+# empty or FULL selection takes the bounded fallback above, #4253): skip the
 # duration-derived `slow` tier (tests/slow_tier.py — > 1s in .test_durations,
 # ~1.6% of tests carrying ~82% of the time). A targeted selection keeps its
 # slow tests (they are about the change); DJUST_PREPUSH_FULL=1 runs everything;
@@ -92,11 +148,13 @@ fi
 # The full-suite fallback is the deliberate full gate. Since #4111 the variable alone does
 # not pass the local load guard (tests/local_load_guard.py): over the limit it also needs the
 # developer's time-limited approval, and one heavy run at a time. A targeted selection never does.
-if [ "${PATHS[*]}" = "tests/ python/tests/ python/djust/tests/" ]; then
+# The bounded fallback (#4253) is neither: it is --early-only (guard-exempt) and keeps its
+# slow tests, as `make test-early` does.
+if [ "$FALLBACK" != "1" ] && [ "${PATHS[*]}" = "tests/ python/tests/ python/djust/tests/" ]; then
     export DJUST_FULL_LOCAL=1
 fi
 SKIP_SLOW=0
-if [ "${DJUST_PREPUSH_FULL:-}" != "1" ] && [ "${PATHS[*]}" = "tests/ python/tests/ python/djust/tests/" ]; then
+if [ "$FALLBACK" != "1" ] && [ "${DJUST_PREPUSH_FULL:-}" != "1" ] && [ "${PATHS[*]}" = "tests/ python/tests/ python/djust/tests/" ]; then
     SKIP_SLOW=1
     echo "pre-push: full-suite fallback runs the fast tier (not slow); DJUST_PREPUSH_FULL=1 runs everything."
 fi
@@ -185,7 +243,7 @@ if [ "$SKIP_SLOW" = "1" ]; then
 fi
 MARK_FILTER=()
 [ -n "$MARK_EXPR" ] && MARK_FILTER=(-m "$MARK_EXPR")
-bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q "${PARALLEL[@]+"${PARALLEL[@]}"}" ${MARK_FILTER[@]+"${MARK_FILTER[@]}"} --benchmark-disable 2>&1 | tee "$REPORT"
+bash scripts/run-with-venv-python.sh -m pytest "${PATHS[@]}" -q "${PARALLEL[@]+"${PARALLEL[@]}"}" ${MARK_FILTER[@]+"${MARK_FILTER[@]}"} ${EARLY_ARGS[@]+"${EARLY_ARGS[@]}"} --benchmark-disable 2>&1 | tee "$REPORT"
 STATUS=${PIPESTATUS[0]}
 [ "$STATUS" -eq 0 ] && exit 0
 

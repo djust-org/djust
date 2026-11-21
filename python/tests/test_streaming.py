@@ -551,3 +551,102 @@ def test_slot_view_stream_frame_carries_target_id():
     assert len(parent.pushed) == 1
     assert parent.pushed[0]["type"] == "stream"
     assert parent.pushed[0]["target_id"] == "side"
+
+
+# -- #4256: push_state reaches SSE clients ------------------------------------
+
+
+def _push_state_view(view, patches='[{"op":"x"}]', rust_version=7):
+    """Give a ``_make_view`` view what ``push_state`` needs: a render and push events."""
+    from djust.mixins.push_events import PushEventMixin
+
+    view._pending_push_events = []
+    view.render_with_diff = lambda: ("<div>x</div>", patches, rust_version)
+    view._strip_comments_and_whitespace = lambda html: html
+    view._extract_liveview_content = lambda html: html
+    view._parameter_contracts_active = False
+    for name in ("push_event", "flush_push_events", "_drain_push_events"):
+        setattr(view, name, getattr(PushEventMixin, name).__get__(view))
+    view.push_state = StreamingMixin.push_state.__get__(view)
+    return view
+
+
+def test_push_state_over_sse_sends_patch_with_rust_version_then_push_events(monkeypatch):
+    from djust import _background_render
+
+    monkeypatch.setattr(_background_render, "render_contract_fields", lambda v, rt: {})
+    view, session = _sse_view()
+    _push_state_view(view, rust_version=7)
+    view.push_event("step", {"n": 1})
+
+    asyncio.run(view.push_state())
+
+    assert session.pushed == [
+        {"type": "patch", "patches": [{"op": "x"}], "version": 7},
+        {"type": "push_event", "event": "step", "payload": {"n": 1}},
+    ]
+    assert view._pending_push_events == []
+
+
+def test_push_state_over_sse_sends_html_update_without_patches(monkeypatch):
+    from djust import _background_render
+
+    monkeypatch.setattr(_background_render, "render_contract_fields", lambda v, rt: {})
+    view, session = _sse_view()
+    _push_state_view(view, patches=None, rust_version=3)
+
+    asyncio.run(view.push_state())
+
+    assert session.pushed == [{"type": "html_update", "html": "<div>x</div>", "version": 3}]
+
+
+def test_push_state_skips_a_view_the_sse_session_no_longer_serves(monkeypatch):
+    from djust import _background_render
+
+    monkeypatch.setattr(_background_render, "render_contract_fields", lambda v, rt: {})
+    view, session = _sse_view()
+    _push_state_view(view)
+    session.view_instance = object()  # replaced by a live_redirect
+    view.push_event("step", {"n": 1})
+
+    asyncio.run(view.push_state())
+
+    assert session.pushed == []
+    assert view._pending_push_events == [("step", {"n": 1})]
+
+
+def test_push_state_websocket_wins_over_sse_and_stamps_consumer_counter(monkeypatch):
+    from djust import _background_render
+
+    monkeypatch.setattr(_background_render, "render_contract_fields", lambda v, rt: {})
+    view, session = _sse_view()
+    _push_state_view(view, rust_version=7)
+    consumer = FakeConsumer()
+    consumer._next_version = lambda: 42
+    view._ws_consumer = consumer
+
+    asyncio.run(view.push_state())
+
+    assert consumer.sent_messages == [{"type": "patch", "patches": [{"op": "x"}], "version": 42}]
+    assert session.pushed == []
+
+
+def test_push_state_websocket_html_update_stamps_consumer_counter(monkeypatch):
+    """No patches: the WebSocket ``html_update`` frame carries the consumer's next
+    version too, not the Rust one (#1788 HIDDEN #2, #4256)."""
+    from djust import _background_render
+
+    monkeypatch.setattr(_background_render, "render_contract_fields", lambda v, rt: {})
+    view, session = _sse_view()
+    _push_state_view(view, patches=None, rust_version=7)
+    consumer = FakeConsumer()
+    versions = iter([42, 43])
+    consumer._next_version = lambda: next(versions)
+    view._ws_consumer = consumer
+
+    asyncio.run(view.push_state())
+
+    assert consumer.sent_messages == [
+        {"type": "html_update", "html": "<div>x</div>", "version": 42}
+    ]
+    assert session.pushed == []

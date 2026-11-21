@@ -37,7 +37,8 @@ remains the authoritative full run.
 
 ``--ci``: pull-request CI's selection. Targeted, plus the rules at
 ``CI_CONFIG_PREFIXES`` (CI configuration, docs and test support select their
-consumers; every selection adds the Makefile's ``MERGE_GATES``). The merge
+consumers; every selection adds the Makefile's ``MERGE_GATES`` and every test
+file with a strict xfail, #4259). The merge
 queue still runs everything (docs/testing-strategy.md, "Pull-request CI runs
 the selection").
 
@@ -112,7 +113,8 @@ FULL_SUITE_FILES = frozenset(
         "scripts/pre-push-cargo-test.sh",
         "scripts/embeddable-python.sh",
         ".test_collected_floor",
-        ".test_durations",
+        # Not ``.test_durations`` (#4253): it only re-tiers tests and rebalances shards, and the
+        # tests that read it name it, so rule (c) selects them.
         "examples/demo_project/demo_project/settings.py",
     }
 )
@@ -160,10 +162,18 @@ TARGETED_ENV = "DJUST_PREPUSH_TARGETED"
 #   (a plugin, fixture or settings module every test goes through).
 # * Every selection also runs the whole-tree merge gates (``MERGE_GATES`` in the
 #   Makefile, #3757), the tests that pass alone and fail together.
+# * Every selection also runs every test file with a strict xfail
+#   (``STRICT_XFAIL_RE``, #4259): a fix that makes one pass turns it red, often
+#   through code the file never imports or names (#4257 rendered through it).
 CI_CONFIG_PREFIXES = (".github/workflows/",)
 CI_CONFIG_FILES = frozenset({".pre-commit-config.yaml", "Makefile"})
 DOC_SUFFIXES = (".md", ".rst")
 DOC_SCANNER_RE = re.compile(r"\*\.md\b")
+# An ``xfail(`` call whose arguments (one level of nested parens, any number of
+# lines) pass ``strict=True``. A strict xfail spelled otherwise (a global
+# ``xfail_strict``, ``strict=SOME_CONST``) is not seen; ``pyproject.toml`` changes
+# are FULL anyway, and a global ``xfail_strict`` should widen this to any xfail.
+STRICT_XFAIL_RE = re.compile(r"xfail\((?:[^()]|\([^()]*\))*?\bstrict\s*=\s*True\b", re.S)
 FULL_SUITE_BRANCH_RE = re.compile(r"flip|routing|convergence", re.IGNORECASE)
 
 # Workspace-wide cargo run when these change.
@@ -505,6 +515,9 @@ def select_tests(
             for t in gates:
                 if t in existing:
                     chosen.setdefault(t, "merge gate")
+            for t in all_tests:
+                if STRICT_XFAIL_RE.search(text_of(t)):
+                    chosen.setdefault(t, "strict xfail")
     if not chosen:
         if no_consumer == set(changed):
             return Selection(

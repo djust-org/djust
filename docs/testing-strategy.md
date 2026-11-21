@@ -125,6 +125,13 @@ Name globs and `-k` are exploration aids; they cannot prove subsystem completene
 - Shared harness/dependency/workflow files, package initializers, test support,
   state backends, LiveView/WebSocket runtime and the Rust engine require FULL.
   Existing routing/flip/convergence branch triggers remain.
+  `.test_durations` does not (#4253): it only re-tiers tests, and the tests that
+  read it name it, so they are selected.
+- In the pre-push hook a FULL answer (or a selector that cannot run) runs a bounded
+  tier, not every root (#4253): the early tier (`--early-only`, as `make test-early`)
+  plus the direct selection (`DJUST_PREPUSH_TARGETED=1`, passed as `--early-include`).
+  PR CI runs its own selection and the merge queue runs the full suite; `DJUST_PREPUSH_FULL=1` runs everything locally,
+  subject to the load guard's approval.
 - The CLI reads all production `python/djust` Python modules. If a production
   module statically imports a changed module, require FULL for transitive impact.
   Absolute/relative imports, imports inside functions, and type-checking imports
@@ -150,7 +157,7 @@ A consumer the selection misses therefore fails in the merge queue, before merge
 later than it would have.
 
 `--ci` is the targeted mode (`DJUST_PREPUSH_TARGETED=1`: blast-radius paths and transitive
-impact select their direct consumers) with four more rules:
+impact select their direct consumers) with five more rules:
 
 - CI configuration (`.github/workflows/`, `.pre-commit-config.yaml`, `Makefile`) selects the
   tests that name it instead of forcing `FULL`.
@@ -160,6 +167,9 @@ impact select their direct consumers) with four more rules:
   directly or through other support modules. It is still `FULL` when a `conftest.py` or
   `pyproject.toml` names it: a plugin, fixture or settings module reaches every test.
 - Every selection adds the whole-tree merge gates (`MERGE_GATES` in the `Makefile`).
+- Every selection adds the test files with a strict xfail (`xfail(..., strict=True)`): they go
+  red when a fix makes them pass, often through code they never name (#4259). They do not
+  turn an empty selection into a run, and do not change a `FULL` answer.
 
 Dependencies (`pyproject.toml`, `uv.lock`, `Cargo.lock`), a `conftest.py`, a package
 `__init__.py`, the branch-name rule and an unclassified path still run everything. Measured on
@@ -436,8 +446,8 @@ in the root `conftest.py`) enforces it (#4111). Outside CI:
   35,000) stops before running any, with the ways out in the message, unless the developer has
   approved it: the file `~/.djust/full-run-approval` holds a Unix time in the future, at most 24
   hours ahead. The developer writes it by hand; nothing in the repository or an agent does.
-  `DJUST_FULL_LOCAL=1` (still set by the `make test*` full gates and the pre-push full-suite
-  fallback) no longer lets a run past the limit on its own;
+  `DJUST_FULL_LOCAL=1` (still set by the `make test*` full gates and `DJUST_PREPUSH_FULL=1`;
+  the pre-push FULL fallback runs the bounded early tier instead, #4253) no longer lets a run past the limit on its own;
 - an approved run holds a machine-wide lock (`~/.djust/full-run.lock`), so a second run over the
   limit refuses at once while one is in progress, from any worktree;
 - xdist is held to 2 workers however many `-n N` / `-n auto` asked for (`DJUST_LOCAL_MAX_WORKERS`),

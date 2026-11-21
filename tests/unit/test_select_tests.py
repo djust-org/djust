@@ -505,7 +505,6 @@ def test_unparseable_production_import_graph_requires_full():
         "requirements-dev.txt",
         "crates/djust_components/Cargo.toml",
         ".test_collected_floor",
-        ".test_durations",
         "scripts/pre-push-cargo-test.sh",
     ],
 )
@@ -763,3 +762,41 @@ def test_ci_mode_keeps_full_for_conftest_and_package_init(path):
 def test_a_support_module_is_referred_to_by_import_not_by_its_bare_stem(text, refers):
     pattern = st.support_import_re("python/djust/tests/_live_session.py")
     assert bool(pattern.search(text)) is refers
+
+
+# --------------------------------------------------------------------------
+# #4259: a strict xfail turns red when a fix makes it pass. It pins behaviour
+# through the code it renders, not by naming the module, so the selection rules
+# (a)-(c) miss it; the merge queue caught one (#4257, an XPASS(strict)).
+# --------------------------------------------------------------------------
+
+XFAIL_TESTS = [*CI_TESTS, "python/tests/test_pin_strict.py", "python/tests/test_pin_loose.py"]
+XFAIL_TEXTS = {
+    **CI_TEXTS,
+    "python/tests/test_pin_strict.py": (
+        "@pytest.mark.xfail(\n    reason='renders through it (#4241)',\n    strict=True,\n)\n"
+        "def test_it_prints_the_row(): ...\n"
+    ),
+    "python/tests/test_pin_loose.py": (
+        "@pytest.mark.xfail(reason='flaky upstream')\ndef test_x(): ...\n"
+        "STRICT = dict(strict=True)  # not an xfail argument\n"
+    ),
+}
+
+
+def _xfail(changed, **kw):
+    return st.select_tests(changed, XFAIL_TESTS, XFAIL_TEXTS.__getitem__, "feat/x", **kw)
+
+
+def test_ci_mode_adds_every_strict_xfail_file_to_a_selection():
+    sel = _xfail(["python/djust/forms.py"], ci=True, gates=())
+    assert not sel.full, sel.reason
+    assert "tests/unit/test_forms.py" in sel.tests
+    assert "python/tests/test_pin_strict.py" in sel.tests
+    # A non-strict xfail cannot go red when it passes; `strict=True` outside an xfail is not one.
+    assert "python/tests/test_pin_loose.py" not in sel.tests
+
+
+def test_strict_xfails_do_not_rescue_an_empty_selection_or_change_full():
+    assert _xfail(["docs/nowhere.txt"], ci=True).full
+    assert _xfail(["pyproject.toml"], ci=True).full

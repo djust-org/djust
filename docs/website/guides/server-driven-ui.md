@@ -171,7 +171,7 @@ Everything in the "planned" rows is to be built on top of `push_commands`. It's 
 
 `push_commands` works inside `@background` handlers too, which is the pattern for any flow longer than a single click.
 
-Inside a `@background` task, pushed commands are queued until the task returns. Call `await self.flush_push_events()` after each step to deliver it immediately:
+Inside a `@background` task, pushed commands are queued until the task returns. Call `await self.flush_push_events()` after each step to deliver it immediately. This works over a WebSocket or SSE connection; on the HTTP fallback there is no push channel, so the queued events ride the response to the request instead:
 
 ```python
 import asyncio

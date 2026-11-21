@@ -544,11 +544,44 @@ def test_every_client_checked_send_path_uses_next_version():
     )
 
     # HIDDEN #2 — streaming push_state must route through the consumer counter.
+    # #4256: push_state picks its transport once; over WS ``next_version`` is the
+    # consumer counter, and both frames stamp through it (SSE: the Rust version
+    # via ``next_client_version``, #1858). Behaviour is pinned by
+    # ``test_push_state_websocket_wins_over_sse_and_stamps_consumer_counter``.
     stream_src = without_prose(inspect.getsource(streaming_mod.StreamingMixin.push_state))
-    assert stream_src.count("self._ws_consumer._next_version()") >= 2, (
+    assert stream_src.count("return consumer._next_version()") == 1, (
+        "StreamingMixin.push_state's WebSocket branch MUST stamp the consumer counter "
+        "consumer._next_version() (HIDDEN #2, #1788)."
+    )
+    # The counter return must be the WebSocket branch's ``next_version``: the
+    # ``def next_version`` under ``if consumer is not None:`` returns exactly
+    # ``consumer._next_version()``, and the else branch binds the SSE stamp.
+    push_tree = ast.parse(stream_src)
+    ws_branch = next(
+        node
+        for node in ast.walk(push_tree)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "consumer is not None"
+        and any(isinstance(n, ast.FunctionDef) and n.name == "next_version" for n in node.body)
+    )
+    ws_next = next(
+        n for n in ws_branch.body if isinstance(n, ast.FunctionDef) and n.name == "next_version"
+    )
+    ws_returns = [n for n in ast.walk(ws_next) if isinstance(n, ast.Return)]
+    assert [ast.unparse(r.value) for r in ws_returns] == ["consumer._next_version()"], (
+        "push_state's WebSocket-branch next_version MUST return consumer._next_version() "
+        "and nothing else (HIDDEN #2, #1788, #4256)."
+    )
+    assert any(
+        isinstance(n, ast.Assign)
+        and [ast.unparse(t) for t in n.targets] == ["next_version"]
+        and ast.unparse(n.value) == "transport.next_client_version"
+        for n in ws_branch.orelse
+    ), "push_state's SSE branch binds next_version to transport.next_client_version (#4256)."
+    assert stream_src.count('"version": next_version(') == 2, (
         "StreamingMixin.push_state bypasses _send_update and sends patch + html_update "
-        "directly; both MUST stamp self._ws_consumer._next_version() (HIDDEN #2, #1788). "
-        f"Found {stream_src.count('self._ws_consumer._next_version()')} of 2."
+        "directly; both MUST stamp through the transport-chosen next_version (HIDDEN #2, "
+        f"#1788, #4256). Found {stream_src.count(chr(34) + 'version' + chr(34) + ': next_version(')} of 2."
     )
 
 

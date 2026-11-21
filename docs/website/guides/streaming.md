@@ -84,7 +84,7 @@ render; see [`mount()`](../api-reference/liveview.md#mountrequest-kwargs).
 
 ## Core Methods
 
-All streaming methods are `async` and work over a WebSocket or SSE connection; on the HTTP fallback they are a no-op (the page shows the final render).
+All streaming methods are `async` and work over a WebSocket or SSE connection; on the HTTP fallback they are a no-op (the page shows the final render). The same holds for `push_state()`: over a WebSocket or SSE connection it sends the current render to the client at once, and on the HTTP fallback it logs a warning and does nothing.
 
 ### `stream_text(stream_name, text, mode="append", target=None)`
 

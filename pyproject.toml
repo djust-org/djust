@@ -289,6 +289,17 @@ ignore_errors = true
 module = ["yaml", "requests"]
 ignore_missing_imports = true
 
+# numpy is NOT a djust dependency, but typed dev deps reach it (pytest's
+# _pytest.python_api TYPE_CHECKING import; fakeredis.model). numpy >= 2.5 stubs
+# use the 3.12 `type` statement, which aborts the whole run under
+# python_version = "3.11" (#4254). follow_imports is ignored for .pyi stubs
+# unless follow_imports_for_stubs is set, so a plain skip does nothing. If
+# another library's 3.12-only stubs fail the same way, add it to this list.
+[[tool.mypy.overrides]]
+module = ["numpy"]
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
 # --------------------------------------------------------------------------- #
 # STRICT ISLANDS — modules enforced under full strict rules. Each is verified to
 # pass clean (0 errors) under disallow_untyped_defs + disallow_incomplete_defs +
