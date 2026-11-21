@@ -534,6 +534,12 @@ async def store_turn_session_writes(view: Any, source: str = "event") -> None:
     data = getattr(session, "_session_cache", None)
     if type(data) is not TrackedSessionData or not data.has_foreign_changes():
         return
+    if not getattr(session, "session_key", None):
+        # A socket mounted without a session cookie (an anonymous legacy
+        # view): saving would create a session row whose key no browser ever
+        # receives, one orphan per socket (#4168 review N5). The writes stay
+        # on the socket's session object only.
+        return
     await sync_to_async(_store_session_writes_sync)(session, source)
 
 

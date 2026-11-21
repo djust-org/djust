@@ -380,6 +380,27 @@ async def test_a_legacy_save_after_a_logout_is_dropped_quietly(caplog):
     assert "were not stored" not in caplog.text
 
 
+@pytest.mark.parametrize("view", ["LegacyPlain", "LegacyMountWriter"])
+async def test_a_keyless_legacy_socket_creates_no_session_row(view):
+    """#4168 review N5: a legacy socket mounted without a session cookie (an
+    anonymous visitor) has a session object with no key. Storing its writes
+    would create a session row whose key no browser ever receives: one orphan
+    per socket. Nothing is stored for it."""
+    from django.contrib.sessions.models import Session
+
+    view_cls = {"LegacyPlain": LegacyPlain, "LegacyMountWriter": LegacyMountWriter}[view]
+    with _settings():
+        before = await sync_to_async(Session.objects.count)()
+        comm = await _ws_mount(view_cls, None)
+        try:
+            frame = await harness.event(comm, "set_only")
+        finally:
+            await comm.disconnect()
+        after = await sync_to_async(Session.objects.count)()
+    assert frame["type"] in ("patch", "noop", "html_update"), frame
+    assert after == before
+
+
 # -- 2. ticks, pushes and NOTIFY hooks that render nothing ---------------------
 
 POLICIES = [pytest.param("explicit", id="explicit"), pytest.param("legacy", id="legacy")]
