@@ -559,8 +559,8 @@ returns, exactly as Django's own template engine does.
 `python/tests/test_row_str_is_public_text_3806.py`): a top-level loop over a
 QuerySet (`{% for r in rows %}{{ r }}`), a model in the context (`{{ row }}`), a
 foreign key read whole (`{{ row.shelf }}`), a row reached through a relation
-(`{{ shelf.rows.all.first }}`), and on the `DjustTemplateBackend` a QuerySet's
-`{{ rows.first }}` / `{{ rows.last }}`.
+(`{{ shelf.rows.all.first }}`), and a QuerySet's `{{ rows.first }}` / `{{ rows.last }}`
+(on the `DjustTemplateBackend`, and for a LiveView's top-level QuerySet since #4241).
 
 **Impact:** a model whose `__str__` is built from a field you excluded or did not
 allowlist shows that field in the rendered page while `{{ row.that_field }}` is
