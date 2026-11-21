@@ -1,4 +1,4 @@
-{% extends "djust_admin/base.html" %}
+{% extends "djust_admin/base.html" %}{% load djust_attrs %}
 {% load djust_admin_tags %}
 
 {% block breadcrumb_items %}
@@ -38,7 +38,7 @@
         </div>
 
         <div class="px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-end space-x-3">
-            <a href="{{ list_url }}"
+            <a href="{{ list_url|djust_url_attr }}"
                class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
                 Cancel
             </a>

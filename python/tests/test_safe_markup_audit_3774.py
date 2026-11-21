@@ -636,3 +636,40 @@ class TestTheDocMatchesTheAudit:
         # Line numbers move with every unrelated edit to a 10,000-line file; what must not drift
         # is WHICH sites are audited, how many sinks, and why. ``--table`` regenerates the lines.
         assert _without_lines(self._doc_table()) == _without_lines(audit.table())
+
+
+@pytest.mark.slow
+class TestScanSet:
+    """The guard's findings for a file do not depend on which other files are scanned with it
+    (#4212). Scanning the package with ``examples`` and ``scripts`` flagged two more functions
+    than the ratchet's scan: the two ``djust.theming`` helpers this scan skips
+    (:data:`audit.EXCLUDED_PARTS`) and ``test_safe_markup_guard_3766.AUDITED`` records."""
+
+    @staticmethod
+    def _scan(files, context_files):
+        from scripts.lib.safe_markup_taint import dynamic_class_names, find_unsafe_markup
+
+        dynamic = dynamic_class_names(p.read_text() for p in context_files)
+        found = set()
+        for path in files:
+            module, is_package = audit.module_name(path, ROOT)
+            for finding in find_unsafe_markup(path.read_text(), module, is_package, dynamic):
+                found.add((str(path.relative_to(ROOT)), finding.function))
+        return found
+
+    def test_findings_do_not_depend_on_the_files_scanned_together(self):
+        import test_safe_markup_guard_3766 as theming_guard
+
+        package = audit.package_files(ROOT)
+        theming = sorted((ROOT / "python/djust/theming").rglob("*.py"))
+        theming = [p for p in theming if "tests" not in p.parts and not p.name.startswith("test_")]
+        wider = (
+            package
+            + theming
+            + sorted((ROOT / "examples").rglob("*.py"))
+            + sorted((ROOT / "scripts/lib").rglob("*.py"))
+        )
+        alone = self._scan(package, package)
+        assert alone == self._scan(package, wider)
+        with_theming = alone | self._scan(theming, wider)
+        assert with_theming == set(audit.AUDITED) | set(theming_guard.AUDITED)

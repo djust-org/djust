@@ -1,4 +1,4 @@
-{% load djust_assets djust_admin_tags %}
+{% load djust_assets djust_admin_tags djust_attrs %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -36,7 +36,7 @@
                 <ul class="mt-2 space-y-1">
                     {% for model in app.models %}
                     <li>
-                        <a href="{{ model.admin_url }}"
+                        <a href="{{ model.admin_url|djust_url_attr }}"
                            class="flex items-center px-2 py-2 text-sm font-medium rounded-md
                                   {% if request.path == model.admin_url %}
                                   bg-gray-800 text-white
@@ -60,7 +60,7 @@
                 <ul class="mt-2 space-y-1">
                     {% for item in section.items %}
                     <li>
-                        <a href="{{ item.url }}"
+                        <a href="{{ item.url|djust_url_attr }}"
                            class="flex items-center px-2 py-2 text-sm font-medium rounded-md text-gray-300 hover:bg-gray-800 hover:text-white">
                             {% if item.icon %}
                             <span class="mr-2">{{ item.icon|safe }}</span>

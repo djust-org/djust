@@ -127,6 +127,14 @@ logger = logging.getLogger(__name__)
 #: (measured: 15 suite failures).
 _UNBRIDGED_PREFIXES = ("djust.templatetags.",)
 
+#: The exception to :data:`_UNBRIDGED_PREFIXES` for a djust library with NO tags
+#: (#4157): its filters bridge on ``{% load %}`` like a project library's. The
+#: filters of the other ``djust.templatetags`` libraries reach the Rust engine
+#: through ``bootstrap_django_filters``, which a ``{% load %}`` in an extended
+#: template's child can run ahead of; ``djust_attrs`` is loaded by children
+#: (the admin, auth and gallery pages), so it must not wait for it.
+_DJUST_FILTER_LIBRARIES = frozenset({"djust.templatetags.djust_attrs"})
+
 #: Modules that ship inside djust. A refusal of one of their tags is expected (#3655).
 _DJUST_OWN_MODULE_PREFIX = "djust."
 
@@ -790,7 +798,7 @@ def _still_bridged(label: str, library: Any, module: str) -> bool:
 def _bridge_library(label: str, library: Any) -> None:
     """Register every filter and tag of ``library`` with the Rust engine."""
     module = _library_module(library)
-    if module.startswith(_UNBRIDGED_PREFIXES):
+    if module.startswith(_UNBRIDGED_PREFIXES) and module not in _DJUST_FILTER_LIBRARIES:
         allowed = _DJUST_TAGS_BRIDGED.get(module)
         if not allowed:
             return

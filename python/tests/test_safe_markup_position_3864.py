@@ -346,6 +346,10 @@ CONSERVATIVE = {
     "conditional_escape in a comment": (
         "def f(x):\n    return mark_safe(f'<!-- {conditional_escape(x)} -->')\n"
     ),
+    # a nested spec: the part is not read, so it is reported even in a quoted title (#4212)
+    "an escaped value with a nested spec in a quoted title": (
+        "def f(x, w=1):\n    return mark_safe(f'<a title=\"{escape(x):>{w}}\">l</a>')\n"
+    ),
 }
 
 
@@ -494,6 +498,77 @@ REVIEW_ROWS: dict[str, tuple[str, bool]] = {
         "def f(x):\n    return format_html_join('', '<a href=\"{}\">l</a>', ((v,) for v in [x]))\n",
         True,
     ),
+    # a cut of a checked URL is escaped text, not a checked URL: ``safe_url('/javascript:x')`` is
+    # a path, and ``[1:]`` uncovers the scheme (#4212)
+    "a slice of a checked URL in an href": (D + "f'<a href=\"{safe_url(x)[1:]}\">l</a>')\n", True),
+    "a sliced checked URL concatenated into an href": (
+        D + "'<a href=\"' + safe_url(x)[1:] + '\">l</a>')\n",
+        True,
+    ),
+    "a checked URL with its leading slash stripped": (
+        D + "'<a href=\"' + safe_url(x).lstrip('/') + '\">l</a>')\n",
+        True,
+    ),
+    # format_html: a format string held in a name, a default or a branch, a join template held
+    # by a name, and star arguments are placed too (#4212)
+    "format_html with a format string in a module constant": (
+        "FMT = '<a href=\"{}\">l</a>'\ndef f(x):\n    return format_html(FMT, x)\n",
+        True,
+    ),
+    "format_html with a format string in a parameter default": (
+        "def f(x, fmt='<a href=\"{}\">l</a>'):\n    return format_html(fmt, x)\n",
+        True,
+    ),
+    "format_html with a format string chosen by a branch": (
+        "def f(x, c=True):\n"
+        "    return format_html('<a href=\"{}\">l</a>' if c else '<b>{}</b>', x)\n",
+        True,
+    ),
+    "format_html_join with a template held by a name": (
+        "T = '<a href=\"{}\">l</a>'\n"
+        "def f(x):\n    return format_html_join('', T, ((v,) for v in [x]))\n",
+        True,
+    ),
+    "format_html with *args into an href": (
+        "def f(x):\n    return format_html('<a href=\"{}\">l</a>', *[x])\n",
+        True,
+    ),
+    "format_html with **kwargs into an href": (
+        "def f(x):\n    return format_html('<a href=\"{u}\">l</a>', **{'u': x})\n",
+        True,
+    ),
+    "format_html with a format string in a module constant and a checked URL": (
+        "FMT = '<a href=\"{}\">l</a>'\ndef f(x):\n    return format_html(FMT, safe_url(x))\n",
+        False,
+    ),
+    "format_html with a format string in a module constant, title": (
+        "FMT = '<a title=\"{}\">l</a>'\ndef f(x):\n    return format_html(FMT, x)\n",
+        False,
+    ),
+    # a style attribute's value is CSS: HTML escaping does not stop ``;`` or ``url(...)`` (#4212)
+    "an escaped value in a style attribute": (
+        D + "f'<b style=\"color: {escape(x)}\">b</b>')\n",
+        True,
+    ),
+    "format_html with an argument in a style attribute": (
+        "def f(x):\n    return format_html('<b style=\"color: {}\">b</b>', x)\n",
+        True,
+    ),
+    "a safe_css_color value in a style attribute": (
+        "from djust.components.utils import safe_css_color\n"
+        "def f(x):\n    return mark_safe(f'<b style=\"color: {safe_css_color(x)}\">b</b>')\n",
+        False,
+    ),
+    # a nested format spec makes the part one the guard cannot read: it may not sit anywhere
+    # (#4212: the behavioural witness of that rule)
+    "an escaped value with a nested spec in an href": (
+        "def f(x, w=1):\n    return mark_safe(f'<a href=\"{escape(x):>{w}}\">l</a>')\n",
+        True,
+    ),
+    "a slice of a checked URL in a quoted title": (
+        D + "f'<a title=\"{safe_url(x)[1:]}\">l</a>')\n",
+        False,
+    ),
 }
 
 
@@ -520,8 +595,7 @@ class TestTheSecondReview:
 
     @pytest.mark.parametrize("label", sorted(REVIEW_ROWS))
     def test_the_row_is_true_in_a_browser(self, label):
-        if not positions.browser_available():
-            pytest.skip("node and jsdom are not installed here (npm ci)")
+        positions.require_browser()
         module, expected = REVIEW_ROWS[label]
         outs = _outputs(module)
         verdicts = positions.browser_verdicts(outs, deadline=60)
@@ -682,8 +756,7 @@ class TestTheDifferential:
     def test_no_module_a_browser_lets_a_payload_out_of_is_cleared(self, seed):
         """The same, judged by a browser's parser (jsdom through node; its run is bounded by a
         deadline and a heap cap): the tokenizer states Python's parser does not follow."""
-        if not positions.browser_available():
-            pytest.skip("node and jsdom are not installed here (npm ci)")
+        positions.require_browser()
         result = positions.survey(300, seed, browser=True)
         assert result["false_negatives"] == [], result["false_negatives"][:3]
         assert result["unsafe"] >= 100, result["unsafe"]
@@ -711,3 +784,33 @@ class TestTheGateOffListApplies:
             found = source.count(entry["old"])
             assert found == entry.get("expect", 1), f"{entry['label']!r}: found {found} time(s)"
             assert entry["old"] != entry["new"], entry["label"]
+
+
+class TestTheBrowserOracleRunsInCI:
+    """The jsdom rows skip where node and jsdom are missing; one CI job installs them and turns
+    that skip into a failure, so they run (#4212)."""
+
+    def test_the_skip_fails_when_the_oracle_is_required(self, monkeypatch):
+        monkeypatch.setattr(positions, "browser_available", lambda: False)
+        monkeypatch.setenv(positions.REQUIRE_BROWSER_ENV, "1")
+        with pytest.raises(pytest.fail.Exception):
+            positions.require_browser()
+        monkeypatch.delenv(positions.REQUIRE_BROWSER_ENV)
+        with pytest.raises(pytest.skip.Exception):
+            positions.require_browser()
+
+    def test_a_ci_job_installs_jsdom_and_runs_the_browser_rows(self):
+        import yaml
+
+        root = Path(__file__).resolve().parents[2]
+        workflow = yaml.safe_load((root / ".github/workflows/test.yml").read_text())
+        jobs = []
+        for name, job in workflow["jobs"].items():
+            runs = [step.get("run", "") for step in job.get("steps", [])]
+            if any("npm ci" in r for r in runs) and any(
+                "test_safe_markup_position_3864.py" in r
+                and f"{positions.REQUIRE_BROWSER_ENV}=1" in r
+                for r in runs
+            ):
+                jobs.append(name)
+        assert jobs, "no job installs jsdom and runs the browser rows with the oracle required"

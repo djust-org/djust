@@ -1,4 +1,4 @@
-{% extends "djust_admin/base.html" %}
+{% extends "djust_admin/base.html" %}{% load djust_attrs %}
 {% load djust_admin_tags %}
 
 {% block breadcrumb_items %}
@@ -68,7 +68,7 @@
         <div class="px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between rounded-b-lg">
             <div>
                 {% if object_pk and has_delete_permission %}
-                <a href="{{ delete_url }}"
+                <a href="{{ delete_url|djust_url_attr }}"
                    class="text-red-600 hover:text-red-800 text-sm font-medium">
                     Delete
                 </a>
