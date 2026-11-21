@@ -369,6 +369,15 @@ HTML_ONLY_ORIGINS = frozenset(
 #: element text (the marker means "this is markup"), wrong in any attribute value, where the value
 #: can close the attribute (#4009). ``attr_text`` / ``escape`` always escape.
 MARK_HONOURING_ORIGINS = frozenset({"django.utils.html.conditional_escape"})
+#: CSS value escapers: their output is what a ``style`` value takes, and no URL (#4212 item 7).
+CSS_ESCAPER_ORIGINS = frozenset(
+    {
+        "djust.components.utils.safe_css_color",
+        "djust.components.utils.safe_css_length",
+        "djust.components.utils.safe_css_ratio",
+        "djust.components.utils.safe_css_number",
+    }
+)
 #: Escapers that also refuse a URL that is not a navigation: an HTML escaper wrapped around one of
 #: these is still a checked URL (``conditional_escape(safe_url(x))``).
 URL_ESCAPER_ORIGINS = frozenset(
@@ -595,9 +604,14 @@ SYM_DIGITS = "\x04"
 #: leaves a tag between attributes (`` hidden``, ``btn btn-primary``): anywhere but a tag's name or
 #: an unquoted value
 SYM_WORDS = "\x07"
-#: a value escaper's output (``safe_url``, ``safe_css_*``): no ``<`` or quote, but spaces: text, a
-#: quoted value or a comment, not a tag (it would add attributes) or an unquoted value
+#: a URL checker's output (``safe_url``, ``url_attr``): no ``<`` or quote, but spaces: text, a
+#: quoted value (the start of a URL included) or a comment, not a tag (it would add attributes), an
+#: unquoted value or a ``style`` value (``)`` and ``;`` pass a URL check and end a CSS ``url(...)``
+#: or declaration, #4212 item 7)
 SYM_VALUE = "\x00"
+#: a CSS escaper's output (``safe_css_*``): as ``SYM_VALUE``, but it fits a ``style`` value and not
+#: the start of a URL (it is no checked URL)
+SYM_CSS = "\x0e"
 #: an HTML-only escaper's output (``escape``, ``attr_text``): as ``SYM_VALUE``, and not where HTML
 #: escaping is not enough (the start of a URL, a handler, a script or style body, ``srcdoc``)
 SYM_ESCAPED = "\x05"
@@ -618,6 +632,7 @@ _SYMBOLS = frozenset(
         SYM_DIGITS,
         SYM_WORDS,
         SYM_VALUE,
+        SYM_CSS,
         SYM_ESCAPED,
         SYM_JSON,
         SYM_MARKUP,
@@ -627,7 +642,9 @@ _SYMBOLS = frozenset(
     }
 )
 #: symbols that need a known position
-_POSITIONED = frozenset({SYM_WORDS, SYM_VALUE, SYM_ESCAPED, SYM_JSON, SYM_MARKUP, SYM_ATTRS})
+_POSITIONED = frozenset(
+    {SYM_WORDS, SYM_VALUE, SYM_CSS, SYM_ESCAPED, SYM_JSON, SYM_MARKUP, SYM_ATTRS}
+)
 #: a text :func:`_walk` always refuses
 SYM_REFUSED = SYM_RAW
 #: a value with a few known spellings is kept as all of them: ``\x10a\x11b\x12`` is ``a`` or ``b``,
@@ -636,7 +653,9 @@ CHOICE_OPEN, CHOICE_SEP, CHOICE_CLOSE = "\x10", "\x11", "\x12"
 _CONTROL = _SYMBOLS | {CHOICE_OPEN, CHOICE_SEP, CHOICE_CLOSE}
 #: the classes whose every spelling starts and ends in element text (what a recursive call is
 #: first read as, ``SYM_MARKUP``, promises)
-_FITS_MARKUP = frozenset({SYM_DIGITS, SYM_WORDS, SYM_VALUE, SYM_ESCAPED, SYM_MARKUP, SYM_ATTRS})
+_FITS_MARKUP = frozenset(
+    {SYM_DIGITS, SYM_WORDS, SYM_VALUE, SYM_CSS, SYM_ESCAPED, SYM_MARKUP, SYM_ATTRS}
+)
 #: how deep ``_text_b`` follows a value (names, calls, containers) before it reads "unknown"
 _TEXT_DEPTH = 30
 _SPELLINGS = 32
@@ -656,6 +675,7 @@ def _mapped(text: str) -> str:
     return (
         text.replace(SYM_DIGITS, "0")
         .replace(SYM_VALUE, "")
+        .replace(SYM_CSS, "")
         .replace(SYM_ESCAPED, "")
         .replace(SYM_JSON, "")
         .replace(SYM_MARKUP, "")
@@ -749,7 +769,8 @@ def _walk(text: str) -> tuple[bool, str]:
 _SYMBOL_NAMES = {
     SYM_DIGITS: "digits",
     SYM_WORDS: "literal words",
-    SYM_VALUE: "a URL/CSS escaper's output",
+    SYM_VALUE: "a URL checker's output",
+    SYM_CSS: "a CSS escaper's output",
     SYM_ESCAPED: "an HTML-escaped value",
     SYM_JSON: "script-escaped JSON",
     SYM_MARKUP: "markup",
@@ -964,10 +985,15 @@ def _walk_tail(text: str) -> tuple[bool, str, int]:
                 )
             elif ch == SYM_VALUE:
                 # ``raw`` with ``where`` None is a JSON data block's body: never run
-                # (a CSS escaper's output, ``safe_css_*``, is what a ``style`` value takes)
-                allowed = (
-                    state in ("text", "quoted", "comment") and where in (None, "url", "css")
-                ) or (state == "raw" and (plain_body or where is None))
+                # (not a ``style`` value: a checked URL may hold ``)`` / ``;``, #4212 item 7)
+                allowed = (state in ("text", "quoted", "comment") and where in (None, "url")) or (
+                    state == "raw" and (plain_body or where is None)
+                )
+            elif ch == SYM_CSS:
+                # a CSS escaper's output (``safe_css_*``) is what a ``style`` value takes
+                allowed = (state in ("text", "quoted", "comment") and where in (None, "css")) or (
+                    state == "raw" and (plain_body or where is None)
+                )
             elif ch == SYM_ESCAPED:
                 allowed = state in ("text", "quoted", "comment") and where is None
                 allowed = allowed or (state == "raw" and (plain_body or where is None))
@@ -1116,7 +1142,7 @@ def _cut_class(cls: str) -> str:
     ``/`` off ``safe_url('/javascript:x')`` uncovers the scheme it judged as a path (#4212)."""
     if cls == SYM_VALUE:
         return SYM_ESCAPED
-    return cls if cls in (SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
+    return cls if cls in (SYM_CSS, SYM_ESCAPED, SYM_WORDS) else SYM_UNKNOWN
 
 
 def _text_class(text: str) -> str:
@@ -1146,7 +1172,9 @@ def _text_class(text: str) -> str:
             return SYM_WORDS
     if not special and syms <= {SYM_DIGITS, SYM_VALUE}:
         return SYM_VALUE
-    if not special and syms <= {SYM_DIGITS, SYM_VALUE, SYM_ESCAPED}:
+    if not special and syms <= {SYM_DIGITS, SYM_CSS}:
+        return SYM_CSS
+    if not special and syms <= {SYM_DIGITS, SYM_VALUE, SYM_CSS, SYM_ESCAPED}:
         return SYM_ESCAPED
     if not special and syms <= {SYM_DIGITS, SYM_JSON}:
         return SYM_JSON
@@ -1169,7 +1197,7 @@ def _join(classes: set[str]) -> str:
         return next(iter(classes))
     if SYM_UNKNOWN in classes:
         return SYM_UNKNOWN
-    if classes <= {SYM_VALUE, SYM_ESCAPED}:
+    if classes <= {SYM_VALUE, SYM_CSS, SYM_ESCAPED}:
         return SYM_ESCAPED
     if SYM_JSON in classes:
         return SYM_UNKNOWN if classes & {SYM_ATTRS} else SYM_MARKUP
@@ -1232,7 +1260,7 @@ def _spec_text(text: str, spec: str, numeric: bool) -> str:
         return text
     if cls == SYM_DIGITS:
         return SYM_WORDS if (cut or padded) else SYM_DIGITS
-    if cls in (SYM_WORDS, SYM_VALUE, SYM_ESCAPED):
+    if cls in (SYM_WORDS, SYM_VALUE, SYM_CSS, SYM_ESCAPED):
         return cls  # spaces around (or a part of) escaped text are escaped text
     return SYM_UNKNOWN
 
@@ -1243,7 +1271,7 @@ def _repr_text(text: str) -> str:
     cls = _text_class(text)
     if cls == SYM_DIGITS:
         return SYM_DIGITS
-    if cls in (SYM_WORDS, SYM_VALUE, SYM_ESCAPED):
+    if cls in (SYM_WORDS, SYM_VALUE, SYM_CSS, SYM_ESCAPED):
         return "'" + cls + "'"
     return SYM_RAW
 
@@ -3359,7 +3387,7 @@ class _Module:
         """What ``conditional_escape`` makes of a value whose text is ``text`` (``plain``: never a
         marked-safe value): escaped text, or, for a value that may be marked safe, the markup."""
         cls = _text_class(text)
-        if cls in (SYM_DIGITS, SYM_WORDS, SYM_VALUE, SYM_ESCAPED):
+        if cls in (SYM_DIGITS, SYM_WORDS, SYM_VALUE, SYM_CSS, SYM_ESCAPED):
             return cls
         if plain:
             return SYM_ESCAPED
@@ -4039,6 +4067,8 @@ class _Module:
             if origin in MARK_HONOURING_ORIGINS and not (e.args and self._plain_str(e.args[0], sc)):
                 return SYM_MARKUP  # a marked-safe value comes out as it went in
             return SYM_ESCAPED
+        if origin in CSS_ESCAPER_ORIGINS:
+            return SYM_CSS
         if origin in CONTEXT_SENSITIVE_ORIGINS:
             return SYM_VALUE
         if origin in JSON_ESCAPERS:
@@ -4175,6 +4205,7 @@ class _Module:
                         SYM_DIGITS,
                         SYM_WORDS,
                         SYM_VALUE,
+                        SYM_CSS,
                         SYM_ESCAPED,
                     ):
                         return SYM_RAW
