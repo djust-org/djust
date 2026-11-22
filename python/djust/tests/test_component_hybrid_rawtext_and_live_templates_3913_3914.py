@@ -541,6 +541,7 @@ def template_files(tmp_path):
     root.mkdir()
 
     def write(name: str, source: str) -> None:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
         (root / name).write_text(source)
 
     templates = [
@@ -616,6 +617,33 @@ class TestTemplateNameFile:
         assert "<b>" not in out and "<main>" in out, out
         assert "&lt;/textarea&gt;" in out, out
 
+    def test_a_relative_extends_resolves_against_the_files_own_origin(
+        self, drawer, template_files
+    ) -> None:
+        """Review B1: the hardened source is compiled with the loaded template's origin, so a
+        ``./`` name resolves as it does for the file on disk (``from_string`` had no origin and
+        raised ``AttributeError``)."""
+        template_files("sub/base_r.html", "<main>{% block b %}{% endblock %}</main>")
+        template_files(
+            "sub/child_r.html",
+            '{% extends "./base_r.html" %}{% block b %}<i title="{{ v }}">c</i>{% endblock %}',
+        )
+        out = FILE_DRAWERS[drawer]("sub/child_r.html", v=mark_safe('"><b>x</b>'))
+        assert "<main><i " in out, out
+        assert "<b>" not in out, out
+        assert _attrs(out, "i")["title"] == '"><b>x</b>', out
+
+    def test_a_missing_template_raises_without_the_unscanned_warning(
+        self, drawer, template_files, caplog
+    ) -> None:
+        """Review N1: not finding the file is the loader's error, not an unscannable source."""
+        from django.template import TemplateDoesNotExist
+
+        with caplog.at_level(logging.WARNING, logger="djust.components._hybrid_attrs"):
+            with pytest.raises(TemplateDoesNotExist):
+                FILE_DRAWERS[drawer]("nope.html", v="x")
+        assert "was not scanned" not in caplog.text, caplog.text
+
     def test_a_slot_in_the_parent_is_not_scanned_and_the_warning_names_the_extends(
         self, drawer, template_files, caplog
     ) -> None:
@@ -662,7 +690,7 @@ class TestTemplateNameFile:
         self, drawer, template_files, monkeypatch, caplog
     ) -> None:
         template_files("opaque.html", '<a title="{{ v }}">x</a>')
-        monkeypatch.setattr(components_base, "_load_template_source", lambda name: None)
+        monkeypatch.setattr(components_base, "_template_source", lambda loaded: None)
         with caplog.at_level(logging.WARNING, logger="djust.components._hybrid_attrs"):
             out = FILE_DRAWERS[drawer]("opaque.html", v="ok")
             FILE_DRAWERS[drawer]("opaque.html", v="ok")
@@ -1442,9 +1470,14 @@ RENDER_SITES = {
     ): "renders the hardened source of a template_name FILE (#3933), not an inline template",
     (
         "components/base.py",
-        "_render_template_file",
+        "_recompile_like",
+        "DjangoTemplate",
+    ): "compiles the hardened source of an {% extends %} template_name FILE with the loaded origin",
+    (
+        "components/base.py",
+        "_recompile_like",
         "from_string",
-    ): "renders the hardened source of an {% extends %} template_name FILE through the backend",
+    ): "the fallback for a backend that is neither Django's nor djust's: the same hardened source",
 }
 
 #: Every call in the WHOLE package that renders a template string read off an object attribute

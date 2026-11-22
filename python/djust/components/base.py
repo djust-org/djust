@@ -115,16 +115,41 @@ def _render_inline_template(
     return _render_template_string(template_str, context)
 
 
+def _template_source(loaded: Any) -> Optional[str]:
+    """The source of a template the backend loaded, or ``None`` when it does not expose one."""
+    source = getattr(loaded, "source", None)
+    if source is None:
+        source = getattr(getattr(loaded, "template", None), "source", None)
+    return source if isinstance(source, str) else None
+
+
 def _load_template_source(template_name: str) -> Optional[str]:
     """The source of ``template_name`` as the project's loaders find it, or
     ``None`` when the configured backend does not expose one (#2530)."""
     from django.template.loader import get_template
 
-    loaded = get_template(template_name)
-    source = getattr(loaded, "source", None)
-    if source is None:
-        source = getattr(getattr(loaded, "template", None), "source", None)
-    return source if isinstance(source, str) else None
+    return _template_source(get_template(template_name))
+
+
+def _recompile_like(loaded: Any, source: str) -> Any:
+    """A template for ``source`` compiled the way ``loaded`` was: same backend, engine and ORIGIN.
+
+    ``backend.from_string(source)`` has no origin, and Django resolves a relative
+    ``{% extends "./base.html" %}`` / ``{% include "../x.html" %}`` against the origin's template
+    name (a template without one raises ``AttributeError``). The hardened source takes the loaded
+    template's origin, so the names it holds resolve as they do for the file on disk.
+    """
+    backend = loaded.backend
+    inner = getattr(loaded, "template", None)
+    from django.template.base import Template as DjangoTemplate
+
+    if isinstance(inner, DjangoTemplate):
+        compiled = DjangoTemplate(source, origin=inner.origin, name=inner.name, engine=inner.engine)
+        return type(loaded)(compiled, backend)
+    origin = getattr(loaded, "origin", None)
+    if origin is not None and hasattr(loaded, "template_string"):  # DjustTemplate
+        return type(loaded)(source, backend=backend, origin=origin)
+    return backend.from_string(source)
 
 
 _ID_NAMESPACE_ALLOWED = re.compile(r"[^A-Za-z0-9_]")
@@ -210,8 +235,9 @@ def _render_template_file(template_name: str, context: Dict[str, Any], owner: st
     template.
 
     A file without ``{% extends %}`` is drawn through the LiveView engine entry so its
-    ``{% if %}`` blocks keep dj-if markers (#2530); one with it goes to the backend that found it
-    (``from_string`` resolves ``{% extends %}`` and ``{% include %}`` through the same loaders).
+    ``{% if %}`` blocks keep dj-if markers (#2530); one with it is compiled by the backend that found it, with the
+    loaded template's origin (``_recompile_like``), so ``{% extends %}`` / ``{% include %}``
+    resolve through the same loaders and a relative ``./`` name resolves against the file.
     A file whose source the backend does not expose cannot be scanned: it is drawn as before and
     named once per class.
 
@@ -219,10 +245,11 @@ def _render_template_file(template_name: str, context: Dict[str, Any], owner: st
     """
     from django.template.loader import get_template, render_to_string
 
-    try:
-        source = _load_template_source(template_name)
-    except Exception:
-        source = None
+    # One lookup: the loaded template gives the source, and (for an ``{% extends %}`` file) the
+    # backend and origin the hardened source is compiled with. A missing template raises here,
+    # as it does for ``render_to_string``, and is not reported as an unscannable one.
+    loaded = get_template(template_name)
+    source = _template_source(loaded)
     if source is None:
         warn_unscanned_file(owner, template_name)
         with include_guard_scope():
@@ -230,9 +257,8 @@ def _render_template_file(template_name: str, context: Dict[str, Any], owner: st
     rewritten, hardened = harden_context(source, context, owner, file=True)
     if "{% extends" not in source:
         return _render_source_with_markers(rewritten, hardened)
-    backend = get_template(template_name).backend
     with include_guard_scope():
-        return cast(str, backend.from_string(rewritten).render(hardened))
+        return cast(str, _recompile_like(loaded, rewritten).render(hardened))
 
 
 _DECLARES_NAME: Dict[type, bool] = {}
