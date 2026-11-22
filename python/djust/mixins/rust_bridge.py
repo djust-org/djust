@@ -143,6 +143,13 @@ def _overlay_floor(value: Any, memo: Dict[Any, Any], text_memo: Dict[int, Any]) 
     return _overlay_plain_text_handles(floored, text_memo)
 
 
+def _method_read_rows_take_the_jit(full_context: Any) -> bool:
+    """Does a method-read QuerySet (``{{ qs.count }}``) still go on to the row-walk check (review
+    S1)? On an explicit context, yes: its walked rows are JIT-serialized as legacy's are. Legacy's
+    JIT already ran before the sync. A function so the gate-off test can turn it off."""
+    return type(full_context) is ExplicitRenderContext
+
+
 def _overlay_model_class(value: Any) -> Any:
     """The model class behind one overlay value (a ``Model``, a ``QuerySet``, a model list)."""
     from django.db.models import Model, QuerySet
@@ -1203,7 +1210,13 @@ class RustBridgeMixin:
                         _qs_roots = _queryset_method_roots_for(self)
                     if _key in _qs_roots:
                         _raw_models_for_sidecar[_key] = _val
-                        continue
+                        # Review S1: an explicit view's method-read QuerySet whose rows
+                        # the template ALSO walks goes on to the JIT below, as legacy's
+                        # does, so each row dict carries the relation values and a
+                        # filtered rebinding of a row (``{% with r=x|default:x %}``)
+                        # reads them. Legacy's JIT already ran (context.py).
+                        if not _method_read_rows_take_the_jit(full_context):
+                            continue
                 # #4069: a loop row's relation walk (``{% for u in users %}
                 # {{ u.groups.all }}``) is answered through the sidecar alias
                 # ``u -> users.<N>``; the normalized column dicts cannot answer
@@ -1266,6 +1279,14 @@ class RustBridgeMixin:
                 for _key, _val in _explicit_jit_keys.items():
                     if _key not in self._jit_serialized_keys:
                         _raw_models_for_sidecar[_key] = list(_val)
+                    elif _key in _raw_models_for_sidecar:
+                        # A method-read QuerySet the JIT serialized (review S1): the
+                        # method answers come from the JIT's EVALUATED QuerySet
+                        # (``_all_method_rows``), not the caller's unevaluated one,
+                        # so ``{{ qs.count }}`` costs no second query.
+                        _evaluated = (getattr(self, "_all_method_rows", None) or {}).get(_key)
+                        if _evaluated is not None:
+                            _raw_models_for_sidecar[_key] = _evaluated
 
             for _key, _val in list(full_context.items()):
                 _normalized = _normalize_db_values(_val)

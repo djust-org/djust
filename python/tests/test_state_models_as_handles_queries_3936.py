@@ -241,3 +241,48 @@ def test_the_world_is_what_the_answers_assume(world):
         "u2",
     ]
     assert Group.objects.count() == 2
+
+
+# -- review S1: a method-read QuerySet whose rows are walked keeps its filtered rebindings ------
+#
+# The overlay skips such a key (the dict path answers ``count`` and the walk). On an explicit view
+# its rows were the plain column dicts, so a filtered rebinding of a row read the relation empty --
+# #3936's own symptom, switched back on by an unrelated ``{{ users.count }}``. Its rows now go
+# through the JIT as legacy's do, so each row dict carries the relation values.
+
+S1_CASES = [
+    (
+        "count+with-first-rebind",
+        "{{ users.count }}|{% with q=users|first %}{% with r=q|default:q %}"
+        "{{ r.groups.count }}{% endwith %}{% endwith %}",
+        "3|2",
+    ),
+    (
+        "count+loop-rebind",
+        "{{ users.count }}|{% for x in users %}{% with r=x|default:x %}"
+        "{{ r.groups.count }}{% endwith %},{% endfor %}",
+        "3|2,1,0,",
+    ),
+]
+
+
+@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("name,source,want", S1_CASES, ids=[c[0] for c in S1_CASES])
+def test_a_method_read_key_keeps_its_filtered_rebindings(world, policy, flag, name, source, want):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
+    assert DjangoTemplate(source).render(DjangoContext(_qs())) == want
+    out, queries = _measure(source, _qs, policy, flag=flag)
+    assert out == want
+    # the outer SELECT once, the relation once (prefetched), no per-row query
+    assert queries <= 3, queries
+
+
+def test_gate_off_without_the_jit_an_explicit_rebinding_reads_empty(world, monkeypatch):
+    from djust.mixins import rust_bridge
+
+    monkeypatch.setattr(rust_bridge, "_method_read_rows_take_the_jit", lambda ctx: False)
+    _, source, _ = S1_CASES[1]
+    assert _render(source, _qs, "explicit") == "3|,,,"
