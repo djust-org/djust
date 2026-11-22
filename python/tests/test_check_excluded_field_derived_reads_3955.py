@@ -124,3 +124,35 @@ def test_suppressed(isolated, monkeypatch):
     model = _model("S015Quiet", {"djust_exclude_fields": ["secret"], "get_display": get_display})
     with override_settings(DJUST_CONFIG={"suppress_checks": ["S015"]}):
         assert _run(monkeypatch, model) == []
+
+
+def test_warns_for_plain_method(isolated, monkeypatch):
+    """The floor proxy answers any public zero-argument method as a call (``{{ obj.label }}``), not
+    only ``get_*`` (train/2.0-ah review S6). A method that needs an argument, a private one and an
+    ``alters_data`` one are not template-callable and stay quiet."""
+
+    def label(self):
+        return "L:%s" % self.secret
+
+    def needs_arg(self, prefix):
+        return prefix + self.secret
+
+    def _private(self):
+        return self.secret
+
+    def wipe(self):
+        return self.secret
+
+    wipe.alters_data = True
+    model = _model(
+        "S015Plain",
+        {
+            "djust_exclude_fields": ["secret"],
+            "label": label,
+            "needs_arg": needs_arg,
+            "_private": _private,
+            "wipe": wipe,
+        },
+    )
+    messages = _run(monkeypatch, model)
+    assert [m.msg.split(" reads ")[0].rsplit(".", 1)[-1] for m in messages] == ["label"]

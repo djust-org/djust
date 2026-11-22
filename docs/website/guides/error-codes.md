@@ -1207,7 +1207,7 @@ not trigger it.
 
 **Severity**: Warning
 
-**What causes it**: A model lists a field in `djust_exclude_fields`, and one of its explicit `get_*()` methods or `@property` values (its own or inherited, such as `AbstractUser.get_full_name`) reads that field. djust hides the field but still serializes the computed value, so the excluded data reaches the template. Message: "<model>.<member> reads <fields>, which <Model>.djust_exclude_fields hides: djust still serializes the computed value, so the excluded data reaches the template."
+**What causes it**: A model lists a field in `djust_exclude_fields`, and one of its explicit `get_*()` methods or `@property` values (its own or inherited, such as `AbstractUser.get_full_name`), or another public zero-argument method of its own (`{{ obj.label }}`), reads that field. djust hides the field but still serializes the computed value, so the excluded data reaches the template. Message: "<model>.<member> reads <fields>, which <Model>.djust_exclude_fields hides: djust still serializes the computed value, so the excluded data reaches the template."
 
 **Fix**: Add the member to `djust_exclude_fields` as well, or switch the model to an allowlist with `djust_serializable_fields`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["S015"]}`.
 

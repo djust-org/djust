@@ -920,7 +920,9 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Method**: Source inspection of every installed model with a non-empty `djust_exclude_fields`
   (Django's own models are skipped; their inherited methods are read). The source of each explicit
   `get_*` method and `@property` (the members the serializer collects, inherited ones such as
-  `AbstractUser.get_full_name` included) is parsed; nothing is called or queried.
+  `AbstractUser.get_full_name` included), and of every other public zero-argument method the
+  application's own model classes define (the floor proxy answers `{{ obj.label }}` as a call), is
+  parsed; nothing is called or queried.
 - **What it detects**: A member that reads an excluded field through `self.<field>`,
   `getattr(self, "<field>")`, or up to three hops of `self.<helper>` / `self.<property>`.
   `djust_exclude_fields` keeps the FIELD out of the serialized row and off the floor proxy, but the

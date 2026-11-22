@@ -1455,21 +1455,48 @@ def _excluded_fields_read_by(model: type, name: str, excluded: frozenset[str]) -
     return found
 
 
+def _zero_arg_template_callable(func: Any) -> bool:
+    """Can a template call *func* (``{{ obj.name }}``)? No required argument besides ``self``, and
+    not marked ``alters_data`` (Django's template engine refuses those)."""
+    if getattr(func, "alters_data", False):
+        return False
+    try:
+        params = list(inspect.signature(func).parameters.values())[1:]
+    except (TypeError, ValueError):
+        return False
+    return all(
+        p.default is not inspect.Parameter.empty
+        or p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        for p in params
+    )
+
+
 def _serialized_members(model: type) -> list[str]:
-    """The computed members the eager serializer reads off *model*: explicit ``get_*`` methods and
+    """The computed members a template can read off *model*: explicit ``get_*`` methods and
     ``@property`` values defined on a class above ``models.Model`` in the MRO (inherited ones such as
-    ``AbstractUser.get_full_name`` included), the same set ``_add_safe_model_methods`` and
-    ``_add_property_values`` collect."""
+    ``AbstractUser.get_full_name`` included), the set ``_add_safe_model_methods`` and
+    ``_add_property_values`` collect; and every other public zero-argument method of the
+    application's own classes, which the floor proxy answers as a call (``{{ u.label }}``,
+    ``_FlooredCall``; train/2.0-ah review S6). A plain method inherited from a ``django.*`` class
+    (``clean``, ``natural_key``) is not one an application wrote, and is left out."""
     from django.db import models as dj_models
 
     names: set[str] = set()
     for klass in model.__mro__:
         if klass is dj_models.Model:
             break
+        own = not (getattr(klass, "__module__", "") or "").startswith("django.")
         for attr_name, attr in vars(klass).items():
             if isinstance(attr, property):
                 names.add(attr_name)
             elif attr_name.startswith("get_") and inspect.isfunction(attr):
+                names.add(attr_name)
+            elif (
+                own
+                and not attr_name.startswith("_")
+                and inspect.isfunction(attr)
+                and _zero_arg_template_callable(attr)
+            ):
                 names.add(attr_name)
     return sorted(names)
 
