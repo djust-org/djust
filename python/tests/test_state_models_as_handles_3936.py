@@ -231,9 +231,15 @@ def test_title_reads_reverse_relation_flag_on(people):
 
 
 @pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_tag_arguments_stay_floored_json(people, policy):
+def test_tag_arguments_stay_floored_json(people, policy, monkeypatch):
     """A native tag ARGUMENT stays the floored dict text with the flag on: ``data_table`` reads
-    dict rows, and renders the same bytes as with the flag off."""
+    dict rows, and renders the same bytes as with the flag off.
+
+    Non-vacuity: with the flag on the argument IS read through the handle's floored dict (the
+    proxy's ``__djust_serialize__``): a serializer that drops ``username`` drops it from the
+    flag-on table only."""
+    from djust import serialization
+
     cols = [{"key": "username", "label": "U"}]
 
     def ctx():
@@ -244,30 +250,81 @@ def test_tag_arguments_stay_floored_json(people, policy):
     assert "u0" in on and "u1" in on and HASH_MARK not in on, on
     assert on == _render(src, ctx, policy, flag=False)
 
+    real = serialization._smp_serialize
+
+    def without_username(proxy):
+        row = dict(real(proxy))
+        row.pop("username", None)
+        return row
+
+    monkeypatch.setattr(serialization, "_smp_serialize", without_username)
+    assert "u0" not in _render(src, ctx, policy)
+    assert "u0" in _render(src, ctx, policy, flag=False)
+
 
 def test_change_detection_unchanged(people):
-    """A field mutated behind a stable ``id()`` still re-renders with the flag on, and the
-    overlay follows it (the handle is rebuilt on every sync)."""
+    """The overlay follows a REPLACED state model on every diff render (the handle is rebuilt on
+    every sync): ``self.u`` becomes another ``User`` in the event, and ``render_with_diff`` reads
+    the new one through the filtered rebinding and through a loop over a held list (whose items
+    the loop render cache must not replay, train/2.0-ah review B3)."""
     from djust.decorators import event_handler
 
     class _V(LiveView):
         exposure_policy = "legacy"
         template = (
             "<div dj-root>{{ u.username }}|"
-            "{% with q=u|default:u %}{{ q.username }}{% endwith %}"
-            "<button dj-click='rename'>x</button></div>"
+            "{% with q=u|default:u %}{{ q.username }}{% endwith %}|"
+            "{% for x in us %}<i>{{ x.email }}</i>{% endfor %}"
+            "<button dj-click='swap'>x</button></div>"
         )
 
         def mount(self, request, **kwargs):
             self.u = User.objects.get(username="u0")
+            self.us = [User.objects.get(username="u0")]
 
         @event_handler
-        def rename(self, **kwargs):
-            self.u.username = "renamed"
+        def swap(self, **kwargs):
+            self.u = User.objects.get(username="u1")
+            self.us[0].email = "swapped@example.com"
 
-    with override_settings(LIVEVIEW_CONFIG=FLAG_ON):
+    def text(html: str) -> str:
+        return _body(
+            re.sub(r' dj-id="[^"]*"', "", html).replace('<div dj-root="">', "<div dj-root>")
+        )
+
+    with override_settings(LIVEVIEW_CONFIG=dict(FLAG_ON, loop_render_cache_enabled=True)):
         client = LiveViewTestClient(_V)
         client.mount()
-        assert _body(client.render()).startswith("u0|u0")
-        client.send_event("rename")
-        assert _body(client.render()).startswith("renamed|renamed")
+        view = client.view_instance
+        assert text(view.render_with_diff()[0]).startswith("u0|u0|<i></i>")
+        client.send_event("swap")
+        assert text(view.render_with_diff()[0]).startswith("u1|u1|<i>swapped@example.com</i>")
+
+
+#: The four Rust render entries that bind the overlay (``apply_render_handles``), each called on
+#: the synced Rust view: ``render_result``, ``render_with_diff_detached``, ``render_binary_diff``,
+#: and ``prepare_partial_page`` (the full-page root render; the authenticated partial-root page
+#: renders through it). G1 (``set_render_handles({})``) turns every entry off at once, so a missing
+#: call at ONE entry is only visible here (train/2.0-ah review S4).
+RUST_ENTRIES = {
+    "render": lambda rv: rv.render(),
+    "render_with_diff": lambda rv: rv.render_with_diff()[0],
+    "render_binary_diff": lambda rv: rv.render_binary_diff()[0],
+    "prepare_partial_page": lambda rv: rv.render_full_root_provenance()[0],
+}
+
+
+@pytest.mark.parametrize("entry", list(RUST_ENTRIES))
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_every_render_entry_binds_the_overlay(world, policy, entry):
+    """A custom filter is handed the floor proxy (not the dict) on every entry, both policies:
+    a shape legacy's JIT does not answer by itself, so each entry's binding is what shows."""
+    source = "{% load cc3949 %}{{ m|cc3949_filter }}"
+    with override_settings(LIVEVIEW_CONFIG=FLAG_ON):
+        client = LiveViewTestClient(_view(source, lambda: {"m": world["a1"]}, policy))
+        client.mount()
+        client.render()
+        view = client.view_instance
+        view._sync_state_to_rust()  # the overlay is set by the sync, read by each entry
+        html = html_lib.unescape(RUST_ENTRIES[entry](view._rust_view))
+    assert PROXY in html and HASH_MARK not in html, (entry, html)
