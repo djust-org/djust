@@ -141,6 +141,66 @@ def _overlay_floor(value: Any, memo: Dict[Any, Any]) -> Any:
     return _protect_sidecar_tree(value, 0, memo, set())
 
 
+def _overlay_model_class(value: Any) -> Any:
+    """The model class behind one overlay value (a ``Model``, a ``QuerySet``, a model list)."""
+    from django.db.models import Model, QuerySet
+
+    if isinstance(value, QuerySet):
+        return value.model
+    if isinstance(value, Model):
+        return type(value)
+    return next((type(v) for v in value if isinstance(v, Model)), None)
+
+
+def _overlay_skip_keys(
+    view: Any,
+    raw: Dict[str, Any],
+    full_context: Any,
+    walked_keys: Any = (),
+    qs_roots: Optional[FrozenSet[str]] = None,
+) -> FrozenSet[str]:
+    """The state keys the flag-off path already answers with Django's semantics (#3936, B-H1).
+
+    The overlay binds a handle ABOVE the state, so it shadows every answer the JIT and the
+    render sidecar give for that name. For these keys the shadow loses an answer or adds a query,
+    so they keep the flag-off path (capped, prefetched rows; method answers):
+
+    - a QuerySet the template reads ``count`` / ``exists`` / ``first`` / ``last`` off (#4241,
+      #4258): the handle is a LIST of rows, which has no ``count``;
+    - a name whose rows the template reads through a QuerySet method (``_all_method_rows``,
+      #3801);
+    - a name whose rows the JIT serialized WITH the relation paths the template walks
+      (``walked_keys`` on an explicit view, #4069 S1; ``_jit_serialized_keys`` plus a live walk
+      on a legacy one): the JIT prefetched them and applied ``queryset_all_row_cap`` (#3788),
+      and a handle would walk each row again, one query per row.
+
+    Every other key still gets its handle: a single model on an explicit view, a model list or
+    QuerySet the template reads only columns off, and every value a filtered rebinding or a
+    custom filter / tag is handed.
+    """
+    from django.db.models import QuerySet
+
+    from .jit import rows_need_live_walk
+
+    if not raw:
+        return frozenset()
+    skip = {k for k in walked_keys if k in raw}
+    skip.update(k for k in (getattr(view, "_all_method_rows", None) or {}) if k in raw)
+    if any(isinstance(v, QuerySet) for v in raw.values()):
+        # The sync's own lookup when it made one: one per sync (#4258).
+        roots = _queryset_method_roots_for(view) if qs_roots is None else qs_roots
+        skip.update(k for k, v in raw.items() if isinstance(v, QuerySet) and k in roots)
+    jit_keys = getattr(view, "_jit_serialized_keys", None) or ()
+    pending = [k for k in raw if k in jit_keys and k not in skip]
+    if pending:
+        walk_paths = _queryset_row_walk_paths_for(view)
+        for key in pending:
+            paths = walk_paths.get(key)
+            if paths and rows_need_live_walk(_overlay_model_class(raw[key]), paths, full_context):
+                skip.add(key)
+    return frozenset(skip)
+
+
 def _render_handles(raw: Dict[str, Any], full_context: Any, skip_keys: Any = ()) -> Dict[str, Any]:
     """Floored handles for the render-time overlay (#3936).
 
@@ -1879,7 +1939,17 @@ class RustBridgeMixin:
             # flag-off sync then costs one ``has_render_handles`` read, and a view
             # that held handles is still cleared on the sync they leave.
             if hasattr(self._rust_view, "set_render_handles"):
-                _handles = _render_handles(_overlay_raw, full_context, sidecar_only_keys)
+                # B-H1/B-H2 (train/2.0-ai): a key the flag-off path already answers
+                # (QuerySet methods, JIT-walked rows) keeps that path, so the overlay
+                # issues no query the flag-off render does not.
+                _skip = set(sidecar_only_keys)
+                if _overlay_raw:
+                    _skip.update(
+                        _overlay_skip_keys(
+                            self, _overlay_raw, full_context, _explicit_jit_keys, _qs_roots
+                        )
+                    )
+                _handles = _render_handles(_overlay_raw, full_context, _skip)
                 if _handles or getattr(self._rust_view, "has_render_handles", lambda: True)():
                     self._rust_view.set_render_handles(_handles)
 

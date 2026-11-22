@@ -84,6 +84,34 @@ def test_single_model_corpus_is_unchanged(world, policy, name, source):
     )
 
 
+#: The QuerySet-method and walked-row shapes (#4241, #4258, #3801, #4069) the corpus above missed,
+#: which is how the overlay shipped shadowing them behind the flag (train/2.0-ai, B-H1). The
+#: query counts and the row cap are pinned in ``test_state_models_as_handles_queries_3936.py``.
+QUERYSET_READS = [
+    ("qs-count", "{{ users.count }}"),
+    ("qs-exists", "{% if users.exists %}y{% endif %}|{{ users.exists }}"),
+    ("qs-first-last", "{{ users.first.username }}|{{ users.last.username }}"),
+    (
+        "qs-loop-and-method",
+        "{% for u in users %}{% for g in u.groups.all %}{{ g.name }},{% endfor %}"
+        "{{ u.groups.all.count }};{% endfor %}",
+    ),
+    (
+        "qs-count-beside-walk",
+        "{{ users.count }}:{% for u in users %}{{ u.groups.count }};{% endfor %}",
+    ),
+    ("qs-with-first", "{% with q=users|first %}{{ q.groups.count }}{% endwith %}"),
+]
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("name,source", QUERYSET_READS, ids=[n for n, _ in QUERYSET_READS])
+def test_queryset_reads_are_unchanged(world, policy, name, source):
+    on = _render(source, _user_qs, policy, flag=True)
+    assert on == _render(source, _user_qs, policy, flag=False)
+    assert on not in ("", "|", ":"), on
+
+
 def test_the_harness_sees_the_flag(world):
     source = MUST_DIFFER["filtered-rebinding"]
     on = _render(source, _single, "explicit", flag=True)
