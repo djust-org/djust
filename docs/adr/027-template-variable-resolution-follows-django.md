@@ -695,6 +695,8 @@ Mechanism (smallest complete design, sizes from reading the code, not a prototyp
 - **Known limit kept:** the overlay binds top-level keys only, so a model inside a dict held in state keeps its dict. Widening it is not a one-liner (binding a whole dict key would hand its non-model values to the engine un-normalized); it is documented, not scheduled.
 - **Still a gap:** a QuerySet read both through a slice and a method (`{% for u in users|slice:':2' %}{{ u.groups.all.count }}`, #3867 item 3) keeps the serialized rows, so it stays the declared xfail.
 
+- **Review fixes before the flip (same train):** a `.values()` / `.values_list()` QuerySet is never captured (its rows are not models; a handle was an empty list); a legacy QuerySet whose rows' forward relation is read as one segment keeps its `select_related` JIT rows; an explicit method-read QuerySet whose rows are walked goes through the JIT, so a filtered rebinding of its row reads the relation (the #3936 symptom no longer comes back with an unrelated `{{ qs.count }}`); an explicit one-segment forward-FK loop is one query. A skipped QuerySet key hands a custom callable `dict` rows (documented in the guide's table). The kill-switch is read strictly (`"false"` is `False`).
+
 The 2539 LiveView branch is removed; #3936 and #3949 close.
 
 ### Acceptance (the work for 1.4.0)
