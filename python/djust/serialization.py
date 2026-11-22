@@ -2139,11 +2139,12 @@ class _SidecarModelProxy:
 
     __slots__ = ("_s",)
 
-    def __init__(self, obj: "models.Model") -> None:
-        # [instance, denied, allowed, optout, floored-dict cell]. The three floor sets are read
-        # from the model class on the FIRST attribute read, not here: a handle that is only
-        # printed or serialised (`{{ u }}`) never needs them, and one is built per row.
-        _SMP_SET(self, [obj, None, None, None, []])
+    def __init__(self, obj: "models.Model", plain_text: bool = False) -> None:
+        # [instance, denied, allowed, optout, floored-dict cell, plain text]. The three floor sets
+        # are read from the model class on the FIRST attribute read, not here: a handle that is
+        # only printed or serialised (`{{ u }}`) never needs them, and one is built per row.
+        # `plain text` (#3936 overlay handles only): `str()` never carries `SafeData`.
+        _SMP_SET(self, [obj, None, None, None, [], plain_text])
 
     def __getattribute__(self, name: str) -> Any:
         # EVERY instance attribute read comes through here, so the refusal is structural: any
@@ -2199,7 +2200,12 @@ class _SidecarModelProxy:
         # ``{{ member }}`` normally renders via the eager dict's ``__str__``
         # key; this covers the case where a proxied related model is the
         # terminal value of a walk.
-        return str(_SMP_GET(self)[0])
+        state = _SMP_GET(self)
+        text = str(state[0])
+        # A render-time overlay handle (#3936) keeps LiveView's escaping: a model whose
+        # ``__str__`` is a ``SafeString`` (``format_html``) prints escaped, as its serialized
+        # dict always did on a LiveView. ``text[:]`` is a plain ``str`` copy of a subclass.
+        return text[:] if state[5] else text
 
     def __repr__(self) -> str:
         # ``{% debug %}`` (#2556) ``pformat``s the context, and Django's
@@ -2296,6 +2302,32 @@ class _FloorSafeText(SafeData, str):
 
     def __str__(self) -> str:
         return self
+
+
+def _overlay_plain_text_handles(value: Any, memo: Dict[int, Any]) -> Any:
+    """The overlay's handles (#3936): each model proxy in a floored top-level state value (the value
+    itself, a list / tuple member, a QuerySet's row) rebuilt as a PLAIN-TEXT proxy, so the overlay
+    never turns a ``SafeString`` ``__str__`` into unescaped markup on a LiveView.
+
+    A QuerySet proxy is expanded to its rows here, as the engine's conversion of it would
+    (``_sqp_serialize``), over the same result cache; a ``.values()`` projection stays as it is (it
+    yields no rows). ``memo`` keeps one object one handle across keys.
+    """
+    kind = type(value)
+    if kind is _SidecarModelProxy:
+        obj = _SMP_GET(value)[0]
+        handle = memo.get(id(obj))
+        if handle is None:
+            handle = memo[id(obj)] = _SidecarModelProxy(obj, plain_text=True)
+        return handle
+    if kind is _SidecarQuerySetProxy:
+        qs, is_projection = _SQP_GET(value)
+        if is_projection:
+            return value
+        return [_overlay_plain_text_handles(_floored_result(item), memo) for item in qs]
+    if kind is list or kind is tuple:
+        return kind(_overlay_plain_text_handles(item, memo) for item in value)
+    return value
 
 
 def _smp_serialize(self: Any) -> Any:  # noqa: dead-method-allowed (handed to _Hook by reference)

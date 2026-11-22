@@ -134,11 +134,13 @@ def _queryset_row_walk_paths_for(view: Any) -> Dict[str, FrozenSet[str]]:
     return queryset_row_walk_paths(content)
 
 
-def _overlay_floor(value: Any, memo: Dict[Any, Any]) -> Any:
-    """The floor the overlay applies to one state value (#3936): the sidecar's tree floor."""
-    from ..serialization import _protect_sidecar_tree
+def _overlay_floor(value: Any, memo: Dict[Any, Any], text_memo: Dict[int, Any]) -> Any:
+    """The floor the overlay applies to one state value (#3936): the sidecar's tree floor, with
+    each model handle's text kept plain (LiveView's escaping, train/2.0-ai)."""
+    from ..serialization import _overlay_plain_text_handles, _protect_sidecar_tree
 
-    return _protect_sidecar_tree(value, 0, memo, set())
+    floored = _protect_sidecar_tree(value, 0, memo, set())
+    return _overlay_plain_text_handles(floored, text_memo)
 
 
 def _overlay_model_class(value: Any) -> Any:
@@ -212,12 +214,13 @@ def _render_handles(raw: Dict[str, Any], full_context: Any, skip_keys: Any = ())
     if not raw:
         return {}
     memo: Dict[Any, Any] = {}
+    text_memo: Dict[int, Any] = {}
     handles: Dict[str, Any] = {}
     for key, value in raw.items():
         if key not in full_context or key in skip_keys:
             continue
         try:
-            handles[key] = _overlay_floor(value, memo)
+            handles[key] = _overlay_floor(value, memo, text_memo)
         except Exception:  # noqa: BLE001 -- fail closed: the key keeps its dict
             logging.getLogger("djust.rust_bridge").warning(
                 "state_models_as_handles: the floor refused %r; it renders from its dict", key
