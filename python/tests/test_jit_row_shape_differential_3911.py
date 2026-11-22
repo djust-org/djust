@@ -30,7 +30,10 @@ Engine path: the Rust extractor (``crates/djust_templates/src/parser.rs``), the 
 row serializers (``serialize_queryset``, ``optimization/codegen.py``), the Python JIT
 (``mixins/jit.py``, ``template/rendering.py``) and the Rust ``dictsort``.
 
-Refs #3911, #3910, #3912, #3918, #3919, #3920, #3862.
+The LiveView entry is the explicit default (#4264); ``liveview-legacy`` keeps the deprecated legacy
+exposure policy covered (through the shared legacy render helper).
+
+Refs #3911, #3910, #3912, #3918, #3919, #3920, #3862, #4264.
 """
 
 # ruff: noqa: F811
@@ -49,7 +52,8 @@ from djust import _rust
 from python.tests.test_queryset_all_traversal_3777 import (  # noqa: F401
     _backend_render,
     _django_render,
-    _legacy_liveview_render as _liveview_render,  # JIT row shape: legacy-only (#4069)
+    _legacy_liveview_render,
+    _liveview_render,
     _raw_render,
 )
 
@@ -96,6 +100,7 @@ def _pk_order_is_not_any_sort_order() -> None:
 ENTRIES = [
     pytest.param(_backend_render, id="backend"),
     pytest.param(_liveview_render, id="liveview"),
+    pytest.param(_legacy_liveview_render, id="liveview-legacy"),
     pytest.param(_raw_render, id="render_template"),
 ]
 
@@ -248,6 +253,52 @@ class TestTheExtractorSaysWhatTheRowNeeds:
             "{% for u in users|dictsort:'username' %}{{ u.username }}{% endfor %}"
         )
         assert dict(_rust.extract_item_key_only_reads(source)) == {"users": ["get_full_name"]}
+
+    def test_a_regroup_key_is_not_an_item_key_only_read(self) -> None:
+        """``{% regroup %}`` resolves ``by`` with ``Variable``, which calls a method (#4264)."""
+        source = "{% regroup users by get_username as g %}{{ g }}"
+        assert dict(_rust.extract_item_key_only_reads(source)) == {}
+
+    def test_only_the_dictsort_key_is_reported_beside_a_regroup_key(self) -> None:
+        source = (
+            "{% for u in users|dictsort:'get_username' %}{{ u }}{% endfor %}"
+            "{% regroup users by get_full_name as g %}{{ g }}"
+        )
+        assert dict(_rust.extract_item_key_only_reads(source)) == {"users": ["get_username"]}
+
+    def test_a_variable_sort_key_needs_the_live_walk(self) -> None:
+        from djust.mixins import jit
+
+        assert jit.rows_need_live_walk(User, frozenset({"*key"})) is True
+        assert jit.rows_need_live_walk(User, frozenset({"username"})) is False
+
+    def test_a_variable_sort_key_walks_only_when_its_value_is_a_callable_or_dotted(self) -> None:
+        from djust.mixins import jit
+
+        walk = frozenset({"*key", "pk"})
+        for value, expected in [
+            ("get_username", True),  # a method: the JIT drops it, as Django does not call it
+            ("groups", True),  # a related manager
+            ("username.nope", True),  # a dotted path
+            ("username", False),  # a column: sorts on the normalized row
+            ("is_authenticated", False),  # a property: only the whole row carries it
+            ("nope", False),
+            (3, False),
+            (None, False),
+        ]:
+            assert jit.rows_need_live_walk(User, walk, {"key": value}) is expected, value
+        assert jit.rows_need_live_walk(User, walk, {}) is False  # missing: no walk
+        assert jit.rows_need_live_walk(User, walk, None) is True  # no context: walk to be safe
+
+    def test_a_method_sort_key_reaches_the_row_walk_paths(self) -> None:
+        from djust.mixins import jit
+
+        source = "{% for u in users|dictsort:'get_username' %}{{ u }}{% endfor %}"
+        paths = jit.queryset_row_walk_paths(source)["users"]
+        assert "get_username" in paths
+        assert jit.rows_need_live_walk(User, paths) is True
+        plain = "{% for u in users|dictsort:'username' %}{{ u }}{% endfor %}"
+        assert jit.rows_need_live_walk(User, jit.queryset_row_walk_paths(plain)["users"]) is False
 
 
 # ---------------------------------------------------------------------------------------------
@@ -512,14 +563,17 @@ class TestAVariableKeyCarriesOneColumn:
         (a path it could not read) is rebuilt through the Python codegen. The path set now
         depends on the resolved sort key, so the count is cached per key: cached per template
         alone, the count from ``key="pk"`` (a field the template already reads) stood for
-        ``key="email"`` too, one short, and a missing path there went unnoticed."""
+        ``key="email"`` too, one short, and a missing path there went unnoticed.
+
+        Legacy entry: an explicit view JITs a variable key only when its value names a method
+        or is dotted (#4264), so a plain-column key never reaches the JIT there."""
         from djust.mixins import jit
 
         source = "{% for u in users|dictsort:key %}{{ u.pk }}:{{ u.is_authenticated }},{% endfor %}"
         jit._expected_keys_cache.clear()
         for key in ("pk", "email"):
             context = {"users": _users("QuerySet"), "key": key}
-            got, want = _agrees(_liveview_render, source, context)
+            got, want = _agrees(_legacy_liveview_render, source, context)
             assert got == want, key
         counts = {
             cache_key[-1]: count
@@ -593,3 +647,127 @@ def _outcome(call) -> tuple[str, str]:
         return ("ok", call())
     except Exception as error:  # noqa: BLE001 — the class is the observation
         return ("raises", type(error).__name__)
+
+
+# ---------------------------------------------------------------------------------------------
+# Method sort keys on the explicit default, and regroup by a method (#4264)
+# ---------------------------------------------------------------------------------------------
+METHOD_KEY_CASES = [
+    (
+        "dictsortreversed-method-key",
+        "{% for u in users|dictsortreversed:'get_username' %}{{ u }},{% endfor %}",
+    ),
+    (
+        "with-alias-method-key",
+        "{% with s=users|dictsort:'get_username' %}{% for u in s %}{{ u }},{% endfor %}{% endwith %}",
+    ),
+    (
+        "regroup-by-method-whole-row",
+        "{% regroup users by get_username as g %}{% for x in g %}{{ x.grouper }}:"
+        "{% for u in x.list %}{{ u }}{% endfor %};{% endfor %}",
+    ),
+    (
+        "regroup-by-method-field",
+        "{% regroup users by get_username as g %}{% for x in g %}{{ x.grouper }}:"
+        "{% for u in x.list %}{{ u.pk }}{% endfor %};{% endfor %}",
+    ),
+]
+
+LIVEVIEW_ENTRIES = [
+    pytest.param(_liveview_render, id="liveview"),
+    pytest.param(_legacy_liveview_render, id="liveview-legacy"),
+]
+
+
+@pytest.mark.django_db
+class TestMethodKeysOnExplicit4264:
+    @pytest.mark.parametrize("render", LIVEVIEW_ENTRIES)
+    @pytest.mark.parametrize("shape", SHAPES)
+    @pytest.mark.parametrize("name,source", METHOD_KEY_CASES, ids=[c[0] for c in METHOD_KEY_CASES])
+    def test_renders_like_django(self, world, render, shape, name, source) -> None:
+        got, want = _agrees(render, source, {"users": _users(shape)})
+        assert got == want, name
+
+    def test_dictsort_by_a_method_is_the_empty_loop_django_renders(self, world) -> None:
+        source = "{% for u in users|dictsort:'get_username' %}{{ u }},{% endfor %}"
+        got, want = _agrees(_liveview_render, source, {"users": _users("QuerySet")})
+        assert got == want == ""
+
+    def test_regroup_by_a_method_calls_it(self, world) -> None:
+        source = METHOD_KEY_CASES[2][1]
+        got, want = _agrees(_liveview_render, source, {"users": _users("QuerySet")})
+        assert got == want and "cara:" in got
+
+
+@pytest.mark.django_db
+class TestVariableKeyValueKinds4264:
+    """A variable sort key whose value is a PROPERTY or a column renders as Django does on
+    the explicit default (the review's S1): only a method or dotted value takes the JIT."""
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    @pytest.mark.parametrize("key", ["is_authenticated", "is_anonymous", "username", "email"])
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "{% for u in users|dictsort:key %}{{ u.pk }},{% endfor %}",
+            "{% for u in users|dictsort:key %}{{ u.username }}{{ u.is_active }},{% endfor %}",
+            "{% for u in users|dictsort:key %}{{ u }},{% endfor %}",
+        ],
+    )
+    def test_explicit_matches_django(self, world, shape, key, source) -> None:
+        got, want = _agrees(_liveview_render, source, {"users": _users(shape), "key": key})
+        assert got == want, (key, source)
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    def test_a_method_valued_key_is_the_empty_loop_django_renders(self, world, shape) -> None:
+        source = "{% for u in users|dictsort:key %}{{ u.pk }},{% endfor %}"
+        context = {"users": _users(shape), "key": "get_username"}
+        got, want = _agrees(_liveview_render, source, context)
+        assert got == want == ""
+
+    def test_the_legacy_policy_keeps_its_documented_property_key_difference(self, world) -> None:
+        """Legacy's JIT row carries a column only for a variable key (#3910), so a property
+        value renders the empty loop where Django sorts. A recorded difference, not a goal."""
+        source = "{% for u in users|dictsort:key %}{{ u.pk }},{% endfor %}"
+        got, want = _agrees(
+            _legacy_liveview_render,
+            source,
+            {"users": _users("QuerySet"), "key": "is_authenticated"},
+        )
+        # Django sorts all three rows; the pks depend on the database sequence.
+        assert got == "" and want.count(",") == 3
+
+
+# ---------------------------------------------------------------------------------------------
+# regroup over a dictsort, and one root read by both (#4264, the accepted edge)
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.django_db
+class TestRegroupBesideDictsort4264:
+    IDIOM = (
+        "{% regroup users|dictsort:'get_username' by get_username as g %}"
+        "{% for x in g %}{{ x.grouper }}:{% for u in x.list %}{{ u }}{% endfor %};{% endfor %}"
+    )
+    SEPARATE = (
+        "{% for u in users|dictsort:'get_username' %}{{ u }};{% endfor %}|"
+        "{% regroup users by get_username as g %}"
+        "{% for x in g %}{{ x.grouper }}:{% for u in x.list %}{{ u }}{% endfor %};{% endfor %}"
+    )
+
+    @pytest.mark.parametrize("render", LIVEVIEW_ENTRIES)
+    @pytest.mark.parametrize("shape", SHAPES)
+    def test_regroup_over_a_dictsort_is_django_s_empty_result(self, world, render, shape) -> None:
+        """Django's documented idiom: the dictsort fails first, so the regroup is empty."""
+        got, want = _agrees(render, self.IDIOM, {"users": _users(shape)})
+        assert got == want == ""
+
+    @pytest.mark.parametrize("render", LIVEVIEW_ENTRIES)
+    @pytest.mark.parametrize("shape", SHAPES)
+    def test_the_same_method_key_in_a_dictsort_and_a_regroup_is_the_accepted_edge(
+        self, world, render, shape
+    ) -> None:
+        """Documented pin, NOT Django parity: one row set cannot satisfy both Django behaviors
+        (dictsort never calls the method, regroup does). The key stays key-only, so the JIT
+        drops it and the regroup groups under ``None``; Django groups by the called value."""
+        got, want = _agrees(render, self.SEPARATE, {"users": _users(shape)})
+        assert want == "|cara:cara;abe:abe;bob:bob;"
+        assert got == "|None:caraabebob;"

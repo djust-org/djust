@@ -315,6 +315,13 @@ def queryset_row_walk_paths(template_content: Optional[str]) -> Dict[str, Frozen
     by a live row, never by the serialized column dict. Cached per template
     hash; an empty or unparseable template reads nothing (fail closed: no
     capture).
+
+    The names a ``dictsort`` / ``dictsortreversed`` key reads (and no field
+    beside it) are unioned in (#4264): ``{% for u in users|dictsort:'get_username' %}{{ u }}``
+    files ``users: []`` in the extractor, the key being settled away, yet the key
+    is a method Django never calls. Only the JIT drops it
+    (``whole_rows_without_callable_sort_keys``), so the name has to reach
+    ``rows_need_live_walk``.
     """
     if not template_content:
         return {}
@@ -329,21 +336,46 @@ def queryset_row_walk_paths(template_content: Optional[str]) -> Dict[str, Frozen
         logger.debug("extract_template_variables refused the template; no row capture")
         variables = {}
     result = {root: frozenset(p for p in paths if p) for root, paths in variables.items() if paths}
+    # A cached frozenset is never mutated: each union builds a new one (#4264).
+    for root, keys in _item_key_only_reads(template_content).items():
+        named = frozenset(k for k in keys if k)
+        if named:
+            result[root] = result.get(root, frozenset()) | named
     if len(_queryset_row_walk_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
         _queryset_row_walk_cache.clear()
     _queryset_row_walk_cache[content_hash] = result
     return result
 
 
-def rows_need_live_walk(model_class: Any, paths: FrozenSet[str]) -> bool:
+def rows_need_live_walk(model_class: Any, paths: FrozenSet[str], context: Any = None) -> bool:
     """Does any of *paths* walk past a row's serialized columns (#4069)?
 
     A path of two or more parts (``groups.all``, ``profile.name``) does; so
     does a single part that names a related manager or a method of the row
     model (``{{ u.groups }}``, ``{{ u.get_full_name }}``), read off the class
     without calling anything. A plain column (``username``) does not.
+
+    A variable sort key (``dictsort:key``, filed as ``*key``) is named at
+    render time (#4264). With *context* in hand it is resolved as the JIT
+    resolves it (``_lookup``) and walks only when its value is a dotted path or
+    names a callable of the row model: the JIT then drops a callable key
+    (``whole_rows_without_callable_sort_keys``, #3919) where the normalized
+    whole row would sort by the called value. A column or a property value
+    stays on the normalized rows (Django sorts by it, and the JIT row carries a
+    column only, #3910), as does a value that is missing or not text. With no
+    *context* the name cannot be resolved and walks, to be safe.
     """
     for path in paths:
+        if path.startswith(VARIABLE_KEY_PREFIX):
+            if context is None:
+                return True
+            value = _lookup(context, path[len(VARIABLE_KEY_PREFIX) :])
+            if isinstance(value, str) and value:
+                if "." in value or (
+                    model_class is not None and _names_a_callable(model_class, value)
+                ):
+                    return True
+            continue
         if "." in path:
             return True
         if model_class is not None and _names_a_callable(model_class, path):

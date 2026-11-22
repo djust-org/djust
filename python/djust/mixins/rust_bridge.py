@@ -1143,7 +1143,7 @@ class RustBridgeMixin:
                         if _is_qs
                         else next(type(_r) for _r in _val if isinstance(_r, _DjModel))
                     )
-                    if rows_need_live_walk(_model_cls, _paths):
+                    if rows_need_live_walk(_model_cls, _paths, full_context):
                         _explicit_jit_keys[_key] = _val
 
             # #4069 review S1: an explicit view's walked rows also go through the

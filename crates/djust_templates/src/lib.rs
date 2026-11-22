@@ -235,6 +235,8 @@ impl Template {
         if !self.uses_extends() || self.resolved.get().is_some() {
             return Ok(());
         }
+        // No template name here (#4265): this runs on an inline source or an already-flattened one,
+        // whose names are absolute; a file's own relative names are resolved where it is loaded.
         let chain = build_inheritance_chain(self.nodes.clone(), loader, 10)?;
         let root_nodes = chain.get_root_nodes();
         let final_nodes = chain.apply_block_overrides(root_nodes);
