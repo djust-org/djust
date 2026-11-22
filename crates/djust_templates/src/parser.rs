@@ -3168,7 +3168,10 @@ fn drop_index_segments(paths: &mut Vec<String>) {
 /// ([`RegroupKeysSkipped`]) but still filed by [`extract_template_variables`].
 /// Accepted edge: the same method key used by BOTH a `dictsort` and a
 /// `{% regroup %}` on one root stays key-only (dropped), so the regroup groups
-/// under `None`; one row set cannot satisfy both Django behaviors.
+/// under `None`; one row set cannot satisfy both Django behaviors. (Unless the
+/// regroup's source IS that dictsort, `{% regroup users|dictsort:'k' by k %}`:
+/// Django's dictsort fails first and renders the empty result, which the dropped
+/// key reproduces.)
 ///
 /// Django's `dictsort` resolves its key with `_property_resolver`, which never
 /// CALLS what it finds, so a method or a related manager named as a key orders
@@ -3179,15 +3182,24 @@ fn drop_index_segments(paths: &mut Vec<String>) {
 pub fn extract_item_key_only_reads(
     template: &str,
 ) -> Result<std::collections::HashMap<String, Vec<String>>> {
-    use std::collections::HashMap;
-
     let tokens = crate::lexer::tokenize(template)?;
     let nodes = parse(&tokens)?;
+    Ok(item_key_only_reads_from_nodes(&nodes))
+}
+
+/// [`extract_item_key_only_reads`] over parsed nodes (a seam for tests: a
+/// `{% regroup %}` handler is registered from Python, so a Rust test builds the
+/// node by hand).
+fn item_key_only_reads_from_nodes(
+    nodes: &[Node],
+) -> std::collections::HashMap<String, Vec<String>> {
+    use std::collections::HashMap;
+
     let mut variables: HashMap<String, Vec<String>> = HashMap::new();
     {
         let _walk = RawBodyWalk::enter();
         let _regroup = RegroupKeysSkipped::enter();
-        extract_from_nodes(&nodes, &mut variables);
+        extract_from_nodes(nodes, &mut variables);
     }
     let mut out = HashMap::new();
     for (root, mut paths) in variables {
@@ -3207,7 +3219,7 @@ pub fn extract_item_key_only_reads(
         keys.dedup();
         out.insert(root, keys);
     }
-    Ok(out)
+    out
 }
 
 thread_local! {
@@ -7852,8 +7864,9 @@ mod tag_context_tests {
 #[cfg(test)]
 mod own_reads_tests_4258 {
     use super::{
-        extract_item_key_only_reads, extract_own_reads, extract_template_variables,
-        record_regroup_item_key, RegroupKeysSkipped,
+        extract_from_nodes, extract_item_key_only_reads, extract_own_reads,
+        extract_template_variables, item_key_only_reads_from_nodes, parse, record_regroup_item_key,
+        Node, RegroupKeysSkipped,
     };
 
     fn paths(template: &str, root: &str) -> Option<Vec<String>> {
@@ -7934,6 +7947,35 @@ mod own_reads_tests_4258 {
         record_regroup_item_key(&regroup_args(), &mut still_skipped);
         assert!(still_skipped.is_empty());
         drop(outer);
+    }
+
+    #[test]
+    fn item_key_only_reads_from_nodes_skips_a_hand_built_regroup_4264() {
+        let tokens = crate::lexer::tokenize(
+            "{% for u in users|dictsort:'get_username' %}{{ u }}{% endfor %}",
+        )
+        .unwrap();
+        let mut nodes = parse(&tokens).unwrap();
+        // Same root, a different key: the regroup is not a key-only read.
+        nodes.push(Node::CustomTag {
+            name: "regroup".to_string(),
+            args: ["users", "by", "get_full_name", "as", "g"]
+                .iter()
+                .map(|a| a.to_string())
+                .collect(),
+        });
+        let keys = item_key_only_reads_from_nodes(&nodes);
+        assert_eq!(keys.get("users"), Some(&vec!["get_username".to_string()]));
+
+        // A regroup alone reports nothing; the full walk still files its key.
+        let only = vec![nodes.pop().unwrap()];
+        assert!(item_key_only_reads_from_nodes(&only).is_empty());
+        let mut full = std::collections::HashMap::new();
+        extract_from_nodes(&only, &mut full);
+        assert!(
+            full.values().flatten().any(|p| p.contains("get_full_name")),
+            "{full:?}"
+        );
     }
 
     #[test]

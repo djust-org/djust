@@ -347,7 +347,7 @@ def queryset_row_walk_paths(template_content: Optional[str]) -> Dict[str, Frozen
     return result
 
 
-def rows_need_live_walk(model_class: Any, paths: FrozenSet[str]) -> bool:
+def rows_need_live_walk(model_class: Any, paths: FrozenSet[str], context: Any = None) -> bool:
     """Does any of *paths* walk past a row's serialized columns (#4069)?
 
     A path of two or more parts (``groups.all``, ``profile.name``) does; so
@@ -355,15 +355,27 @@ def rows_need_live_walk(model_class: Any, paths: FrozenSet[str]) -> bool:
     model (``{{ u.groups }}``, ``{{ u.get_full_name }}``), read off the class
     without calling anything. A plain column (``username``) does not.
 
-    A variable sort key (``dictsort:key``, filed as ``*key``) does (#4264): the
-    key is named at render time, only the JIT resolves it
-    (``resolve_variable_keys``) and drops a callable one
-    (``whole_rows_without_callable_sort_keys``, #3919), so every variable key
-    takes the JIT, as on a legacy view; it is not narrowed to a callable value.
+    A variable sort key (``dictsort:key``, filed as ``*key``) is named at
+    render time (#4264). With *context* in hand it is resolved as the JIT
+    resolves it (``_lookup``) and walks only when its value is a dotted path or
+    names a callable of the row model: the JIT then drops a callable key
+    (``whole_rows_without_callable_sort_keys``, #3919) where the normalized
+    whole row would sort by the called value. A column or a property value
+    stays on the normalized rows (Django sorts by it, and the JIT row carries a
+    column only, #3910), as does a value that is missing or not text. With no
+    *context* the name cannot be resolved and walks, to be safe.
     """
     for path in paths:
         if path.startswith(VARIABLE_KEY_PREFIX):
-            return True
+            if context is None:
+                return True
+            value = _lookup(context, path[len(VARIABLE_KEY_PREFIX) :])
+            if isinstance(value, str) and value:
+                if "." in value or (
+                    model_class is not None and _names_a_callable(model_class, value)
+                ):
+                    return True
+            continue
         if "." in path:
             return True
         if model_class is not None and _names_a_callable(model_class, path):
