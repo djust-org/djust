@@ -1027,7 +1027,10 @@ def data_table(
         ``<a href="{{ row[col.link] }}">{{ row[col.key] }}</a>``;
         otherwise plain text (pre-#1110 behavior).
     """
-    params = dict(locals())
+    # the operands are the signature's parameters, not whatever else is local here (review N3)
+    given = locals()
+    code = data_table.__code__
+    params = {name: given[name] for name in code.co_varnames[: code.co_argcount]}
     from djust.components.rust_handlers import render_data_table
 
     return render_data_table(**params)

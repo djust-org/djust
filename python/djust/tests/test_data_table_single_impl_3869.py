@@ -117,6 +117,21 @@ def test_the_other_native_only_features_are_wired_under_the_django_engine() -> N
         assert needle in out, (flag, out)
 
 
+def test_the_handler_is_handed_exactly_the_tags_parameters(monkeypatch) -> None:
+    """Review N3: the operands are the signature's parameters. A local added to the tag function
+    (``locals()`` once built the dict) must not become an operand. Gate-off: build the dict from
+    ``locals()`` again and add a local above it, and this fails."""
+    import inspect
+
+    from djust.components import rust_handlers
+    from djust.components.templatetags import djust_components as tags
+
+    seen: dict = {}
+    monkeypatch.setattr(rust_handlers, "render_data_table", lambda **params: seen.update(params))
+    tags.data_table(rows=[], columns=[])
+    assert list(seen) == list(inspect.signature(tags.data_table).parameters)
+
+
 def test_table_html_is_gone() -> None:
     """No template file, so an override of it (``djust_components/table.html``) has no effect."""
     templates = Path(djust.components.__file__).parent / "templates"
