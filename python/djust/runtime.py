@@ -1131,14 +1131,18 @@ def navigation_title_variables(view: Any) -> Tuple[str, ...]:
 def _title_value(value: Any) -> Any:
     """A view value for the ``<title>`` render: its serialized dict, or with
     ``state_models_as_handles`` on (#3936) a floored handle for a model, so the
-    title reads a model as the page body does. A floor that raises falls back
-    to the dict (fail closed)."""
+    title reads a model as the page body does (plain text, as the overlay's
+    handles are). A floor that raises falls back to the dict (fail closed)."""
     from .mixins.context import _state_model_values
-    from .serialization import _protect_sidecar_tree, normalize_django_value
+    from .serialization import (
+        _overlay_plain_text_handles,
+        _protect_sidecar_tree,
+        normalize_django_value,
+    )
 
     if _state_model_values({"v": value}):
         try:
-            return _protect_sidecar_tree(value, 0, {}, set())
+            return _overlay_plain_text_handles(_protect_sidecar_tree(value, 0, {}, set()), {})
         except Exception:  # noqa: BLE001 -- fail closed: the dict
             pass
     return normalize_django_value(value)

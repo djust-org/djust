@@ -318,8 +318,13 @@ class LiveViewConfig:
         # (``{% with q=user|default:user %}{{ q.groups.count }}``), a custom
         # filter or tag and ``pprint`` then see the model as the Django backend
         # does, not its serialized dict. State, change detection and the wire
-        # keep the dict. Off by default while the behaviour change is opt-in.
-        "state_models_as_handles": False,
+        # keep the dict. A key the flag-off path already answers (QuerySet
+        # methods, JIT-walked rows) keeps that path. Default ON since 2.0
+        # (#3936 / #3949, maintainer decision 2026-11-22). ``False`` is the
+        # kill-switch: every state model renders from its serialized dict again
+        # (a filtered rebinding of one then renders empty on an explicit view,
+        # and a custom filter or tag is handed a ``dict``).
+        "state_models_as_handles": True,
         # Seconds one page-POST fallback request waits, in total, for the
         # ``start_async`` / ``@background`` work it runs before answering
         # (#3634). ``None`` (default) = no deadline: a task that does not return

@@ -176,12 +176,13 @@ def _holds_db_value(value: Any, depth: int = 0) -> bool:
 
 
 def state_models_as_handles_enabled() -> bool:
-    """``LIVEVIEW_CONFIG["state_models_as_handles"]`` (#3936, default off)."""
+    """``LIVEVIEW_CONFIG["state_models_as_handles"]`` (#3936, default on since 2.0)."""
     try:
         from ..config import get_config
 
-        return bool(get_config().get("state_models_as_handles", False))
-    except Exception:  # noqa: BLE001 -- config access is defensive; off is the safe answer
+        return bool(get_config().get("state_models_as_handles", True))
+    except Exception:  # noqa: BLE001 -- config access is defensive
+        # Fail safe: a config error means no overlay, i.e. the serialized-dict path.
         return False
 
 

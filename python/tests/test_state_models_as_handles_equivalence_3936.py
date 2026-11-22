@@ -149,14 +149,14 @@ def _render_change_diff(source: str, factory, policy: str, flag: bool) -> str:
     from django.test import override_settings
 
     from djust.testing import LiveViewTestClient
-    from python.tests.test_state_models_as_handles_3936 import FLAG_ON, _body, _view
+    from python.tests.test_state_models_as_handles_3936 import FLAG_OFF, FLAG_ON, _body, _view
 
     def body(html: str) -> str:
         return _body(
             re.sub(r"<div [^>]*dj-root[^>]*>", "<div dj-root>", html.replace(" dj-id=", " data-x="))
         )
 
-    config = dict(FLAG_ON if flag else {}, loop_render_cache_enabled=True)
+    config = dict(FLAG_ON if flag else FLAG_OFF, loop_render_cache_enabled=True)
     from django.db import transaction
 
     # The change is rolled back, so the flag-on and flag-off runs start from the same rows.
