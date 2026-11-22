@@ -156,12 +156,10 @@ import functools
 import html
 import inspect
 import logging
+import posixpath
 import re
 import uuid
 from typing import Any, NamedTuple
-
-from django.template import TemplateSyntaxError
-from django.template.loader_tags import construct_relative_path
 
 logger = logging.getLogger(__name__)
 
@@ -1500,6 +1498,18 @@ def _include_source(name: str) -> str | None:
         return None
 
 
+def _relative_to(origin: str | None, name: str) -> str | None:
+    """``name`` (a ``./`` / ``../`` literal) resolved against the template ``origin``, as Django's
+    ``construct_relative_path`` does, or None when there is no ``origin`` or the result leaves the
+    template hierarchy. Done here rather than by that function: its ``allow_recursion`` keyword
+    exists only from Django 5.2 and djust supports 4.2+; this reads a source, it does not render,
+    so the self-reference check is not needed (#4265)."""
+    if not origin:
+        return None
+    resolved = posixpath.normpath(posixpath.join(posixpath.dirname(origin.lstrip("/")), name))
+    return None if resolved.startswith("../") else resolved
+
+
 def _unscanned_includes(rewrite: Plan, origin: str | None = None) -> int:
     """How many ``{% include %}`` / ``{% extends %}`` tags name a template whose slots would need
     this module's rule. A quoted literal name that the loaders find, whose source has no
@@ -1512,14 +1522,11 @@ def _unscanned_includes(rewrite: Plan, origin: str | None = None) -> int:
     unresolved = rewrite.includes - len(rewrite.include_names)
     for name in rewrite.include_names:
         if name.startswith(("./", "../")):
-            if not origin:
+            resolved = _relative_to(origin, name)
+            if resolved is None:  # no file to be relative to, or outside the file hierarchy
                 unresolved += 1
                 continue
-            try:
-                name = construct_relative_path(origin, name, allow_recursion=True)
-            except TemplateSyntaxError:  # points outside the file hierarchy
-                unresolved += 1
-                continue
+            name = resolved
         source = _include_source(name)
         if source is None:
             unresolved += 1

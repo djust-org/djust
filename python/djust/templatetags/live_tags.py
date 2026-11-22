@@ -76,6 +76,30 @@ def djust_audio(context: Any) -> SafeString:
     )
 
 
+def child_source_with_named_includes(child: Any, source: Any) -> Any:
+    """``source`` (the child's template source) with each relative ``{% include "./x.html" %}``
+    named against the child's ``template_name`` file (#4265).
+
+    The child's source is compiled by an engine entry that has no origin (``from_string`` in
+    ``render_embedded_child_html``) and read by the dj-model walker, which has none either, so a
+    ``./`` / ``../`` name would not resolve: the child would fail to re-render and its partial's
+    fields would be refused. One helper for both, so they cannot drift (#1646). An inline
+    ``template`` has no file and is returned as it is; so is a source with no relative name.
+    """
+    if not isinstance(source, str) or "./" not in source or getattr(child, "template", None):
+        return source
+    file_name = getattr(child, "template_name", None)
+    if not (isinstance(file_name, str) and file_name):
+        return source
+    from djust._rust import resolve_relative_template_includes
+
+    try:
+        return resolve_relative_template_includes(source, file_name)
+    except Exception:  # noqa: BLE001 - the Rust parser refused it: leave the source as it was
+        logger.debug("child source: relative includes were not named for %s", file_name)
+        return source
+
+
 def _record_child_dj_model_allowlist(child: Any) -> None:
     """Populate an embedded ``{% live_render %}`` child's dj-model allowlist
     from the CHILD's own TEMPLATE SOURCE (CWE-915 mass-assignment guard).
@@ -108,16 +132,7 @@ def _record_child_dj_model_allowlist(child: Any) -> None:
                     from django.template import loader as _loader
 
                     source = _loader.get_template(template_name).template.source
-        # #4265: the walker has no origin, so a relative ``{% include "./x.html" %}`` in a
-        # ``template_name`` file would not resolve and its dj-model fields would be refused
-        # (fail closed). Name the includes against the file first, as Django resolves them.
-        file_name = (
-            None if getattr(child, "template", None) else getattr(child, "template_name", None)
-        )
-        if source and isinstance(file_name, str) and file_name:
-            from djust._rust import resolve_relative_template_includes
-
-            source = resolve_relative_template_includes(source, file_name)
+        source = child_source_with_named_includes(child, source)
         child._record_dj_model_fields_from_source(source, get_template_dirs())
     except Exception:  # noqa: BLE001 — never let allowlist collection break a render
         # Fail closed: the child's _record_dj_model_fields_from_source already

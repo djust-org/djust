@@ -890,45 +890,6 @@ class TestTheWarning:
 
 # -- #4265 -----------------------------------------------------------------------------------------
 
-#: The engines a project can configure: the file is found, and its relative names resolve, the same
-#: way under both.
-ENGINES = {
-    "django": "django.template.backends.django.DjangoTemplates",
-    "djust": "djust.template.backend.DjustTemplateBackend",
-}
-
-
-@pytest.fixture(params=sorted(ENGINES))
-def rel_files(tmp_path, request):
-    """``template_files`` for each engine; ``write.root`` is the template directory."""
-    from django.test import override_settings
-
-    from djust.utils import clear_template_dirs_cache
-
-    root = tmp_path / "templates"
-    root.mkdir()
-
-    def write(name: str, source: str) -> None:
-        (root / name).parent.mkdir(parents=True, exist_ok=True)
-        (root / name).write_text(source)
-
-    write.root = root  # type: ignore[attr-defined]
-    templates = [
-        {
-            "BACKEND": ENGINES[request.param],
-            "DIRS": [str(root)],
-            "APP_DIRS": False,
-            "OPTIONS": {},
-        }
-    ]
-    with override_settings(TEMPLATES=templates):
-        clear_template_dirs_cache()
-        try:
-            yield write
-        finally:
-            clear_template_dirs_cache()
-
-
 #: ``name -> (source, {other file -> source}, the same source with absolute names)``.
 RELATIVE_SHAPES = {
     "dot": (
@@ -1077,21 +1038,22 @@ class TestRelativeNamesInATemplateNameFile:
         assert _attrs(out, "a")["title"] == '"><b>x</b>', out
         assert "<p>part</p>" in out, out
 
-    def test_a_function_component_resolves_it_too(self, drawer, rel_files) -> None:
-        """Regression (not changed by #4265): a function component's file is drawn by the
-        project's engine, which resolves a relative name. ``drawer`` only repeats the engines."""
-        from djust.components.function_component import clear_components, component
-        from djust.testing import render_template_string
 
-        rel_files("fc/main.html", '<div>{% include "./part.html" %}</div>')
-        rel_files("fc/part.html", "<p>{{ v }}</p>")
+def test_a_function_component_resolves_a_relative_include(rel_files) -> None:
+    """Regression (not changed by #4265): a function component's file is drawn by the
+    project's engine, which resolves a relative name."""
+    from djust.components.function_component import clear_components, component
+    from djust.testing import render_template_string
+
+    rel_files("fc/main.html", '<div>{% include "./part.html" %}</div>')
+    rel_files("fc/part.html", "<p>{{ v }}</p>")
+    clear_components()
+    try:
+        component(name="fc_4265", template_name="fc/main.html")(lambda assigns: {"v": "hi"})
+        out = render_template_string('{% call "fc_4265" %}{% endcall %}')
+    finally:
         clear_components()
-        try:
-            component(name="fc_4265", template_name="fc/main.html")(lambda assigns: {"v": "hi"})
-            out = render_template_string('{% call "fc_4265" %}{% endcall %}')
-        finally:
-            clear_components()
-        assert "<div><p>hi</p></div>" in out, out
+    assert "<div><p>hi</p></div>" in out, out
 
 
 @pytest.mark.parametrize("drawer", sorted(FILE_DRAWERS))
@@ -1205,6 +1167,56 @@ class TestRelativeIncludeNamesInTheWarning:
             "SECRETDIR/main.html",
         )
         assert "1 {% include %}" in text and "SECRETDIR" not in text
+
+    def test_the_resolution_does_not_call_the_django_5_2_helper(self, caplog, monkeypatch) -> None:
+        """``construct_relative_path(..., allow_recursion=True)`` exists from Django 5.2 only and
+        djust supports 4.2+: on an older Django it raised ``TypeError`` out of the first render of
+        a file with a relative include. The name is resolved here, so the helper is not needed
+        (stand-in for 4.2-5.1: it refuses the keyword; here it refuses every call)."""
+        from django.template import loader_tags
+
+        def old_signature(current_template_name: str, relative_name: str) -> str:
+            raise TypeError("construct_relative_path() got an unexpected keyword 'allow_recursion'")
+
+        monkeypatch.setattr(loader_tags, "construct_relative_path", old_signature)
+        text = self._warned(
+            caplog,
+            monkeypatch,
+            '{% extends "./base.html" %}{% block b %}x{% endblock %}',
+            {"sub/base.html": '<main title="{{ t }}">{% block b %}{% endblock %}</main>'},
+            "sub/c.html",
+        )
+        assert "1 {% include %}" in text, text
+
+    @pytest.mark.parametrize(
+        "origin, name, expected",
+        [
+            ("sub/main.html", "./p.html", "sub/p.html"),
+            ("/sub/main.html", "./p.html", "sub/p.html"),
+            ("sub/main.html", "../p.html", "p.html"),
+            ("sub/deep/main.html", "../../p.html", "p.html"),
+            ("main.html", "./a/../p.html", "p.html"),
+            ("main.html", "../p.html", None),
+            ("sub/main.html", "../../p.html", None),
+            (None, "./p.html", None),
+            ("", "./p.html", None),
+        ],
+    )
+    def test_a_relative_name_resolves_as_django_resolves_it(self, origin, name, expected) -> None:
+        assert hybrid._relative_to(origin, name) == expected
+
+    @pytest.mark.parametrize("drawer", sorted(FILE_DRAWERS))
+    def test_a_relative_extends_of_a_slot_free_parent_warns_nothing(
+        self, drawer, rel_files, caplog
+    ) -> None:
+        rel_files("sub/base.html", "<main>{% block b %}{% endblock %}</main>")
+        rel_files(
+            "sub/c.html",
+            '{% extends "./base.html" %}{% block b %}<i title="{{ v }}">c</i>{% endblock %}',
+        )
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            out = FILE_DRAWERS[drawer]("sub/c.html", v="ok")
+        assert "<main>" in out and "{% include %}" not in caplog.text, (out, caplog.text)
 
     @pytest.mark.parametrize("drawer", sorted(FILE_DRAWERS))
     @pytest.mark.parametrize("slot_in", ["sibling", "root"])
