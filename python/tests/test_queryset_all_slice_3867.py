@@ -173,6 +173,7 @@ class TestASlicedListOfModelsOnTheBackend:
     @pytest.mark.parametrize("name", ["loop-only", "method-only"])
     def test_it_is_the_backend_only(self, world, name) -> None:
         """The control: the same template over the same list through a LiveView agrees."""
+        # A sliced operand, on the explicit (default) LiveView (train/2.0-ah review S1).
         from python.tests.test_queryset_all_traversal_3777 import _liveview_render
 
         source = CONTROLS[name]

@@ -274,7 +274,14 @@ def handle_exception(
         protected_logger = (
             logger if logger is not None else logging_module.getLogger("djust.security")
         )
-        protected_logger.error("Protected view operation failed")
+        from .._exposure import ExposureConfigurationError
+
+        if isinstance(exception, ExposureConfigurationError):
+            # Framework-authored and value-free, like ``log_failure``'s same branch:
+            # the operator needs the reason (an unsupported SESSION_ENGINE, #4092).
+            protected_logger.error("Protected view operation failed: %s", exception)
+        else:
+            protected_logger.error("Protected view operation failed")
         return {
             "type": "error",
             "error": GENERIC_ERROR_MESSAGES.get(error_type, GENERIC_ERROR_MESSAGES["default"]),

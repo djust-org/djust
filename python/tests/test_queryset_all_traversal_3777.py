@@ -67,6 +67,29 @@ def _body(html: str) -> str:
 
 
 def _liveview_render(source: str, context: dict) -> str:
+    # #4069: the default (explicit) policy, context supplied by
+    # ``get_context_data`` -- the shape an explicit view has.
+    class _V(LiveView):
+        exposure_policy = "explicit"
+
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx.update(context)
+            return ctx
+
+    _V.template = f"<div dj-root>{source}</div>"
+    client = LiveViewTestClient(_V)
+    client.mount()
+    return _body(client.render())
+
+
+def _legacy_liveview_render(source: str, context: dict) -> str:
+    """The legacy policy's LiveView, kept for what is legacy's own: the JIT
+    handler's error log (``test_the_jit_handler_logs_it``). The filtered
+    operand and container shapes run explicit since the train/2.0-ah review
+    (S1): the explicit sync runs the JIT over the names whose rows the
+    template walks."""
+
     class _V(LiveView):
         exposure_policy = "legacy"
 

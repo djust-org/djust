@@ -1371,3 +1371,189 @@ def check_editable_secret_floor_fields(app_configs: Any, **kwargs: Any) -> list[
             )
         )
     return messages
+
+
+#: How many ``self.<helper>()`` hops the S015 source scan follows from a member.
+_S015_HOP_DEPTH = 3
+
+
+def _member_function(model: type, name: str) -> Any:
+    """The function behind *name* on *model* (a method's function, a property's getter), or None."""
+    for klass in model.__mro__:
+        if name in vars(klass):
+            attr = vars(klass)[name]
+            if isinstance(attr, property):
+                return attr.fget
+            if isinstance(attr, (staticmethod, classmethod)):
+                return attr.__func__
+            return attr if inspect.isfunction(attr) else None
+    return None
+
+
+def _self_reads(func: Any) -> Optional[tuple[set[str], set[str]]]:
+    """``(names read off self, names called off self)`` in *func*'s source, or None when the source
+    cannot be read or parsed (a method built with ``exec``, a C function): such a member is skipped.
+    ``getattr(self, "<name>")`` with a literal name counts as a read."""
+    import textwrap
+
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    except (OSError, TypeError, SyntaxError, IndentationError):
+        return None
+    reads: set[str] = set()
+    calls: set[str] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        ):
+            reads.add(node.attr)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "self"
+            and isinstance(node.args[1], ast.Constant)
+            and isinstance(node.args[1].value, str)
+        ):
+            reads.add(node.args[1].value)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "self"
+        ):
+            calls.add(node.func.attr)
+    return reads, calls
+
+
+def _excluded_fields_read_by(model: type, name: str, excluded: frozenset[str]) -> set[str]:
+    """The excluded fields member *name* of *model* reads, directly or through up to
+    ``_S015_HOP_DEPTH`` hops of ``self.<other member>`` (a helper method or a property)."""
+    found: set[str] = set()
+    visited: set[str] = set()
+    frontier = [(name, 0)]
+    while frontier:
+        member, depth = frontier.pop()
+        if member in visited:
+            continue
+        visited.add(member)
+        func = _member_function(model, member)
+        if func is None:
+            continue
+        scanned = _self_reads(func)
+        if scanned is None:
+            continue
+        reads, calls = scanned
+        found |= reads & excluded
+        if depth < _S015_HOP_DEPTH:
+            for other in (reads | calls) - excluded:
+                frontier.append((other, depth + 1))
+    return found
+
+
+def _zero_arg_template_callable(func: Any) -> bool:
+    """Can a template call *func* (``{{ obj.name }}``)? No required argument besides ``self``, and
+    not marked ``alters_data`` (Django's template engine refuses those)."""
+    if getattr(func, "alters_data", False):
+        return False
+    try:
+        params = list(inspect.signature(func).parameters.values())[1:]
+    except (TypeError, ValueError):
+        return False
+    return all(
+        p.default is not inspect.Parameter.empty
+        or p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        for p in params
+    )
+
+
+def _serialized_members(model: type) -> list[str]:
+    """The computed members a template can read off *model*: explicit ``get_*`` methods and
+    ``@property`` values defined on a class above ``models.Model`` in the MRO (inherited ones such as
+    ``AbstractUser.get_full_name`` included), the set ``_add_safe_model_methods`` and
+    ``_add_property_values`` collect; and every other public zero-argument method of the
+    application's own classes, which the floor proxy answers as a call (``{{ u.label }}``,
+    ``_FlooredCall``; train/2.0-ah review S6). A plain method inherited from a ``django.*`` class
+    (``clean``, ``natural_key``) is not one an application wrote, and is left out."""
+    from django.db import models as dj_models
+
+    names: set[str] = set()
+    for klass in model.__mro__:
+        if klass is dj_models.Model:
+            break
+        own = not (getattr(klass, "__module__", "") or "").startswith("django.")
+        for attr_name, attr in vars(klass).items():
+            if isinstance(attr, property):
+                names.add(attr_name)
+            elif attr_name.startswith("get_") and inspect.isfunction(attr):
+                names.add(attr_name)
+            elif (
+                own
+                and not attr_name.startswith("_")
+                and inspect.isfunction(attr)
+                and _zero_arg_template_callable(attr)
+            ):
+                names.add(attr_name)
+    return sorted(names)
+
+
+@register("djust")
+def check_excluded_field_derived_reads(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """``djust.S015``: a model's ``get_*()`` / ``@property`` reads a field its ``djust_exclude_fields``
+    hides (#3955).
+
+    ``djust_exclude_fields`` keeps the FIELD out of the serialized row and off the floor proxy, but the
+    eager serializer still collects explicit ``get_*`` methods and ``@property`` values, and the floor
+    proxy still answers a zero-argument method: ``get_full_name()`` renders the ``last_name`` a custom
+    ``User`` excluded. Static: the members' source is parsed (``self.<field>``, ``getattr(self,
+    "<field>")``, and up to three hops of ``self.<helper>``); nothing is called. A member whose source
+    cannot be read is skipped. Warning only.
+    """
+    if _is_check_suppressed("S015"):
+        return []
+    try:
+        from django.apps import apps
+    except ImportError:  # pragma: no cover - Django is a dependency
+        return []
+
+    messages: list[CheckMessage] = []
+    for model in sorted(apps.get_models(), key=lambda m: (m.__module__, m.__qualname__)):
+        module = getattr(model, "__module__", "") or ""
+        if module.split(".", 1)[0] == "django":
+            continue
+        raw = getattr(model, "djust_exclude_fields", None)
+        if not raw or isinstance(raw, str):
+            continue
+        try:
+            excluded = frozenset(str(name) for name in raw)
+        except TypeError:
+            continue
+        for member in _serialized_members(model):
+            if member in excluded:
+                continue
+            leaked = _excluded_fields_read_by(model, member, excluded)
+            if not leaked:
+                continue
+            label = "%s.%s" % (module, model.__qualname__)
+            names = ", ".join(sorted(leaked))
+            messages.append(
+                DjustWarning(
+                    "%s.%s reads %s, which %s.djust_exclude_fields hides: djust still serializes the "
+                    "computed value, so the excluded data reaches the template."
+                    % (label, member, names, model.__qualname__),
+                    hint=(
+                        "Add %r to djust_exclude_fields too, or list the fields a template may read "
+                        "in djust_serializable_fields." % member
+                    ),
+                    id="djust.S015",
+                    fix_hint=(
+                        "On `%s`: `djust_exclude_fields = [..., %r]`."
+                        % (model.__qualname__, member)
+                    ),
+                )
+            )
+    return messages

@@ -519,12 +519,27 @@ class TestAModelIsNotAMappingToATemplate:
         # a non-text marker is not a marker for display either
         assert _lv("{{ d.n }}|{{ d.items|length }}", d={"__str__": 5, "n": 1}) == "1|2"
 
-    def test_a_dict_carrying_the_whole_identity_shape_is_still_read_as_a_model(self) -> None:
-        """The honest limit: any dict can carry the three keys a serializer stamps (``__str__``,
-        ``__model__``, ``pk``). The requirement narrows the accident, it does not make the marker
-        unforgeable, and this pins that so a change to it is a decision."""
-        d = {"__str__": "label", "__model__": "Thing", "pk": 1, "n": 1}
-        assert _lv("{{ d|pprint }}|{{ d.items|length }}", d=d) == "label|0"
+    @pytest.mark.parametrize("entry", sorted(ENTRIES))
+    def test_a_dict_carrying_the_whole_identity_shape_is_a_dict_since_3947(
+        self, world, entry
+    ) -> None:
+        """#3947: a dict carrying all three keys a serializer stamps (``__str__``, a TEXT
+        ``__model__``, ``pk``) is user data, and every model sink treats it as a dict: the marker
+        is the ``ModelName`` type only ``model_identity`` stamps. A real model in the same
+        template still spells its own text."""
+        forged = {"__str__": "label", "__model__": "Thing", "pk": 1, "n": 1}
+        ctx = {"d": forged, "m": world["a1"]}
+        src = (
+            "{{ d|pprint }}|{{ d.items|length }}|{% for k in d %}{{ k }},{% endfor %}|"
+            '{{ d|json_script:"x" }}|{{ m|pprint }}'
+        )
+        got = html_lib.unescape(ENTRIES[entry](src, ctx))
+        parts = got.split("|")
+        assert parts[0].startswith("{") and "'__model__': 'Thing'" in parts[0], got
+        assert parts[1] == "4", got
+        assert parts[2] == "__str__,__model__,pk,n,", got
+        assert '"__model__": "Thing"' in parts[3], got
+        assert parts[4] == str(world["a1"]), got
 
     @pytest.mark.parametrize("entry", sorted(ENTRIES))
     def test_a_model_is_not_a_mapping_to_stringformat_in_or_pluralize(self, world, entry) -> None:

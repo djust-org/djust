@@ -18,6 +18,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
 from djust import LiveView, event_handler
+from djust.tests._worker_connections import close_new_worker_connections
 from djust._exposure_children import child_state_key
 from djust.decorators import state
 
@@ -87,27 +88,8 @@ class LegacyShellPage(LiveView):
 @pytest.fixture(autouse=True)
 async def close_reconnect_worker_connections(transactional_db):
     """Release connections opened by reconnect session creation on the async worker."""
-    from asgiref.sync import sync_to_async
-    from django.db import connections
-    from django.db.backends.base.base import BaseDatabaseWrapper
-
-    def snapshot():
-        return {
-            id(conn): conn.connection is not None for conn in connections.all(initialized_only=True)
-        }
-
-    def close_new_connections(before):
-        for conn in connections.all(initialized_only=True):
-            if conn.connection is None or before.get(id(conn), False):
-                continue
-            if conn.vendor == "sqlite" and conn.is_in_memory_db():
-                BaseDatabaseWrapper.close(conn)
-            else:
-                conn.close()
-
-    before = await sync_to_async(snapshot)()
-    yield
-    await sync_to_async(close_new_connections)(before)
+    async with close_new_worker_connections():
+        yield
 
 
 @pytest.fixture(autouse=True)

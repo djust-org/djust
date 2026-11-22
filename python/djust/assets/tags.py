@@ -211,12 +211,25 @@ def _files(name: str, variant: str | None) -> tuple[AssetFile, ...]:
     return asset.files_for(variant)
 
 
-def asset_tags(name: str, variant: str | None = None, file_type: str | None = None) -> SafeString:
+class AssetTags(SafeString):
+    """The markup :func:`asset_tags` builds: ``<script>`` / ``<link>`` elements whose every
+    attribute went through ``format_html``.
+
+    A ``Component``'s ordinary text slot escapes a marked-safe value (#3932); a value of this
+    type is the one it prints as markup, so the documented ``{{ asset_tags }}`` pattern
+    (``get_context_data`` returning ``self.asset_tags()``) still loads the library. Build it
+    only from :func:`asset_tags` output: constructing one from other text claims that text is
+    framework-built markup."""
+
+    __slots__ = ()
+
+
+def asset_tags(name: str, variant: str | None = None, file_type: str | None = None) -> AssetTags:
     """Tags for every file of ``name`` (and ``variant``); only the files of
     ``file_type`` ("script", "module", "style") when it is given."""
     files = [f for f in _files(name, variant) if file_type is None or f.type == file_type]
     # Every element is format_html output, so joining them is safe.
-    return mark_safe("\n".join(_tag(f) for f in files))
+    return AssetTags(mark_safe("\n".join(_tag(f) for f in files)))
 
 
 def asset_source(

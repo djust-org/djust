@@ -622,14 +622,13 @@ def test_a_marked_safe_link_class_stays_inside_the_class_attribute_natively(
         assert "<b>" not in html, html
 
 
-def test_a_row_that_is_not_a_dict_is_dropped_natively() -> None:
-    """Declined, pinned: the Python tag draws an empty row (not clickable: no URL, #3895), the
-    native handler omits it. That is the row set (every native feature reads ``row.get``), not
-    navigation."""
+def test_a_row_that_is_not_a_dict_is_dropped_on_both_engines() -> None:
+    """One implementation (#3869): a row that is not a mapping is omitted by both engines (every
+    table feature reads ``row.get``), whatever navigation does with the rows that remain."""
     rows = [{"id": 1, "name": "N", "age": 3, "u": "/1"}, "not a dict", None]
     src = '{% data_table rows=rows columns=cols row_url="u" %}'
     py, rs = render_both(src, ctx(rows=rows, cols=LINKED))
-    assert [r["attrs"].get("data-href") for r in view(py).rows] == ["/1", None, None]
+    assert [r["attrs"].get("data-href") for r in view(py).rows] == ["/1"]
     assert [r["attrs"]["data-href"] for r in view(rs).rows] == ["/1"]
 
 

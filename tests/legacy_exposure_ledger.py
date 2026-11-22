@@ -120,6 +120,9 @@ REMAINING_4082: dict[str, str] = {
     "python/djust/tests/test_server_turn_reauth_slots.py": (
         "legacy subject: reauth_on_event on server-originated turns runs for legacy views only (turns.reauth)"
     ),
+    "python/djust/tests/test_stable_component_ids_4114.py": (
+        "migrated; the mount-built and instance-held component cases stay legacy: an explicit view declares its components at class level and refuses one assigned in mount() or a handler"
+    ),
     "python/djust/tests/test_turn_middleware_core.py": (
         "legacy subject: its legacy view drives the reauth built-in, which re-checks legacy views only (turns.reauth)"
     ),
@@ -140,6 +143,9 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_sse_reauth_mount_request_4255.py",
         # #4167: a legacy lazy child routes over the socket like an explicit one.
         "python/djust/tests/test_lazy_child_live_transport_4167.py",
+        # #3936: state models as handles run on both exposure policies (the policy is a
+        # parametrised axis of the cases), so legacy is a subject here.
+        "python/tests/test_state_models_as_handles_3936.py",
         # #4168: legacy socket turns store their handlers' session writes.
         "python/djust/tests/test_session_only_write_4168.py",
         # #4112: rows a legacy view publishes refresh after a write, as explicit ones do.
@@ -433,6 +439,7 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_server_turn_reauth_slots.py",
     "python/djust/tests/test_async_pending_flag_2963.py",
     "python/djust/tests/test_multi_view_refusal_3252.py",
+    "python/djust/tests/test_stable_component_ids_4114.py",
     "python/djust/tests/test_turn_middleware_core.py",
     "python/djust/tests/test_event_loop_offload_3074.py",
     "python/djust/tests/test_async_check_permissions.py",

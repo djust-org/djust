@@ -1,6 +1,6 @@
 """A marked-safe row value is data, not a URL or an attribute (#3894).
 
-``table.html`` reads a row's URL with ``table_href`` and a link column's class from the column.
+The table reads a row's URL (``row_url``, a link column) and a link column's class from the column.
 ``mark_safe`` on a CELL is how a table keeps markup in a TEXT cell; it never meant "and use it as a
 URL" or "and write it into an attribute". ``url_attr`` honours a ``SafeData`` value by default
 (a developer's own tag argument), so a marked-safe row value skipped both the scheme allowlist and
@@ -225,7 +225,14 @@ def test_a_marked_safe_column_key_stays_inside_the_sort_value(claim: str, payloa
 # --- the TEXT cell keeps what the developer marked safe (the legitimate use) -------------------
 
 
-@pytest.mark.parametrize("claim", sorted(CLAIMS))
+#: The claims a table cell honours: ``SafeData`` (``mark_safe`` and its subclasses). A lazy string
+#: or a ``str`` with an ``__html__`` method is text in the one implementation both engines share
+#: (#3869; the Rust engine always read them as text).
+SAFE_DATA_CLAIMS = ["mark_safe", "safestring-subclass"]
+TEXT_CLAIMS = ["lazy-mark_safe", "html-object"]
+
+
+@pytest.mark.parametrize("claim", SAFE_DATA_CLAIMS)
 def test_a_marked_safe_text_cell_still_renders_its_markup(claim: str) -> None:
     plain_cols = [{"key": "name", "label": "N"}]  # no link: the plain-text branch of the cell
     html = render({"id": 1, "name": CLAIMS[claim]("<i>italic</i>")}, plain_cols, args="")
@@ -233,10 +240,21 @@ def test_a_marked_safe_text_cell_still_renders_its_markup(claim: str) -> None:
     assert "<a " not in html, html
 
 
-@pytest.mark.parametrize("claim", sorted(CLAIMS))
+@pytest.mark.parametrize("claim", SAFE_DATA_CLAIMS)
 def test_a_marked_safe_text_cell_inside_a_link_still_renders_its_markup(claim: str) -> None:
     html = render({"id": 1, "name": CLAIMS[claim]("<i>italic</i>"), "u": "/x"})
     assert "<i>italic</i></a>" in html.replace("\n", "").replace("  ", ""), html
+
+
+@pytest.mark.parametrize("claim", TEXT_CLAIMS)
+def test_a_lazy_or_html_object_cell_is_text_on_both_engines(claim: str) -> None:
+    """Only ``SafeData`` keeps markup in a cell (#3869): the Django engine now draws what the Rust
+    engine always drew."""
+    plain_cols = [{"key": "name", "label": "N"}]
+    ctx = {"rows": [{"id": 1, "name": CLAIMS[claim]("<i>italic</i>")}], "cols": plain_cols}
+    src = "{% data_table rows=rows columns=cols %}"
+    for html in (_django(src, ctx), _rust(src, ctx)):
+        assert "<i>" not in html and "&lt;i&gt;italic&lt;/i&gt;" in html, html
 
 
 def test_an_unmarked_text_cell_is_escaped() -> None:

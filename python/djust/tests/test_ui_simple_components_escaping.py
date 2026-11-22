@@ -22,7 +22,7 @@ from unittest.mock import patch
 from html.parser import HTMLParser
 
 import pytest
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 from djust import config as config_module
 from djust.components.ui import (
@@ -489,3 +489,150 @@ def test_modal_marked_safe_body_and_footer_pass_through_on_the_default_render_pa
 
     html = str(Modal(mark_safe("<p>b</p>"), id="m", footer=mark_safe("<b>f</b>")).render())
     assert "<p>b</p>" in html and "<b>f</b>" in html
+
+
+# --- The template path agrees with the Rust instance (#3932) ----------------
+
+
+def _template_classes() -> List[Tuple[str, type, str]]:
+    """``(class name, class, parameter)`` of every ``*_simple`` class that has a ``template``,
+    for each of its string parameters. Derived from the code, not listed."""
+    import importlib
+    import inspect
+    import pkgutil
+
+    import djust.components.ui as ui_package
+    from djust.components.base import Component
+
+    found: List[Tuple[str, type, str]] = []
+    for info in pkgutil.iter_modules(ui_package.__path__):
+        if not info.name.endswith("_simple"):
+            continue
+        module = importlib.import_module(f"djust.components.ui.{info.name}")
+        for name, cls in vars(module).items():
+            if not (
+                inspect.isclass(cls)
+                and issubclass(cls, Component)
+                and cls.__module__ == module.__name__
+                and cls.template is not None
+            ):
+                continue
+            for param in inspect.signature(cls.__init__).parameters.values():
+                if param.name == "self" or param.name == "id":
+                    continue
+                if param.default is inspect.Parameter.empty or isinstance(
+                    param.default, (str, type(None))
+                ):
+                    found.append((name, cls, param.name))
+    return found
+
+
+def _build(cls: type, param: str, value: Any) -> Any:
+    import inspect
+
+    kwargs = {
+        p.name: "req"
+        for p in inspect.signature(cls.__init__).parameters.values()  # type: ignore[misc]
+        if p.name != "self" and p.default is inspect.Parameter.empty
+    }
+    kwargs[param] = value
+    return cls(**kwargs)
+
+
+TEMPLATE_CASES = _template_classes()
+
+
+def test_the_template_classes_were_found() -> None:
+    names = {name for name, _cls, _param in TEMPLATE_CASES}
+    assert {"Alert", "Badge", "Card", "Modal", "Tooltip", "Offcanvas", "Checkbox"} <= names
+
+
+@pytest.mark.parametrize(
+    "name,cls,param", TEMPLATE_CASES, ids=[f"{n}.{p}" for n, _c, p in TEMPLATE_CASES]
+)
+def test_the_template_path_prints_a_marked_safe_value_as_the_rust_instance_does(
+    name: str, cls: type, param: str
+) -> None:
+    """For each string parameter given ``mark_safe("<b>x</b>")``: the template render and the Rust
+    instance's render agree on whether the markup appears. Where the constructor refuses the value
+    (no Rust instance) the expectation is the class's own ``markup_slots``: a parameter it escapes
+    itself and documents as markup."""
+    marked = mark_safe("<b>x</b>")
+    try:
+        component = _build(cls, param, marked)
+    except (TypeError, ValueError):
+        pytest.skip("the constructor refuses the value")
+    with _framework("bootstrap5"):
+        via_template = _build(cls, param, marked)
+        via_template._rust_instance = None
+        template_prints_markup = "<b>x</b>" in str(via_template.render())
+        if component._rust_instance is not None:
+            rust_prints_markup = "<b>x</b>" in str(component.render())
+            assert template_prints_markup == rust_prints_markup, (name, param)
+        else:
+            assert template_prints_markup == (param in cls.markup_slots), (name, param)  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "name,cls,param", TEMPLATE_CASES, ids=[f"{n}.{p}" for n, _c, p in TEMPLATE_CASES]
+)
+def test_a_plain_value_is_not_escaped_twice_on_the_template_path(
+    name: str, cls: type, param: str
+) -> None:
+    try:
+        component = _build(cls, param, "a & b")
+    except (TypeError, ValueError):
+        pytest.skip("the constructor refuses the value")
+    component._rust_instance = None
+    with _framework("bootstrap5"):
+        html = str(component.render())
+    assert "a &amp;amp; b" not in html, (name, param)
+
+
+def test_the_declared_markup_slots_are_the_documented_ones() -> None:
+    from djust.components.ui.modal_simple import Modal
+    from djust.components.ui.offcanvas_simple import Offcanvas
+    from djust.components.ui.tooltip_simple import Tooltip
+
+    assert Modal.markup_slots == {"body", "footer"}
+    assert Tooltip.markup_slots == {"content"}
+    assert Offcanvas.markup_slots == {"body"}
+    from djust.components.ui import Card
+
+    assert Card.markup_slots == frozenset()
+
+
+MARKUP_SLOT_CASES = [(n, c, p) for n, c, p in TEMPLATE_CASES if p in c.markup_slots]  # type: ignore[attr-defined]
+
+
+def test_the_markup_slot_classes_were_found() -> None:
+    assert {(n, p) for n, _c, p in MARKUP_SLOT_CASES} == {
+        ("Modal", "body"),
+        ("Modal", "footer"),
+        ("Tooltip", "content"),
+        ("Offcanvas", "body"),
+    }
+
+
+@pytest.mark.parametrize(
+    "name,cls,param", MARKUP_SLOT_CASES, ids=[f"{n}.{p}" for n, _c, p in MARKUP_SLOT_CASES]
+)
+def test_a_markup_slot_is_one_the_constructor_escapes_itself(
+    name: str, cls: type, param: str
+) -> None:
+    """The criterion ``Component.markup_slots`` documents (review S2): the template prints the
+    name as given because the constructor already ``conditional_escape``d it, so a plain string
+    cannot reach the page raw and a marked-safe one is markup the developer wrote."""
+    plain = getattr(_build(cls, param, "a <i> & b"), param)
+    assert isinstance(plain, SafeString) and str(plain) == "a &lt;i&gt; &amp; b", (name, param)
+    marked = getattr(_build(cls, param, mark_safe("<b>x</b>")), param)
+    assert str(marked) == "<b>x</b>", (name, param)
+
+
+def test_an_undeclared_markup_slot_template_escapes_a_marked_safe_value() -> None:
+    """The class with no crate counterpart used to print the markup always (``Checkbox.label``)."""
+    from djust.components.ui import Checkbox
+
+    with _framework("bootstrap5"):
+        html = str(Checkbox("n", label=mark_safe("<b>x</b>")).render())
+    assert "<b>x</b>" not in html and "&lt;b&gt;x&lt;/b&gt;" in html

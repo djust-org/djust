@@ -1657,6 +1657,12 @@ class TestTheAliasFallbackStays2628:
         got = render(source, {"user": u})
         if request.node.callspec.id == "LiveView":
             assert got == "", "LiveView: a state-held top-level model is a dict, with no handle"
+            # #3936: the render-time handle overlay closes it behind the flag. Delete the `''`
+            # branch above when `state_models_as_handles` defaults on.
+            from django.test import override_settings
+
+            with override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": True}):
+                assert render(source, {"user": u}) == "1"
         else:
             assert got == "1"
 

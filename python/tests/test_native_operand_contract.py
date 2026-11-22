@@ -377,6 +377,12 @@ READERS = {
             # ``NavMenuHandler``: the hex-encoded ``[id, href]`` marker each ``{% nav_item %}``
             # wrote into the menu's body, never an operand
             "_nav_key_matches",
+            # ``render_data_table`` (#3869): the DJANGO engine's ``{% data_table %}`` arguments,
+            # already resolved once by Django's ``simple_tag``, made the shape the Rust engine
+            # hands ``DataTableHandler``. Its ``json.loads`` decodes its own ``json.dumps`` of the
+            # normalized value (a round trip, never text an engine or a user wrote), and nothing
+            # is looked up in a context, so no operand is read twice.
+            "_python_operand",
         },
     },
     # The ``TagHandler`` family (``djust.template_tags``): ``_resolve_arg`` is their reader, and it
@@ -413,8 +419,10 @@ READERS = {
         },
     },
 }
-#: The callers of ``plain_operand`` (the conversion) outside its own module.
-CONVERTERS = {"_parse_args", "_passed_or_context"}
+#: The callers of ``plain_operand`` (the conversion) outside its own module. The two readers of
+#: the Rust engine's operands, and ``_python_operand`` (#3869), which hands a Django-resolved
+#: scalar of ``{% data_table %}`` the same conversion so both engines draw it alike (see READERS).
+CONVERTERS = {"_parse_args", "_passed_or_context", "_python_operand"}
 
 
 def _functions_reading(path: Path) -> dict[str, set[str]]:

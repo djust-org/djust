@@ -623,7 +623,9 @@ the content of a field.
 
 ## Addendum (#3949, #3936): a render-time handle overlay for a model held as state (Accepted, to be built for 1.4.0)
 
-**Status: Accepted (maintainer decision, 2026-11-10). Nothing in this addendum is implemented yet; it is built for 1.4.0, not in a 1.3.x patch.** Maintainer decision recorded on #3949: the behaviour is pinned and documented now (`python/tests/test_custom_callable_model_argument_3949.py`, the guide section "What a custom filter or tag receives for a model"), and the real fix is taken together with #3936, under this addendum.
+**Implemented (#3936, train 2.0-ah) behind `LIVEVIEW_CONFIG["state_models_as_handles"]`, default off.** `RustLiveView.set_render_handles` carries the floored handles, bound in a scope above the state at each render entry (`render_result`, `render_binary_diff`, `prepare_partial_page`, `render_with_diff_detached`); `python/tests/test_state_models_as_handles_3936.py` and `test_state_models_as_handles_equivalence_3936.py` pin the invariants below. Legacy captures the raw value at the top-level key only (a model inside a dict keeps its dict). **The actor entry (decision 3) no longer exists:** `use_actors` was removed in 2.0 (`REMOVED_VIEW_ATTRIBUTES`, "the Tokio actor system was removed"), so there is no second render path to mirror.
+
+**Status: Accepted (maintainer decision, 2026-11-10); implemented in 2.0 behind the flag, default off (see the 2026-11-21 note under Decisions).** Maintainer decision recorded on #3949: the behaviour is pinned and documented now (`python/tests/test_custom_callable_model_argument_3949.py`, the guide section "What a custom filter or tag receives for a model"), and the real fix is taken together with #3936, under this addendum.
 
 ### The problem, measured on 1.3.1
 
@@ -679,6 +681,8 @@ Mechanism (smallest complete design, sizes from reading the code, not a prototyp
 1. **Accept the overlay.** It is built for 1.4.0. "Pin and document" remains the answer on the 1.3.x line.
 2. **Flag default:** `LIVEVIEW_CONFIG["state_models_as_handles"]` is off in the release candidates and on by 1.4.0, with a behaviour-change note in the changelog.
 3. **The actor entry** (`use_actors = True`) gets the overlay in the same release, so the two paths do not drift.
+
+**Note, 2026-11-21 (train 2.0-ah review S5): decision 2 is not met in 2.0, and that is open for the maintainer.** The overlay ships in 2.0 (past 1.4.0) with the flag OFF by default. Flipping it is left to a maintainer decision rather than taken in the train, because two of its preconditions are not measured yet: the per-sync cost of building and extracting the handles (no benchmark was run) and the full model-state equivalence corpus (the differential covers the #3777 cases, nine single-model reads and three held-list reads, full render and diff render, not the planned 52 templates). Until the flip: `changelog.d/3936.added.md` describes an opt-in, not a fix of the default path; #3936 and #3949 stay open on the flip; and the `''` branch of the 2539 characterization net stays. The flip is the default in `python/djust/config.py`, the deletion of that branch, and the behaviour-change bullets of `changelog.d/3949.changed.md` moving under the release that flips it.
 
 ### Acceptance (the work for 1.4.0)
 

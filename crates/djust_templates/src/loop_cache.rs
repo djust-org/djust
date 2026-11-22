@@ -756,6 +756,12 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
             13u8.hash(hasher);
             s.hash(hasher);
         }
+        // Tag 14 (#3947): a model marker and a plain string of the same text make a map a model
+        // or a dict, so a fragment cached for one must not be served for the other.
+        Value::ModelName(s) => {
+            14u8.hash(hasher);
+            s.hash(hasher);
+        }
         Value::String(s) => {
             4u8.hash(hasher);
             s.hash(hasher);

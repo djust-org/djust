@@ -5,7 +5,7 @@ ContextMixin - Context data management for LiveView.
 import itertools
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional, Tuple, cast
 
 from django.db import models
 from django.test.signals import setting_changed
@@ -173,6 +173,33 @@ def _holds_db_value(value: Any, depth: int = 0) -> bool:
         if type(item) not in _NEVER_DB_TYPES and _holds_db_value(item, depth):
             return True
     return False
+
+
+def state_models_as_handles_enabled() -> bool:
+    """``LIVEVIEW_CONFIG["state_models_as_handles"]`` (#3936, default off)."""
+    try:
+        from ..config import get_config
+
+        return bool(get_config().get("state_models_as_handles", False))
+    except Exception:  # noqa: BLE001 -- config access is defensive; off is the safe answer
+        return False
+
+
+def _state_model_values(context: Any) -> Dict[str, Any]:
+    """The top-level context values that hold a model (a ``Model``, a ``QuerySet``, a list or
+    tuple containing a ``Model``), for the render-time handle overlay (#3936). Empty when the
+    flag is off, so the default path pays one config read."""
+    if not state_models_as_handles_enabled():
+        return {}
+    from django.db.models import QuerySet
+
+    out: Dict[str, Any] = {}
+    for key, value in context.items():
+        if isinstance(value, (models.Model, QuerySet)) or (
+            isinstance(value, (list, tuple)) and any(isinstance(v, models.Model) for v in value)
+        ):
+            out[key] = value
+    return out
 
 
 def _jit_serialization_enabled() -> bool:
@@ -717,7 +744,7 @@ class ContextMixin:
         )
 
         # JIT auto-serialization for QuerySets and Models
-        jit_serialized_keys = set()
+        jit_serialized_keys: set = set()
         template_content = None
         # The raw rows a template's QuerySet-method read is answered from
         # (#3801); rebuilt every render, never state.
@@ -728,6 +755,11 @@ class ContextMixin:
         # inside dicts will NOT trigger JIT; they are handled later by
         # _deep_serialize_dict() which falls back to DjangoJSONEncoder when
         # template_content is None.
+        # #3936 (``state_models_as_handles``): the raw top-level model values,
+        # captured before the JIT replaces them with dicts, for the render-time
+        # handle overlay. Rebuilt every render, never state.
+        self.__dict__["_state_model_raw"] = _state_model_values(context)
+
         has_db_values = False
         if _jit_serialization_enabled():
             for val in context.values():
@@ -744,133 +776,9 @@ class ContextMixin:
 
                 template_content = _jit_template_content(self)
                 if template_content:
-                    # Extract variable paths once for list[Model] optimization
-                    from ..mixins.jit import _cached_extract_template_variables
-
-                    variable_paths_map = _cached_extract_template_variables(template_content)
-
-                    # Template hash once for codegen cache keys
-                    from ..mixins.jit import _template_hash
-                    from ..session_utils import _jit_serializer_cache, _get_model_hash
-                    from ..optimization.codegen import (
-                        all_methods_need_rows,
-                        compile_serializer,
-                        generate_serializer_code,
-                    )
-                    from ..mixins.jit import keep_rows_for_all_methods
-
-                    template_hash = _template_hash(template_content)
-
-                    for key, value in list(context.items()):
-                        if isinstance(value, QuerySet):
-                            serialized = self._jit_serialize_queryset(
-                                value, template_content, key, context
-                            )
-                            context[key] = serialized
-                            jit_serialized_keys.add(key)
-
-                            if isinstance(serialized, list):
-                                count_key = f"{key}_count"
-                                if count_key not in context:
-                                    context[count_key] = len(serialized)
-
-                        elif isinstance(value, models.Model):
-                            context[key] = self._jit_serialize_model(value, template_content, key)
-                            jit_serialized_keys.add(key)
-
-                        elif is_model_list(value):
-                            # Recursive partial rows must use the same scoped,
-                            # cycle-checked serializer as QuerySets.
-                            from ..mixins.jit import _recursive_queryset_relation
-
-                            if _recursive_queryset_relation(template_content, key):
-                                context[key] = self._jit_serialize_model_list(
-                                    value, template_content, key, context
-                                )
-                                jit_serialized_keys.add(key)
-                                continue
-                            # Re-fetch with select_related/prefetch_related/annotations
-                            # to avoid N+1 queries during serialization
-                            from ..optimization.query_optimizer import (
-                                analyze_queryset_optimization,
-                                optimize_queryset,
-                            )
-
-                            from ..mixins.jit import (
-                                drop_callable_sort_keys,
-                                resolve_variable_keys,
-                                split_variable_keys,
-                            )
-
-                            model_class = value[0].__class__
-                            paths, key_variables = split_variable_keys(
-                                variable_paths_map.get(key, []) if variable_paths_map else []
-                            )
-                            # ``dictsort:<variable>``: the ONE column the variable
-                            # names this render (#3910).
-                            sort_keys = (
-                                tuple(
-                                    resolve_variable_keys(key_variables, context, model_class, self)
-                                )
-                                if paths
-                                else ()
-                            )
-                            if sort_keys:
-                                paths = sorted(set(paths) | set(sort_keys))
-                            paths = drop_callable_sort_keys(
-                                model_class, template_content, key, paths
-                            )
-                            optimization = (
-                                analyze_queryset_optimization(model_class, paths) if paths else None
-                            )
-
-                            # #2536: re-query ONLY when some row lacks what the
-                            # template paths need, and graft the fetched
-                            # relation caches / annotations onto the USER'S
-                            # instances instead of replacing them. A static
-                            # list then costs one query for the whole session
-                            # (zero when the view already ``select_related``),
-                            # and an in-memory row mutation is rendered rather
-                            # than discarded by a fresh instance winning.
-                            if (
-                                optimization
-                                and (
-                                    optimization.select_related
-                                    or optimization.prefetch_related
-                                    or optimization.annotations
-                                )
-                                and _rows_lack_optimization(value, optimization)
-                            ):
-                                pks = [obj.pk for obj in value]
-                                qs = model_class._default_manager.filter(pk__in=pks)
-                                qs = optimize_queryset(qs, optimization)
-                                pk_map = {obj.pk: obj for obj in qs}
-                                _graft_optimization_caches(value, pk_map, optimization)
-
-                            if paths:
-                                # Use codegen serializer directly — avoids DjangoJSONEncoder fallback
-                                model_hash = _get_model_hash(model_class)
-                                cache_key = (template_hash, key, model_hash, "list", sort_keys)
-                                if cache_key in _jit_serializer_cache:
-                                    serializer, _ = _jit_serializer_cache[cache_key]
-                                else:
-                                    func_name = f"serialize_{key}_{template_hash}"
-                                    code = generate_serializer_code(
-                                        model_class.__name__, paths, func_name
-                                    )
-                                    serializer = compile_serializer(code, func_name)
-                                    _jit_serializer_cache[cache_key] = (serializer, None)
-                                context[key] = [serializer(item) for item in value]
-                                if all_methods_need_rows(model_class, paths):
-                                    keep_rows_for_all_methods(self, key, value)
-                            else:
-                                # No field path for this list: the QuerySet
-                                # contract, not the single-model identity map
-                                # (#2736).
-                                context[key] = self._jit_serialize_model_list(
-                                    value, template_content, key, context
-                                )
-                            jit_serialized_keys.add(key)
+                    # ``into``: a key serialized before a later one raises stays
+                    # recorded, as when this loop was inline.
+                    self._jit_serialize_context(context, template_content, into=jit_serialized_keys)
             except Exception as e:
                 if template_content and "djust:recursive-partial" in template_content:
                     # Falling back to whole-model normalization here would
@@ -1123,6 +1031,157 @@ class ContextMixin:
         context.update(kwargs)
         self._jit_serialized_keys = set()
         return context
+
+    def _jit_serialize_context(
+        self,
+        context: Dict[str, Any],
+        template_content: str,
+        keys: Optional[Iterable[str]] = None,
+        add_counts: bool = True,
+        into: Optional[set] = None,
+    ) -> set:
+        """JIT-serialize the top-level QuerySets / Models / model lists of ``context``.
+
+        Each value is replaced by what the template reads off it (relation paths included),
+        and the replaced names are returned. ``keys`` limits the pass to those names (the
+        explicit sync, #4069 review S1, passes the names whose rows the template walks);
+        ``add_counts`` adds the legacy ``<name>_count`` key for a serialized QuerySet.
+        Raises what the serializers raise; the caller decides how to fail. ``into`` collects
+        the names as they are replaced, so a caller that catches still sees the earlier ones.
+        """
+        from django.db.models import QuerySet
+
+        from ..mixins.jit import _cached_extract_template_variables
+
+        jit_serialized_keys: set = set() if into is None else into
+        if type(context) is dict:
+            set_value = context.__setitem__
+        else:
+            # A framework rewrite of the same value: an explicit context refuses a
+            # provider key through ``__setitem__`` (E2-1), as the sync's normalize does.
+            def set_value(key: str, value: Any) -> None:
+                dict.__setitem__(context, key, value)
+
+        # Extract variable paths once for list[Model] optimization
+        variable_paths_map = _cached_extract_template_variables(template_content)
+
+        # Template hash once for codegen cache keys
+        from ..mixins.jit import _template_hash
+        from ..session_utils import _jit_serializer_cache, _get_model_hash
+        from ..optimization.codegen import (
+            all_methods_need_rows,
+            compile_serializer,
+            generate_serializer_code,
+        )
+        from ..mixins.jit import keep_rows_for_all_methods
+
+        template_hash = _template_hash(template_content)
+
+        for key, value in list(context.items()):
+            if keys is not None and key not in keys:
+                continue
+            if isinstance(value, QuerySet):
+                serialized = self._jit_serialize_queryset(value, template_content, key, context)
+                set_value(key, serialized)
+                jit_serialized_keys.add(key)
+
+                if add_counts and isinstance(serialized, list):
+                    count_key = f"{key}_count"
+                    if count_key not in context:
+                        context[count_key] = len(serialized)
+
+            elif isinstance(value, models.Model):
+                set_value(key, self._jit_serialize_model(value, template_content, key))
+                jit_serialized_keys.add(key)
+
+            elif is_model_list(value):
+                # Recursive partial rows must use the same scoped,
+                # cycle-checked serializer as QuerySets.
+                from ..mixins.jit import _recursive_queryset_relation
+
+                if _recursive_queryset_relation(template_content, key):
+                    set_value(
+                        key,
+                        self._jit_serialize_model_list(value, template_content, key, context),
+                    )
+                    jit_serialized_keys.add(key)
+                    continue
+                # Re-fetch with select_related/prefetch_related/annotations
+                # to avoid N+1 queries during serialization
+                from ..optimization.query_optimizer import (
+                    analyze_queryset_optimization,
+                    optimize_queryset,
+                )
+
+                from ..mixins.jit import (
+                    drop_callable_sort_keys,
+                    resolve_variable_keys,
+                    split_variable_keys,
+                )
+
+                model_class = value[0].__class__
+                paths, key_variables = split_variable_keys(
+                    variable_paths_map.get(key, []) if variable_paths_map else []
+                )
+                # ``dictsort:<variable>``: the ONE column the variable
+                # names this render (#3910).
+                sort_keys = (
+                    tuple(resolve_variable_keys(key_variables, context, model_class, self))
+                    if paths
+                    else ()
+                )
+                if sort_keys:
+                    paths = sorted(set(paths) | set(sort_keys))
+                paths = drop_callable_sort_keys(model_class, template_content, key, paths)
+                optimization = analyze_queryset_optimization(model_class, paths) if paths else None
+
+                # #2536: re-query ONLY when some row lacks what the
+                # template paths need, and graft the fetched
+                # relation caches / annotations onto the USER'S
+                # instances instead of replacing them. A static
+                # list then costs one query for the whole session
+                # (zero when the view already ``select_related``),
+                # and an in-memory row mutation is rendered rather
+                # than discarded by a fresh instance winning.
+                if (
+                    optimization
+                    and (
+                        optimization.select_related
+                        or optimization.prefetch_related
+                        or optimization.annotations
+                    )
+                    and _rows_lack_optimization(value, optimization)
+                ):
+                    pks = [obj.pk for obj in value]
+                    qs = model_class._default_manager.filter(pk__in=pks)
+                    qs = optimize_queryset(qs, optimization)
+                    pk_map = {obj.pk: obj for obj in qs}
+                    _graft_optimization_caches(value, pk_map, optimization)
+
+                if paths:
+                    # Use codegen serializer directly — avoids DjangoJSONEncoder fallback
+                    model_hash = _get_model_hash(model_class)
+                    cache_key = (template_hash, key, model_hash, "list", sort_keys)
+                    if cache_key in _jit_serializer_cache:
+                        serializer, _ = _jit_serializer_cache[cache_key]
+                    else:
+                        func_name = f"serialize_{key}_{template_hash}"
+                        code = generate_serializer_code(model_class.__name__, paths, func_name)
+                        serializer = compile_serializer(code, func_name)
+                        _jit_serializer_cache[cache_key] = (serializer, None)
+                    set_value(key, [serializer(item) for item in value])
+                    if all_methods_need_rows(model_class, paths):
+                        keep_rows_for_all_methods(self, key, value)
+                else:
+                    # No field path for this list: the QuerySet
+                    # contract, not the single-model identity map
+                    # (#2736).
+                    set_value(
+                        key,
+                        self._jit_serialize_model_list(value, template_content, key, context),
+                    )
+                jit_serialized_keys.add(key)
+        return jit_serialized_keys
 
     def _nested_template_content(self) -> Optional[str]:
         """The JIT's template source for a value reached through a container.

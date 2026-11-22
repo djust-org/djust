@@ -79,6 +79,12 @@ def mark_embedded(view_instance: Any) -> None:
     _EMBEDDED.set(view_instance)
 
 
+def is_embedded(view_instance: Any) -> bool:
+    """Whether ``view_instance`` was created to render inside a page (see
+    :func:`mark_embedded`)."""
+    return bool(_EMBEDDED.get(view_instance))
+
+
 def note_http_dispatch(view_instance: Any, request: Any) -> None:
     """Record that Django dispatched ``request`` to ``view_instance`` (its own
     ``get``/``post``), after the middleware chain processed it."""

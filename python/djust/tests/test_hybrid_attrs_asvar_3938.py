@@ -101,13 +101,19 @@ class TestEscapedOnce:
         assert [t for t, _a in tags] == ["b"], tags
 
     def test_a_text_slot_and_a_filtered_slot_are_left_as_django_prints_them(self) -> None:
-        """The author's block is not touched: other uses of the variable are Django's own."""
+        """The author's block is not touched: a plain value prints what Django prints.
+
+        A marked-safe value is the exception since #3932: a ``Component``'s ordinary text slot
+        escapes it (as the Rust instance does), where Django lets the block's markup out."""
         template = LOAD + BLOCK + '<span>{{ label }}</span><i title="{{ label|upper }}">'
-        for value in [*PLAIN, BREAKOUT]:
+        for value in PLAIN:
             assert _draw(template, item=value).startswith(
                 _django(template, item=value).split("<i ")[0]
             )
         assert _draw(template, item="A & B") == _django(template, item="A & B")
+        assert "<img" in _django(template, item=BREAKOUT)
+        tags = _starttags(_draw(template, item=BREAKOUT))
+        assert [t for t, _a in tags] == ["span", "i"], tags
 
     def test_the_twin_is_placed_after_the_block_and_read_by_the_slot(self) -> None:
         rewritten = hybrid.plan(LOAD + BLOCK + SINKS["attribute"]).template

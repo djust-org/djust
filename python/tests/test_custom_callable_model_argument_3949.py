@@ -67,7 +67,9 @@ EXCLUDED = "EXCLUDED-3949"  # the field the model lists in djust_exclude_fields:
 HASH_MARK = "HASHMARK3949"
 PASSWORD_HASH = f"pbkdf2_sha256$1$salt${HASH_MARK}"
 
-ENTRIES = ("liveview", "backend", "raw")
+#: ``liveview-handles*``: the LiveView with ``state_models_as_handles`` on (#3936), legacy and
+#: explicit policy -- the ADR-027 addendum's flag axis.
+ENTRIES = ("liveview", "backend", "raw", "liveview-handles", "liveview-handles-explicit")
 IDENTITY_KEYS = {"id", "pk", "__str__", "__model__"}
 PROXY, QS_PROXY = "_SidecarModelProxy", "_SidecarQuerySetProxy"
 
@@ -221,7 +223,47 @@ def _django(src: str, ctx: dict) -> str:
     return html_lib.unescape(engine.from_string(src).render(DjangoContext(dict(ctx))))
 
 
-RENDER = {"liveview": _liveview, "backend": _backend, "raw": _raw}
+def _liveview_handles(src: str, ctx: dict) -> str:
+    """The legacy LiveView entry with ``state_models_as_handles`` on (#3936)."""
+    from django.test import override_settings
+
+    with override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": True}):
+        return _liveview(src, ctx)
+
+
+def _liveview_handles_explicit(src: str, ctx: dict) -> str:
+    """The explicit (default) LiveView, values from ``get_context_data``, flag on (#3936)."""
+    from django.test import override_settings
+
+    def get_context_data(self, **kwargs):
+        context = LiveView.get_context_data(self, **kwargs)
+        context.update(ctx)
+        return context
+
+    view = type(
+        "CallableExplicitView",
+        (LiveView,),
+        {
+            "exposure_policy": "explicit",
+            "template": f"<div dj-root>{src}</div>",
+            "get_context_data": get_context_data,
+        },
+    )
+    with override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": True}):
+        client = LiveViewTestClient(view)
+        client.mount()
+        match = DJ_ROOT.search(client.render())
+    assert match is not None
+    return html_lib.unescape(match.group(1))
+
+
+RENDER = {
+    "liveview": _liveview,
+    "backend": _backend,
+    "raw": _raw,
+    "liveview-handles": _liveview_handles,
+    "liveview-handles-explicit": _liveview_handles_explicit,
+}
 
 
 # -- reading what a callable reported --------------------------------------------------------------
@@ -282,71 +324,98 @@ LOOP_CALLS = {
 # {% for r in x %} handed to a filter or a tag.
 #
 # Every LiveView cell below, and the two backend QuerySet cells, describe behaviour the 1.4.0 handle
-# overlay will deliberately change (#3949, #3936).
+# overlay will deliberately change (#3949, #3936). The ``liveview-handles*`` columns are that overlay
+# (``state_models_as_handles`` on, legacy and explicit), measured: a top-level model / list /
+# QuerySet arrives as the floor proxy (a QuerySet as its rows' proxies, for a filter AND a tag);
+# a dict holding models keeps its dicts, because the overlay captures top-level keys only.
 TYPES = {
     # a single model
     ("model", "filter"): {
         "liveview": "dict",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "proxy",
         "raw": "proxy",
+        "liveview-handles": "proxy",
+        "liveview-handles-explicit": "proxy",
     },
     ("model", "tag"): {
         "liveview": "dict",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "proxy",
         "raw": "proxy",
+        "liveview-handles": "proxy",
+        "liveview-handles-explicit": "proxy",
     },
     # a list of models
     ("list", "filter"): {
         "liveview": "list[dict,dict]",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "list[proxy,proxy]",
         "raw": "list[proxy,proxy]",
+        "liveview-handles": "list[proxy,proxy]",
+        "liveview-handles-explicit": "list[proxy,proxy]",
     },
     ("list", "tag"): {
         "liveview": "list[dict,dict]",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "list[proxy,proxy]",
         "raw": "list[proxy,proxy]",
+        "liveview-handles": "list[proxy,proxy]",
+        "liveview-handles-explicit": "list[proxy,proxy]",
     },
     ("list", "loop"): {
         "liveview": "dict",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "proxy",
         "raw": "proxy",
+        "liveview-handles": "proxy",
+        "liveview-handles-explicit": "proxy",
     },
     # a QuerySet: the backend hands a FILTER the serialized rows and a TAG a queryset proxy
     ("queryset", "filter"): {
         "liveview": "list[dict,dict]",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "list[dict,dict]",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "raw": "list[proxy,proxy]",
+        "liveview-handles": "list[proxy,proxy]",
+        "liveview-handles-explicit": "list[proxy,proxy]",
     },
     ("queryset", "tag"): {
         "liveview": "list[dict,dict]",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "qsproxy",
         "raw": "qsproxy",
+        "liveview-handles": "list[proxy,proxy]",
+        "liveview-handles-explicit": "list[proxy,proxy]",
     },
     ("queryset", "loop"): {
         "liveview": "dict",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "dict",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "raw": "proxy",
+        "liveview-handles": "proxy",
+        "liveview-handles-explicit": "proxy",
     },
     # a dict that HOLDS models stays a dict on every entry; what it holds differs
     ("dict-of-model", "filter"): {
         "liveview": "dict{owner:dict}",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "dict{owner:proxy}",
         "raw": "dict{owner:proxy}",
+        "liveview-handles": "dict{owner:dict}",  # the overlay captures top-level keys only (#3936)
+        "liveview-handles-explicit": "dict{owner:dict}",  # the overlay captures top-level keys only (#3936)
     },
     ("dict-of-model", "tag"): {
         "liveview": "dict{owner:dict}",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "dict{owner:proxy}",
         "raw": "dict{owner:proxy}",
+        "liveview-handles": "dict{owner:dict}",  # the overlay captures top-level keys only (#3936)
+        "liveview-handles-explicit": "dict{owner:dict}",  # the overlay captures top-level keys only (#3936)
     },
     ("dict-of-list", "filter"): {
         "liveview": "dict{items:list[dict,dict]}",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "dict{items:list[proxy,proxy]}",
         "raw": "dict{items:list[proxy,proxy]}",
+        "liveview-handles": "dict{items:list[dict,dict]}",  # the overlay captures top-level keys only (#3936)
+        "liveview-handles-explicit": "dict{items:list[dict,dict]}",  # the overlay captures top-level keys only (#3936)
     },
     ("dict-of-list", "tag"): {
         "liveview": "dict{items:list[dict,dict]}",  # changes with the 1.4.0 handle overlay (#3949, #3936)
         "backend": "dict{items:list[proxy,proxy]}",
         "raw": "dict{items:list[proxy,proxy]}",
+        "liveview-handles": "dict{items:list[dict,dict]}",  # the overlay captures top-level keys only (#3936)
+        "liveview-handles-explicit": "dict{items:list[dict,dict]}",  # the overlay captures top-level keys only (#3936)
     },
 }
 #: shapes whose rows the LiveView dict carries IN FULL when the template names nothing on them

@@ -56,6 +56,7 @@ import functools
 import logging
 from typing import Any, Callable, ContextManager, Optional, Tuple, TypeVar
 
+from ._component_ids import render_ids
 from ._held_rows import (
     RECORDED_STEPS,
     attributed,
@@ -172,6 +173,12 @@ def _meter(view: Any, step: str, fn: Callable[..., Any]) -> Any:
     return hop(view, step, fn)
 
 
+def _embedded(view: Any) -> bool:
+    from .auth._login_required_middleware import is_embedded
+
+    return is_embedded(view)
+
+
 def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
     """Call ``fn(*args, **kwargs)`` on this thread inside the configured wrapper.
 
@@ -195,6 +202,11 @@ def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **
             unmark(view, generation)
             return result
     if step in RECORDED_STEPS and view is not None and not _is_async(fn):
+        if step == "mount" and not _embedded(view):
+            # The components ``mount()`` builds get ids that are the same on every
+            # request (#4114). An embedded child has no view_id yet: random ids.
+            with writes_by(view), render_ids(view, "mount"):
+                return _run_step(view, step, fn, *args, **kwargs)
         with writes_by(view):
             return _run_step(view, step, fn, *args, **kwargs)
     return _run_step(view, step, fn, *args, **kwargs)
@@ -232,9 +244,10 @@ def sync_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """
     if _is_async(fn):
         return fn
-    if step == "render" and view is not None:
+    if step in ("render", "mount") and view is not None:
         # The render's reads enter the view's read set, and a marked view is
-        # reset first: both in ``run_sync_step`` (#4112).
+        # reset first; a mount numbers the components it builds (#4114): both in
+        # ``run_sync_step`` (#4112).
         @functools.wraps(fn)
         def rendering(*args: Any, **kwargs: Any) -> _T:
             return run_sync_step(view, step, fn, *args, **kwargs)

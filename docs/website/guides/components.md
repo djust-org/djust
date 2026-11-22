@@ -106,13 +106,13 @@ A URL is judged as the whole value, in every way it can come out. A literal insi
 
 **Text inside `<textarea>` and `<title>`, and in HTML comments (#3914).** The content of `<textarea>` and `<title>` is RCDATA: text in which character references are decoded, ended by the first matching end tag, so markup in a value written there can end the element (and `-->` ends a comment the same way). A `{{ value }}` in such text is therefore escaped **even when it is marked safe** (a marked-safe string, a lazy one, an object whose text form is marked safe, a callable returning one; also `{{ v|safe }}` and under `{% autoescape off %}`). `TextArea(value=...)` is the case that was reported. An ordinary value prints exactly as before: a plain name keeps the engine's own formatting (a date is localized, a number formatted); a dotted path or a filtered expression ends in `|force_escape`, so a date or number there prints in its canonical form (`2026-01-02`), as in an attribute. A callable in such a slot is called where the engine reaches the slot, so one in a branch that does not render is not called. The same text in an HTML comment changes as well: a marked-safe value in `<!-- {{ v }} -->` is now escaped.
 
-**`<script>`, `<style>`, `<xmp>`, `<iframe>`, `<noembed>`, `<noframes>`, `<plaintext>` and `<noscript>` keep your markup.** Entities are not decoded in them, so HTML escaping is the wrong encoding there (`<script>var cfg = {{ cfg|safe }};</script>` must stay JSON), and the markup in them is yours. Nothing about them changes: a value (marked safe or not) prints as it did. To put data in a page, use `{{ data|json_script:"id" }}` (a script element, escaped for HTML) or a `data-*` attribute, and read it from your script. The scanner still knows the first seven as raw text (their content is not markup, so an `<a href="{{ u }}">` written inside `<xmp>` is not read as an attribute). `<noscript>` is markup where scripting is off and is scanned as it always was: its attribute slots follow the attribute rule.
+**`<script>`, `<style>`, `<xmp>`, `<iframe>`, `<noembed>`, `<noframes>`, `<plaintext>` and `<noscript>` keep your markup.** Entities are not decoded in them, so HTML escaping is the wrong encoding there (`<script>var cfg = {{ cfg|safe }};</script>` must stay JSON), and the markup in them is yours. Nothing about them changes: a value (marked safe or not) prints as it did. To put data in a page, use `{{ data|json_script:"id" }}` (a script element, escaped for HTML) or a `data-*` attribute, and read it from your script. The scanner still knows the first seven as raw text (their content is not markup, so an `<a href="{{ u }}">` written inside `<xmp>` is not read as an attribute). `<noscript>` is markup where scripting is off: its attribute slots follow the attribute rule, and its text is ordinary text (escaped in a `Component`).
 
-What is **not** covered, named by one warning per component class (class, tag, attribute and element names and a count; never an attribute value or anything from the context; a name is template text, so keep names static in a template you build per instance): a tag that prints text inside `<textarea>` / `<title>` / a comment (`{% firstof %}`, `{% cycle %}` ...; escape what it prints); an `{% include %}` / `{% extends %}` of a template whose slots would need the rule (a literal name the loaders find, with no attribute slot and no escaped-text slot, is not reported); and shapes the scanner cannot follow like a browser does: an element name built by a tag (`<{{ tag }}>`), an end tag inside another block than its start tag (`{% if closed %}</textarea>{% endif %}`; a slot after an end tag whose name is followed by a token, `</textarea{{ x }}>`, is escaped as if still inside). A `<textarea>` opened inside `{% verbatim %}` is followed.
+What is **not** covered, named by one warning per component class (class, tag, attribute and element names and a count; never an attribute value or anything from the context; a name is template text, so keep names static in a template you build per instance): a tag that prints text inside `<textarea>` / `<title>` / a comment, or in the ordinary text of a `Component` template (`{% firstof %}`, `{% cycle %}`, `{% blocktranslate %}` ...; escape what it prints); an `{% include %}` / `{% extends %}` of a template whose slots would need the rule (a literal name the loaders find, with no attribute slot and no escaped-text slot, is not reported); and shapes the scanner cannot follow like a browser does: an element name built by a tag (`<{{ tag }}>`), an end tag inside another block than its start tag (`{% if closed %}</textarea>{% endif %}`; a slot after an end tag whose name is followed by a token, `</textarea{{ x }}>`, is escaped as if still inside). A `<textarea>` opened inside `{% verbatim %}` is followed.
 
 **`{% blocktranslate %}` blocks.** The variables of a translation block are keyed by the translation catalog (`%(name)s`), so the body is never rewritten (a rename would change the msgid). In an attribute value and in `<textarea>` / `<title>` / a comment the block is escaped as a whole: a variable it reads from the context is escaped around it, a `with` argument gets `|force_escape`, a `count` argument is a number, and the literal text prints as written. A block with `asvar` prints nothing, and `{{ name }}` of the variable it sets prints in an attribute or in `<textarea>` / `<title>` escaped exactly once (`Delete A &amp; B`, as Django prints it), and so is everything else the block prints: a marked-safe variable, and the block's own text (the msgid, or the translator's msgstr from the catalog). There djust is stricter than Django, which prints that text as it is: `{% blocktranslate asvar x %}Say "hi"{% endblocktranslate %}` in `title="{{ x }}"` prints `Say &quot;hi&quot;`, because a catalog is an input and markup in it must not end the attribute or the `<textarea>` (#3938). That holds where the slot is sure to read that block: one `asvar` block for the name, at the template's top level (not inside `{% if %}`, `{% for %}`, `{% with %}` ...), no other tag binding the name, no `{% extends %}`, the slot after the block. Anywhere else, and for a filtered expression (`{{ label|upper }}`, which Django escapes twice too), the text is escaped twice: never let out, but `&` prints as `&amp;amp;`. `{% translate ... as name %}` is not covered and is escaped twice the same way. The legacy `with expr as name` form cannot be rewritten and is named by the warning. A block in a URL attribute is escaped, not scheme-checked.
 
-**Every other text slot keeps a marked-safe value's markup** (`<span>{{ v }}</span>`), as a Django template does. This is a difference from the Rust instance and `_render_custom()` of the same class, which escape a text slot whatever it is marked as, so the same marked-safe text can print as markup or as text depending on which path the constructor's accept/refuse decision picks. It is tracked in [#3932](https://github.com/djust-org/djust/issues/3932).
+**Every other text slot of a `Component` template is escaped too (#3932).** A `{{ value }}` in ordinary text (`<span>{{ v }}</span>`, `<td>{{ row.v }}</td>`) is escaped whatever the value is marked as (a marked-safe string, a lazy one, a callable returning one; also `{{ v|safe }}`), like the same class drawn by its Rust instance. A plain value prints as before. A class that documents a parameter as markup lists its name in `markup_slots` (a `frozenset` on the class): that name keeps a marked-safe value's markup in a text slot. The shipped ones are `Modal` (`body`, `footer`), `Tooltip` (`content`) and `Offcanvas` (`body`), whose constructors already escape a plain string themselves. To print markup from your own `Component`, add the parameter to `markup_slots`, or use a `LiveComponent`. The tags `self.asset_tags()` returns (an `AssetTags`, the framework's own `<script>` / `<link>` markup) print as markup in ordinary text without either, so the [vendored-assets](vendored-assets.md) `{{ asset_tags }}` pattern keeps loading its library; in a `<textarea>` or `<title>` they are text like any value. In ordinary text a number or date from a dotted or filtered slot prints in its canonical form (`2026-01-02`), as in an attribute. A `{% %}` tag or a `{% blocktranslate %}` block in ordinary text is not a slot, so it is **not** escaped: a marked-safe value that `{% firstof v %}`, `{% cycle v w %}` or a `{% blocktranslate %}{{ v }}{% endblocktranslate %}` prints keeps its markup. The once-per-class warning names such a tag (`text:firstof`); use a `{{ v }}` slot for a value that may be marked safe.
 
 **Inline templates of `LiveComponent` and class-level (`BoundComponent`) components follow the same rule (#3913).** Their `template` string is drawn by the same helper (`_render_inline_template`), so the attribute slots are escaped whatever the value is marked as, a URL attribute (`href`, `src`, `action`, `dj-navigate`, `dj-patch` ...) is judged with the scheme allowlist, and the text of `<textarea>` / `<title>` and of HTML comments is escaped, exactly as above, with one warning per component class. **What this changes in an existing inline template** (a before/after list, measured over a corpus of values and templates):
 
@@ -121,6 +121,8 @@ What is **not** covered, named by one warning per component class (class, tag, a
 | `<a href="{{ url }}">` with a state value `javascript:alert(1)` (or any scheme outside the allowlist) | printed as written | `href="#"` |
 | `<p title="{{ v }}">` or `title="{{ v\|safe }}"` with a marked-safe value | the markup left the attribute | escaped, stays in the attribute (`mark_safe("a &amp; b")` prints `a &amp;amp; b`: pass plain text) |
 | `<textarea>{{ v }}</textarea>` / `<title>` / `<!-- {{ v }} -->` with a marked-safe value | the markup printed | escaped |
+| `<span>{{ v }}</span>` (ordinary text) with a marked-safe value, in a `Component` | the markup printed | escaped, like the Rust instance (a name in `markup_slots` keeps it) |
+| `<span>{{ v }}</span>` (ordinary text) with a marked-safe value, in a `LiveComponent` / `BoundComponent` | the markup printed | **unchanged**: children and nested components are written there |
 | a number or date in an attribute, or in a dotted / filtered slot of `<textarea>` | localized (`Jan. 2, 2026`, `33,5`) | canonical (`2026-01-02`, `33.5`) |
 | `<script>`, `<style>`, `<xmp>`, `<noscript>` ... with `{{ v\|safe }}` | as written | **unchanged** |
 | an ordinary URL (relative, `http(s):`, `mailto:`, `tel:`, a fragment, a query) | printed | **unchanged**, byte for byte |
@@ -129,7 +131,7 @@ Which schemes pass: relative URLs, `http`, `https`, `ftp`, `ftps`, `mailto` and 
 
 Two behaviours to know. A callable in a URL slot is called when the context is prepared, even if its branch does not render (it must be judged first); a callable in `<textarea>` / `<title>` text is called only where the engine reaches it. And a `BoundComponent` hashes its state to cache its render, which asks each value for its text form.
 
-A `template_name` file is not read by the rule: it is loaded by the project's template loaders, with `{% include %}` and `{% extends %}`, and escapes (or not) as your template says ([#3933](https://github.com/djust-org/djust/issues/3933)).
+**A `template_name` file's own source follows the same rule (#3933).** A `LiveComponent` or class-level (`BoundComponent`) `template_name` file is read once, and the attribute slots written in the file itself are escaped whatever the value is marked as, a URL attribute is judged with the scheme allowlist, and the text of `<textarea>` / `<title>` and HTML comments is escaped, with one warning per component class (the warning says "template file"). A text slot keeps a marked-safe value's markup, as in an inline `LiveComponent` template. What the file gets from `{% extends %}` (the parent's slots) or `{% include %}` is not scanned and is named by the same warning as for an inline template; write the slots in the file itself. If the template backend does not expose the file's source, the file is drawn as before and named once. Not covered: a function component's `template_name` file (`@component(template_name=...)`) and the suspense fallback, which Django's `render_to_string` draws as your template says. The file's `{% if %}` blocks keep their dj-if markers; their ids (`if-<source hash>-n`) change once on upgrade for a file that has attribute slots, and the client re-mounts.
 
 ### Updating a Component
 
@@ -1057,6 +1059,26 @@ engine (every socket render).
   A single `{% dj_radio %}` is still one loose radio: put it inside your own
   `<fieldset><legend>`.
 
+### `{% data_table %}`: one implementation on both engines (#3869)
+
+`{% data_table %}` is drawn by one implementation, the native handler (`DataTableHandler` in
+`djust/components/rust_handlers.py`), under Django's template engine and under the Rust engine. The
+Django engine's tag takes the same arguments and calls the handler with them, so a template draws
+the same markup, and every feature the tag accepts is available under DjangoTemplates: expandable
+rows (`on_table_expand`), editable columns and rows, export and import, column reordering,
+resizing and visibility, density, grouping, copy, row drag, frozen columns, virtual scroll,
+footer aggregations, conditional formatting. Rows and columns reach the handler the way the Rust
+engine hands them (a model is its serialised dict, so the exposure floor applies).
+
+`djust_components/table.html` no longer exists: a project override of it has no effect, and the
+filters only it used (`table_cell`, `table_href`, `table_has_href`, `table_width`,
+`table_width_attrs`) are removed. The markup is the handler's, not the old template's (no whitespace between elements,
+`data-row-key` on rows, the handler's classes and wrappers); CSS or tests written against the old
+markup may need new selectors. A table with `row_click_event` or `row_url` loads
+`/static/djust_components/data-table-row-click.js` with a fixed `/static/` prefix, as the handler
+always did; a project with another `STATIC_URL` serves that file from `/static/` or loads it
+itself.
+
 ### `{% data_table %}` row-level navigation (#1111)
 
 Two ways to make whole rows clickable for navigation. Both render
@@ -1129,16 +1151,12 @@ def get_context_data(self, **kwargs):
 
 A column can be a link too: `{"key": "claim_number", "label": "Claim #", "link": "claim_url",
 "link_class": "text-blue"}` draws the cell as `<a href>` of the row's `claim_url` value
-(`link_class` is optional). `row_url` and `link` are drawn the same way by the first render
-(Django's template engine) and by every render after the socket opens (the native handler), with
-two exceptions: the URL goes through the same scheme allowlist on the server, so `javascript:`,
-`data:` and other non-navigation schemes become `#` before they reach the page, and a `None` /
-`""` / `0` / `False` `row_url` or `link` draws nothing (it is not the key `"None"`). A row whose
-URL value is `None`, missing or blank has no URL: the cell is plain text and the row is not
-clickable, on both engines (#3895). One exception remains: a `row_url` given as a template
-VARIABLE that holds the text `"0"`, `"None"` or `"False"`, over rows that have a key spelled that
-way, makes a clickable row in the Python tag but not natively, because the native handler re-types
-the text it is handed (#3882, #3883).
+(`link_class` is optional). `row_url` and `link` are drawn the same way by every render (one
+implementation on both engines, below), with two rules: the URL goes through the same scheme
+allowlist on the server, so `javascript:`, `data:` and other non-navigation schemes become `#`
+before they reach the page, and a `None` / `""` / `0` / `False` `row_url` or `link` draws nothing
+(it is not the key `"None"`). A row whose URL value is `None`, missing or blank has no URL: the
+cell is plain text and the row is not clickable (#3895).
 
 A column given as a bare name is the column with that key and label: `columns=["claim_number",
 "status"]` draws the same table as `[{"key": "claim_number", "label": "claim_number"}, {"key":

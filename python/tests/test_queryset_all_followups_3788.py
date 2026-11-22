@@ -58,8 +58,14 @@ from python.tests.test_queryset_all_floor_and_errors_3777 import (  # noqa: F401
 from python.tests.test_queryset_all_traversal_3777 import (  # noqa: F401
     _backend_render,
     _django_render,
-    _liveview_render,
     world,
+)
+
+# The explicit (default) policy since the train/2.0-ah review (S1): a QuerySet
+# reached through a container, the row cap and a sliced operand go through the
+# JIT on an explicit view too.
+from python.tests.test_queryset_all_traversal_3777 import (  # noqa: E402
+    _liveview_render,
 )
 
 RENDERS = [

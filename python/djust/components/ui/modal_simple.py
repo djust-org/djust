@@ -44,6 +44,10 @@ class Modal(Component):
 
     _rust_impl_class = RustModal
 
+    # #3932: parameters the constructor already ``conditional_escape``s (a plain string is
+    # escaped, a marked-safe one is developer markup): the template prints them as given.
+    markup_slots = frozenset({"body", "footer"})
+
     template = """<div class="modal fade{% if show %} show{% endif %}" id="{{ id }}" tabindex="-1" aria-labelledby="{{ id }}Label" aria-hidden="true">
     <div class="modal-dialog{% if size != "md" %} modal-{{ size }}{% endif %}{% if centered %} modal-dialog-centered{% endif %}">
         <div class="modal-content">{% if title %}

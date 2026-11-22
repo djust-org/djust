@@ -195,6 +195,19 @@ class TestTheRatchet:
             assert row.own_output > 0, "%s: %s, but its own output never appeared" % (tag, row)
             assert passed >= classify.MIN_EXERCISED * readable, "%s: %s" % (tag, row)
 
+    def test_every_theme_tag_shows_its_own_output(self, runs):
+        """The harness configures a theme pack: without one ``theme_framework_overrides`` prints
+        nothing, so its row compared ``""`` with ``""`` and was UNEXERCISED (#3663)."""
+        theme = {
+            tag: row for tag, row in runs["check"].rows.items() if tag.startswith("theme_tags:")
+        }
+        assert len(theme) >= 11, sorted(theme)
+        unexercised = [tag for tag, row in theme.items() if row.tag_class == "UNEXERCISED"]
+        assert not unexercised, unexercised
+        assert all(row.own_output > 0 for row in theme.values()), {
+            tag: row.own_output for tag, row in theme.items() if row.own_output == 0
+        }
+
     def test_the_libraries_covered_are_the_two_djust_ships(self):
         """An intent pin, and the module names a change to either library selects this file by."""
         assert harness.LIBRARIES == {

@@ -312,6 +312,14 @@ class LiveViewConfig:
         # after a streak of low-hit renders (#3071; see
         # RustBridgeMixin._LOOP_CACHE_BYPASS_AFTER).
         "loop_render_cache_enabled": True,
+        # #3936 / #3949 (ADR-027 addendum): hand the renderer a floored model
+        # HANDLE for each state key holding a model (a Model, a QuerySet, a
+        # list of models), bound for the render only. A filtered rebinding
+        # (``{% with q=user|default:user %}{{ q.groups.count }}``), a custom
+        # filter or tag and ``pprint`` then see the model as the Django backend
+        # does, not its serialized dict. State, change detection and the wire
+        # keep the dict. Off by default while the behaviour change is opt-in.
+        "state_models_as_handles": False,
         # Seconds one page-POST fallback request waits, in total, for the
         # ``start_async`` / ``@background`` work it runs before answering
         # (#3634). ``None`` (default) = no deadline: a task that does not return

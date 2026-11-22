@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 127 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 128 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -105,6 +105,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | S012 | Security | Error | A LiveView the runtime refuses on live transports because access control that only the HTTP request runs is not covered by its declared djust auth: a custom `AccessMixin` subclass's `dispatch()`, a `setup()`/`dispatch()`/`get()`/`post()` override, decorator or URLconf wrapper that checks the user and denies, and unknown decorators and URLconf wrappers. Django's own auth decorators, wrappers and mixins are replayed; the rest is V013 (#14; reallocated from a duplicate S004, #2070) |
 | S013 | Security | Warning | A `ModelFormMixin` edit view overrides neither `get_queryset()` nor `has_object_permission()` (ADR-035) |
 | S014 | Security | Warning | A `ModelForm` with an editable SECRET-LIKE floor field (`password`, `api_token`, `secret_key`, ...): djust draws it without its stored value, so an unchanged re-post saves it as empty (#3797) |
+| S015 | Security | Warning | A model's `get_*()` method or `@property` reads a field its `djust_exclude_fields` hides, so the computed value still carries the excluded data (#3955) |
 | T001 | Templates | Warning | Deprecated @click/@input syntax |
 | T002 | Templates | Info | Template declares `dj-view` but no `dj-root` (the root is inferred; the page connects) |
 | T003 | Templates | Info | wrapper_template uses {% include %} instead of liveview_content |
@@ -913,6 +914,26 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   does not call `super()` is not protected and is why the class is reported.
 - **Suppression**: `# noqa: S014` on the `class` line, or
   `DJUST_CONFIG = {'suppress_checks': ['S014']}`.
+
+### S015 — Computed member reads an excluded field
+- **Severity**: Warning
+- **Method**: Source inspection of every installed model with a non-empty `djust_exclude_fields`
+  (Django's own models are skipped; their inherited methods are read). The source of each explicit
+  `get_*` method and `@property` (the members the serializer collects, inherited ones such as
+  `AbstractUser.get_full_name` included), and of every other public zero-argument method the
+  application's own model classes define (the floor proxy answers `{{ obj.label }}` as a call), is
+  parsed; nothing is called or queried.
+- **What it detects**: A member that reads an excluded field through `self.<field>`,
+  `getattr(self, "<field>")`, or up to three hops of `self.<helper>` / `self.<property>`.
+  `djust_exclude_fields` keeps the FIELD out of the serialized row and off the floor proxy, but the
+  eager serializer still serializes explicit `get_*` methods and `@property` values, and the floor proxy
+  still answers a zero-argument method: a custom `User` excluding `last_name` still renders it through
+  `{{ user.get_full_name }}`.
+- **Fix**: Add the member to `djust_exclude_fields` too, or list the fields a template may read in
+  `djust_serializable_fields` (an allowlist).
+- **Limits**: Dynamic access (`getattr(self, name)` with a computed name, a helper on another object)
+  is not seen; a member whose source cannot be read (built with `exec`, a C extension) is skipped.
+- **Suppression**: `DJUST_CONFIG = {'suppress_checks': ['S015']}`.
 
 <!-- END GENERATED check-sections:S -->
 

@@ -127,6 +127,35 @@ def _accept_communicators_without_origin():
         pass
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _import_asgi_application_under_the_real_settings():
+    """Import ``ASGI_APPLICATION`` before any test can override ``ALLOWED_HOSTS`` (#4262).
+
+    ``channels``' ``AllowedHostsOriginValidator`` is a factory: the demo project's
+    ``asgi.py`` calls it at import and the validator keeps that moment's
+    ``ALLOWED_HOSTS`` for the life of the process. Something else imports the module
+    lazily, ``check_configuration`` (it walks the ASGI app for A001/C005) among them, and
+    a test that runs it under ``@override_settings(ALLOWED_HOSTS=["myapp.example.com"])``
+    was then the one to import it, so every later socket opened through
+    ``ASGI_APPLICATION`` (``LivePage.connect``) got its handshake denied (close code
+    1000). Which test imported it first depends on how xdist dealt out the tests.
+
+    A test that drops ``demo_project.asgi`` from ``sys.modules`` and imports it again
+    under an override would freeze the restricted list again, for every later test in
+    its process: such a test must restore the module it removed.
+    """
+    try:
+        from django.conf import settings
+        from django.utils.module_loading import import_string
+
+        dotted = getattr(settings, "ASGI_APPLICATION", None)
+        if dotted:
+            import_string(dotted)
+    except Exception:  # noqa: BLE001 — not importable here: tests that need it report it
+        pass
+    yield
+
+
 def pytest_collection_finish(session):
     """Take the heap collection built out of every later garbage collection (#3692).
 

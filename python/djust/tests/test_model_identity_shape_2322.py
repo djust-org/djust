@@ -125,6 +125,22 @@ class TestTheHelperIsTheDefinition:
         assert got["__str__"] == str(user) == "bob"
         assert got["__model__"] == "User"
 
+    def test_model_identity_stamps_model_name(self) -> None:
+        """#3947: the marker is the TYPE of ``__model__`` (``ModelName``), and the JSON wire is
+        byte-identical to the plain class name."""
+        import json
+
+        got = model_identity(_make_user(pk=3, username="bob"))
+        assert type(got["__model__"]) is ser.ModelName
+        assert isinstance(got["__model__"], str)
+        assert json.dumps(got) == json.dumps(
+            {"id": 3, "pk": 3, "__str__": "bob", "__model__": "User"}
+        )
+        assert ser.is_serialized_model_map(got)
+        assert not ser.is_serialized_model_map({**got, "__model__": "User"})
+        # a dict copy keeps the marker (the value object is reused)
+        assert ser.is_serialized_model_map(dict(got))
+
     def test_id_and_pk_stay_NATIVE_types_for_template_comparisons(self) -> None:
         # `{% if item.id == state_var %}` compares an int to an int; stringifying
         # the pk here would silently break every such comparison.

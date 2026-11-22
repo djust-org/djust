@@ -533,6 +533,9 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         "_nested_template_source",
         # The raw rows a QuerySet-method read is answered from (#3801).
         "_all_method_rows",
+        # The raw state-model values a legacy ``get_context_data`` captures for the
+        # #3936 handle overlay; the next sync pops them (train/2.0-ah review S1 run).
+        "_state_model_raw",
         "_context_processor_keys",
         # What the last legacy render built from attributes / as render-only
         # (``mixins/context.py`` ``legacy_unsaved_keys``).
