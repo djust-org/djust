@@ -211,46 +211,51 @@ entry: `isinstance(value, Model)` is `False`. What they are handed depends on th
   `password`, any field the model lists in `djust_exclude_fields`, and names starting with `_`
   (`value._meta`) with `AttributeError`. It is not subscriptable (`value["username"]` raises
   `TypeError`) and not iterable, and `str(value)` is the model's own text.
-- **A LiveView** hands a plain `dict`: the model is turned into its serialized mapping in Python before
-  the Rust engine sees it (ADR-027 keeps models eager on the state path). Read it with `value["name"]`
-  or `value.get("name")`.
+- **A LiveView** hands the same floor proxy since 2.0, for a model, a list of models or a `QuerySet`
+  held as a top-level state key (`LIVEVIEW_CONFIG["state_models_as_handles"]`, default `True`). A model
+  inside a `dict` held in state is still its serialized `dict`.
 
-**`LIVEVIEW_CONFIG["state_models_as_handles"]` (default `False`, #3936 / #3949).** With it on, a
-LiveView hands a state model to the template the way `DjustTemplateBackend` does: each state key that
+**`LIVEVIEW_CONFIG["state_models_as_handles"]` (default `True` since 2.0, #3936 / #3949).** A LiveView
+hands a state model to the template the way `DjustTemplateBackend` does: each top-level state key that
 holds a model, a list of models or a `QuerySet` gets a floor proxy bound for the render only. A custom
-filter then receives the floor proxy (attribute reads work; `value["name"]`, `value.password` and
+filter receives the floor proxy (attribute reads work; `value["name"]`, `value.password` and
 `value._meta` raise), a filtered rebinding reads a relation (`{% with q=user|default:user %}{{ q.groups.count }}`,
 `{% for u in users|slice:":2" %}{{ u.groups.count }}`), and state, change detection, the state backend
 and what the client receives keep the serialized dict. A native tag's argument is still the floored
 dict text (`data_table` reads dict rows). If the floor cannot be built for a key, that key renders from
-its dict (never the instance). The table below is the flag-off behaviour.
+its dict (never the instance). A `QuerySet` whose `count` / `exists` / `first` / `last` the template
+reads, or whose rows' relations the template walks, keeps the serialized rows the JIT built (prefetched
+and capped), so the proxy adds no query. A model whose `__str__` returns a `SafeString` prints escaped
+on a LiveView either way. Set the key to `False` to restore the 1.x `dict` everywhere (kill-switch);
+with it off, the "LiveView state" column below reads `dict` (and `list` of `dict`) in every row.
 
 What each entry hands over (measured; every cell is pinned by
 `python/tests/test_custom_callable_model_argument_3949.py`):
 
 | the template's value | LiveView state | `DjustTemplateBackend` | `render_template` |
 |---|---|---|---|
-| one model | `dict` | floor proxy | floor proxy |
-| a list of models | `list` of `dict` | `list` of floor proxies | `list` of floor proxies |
-| a row of `{% for r in rows %}` | `dict` | floor proxy | floor proxy |
-| a `QuerySet`, to a **filter** | `list` of `dict` | `list` of `dict` | `list` of floor proxies |
-| a `QuerySet`, to a **tag** | `list` of `dict` | queryset proxy | queryset proxy |
-| a row of `{% for r in qs %}` | `dict` | `dict` | floor proxy |
+| one model | floor proxy | floor proxy | floor proxy |
+| a list of models | `list` of floor proxies | `list` of floor proxies | `list` of floor proxies |
+| a row of `{% for r in rows %}` | floor proxy | floor proxy | floor proxy |
+| a `QuerySet`, to a **filter** | `list` of floor proxies | `list` of `dict` | `list` of floor proxies |
+| a `QuerySet`, to a **tag** | `list` of floor proxies | queryset proxy | queryset proxy |
+| a row of `{% for r in qs %}` | floor proxy | `dict` | floor proxy |
 | a `dict` holding a model, or a list of models | a `dict` holding `dict`s | a `dict` holding floor proxies | a `dict` holding floor proxies |
 
 A filter and every tag form are handed the same thing in every row; the one place they differ is a
-`QuerySet` passed whole (the two `QuerySet` rows). A field the template reads (`{{ user.username|my_filter }}`) arrives as that
+`QuerySet` passed whole on the backend and `render_template` (the two `QuerySet` rows). A field the template reads (`{{ user.username|my_filter }}`) arrives as that
 field's plain value, a `str`, on every entry.
 
 **What holds on every entry** (the floor): the value carries neither `password` nor a field the model
 lists in `djust_exclude_fields`, as a value or as a key, and `str(value)` does not write them. The
 guarantee is per *field*: a method or property that computes from an excluded field is a result like any
 other. With `last_name` excluded, `value.get_full_name()` on a proxy, and the `get_full_name` value of a
-LiveView `dict`, still contain the last name, so do not rely on `djust_exclude_fields` to hide what a
+flag-off LiveView `dict`, still contain the last name, so do not rely on `djust_exclude_fields` to hide what a
 method derives from the field. The system check [`djust.S015`](../guides/error-codes.md#s015-computed-member-reads-an-excluded-field) reports a `get_*()` method or
 property that reads an excluded field (#3955).
 
-**What differs today.** The LiveView `dict` is not a fixed shape: its keys are what the template names.
+**What differs with the kill-switch, and for a model inside a `dict`.** A LiveView `dict` is not a fixed
+shape: its keys are what the template names.
 A single model the template names nothing on is the identity keys (`id`, `pk`, `__str__`, `__model__`);
 if the template prints `{{ x.owner_code }}` elsewhere, the dict a filter receives has `owner_code` too;
 and the rows of a list or queryset the template names nothing on carry their fields, properties and
@@ -284,12 +289,12 @@ def initial(text):
 Do not depend on the number or names of the keys of a LiveView `dict`, and do not branch on
 `isinstance(value, dict)` or `isinstance(value, Model)`.
 
-The two shapes are a known inconsistency, not a contract. Handing custom code on a LiveView the same
-floor proxy the backend hands it is the render-time handle overlay decided together with the LiveView
-reverse-relation read in [#3936](https://github.com/djust-org/djust/issues/3936). It is tracked in
-[#3949](https://github.com/djust-org/djust/issues/3949) for 1.4.0, behind an ADR-027 addendum, and will
-change which of the cells above is a `dict`. Python's template engine hands a filter the live instance,
-password hash included; no djust entry reproduces that.
+The two shapes were a known inconsistency, resolved in 2.0 by the render-time handle overlay
+([#3936](https://github.com/djust-org/djust/issues/3936),
+[#3949](https://github.com/djust-org/djust/issues/3949), ADR-027 addendum), except for a model inside a
+`dict` held in state, which keeps its `dict` (the overlay binds top-level keys only; a known limit).
+Python's template engine hands a filter the live instance, password hash included; no djust entry
+reproduces that.
 
 ## Inline Templates
 
