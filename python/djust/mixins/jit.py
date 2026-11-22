@@ -315,6 +315,13 @@ def queryset_row_walk_paths(template_content: Optional[str]) -> Dict[str, Frozen
     by a live row, never by the serialized column dict. Cached per template
     hash; an empty or unparseable template reads nothing (fail closed: no
     capture).
+
+    The names a ``dictsort`` / ``dictsortreversed`` key reads (and no field
+    beside it) are unioned in (#4264): ``{% for u in users|dictsort:'get_username' %}{{ u }}``
+    files ``users: []`` in the extractor, the key being settled away, yet the key
+    is a method Django never calls. Only the JIT drops it
+    (``whole_rows_without_callable_sort_keys``), so the name has to reach
+    ``rows_need_live_walk``.
     """
     if not template_content:
         return {}
@@ -329,6 +336,11 @@ def queryset_row_walk_paths(template_content: Optional[str]) -> Dict[str, Frozen
         logger.debug("extract_template_variables refused the template; no row capture")
         variables = {}
     result = {root: frozenset(p for p in paths if p) for root, paths in variables.items() if paths}
+    # A cached frozenset is never mutated: each union builds a new one (#4264).
+    for root, keys in _item_key_only_reads(template_content).items():
+        named = frozenset(k for k in keys if k)
+        if named:
+            result[root] = result.get(root, frozenset()) | named
     if len(_queryset_row_walk_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
         _queryset_row_walk_cache.clear()
     _queryset_row_walk_cache[content_hash] = result
@@ -342,8 +354,16 @@ def rows_need_live_walk(model_class: Any, paths: FrozenSet[str]) -> bool:
     does a single part that names a related manager or a method of the row
     model (``{{ u.groups }}``, ``{{ u.get_full_name }}``), read off the class
     without calling anything. A plain column (``username``) does not.
+
+    A variable sort key (``dictsort:key``, filed as ``*key``) does (#4264): the
+    key is named at render time, only the JIT resolves it
+    (``resolve_variable_keys``) and drops a callable one
+    (``whole_rows_without_callable_sort_keys``, #3919), so every variable key
+    takes the JIT, as on a legacy view; it is not narrowed to a callable value.
     """
     for path in paths:
+        if path.startswith(VARIABLE_KEY_PREFIX):
+            return True
         if "." in path:
             return True
         if model_class is not None and _names_a_callable(model_class, path):
