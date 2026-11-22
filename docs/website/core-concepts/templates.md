@@ -215,6 +215,16 @@ entry: `isinstance(value, Model)` is `False`. What they are handed depends on th
   the Rust engine sees it (ADR-027 keeps models eager on the state path). Read it with `value["name"]`
   or `value.get("name")`.
 
+**`LIVEVIEW_CONFIG["state_models_as_handles"]` (default `False`, #3936 / #3949).** With it on, a
+LiveView hands a state model to the template the way `DjustTemplateBackend` does: each state key that
+holds a model, a list of models or a `QuerySet` gets a floor proxy bound for the render only. A custom
+filter then receives the floor proxy (attribute reads work; `value["name"]`, `value.password` and
+`value._meta` raise), a filtered rebinding reads a relation (`{% with q=user|default:user %}{{ q.groups.count }}`,
+`{% for u in users|slice:":2" %}{{ u.groups.count }}`), and state, change detection, the state backend
+and what the client receives keep the serialized dict. A native tag's argument is still the floored
+dict text (`data_table` reads dict rows). If the floor cannot be built for a key, that key renders from
+its dict (never the instance). The table below is the flag-off behaviour.
+
 What each entry hands over (measured; every cell is pinned by
 `python/tests/test_custom_callable_model_argument_3949.py`):
 
@@ -237,7 +247,8 @@ lists in `djust_exclude_fields`, as a value or as a key, and `str(value)` does n
 guarantee is per *field*: a method or property that computes from an excluded field is a result like any
 other. With `last_name` excluded, `value.get_full_name()` on a proxy, and the `get_full_name` value of a
 LiveView `dict`, still contain the last name, so do not rely on `djust_exclude_fields` to hide what a
-method derives from the field.
+method derives from the field. The system check [`djust.S015`](../guides/error-codes.md#s015-computed-member-reads-an-excluded-field) reports a `get_*()` method or
+property that reads an excluded field (#3955).
 
 **What differs today.** The LiveView `dict` is not a fixed shape: its keys are what the template names.
 A single model the template names nothing on is the identity keys (`id`, `pk`, `__str__`, `__model__`);

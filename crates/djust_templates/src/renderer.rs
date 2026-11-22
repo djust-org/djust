@@ -1327,7 +1327,7 @@ fn ifchanged_key(value: &Value) -> String {
             Ok(f) => numeric_key(f),
             Err(_) => format!("d{text}"),
         },
-        Value::String(s) | Value::SafeString(s) => format!("s{s}"),
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => format!("s{s}"),
         other => format!("o{other:?}"),
     }
 }
@@ -2304,7 +2304,12 @@ fn resolve_custom_tag_arg(arg: &str, context: &Context) -> TagArg {
 /// anyone vouched for.
 fn tag_arg(value: &Value, safe: bool) -> TagArg {
     let text = value_to_arg_string(value);
-    if safe && matches!(value, Value::String(_) | Value::SafeString(_)) {
+    if safe
+        && matches!(
+            value,
+            Value::String(_) | Value::SafeString(_) | Value::ModelName(_)
+        )
+    {
         TagArg::marked(text)
     } else {
         TagArg::plain(text)
@@ -2497,7 +2502,7 @@ fn resolve_tag_operand_value(expr: &str, context: &Context) -> Option<Value> {
 /// that declares no policy is untouched.
 fn value_channel_arg_string(v: &Value) -> String {
     match v {
-        Value::String(s) | Value::SafeString(s) => {
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
             serde_json::to_string(s).unwrap_or_else(|_| s.clone())
         }
         // JSON `true` / `false`, not Python's `True` / `False` (#2463).
@@ -3797,7 +3802,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // closed. Empty for a non-normalised operand, where the loop
             // mapping is the (legitimate) channel.
             let (iterable_value, normalised, derived_grants) = match iterable_value {
-                Value::String(s) | Value::SafeString(s) => (
+                Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => (
                     Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
                     true,
                     Vec::new(),
@@ -4327,7 +4332,23 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                                 let item_html = match cached {
                                     Some(html) => R::from(html),
                                     None => {
+                                        // A read through a live object is not in `hash`
+                                        // (train/2.0-ah review B2/B3): the render
+                                        // sidecar walk (a row's relation, #4069) and a
+                                        // handle on an opaque carrier (a #3936 state
+                                        // model handle, a row a relation walk returned)
+                                        // hash as `str(o)` at most. Every resolve of
+                                        // such a binding goes through
+                                        // `Context::walk_from_handle`, which counts it,
+                                        // a custom filter's operand included. That item
+                                        // is emitted as rendered and stored in neither
+                                        // cache; a temporal handle is not counted.
+                                        let live_before = djust_core::context::live_read_count();
                                         let html = render_nodes_output::<L, R>(nodes, ctx, loader)?;
+                                        if djust_core::context::live_read_count() != live_before {
+                                            output.append(&html);
+                                            continue;
+                                        }
                                         crate::loop_cache::with_active_cache(|cache| {
                                             cache.insert(hash, html.to_string())
                                         });
@@ -4488,7 +4509,10 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let object = template_object(&value)?;
                 let candidates: Vec<Value> = if object.is_some() || !value.is_truthy() {
                     Vec::new()
-                } else if let Value::String(name) | Value::SafeString(name) = &value {
+                } else if let Value::String(name)
+                | Value::SafeString(name)
+                | Value::ModelName(name) = &value
+                {
                     if literal {
                         crate::inheritance::construct_relative_path_allow_recursion(
                             origin.as_deref(),
@@ -4526,7 +4550,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     // Validate each candidate only when it is reached; a later
                     // invalid name cannot invalidate an earlier successful one.
                     let name = match candidate {
-                        Value::String(name) | Value::SafeString(name) => name,
+                        Value::String(name) | Value::SafeString(name) | Value::ModelName(name) => {
+                            name
+                        }
                         other => {
                             let kind = filters::python_type_name(&other).to_owned();
                             if kind == "bytes" {
@@ -5673,8 +5699,8 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                     .items
                     .as_ref()
                     .is_some_and(|items| items.iter().any(|item| values_equal(&needle, item)))),
-                Value::String(s) | Value::SafeString(s) => {
-                    if let Value::String(n) | Value::SafeString(n) = &needle {
+                Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
+                    if let Value::String(n) | Value::SafeString(n) | Value::ModelName(n) = &needle {
                         Ok(s.contains(n.as_str()))
                     } else {
                         return Ok(false);
@@ -6489,9 +6515,10 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // one. `(Float, Float)` keeps its epsilon — a separate question (#1079).
         (Value::Integer(a), Value::Float(b)) => int_eq_float(*a, *b),
         (Value::Float(a), Value::Integer(b)) => int_eq_float(*b, *a),
-        (Value::String(a) | Value::SafeString(a), Value::String(b) | Value::SafeString(b)) => {
-            a == b
-        }
+        (
+            Value::String(a) | Value::SafeString(a) | Value::ModelName(a),
+            Value::String(b) | Value::SafeString(b) | Value::ModelName(b),
+        ) => a == b,
         // Two sequences of the SAME kind: same length, pairwise equal (#2335).
         // Without this arm two lists fell to `_ => false` and were never equal
         // — not even to themselves — so `{% if a == b %}` silently took the
@@ -6895,9 +6922,10 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
         // Allow comparing integers and floats
         (Value::Integer(a), Value::Float(b)) => order_floats(*a as f64, *b),
         (Value::Float(a), Value::Integer(b)) => order_floats(*a, *b as f64),
-        (Value::String(a) | Value::SafeString(a), Value::String(b) | Value::SafeString(b)) => {
-            Some(a.cmp(b) as i32)
-        }
+        (
+            Value::String(a) | Value::SafeString(a) | Value::ModelName(a),
+            Value::String(b) | Value::SafeString(b) | Value::ModelName(b),
+        ) => Some(a.cmp(b) as i32),
         // Lexicographic, as Python orders two sequences of the same kind
         // (#2335): the first differing element decides, and if one is a prefix
         // of the other the shorter is smaller. The mirror of the `values_equal`
@@ -7279,7 +7307,7 @@ impl ToF64 for Value {
             // accepts `_` between digits, so `{% widthratio "1_0" 2 100 %}` is
             // 500 in Django, and a bare `parse::<f64>()` refused it and
             // rendered nothing.
-            Value::String(s) | Value::SafeString(s) => {
+            Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
                 crate::filters::strip_python_underscores(s.trim())
                     .and_then(|cleaned| cleaned.parse::<f64>().ok())
             }
@@ -8290,7 +8318,11 @@ mod tests {
         .map(|(k, v)| {
             (
                 djust_core::ObjectKey::Str(k.chars().collect()),
-                Value::String(v.chars().collect()),
+                if k == "__model__" {
+                    Value::ModelName(v.chars().collect())
+                } else {
+                    Value::String(v.chars().collect())
+                },
             )
         })
         .collect();
@@ -9006,7 +9038,11 @@ mod tests {
                 .map(|(k, v)| {
                     (
                         djust_core::ObjectKey::Str(k.chars().collect()),
-                        Value::String(v.chars().collect()),
+                        if k == "__model__" {
+                            Value::ModelName(v.chars().collect())
+                        } else {
+                            Value::String(v.chars().collect())
+                        },
                     )
                 })
                 .collect(),

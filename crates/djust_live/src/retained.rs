@@ -159,6 +159,11 @@ pub(super) fn report(view: &RustLiveViewBackend) -> HashMap<String, usize> {
             table_bytes(map.capacity(), size_of::<(String, Py<PyAny>)>())
                 + map.keys().map(String::capacity).sum::<usize>()
         })
+        // #3936: the overlay's keys and `Value` slots (the payloads are handles).
+        + view.render_handles.as_ref().map_or(0, |handles| {
+            handles.capacity() * size_of::<(String, Value)>()
+                + handles.iter().map(|(k, _)| k.capacity()).sum::<usize>()
+        })
         + pending;
     out.insert("template_source".to_string(), template_source);
     out.insert("state".to_string(), state);

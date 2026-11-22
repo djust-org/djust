@@ -44,9 +44,11 @@ impl Value {
             Value::Missing | Value::None | Value::Bool(_) | Value::Integer(_) | Value::Float(_) => {
                 0
             }
-            Value::String(s) | Value::SafeString(s) | Value::Decimal(s) | Value::BigInt(s) => {
-                s.capacity()
-            }
+            Value::String(s)
+            | Value::SafeString(s)
+            | Value::ModelName(s)
+            | Value::Decimal(s)
+            | Value::BigInt(s) => s.capacity(),
             Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
                 items_bytes(items)
             }

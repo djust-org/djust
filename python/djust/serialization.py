@@ -239,6 +239,20 @@ def _field_type_excluded_for(model_class: Any, field_name: str) -> bool:
 _IDENTITY_KEYS = frozenset({"pk", "id", "__str__", "__model__"})
 
 
+class ModelName(str):
+    """The ``__model__`` value :func:`model_identity` stamps: the model class name (#3947).
+
+    A ``str`` subclass, so it reads, compares, hashes and ``json.dumps`` exactly as the plain
+    name (the client wire is unchanged), and survives a dict copy or comprehension (the value
+    object is reused). Its TYPE is the marker: the Rust engine reads it as ``Value::ModelName``
+    and only that makes a map a model there (``Value::model_str``); a dict from user data with a
+    plain-text ``__model__`` beside ``__str__`` and ``pk`` stays a dict. Nothing else constructs
+    it.
+    """
+
+    __slots__ = ()
+
+
 def model_identity(obj: Any) -> Dict[str, Any]:
     """The identity map standing in for a Django model — the ONLY producer.
 
@@ -269,7 +283,7 @@ def model_identity(obj: Any) -> Dict[str, Any]:
         "id": obj.pk,
         "pk": obj.pk,
         "__str__": str(obj),
-        "__model__": obj.__class__.__name__,
+        "__model__": ModelName(obj.__class__.__name__),
     }
 
 
@@ -277,15 +291,15 @@ def is_serialized_model_map(value: Any) -> bool:
     """Whether ``value`` is the map :func:`model_identity` produced for a model.
 
     The READER of the shape :func:`model_identity` writes, kept beside it so the two cannot drift:
-    a dict with a text ``__str__``, a text ``__model__`` and a ``pk`` key. This is the same shape
-    the Rust engine reads (``Value::model_str``). A dict carrying only some of those keys is an
-    ordinary dict. Any dict can carry all three, so this narrows the accident and does not make
-    the marker unforgeable.
+    a dict with a text ``__str__``, a :class:`ModelName` ``__model__`` and a ``pk`` key. This is
+    the same shape the Rust engine reads (``Value::model_str``). The marker is the TYPE of the
+    ``__model__`` value, which only :func:`model_identity` constructs, so a dict from user data
+    carrying a plain-text ``__model__`` beside ``__str__`` and ``pk`` is an ordinary dict (#3947).
     """
     return (
         isinstance(value, dict)
         and isinstance(value.get("__str__"), str)
-        and isinstance(value.get("__model__"), str)
+        and type(value.get("__model__")) is ModelName
         and "pk" in value
     )
 
@@ -1420,6 +1434,13 @@ def encode_state_value(
                 if nodes[0] < 0 or depth > max_depth:
                     raise StateValueError("it is too large or too deeply nested", "structure")
                 append(child)
+            elif kind is ModelName:
+                # The #3947 marker saves as its plain text: the saved form is JSON,
+                # and the next sync's ``model_identity`` stamps it again.
+                nodes[0] -= 1
+                if nodes[0] < 0 or depth > max_depth:
+                    raise StateValueError("it is too large or too deeply nested", "structure")
+                append(str.__str__(child))
             else:
                 append(walk(child, depth))
         return out
@@ -1431,6 +1452,8 @@ def encode_state_value(
         kind = type(item)
         if item is None or kind is bool or kind is str:
             return item
+        if kind is ModelName:
+            return str.__str__(item)
         if kind is int:
             return item if -(2**53) < item < 2**53 else _tag("int", str(item))
         if kind is float:

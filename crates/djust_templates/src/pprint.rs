@@ -103,7 +103,7 @@ fn flat_repr(value: &Value) -> String {
         Value::Decimal(d) => format!("Decimal('{d}')"),
         // `repr(int)` is the digits, however many there are (#2260).
         Value::BigInt(d) => d.clone(),
-        Value::String(s) | Value::SafeString(s) => py_repr_string(s),
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => py_repr_string(s),
         // The CONSTRUCTOR form — `datetime.datetime(2020, 1, 1, 3, 4, 5)` —
         // the way the `Decimal` arm above spells `Decimal('…')` (#2472).
         //
@@ -202,7 +202,7 @@ fn format_value(value: &Value, out: &mut String, indent: isize, allowance: isize
                 out.push('}');
                 return;
             }
-            Value::String(s) | Value::SafeString(s) => {
+            Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
                 format_str(s, out, indent, allowance, level + 1);
                 return;
             }
@@ -464,7 +464,7 @@ mod tests {
             ("id", Value::Integer(1)),
             ("pk", Value::Integer(1)),
             ("__str__", s(text)),
-            ("__model__", s("Account")),
+            ("__model__", Value::ModelName("Account".to_string())),
             ("owner_code", s("SENTINEL-A")),
             ("get_note_text", s("SENTINEL-B")),
         ] {
@@ -496,7 +496,7 @@ mod tests {
         for (k, v) in [
             ("pk", Value::Integer(1)),
             ("__str__", Value::SafeString("<b>a1</b>".to_string())),
-            ("__model__", s("Account")),
+            ("__model__", Value::ModelName("Account".to_string())),
             ("owner_code", s("SENTINEL-A")),
         ] {
             m.insert(ObjectKey::Str(k.to_string()), v);

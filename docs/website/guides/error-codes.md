@@ -1203,6 +1203,14 @@ not trigger it.
 
 **Fix**: Declare the form field `disabled=True` (Django then ignores the posted value and keeps the stored one; a `FormMixin` view that edits an existing row sets it for you), leave the field out of `Meta.fields`, or opt the model field out of the floor with `djust_serialize_sensitive_fields`. HTML `disabled` / `readonly` does not protect the column. Suppress one form with `# noqa: S014` on its class line, or all with `DJUST_CONFIG = {"suppress_checks": ["S014"]}`.
 
+### S015: Computed member reads an excluded field
+
+**Severity**: Warning
+
+**What causes it**: A model lists a field in `djust_exclude_fields`, and one of its explicit `get_*()` methods or `@property` values (its own or inherited, such as `AbstractUser.get_full_name`), or another public zero-argument method of its own (`{{ obj.label }}`), reads that field. djust hides the field but still serializes the computed value, so the excluded data reaches the template. Message: "<model>.<member> reads <fields>, which <Model>.djust_exclude_fields hides: djust still serializes the computed value, so the excluded data reaches the template."
+
+**Fix**: Add the member to `djust_exclude_fields` as well, or switch the model to an allowlist with `djust_serializable_fields`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["S015"]}`.
+
 <!-- END GENERATED check-sections:S -->
 
 ---
