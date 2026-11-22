@@ -9,7 +9,9 @@ implementation that drew none of the native-only features (``expandable``, ``edi
 * ``TestBothEnginesDrawTheSameBytes``: three row shapes x three flag sets, byte for byte.
 * ``test_expandable_is_wired_under_the_django_engine``: the feature the issue named.
 * ``test_table_html_is_gone``: no template file, so no override of it can take effect.
-* ``TestTheExposureFloor``: a model row under the Django engine is its floored dict.
+* ``TestTheExposureFloor``: a model row under the Django engine never prints a floored field.
+  Two independent pins: ``_python_operand`` hands the handler floored dicts (the operand test),
+  and ``table_row`` floors a model itself (the print tests).
 """
 
 from __future__ import annotations
@@ -124,6 +126,52 @@ def test_table_html_is_gone() -> None:
 
 
 class TestTheExposureFloor:
+    """A floored field (``password``, ``djust_exclude_fields``) never reaches the page. There are
+    TWO independent protections, each with its own pin (review S4):
+
+    * ``_python_operand`` (``render_data_table``) hands the handler the serialised dict of a model
+      row, so the exposure floor already applied: ``test_the_handler_is_handed_floored_dicts``.
+      Gate-off: let ``_python_operand`` return the raw value, and that test fails (the print tests
+      still pass, because the second protection holds).
+    * ``table_row`` floors a model itself (``normalize_django_value``) when the handler is handed
+      a raw one: ``test_table_row_floors_a_model_itself``. Gate-off: have ``table_row`` read a
+      model's fields, and that test fails (the operand tests still pass). The print tests pass
+      with either one removed: the Django engine's operands are floored before the handler
+      reads them, so they are end-to-end checks of the pair, not a pin of either.
+    """
+
+    def test_the_handler_is_handed_floored_dicts(self, monkeypatch) -> None:
+        from djust.components import rust_handlers
+
+        seen: list[dict] = []
+
+        def spy(self, kw, context):  # noqa: ANN001
+            seen.append(kw)
+            return ""
+
+        monkeypatch.setattr(rust_handlers.DataTableHandler, "render_kwargs", spy)
+        for rows in ([_account()], (m for m in [_account()])):
+            seen.clear()
+            rust_handlers.render_data_table(rows=rows, columns=MODEL_COLUMNS)
+            (kw,) = seen
+            (row,) = kw["rows"]
+            assert isinstance(row, dict), kw["rows"]
+            assert row["username"] == "ann", row
+            assert not {"password", "email"} & set(row), row
+
+    def test_python_operand_is_the_floored_dict_of_a_model(self) -> None:
+        from djust.components.rust_handlers import _python_operand
+
+        (row,) = _python_operand([_account()])  # type: ignore[misc]
+        assert isinstance(row, dict) and "password" not in row and "email" not in row, row
+
+    def test_table_row_floors_a_model_itself(self) -> None:
+        from djust.components.utils import table_row
+
+        row = table_row(_account(), ["username", "password", "email"])
+        assert row["username"] == "ann", row
+        assert "password" not in row and "email" not in row, row
+
     def test_a_model_row_is_its_floored_dict_under_the_django_engine(self) -> None:
         src = "{% data_table rows=rows columns=cols %}"
         out = _django(src, {"rows": [_account()], "cols": MODEL_COLUMNS})
