@@ -1217,8 +1217,9 @@ class RustBridgeMixin:
                     if _key in _qs_roots:
                         _raw_models_for_sidecar[_key] = _val
                         # Review S1: an explicit view's method-read QuerySet whose rows
-                        # the template ALSO walks goes on to the JIT below, as legacy's
-                        # does, so each row dict carries the relation values and a
+                        # the template ALSO walks goes on to the walk check below, which
+                        # hands it to the JIT as legacy's does, so each row dict carries
+                        # the relation values and a
                         # filtered rebinding of a row (``{% with r=x|default:x %}``)
                         # reads them. Legacy's JIT already ran (context.py).
                         if not _method_read_rows_take_the_jit(full_context):
