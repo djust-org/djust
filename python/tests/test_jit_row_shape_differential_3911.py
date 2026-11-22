@@ -734,7 +734,8 @@ class TestVariableKeyValueKinds4264:
             source,
             {"users": _users("QuerySet"), "key": "is_authenticated"},
         )
-        assert got == "" and want == "1,2,3,"
+        # Django sorts all three rows; the pks depend on the database sequence.
+        assert got == "" and want.count(",") == 3
 
 
 # ---------------------------------------------------------------------------------------------

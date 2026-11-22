@@ -76,7 +76,7 @@ def djust_audio(context: Any) -> SafeString:
     )
 
 
-def child_source_with_named_includes(child: Any, source: Any) -> Any:
+def _child_source_with_named_includes(child: Any, source: Any) -> Any:
     """``source`` (the child's template source) with each relative ``{% include "./x.html" %}``
     named against the child's ``template_name`` file (#4265).
 
@@ -132,7 +132,7 @@ def _record_child_dj_model_allowlist(child: Any) -> None:
                     from django.template import loader as _loader
 
                     source = _loader.get_template(template_name).template.source
-        source = child_source_with_named_includes(child, source)
+        source = _child_source_with_named_includes(child, source)
         child._record_dj_model_fields_from_source(source, get_template_dirs())
     except Exception:  # noqa: BLE001 — never let allowlist collection break a render
         # Fail closed: the child's _record_dj_model_fields_from_source already

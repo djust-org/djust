@@ -6,7 +6,7 @@ The allowlist is derived from the child's template SOURCE by a walker that has n
 re-render (``render_embedded_child_html``) compiles that source with ``from_string``, which has
 none either, so the relative name did not resolve: the fields were refused (fail closed,
 silently) and the first ``dj-model`` update that re-rendered the child failed. Both now take the
-source from ``child_source_with_named_includes``, which names the includes against the child's
+source from ``_child_source_with_named_includes``, which names the includes against the child's
 ``template_name``.
 """
 
