@@ -1187,6 +1187,41 @@ def test_a_model_instance_is_saved_as_its_field_dict_as_in_1_3():
 
 
 @pytest.mark.django_db
+def test_a_held_model_saves_its_model_name_marker_as_plain_text_3947():
+    """#3947 stamps ``__model__`` as a ``ModelName``; the saver writes it as plain text.
+
+    Before the fix ``encode_state_value`` took only an exact ``str``, so the marker
+    fell to ``convert`` and the held model was dropped (every request mounted again).
+    """
+    from djust.serialization import ModelName, encode_state_value, model_identity
+
+    member = User(username="ann-3947", email="ann@example.com", password="pw-hash")
+    identity = model_identity(member)
+    assert type(identity["__model__"]) is ModelName
+    encoded = encode_state_value({"m": identity, "names": [identity["__model__"]]})
+    assert type(encoded["m"]["__model__"]) is str and encoded["m"]["__model__"] == "User"
+    assert type(encoded["names"][0]) is str  # the list fast path too
+
+    class HoldsModel(_Base):
+        shown = ("count",)
+
+        def mount(self, request, **kwargs):
+            self.count = 0
+            self.member = member
+
+        @event_handler()
+        def inc(self, **kwargs):
+            self.count += 1
+
+    view, key, _ = _fallback(HoldsModel, [("inc",)])
+    assert view.count == 1
+    envelope = _saved_envelope(key)
+    assert envelope["remount"] is False
+    saved_member = envelope["values"]["member"]
+    assert type(saved_member["__model__"]) is str and saved_member["__model__"] == "User"
+
+
+@pytest.mark.django_db
 def test_work_mount_queued_makes_the_next_request_mount_again():
     class Queues(_Base):
         shown = ("count",)

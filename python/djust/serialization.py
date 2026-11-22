@@ -1434,6 +1434,13 @@ def encode_state_value(
                 if nodes[0] < 0 or depth > max_depth:
                     raise StateValueError("it is too large or too deeply nested", "structure")
                 append(child)
+            elif kind is ModelName:
+                # The #3947 marker saves as its plain text: the saved form is JSON,
+                # and the next sync's ``model_identity`` stamps it again.
+                nodes[0] -= 1
+                if nodes[0] < 0 or depth > max_depth:
+                    raise StateValueError("it is too large or too deeply nested", "structure")
+                append(str.__str__(child))
             else:
                 append(walk(child, depth))
         return out
@@ -1445,6 +1452,8 @@ def encode_state_value(
         kind = type(item)
         if item is None or kind is bool or kind is str:
             return item
+        if kind is ModelName:
+            return str.__str__(item)
         if kind is int:
             return item if -(2**53) < item < 2**53 else _tag("int", str(item))
         if kind is float:
