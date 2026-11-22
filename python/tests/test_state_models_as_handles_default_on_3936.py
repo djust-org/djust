@@ -103,3 +103,41 @@ def test_a_config_error_falls_back_to_the_dict_path(monkeypatch):
 
 def test_the_users_model_is_a_real_user(people):
     assert isinstance(_ctx()["u"], User)
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("false", False),
+        ("0", False),
+        ("off", False),
+        (0, False),
+        ("true", True),
+        (1, True),
+        ("maybe", True),  # not a boolean spelling: the default, with a warning
+        (None, True),
+    ],
+)
+def test_the_kill_switch_is_read_strictly(value, expected, caplog):
+    """Review N1: ``bool("false")`` is ``True``; the switch is parsed as a boolean spelling, so a
+    kill-switch read from the environment cannot silently fail to engage."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="djust.config"):
+        with override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": value}):
+            assert state_models_as_handles_enabled() is expected
+    assert any("state_models_as_handles" in r.getMessage() for r in caplog.records)
+
+
+def test_a_bool_switch_written_in_code_is_read_strictly_too():
+    from djust.config import config
+
+    config.set("state_models_as_handles", "false")
+    try:
+        assert config.get("state_models_as_handles") is False
+        assert state_models_as_handles_enabled() is False
+    finally:
+        # drop the code-written value, so no later test inherits it
+        config._programmatic.pop("state_models_as_handles", None)
+        config.reload_from_settings()
+    assert state_models_as_handles_enabled() is True

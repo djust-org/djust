@@ -36,7 +36,12 @@ _FORM_LIMIT_KEYS = ("max_form_fields", "max_form_data_size", "max_form_members")
 #: ``set`` / ``update`` that names it; a bad value is the default (no map, the page answers 200).
 _STATUS_MAP_KEY = "http_status_of_state"
 #: Every key whose written value is sanitized, so what a reload replays is what is stored (#3858).
-_SANITIZED_KEYS = _FORM_LIMIT_KEYS + (_STATUS_MAP_KEY,)
+#: On/off switches whose value must be a real ``bool`` (train/2.0-ai review N1): ``bool("false")``
+#: is ``True``, so a kill-switch read from an environment variable would silently stay on.
+_BOOL_SWITCH_KEYS = ("state_models_as_handles",)
+_FALSE_SPELLINGS = frozenset({"false", "0", "no", "off"})
+_TRUE_SPELLINGS = frozenset({"true", "1", "yes", "on"})
+_SANITIZED_KEYS = _FORM_LIMIT_KEYS + (_STATUS_MAP_KEY,) + _BOOL_SWITCH_KEYS
 
 
 def valid_http_status_map(value: Any) -> bool:
@@ -635,6 +640,31 @@ class LiveViewConfig:
                 )
                 target[key] = self._defaults[key]
 
+    def _validate_bool_switches(self, target: Dict[str, Any]) -> None:
+        """Make each on/off switch in *target* a real ``bool`` (review N1).
+
+        A string or ``0`` / ``1`` spelling of a boolean (``"false"``, ``"0"``, ``"off"``, from an
+        environment-driven settings file) is read as that boolean, with a warning; anything else is
+        the default, with a warning. ``bool(value)`` would turn ``"false"`` into ``True``."""
+        for key in _BOOL_SWITCH_KEYS:
+            if key not in target:
+                continue
+            val = target[key]
+            if isinstance(val, bool):
+                continue
+            text = str(val).strip().lower() if isinstance(val, (str, int)) else None
+            if text in _FALSE_SPELLINGS or text in _TRUE_SPELLINGS:
+                parsed = text in _TRUE_SPELLINGS
+                logger.warning(
+                    "%s=%r is not a bool; read as %s. Set True or False.", key, val, parsed
+                )
+            else:
+                parsed = self._defaults[key]
+                logger.warning(
+                    "Invalid %s=%r (must be True or False). Using default %s.", key, val, parsed
+                )
+            target[key] = parsed
+
     def _validate_status_map(self, target: Dict[str, Any]) -> None:
         """Replace ``http_status_of_state`` in *target* by the default (no map) when it is not a mapping
         of state names to HTTP statuses (#3706). Run where the form limits are, so a value written in
@@ -657,6 +687,7 @@ class LiveViewConfig:
         # A limit that is not a non-negative integer is the default, never "no limit" (#3834).
         self._validate_form_limits(target)
         self._validate_status_map(target)
+        self._validate_bool_switches(target)
 
         # Validate rate_limit values
         defaults = self._defaults["rate_limit"]
@@ -759,6 +790,7 @@ class LiveViewConfig:
                 # the sanitized value and not the one written (#3858, #3706).
                 self._validate_form_limits(new)
                 self._validate_status_map(new)
+                self._validate_bool_switches(new)
                 value = new[key]
             self._record_programmatic(key, value)
             self._config = new
@@ -840,6 +872,7 @@ class LiveViewConfig:
             new.update(_detached(config_dict))
             self._validate_form_limits(new)  # the same rule ``set()`` applies (#3858)
             self._validate_status_map(new)
+            self._validate_bool_switches(new)
             for key, value in config_dict.items():
                 self._record_programmatic(key, new[key] if key in _SANITIZED_KEYS else value)
             self._config = new
