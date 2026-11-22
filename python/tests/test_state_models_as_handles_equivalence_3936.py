@@ -1,8 +1,9 @@
 """#3936 equivalence differential: ``state_models_as_handles`` on vs off.
 
-Every template of the model-state corpus (the #3777 traversal CASES over a QuerySet, plus
-single-model reads) renders byte-identically with the flag on and off, on both exposure
-policies, except an explicit allowlist of the declared behaviour changes. The non-vacuity case
+Every template of the model-state corpus (the #3777 traversal CASES over a QuerySet, single-model
+reads, held lists, and the #3888 model-list corpus of 55 loop-operand x relation-read templates)
+renders byte-identically, through the full render and through ``render_with_diff`` after a
+change, with the flag on and off, on both exposure policies, except an explicit allowlist of the declared behaviour changes. The non-vacuity case
 (``{% with q=u|default:u %}{{ q.groups.count }}``) MUST differ on an explicit view, so the
 harness proves the flag is live.
 """
@@ -16,6 +17,7 @@ import pytest
 from django.contrib.auth.models import User
 
 from python.tests.test_queryset_all_traversal_3777 import CASES, world  # noqa: F401
+from python.tests.test_sliced_list_of_models_3888 import FILTERED, READS, UNFILTERED
 from python.tests.test_state_models_as_handles_3936 import _render
 
 SINGLE_MODEL = [
@@ -38,6 +40,32 @@ MUST_DIFFER = {
 
 def _single() -> dict:
     return {"u": User.objects.order_by("pk").first()}
+
+
+#: The #3888 model-list corpus (review N5): every loop operand, filtered or not, by every relation
+#: read through the loop variable -- 55 templates over a list of models and over a QuerySet.
+ROW_CORPUS = [
+    (f"{op}-{read}", operand.replace("<R>", READS[read]))
+    for op, operand in {**FILTERED, **UNFILTERED}.items()
+    for read in READS
+]
+
+
+def _user_list() -> dict:
+    return {"users": list(User.objects.order_by("pk"))}
+
+
+def _user_qs() -> dict:
+    return {"users": User.objects.order_by("pk")}
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("factory", [_user_list, _user_qs], ids=["list", "queryset"])
+@pytest.mark.parametrize("name,source", ROW_CORPUS, ids=[n for n, _ in ROW_CORPUS])
+def test_row_corpus_is_unchanged(world, policy, factory, name, source):
+    assert _render(source, factory, policy, flag=True) == _render(
+        source, factory, policy, flag=False
+    )
 
 
 @pytest.mark.parametrize("policy", ["explicit", "legacy"])
@@ -122,6 +150,8 @@ def _diff_corpus():
         yield pytest.param(source, _single, id=name)
     for name, source in HELD_LIST:
         yield pytest.param(source, _held, id=name)
+    for name, source in ROW_CORPUS:
+        yield pytest.param(source, _user_list, id="rows-" + name)
 
 
 @pytest.mark.parametrize("policy", ["explicit", "legacy"])
