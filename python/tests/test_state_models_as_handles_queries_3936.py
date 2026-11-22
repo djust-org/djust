@@ -61,48 +61,81 @@ PROJECTIONS = [
     ("values-pairs-length", "{{ rows|length }}", _values_pairs),
 ]
 
-PROBES = PROJECTIONS + [
-    ("qs-column", "{% for u in users %}{{ u.username }};{% endfor %}", _qs),
-    (
-        "qs-nested-all",
-        "{% for u in users %}{% for g in u.groups.all %}{{ g.name }},{% endfor %};{% endfor %}",
-        _qs,
-    ),
-    ("qs-row-count", "{% for u in users %}{{ u.groups.count }};{% endfor %}", _qs),
-    (
-        "qs-slice-walk",
-        "{% for u in users|slice:':2' %}{{ u.groups.count }};{% endfor %}",
-        _qs,
-    ),
-    ("qs-with-first", "{% with q=users|first %}{{ q.groups.count }}{% endwith %}", _qs),
-    ("qs-count", "{{ users.count }}", _qs),
-    ("qs-exists", "{% if users.exists %}y{% endif %}|{{ users.exists }}", _qs),
-    ("qs-first-last", "{{ users.first.username }}|{{ users.last.username }}", _qs),
-    (
-        "qs-loop-and-method",
-        "{% for u in users %}{% for g in u.groups.all %}{{ g.name }},{% endfor %}"
-        "{{ u.groups.all.count }};{% endfor %}",
-        _qs,
-    ),
-    (
-        "qs-count-and-loop",
-        "{{ users.count }}:{% for u in users %}{{ u.username }};{% endfor %}",
-        _qs,
-    ),
-    (
-        "held-nested-all",
-        "{% for u in users %}{% for g in u.groups.all %}{{ g.name }},{% endfor %};{% endfor %}",
-        _held,
-    ),
-    ("held-row-count", "{% for u in users %}{{ u.groups.count }};{% endfor %}", _held),
-    ("model-relation-count", "{{ u.groups.count }}", _one),
-    (
-        "model-relation-loop",
-        "{% for g in u.groups.all %}{{ g.name }},{% endfor %}",
-        _one,
-    ),
-    ("model-column", "{{ u.username }}", _one),
+
+def _perms_sliced() -> dict:
+    from django.contrib.auth.models import Permission
+
+    return {"perms": Permission.objects.order_by("pk")[:5]}
+
+
+def _perms() -> dict:
+    from django.contrib.auth.models import Permission
+
+    return {"perms": Permission.objects.order_by("pk")}
+
+
+def _perm() -> dict:
+    from django.contrib.auth.models import Permission
+
+    return {"p": Permission.objects.order_by("pk").first()}
+
+
+#: A forward FK (``Permission.content_type``) read as one segment and dotted (review B2): a legacy
+#: JIT re-queries the QuerySet with ``select_related``; a handle walked the state rows lazily.
+FORWARD_FK = [
+    ("fk-single", "{% for p in perms %}{{ p.content_type }};{% endfor %}", _perms_sliced),
+    ("fk-if", "{% for p in perms %}{% if p.content_type %}y{% endif %}{% endfor %}", _perms_sliced),
+    ("fk-single-unsliced", "{% for p in perms %}{{ p.content_type }};{% endfor %}", _perms),
+    ("fk-dotted", "{% for p in perms %}{{ p.content_type.model }};{% endfor %}", _perms_sliced),
+    ("fk-model", "{{ p.content_type }}|{{ p.content_type.app_label }}", _perm),
 ]
+
+PROBES = (
+    PROJECTIONS
+    + FORWARD_FK
+    + [
+        ("qs-column", "{% for u in users %}{{ u.username }};{% endfor %}", _qs),
+        (
+            "qs-nested-all",
+            "{% for u in users %}{% for g in u.groups.all %}{{ g.name }},{% endfor %};{% endfor %}",
+            _qs,
+        ),
+        ("qs-row-count", "{% for u in users %}{{ u.groups.count }};{% endfor %}", _qs),
+        (
+            "qs-slice-walk",
+            "{% for u in users|slice:':2' %}{{ u.groups.count }};{% endfor %}",
+            _qs,
+        ),
+        ("qs-with-first", "{% with q=users|first %}{{ q.groups.count }}{% endwith %}", _qs),
+        ("qs-count", "{{ users.count }}", _qs),
+        ("qs-exists", "{% if users.exists %}y{% endif %}|{{ users.exists }}", _qs),
+        ("qs-first-last", "{{ users.first.username }}|{{ users.last.username }}", _qs),
+        (
+            "qs-loop-and-method",
+            "{% for u in users %}{% for g in u.groups.all %}{{ g.name }},{% endfor %}"
+            "{{ u.groups.all.count }};{% endfor %}",
+            _qs,
+        ),
+        (
+            "qs-count-and-loop",
+            "{{ users.count }}:{% for u in users %}{{ u.username }};{% endfor %}",
+            _qs,
+        ),
+        (
+            "held-nested-all",
+            "{% for u in users %}{% for g in u.groups.all %}{{ g.name }},{% endfor %};{% endfor %}",
+            _held,
+        ),
+        ("held-row-count", "{% for u in users %}{{ u.groups.count }};{% endfor %}", _held),
+        ("model-relation-count", "{{ u.groups.count }}", _one),
+        (
+            "model-relation-loop",
+            "{% for g in u.groups.all %}{{ g.name }},{% endfor %}",
+            _one,
+        ),
+        ("model-column", "{{ u.username }}", _one),
+    ]
+)
 
 
 def _measure(source: str, factory, policy: str, flag: bool) -> tuple[str, int]:
@@ -162,6 +195,18 @@ def test_the_overlay_still_serves_a_filtered_rebinding(world):
     source = "{% with q=u|default:u %}{{ q.groups.count }}{% endwith %}"
     assert _render(source, _one, "explicit", flag=True) == "2"
     assert _render(source, _one, "explicit", flag=False) == ""
+
+
+def test_gate_off_without_the_relation_check_a_legacy_fk_loop_is_n_plus_one(world, monkeypatch):
+    """Gate-off (review B2): without ``_paths_read_a_relation`` the legacy handles walk each row's
+    forward FK lazily."""
+    from djust.mixins import rust_bridge
+
+    source = "{% for p in perms %}{{ p.content_type }};{% endfor %}"
+    monkeypatch.setattr(rust_bridge, "_paths_read_a_relation", lambda *a, **k: False)
+    _, on_queries = _measure(source, _perms_sliced, "legacy", flag=True)
+    _, off_queries = _measure(source, _perms_sliced, "legacy", flag=False)
+    assert on_queries > off_queries, (on_queries, off_queries)
 
 
 def test_gate_off_restoring_the_shadow_turns_the_method_probe_red(world, monkeypatch):

@@ -198,9 +198,36 @@ def _overlay_skip_keys(
         walk_paths = _queryset_row_walk_paths_for(view)
         for key in pending:
             paths = walk_paths.get(key)
-            if paths and rows_need_live_walk(_overlay_model_class(raw[key]), paths, full_context):
+            if not paths:
+                continue
+            model_cls = _overlay_model_class(raw[key])
+            if rows_need_live_walk(model_cls, paths, full_context) or (
+                # Review B2: a legacy JIT re-queries a QuerySet WITH ``select_related`` for a
+                # forward relation read as one segment (``{{ o.customer }}``), which
+                # ``rows_need_live_walk`` calls a value. The handles would iterate the state
+                # QuerySet again and load each row's relation lazily (N+1).
+                isinstance(raw[key], QuerySet) and _paths_read_a_relation(model_cls, paths)
+            ):
                 skip.add(key)
     return frozenset(skip)
+
+
+def _paths_read_a_relation(model_class: Any, paths: FrozenSet[str]) -> bool:
+    """Does any template path start at a relation field of the row model (review B2)?"""
+    from .jit import VARIABLE_KEY_PREFIX
+
+    if model_class is None:
+        return False
+    for path in paths:
+        if path.startswith(VARIABLE_KEY_PREFIX):
+            continue
+        try:
+            field = model_class._meta.get_field(path.split(".", 1)[0])
+        except Exception:  # noqa: BLE001 -- not a field (a property, a method, a column alias)
+            continue
+        if field.is_relation:
+            return True
+    return False
 
 
 def _render_handles(raw: Dict[str, Any], full_context: Any, skip_keys: Any = ()) -> Dict[str, Any]:
