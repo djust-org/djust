@@ -134,22 +134,67 @@ PROBES = (
             _one,
         ),
         ("model-column", "{{ u.username }}", _one),
+        # review S4: the QuerySet spelled through ``.all`` and through a ``{% with %}`` alias
+        ("qs-top-all", "{% for u in users.all %}{{ u.username }};{% endfor %}", _qs),
+        ("qs-top-all-count", "{{ users.all.count }}", _qs),
+        ("qs-with-count", "{% with x=users %}{{ x.count }}{% endwith %}", _qs),
+        (
+            "qs-with-loop-walk",
+            "{% with x=users %}{% for u in x %}{{ u.groups.count }};{% endfor %}{% endwith %}",
+            _qs,
+        ),
     ]
 )
 
 
-def _measure(source: str, factory, policy: str, flag: bool) -> tuple[str, int]:
-    with CaptureQueriesContext(connection) as ctx:
-        out = _render(source, factory, policy, flag=flag)
+def _measure(source: str, factory, policy: str, flag: bool, twice: bool = False) -> tuple[str, int]:
+    """The rendered body and the number of queries; ``twice`` renders again on the same view (a
+    second sync, as after an event)."""
+    from django.test import override_settings
+
+    from djust.testing import LiveViewTestClient
+    from python.tests.test_state_models_as_handles_3936 import FLAG_OFF, FLAG_ON, _body, _view
+
+    if not twice:
+        with CaptureQueriesContext(connection) as ctx:
+            out = _render(source, factory, policy, flag=flag)
+        return out, len(ctx.captured_queries)
+    with override_settings(LIVEVIEW_CONFIG=FLAG_ON if flag else FLAG_OFF):
+        with CaptureQueriesContext(connection) as ctx:
+            client = LiveViewTestClient(_view(source, factory, policy))
+            client.mount()
+            client.render()
+            out = _body(client.render())
     return out, len(ctx.captured_queries)
 
 
+@pytest.mark.parametrize("twice", [False, True], ids=["once", "twice"])
 @pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("name,source,factory", [pytest.param(*p, id=p[0]) for p in PROBES])
-def test_the_overlay_answers_and_queries_as_flag_off_does(world, policy, name, source, factory):
-    on_out, on_queries = _measure(source, factory, policy, flag=True)
-    off_out, off_queries = _measure(source, factory, policy, flag=False)
+def test_the_overlay_answers_and_queries_as_flag_off_does(
+    world, policy, name, source, factory, twice
+):
+    on_out, on_queries = _measure(source, factory, policy, flag=True, twice=twice)
+    off_out, off_queries = _measure(source, factory, policy, flag=False, twice=twice)
     assert on_out == off_out, (on_out, off_out)
+    assert on_queries <= off_queries, (on_queries, off_queries)
+
+
+def _annotated() -> dict:
+    from django.db.models import Count
+
+    return {"users": User.objects.annotate(n=Count("groups")).order_by("pk")}
+
+
+@pytest.mark.parametrize("twice", [False, True], ids=["once", "twice"])
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_an_annotated_queryset_reads_its_annotation(world, policy, twice):
+    """Review S4: an annotation is read as Django reads it (explicit's flag-off dict lacks it and
+    printed ``;;;``; the overlay improves that), with no added query."""
+    source = "{% for u in users %}{{ u.n }};{% endfor %}"
+    on_out, on_queries = _measure(source, _annotated, policy, flag=True, twice=twice)
+    _, off_queries = _measure(source, _annotated, policy, flag=False, twice=twice)
+    assert on_out == "2;1;0;"
     assert on_queries <= off_queries, (on_queries, off_queries)
 
 
