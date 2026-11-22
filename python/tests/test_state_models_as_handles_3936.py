@@ -328,3 +328,39 @@ def test_every_render_entry_binds_the_overlay(world, policy, entry):
         view._sync_state_to_rust()  # the overlay is set by the sync, read by each entry
         html = html_lib.unescape(RUST_ENTRIES[entry](view._rust_view))
     assert PROXY in html and HASH_MARK not in html, (entry, html)
+
+
+class _SpyRustView:
+    """Forwards to the real Rust view and records ``set_render_handles`` calls."""
+
+    def __init__(self, real):
+        object.__setattr__(self, "_real", real)
+        object.__setattr__(self, "calls", [])
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def set_render_handles(self, values):
+        self.calls.append(dict(values))
+        return self._real.set_render_handles(values)
+
+
+def test_flag_off_sync_sends_no_empty_overlay_to_a_view_without_one(people):
+    """Review N3: with the flag off, a sync does not cross into Rust to clear an overlay the view
+    never had; with it on, a key leaving state still sends the clearing call."""
+    source = "{% with q=u|default:u %}[{{ q.groups.count }}]{% endwith %}"
+    for flag, expect_calls in ((False, 0), (True, 2)):
+        with override_settings(LIVEVIEW_CONFIG=FLAG_ON if flag else {}):
+            client = LiveViewTestClient(_view(source, _ctx))
+            client.mount()
+            client.render()
+            view = client.view_instance
+            spy = _SpyRustView(view._rust_view)
+            view._rust_view = spy
+            view._sync_state_to_rust()  # flag on: the handles again
+            if flag:
+                view.get_context_data = lambda **kw: {}  # the key leaves state
+                view._sync_state_to_rust()
+            assert len(spy.calls) == expect_calls, (flag, spy.calls)
+            if flag:
+                assert spy.calls[-1] == {} and not spy._real.has_render_handles()

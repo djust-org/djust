@@ -1875,10 +1875,13 @@ class RustBridgeMixin:
             # #3936: the handle overlay, set on EVERY sync (empty with the flag
             # off, or when no state key holds a model) so a key that left state
             # leaves no stale handle.
+            # An empty overlay is not sent to a view that has none (review N3): the
+            # flag-off sync then costs one ``has_render_handles`` read, and a view
+            # that held handles is still cleared on the sync they leave.
             if hasattr(self._rust_view, "set_render_handles"):
-                self._rust_view.set_render_handles(
-                    _render_handles(_overlay_raw, full_context, sidecar_only_keys)
-                )
+                _handles = _render_handles(_overlay_raw, full_context, sidecar_only_keys)
+                if _handles or getattr(self._rust_view, "has_render_handles", lambda: True)():
+                    self._rust_view.set_render_handles(_handles)
 
             if user_changed is not None:
                 self._rust_view.set_changed_keys(user_changed)

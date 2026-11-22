@@ -846,6 +846,12 @@ impl RustLiveViewBackend {
         }
     }
 
+    /// Whether a render-time handle overlay is attached (#3936). The sync skips sending an
+    /// empty overlay to a view that has none (train/2.0-ah review N3: the flag-off cost).
+    fn has_render_handles(&self) -> bool {
+        self.render_handles.is_some()
+    }
+
     /// Attach the render-time handle overlay (#3936). Python calls this on EVERY sync (an
     /// empty map with the flag off), so a key that left state leaves no stale handle. Each value
     /// is converted once here: a floored model proxy becomes its handle, and a raw model is
