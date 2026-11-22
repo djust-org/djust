@@ -81,14 +81,19 @@ def _entry_render(entry: str, source: str, ctx: dict) -> str:
     from djust.live_view import LiveView
     from djust.testing import LiveViewTestClient
 
-    def mount(self, request, **kwargs):
-        for name, value in ctx.items():
-            setattr(self, name, value)
+    def get_context_data(self, **kwargs):
+        context = super(view, self).get_context_data(**kwargs)
+        context.update(ctx)
+        return context
 
     view = type(
         "ForgedView",
         (LiveView,),
-        {"exposure_policy": "legacy", "template": f"<div dj-root>{source}</div>", "mount": mount},
+        {
+            "exposure_policy": "explicit",
+            "template": f"<div dj-root>{source}</div>",
+            "get_context_data": get_context_data,
+        },
     )
     client = LiveViewTestClient(view)
     client.mount()

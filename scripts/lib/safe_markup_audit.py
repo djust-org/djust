@@ -464,14 +464,14 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (RH, "breadcrumb_content = content[:idx]"),
         (RH, "e_custom_class = attr_text(str(custom_class))"),
     ),
-    (RH, "DataTableHandler.render"): S(
+    (RH, "DataTableHandler.render_kwargs"): S(
         1,
-        "everything the guard cannot see through is the row URL: _row_href(row, key) is str(url_attr(_row_text(row, key), honor_safe=False)) (the one URL rule every component uses, #3887/#3894), placed only inside the quoted data-href / href of a row or a link cell; the guard judges an escaper's output returned through a helper again where it lands and does not follow str() of it. The nested _dbtn(val, label) (density toggle) is proved since #3845 (its only call sites pass literals); the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is escaped (attr_text / escape in an attribute, conditional_escape in text: #4009) or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",
+        "the one implementation of the tag since #3869 (render parses the Rust engine's operands, the Django engine's simple tag hands render_kwargs the same operands as Python values), so one sink serves both engines. Everything the guard cannot see through is the row URL: _row_href(row, key) is str(url_attr(_row_text(row, key), honor_safe=False)) (the one URL rule every component uses, #3887/#3894), placed only inside the quoted data-href / href of a row or a link cell; the guard judges an escaper's output returned through a helper again where it lands and does not follow str() of it. The nested _dbtn(val, label) (density toggle) is proved since #3845 (its only call sites pass literals); the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is escaped (attr_text / escape in an attribute, conditional_escape in text: #4009) or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",
         (RH, "return str(url_attr(_row_text(row, key), honor_safe=False))", "_row_href"),
         (
             RH,
             "row_attrs += f' data-href=\"{_row_href(row, row_url)}\" {_ROW_NAV_A11Y}'",
-            "DataTableHandler.render._render_row",
+            "DataTableHandler.render_kwargs._render_row",
         ),
         (RH, "vals.append(float(v))"),
         (RH, "agg_val = round(sum(vals) / len(vals), 2)"),

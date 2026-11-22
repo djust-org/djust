@@ -36,7 +36,7 @@ pytestmark = [pytest.mark.django_db(transaction=True)]
 class WithNavbars(LiveView):
     """Builds two navbars on every render, as the demo's base view builds one."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = PAGE % "{{ first.render }}{{ second.render }}"
 
     def get_context_data(self, **kwargs):
@@ -49,7 +49,7 @@ class WithNavbars(LiveView):
 class CountsWithNavbar(LiveView):
     """The demo's shape: a navbar built in ``get_context_data``, and a handler."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = PAGE % "{{ nav.render }}<p>Value: <b>{{ count }}</b></p>"
     count = 0
 
@@ -65,7 +65,7 @@ class CountsWithNavbar(LiveView):
 
 
 class BuiltInMount(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # legacy subject: a component assigned in mount() / on the instance is held by legacy views only (explicit views declare components at class level)
     template = PAGE % "{{ nav.render }}"
 
     def mount(self, request, **kwargs):
@@ -73,7 +73,7 @@ class BuiltInMount(LiveView):
 
 
 class BuiltInMountAndRender(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # legacy subject: a component assigned in mount() / on the instance is held by legacy views only (explicit views declare components at class level)
     template = PAGE % "{{ nav.render }}{{ other.render }}"
 
     def mount(self, request, **kwargs):
@@ -86,7 +86,7 @@ class BuiltInMountAndRender(LiveView):
 
 
 class BuiltTwiceInMount(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # legacy subject: a component assigned in mount() / on the instance is held by legacy views only (explicit views declare components at class level)
     template = PAGE % "{{ first.render }}{{ second.render }}"
 
     def mount(self, request, **kwargs):
@@ -95,7 +95,7 @@ class BuiltTwiceInMount(LiveView):
 
 
 class BuiltInHandler(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = PAGE % "x"
 
     def mount(self, request=None, **kwargs):
@@ -109,7 +109,7 @@ class BuiltInHandler(LiveView):
 class LazyAttrs(LiveView):
     """A component built on a later render and held beside the first (B1)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "legacy"  # legacy subject: a component assigned on the instance is held by legacy views only (explicit views declare components at class level)
     template = PAGE % "x"
     show_b = False
 
@@ -123,7 +123,7 @@ class LazyAttrs(LiveView):
 
 
 class LazyCache(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = PAGE % "{{ nav0.render }}{% if nav1 %}{{ nav1.render }}{% endif %}"
 
     def mount(self, request=None, **kwargs):
@@ -141,7 +141,7 @@ class LazyCache(LiveView):
 
 
 class Twin(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = PAGE % "{{ nav.render }}"
 
     def get_context_data(self, **kwargs):
@@ -250,7 +250,7 @@ def test_an_embedded_childs_mount_keeps_random_ids():
 
 def test_an_explicit_component_id_is_used_as_given():
     class Explicit(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = PAGE % "{{ nav.render }}"
 
         def get_context_data(self, **kwargs):
