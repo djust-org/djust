@@ -160,6 +160,9 @@ import re
 import uuid
 from typing import Any, NamedTuple
 
+from django.template import TemplateSyntaxError
+from django.template.loader_tags import construct_relative_path
+
 logger = logging.getLogger(__name__)
 
 #: Attributes HTML defines as holding a URL (plus ``xlink:href``); ``srcset`` is a list of them.
@@ -1497,13 +1500,26 @@ def _include_source(name: str) -> str | None:
         return None
 
 
-def _unscanned_includes(rewrite: Plan) -> int:
+def _unscanned_includes(rewrite: Plan, origin: str | None = None) -> int:
     """How many ``{% include %}`` / ``{% extends %}`` tags name a template whose slots would need
     this module's rule. A quoted literal name that the loaders find, whose source has no
     attribute slot, no escaped-text slot and no translation block, needs nothing and is not
-    counted; a name that is not a literal, or that cannot be found, is."""
+    counted; a name that is not a literal, or that cannot be found, is.
+
+    A relative ``./`` / ``../`` name is resolved against ``origin`` (the template file's own name,
+    #4265) as Django does; without an ``origin`` (an inline template) or when it points outside
+    the hierarchy it cannot be resolved and is counted."""
     unresolved = rewrite.includes - len(rewrite.include_names)
     for name in rewrite.include_names:
+        if name.startswith(("./", "../")):
+            if not origin:
+                unresolved += 1
+                continue
+            try:
+                name = construct_relative_path(origin, name, allow_recursion=True)
+            except TemplateSyntaxError:  # points outside the file hierarchy
+                unresolved += 1
+                continue
         source = _include_source(name)
         if source is None:
             unresolved += 1
@@ -1516,7 +1532,7 @@ def _unscanned_includes(rewrite: Plan) -> int:
     return unresolved
 
 
-def _warn_once(owner: str, rewrite: Plan, file: bool = False) -> None:
+def _warn_once(owner: str, rewrite: Plan, file: bool = False, origin: str | None = None) -> None:
     """Name, once per class and set of findings, what djust could not make safe in a template:
     URL values escaped but not judged, unquoted values, tags that print text inside escaped
     text, shapes the scanner cannot follow like a browser does, and the ``{% include %}`` /
@@ -1529,6 +1545,9 @@ def _warn_once(owner: str, rewrite: Plan, file: bool = False) -> None:
     runtime text in a name, so keep names static.
 
     ``file`` is True for a ``template_name`` file (#3933): the warning says "template file".
+    ``origin`` is that file's name (#4265): a relative include name resolves against it, and it is
+    part of the de-dup key (two files with one source in different directories resolve
+    differently). It is never logged.
     """
     if not (
         rewrite.unchecked_urls
@@ -1554,11 +1573,12 @@ def _warn_once(owner: str, rewrite: Plan, file: bool = False) -> None:
         rewrite.includes,
         rewrite.include_names,
         rewrite.shapes,
+        origin,
     )
     if key in _WARNED or len(_WARNED) >= _MAX_WARNED:
         return
     _WARNED.add(key)
-    includes = _unscanned_includes(rewrite) if rewrite.includes else 0
+    includes = _unscanned_includes(rewrite, origin) if rewrite.includes else 0
     fragments: list[str] = []
     advice: list[str] = []
     args: list[Any] = [owner]
@@ -1625,13 +1645,16 @@ def harden_context(
     text: bool = False,
     keep: frozenset[str] = frozenset(),
     file: bool = False,
+    origin: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """``(template, context)`` to hand the engine: the attribute slots of ``template`` rewritten
     and the values of the URL groups judged. ``context`` itself is not modified. ``owner`` is the
     component class name, for the warning. ``text`` and ``keep``: see :func:`plan`. ``file`` is
-    True when ``template`` is the source of a ``template_name`` file (the warning says so)."""
+    True when ``template`` is the source of a ``template_name`` file (the warning says so);
+    ``origin`` is that file's template name, against which a relative ``{% include %}`` /
+    ``{% extends %}`` name is resolved when the warning counts unscanned ones (#4265)."""
     rewrite = plan(template, text, keep)
-    _warn_once(owner, rewrite, file)
+    _warn_once(owner, rewrite, file, origin)
     if not (rewrite.groups or rewrite.raw):
         return rewrite.template, context
     hardened = dict(context)
