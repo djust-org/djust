@@ -276,6 +276,7 @@ class TestOnlyKnownTemplateSourceBuildersExist:
         "mcp/server.py": "template source an MCP caller asks to be checked (dev tool)",
         "theming/templatetags/theme_tags.py": "the preview template, a module constant",
         "components/gallery/views.py": "gallery example sources, module constants",
+        "components/base.py": "a component's own template_name file source, hardened (#3933); values go in the context",
     }
 
     def test_the_construction_sites_are_exactly_the_known_ones(self) -> None:

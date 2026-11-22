@@ -601,6 +601,10 @@ EXPECTED_TEMPLATE_BOUND_MODULES = {
     # #3895: ``table_row`` reads a model-instance ``data_table`` row as the dict both engines
     # draw its cells from — template-bound, so the Decimal stays exact (no flag).
     "components/utils.py",
+    # #3869: the Django ``{% data_table %}`` hands each non-scalar operand to the native
+    # handler as the engine's JSON text decodes (``_python_operand``) — template-bound, and a
+    # ``Decimal`` takes its exact ``str`` there, as in the engine's text (no flag).
+    "components/rust_handlers.py",
     "mixins/context.py",
     "mixins/jit.py",
     "mixins/request.py",
