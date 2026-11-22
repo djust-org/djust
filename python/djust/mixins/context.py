@@ -176,13 +176,20 @@ def _holds_db_value(value: Any, depth: int = 0) -> bool:
 
 
 def state_models_as_handles_enabled() -> bool:
-    """``LIVEVIEW_CONFIG["state_models_as_handles"]`` (#3936, default off)."""
+    """``LIVEVIEW_CONFIG["state_models_as_handles"]`` (#3936, default on since 2.0)."""
     try:
         from ..config import get_config
 
-        return bool(get_config().get("state_models_as_handles", False))
-    except Exception:  # noqa: BLE001 -- config access is defensive; off is the safe answer
+        return bool(get_config().get("state_models_as_handles", True))
+    except Exception:  # noqa: BLE001 -- config access is defensive
+        # Fail safe: a config error means no overlay, i.e. the serialized-dict path.
         return False
+
+
+def _is_projection(queryset: Any) -> bool:
+    """Is this QuerySet a ``.values()`` / ``.values_list()`` projection? The ONLY queryset
+    operation that sets ``_fields`` (as ``_SidecarQuerySetProxy`` reads it)."""
+    return getattr(queryset, "_fields", None) is not None
 
 
 def _state_model_values(context: Any) -> Dict[str, Any]:
@@ -195,6 +202,11 @@ def _state_model_values(context: Any) -> Dict[str, Any]:
 
     out: Dict[str, Any] = {}
     for key, value in context.items():
+        if isinstance(value, QuerySet) and _is_projection(value):
+            # ``.values()`` / ``.values_list()``: the rows are dicts / tuples with no model to hand
+            # a proxy for, and the floor refuses a projection's rows (vector 5), so a handle would
+            # be an EMPTY list shadowing the serialized rows (train/2.0-ai review B1).
+            continue
         if isinstance(value, (models.Model, QuerySet)) or (
             isinstance(value, (list, tuple)) and any(isinstance(v, models.Model) for v in value)
         ):

@@ -31,6 +31,7 @@ from python.tests.test_custom_callable_model_argument_3949 import (  # noqa: F40
 )
 
 FLAG_ON = {"state_models_as_handles": True}
+FLAG_OFF = {"state_models_as_handles": False}  # the kill-switch; {} is ON since 2.0
 
 
 def _body(html: str) -> str:
@@ -139,7 +140,7 @@ def _change_email(view):
 def test_state_model_loop_follows_a_field_change(people, policy, flag):
     """B3: a loop over a state model list reads ``x.email`` (not in ``str(model)``)."""
     source = "{% for x in us %}<li>{{ x.email }}</li>{% endfor %}"
-    cfg = dict(FLAG_ON if flag else {}, loop_render_cache_enabled=True)
+    cfg = dict(FLAG_ON if flag else FLAG_OFF, loop_render_cache_enabled=True)
     first, again, after = _diff_renders(_view(source, policy, _held_users, _change_email), cfg)
     assert first == again == "<li>u0@old.example</li><li>u1@old.example</li>", first
     assert after == "<li>u0@new.example</li><li>u1@old.example</li>", after

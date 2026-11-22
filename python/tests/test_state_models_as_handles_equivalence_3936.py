@@ -84,6 +84,43 @@ def test_single_model_corpus_is_unchanged(world, policy, name, source):
     )
 
 
+#: The QuerySet-method and walked-row shapes (#4241, #4258, #3801, #4069) the corpus above missed,
+#: which is how the overlay shipped shadowing them behind the flag (train/2.0-ai, B-H1). The
+#: query counts and the row cap are pinned in ``test_state_models_as_handles_queries_3936.py``.
+QUERYSET_READS = [
+    ("qs-count", "{{ users.count }}"),
+    ("qs-exists", "{% if users.exists %}y{% endif %}|{{ users.exists }}"),
+    ("qs-first-last", "{{ users.first.username }}|{{ users.last.username }}"),
+    (
+        "qs-loop-and-method",
+        "{% for u in users %}{% for g in u.groups.all %}{{ g.name }},{% endfor %}"
+        "{{ u.groups.all.count }};{% endfor %}",
+    ),
+    (
+        "qs-count-beside-walk",
+        "{{ users.count }}:{% for u in users %}{{ u.groups.count }};{% endfor %}",
+    ),
+    ("qs-with-first", "{% with q=users|first %}{{ q.groups.count }}{% endwith %}"),
+    # review S4
+    ("qs-top-all", "{% for u in users.all %}{{ u.username }};{% endfor %}"),
+    ("qs-top-all-count", "{{ users.all.count }}"),
+    ("qs-with-count", "{% with x=users %}{{ x.count }}{% endwith %}"),
+]
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("name,source", QUERYSET_READS, ids=[n for n, _ in QUERYSET_READS])
+def test_queryset_reads_are_unchanged(world, policy, name, source):
+    on = _render(source, _user_qs, policy, flag=True)
+    assert on == _render(source, _user_qs, policy, flag=False)
+    if name.startswith("qs-top-all"):
+        # ``users.all`` on a top-level QuerySet held in state renders empty on a LiveView with the
+        # overlay on or off (Django: the rows). Pre-existing, outside this flag; pinned as equal.
+        assert on in ("", "0"), on
+        return
+    assert on not in ("", "|", ":"), on
+
+
 def test_the_harness_sees_the_flag(world):
     source = MUST_DIFFER["filtered-rebinding"]
     on = _render(source, _single, "explicit", flag=True)
@@ -121,14 +158,14 @@ def _render_change_diff(source: str, factory, policy: str, flag: bool) -> str:
     from django.test import override_settings
 
     from djust.testing import LiveViewTestClient
-    from python.tests.test_state_models_as_handles_3936 import FLAG_ON, _body, _view
+    from python.tests.test_state_models_as_handles_3936 import FLAG_OFF, FLAG_ON, _body, _view
 
     def body(html: str) -> str:
         return _body(
             re.sub(r"<div [^>]*dj-root[^>]*>", "<div dj-root>", html.replace(" dj-id=", " data-x="))
         )
 
-    config = dict(FLAG_ON if flag else {}, loop_render_cache_enabled=True)
+    config = dict(FLAG_ON if flag else FLAG_OFF, loop_render_cache_enabled=True)
     from django.db import transaction
 
     # The change is rolled back, so the flag-on and flag-off runs start from the same rows.
@@ -168,3 +205,38 @@ def test_the_diff_harness_sees_a_change(world):
     assert got.count("changed@example.com") == 3, got  # explicit re-reads the rows
     got = _render_change_diff(HELD_LIST[1][1], _held, "explicit", flag=True)
     assert got.endswith("<li>1</li>"), got  # u2 gained ops
+
+
+# -- review B1: a .values() / .values_list() QuerySet held in state ----------------------------
+
+
+def _projection_cases():
+    from python.tests.test_state_models_as_handles_queries_3936 import PROJECTIONS
+
+    return [pytest.param(s, f, id=n) for n, s, f in PROJECTIONS]
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("source,factory", _projection_cases())
+def test_projection_corpus_is_unchanged(world, policy, source, factory):
+    on = _render(source, factory, policy, flag=True)
+    assert on == _render(source, factory, policy, flag=False)
+    if policy == "explicit":
+        # (legacy reads a ``.values()`` row's key empty with or without the overlay: its JIT's
+        # own row shape, unchanged by this flag.)
+        assert on not in ("", "0"), on
+
+
+def _forward_fk_cases():
+    from python.tests.test_state_models_as_handles_queries_3936 import FORWARD_FK
+
+    return [pytest.param(s, f, id=n) for n, s, f in FORWARD_FK]
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("source,factory", _forward_fk_cases())
+def test_forward_fk_corpus_is_unchanged(world, policy, source, factory):
+    """Review S4: a forward FK read as one segment, dotted, in ``{% if %}`` and off one model."""
+    on = _render(source, factory, policy, flag=True)
+    assert on == _render(source, factory, policy, flag=False)
+    assert on.strip(";|"), on

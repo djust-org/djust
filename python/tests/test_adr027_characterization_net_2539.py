@@ -1630,9 +1630,7 @@ class TestTheAliasFallbackStays2628:
         assert render(source, {"user": u}) == "1"
 
     @pytest.mark.parametrize("render", ALL_FOUR)
-    def test_the_filtered_rebinding_reaches_its_reverse_relation_since_3888(
-        self, render, request
-    ) -> None:
+    def test_the_filtered_rebinding_reaches_its_reverse_relation_since_3888(self, render) -> None:
         """Was `..._is_a_recorded_gap_not_a_regression`: a FILTERED operand registers no alias
         (`context.rs`, #2504 — the guards are `Context::is_safe`'s XSS boundary), and a raw model had
         no handle to fall back on, so this cell rendered `''` where Django renders `1`. Recorded so
@@ -1646,25 +1644,15 @@ class TestTheAliasFallbackStays2628:
         top-level single model with `_jit_serialize_model(...)`, it carries it raw like a list row
         (a plain render is not state).
 
-        It stays a recorded gap on `LiveView` ONLY: the view holds the model as STATE (ADR-027
-        "models stay eager": client payload, msgpack, change detection), so `normalize_django_value`
-        still makes a dict of it and the Rust conversion has no handle to keep. Making it a handle
-        there is a design decision, not a fix (#3936, the LiveView half of #3902); delete the `''`
-        branch when it closes."""
+        `LiveView` was the last recorded gap: the view holds the model as STATE (ADR-027 "models
+        stay eager": client payload, msgpack, change detection), so `normalize_django_value` makes
+        a dict of it. Closed on LiveView by the render-time handle overlay, default on since 2.0
+        (#3936): a floored handle is bound above the state for the render only. The kill-switch
+        (`state_models_as_handles: False`) is pinned in `test_state_models_as_handles_3936.py`."""
         source = "{% with q=user|default:user %}{{ q.groups.count }}{% endwith %}"
         u = self._alice()
         assert django_render(source, {"user": u}) == "1"
-        got = render(source, {"user": u})
-        if request.node.callspec.id == "LiveView":
-            assert got == "", "LiveView: a state-held top-level model is a dict, with no handle"
-            # #3936: the render-time handle overlay closes it behind the flag. Delete the `''`
-            # branch above when `state_models_as_handles` defaults on.
-            from django.test import override_settings
-
-            with override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": True}):
-                assert render(source, {"user": u}) == "1"
-        else:
-            assert got == "1"
+        assert render(source, {"user": u}) == "1"
 
 
 class TestStringIfInvalidReachesTheLiveWalk2628:

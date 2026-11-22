@@ -621,11 +621,11 @@ Python function among its members; the second level is every underscore name tha
 tests guarantee the KIND of what is returned for the members of those models; they do not guarantee
 the content of a field.
 
-## Addendum (#3949, #3936): a render-time handle overlay for a model held as state (Accepted, to be built for 1.4.0)
+## Addendum (#3949, #3936): a render-time handle overlay for a model held as state (Accepted; on by default in 2.0)
 
-**Implemented (#3936, train 2.0-ah) behind `LIVEVIEW_CONFIG["state_models_as_handles"]`, default off.** `RustLiveView.set_render_handles` carries the floored handles, bound in a scope above the state at each render entry (`render_result`, `render_binary_diff`, `prepare_partial_page`, `render_with_diff_detached`); `python/tests/test_state_models_as_handles_3936.py` and `test_state_models_as_handles_equivalence_3936.py` pin the invariants below. Legacy captures the raw value at the top-level key only (a model inside a dict keeps its dict). **The actor entry (decision 3) no longer exists:** `use_actors` was removed in 2.0 (`REMOVED_VIEW_ATTRIBUTES`, "the Tokio actor system was removed"), so there is no second render path to mirror.
+**Implemented (#3936, train 2.0-ah) behind `LIVEVIEW_CONFIG["state_models_as_handles"]`; default on since 2.0 (maintainer decision 2026-11-22, train 2.0-ai).** `RustLiveView.set_render_handles` carries the floored handles, bound in a scope above the state at each render entry (`render_result`, `render_binary_diff`, `prepare_partial_page`, `render_with_diff_detached`); `python/tests/test_state_models_as_handles_3936.py` and `test_state_models_as_handles_equivalence_3936.py` pin the invariants below. Legacy captures the raw value at the top-level key only (a model inside a dict keeps its dict). **The actor entry (decision 3) no longer exists:** `use_actors` was removed in 2.0 (`REMOVED_VIEW_ATTRIBUTES`, "the Tokio actor system was removed"), so there is no second render path to mirror.
 
-**Status: Accepted (maintainer decision, 2026-11-10); implemented in 2.0 behind the flag, default off (see the 2026-11-21 note under Decisions).** Maintainer decision recorded on #3949: the behaviour is pinned and documented now (`python/tests/test_custom_callable_model_argument_3949.py`, the guide section "What a custom filter or tag receives for a model"), and the real fix is taken together with #3936, under this addendum.
+**Status: Accepted (maintainer decision, 2026-11-10); implemented and on by default in 2.0 (see the 2026-11-22 note under Decisions).** Maintainer decision recorded on #3949: the behaviour is pinned and documented now (`python/tests/test_custom_callable_model_argument_3949.py`, the guide section "What a custom filter or tag receives for a model"), and the real fix is taken together with #3936, under this addendum.
 
 ### The problem, measured on 1.3.1
 
@@ -645,7 +645,7 @@ Mechanism (smallest complete design, sizes from reading the code, not a prototyp
 
 - **Python** (about 80 to 120 lines): `mixins/context.py` records the raw object per key at the places that replace a value (single model, `list[Model]`, QuerySet, the `normalize_django_value` fallback, a dict holding models) into a per-render slot, never into state. `mixins/rust_bridge.py` builds `{key: _protect_sidecar_tree(raw, ...)}` and calls a new `RustLiveView.set_render_handles(...)` on **every** sync, including empty (the discipline `set_raw_py_values` already documents, #2300).
 - **Rust** (about 100 to 150 lines, a rebuild, an ABI change): a field and setter beside `raw_py_values` in `crates/djust_live/src/lib.rs`; at each render entry, after the context is built from state, `context.set(key, handle)`; mirrored at the component and actor renders. A stale-extension guard (`hasattr`, as for `set_raw_py_values`) and `_rust.pyi`.
-- **Kill-switch:** `LIVEVIEW_CONFIG["state_models_as_handles"]`, default off for the first release candidate, as ADR-027's own steps shipped.
+- **Kill-switch:** `LIVEVIEW_CONFIG["state_models_as_handles"]`, default off for the first release candidate, as ADR-027's own steps shipped; default on from 2.0 (`False` restores the dict).
 - **Release:** a minor (1.4.0). It changes what custom callables and template reads of the key observe.
 
 ### Invariants (each needs a test that fails without it)
@@ -657,6 +657,8 @@ Mechanism (smallest complete design, sizes from reading the code, not a prototyp
 - The overlay is set and cleared on every sync, so a key that leaves state does not leave a stale handle behind.
 - Change detection is unchanged: a field mutated behind a stable `id()` still re-renders; a partial render with `set_changed_keys` still works; a msgpack round trip drops the handle and the next sync restores it.
 - Flag on and flag off render byte-identical HTML for every template that does not depend on what changes below (an equivalence differential over the LiveView test corpus, with a non-vacuity case).
+- The overlay issues no query the flag-off render does not, and answers every read the flag-off render answers (train 2.0-ai, `python/tests/test_state_models_as_handles_queries_3936.py`: output and query count, flag on vs off, both policies, with the row cap and a gate-off). A key the flag-off path already answers keeps that path: a QuerySet whose `count` / `exists` / `first` / `last` the template reads, a name whose rows a QuerySet method reads (#3801), and a name whose rows the JIT serialized with the relation paths the template walks (prefetched, `queryset_all_row_cap` applied).
+- A handle's text is plain for the state key's OWN model (the value, a list / tuple member, a QuerySet's row): one whose `__str__` is a `SafeString` prints escaped on a LiveView, with the overlay on or off (LiveView's stricter escaping is kept, not the backend's Django parity; train 2.0-ai decision). A related model reached by a walk (`{{ u.groups.first }}`, a rebinding's `q.groups.all` rows) is a fresh floor proxy and prints its `SafeString` as Django does, as a LiveView already did before the overlay (`test_a_related_models_safe_text_prints_as_django_prints_it`).
 
 ### Behaviour changes to declare
 
@@ -682,11 +684,24 @@ Mechanism (smallest complete design, sizes from reading the code, not a prototyp
 2. **Flag default:** `LIVEVIEW_CONFIG["state_models_as_handles"]` is off in the release candidates and on by 1.4.0, with a behaviour-change note in the changelog.
 3. **The actor entry** (`use_actors = True`) gets the overlay in the same release, so the two paths do not drift.
 
-**Note, 2026-11-21 (train 2.0-ah review S5): decision 2 is not met in 2.0, and that is open for the maintainer.** The overlay ships in 2.0 (past 1.4.0) with the flag OFF by default. Flipping it is left to a maintainer decision rather than taken in the train, because two of its preconditions are not measured yet: the per-sync cost of building and extracting the handles (no benchmark was run) and the full model-state equivalence corpus (the differential covers the #3777 cases, nine single-model reads and three held-list reads, full render and diff render, not the planned 52 templates). Until the flip: `changelog.d/3936.added.md` describes an opt-in, not a fix of the default path; #3936 and #3949 stay open on the flip; and the `''` branch of the 2539 characterization net stays. The flip is the default in `python/djust/config.py`, the deletion of that branch, and the behaviour-change bullets of `changelog.d/3949.changed.md` moving under the release that flips it.
+**Note, 2026-11-21 (train 2.0-ah review S5):** decision 2 was left open for the maintainer, with the flag off by default in 2.0. Superseded by the 2026-11-22 note.
+
+**Note, 2026-11-22 (train 2.0-ai): decision 2 is met in 2.0** (the release after 1.4.0 was folded into 2.0): the maintainer turned the default on. Before the flip:
+
+- **B-H1/B-H2, found and fixed.** A measuring pass with the flag forced on over the 453 model-touching test files found 71 failures of one cause: the overlay bound a top-level QuerySet as a list of row handles ABOVE the state, shadowing the answers the JIT and sidecar give for that name. `{{ qs.count }}` / `.exists` / `.first` / `.last` rendered empty, a walked `{% for g in u.groups.all %}` re-walked each row live (2 to 6 queries for 3 users) and skipped `queryset_all_row_cap`, and a legacy single model with a relation read was walked twice. `_overlay_skip_keys` (`mixins/rust_bridge.py`) keeps the flag-off path for those keys; the query invariant above pins it.
+- **Cost** (re-measured after the review fixes; `_sync_state_to_rust`, median of 30, a one-column loop, flag off to on): a QuerySet of 100 rows, explicit 12.25 to 12.86 ms, legacy 0.88 to 1.43 ms; of 1,000 rows, explicit 110.8 to 118.0 ms, legacy 3.96 to 9.07 ms. A held list costs the same. Every non-skipped model row becomes a handle at every sync, which is legacy's relative cost.
+- **Equivalence:** the differential covers the #3777 cases, nine single-model reads, held lists, the 55-template #3888 corpus and six QuerySet-method shapes, full render and diff render, both policies; the full Python suite runs with the overlay on (it is the default).
+- **Decided with the flip:** a state model with a `SafeString` `__str__` keeps LiveView's escaping (a plain-text handle; a related model reached by a walk prints as Django does); a raising `.all()` the legacy JIT could not serialize now raises out of the render, as Django's render does, where the flag-off path logged it and rendered the rows without it.
+- **Known limit kept:** the overlay binds top-level keys only, so a model inside a dict held in state keeps its dict. Widening it is not a one-liner (binding a whole dict key would hand its non-model values to the engine un-normalized); it is documented, not scheduled.
+- **Still a gap:** a QuerySet read both through a slice and a method (`{% for u in users|slice:':2' %}{{ u.groups.all.count }}`, #3867 item 3) keeps the serialized rows, so it stays the declared xfail.
+
+- **Review fixes before the flip (same train):** a `.values()` / `.values_list()` QuerySet is never captured (its rows are not models; a handle was an empty list); a legacy QuerySet whose rows' forward relation is read as one segment keeps its `select_related` JIT rows; an explicit method-read QuerySet whose rows are walked goes through the JIT, so a filtered rebinding of its row reads the relation (the #3936 symptom no longer comes back with an unrelated `{{ qs.count }}`); an explicit one-segment forward-FK loop is one query. A skipped QuerySet key hands a custom callable `dict` rows (documented in the guide's table). The kill-switch is read strictly (`"false"` is `False`).
+
+The 2539 LiveView branch is removed; #3936 and #3949 close.
 
 ### Acceptance (the work for 1.4.0)
 
-The #3949 matrix (every entry by every shape by every callable kind) pins the flag-on behaviour with a Django oracle on real instances; the floor gate-offs (raw instance instead of the proxy, the protect call dropped, the fail-closed fallback broken, the overlay not cleared) each turn a leak row red; the `LiveView` branch at `python/tests/test_adr027_characterization_net_2539.py` ("delete when #3936 closes") is removed; `changelog.d/3949.changed.md` carries a "Behavior change" bullet listing the items above.
+The #3949 matrix (every entry by every shape by every callable kind) pins the flag-on behaviour with a Django oracle on real instances; the floor gate-offs (raw instance instead of the proxy, the protect call dropped, the fail-closed fallback broken, the overlay not cleared) each turn a leak row red; the `LiveView` branch at `python/tests/test_adr027_characterization_net_2539.py` ("delete when #3936 closes") is removed (done, 2026-11-22); `changelog.d/3949.changed.md` carries a "Behavior change" bullet listing the items above.
 
 ## Non-goals
 

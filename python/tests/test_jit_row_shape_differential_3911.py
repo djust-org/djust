@@ -727,15 +727,19 @@ class TestVariableKeyValueKinds4264:
 
     def test_the_legacy_policy_keeps_its_documented_property_key_difference(self, world) -> None:
         """Legacy's JIT row carries a column only for a variable key (#3910), so a property
-        value renders the empty loop where Django sorts. A recorded difference, not a goal."""
+        value renders the empty loop where Django sorts. A recorded difference, not a goal --
+        and since 2.0 only with the handle overlay switched off (``state_models_as_handles:
+        False``): by default the overlay hands the QuerySet's rows as floored handles
+        (#3936), which ``dictsort`` sorts by the property as Django does."""
+        from django.test import override_settings
+
         source = "{% for u in users|dictsort:key %}{{ u.pk }},{% endfor %}"
-        got, want = _agrees(
-            _legacy_liveview_render,
-            source,
-            {"users": _users("QuerySet"), "key": "is_authenticated"},
-        )
-        # Django sorts all three rows; the pks depend on the database sequence.
-        assert got == "" and want.count(",") == 3
+        context = {"users": _users("QuerySet"), "key": "is_authenticated"}
+        with override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": False}):
+            got, want = _agrees(_legacy_liveview_render, source, context)
+        assert got == "" and want.count(",") == 3  # pks depend on the DB sequence
+        got, want = _agrees(_legacy_liveview_render, source, context)
+        assert got == want and want.count(",") == 3
 
 
 # ---------------------------------------------------------------------------------------------

@@ -695,6 +695,26 @@ class TestAModelWithAMarkupSafeTextIsAModelToo:
         html = DJ_ROOT.search(client.render()).group(1)
         assert "<b>" not in html and html.count("&lt;b&gt;s1&lt;/b&gt;") == 3, html
 
+    @pytest.mark.parametrize("policy", ["explicit", "legacy"])
+    @pytest.mark.parametrize("shape", ["list", "queryset", "model"])
+    @pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
+    def test_the_handle_overlay_keeps_liveviews_escaping(
+        self, safe_world, policy, shape, flag
+    ) -> None:
+        """#3936 (train/2.0-ai decision): the render-time handle overlay hands the template a floor
+        proxy, whose ``str()`` would be the model's ``SafeString``. LiveView keeps its stricter
+        escaping (its serialized dict always printed the text escaped), on both policies with the
+        overlay on or off -- not the backend's Django parity (raw ``<b>``). Gate-off below."""
+        _assert_overlay_text_escaped(safe_world, policy, shape, flag)
+
+    def test_gate_off_a_safe_handle_text_prints_raw(self, safe_world, monkeypatch) -> None:
+        """Gate-off: with the overlay handles' plain text undone, the markup prints raw."""
+        from djust import serialization
+
+        monkeypatch.setattr(serialization, "_overlay_plain_text_handles", lambda value, memo: value)
+        with pytest.raises(AssertionError, match="<b>s1</b>"):
+            _assert_overlay_text_escaped(safe_world, "legacy", "list", True)
+
     def test_a_markup_text_stays_inert(self, world) -> None:
         world["a1"].username = "</b><script>alert(1)</script>"
 
@@ -714,3 +734,115 @@ class TestAModelWithAMarkupSafeTextIsAModelToo:
         client.mount()
         html = DJ_ROOT.search(client.render()).group(1)
         assert "<script>" not in html and "&lt;script&gt;" in html, html
+
+
+def _assert_overlay_text_escaped(safe_world, policy: str, shape: str, flag: bool) -> None:
+    """Render the markup-safe model through every read the overlay answers; assert it is escaped."""
+    from django.test import override_settings
+
+    value = {
+        "list": lambda: [safe_world["a1"], safe_world["a2"]],
+        "queryset": lambda: safe_world["Account"].objects.order_by("username"),
+        "model": lambda: safe_world["a1"],
+    }[shape]
+    if shape == "model":
+        source = "{{ rows }}|{% with r=rows|default:rows %}{{ r }}{% endwith %}"
+    else:
+        source = (
+            "{{ rows.0 }}|{% for r in rows %}{{ r }};{% endfor %}|"
+            "{% with r=rows|first %}{{ r }}{% endwith %}|{% for r in rows|slice:':1' %}{{ r }}{% endfor %}"
+        )
+
+    class _V(LiveView):
+        exposure_policy = policy
+        template = f"<div dj-root>{source}</div>"
+
+        if policy == "legacy":
+
+            def mount(self, request, **kwargs):
+                self.rows = value()
+
+        else:
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["rows"] = value()
+                return ctx
+
+    with override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": flag}):
+        client = LiveViewTestClient(_V)
+        client.mount()
+        html = DJ_ROOT.search(client.render()).group(1)
+    assert "<b>" not in html and "&lt;b&gt;s1&lt;/b&gt;" in html, html
+
+
+# -- review S3: the plain-text handle is the state key's OWN model ------------------------------
+#
+# The overlay's plain text covers the state value, its list / tuple members and a QuerySet's rows.
+# A related model reached by a walk is a fresh floor proxy and prints its ``SafeString`` raw, as
+# Django prints it and as a LiveView already did before the overlay (``{{ u.groups.first }}``).
+# Pinned so the ADR's narrowed wording stays true: "own model escaped, related model as Django".
+
+RELATED_SAFE = {
+    # name: (template, {policy: "raw" | "escaped"})
+    "self": ("{{ u }}", {"explicit": "escaped", "legacy": "escaped"}),
+    "list-self": ("{{ us.0 }}", {"explicit": "escaped", "legacy": "escaped"}),
+    "m2m-first": ("{{ u.groups.first }}", {"explicit": "raw", "legacy": "raw"}),
+    "rebind-m2m-first": (
+        "{% with q=u|default:u %}{{ q.groups.first }}{% endwith %}",
+        {"explicit": "raw", "legacy": "raw"},
+    ),
+    "rebind-m2m-loop": (
+        "{% with q=u|default:u %}{% for g in q.groups.all %}{{ g }}{% endfor %}{% endwith %}",
+        {"explicit": "raw", "legacy": "escaped"},
+    ),
+}
+
+
+@pytest.fixture
+def related_safe_world(db, scratch_models, monkeypatch):  # noqa: F811
+    from django.contrib.auth.models import Group
+    from django.utils.html import format_html
+
+    class RelAccount(User):
+        class Meta:
+            proxy = True
+            app_label = "auth"
+
+        def __str__(self):
+            return format_html("<b>{}</b>", self.username)
+
+    monkeypatch.setattr(Group, "__str__", lambda self: format_html("<s>{}</s>", self.name))
+    account = RelAccount.objects.create(username="r1")
+    account.groups.add(Group.objects.create(name="g1"))
+    return RelAccount
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("name", sorted(RELATED_SAFE))
+def test_a_related_models_safe_text_prints_as_django_prints_it(related_safe_world, name, policy):
+    source, expected = RELATED_SAFE[name]
+
+    class _V(LiveView):
+        exposure_policy = policy
+        template = f"<div dj-root>{source}</div>"
+
+        if policy == "legacy":
+
+            def mount(self, request, **kwargs):
+                self.u = related_safe_world.objects.get(username="r1")
+                self.us = [self.u]
+
+        else:
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                u = related_safe_world.objects.get(username="r1")
+                ctx.update({"u": u, "us": [u]})
+                return ctx
+
+    client = LiveViewTestClient(_V)
+    client.mount()
+    html = DJ_ROOT.search(client.render()).group(1)
+    got = "raw" if re.search(r"<[bs]>", html) else "escaped" if "&lt;" in html else html
+    assert got == expected[policy], (name, policy, html)

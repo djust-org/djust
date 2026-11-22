@@ -134,11 +134,113 @@ def _queryset_row_walk_paths_for(view: Any) -> Dict[str, FrozenSet[str]]:
     return queryset_row_walk_paths(content)
 
 
-def _overlay_floor(value: Any, memo: Dict[Any, Any]) -> Any:
-    """The floor the overlay applies to one state value (#3936): the sidecar's tree floor."""
-    from ..serialization import _protect_sidecar_tree
+def _overlay_floor(value: Any, memo: Dict[Any, Any], text_memo: Dict[int, Any]) -> Any:
+    """The floor the overlay applies to one state value (#3936): the sidecar's tree floor, with
+    each model handle's text kept plain (LiveView's escaping, train/2.0-ai)."""
+    from ..serialization import _overlay_plain_text_handles, _protect_sidecar_tree
 
-    return _protect_sidecar_tree(value, 0, memo, set())
+    floored = _protect_sidecar_tree(value, 0, memo, set())
+    return _overlay_plain_text_handles(floored, text_memo)
+
+
+def _method_read_rows_take_the_jit(full_context: Any) -> bool:
+    """Does a method-read QuerySet (``{{ qs.count }}``) still go on to the row-walk check (review
+    S1)? On an explicit context, yes: its walked rows are JIT-serialized as legacy's are. Legacy's
+    JIT already ran before the sync. A function so the gate-off test can turn it off."""
+    return type(full_context) is ExplicitRenderContext
+
+
+def _explicit_fk_rows_take_the_jit(model_class: Any, paths: FrozenSet[str]) -> bool:
+    """Does an explicit view's QuerySet go through the JIT because its rows' forward relation is read
+    as one segment (review N4)? A function so the gate-off test can turn it off."""
+    return _paths_read_a_relation(model_class, paths)
+
+
+def _overlay_model_class(value: Any) -> Any:
+    """The model class behind one overlay value (a ``Model``, a ``QuerySet``, a model list)."""
+    from django.db.models import Model, QuerySet
+
+    if isinstance(value, QuerySet):
+        return value.model
+    if isinstance(value, Model):
+        return type(value)
+    return next((type(v) for v in value if isinstance(v, Model)), None)
+
+
+def _overlay_skip_keys(
+    view: Any,
+    raw: Dict[str, Any],
+    full_context: Any,
+    walked_keys: Any = (),
+    qs_roots: Optional[FrozenSet[str]] = None,
+) -> FrozenSet[str]:
+    """The state keys the flag-off path already answers with Django's semantics (#3936, B-H1).
+
+    The overlay binds a handle ABOVE the state, so it shadows every answer the JIT and the
+    render sidecar give for that name. For these keys the shadow loses an answer or adds a query,
+    so they keep the flag-off path (capped, prefetched rows; method answers):
+
+    - a QuerySet the template reads ``count`` / ``exists`` / ``first`` / ``last`` off (#4241,
+      #4258): the handle is a LIST of rows, which has no ``count``;
+    - a name whose rows the template reads through a QuerySet method (``_all_method_rows``,
+      #3801);
+    - a name whose rows the JIT serialized WITH the relation paths the template walks
+      (``walked_keys`` on an explicit view, #4069 S1; ``_jit_serialized_keys`` plus a live walk
+      on a legacy one): the JIT prefetched them and applied ``queryset_all_row_cap`` (#3788),
+      and a handle would walk each row again, one query per row.
+
+    Every other key still gets its handle: a single model on an explicit view, a model list or
+    QuerySet the template reads only columns off, and every value a filtered rebinding or a
+    custom filter / tag is handed.
+    """
+    from django.db.models import QuerySet
+
+    from .jit import rows_need_live_walk
+
+    if not raw:
+        return frozenset()
+    skip = {k for k in walked_keys if k in raw}
+    skip.update(k for k in (getattr(view, "_all_method_rows", None) or {}) if k in raw)
+    if any(isinstance(v, QuerySet) for v in raw.values()):
+        # The sync's own lookup when it made one: one per sync (#4258).
+        roots = _queryset_method_roots_for(view) if qs_roots is None else qs_roots
+        skip.update(k for k, v in raw.items() if isinstance(v, QuerySet) and k in roots)
+    jit_keys = getattr(view, "_jit_serialized_keys", None) or ()
+    pending = [k for k in raw if k in jit_keys and k not in skip]
+    if pending:
+        walk_paths = _queryset_row_walk_paths_for(view)
+        for key in pending:
+            paths = walk_paths.get(key)
+            if not paths:
+                continue
+            model_cls = _overlay_model_class(raw[key])
+            if rows_need_live_walk(model_cls, paths, full_context) or (
+                # Review B2: a legacy JIT re-queries a QuerySet WITH ``select_related`` for a
+                # forward relation read as one segment (``{{ o.customer }}``), which
+                # ``rows_need_live_walk`` calls a value. The handles would iterate the state
+                # QuerySet again and load each row's relation lazily (N+1).
+                isinstance(raw[key], QuerySet) and _paths_read_a_relation(model_cls, paths)
+            ):
+                skip.add(key)
+    return frozenset(skip)
+
+
+def _paths_read_a_relation(model_class: Any, paths: FrozenSet[str]) -> bool:
+    """Does any template path start at a relation field of the row model (review B2)?"""
+    from .jit import VARIABLE_KEY_PREFIX
+
+    if model_class is None:
+        return False
+    for path in paths:
+        if path.startswith(VARIABLE_KEY_PREFIX):
+            continue
+        try:
+            field = model_class._meta.get_field(path.split(".", 1)[0])
+        except Exception:  # noqa: BLE001 -- not a field (a property, a method, a column alias)
+            continue
+        if field.is_relation:
+            return True
+    return False
 
 
 def _render_handles(raw: Dict[str, Any], full_context: Any, skip_keys: Any = ()) -> Dict[str, Any]:
@@ -152,12 +254,13 @@ def _render_handles(raw: Dict[str, Any], full_context: Any, skip_keys: Any = ())
     if not raw:
         return {}
     memo: Dict[Any, Any] = {}
+    text_memo: Dict[int, Any] = {}
     handles: Dict[str, Any] = {}
     for key, value in raw.items():
         if key not in full_context or key in skip_keys:
             continue
         try:
-            handles[key] = _overlay_floor(value, memo)
+            handles[key] = _overlay_floor(value, memo, text_memo)
         except Exception:  # noqa: BLE001 -- fail closed: the key keeps its dict
             logging.getLogger("djust.rust_bridge").warning(
                 "state_models_as_handles: the floor refused %r; it renders from its dict", key
@@ -1113,7 +1216,14 @@ class RustBridgeMixin:
                         _qs_roots = _queryset_method_roots_for(self)
                     if _key in _qs_roots:
                         _raw_models_for_sidecar[_key] = _val
-                        continue
+                        # Review S1: an explicit view's method-read QuerySet whose rows
+                        # the template ALSO walks goes on to the walk check below, which
+                        # hands it to the JIT as legacy's does, so each row dict carries
+                        # the relation values and a
+                        # filtered rebinding of a row (``{% with r=x|default:x %}``)
+                        # reads them. Legacy's JIT already ran (context.py).
+                        if not _method_read_rows_take_the_jit(full_context):
+                            continue
                 # #4069: a loop row's relation walk (``{% for u in users %}
                 # {{ u.groups.all }}``) is answered through the sidecar alias
                 # ``u -> users.<N>``; the normalized column dicts cannot answer
@@ -1143,7 +1253,12 @@ class RustBridgeMixin:
                         if _is_qs
                         else next(type(_r) for _r in _val if isinstance(_r, _DjModel))
                     )
-                    if rows_need_live_walk(_model_cls, _paths, full_context):
+                    if rows_need_live_walk(_model_cls, _paths, full_context) or (
+                        # Review N4: a forward FK read as one segment (``{{ p.content_type }}``)
+                        # was walked per row through the sidecar alias (2N+1 queries); the JIT
+                        # selects it with the rows, as legacy's does.
+                        _is_qs and _explicit_fk_rows_take_the_jit(_model_cls, _paths)
+                    ):
                         _explicit_jit_keys[_key] = _val
 
             # #4069 review S1: an explicit view's walked rows also go through the
@@ -1176,6 +1291,14 @@ class RustBridgeMixin:
                 for _key, _val in _explicit_jit_keys.items():
                     if _key not in self._jit_serialized_keys:
                         _raw_models_for_sidecar[_key] = list(_val)
+                    elif _key in _raw_models_for_sidecar:
+                        # A method-read QuerySet the JIT serialized (review S1): the
+                        # method answers come from the JIT's EVALUATED QuerySet
+                        # (``_all_method_rows``), not the caller's unevaluated one,
+                        # so ``{{ qs.count }}`` costs no second query.
+                        _evaluated = (getattr(self, "_all_method_rows", None) or {}).get(_key)
+                        if _evaluated is not None:
+                            _raw_models_for_sidecar[_key] = _evaluated
 
             for _key, _val in list(full_context.items()):
                 _normalized = _normalize_db_values(_val)
@@ -1879,7 +2002,17 @@ class RustBridgeMixin:
             # flag-off sync then costs one ``has_render_handles`` read, and a view
             # that held handles is still cleared on the sync they leave.
             if hasattr(self._rust_view, "set_render_handles"):
-                _handles = _render_handles(_overlay_raw, full_context, sidecar_only_keys)
+                # B-H1/B-H2 (train/2.0-ai): a key the flag-off path already answers
+                # (QuerySet methods, JIT-walked rows) keeps that path, so the overlay
+                # issues no query the flag-off render does not.
+                _skip = set(sidecar_only_keys)
+                if _overlay_raw:
+                    _skip.update(
+                        _overlay_skip_keys(
+                            self, _overlay_raw, full_context, _explicit_jit_keys, _qs_roots
+                        )
+                    )
+                _handles = _render_handles(_overlay_raw, full_context, _skip)
                 if _handles or getattr(self._rust_view, "has_render_handles", lambda: True)():
                     self._rust_view.set_render_handles(_handles)
 

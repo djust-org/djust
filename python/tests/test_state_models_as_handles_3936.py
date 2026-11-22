@@ -1,4 +1,4 @@
-"""#3936 / #3949 -- the render-time handle overlay (``state_models_as_handles``, default off).
+"""#3936 / #3949 -- the render-time handle overlay (``state_models_as_handles``, default on since 2.0).
 
 A model held as LiveView state reached the Rust engine only as its serialized dict: a filtered
 rebinding (``{% with q=u|default:u %}{{ q.groups.count }}``) and a filtered loop operand rendered
@@ -34,6 +34,8 @@ from python.tests.test_custom_callable_model_argument_3949 import (  # noqa: F40
 )
 
 FLAG_ON = {"state_models_as_handles": True}
+#: The kill-switch, spelled explicitly: since 2.0 the default is ON, so an empty config is ON too.
+FLAG_OFF = {"state_models_as_handles": False}
 
 
 def _body(html: str) -> str:
@@ -64,7 +66,7 @@ def _view(source: str, factory, policy: str = "explicit"):
 
 
 def _render(source: str, factory, policy: str = "explicit", flag: bool = True) -> str:
-    config = FLAG_ON if flag else {}
+    config = FLAG_ON if flag else FLAG_OFF
     with override_settings(LIVEVIEW_CONFIG=config):
         client = LiveViewTestClient(_view(source, factory, policy))
         client.mount()
@@ -198,7 +200,7 @@ def test_handle_never_serialised(people):
     source = "{{ u.username }}|{{ u.groups.count }}"
     states = {}
     for flag in (False, True):
-        with override_settings(LIVEVIEW_CONFIG=FLAG_ON if flag else {}):
+        with override_settings(LIVEVIEW_CONFIG=FLAG_ON if flag else FLAG_OFF):
             client = LiveViewTestClient(_view(source, _ctx))
             client.mount()
             html = client.render()
@@ -227,7 +229,10 @@ def test_title_reads_reverse_relation_flag_on(people):
     src = "{% with q=u|default:u %}{{ q.groups.count }}{% endwith %}"
     with override_settings(LIVEVIEW_CONFIG=FLAG_ON):
         assert render_template(src, {"u": _title_value(u)}) == "2"
-    assert render_template(src, {"u": _title_value(u)}) == ""
+    # The default since 2.0 is the overlay; the kill-switch keeps the dict.
+    assert render_template(src, {"u": _title_value(u)}) == "2"
+    with override_settings(LIVEVIEW_CONFIG=FLAG_OFF):
+        assert render_template(src, {"u": _title_value(u)}) == ""
 
 
 @pytest.mark.parametrize("policy", ["explicit", "legacy"])
@@ -350,7 +355,7 @@ def test_flag_off_sync_sends_no_empty_overlay_to_a_view_without_one(people):
     never had; with it on, a key leaving state still sends the clearing call."""
     source = "{% with q=u|default:u %}[{{ q.groups.count }}]{% endwith %}"
     for flag, expect_calls in ((False, 0), (True, 2)):
-        with override_settings(LIVEVIEW_CONFIG=FLAG_ON if flag else {}):
+        with override_settings(LIVEVIEW_CONFIG=FLAG_ON if flag else FLAG_OFF):
             client = LiveViewTestClient(_view(source, _ctx))
             client.mount()
             client.render()

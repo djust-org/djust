@@ -630,10 +630,13 @@ container, and a top-level model rendered through
 `DjustTemplateBackend` or `render_template`, is a floored live handle:
 managers, relations and `*_id` attributes read as they do on Django,
 including behind a filter (`{% with q=user|default:user %}{{ q.groups.count }}{% endwith %}`).
-A top-level model held by a `LiveView` is still the floored dict,
-because a view holds it as state (it is sent to the client and
-change-tracked), so that filtered rebinding reads a relation empty
-there (#3936). A handle is not a mapping: iterate a model's fields
+A top-level model held by a `LiveView` is a floored handle too since
+2.0: the view keeps the floored dict as state (it is sent to the
+client and change-tracked) and binds the handle for the render only,
+so that filtered rebinding reads the relation (#3936). Setting
+`LIVEVIEW_CONFIG["state_models_as_handles"] = False` restores the dict,
+and the rebinding then reads empty; a model inside a `dict` held in
+state is always the dict. A handle is not a mapping: iterate a model's fields
 explicitly, and read a `FileField` with `.url` (a bare
 `{{ doc.attach }}` prints the stored name, as on Django).
 

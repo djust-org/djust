@@ -323,9 +323,16 @@ class TestARaisingAllIsNotSilent3777:
         def boom(self):
             raise OperationalError("statement timeout")
 
+        from django.test import override_settings
+
         monkeypatch.setattr(User.groups.related_manager_cls, "get_queryset", boom)
         source = "{% for u in users %}{{ u.username }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]{% endfor %}"
-        with caplog.at_level(logging.DEBUG):
+        # The kill-switch (``state_models_as_handles: False``) keeps the 1.x path: the render
+        # completes and only the log reports the failure.
+        with (
+            caplog.at_level(logging.DEBUG),
+            override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": False}),
+        ):
             # The JIT handler is the legacy policy's (#4069).
             _legacy_liveview_render(source, {"users": User.objects.order_by("pk")})
         # djust 2.0 does not fall back to another serializer (#3546): the failure is reported
@@ -334,6 +341,26 @@ class TestARaisingAllIsNotSilent3777:
         assert any("JIT auto-serialization failed" in r.getMessage() for r in logged), [
             (r.name, r.levelname, r.getMessage()) for r in caplog.records
         ]
+
+    def test_with_the_overlay_the_database_error_raises_as_in_django(
+        self, world_users, monkeypatch, caplog
+    ) -> None:
+        """Default since 2.0 (#3936, accepted in train/2.0-ai): the JIT still logs the failure,
+        and the rows it could not serialize keep their render-time handle, whose live walk raises
+        the database error out of the render -- what Django's own render does. Never a silent
+        'this user has no groups'."""
+
+        def boom(self):
+            raise OperationalError("statement timeout")
+
+        monkeypatch.setattr(User.groups.related_manager_cls, "get_queryset", boom)
+        source = "{% for u in users %}{{ u.username }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]{% endfor %}"
+        with (
+            caplog.at_level(logging.DEBUG),
+            pytest.raises(OperationalError, match="statement timeout"),
+        ):
+            _legacy_liveview_render(source, {"users": User.objects.order_by("pk")})
+        assert any("JIT auto-serialization failed" in r.getMessage() for r in caplog.records)
 
 
 @pytest.fixture
