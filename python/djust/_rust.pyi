@@ -423,7 +423,8 @@ def resolve_template_inheritance(
             ``template_path`` then names it. A relative ``./`` / ``../`` name in
             ``{% extends %}`` or ``{% include %}``, in the child and in each parent,
             resolves against the name of the template that holds it, as Django does
-            (#4265); a ``template_path`` like ``<string>`` gives it nothing to resolve against.
+            (#4265); a ``template_path`` like ``<string>`` is not a name: a relative name is then left as
+            written and looked up under the template roots.
 
     Returns:
         The merged template string with all inheritance resolved

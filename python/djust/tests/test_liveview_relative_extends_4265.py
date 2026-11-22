@@ -98,22 +98,83 @@ def test_the_flattened_source_renders_what_django_renders(rel_files, shape) -> N
     assert _squash(out) == _squash(expected), (flattened, out, expected)
 
 
+#: The include names a flattened source must hold, absolute: ``{% include %}`` is not inlined in a
+#: source, so the decoy's text cannot show up there; the NAME is what resolved.
+INCLUDES = {
+    "include-in-child-block": ["a/p.html"],
+    "include-in-parent": ["base/q.html"],
+    "include-two-levels-up": ["l1/l2b/part.html"],
+}
+
+
+INLINED = {
+    "include-in-child-block": ["child-p"],
+    "include-in-parent": ["parent-q"],
+    "include-two-levels-up": ["mid-part"],
+}
+
+
+def _view(name: str):
+    return type("V", (LiveView,), {"exposure_policy": "explicit", "template_name": name})()
+
+
 @pytest.mark.parametrize("shape", sorted(SHAPES))
 def test_a_liveview_template_name_resolves_the_chain(rel_files, shape) -> None:
     name, files = SHAPES[shape]
     for path, source in files.items():
         rel_files(path, source)
-    view = type("V", (LiveView,), {"exposure_policy": "explicit", "template_name": name})()
-    assert "WRONG" not in view.get_template()
+    source = _view(name).get_template()
+    assert "WRONG" not in source
+    for included in INCLUDES.get(shape, []):
+        assert '{% include "' + included + '" %}' in source, source
 
 
-def test_the_jit_extraction_source_and_runtime_source_resolve_it(rel_files) -> None:
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_the_jit_and_runtime_sources_resolve_the_chain(rel_files, shape) -> None:
+    """The other callers of the resolver: the runtime's flattened source and the JIT extraction
+    source (``_jit_template_content``, which calls ``JITMixin._get_template_content``)."""
+    from djust.mixins.jit import _jit_template_content
     from djust.runtime import template_source
 
-    name, files = SHAPES["extends-dot"]
+    name, files = SHAPES[shape]
     for path, source in files.items():
         rel_files(path, source)
-    assert "<main>" in template_source(name)
+    view = _view(name)
+    view.get_template()
+    flattened = template_source(name)
+    assert "WRONG" not in flattened, flattened
+    for included in INCLUDES.get(shape, []):
+        assert '{% include "' + included + '" %}' in flattened, flattened
+    # the JIT source inlines each include, so the RIGHT partial's text is there, never the decoy's
+    jit = _jit_template_content(view)
+    assert jit and "WRONG" not in jit, jit
+    for text in INLINED.get(shape, []):
+        assert text in jit, jit
+
+
+def test_two_views_with_one_source_in_different_directories_each_get_their_own_parent(
+    rel_files,
+) -> None:
+    """``a/c.html`` and ``b/c.html`` are byte-identical and differ only in the ``./base.html``
+    they mean: nothing keyed by source text or by name may serve one view the other's parent."""
+    from djust.mixins.jit import _jit_template_content
+    from djust.runtime import template_source
+    from djust.websocket import render_embedded_child_html
+
+    for d in ("a", "b"):
+        rel_files(f"{d}/c.html", '{% extends "./base.html" %}{% block b %}x{% endblock %}')
+        rel_files(
+            f"{d}/base.html", "<div dj-root>" + d.upper() + "{% block b %}{% endblock %}</div>"
+        )
+    for d in ("a", "b", "a"):  # the second "a" is served from whatever the first filled
+        name = f"{d}/c.html"
+        view = _view(name)
+        other = "B" if d == "a" else "A"
+        assert d.upper() in template_source(name) and other not in template_source(name)
+        jit = _jit_template_content(view)
+        assert jit is not None and d.upper() in jit and other not in jit, jit
+        html = render_embedded_child_html(_view(name))
+        assert d.upper() in html and other not in html, html
 
 
 def test_an_embedded_child_renders_and_records_through_a_relative_extends(rel_files) -> None:
@@ -140,5 +201,6 @@ def test_a_relative_extends_above_the_template_root_is_refused_as_django_refuses
     rel_files("base.html", "x")
     with pytest.raises(TemplateSyntaxError, match="outside the file hierarchy"):
         render_to_string("a/c.html", {})
-    with pytest.raises(Exception, match="outside the file hierarchy"):
+    # the Rust resolver reports it as a RuntimeError (Django's is a TemplateSyntaxError)
+    with pytest.raises(RuntimeError, match="outside the file hierarchy"):
         resolve_template_inheritance("a/c.html", get_template_dirs())

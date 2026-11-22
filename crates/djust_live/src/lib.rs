@@ -4650,7 +4650,8 @@ fn python_to_json_value(py: Python, obj: &Bound<'_, PyAny>) -> PyResult<serde_js
 ///
 /// With `source`, the child's source is that text (a `from_string` template),
 /// and `template_path` names it: in an error, and as the name a relative `./` / `../` reference
-/// resolves against (#3920, #4265). A name like `<string>` is not one.
+/// resolves against (#3920, #4265). A name like `<string>` is not one: a relative name is then
+/// left as written and looked up under the template roots.
 #[pyfunction]
 #[pyo3(signature = (template_path, template_dirs, source=None))]
 fn resolve_template_inheritance(
@@ -4667,7 +4668,7 @@ fn resolve_template_inheritance(
 
         // Resolve inheritance using AST-based implementation
         let resolved = match source {
-            // A name that is not one (`<string>`) gives a relative reference nothing to resolve against.
+            // A placeholder (`<string>`) is not a name to resolve against.
             Some(source) => resolve_source(
                 &source,
                 &dirs,

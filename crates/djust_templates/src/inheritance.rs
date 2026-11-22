@@ -2653,7 +2653,7 @@ mod tests {
     }
 
     #[test]
-    fn a_source_with_a_name_resolves_and_one_without_does_not() {
+    fn a_source_with_a_name_resolves_against_it_and_one_without_looks_in_the_root() {
         let dir = tempfile::tempdir().unwrap();
         write(
             dir.path(),
@@ -2668,8 +2668,21 @@ mod tests {
             named.contains("<main>{% block b %}x{% endblock %}</main>"),
             "got: {named}"
         );
-        // no name: nothing to be relative to, the reference stays unresolved (as before)
+        // no name: nothing to be relative to, so the name is left as written and the loader joins
+        // it to the template ROOT (as before #4265; Django has no equivalent). It is a lookup
+        // inside the root, never a path outside it.
         assert!(resolve_template_inheritance_from_source(source, &dirs, None).is_err());
+        write(
+            dir.path(),
+            "base.html",
+            "<main>ROOT{% block b %}{% endblock %}</main>",
+        );
+        let unnamed = resolve_template_inheritance_from_source(source, &dirs, None).unwrap();
+        assert!(unnamed.contains("ROOT"), "got: {unnamed}");
+        // ... and a name always wins over that decoy
+        let named =
+            resolve_template_inheritance_from_source(source, &dirs, Some("sub/c.html")).unwrap();
+        assert!(!named.contains("ROOT"), "got: {named}");
     }
 }
 
