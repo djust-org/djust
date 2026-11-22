@@ -229,6 +229,23 @@ pub(crate) fn live_handle_is_formset(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3:
     }
 }
 
+thread_local! {
+    /// Count of reads answered through a LIVE Python object on this thread: the render
+    /// sidecar walk and a walk from a handle on an opaque carrier (train/2.0-ah review B2/B3).
+    /// The loop render cache (#1967) compares it before and after rendering an item: such a
+    /// read is not part of the item's content hash, so the fragment must not be stored.
+    static LIVE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many live reads this thread has made (see `LIVE_READS`). Only differences matter.
+pub fn live_read_count() -> u64 {
+    LIVE_READS.with(|n| n.get())
+}
+
+fn note_live_read() {
+    LIVE_READS.with(|n| n.set(n.get().wrapping_add(1)));
+}
+
 /// Reuse only exact builtin values with no user-defined timezone behavior.
 /// Subclasses can override display, truthiness and methods; aware values can
 /// carry mutable tzinfo implementations, so both take normal live conversion.
@@ -2725,6 +2742,7 @@ impl Context {
         let Some(obj) = raw.get(first) else {
             return Ok(None);
         };
+        note_live_read();
         if self.provenance_flatten_tracking() {
             self.note_lazy_unknown_effect();
         }
@@ -3054,6 +3072,11 @@ impl Context {
             let Some(handle) = encoded.live.clone() else {
                 continue;
             };
+            // An opaque carrier's handle answers from a mutable object; a temporal carrier
+            // (`json` measured) is immutable and fully hashed by its spellings.
+            if encoded.json.is_none() {
+                note_live_read();
+            }
             if self.provenance_flatten_tracking() {
                 self.note_lazy_unknown_effect();
             }

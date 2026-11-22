@@ -10,6 +10,8 @@ harness proves the flag is live.
 # ruff: noqa: F811
 from __future__ import annotations
 
+import re
+
 import pytest
 from django.contrib.auth.models import User
 
@@ -59,3 +61,79 @@ def test_the_harness_sees_the_flag(world):
     on = _render(source, _single, "explicit", flag=True)
     off = _render(source, _single, "explicit", flag=False)
     assert on != off and on == "2", (on, off)
+
+
+# -- the diff entry (train/2.0-ah review B3) ---------------------------------------------------
+#
+# ``_render`` above is the full render (``render_result``), which never reads the loop render
+# cache. ``render_with_diff`` does, and a handle hashed as ``str(model)`` replayed a stale item
+# there. So every template also renders, changes the rows, and renders WITH DIFF, flag on vs
+# off; the held-list rows read a column ``__str__`` does not spell.
+
+HELD_LIST = [
+    ("held-list-column", "{% for x in us %}<li>{{ x.email }}</li>{% endfor %}"),
+    ("held-list-relation", "{% for x in us %}<li>{{ x.groups.count }}</li>{% endfor %}"),
+]
+
+
+def _held() -> dict:
+    return {"us": list(User.objects.order_by("pk"))}
+
+
+def _change_rows() -> None:
+    from django.contrib.auth.models import Group
+
+    User.objects.update(email="changed@example.com")
+    Group.objects.filter(name="staff").update(name="staff-renamed")
+    User.objects.get(username="u2").groups.add(Group.objects.get(name="ops"))
+
+
+def _render_change_diff(source: str, factory, policy: str, flag: bool) -> str:
+    from django.test import override_settings
+
+    from djust.testing import LiveViewTestClient
+    from python.tests.test_state_models_as_handles_3936 import FLAG_ON, _body, _view
+
+    def body(html: str) -> str:
+        return _body(
+            re.sub(r"<div [^>]*dj-root[^>]*>", "<div dj-root>", html.replace(" dj-id=", " data-x="))
+        )
+
+    config = dict(FLAG_ON if flag else {}, loop_render_cache_enabled=True)
+    from django.db import transaction
+
+    # The change is rolled back, so the flag-on and flag-off runs start from the same rows.
+    with override_settings(LIVEVIEW_CONFIG=config), transaction.atomic():
+        client = LiveViewTestClient(_view(source, factory, policy))
+        client.mount()
+        view = client.view_instance
+        view.render_with_diff()
+        _change_rows()
+        got = re.sub(r' data-x="[^"]*"', "", body(view.render_with_diff()[0]))
+        transaction.set_rollback(True)
+    return got
+
+
+def _diff_corpus():
+    for name, source, factory in CASES:
+        yield pytest.param(source, factory, id=name)
+    for name, source in SINGLE_MODEL:
+        yield pytest.param(source, _single, id=name)
+    for name, source in HELD_LIST:
+        yield pytest.param(source, _held, id=name)
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("source,factory", list(_diff_corpus()))
+def test_render_with_diff_after_a_change_is_unchanged(world, policy, source, factory):
+    on = _render_change_diff(source, factory, policy, flag=True)
+    off = _render_change_diff(source, factory, policy, flag=False)
+    assert on == off, (on, off)
+
+
+def test_the_diff_harness_sees_a_change(world):
+    """Non-vacuity: the held-list column follows the change through the diff entry."""
+    got = _render_change_diff(HELD_LIST[0][1], _held, "explicit", flag=True)
+    assert got.count("changed@example.com") == 3, got  # explicit re-reads the rows
+    got = _render_change_diff(HELD_LIST[1][1], _held, "explicit", flag=True)
+    assert got.endswith("<li>1</li>"), got  # u2 gained ops

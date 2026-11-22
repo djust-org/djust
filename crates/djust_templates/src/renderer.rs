@@ -4332,7 +4332,23 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                                 let item_html = match cached {
                                     Some(html) => R::from(html),
                                     None => {
+                                        // A read through a live object is not in `hash`
+                                        // (train/2.0-ah review B2/B3): the render
+                                        // sidecar walk (a row's relation, #4069) and a
+                                        // handle on an opaque carrier (a #3936 state
+                                        // model handle, a row a relation walk returned)
+                                        // hash as `str(o)` at most. Every resolve of
+                                        // such a binding goes through
+                                        // `Context::walk_from_handle`, which counts it,
+                                        // a custom filter's operand included. That item
+                                        // is emitted as rendered and stored in neither
+                                        // cache; a temporal handle is not counted.
+                                        let live_before = djust_core::context::live_read_count();
                                         let html = render_nodes_output::<L, R>(nodes, ctx, loader)?;
+                                        if djust_core::context::live_read_count() != live_before {
+                                            output.append(&html);
+                                            continue;
+                                        }
                                         crate::loop_cache::with_active_cache(|cache| {
                                             cache.insert(hash, html.to_string())
                                         });
