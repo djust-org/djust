@@ -970,7 +970,6 @@ class RustBridgeMixin:
         self._cached_csrf_token = token
         return token
 
-    @recorded_render
     def _explicit_jit_serialize(self, context: Any, keys: Set[str], nested_keys: List[str]) -> None:
         """Run the legacy JIT over an explicit context's walked names (#4069 review S1).
 
@@ -1022,6 +1021,7 @@ class RustBridgeMixin:
                 traceback=True,
             )
 
+    @recorded_render
     def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
         """Sync Python state to Rust backend.
 

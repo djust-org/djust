@@ -756,6 +756,10 @@ class Plan(NamedTuple):
     #: shapes the scanner cannot follow like a browser does: an element name built by a tag, an
     #: end tag inside a different block than its start tag, a translation block it cannot rewrite
     shapes: tuple[str, ...] = ()
+    #: the synthetic keys of ``raw`` whose slot is ORDINARY text (``plan(text=True)``), not the
+    #: content of ``<textarea>`` / ``<title>`` / a comment: there, and only there, framework-built
+    #: asset markup (:class:`djust.assets.tags.AssetTags`) is printed as markup
+    text_keys: frozenset[str] = frozenset()
 
 
 def _kind(value: Value) -> str:
@@ -1089,6 +1093,7 @@ def plan(template: str, text: bool = False, keep: frozenset[str] = frozenset()) 
         if group is not None:
             groups.append(group)
     raw: list[tuple[str, str]] = []
+    text_keys: set[str] = set()
     # Under ``{% autoescape off %}`` a plain string is not escaped by the engine, so a plain name
     # cannot be left to it: every slot of such a template ends in ``|force_escape``.
     engine_escapes = not re.search(r"\{%-?\s*autoescape\b", template)
@@ -1106,6 +1111,8 @@ def plan(template: str, text: bool = False, keep: frozenset[str] = frozenset()) 
             # engine evaluates only WHEN IT REACHES THE SLOT (see `unmarked`)
             key = f"djust_raw_{slot.start}"
             raw.append((key, expr))
+            if slot.tag == "text":  # ordinary text (``_raw_atom``: where it is, in ``tag``)
+                text_keys.add(key)
             ready = "{% if " + key + "_p %}{{ " + key + " }}{% else %}"
             edits.append(
                 (slot.start, slot.end, ready + "{{ " + expr + "|force_escape }}{% endif %}")
@@ -1133,6 +1140,7 @@ def plan(template: str, text: bool = False, keep: frozenset[str] = frozenset()) 
         includes,
         include_names,
         _named(shapes),
+        frozenset(text_keys),
     )
 
 
@@ -1401,6 +1409,13 @@ _ORDINARY_TYPES = frozenset(
 )  # fmt: skip
 
 
+def _is_asset_markup(value: Any) -> bool:
+    """``value`` is markup :func:`djust.assets.tags.asset_tags` built (an ``AssetTags``)."""
+    from djust.assets.tags import AssetTags
+
+    return isinstance(value, AssetTags)
+
+
 def unmarked(value: Any) -> tuple[bool, Any]:
     """``(deferred, value)``: how a plain-name slot in escaped text (``<textarea>``, ``<title>``,
     an HTML comment) is handed to the engine.
@@ -1623,6 +1638,12 @@ def harden_context(
     for key, name in rewrite.raw:
         value = context.get(name, _MISSING)
         if value is not _MISSING:
+            if key in rewrite.text_keys and _is_asset_markup(value):
+                # the documented ``{{ asset_tags }}`` of a Component's own template (#3932):
+                # framework-built ``<script>`` / ``<link>`` markup, printed as markup
+                hardened[key + "_p"] = True
+                hardened[key] = value
+                continue
             deferred, shown = unmarked(value)
             if not deferred:
                 hardened[key + "_p"] = True

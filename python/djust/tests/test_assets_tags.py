@@ -241,6 +241,29 @@ def test_documented_component_rendering_patterns(tmp_path):
     assert own == f"<div>{tag}<canvas></canvas></div>"
 
 
+def test_only_asset_markup_keeps_its_markup_in_a_component_text_slot(tmp_path):
+    """#3932 escapes a marked-safe value in a ``Component``'s ordinary text slot; the framework's
+    ``AssetTags`` is the one value printed as markup there, and only in ordinary text: in a
+    ``<textarea>`` it is text like any other value."""
+    from django.utils.safestring import mark_safe
+
+    from djust.components.base import Component
+
+    class Widget(Component):
+        requires_assets = ("test-lib",)
+        template = "<div>{{ a }}</div><div>{{ b }}</div><textarea>{{ a }}</textarea>"
+
+        def get_context_data(self):
+            return {"a": self.asset_tags(), "b": mark_safe("".join([self.asset_tags()]))}
+
+    tag = f'<script src="/static/testlib/lib.js" integrity="{sri(CONTENT)}"></script>'
+    with _settings(tmp_path):
+        out = str(Widget().render())
+    assert out.count("<script") == 1, out
+    assert out.startswith(f"<div>{tag}</div><div>&lt;script"), out
+    assert "<textarea>&lt;script" in out, out
+
+
 class BucketStorage:
     """Static storage serving from another origin while STATIC_URL stays
     relative (e.g. a CDN-backed storage that builds its own URLs)."""

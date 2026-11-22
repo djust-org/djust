@@ -397,10 +397,15 @@ class Component(TemplateMutatorGuard, ABC):
     requires_assets: ClassVar[Tuple[str, ...]] = ()
 
     def asset_tags(self, variant: Optional[str] = None) -> SafeString:
-        """Tags for every asset in ``requires_assets``, for the component's template."""
+        """Tags for every asset in ``requires_assets``, for the component's template.
+
+        An :class:`~djust.assets.tags.AssetTags`, which a text slot of the component's own
+        ``template`` prints as markup although it escapes other marked-safe values (#3932)."""
+        from djust.assets.tags import AssetTags
         from djust.assets.tags import asset_tags
 
-        return mark_safe("\n".join(asset_tags(name, variant) for name in self.requires_assets))
+        joined = mark_safe("\n".join(asset_tags(name, variant) for name in self.requires_assets))
+        return AssetTags(joined)
 
     def _create_rust_instance(self, **props: Any) -> None:
         """
