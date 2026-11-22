@@ -6011,8 +6011,12 @@ pub(crate) fn python_type_name(value: &Value) -> &str {
         Value::NamedTuple { name, .. } => name,
         Value::Object(map) => {
             if value.object_str().is_some() {
+                // Only the #3947 marker names a class: a user map carrying `__model__`
+                // as text is not a model, so it never spells a type name of its own
+                // choosing in an error (review N2). It keeps `object`, the name every
+                // other `object_str` map takes, so `python_len` and this agree.
                 match map.get(&djust_core::object_key::ObjectKey::Str("__model__".into())) {
-                    Some(Value::String(name) | Value::ModelName(name)) => name,
+                    Some(Value::ModelName(name)) if value.model_str().is_some() => name,
                     _ => "object",
                 }
             } else {
@@ -6846,6 +6850,28 @@ mod tests {
     /// claim is that a `Missing` behaves as the EMPTY STRING, so the empty
     /// string is the reference. A future arm that changes one probe without
     /// the others fails here rather than in one filter's output.
+    /// Review N2 (#3947): only the `ModelName` marker names a class in a type error; a forged
+    /// map with `__model__` as plain text is `object`, like any other `__str__` map.
+    #[test]
+    fn python_type_name_takes_a_class_name_from_the_marker_only() {
+        let row = |marker: Value| {
+            let mut m: indexmap::IndexMap<djust_core::object_key::ObjectKey, Value> =
+                indexmap::IndexMap::new();
+            m.insert("__str__".into(), Value::String("x".into()));
+            m.insert("__model__".into(), marker);
+            m.insert("pk".into(), Value::Integer(1));
+            Value::Object(m)
+        };
+        assert_eq!(
+            python_type_name(&row(Value::ModelName("User".into()))),
+            "User"
+        );
+        assert_eq!(
+            python_type_name(&row(Value::String("Spoofed".into()))),
+            "object"
+        );
+    }
+
     #[test]
     fn python_len_agrees_with_the_other_two_probes_about_missing() {
         let empty = Value::String(String::new());

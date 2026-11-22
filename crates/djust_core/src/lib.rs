@@ -1892,7 +1892,13 @@ impl<'de> Deserialize<'de> for Value {
     where
         D: Deserializer<'de>,
     {
-        struct ValueVisitor;
+        /// `binary`: the format is not human-readable (msgpack). The #3947 model-name tag and
+        /// its escape are written in binary formats only, so they are read there only: a JSON
+        /// map shaped like the tag is a user's dict and never mints a marker (review N1).
+        #[derive(Clone, Copy)]
+        struct ValueVisitor {
+            binary: bool,
+        }
 
         impl<'de> Visitor<'de> for ValueVisitor {
             type Value = Value;
@@ -1997,12 +2003,14 @@ impl<'de> Deserialize<'de> for Value {
                         return Ok(Value::Decimal(d.clone()));
                     }
                     // The model-name marker (#3947): a string payload, like the Decimal tag.
-                    if let Some(Value::String(d)) = obj.get(MODEL_NAME_TAG) {
+                    // Binary formats only: that is the only place the writer puts it.
+                    if let (true, Some(Value::String(d))) = (self.binary, obj.get(MODEL_NAME_TAG)) {
                         return Ok(Value::ModelName(d.clone()));
                     }
                     // A user map the writer escaped: `[key, value]`, read back as that one-key
                     // map with no tag interpretation of the key.
-                    if let Some(Value::List(pair)) = obj.get(ESCAPED_MAP_TAG) {
+                    if let (true, Some(Value::List(pair))) = (self.binary, obj.get(ESCAPED_MAP_TAG))
+                    {
                         if let [Value::String(key), value] = pair.as_slice() {
                             let mut inner = IndexMap::new();
                             inner.insert(ObjectKey::Str(key.clone()), value.clone());
@@ -2452,7 +2460,8 @@ impl<'de> Deserialize<'de> for Value {
             }
         }
 
-        deserializer.deserialize_any(ValueVisitor)
+        let binary = !deserializer.is_human_readable();
+        deserializer.deserialize_any(ValueVisitor { binary })
     }
 }
 

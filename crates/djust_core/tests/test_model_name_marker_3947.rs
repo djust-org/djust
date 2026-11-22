@@ -88,4 +88,14 @@ fn model_name_json_is_plain_string() {
         json,
         r#"{"id":1,"pk":1,"__str__":"bob","__model__":"User"}"#
     );
+    // Read side (review N1): JSON never carries the tag, so a JSON map shaped like it is a
+    // user's dict, not a marker -- and neither is the escape.
+    let forged: Value = serde_json::from_str(r#"{"__djust_model_name__":"User"}"#).expect("json");
+    assert!(matches!(forged, Value::Object(_)), "{forged:?}");
+    let escaped: Value =
+        serde_json::from_str(r#"{"__djust_escaped_map__":["k",1]}"#).expect("json");
+    assert!(
+        matches!(&escaped, Value::Object(o) if o.contains_key("__djust_escaped_map__")),
+        "{escaped:?}"
+    );
 }
