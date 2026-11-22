@@ -140,6 +140,33 @@ def test_table_html_is_gone() -> None:
         Engine(dirs=[str(templates)]).get_template("djust_components/table.html")
 
 
+REMOVED_TABLE_NAMES = (
+    "table_cell",
+    "table_href",
+    "table_has_href",
+    "table_width",
+    "table_width_attrs",
+)
+
+
+def test_the_removed_names_are_gone_and_documented_for_the_migration() -> None:
+    """Review S3: a removed public name has a ``docs/removed/2.0/`` row, and the generated
+    "Replace removed names" table of the migration guide lists it. Gate-off: delete the
+    ``docs/removed/2.0/migration/320-*`` file and run ``make generated-docs``, and this fails."""
+    from djust.components.templatetags.djust_components import register
+
+    for name in REMOVED_TABLE_NAMES:
+        assert name not in register.filters, name
+    root = Path(__file__).resolve().parents[3]
+    rows = "".join(
+        path.read_text() for path in (root / "docs" / "removed" / "2.0" / "migration").glob("*.md")
+    )
+    guide = (root / "docs" / "website" / "guides" / "migrating-to-2.0.md").read_text()
+    for name in (*REMOVED_TABLE_NAMES, "djust_components/table.html"):
+        assert name in rows, name
+        assert name in guide, name
+
+
 class TestTheExposureFloor:
     """A floored field (``password``, ``djust_exclude_fields``) never reaches the page. There are
     TWO independent protections, each with its own pin (review S4):
