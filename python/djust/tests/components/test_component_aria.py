@@ -47,7 +47,6 @@ _TPL_DIR = Path(__file__).resolve().parents[2] / "components" / "templates" / "d
 
 
 def _engine_template(name):
-    # table.html loads the component filters (``table_cell``, #3870).
     engine = Engine(
         libraries={"djust_components": "djust.components.templatetags.djust_components"}
     )
@@ -368,39 +367,44 @@ def _table_ctx(columns, **overrides):
     return base
 
 
+def _render_data_table(ctx):
+    """``{% data_table %}`` with ``ctx``'s keys as its arguments (the one implementation, #3869)."""
+    arguments = " ".join(f"{key}={key}" for key in ctx)
+    return render_tag("{% load djust_components %}{% data_table " + arguments + " %}", ctx)
+
+
 class TestDataTableAria:
     def test_sortable_th_is_keyboard_operable(self):
         """A sortable <th> gets tabindex=0 so keyboard users can sort."""
-        out = _engine_template("table.html").render(
-            Context(_table_ctx([{"key": "name", "label": "Name", "sortable": True}]))
-        )
+        out = _render_data_table(_table_ctx([{"key": "name", "label": "Name", "sortable": True}]))
         assert 'tabindex="0"' in out
 
     def test_tabindex_only_on_sortable_th(self):
         """tabindex is part of the sortable-<th> branch, not the plain branch.
 
-        The template's `{% if col.sortable|default_if_none:True %}` branch is what
-        carries `tabindex="0"`; the non-sortable `{% else %}` branch emits
-        only `role="columnheader"`. Assert the focusable affordance is
-        scoped to the sortable branch (it sits next to `aria-sort`, which
-        the non-sortable branch never emits).
+        The handler's sortable branch is what carries `tabindex="0"`; the
+        non-sortable branch emits only `role="columnheader"`. Assert the
+        focusable affordance is scoped to the sortable branch (it sits next to
+        `aria-sort`, which the non-sortable branch never emits).
         """
-        out = _engine_template("table.html").render(
-            Context(_table_ctx([{"key": "name", "label": "Name", "sortable": True}]))
-        )
+        out = _render_data_table(_table_ctx([{"key": "name", "label": "Name", "sortable": True}]))
         # tabindex appears on the same <th> as aria-sort (sortable branch).
         assert 'tabindex="0"' in out
         assert "aria-sort=" in out
+        # ... and a column that cannot be sorted is not a tab stop.
+        plain = _render_data_table(
+            _table_ctx([{"key": "name", "label": "Name", "sortable": False}])
+        )
+        assert "tabindex" not in plain and "aria-sort" not in plain
+
+    def test_a_loading_table_announces_politely(self):
+        out = _render_data_table(_table_ctx([{"key": "name", "label": "Name"}], loading=True))
+        assert 'class="data-table-loading skeleton-table" aria-live="polite"' in out
 
     def test_sort_glyph_is_aria_hidden(self):
         """The active-sort direction glyph is decorative -> aria-hidden."""
-        out = _engine_template("table.html").render(
-            Context(
-                _table_ctx(
-                    [{"key": "name", "label": "Name", "sortable": True}],
-                    sort_by="name",
-                )
-            )
+        out = _render_data_table(
+            _table_ctx([{"key": "name", "label": "Name", "sortable": True}], sort_by="name")
         )
         assert 'class="data-table-sort-glyph" aria-hidden="true"' in out
 

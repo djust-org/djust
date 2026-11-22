@@ -97,9 +97,9 @@ NON_ARGUMENTS: Dict[str, Tuple[str, Optional[Tuple[str, ...]]]] = {
         ("components/rust_handlers.py",),
     ),
     "data-href": (
-        "row URL read by data-table-row-click.js; table.html renders it only on a row "
-        "without dj-click (its {% elif %})",
-        ("components/templates/djust_components/table.html",),
+        "row URL read by data-table-row-click.js; the table renders it only on a row "
+        "without dj-click",
+        ("components/rust_handlers.py",),
     ),
     "data-date": (
         "calendar day marker; the day is sent as dj-value-value",
@@ -510,7 +510,6 @@ CASES: List[Dict[str, Any]] = [
         "id": "data_table.filter",
         "template": "{% data_table rows=rows columns=columns %}",
         "event": "on_table_filter",
-        "engines": ["rust"],  # the native table's filter row (table.html has none)
         "form_value": "Ann",
         "params": {"column": "name"},
     },

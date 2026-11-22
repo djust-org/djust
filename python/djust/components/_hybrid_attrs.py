@@ -139,9 +139,13 @@ inside another block than its start tag (``{% if closed %}</textarea>{% endif %}
 ``<script>`` double-escape state (``<!--<script>``), which does not matter for the escaped text
 of ``<textarea>`` / ``<title>``. A ``<textarea>`` opened inside ``{% verbatim %}`` is followed.
 
-Every OTHER text slot (``<span>{{ text }}</span>``) is untouched: it keeps a marked-safe value's
-markup, as a Django template does (the #3898 rule; the difference to the Rust and custom paths of
-the same class is tracked in #3932).
+Every OTHER text slot (``<span>{{ text }}</span>``) is untouched by default: it keeps a marked-safe
+value's markup, as a Django template does (the #3898 rule). A :class:`~djust.components.base.Component`
+asks for more (``plan(..., text=True)``, #3932): its ordinary text slots are escaped whatever the
+value is marked as, like the same class drawn by its Rust instance, except the names in the class's
+``markup_slots`` (a parameter documented as markup: ``Modal`` body and footer). ``{{ v|safe }}``
+there is escaped too. A ``{% %}`` tag or a ``{% blocktranslate %}`` block in ordinary text is not a
+slot (what a tag prints there is the tag's own markup) and is not named by the warning.
 """
 
 from __future__ import annotations
@@ -281,7 +285,11 @@ class _Scanner:
     ``{% if %}`` around an attribute leaves the tag open across it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, text: bool = False, keep: frozenset[str] = frozenset()) -> None:
+        #: ``text``: a plain ``{{ }}`` in ORDINARY text is a slot like one in escaped text (#3932)
+        #: ... except a name in ``keep`` (a parameter the class declares as markup)
+        self.text = text
+        self.keep = keep
         self.state = "text"
         self.tag = ""
         self.name = ""
@@ -477,6 +485,20 @@ class _Scanner:
                 self.shapes.append("element name built by a tag")
             if self.raw in _ESCAPED_TEXT:
                 self._raw_atom(token, start, end, kind, self.raw)
+            elif self.text and not self.raw:
+                if kind == "var":
+                    if token[2:-2].strip() not in self.keep:
+                        self._raw_atom(token, start, end, kind, "text")
+                elif kind == "blk":
+                    # a {% blocktranslate %} is not rewritten (its variables are keyed by the
+                    # catalog), so a marked-safe value it prints keeps its markup: named (S1)
+                    self.raw_tags.append(("text", _tag_name(token)))
+                else:
+                    # a tag is not a slot, and a marked-safe value it prints (``{% firstof v %}``,
+                    # ``{% cycle v %}``) keeps its markup: named by the warning, not escaped (S1)
+                    name = "#" if token.startswith("{#") else _tag_name(token)
+                    if name not in _NON_PRINTING and not _AS_VAR.search(token):
+                        self.raw_tags.append(("text", name))
             return
         if s in ("dq", "sq", "unq"):
             self._flush()
@@ -494,9 +516,10 @@ class _Scanner:
             self.dynamic = True
 
 
-def _scan(template: str) -> _Scanner:
-    """The tokenizer's pass over ``template``: attribute values, raw-text slots and tags."""
-    scanner, pos = _Scanner(), 0
+def _scan(template: str, text: bool = False, keep: frozenset[str] = frozenset()) -> _Scanner:
+    """The tokenizer's pass over ``template``: attribute values, raw-text slots and tags.
+    ``text`` and ``keep`` are those of :func:`plan`."""
+    scanner, pos = _Scanner(text, keep), 0
     matches = list(_TOKEN.finditer(template))
 
     def closing(i: int, name: str) -> int | None:
@@ -995,9 +1018,14 @@ def _visible(text: str) -> bool:
 
 
 @functools.lru_cache(maxsize=512)
-def plan(template: str) -> Plan:
-    """The rewrite of ``template`` (cached per template string, a bounded LRU)."""
-    scan = _scan(template)
+def plan(template: str, text: bool = False, keep: frozenset[str] = frozenset()) -> Plan:
+    """The rewrite of ``template`` (cached per template string and flags, a bounded LRU).
+
+    ``text=True`` (a :class:`~djust.components.base.Component`'s template, #3932) escapes a
+    ``{{ }}`` in ORDINARY text as well, whatever its value is marked as, except a plain name in
+    ``keep`` (the class's ``markup_slots``). ``{% %}`` tags and translation blocks in ordinary
+    text are not slots and are left as they are."""
+    scan = _scan(template, text, keep)
     found = scan.values
     raw_tags = tuple(scan.raw_tags)
     includes, include_names = _includes(template)
@@ -1473,7 +1501,7 @@ def _unscanned_includes(rewrite: Plan) -> int:
     return unresolved
 
 
-def _warn_once(owner: str, rewrite: Plan) -> None:
+def _warn_once(owner: str, rewrite: Plan, file: bool = False) -> None:
     """Name, once per class and set of findings, what djust could not make safe in a template:
     URL values escaped but not judged, unquoted values, tags that print text inside escaped
     text, shapes the scanner cannot follow like a browser does, and the ``{% include %}`` /
@@ -1484,6 +1512,8 @@ def _warn_once(owner: str, rewrite: Plan) -> None:
     above and a count. It is never an attribute VALUE, text between tags or anything from the
     context. An attribute NAME is template text: a template built per instance can carry
     runtime text in a name, so keep names static.
+
+    ``file`` is True for a ``template_name`` file (#3933): the warning says "template file".
     """
     if not (
         rewrite.unchecked_urls
@@ -1502,6 +1532,7 @@ def _warn_once(owner: str, rewrite: Plan) -> None:
     raw_tags = tuple((clean(e), clean(n)) for e, n in rewrite.raw_tags)
     key = (
         owner,
+        file,
         unchecked,
         unquoted,
         raw_tags,
@@ -1528,7 +1559,8 @@ def _warn_once(owner: str, rewrite: Plan) -> None:
         advice.append("quote an attribute value")
     if raw_tags:
         fragments.append(
-            "tags that print text inside <textarea> / <title> / a comment, not escaped %s"
+            "tags that print text inside <textarea> / <title> / a comment (or, in a Component's "
+            "own text, a marked-safe value's markup), not escaped %s"
         )
         args.append([f"{e}:{n}" for e, n in raw_tags])
         advice.append("escape what a tag prints")
@@ -1544,21 +1576,47 @@ def _warn_once(owner: str, rewrite: Plan) -> None:
     if not fragments:
         return
     logger.warning(
-        "%s: hybrid template parts djust cannot make safe: "
+        "%s: "
+        + ("template file" if file else "hybrid template")
+        + " parts djust cannot make safe: "
         + "; ".join(fragments)
         + (". To fix: " + ", ".join(advice) + "." if advice else "."),
         *args,
     )
 
 
+def warn_unscanned_file(owner: str, template_name: str) -> None:
+    """Name, once per class and file, a ``template_name`` file whose source the template backend
+    does not expose: it is drawn without the rule. Only the class and template names (both are
+    code the project wrote) are logged, never a value."""
+    key = (owner, "unscanned file", template_name)
+    if key in _WARNED or len(_WARNED) >= _MAX_WARNED:
+        return
+    _WARNED.add(key)
+    logger.warning(
+        "%s: template file %s was not scanned (its source is not available from the template "
+        "backend), so its attribute and escaped-text slots follow Django's rule. To fix: use a "
+        "template backend that exposes the source, or an inline template.",
+        owner,
+        template_name,
+    )
+
+
 def harden_context(
-    template: str, context: dict[str, Any], owner: str = ""
+    template: str,
+    context: dict[str, Any],
+    owner: str = "",
+    *,
+    text: bool = False,
+    keep: frozenset[str] = frozenset(),
+    file: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """``(template, context)`` to hand the engine: the attribute slots of ``template`` rewritten
     and the values of the URL groups judged. ``context`` itself is not modified. ``owner`` is the
-    component class name, for the warning."""
-    rewrite = plan(template)
-    _warn_once(owner, rewrite)
+    component class name, for the warning. ``text`` and ``keep``: see :func:`plan`. ``file`` is
+    True when ``template`` is the source of a ``template_name`` file (the warning says so)."""
+    rewrite = plan(template, text, keep)
+    _warn_once(owner, rewrite, file)
     if not (rewrite.groups or rewrite.raw):
         return rewrite.template, context
     hardened = dict(context)

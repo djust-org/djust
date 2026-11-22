@@ -21,8 +21,6 @@ covers the v0.9.1 additions called out in the issue brief:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import django
 from django.conf import settings
 from django.template import Context, Engine
@@ -37,20 +35,15 @@ if not settings.configured:
     django.setup()
 
 
-_TABLE_HTML_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "python"
-    / "djust"
-    / "components"
-    / "templates"
-    / "djust_components"
-    / "table.html"
-)
-_ENGINE = Engine(
-    # table.html loads the component filters (``table_cell``, #3870).
-    libraries={"djust_components": "djust.components.templatetags.djust_components"}
-)
-_TABLE_TEMPLATE = _ENGINE.from_string(_TABLE_HTML_PATH.read_text())
+_ENGINE = Engine(libraries={"djust_components": "djust.components.templatetags.djust_components"})
+
+
+def _draw_table(ctx, **context):
+    """Draw ``{% data_table %}`` (the one implementation, #3869) with ``ctx``'s keys as its
+    arguments; ``context`` is in the render context but not an argument."""
+    arguments = " ".join(f"{key}={key}" for key in ctx)
+    template = _ENGINE.from_string("{% load djust_components %}{% data_table " + arguments + " %}")
+    return template.render(Context({**ctx, **context}))
 
 
 def _base_ctx(rows, columns, **overrides):
@@ -91,7 +84,7 @@ def _base_ctx(rows, columns, **overrides):
 
 
 def _render(ctx):
-    return _TABLE_TEMPLATE.render(Context(ctx))
+    return _draw_table(ctx)
 
 
 def _tbody(html: str) -> str:
@@ -303,8 +296,7 @@ class CSPNonceTest(SimpleTestCase):
         # context has no access to the request directly (inclusion-tag
         # context is the dict returned by data_table()), but adding a
         # csp_nonce key must not break rendering.
-        ctx["csp_nonce"] = "test-nonce-value-1234"
-        out = _render(ctx)
+        out = _draw_table(ctx, csp_nonce="test-nonce-value-1234")
         # Render succeeded and produced row markup.
         self.assertIn("<tbody>", out)
         # Sanity: no inline-script tag was emitted (CSP-clean

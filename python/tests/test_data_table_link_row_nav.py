@@ -1,7 +1,7 @@
 """Regression tests for #1110 (link column type) and #1111 (row-level
 navigation) in the {% data_table %} template tag.
 
-Tests verify the STRUCTURAL output of `table.html` — presence of `<a>`
+Tests verify the STRUCTURAL output of `{% data_table %}` — presence of `<a>`
 wrappers, `dj-click` / `data-href` attributes — rather than extracted
 cell content. (Cell content was empty for a dict row until #3870, which
 read it with `dictsort`; it is covered in
@@ -10,32 +10,22 @@ structural conditional logic added by #1110/#1111 is what these tests
 prove.
 """
 
-from pathlib import Path
-
 from django.template import Context, Engine
 from django.test import TestCase
 
-# Read the template directly — djust.components is intentionally not in
-# demo_project's INSTALLED_APPS, so Django's app-based template loader
-# can't find this file by name.
-_TABLE_HTML_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "python"
-    / "djust"
-    / "components"
-    / "templates"
-    / "djust_components"
-    / "table.html"
-)
-_ENGINE = Engine(
-    # table.html loads the component filters (``table_cell``, #3870).
-    libraries={"djust_components": "djust.components.templatetags.djust_components"}
-)
-_TABLE_TEMPLATE = _ENGINE.from_string(_TABLE_HTML_PATH.read_text())
+_ENGINE = Engine(libraries={"djust_components": "djust.components.templatetags.djust_components"})
+
+
+def _draw_table(ctx):
+    """Draw ``{% data_table %}`` (the one implementation, #3869) with ``ctx``'s keys as its
+    arguments."""
+    arguments = " ".join(f"{key}={key}" for key in ctx)
+    template = _ENGINE.from_string("{% load djust_components %}{% data_table " + arguments + " %}")
+    return template.render(Context(ctx))
 
 
 def render_table(ctx):
-    return _TABLE_TEMPLATE.render(Context(ctx))
+    return _draw_table(ctx)
 
 
 def _base_ctx(rows, columns, **overrides):
@@ -233,30 +223,30 @@ class MixinDefaultsTest(TestCase):
 
 class TemplateTagDispatcherTest(TestCase):
     """The {% data_table %} template-tag function passes the new params
-    through to the inclusion-tag context dict."""
+    through to the one implementation (#3869)."""
 
     def test_data_table_function_accepts_new_kwargs(self):
-        """Smoke: calling the underlying function shouldn't TypeError."""
+        """Smoke: calling the underlying function shouldn't TypeError, and the
+        row click is wired."""
         from djust.components.templatetags.djust_components import data_table
 
-        ctx = data_table(
+        out = data_table(
             rows=[{"id": 1, "name": "A"}],
             columns=[{"key": "name"}],
             row_click_event="open",
             row_click_value_key="id",
             row_url="",
         )
-        self.assertEqual(ctx["row_click_event"], "open")
-        self.assertEqual(ctx["row_click_value_key"], "id")
-        self.assertEqual(ctx["row_url"], "")
+        self.assertIn('dj-click="open"', out)
+        self.assertIn('dj-value-value="1"', out)
 
     def test_data_table_defaults_when_omitted(self):
         from djust.components.templatetags.djust_components import data_table
 
-        ctx = data_table(
-            rows=[],
-            columns=[],
+        out = data_table(
+            rows=[{"id": 1, "name": "A"}],
+            columns=[{"key": "name"}],
         )
-        self.assertEqual(ctx["row_click_event"], "")
-        self.assertEqual(ctx["row_click_value_key"], "id")
-        self.assertEqual(ctx["row_url"], "")
+        self.assertNotIn("data-table-row-clickable", out)
+        self.assertNotIn("data-href", out)
+        self.assertNotIn("<script", out)
