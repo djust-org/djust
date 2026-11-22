@@ -32,6 +32,9 @@ What each class proves:
 * ``TestTemplateNameFile`` (#3933): the own source of a ``LiveComponent`` / ``BoundComponent``
   ``template_name`` file follows the attribute and raw-text rule; ``{% extends %}`` / ``{% include %}``
   content is not scanned and is named by the warning.
+* ``TestRelativeNamesInATemplateNameFile`` / ``TestRelativeIncludeNamesInTheWarning`` (#4265): a
+  ``./`` / ``../`` name in an ``{% include %}`` of a ``template_name`` file resolves against the
+  file on the Rust render path, and the "not scanned" warning resolves it against the file too.
 * ``TestOneSink``: an AST census of every site that renders a component's inline template or file.
 """
 
@@ -883,6 +886,353 @@ class TestTheWarning:
         with caplog.at_level(logging.WARNING, logger=self.LOGGER):
             self._component('<textarea>{{ v }}</textarea><a href="{{ u }}">').__call__().render()
         assert not caplog.records
+
+
+# -- #4265 -----------------------------------------------------------------------------------------
+
+#: ``name -> (source, {other file -> source}, the same source with absolute names)``.
+RELATIVE_SHAPES = {
+    "dot": (
+        "sub/main.html",
+        '<div>{% include "./part.html" %}</div>',
+        {"sub/part.html": "<p>{{ v }}</p>"},
+        '<div>{% include "sub/part.html" %}</div>',
+    ),
+    "dotdot": (
+        "sub/deep/main.html",
+        '<div>{% include "../part.html" %}</div>',
+        {"sub/part.html": "<p>{{ v }}</p>"},
+        '<div>{% include "sub/part.html" %}</div>',
+    ),
+    "nested": (
+        "n/main.html",
+        '<div>{% include "./a/p1.html" %}</div>',
+        {"n/a/p1.html": '<q>{% include "../p2.html" %}</q>', "n/p2.html": "<p>{{ v }}</p>"},
+        '<div>{% include "n/a/p1.html" %}</div>',
+    ),
+    "in-if": (
+        "w/main.html",
+        '<div>{% if v %}{% include "./part.html" %}{% endif %}</div>',
+        {"w/part.html": "<p>{{ v }}</p>"},
+        '<div>{% if v %}{% include "w/part.html" %}{% endif %}</div>',
+    ),
+    "with-only": (
+        "k/main.html",
+        '<div>{% include "./part.html" with v="x" only %}</div>',
+        {"k/part.html": "<p>{{ v }}</p>"},
+        '<div>{% include "k/part.html" with v="x" only %}</div>',
+    ),
+}
+SAME_IDS = re.compile(r"dj-if id=\"if-[0-9a-f]+-(\d+)[^\"]*\"")
+
+
+def _ids_normalised(markup: str) -> str:
+    """The dj-if ids hash the source (and carry the instance), which differ by the spelling of the
+    include name; the ordinal stays."""
+    return SAME_IDS.sub(r'dj-if id="if-H-\1"', markup)
+
+
+def _write_shape(write, shape: str) -> str:
+    name, source, others, absolute = RELATIVE_SHAPES[shape]
+    write(name, source)
+    write(name.replace(".html", "_abs.html"), absolute)
+    for other, text in others.items():
+        write(other, text)
+    return name
+
+
+@pytest.mark.parametrize("drawer", sorted(FILE_DRAWERS))
+class TestRelativeNamesInATemplateNameFile:
+    """#4265: a ``template_name`` file (no ``{% extends %}``) is drawn through the LiveView engine
+    entry, which had no origin, so ``{% include "./part.html" %}`` raised ``Template not found``.
+    It is given the file's name now and resolves a ``./`` / ``../`` name as Django does."""
+
+    @pytest.mark.parametrize("shape", sorted(RELATIVE_SHAPES))
+    def test_a_relative_include_draws_what_the_absolute_name_draws(
+        self, drawer, rel_files, shape
+    ) -> None:
+        name = _write_shape(rel_files, shape)
+        out = FILE_DRAWERS[drawer](name, v="hi")
+        absolute = FILE_DRAWERS[drawer](name.replace(".html", "_abs.html"), v="hi")
+        assert "<p>" in out and ("hi" in out or "x" in out), out
+        assert _ids_normalised(out) == _ids_normalised(absolute), (out, absolute)
+
+    def test_a_dot_slash_include_prints_the_included_text(self, drawer, rel_files) -> None:
+        name = _write_shape(rel_files, "dot")
+        assert "<div><p>hi</p></div>" in FILE_DRAWERS[drawer](name, v="hi")
+
+    def test_a_dot_dot_slash_include_resolves_from_a_deeper_file(self, drawer, rel_files) -> None:
+        name = _write_shape(rel_files, "dotdot")
+        assert "<div><p>hi</p></div>" in FILE_DRAWERS[drawer](name, v="hi")
+
+    def test_the_origin_threads_down_a_nested_include(self, drawer, rel_files) -> None:
+        name = _write_shape(rel_files, "nested")
+        assert "<div><q><p>hi</p></q></div>" in FILE_DRAWERS[drawer](name, v="hi")
+
+    def test_an_include_inside_an_if_keeps_the_markers(self, drawer, rel_files) -> None:
+        name = _write_shape(rel_files, "in-if")
+        out = FILE_DRAWERS[drawer](name, v="hi")
+        assert '<!--dj-if id="if-' in out and "<p>hi</p>" in out, out
+
+    def test_include_with_only_passes_its_own_context(self, drawer, rel_files) -> None:
+        name = _write_shape(rel_files, "with-only")
+        # ``v`` is "x" inside the part and not the component's own "hi"
+        assert "<div><p>x</p></div>" in FILE_DRAWERS[drawer](name, v="hi")
+
+    @pytest.mark.parametrize("where", ["child-block", "parent"])
+    def test_an_extending_file_resolves_a_relative_include(self, drawer, rel_files, where) -> None:
+        """Regression (not changed by #4265): ``_recompile_like`` already resolves these."""
+        if where == "child-block":
+            rel_files("e/base.html", "<main>{% block b %}{% endblock %}</main>")
+            rel_files(
+                "e/child.html",
+                '{% extends "./base.html" %}{% block b %}{% include "./part.html" %}{% endblock %}',
+            )
+        else:
+            rel_files(
+                "e/base.html",
+                '<main>{% block b %}{% endblock %}{% include "./part.html" %}</main>',
+            )
+            rel_files("e/child.html", '{% extends "./base.html" %}{% block b %}x{% endblock %}')
+        rel_files("e/part.html", "<p>{{ v }}</p>")
+        out = FILE_DRAWERS[drawer]("e/child.html", v="hi")
+        assert "<p>hi</p>" in out and "<main>" in out, out
+
+    @pytest.mark.parametrize("shape", ["dot", "dotdot", "nested", "in-if", "with-only"])
+    def test_django_draws_the_same_included_markup(self, drawer, rel_files, shape) -> None:
+        """The component path adds dj-if markers, so this is containment, not equality."""
+        from django.template import Engine
+
+        name = _write_shape(rel_files, shape)
+        expected = Engine(dirs=[str(rel_files.root)]).render_to_string(name, {"v": "hi"})
+        out = FILE_DRAWERS[drawer](name, v="hi")
+        included = re.search(r"<p>[^<]*</p>", expected)
+        assert included is not None, expected
+        assert included.group(0) in out, (expected, out)
+
+    def test_a_name_outside_the_hierarchy_raises(self, drawer, rel_files) -> None:
+        rel_files("a/main.html", '<div>{% include "../../x.html" %}</div>')
+        rel_files("x.html", "<p>x</p>")
+        # the engine refuses at load, with its own class (Django's / djust's TemplateSyntaxError)
+        with pytest.raises(Exception, match="outside the file hierarchy"):
+            FILE_DRAWERS[drawer]("a/main.html", v="hi")
+
+    def test_a_dj_root_partial_draws_as_it_does_by_its_absolute_name(
+        self, drawer, rel_files
+    ) -> None:
+        """``set_template_origin`` also gates the authenticated-partial-root branch of the engine:
+        an include that holds a ``dj-root`` renders the same as it does by an absolute name."""
+        rel_files("r/main.html", '<div>{% include "./part.html" %}</div>')
+        rel_files("r/main_abs.html", '<div>{% include "r/part.html" %}</div>')
+        rel_files("r/part.html", '<section dj-root dj-view="x"><p>{{ v }}</p></section>')
+        out = FILE_DRAWERS[drawer]("r/main.html", v="hi")
+        absolute = FILE_DRAWERS[drawer]("r/main_abs.html", v="hi")
+        assert "<p>hi</p>" in out, out
+        assert out == absolute
+
+    def test_the_files_own_slots_are_still_hardened(self, drawer, rel_files) -> None:
+        rel_files("sub/main.html", '<a title="{{ v }}">x</a>{% include "./part.html" %}')
+        rel_files("sub/part.html", "<p>part</p>")
+        out = FILE_DRAWERS[drawer]("sub/main.html", v=mark_safe('"><b>x</b>'))
+        assert "<b>" not in out, out
+        assert _attrs(out, "a")["title"] == '"><b>x</b>', out
+        assert "<p>part</p>" in out, out
+
+
+def test_a_function_component_resolves_a_relative_include(rel_files) -> None:
+    """Regression (not changed by #4265): a function component's file is drawn by the
+    project's engine, which resolves a relative name."""
+    from djust.components.function_component import clear_components, component
+    from djust.testing import render_template_string
+
+    rel_files("fc/main.html", '<div>{% include "./part.html" %}</div>')
+    rel_files("fc/part.html", "<p>{{ v }}</p>")
+    clear_components()
+    try:
+        component(name="fc_4265", template_name="fc/main.html")(lambda assigns: {"v": "hi"})
+        out = render_template_string('{% call "fc_4265" %}{% endcall %}')
+    finally:
+        clear_components()
+    assert "<div><p>hi</p></div>" in out, out
+
+
+@pytest.mark.parametrize("drawer", sorted(FILE_DRAWERS))
+def test_the_origin_is_the_name_the_loader_was_asked_for(drawer, rel_files, monkeypatch) -> None:
+    """The one call: the engine view is told the file's own template name."""
+    import djust._rust as rust
+
+    seen: list[str] = []
+    real = rust.RustLiveView.set_template_origin
+
+    def spy(self: Any, origin: Any) -> None:
+        seen.append(origin)
+        real(self, origin)
+
+    monkeypatch.setattr(rust.RustLiveView, "set_template_origin", spy, raising=False)
+    rel_files("sub/o.html", "<p>{{ v }}</p>")
+    FILE_DRAWERS[drawer]("sub/o.html", v="hi")
+    assert seen == ["sub/o.html"], seen
+
+
+class TestRelativeIncludeNamesInTheWarning:
+    """#4265 (the adjacent defect): the count of unscanned includes read a relative literal by its
+    RAW name, which the loader joins to the template root, so it read a different file."""
+
+    LOGGER = "djust.components._hybrid_attrs"
+
+    def _warned(
+        self, caplog, monkeypatch, template: str, sources: dict[str, str], origin: str | None
+    ) -> str:
+        monkeypatch.setattr(hybrid, "_include_source", lambda name: sources.get(name))
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            hybrid._warn_once("Includer", hybrid.plan(template), True, origin)
+        return caplog.text
+
+    def test_the_slot_in_the_real_target_is_reported(self, caplog, monkeypatch) -> None:
+        text = self._warned(
+            caplog,
+            monkeypatch,
+            '<p>{% include "./part.html" %}</p>',
+            {
+                "sub/part.html": '<p title="{{ t }}">',
+                "part.html": "<p>static</p>",
+                "./part.html": "<p>static</p>",  # what the loader reads for the raw name
+            },
+            "sub/main.html",
+        )
+        assert "1 {% include %}" in text, text
+
+    def test_a_static_real_target_is_not_reported(self, caplog, monkeypatch) -> None:
+        text = self._warned(
+            caplog,
+            monkeypatch,
+            '<p>{% include "./part.html" %}</p>',
+            {"sub/part.html": "<p>static</p>", "part.html": '<p title="{{ t }}">'},
+            "sub/main.html",
+        )
+        assert text == ""
+
+    def test_a_slot_free_relative_extends_is_not_counted(self, caplog, monkeypatch) -> None:
+        text = self._warned(
+            caplog,
+            monkeypatch,
+            '{% extends "./base.html" %}{% block b %}x{% endblock %}',
+            {"sub/base.html": "<main>{% block b %}{% endblock %}</main>"},
+            "sub/c.html",
+        )
+        assert text == ""
+
+    def test_a_relative_name_without_an_origin_is_counted(self, caplog, monkeypatch) -> None:
+        text = self._warned(
+            caplog,
+            monkeypatch,
+            '<p>{% include "./part.html" %}</p>',
+            {"part.html": "<p>static</p>", "./part.html": "<p>static</p>"},
+            None,
+        )
+        assert "1 {% include %}" in text, text
+
+    @pytest.mark.parametrize("name", ["../../x.html", "../x.html"])
+    def test_a_name_outside_the_hierarchy_is_counted_and_never_raises(
+        self, caplog, monkeypatch, name
+    ) -> None:
+        text = self._warned(
+            caplog,
+            monkeypatch,
+            '<p>{% include "' + name + '" %}</p>',
+            {"x.html": "<p>static</p>"},
+            "main.html",
+        )
+        assert "1 {% include %}" in text, text
+
+    def test_two_origins_with_one_source_warn_once_each(self, caplog, monkeypatch) -> None:
+        sources = {"a/part.html": '<p title="{{ t }}">', "b/part.html": "<p>static</p>"}
+        template = '<p>{% include "./part.html" %}</p>'
+        first = self._warned(caplog, monkeypatch, template, sources, "a/main.html")
+        assert "1 {% include %}" in first, first
+        caplog.clear()
+        # same source, other directory: its own key, resolved against ITS target (static)
+        assert self._warned(caplog, monkeypatch, template, sources, "b/main.html") == ""
+        assert len(hybrid._WARNED) == 2
+        caplog.clear()
+        # and the same pair again warns nothing new
+        assert self._warned(caplog, monkeypatch, template, sources, "a/main.html") == ""
+
+    def test_the_origin_is_never_logged(self, caplog, monkeypatch) -> None:
+        text = self._warned(
+            caplog,
+            monkeypatch,
+            '<p>{% include "./part.html" %}</p>',
+            {"SECRETDIR/part.html": '<p title="{{ t }}">'},
+            "SECRETDIR/main.html",
+        )
+        assert "1 {% include %}" in text and "SECRETDIR" not in text
+
+    def test_the_resolution_does_not_call_the_django_5_2_helper(self, caplog, monkeypatch) -> None:
+        """``construct_relative_path(..., allow_recursion=True)`` exists from Django 5.2 only and
+        djust supports 4.2+: on an older Django it raised ``TypeError`` out of the first render of
+        a file with a relative include. The name is resolved here, so the helper is not needed
+        (stand-in for 4.2-5.1: it refuses the keyword; here it refuses every call)."""
+        from django.template import loader_tags
+
+        def old_signature(current_template_name: str, relative_name: str) -> str:
+            raise TypeError("construct_relative_path() got an unexpected keyword 'allow_recursion'")
+
+        monkeypatch.setattr(loader_tags, "construct_relative_path", old_signature)
+        text = self._warned(
+            caplog,
+            monkeypatch,
+            '{% extends "./base.html" %}{% block b %}x{% endblock %}',
+            {"sub/base.html": '<main title="{{ t }}">{% block b %}{% endblock %}</main>'},
+            "sub/c.html",
+        )
+        assert "1 {% include %}" in text, text
+
+    @pytest.mark.parametrize(
+        "origin, name, expected",
+        [
+            ("sub/main.html", "./p.html", "sub/p.html"),
+            ("/sub/main.html", "./p.html", "sub/p.html"),
+            ("sub/main.html", "../p.html", "p.html"),
+            ("sub/deep/main.html", "../../p.html", "p.html"),
+            ("main.html", "./a/../p.html", "p.html"),
+            ("main.html", "../p.html", None),
+            ("sub/main.html", "../../p.html", None),
+            (None, "./p.html", None),
+            ("", "./p.html", None),
+        ],
+    )
+    def test_a_relative_name_resolves_as_django_resolves_it(self, origin, name, expected) -> None:
+        assert hybrid._relative_to(origin, name) == expected
+
+    @pytest.mark.parametrize("drawer", sorted(FILE_DRAWERS))
+    def test_a_relative_extends_of_a_slot_free_parent_warns_nothing(
+        self, drawer, rel_files, caplog
+    ) -> None:
+        rel_files("sub/base.html", "<main>{% block b %}{% endblock %}</main>")
+        rel_files(
+            "sub/c.html",
+            '{% extends "./base.html" %}{% block b %}<i title="{{ v }}">c</i>{% endblock %}',
+        )
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            out = FILE_DRAWERS[drawer]("sub/c.html", v="ok")
+        assert "<main>" in out and "{% include %}" not in caplog.text, (out, caplog.text)
+
+    @pytest.mark.parametrize("drawer", sorted(FILE_DRAWERS))
+    @pytest.mark.parametrize("slot_in", ["sibling", "root"])
+    def test_through_the_real_loader(self, drawer, template_files, caplog, slot_in) -> None:
+        """A file in ``sub/`` includes ``./part.html``: the warning follows ``sub/part.html``, not
+        the template root's file of the same name."""
+        slot, static = '<i title="{{ v }}">p</i>', "<i>p</i>"
+        template_files("sub/main.html", '<u>{% include "./part.html" %}</u>')
+        template_files("sub/part.html", slot if slot_in == "sibling" else static)
+        template_files("part.html", static if slot_in == "sibling" else slot)
+        with caplog.at_level(logging.WARNING, logger=self.LOGGER):
+            FILE_DRAWERS[drawer]("sub/main.html", v="ok")
+        if slot_in == "sibling":
+            assert caplog.text.count("1 {% include %}") == 1, caplog.text
+        else:
+            assert "{% include %}" not in caplog.text, caplog.text
 
 
 # -- #3913 -----------------------------------------------------------------------------------------

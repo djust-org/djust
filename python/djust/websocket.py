@@ -694,7 +694,11 @@ def render_embedded_child_html(child_view: Any) -> str:
         from ._include_guard import include_guard_scope
         from .templatetags.live_tags import active_parent_view
 
-        template_str = child_view.get_template()
+        from .templatetags.live_tags import child_source_with_named_includes
+
+        # #4265: a relative ``{% include "./x.html" %}`` is named against the child's file, as
+        # the allowlist walker below needs (neither entry has an origin).
+        template_str = child_source_with_named_includes(child_view, child_view.get_template())
         engine = engines["django"] if "django" in engines else list(engines.all())[0]
         tmpl = engine.from_string(template_str)
         # Django's engine renders this; the template-call guard (#3880) is applied here.

@@ -171,3 +171,42 @@ def observability_request_factory(**defaults: Any) -> Any:
 
     defaults.setdefault(TOKEN_META_KEY, get_observability_token())
     return RequestFactory(**defaults)
+
+
+#: The engines a project can configure: a template is found, and its relative names resolve, the same
+#: way under both (#4265).
+ENGINES = {
+    "django": "django.template.backends.django.DjangoTemplates",
+    "djust": "djust.template.backend.DjustTemplateBackend",
+}
+
+
+@pytest.fixture(params=sorted(ENGINES))
+def rel_files(tmp_path, request):
+    """``template_files`` for each engine; ``write.root`` is the template directory."""
+    from django.test import override_settings
+
+    from djust.utils import clear_template_dirs_cache
+
+    root = tmp_path / "templates"
+    root.mkdir()
+
+    def write(name: str, source: str) -> None:
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text(source)
+
+    write.root = root  # type: ignore[attr-defined]
+    templates = [
+        {
+            "BACKEND": ENGINES[request.param],
+            "DIRS": [str(root)],
+            "APP_DIRS": False,
+            "OPTIONS": {},
+        }
+    ]
+    with override_settings(TEMPLATES=templates):
+        clear_template_dirs_cache()
+        try:
+            yield write
+        finally:
+            clear_template_dirs_cache()

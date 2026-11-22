@@ -175,7 +175,9 @@ def _dj_if_id_namespace(component_id: Optional[str]) -> str:
     return _ID_NAMESPACE_ALLOWED.sub("_", component_id)
 
 
-def _render_source_with_markers(source: str, context: Dict[str, Any]) -> str:
+def _render_source_with_markers(
+    source: str, context: Dict[str, Any], origin: Optional[str] = None
+) -> str:
     """Render the ``source`` of a ``template_name`` component through the LiveView engine entry
     (``RustLiveView`` — ``<!--dj-if id=…-->`` boundary markers ON) so its
     ``{% if %}`` blocks keep VDOM identity inside the parent (#2530).
@@ -187,6 +189,10 @@ def _render_source_with_markers(source: str, context: Dict[str, Any]) -> str:
     sidecar handling mirror the LiveView path: JSON-normalized values into
     state, ``SafeString`` paths marked safe, raw objects (models behind the
     serialization floor) on the ``set_raw_py_values`` sidecar.
+
+    ``origin`` is the file's template name (#4265): a relative ``{% include "./x.html" %}`` /
+    ``"../x.html"`` in ``source`` resolves against it, as Django resolves it against the loaded
+    template's origin. Without it (an inline source) a relative name cannot resolve.
     """
     from djust._rust import RustLiveView
 
@@ -197,6 +203,10 @@ def _render_source_with_markers(source: str, context: Dict[str, Any]) -> str:
 
     apply_render_env_once()
     rust_view = RustLiveView(source, get_template_dirs())
+    # #4265: the file's name, so a relative ``{% include "./x.html" %}`` / ``"../x.html"``
+    # resolves against it as Django resolves it against the loaded template's origin.
+    if origin and hasattr(rust_view, "set_template_origin"):
+        rust_view.set_template_origin(origin)
     # ADR-029 (#2741): snapshot the pushed environment onto this view, so
     # every render entry applies it on any thread.
     if hasattr(rust_view, "capture_render_env"):
@@ -237,7 +247,9 @@ def _render_template_file(template_name: str, context: Dict[str, Any], owner: st
     A file without ``{% extends %}`` is drawn through the LiveView engine entry so its
     ``{% if %}`` blocks keep dj-if markers (#2530); one with it is compiled by the backend that found it, with the
     loaded template's origin (``_recompile_like``), so ``{% extends %}`` / ``{% include %}``
-    resolve through the same loaders and a relative ``./`` name resolves against the file.
+    resolve through the same loaders and a relative ``./`` name resolves against the file. The
+    file without it gets the same through ``set_template_origin`` on the LiveView engine entry
+    (#4265), so a relative ``./`` / ``../`` name resolves against the file on both branches.
     A file whose source the backend does not expose cannot be scanned: it is drawn as before and
     named once per class.
 
@@ -254,9 +266,11 @@ def _render_template_file(template_name: str, context: Dict[str, Any], owner: st
         warn_unscanned_file(owner, template_name)
         with include_guard_scope():
             return cast(str, render_to_string(template_name, context))
-    rewritten, hardened = harden_context(source, context, owner, file=True)
+    # #4265: the name the loader was asked for; relative ``./`` / ``../`` names resolve against it
+    origin_name = getattr(getattr(loaded, "origin", None), "template_name", None) or template_name
+    rewritten, hardened = harden_context(source, context, owner, file=True, origin=origin_name)
     if "{% extends" not in source:
-        return _render_source_with_markers(rewritten, hardened)
+        return _render_source_with_markers(rewritten, hardened, origin_name)
     with include_guard_scope():
         return cast(str, _recompile_like(loaded, rewritten).render(hardened))
 
