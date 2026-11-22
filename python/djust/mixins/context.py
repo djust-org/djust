@@ -186,6 +186,12 @@ def state_models_as_handles_enabled() -> bool:
         return False
 
 
+def _is_projection(queryset: Any) -> bool:
+    """Is this QuerySet a ``.values()`` / ``.values_list()`` projection? The ONLY queryset
+    operation that sets ``_fields`` (as ``_SidecarQuerySetProxy`` reads it)."""
+    return getattr(queryset, "_fields", None) is not None
+
+
 def _state_model_values(context: Any) -> Dict[str, Any]:
     """The top-level context values that hold a model (a ``Model``, a ``QuerySet``, a list or
     tuple containing a ``Model``), for the render-time handle overlay (#3936). Empty when the
@@ -196,6 +202,11 @@ def _state_model_values(context: Any) -> Dict[str, Any]:
 
     out: Dict[str, Any] = {}
     for key, value in context.items():
+        if isinstance(value, QuerySet) and _is_projection(value):
+            # ``.values()`` / ``.values_list()``: the rows are dicts / tuples with no model to hand
+            # a proxy for, and the floor refuses a projection's rows (vector 5), so a handle would
+            # be an EMPTY list shadowing the serialized rows (train/2.0-ai review B1).
+            continue
         if isinstance(value, (models.Model, QuerySet)) or (
             isinstance(value, (list, tuple)) and any(isinstance(v, models.Model) for v in value)
         ):

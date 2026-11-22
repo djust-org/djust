@@ -37,7 +37,31 @@ def _one() -> dict:
     return {"u": User.objects.order_by("pk").first()}
 
 
-PROBES = [
+def _values() -> dict:
+    return {"rows": User.objects.order_by("pk").values("username")}
+
+
+def _values_flat() -> dict:
+    return {"rows": User.objects.order_by("pk").values_list("username", flat=True)}
+
+
+def _values_pairs() -> dict:
+    return {"rows": User.objects.order_by("pk").values_list("pk", "username")}
+
+
+#: ``.values()`` / ``.values_list()`` held in state (review B1): no model rows, so no handle.
+PROJECTIONS = [
+    ("values-loop", "{% for r in rows %}{{ r.username }};{% endfor %}", _values),
+    ("values-length", "{{ rows|length }}", _values),
+    ("values-index", "{{ rows.0.username }}", _values),
+    ("values-flat-loop", "{% for r in rows %}{{ r }};{% endfor %}", _values_flat),
+    ("values-flat-length", "{{ rows|length }}", _values_flat),
+    ("values-flat-index", "{{ rows.0 }}", _values_flat),
+    ("values-pairs-loop", "{% for a, b in rows %}{{ b }};{% endfor %}", _values_pairs),
+    ("values-pairs-length", "{{ rows|length }}", _values_pairs),
+]
+
+PROBES = PROJECTIONS + [
     ("qs-column", "{% for u in users %}{{ u.username }};{% endfor %}", _qs),
     (
         "qs-nested-all",
@@ -148,6 +172,21 @@ def test_gate_off_restoring_the_shadow_turns_the_method_probe_red(world, monkeyp
     monkeypatch.setattr(rust_bridge, "_overlay_skip_keys", lambda *a, **k: frozenset())
     assert _render("{{ users.count }}", _qs, "explicit", flag=True) == ""
     assert _render("{{ users.count }}", _qs, "explicit", flag=False) == "3"
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_a_projection_is_never_an_empty_handle(world, policy):
+    """Review B1: a projection's rows render (they rendered ``''`` / ``0`` with the overlay on)."""
+    assert _render("{{ rows|length }}", _values_flat, policy, flag=True) == "3"
+    assert _render("{% for r in rows %}{{ r }};{% endfor %}", _values_flat, policy) == "u0;u1;u2;"
+
+
+def test_gate_off_capturing_a_projection_renders_it_empty(world, monkeypatch):
+    """Gate-off: with the projection check removed, the overlay binds the floor's empty answer."""
+    from djust.mixins import context
+
+    monkeypatch.setattr(context, "_is_projection", lambda qs: False)
+    assert _render("{{ rows|length }}", _values_flat, "explicit", flag=True) == "0"
 
 
 def test_the_world_is_what_the_answers_assume(world):

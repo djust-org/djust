@@ -196,3 +196,23 @@ def test_the_diff_harness_sees_a_change(world):
     assert got.count("changed@example.com") == 3, got  # explicit re-reads the rows
     got = _render_change_diff(HELD_LIST[1][1], _held, "explicit", flag=True)
     assert got.endswith("<li>1</li>"), got  # u2 gained ops
+
+
+# -- review B1: a .values() / .values_list() QuerySet held in state ----------------------------
+
+
+def _projection_cases():
+    from python.tests.test_state_models_as_handles_queries_3936 import PROJECTIONS
+
+    return [pytest.param(s, f, id=n) for n, s, f in PROJECTIONS]
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("source,factory", _projection_cases())
+def test_projection_corpus_is_unchanged(world, policy, source, factory):
+    on = _render(source, factory, policy, flag=True)
+    assert on == _render(source, factory, policy, flag=False)
+    if policy == "explicit":
+        # (legacy reads a ``.values()`` row's key empty with or without the overlay: its JIT's
+        # own row shape, unchanged by this flag.)
+        assert on not in ("", "0"), on
