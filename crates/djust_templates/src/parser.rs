@@ -3158,9 +3158,17 @@ fn drop_index_segments(paths: &mut Vec<String>) {
     paths.retain(|path| !path.is_empty());
 }
 
-/// The item-key reads (`dictsort:'k'`, `{% regroup x by k %}`) that
-/// [`extract_template_variables`] files and that nothing ELSE in the template
-/// reads, per root (#3919).
+/// The item-key reads (`dictsort:'k'`, `dictsortreversed:'k'`, the
+/// `djust_item_key` filter) that [`extract_template_variables`] files and that
+/// nothing ELSE in the template reads, per root (#3919).
+///
+/// `{% regroup x by k %}` is NOT one of these (#4264): it resolves its
+/// attribute with `Variable`, which DOES call a method, so a method key groups
+/// by the called value and the JIT must keep it. Regroup keys are skipped here
+/// ([`RegroupKeysSkipped`]) but still filed by [`extract_template_variables`].
+/// Accepted edge: the same method key used by BOTH a `dictsort` and a
+/// `{% regroup %}` on one root stays key-only (dropped), so the regroup groups
+/// under `None`; one row set cannot satisfy both Django behaviors.
 ///
 /// Django's `dictsort` resolves its key with `_property_resolver`, which never
 /// CALLS what it finds, so a method or a related manager named as a key orders
@@ -3178,6 +3186,7 @@ pub fn extract_item_key_only_reads(
     let mut variables: HashMap<String, Vec<String>> = HashMap::new();
     {
         let _walk = RawBodyWalk::enter();
+        let _regroup = RegroupKeysSkipped::enter();
         extract_from_nodes(&nodes, &mut variables);
     }
     let mut out = HashMap::new();
@@ -3199,6 +3208,30 @@ pub fn extract_item_key_only_reads(
         out.insert(root, keys);
     }
     Ok(out)
+}
+
+thread_local! {
+    /// Set while [`extract_item_key_only_reads`] walks a template.
+    static SKIP_REGROUP_ITEM_KEYS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Leave `{% regroup %}` keys out of the item-key reads (#4264).
+struct RegroupKeysSkipped {
+    previous: bool,
+}
+
+impl RegroupKeysSkipped {
+    fn enter() -> Self {
+        Self {
+            previous: SKIP_REGROUP_ITEM_KEYS.with(|flag| flag.replace(true)),
+        }
+    }
+}
+
+impl Drop for RegroupKeysSkipped {
+    fn drop(&mut self) {
+        SKIP_REGROUP_ITEM_KEYS.with(|flag| flag.set(self.previous));
+    }
 }
 
 /// The paths each context name reads ITSELF, per root (#4258).
@@ -4247,6 +4280,9 @@ fn record_regroup_item_key(
     args: &[String],
     variables: &mut std::collections::HashMap<String, Vec<String>>,
 ) {
+    if SKIP_REGROUP_ITEM_KEYS.with(|flag| flag.get()) {
+        return;
+    }
     // The second argument is `by`: the handler's `validate_at_parse` refuses
     // `{% regroup x y z %}` ("second argument to 'regroup' tag must be 'by'")
     // before extraction runs, so a tag that reaches here has it.
@@ -7815,7 +7851,10 @@ mod tag_context_tests {
 
 #[cfg(test)]
 mod own_reads_tests_4258 {
-    use super::{extract_own_reads, extract_template_variables};
+    use super::{
+        extract_item_key_only_reads, extract_own_reads, extract_template_variables,
+        record_regroup_item_key, RegroupKeysSkipped,
+    };
 
     fn paths(template: &str, root: &str) -> Option<Vec<String>> {
         extract_own_reads(template).unwrap().get(root).cloned()
@@ -7857,5 +7896,57 @@ mod own_reads_tests_4258 {
         let _ = extract_own_reads(t).unwrap();
         let full = extract_template_variables(t).unwrap();
         assert!(full["orders"].contains(&"first".to_string()));
+    }
+
+    // `regroup` is a handler registered from Python, so a Rust test cannot parse a
+    // `{% regroup %}` template: the guard is exercised on the recorder itself. The
+    // template-level behavior (extractor output on a real regroup template) is pinned
+    // by python/tests/test_jit_row_shape_differential_3911.py.
+    fn regroup_args() -> Vec<String> {
+        ["users", "by", "get_username", "as", "g"]
+            .iter()
+            .map(|a| a.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn regroup_key_is_recorded_unless_the_key_only_walk_skips_it_4264() {
+        let mut variables = std::collections::HashMap::new();
+        record_regroup_item_key(&regroup_args(), &mut variables);
+        assert!(!variables.is_empty(), "the full walk files the regroup key");
+
+        let mut skipped = std::collections::HashMap::new();
+        {
+            let _guard = RegroupKeysSkipped::enter();
+            record_regroup_item_key(&regroup_args(), &mut skipped);
+        }
+        assert!(skipped.is_empty(), "{skipped:?}");
+
+        // The guard is restored on drop, and nests.
+        let mut again = std::collections::HashMap::new();
+        record_regroup_item_key(&regroup_args(), &mut again);
+        assert_eq!(again, variables);
+        let outer = RegroupKeysSkipped::enter();
+        {
+            let _inner = RegroupKeysSkipped::enter();
+        }
+        let mut still_skipped = std::collections::HashMap::new();
+        record_regroup_item_key(&regroup_args(), &mut still_skipped);
+        assert!(still_skipped.is_empty());
+        drop(outer);
+    }
+
+    #[test]
+    fn item_key_only_reads_still_reports_a_dictsort_key_4264() {
+        let dictsort = "{% for u in users|dictsort:'get_username' %}{{ u }}{% endfor %}";
+        let keys = extract_item_key_only_reads(dictsort).unwrap();
+        assert_eq!(keys.get("users"), Some(&vec!["get_username".to_string()]));
+        // The walk restores the regroup guard: the full walk is unchanged by it.
+        let before = extract_template_variables(dictsort).unwrap();
+        let _ = extract_item_key_only_reads(dictsort).unwrap();
+        assert_eq!(before, extract_template_variables(dictsort).unwrap());
+        let mut variables = std::collections::HashMap::new();
+        record_regroup_item_key(&regroup_args(), &mut variables);
+        assert!(!variables.is_empty());
     }
 }
