@@ -774,3 +774,75 @@ def _assert_overlay_text_escaped(safe_world, policy: str, shape: str, flag: bool
         client.mount()
         html = DJ_ROOT.search(client.render()).group(1)
     assert "<b>" not in html and "&lt;b&gt;s1&lt;/b&gt;" in html, html
+
+
+# -- review S3: the plain-text handle is the state key's OWN model ------------------------------
+#
+# The overlay's plain text covers the state value, its list / tuple members and a QuerySet's rows.
+# A related model reached by a walk is a fresh floor proxy and prints its ``SafeString`` raw, as
+# Django prints it and as a LiveView already did before the overlay (``{{ u.groups.first }}``).
+# Pinned so the ADR's narrowed wording stays true: "own model escaped, related model as Django".
+
+RELATED_SAFE = {
+    # name: (template, {policy: "raw" | "escaped"})
+    "self": ("{{ u }}", {"explicit": "escaped", "legacy": "escaped"}),
+    "list-self": ("{{ us.0 }}", {"explicit": "escaped", "legacy": "escaped"}),
+    "m2m-first": ("{{ u.groups.first }}", {"explicit": "raw", "legacy": "raw"}),
+    "rebind-m2m-first": (
+        "{% with q=u|default:u %}{{ q.groups.first }}{% endwith %}",
+        {"explicit": "raw", "legacy": "raw"},
+    ),
+    "rebind-m2m-loop": (
+        "{% with q=u|default:u %}{% for g in q.groups.all %}{{ g }}{% endfor %}{% endwith %}",
+        {"explicit": "raw", "legacy": "escaped"},
+    ),
+}
+
+
+@pytest.fixture
+def related_safe_world(db, scratch_models, monkeypatch):  # noqa: F811
+    from django.contrib.auth.models import Group
+    from django.utils.html import format_html
+
+    class RelAccount(User):
+        class Meta:
+            proxy = True
+            app_label = "auth"
+
+        def __str__(self):
+            return format_html("<b>{}</b>", self.username)
+
+    monkeypatch.setattr(Group, "__str__", lambda self: format_html("<s>{}</s>", self.name))
+    account = RelAccount.objects.create(username="r1")
+    account.groups.add(Group.objects.create(name="g1"))
+    return RelAccount
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("name", sorted(RELATED_SAFE))
+def test_a_related_models_safe_text_prints_as_django_prints_it(related_safe_world, name, policy):
+    source, expected = RELATED_SAFE[name]
+
+    class _V(LiveView):
+        exposure_policy = policy
+        template = f"<div dj-root>{source}</div>"
+
+        if policy == "legacy":
+
+            def mount(self, request, **kwargs):
+                self.u = related_safe_world.objects.get(username="r1")
+                self.us = [self.u]
+
+        else:
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                u = related_safe_world.objects.get(username="r1")
+                ctx.update({"u": u, "us": [u]})
+                return ctx
+
+    client = LiveViewTestClient(_V)
+    client.mount()
+    html = DJ_ROOT.search(client.render()).group(1)
+    got = "raw" if re.search(r"<[bs]>", html) else "escaped" if "&lt;" in html else html
+    assert got == expected[policy], (name, policy, html)
