@@ -225,8 +225,14 @@ and what the client receives keep the serialized dict. A native tag's argument i
 dict text (`data_table` reads dict rows). If the floor cannot be built for a key, that key renders from
 its dict (never the instance). A `QuerySet` whose `count` / `exists` / `first` / `last` the template
 reads, or whose rows' relations the template walks, keeps the serialized rows the JIT built (prefetched
-and capped), so the proxy adds no query. A model whose `__str__` returns a `SafeString` prints escaped
-on a LiveView either way. Set the key to `False` to restore the 1.x `dict` everywhere (kill-switch);
+and capped), so the proxy adds no query: **a custom filter or tag handed that `QuerySet` (or one of its
+rows) gets `dict`s**, the kill-switch's shape, even though the same filter on the same `QuerySet` gets
+floor proxies in a template that reads nothing else off it. A filtered rebinding of such a row still
+reads the relations the template names. A `.values()` / `.values_list()` `QuerySet` keeps its rows
+(they are not models). A state model whose `__str__` returns a `SafeString` prints escaped on a
+LiveView either way; a related model reached by a walk (`{{ u.groups.first }}`) prints as Django
+prints it. The proxy's methods are callable from your Python code: `alters_data` (`save`, `delete`) is
+enforced only in templates. Set the key to `False` to restore the 1.x `dict` everywhere (kill-switch);
 with it off, the "LiveView state" column below reads `dict` (and `list` of `dict`) in every row.
 
 What each entry hands over (measured; every cell is pinned by
@@ -240,6 +246,7 @@ What each entry hands over (measured; every cell is pinned by
 | a `QuerySet`, to a **filter** | `list` of floor proxies | `list` of `dict` | `list` of floor proxies |
 | a `QuerySet`, to a **tag** | `list` of floor proxies | queryset proxy | queryset proxy |
 | a row of `{% for r in qs %}` | floor proxy | `dict` | floor proxy |
+| a `QuerySet` the template also reads `count` / `exists` / `first` / `last` off, or whose rows' relations it walks (whole, or a row) | `list` of `dict` (a row: `dict`) | as above | as above |
 | a `dict` holding a model, or a list of models | a `dict` holding `dict`s | a `dict` holding floor proxies | a `dict` holding floor proxies |
 
 A filter and every tag form are handed the same thing in every row; the one place they differ is a

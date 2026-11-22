@@ -510,6 +510,34 @@ class TestTheTypeACustomCallableReceives:
         assert (as_filter, as_tag) == ("list[proxy,proxy]", "qsproxy")
 
 
+#: The exception (train/2.0-ai review S2): a QuerySet key the template ALSO reads a method off
+#: (``count`` / ``exists`` / ``first`` / ``last``), or whose rows' relations it walks, keeps the
+#: serialized rows the JIT built (the overlay skips it, so it adds no query), and a custom callable
+#: handed it gets those rows as ``dict``s -- the kill-switch's shape -- on both LiveView entries.
+QUERYSET_EXCEPTION = {
+    "plain": ("{% load cc3949 %}{{ x|cc3949_filter }}", "list[proxy,proxy]"),
+    "plus-count": ("{% load cc3949 %}{{ x.count }}#{{ x|cc3949_filter }}", "list[dict,dict]"),
+    "plus-walk": (
+        "{% load cc3949 %}{% for r in x %}{{ r.groups.count }}{% endfor %}#{{ x|cc3949_filter }}",
+        "list[dict,dict]",
+    ),
+    "loop-filter-plus-walk": (
+        "{% load cc3949 %}{% for r in x %}{{ r.groups.count }}#{{ r|cc3949_filter }}{% endfor %}",
+        "dict",
+    ),
+}
+
+
+class TestAMethodReadOrWalkedQuerySetIsStillDicts:
+    @pytest.mark.parametrize("entry", ("liveview", "liveview-explicit"))
+    @pytest.mark.parametrize("name", sorted(QUERYSET_EXCEPTION))
+    def test_the_type_depends_on_the_other_reads_of_the_key(self, world, entry, name) -> None:
+        body, expected = QUERYSET_EXCEPTION[name]
+        out = RENDER[entry](body, {"x": _shapes(world)["queryset"]()})
+        docs = _docs(out.split("#")[-1])  # the last document the callable wrote
+        assert _sig(docs[0]) == expected, (entry, name, out[:300])
+
+
 # -- 2. the floor: what holds on every entry -------------------------------------------------------
 
 
