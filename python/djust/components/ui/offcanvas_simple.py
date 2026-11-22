@@ -85,6 +85,9 @@ class Offcanvas(Component):
                 f"Invalid placement: {placement}. Must be 'start', 'end', 'top', or 'bottom'"
             )
 
+        # a plain string is escaped here, a marked-safe one is developer markup (as for Modal)
+        body = conditional_escape(body)
+
         # Pass kwargs to the parent Component
         super().__init__(
             body=body,

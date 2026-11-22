@@ -22,7 +22,7 @@ from unittest.mock import patch
 from html.parser import HTMLParser
 
 import pytest
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 from djust import config as config_module
 from djust.components.ui import (
@@ -600,6 +600,33 @@ def test_the_declared_markup_slots_are_the_documented_ones() -> None:
     from djust.components.ui import Card
 
     assert Card.markup_slots == frozenset()
+
+
+MARKUP_SLOT_CASES = [(n, c, p) for n, c, p in TEMPLATE_CASES if p in c.markup_slots]  # type: ignore[attr-defined]
+
+
+def test_the_markup_slot_classes_were_found() -> None:
+    assert {(n, p) for n, _c, p in MARKUP_SLOT_CASES} == {
+        ("Modal", "body"),
+        ("Modal", "footer"),
+        ("Tooltip", "content"),
+        ("Offcanvas", "body"),
+    }
+
+
+@pytest.mark.parametrize(
+    "name,cls,param", MARKUP_SLOT_CASES, ids=[f"{n}.{p}" for n, _c, p in MARKUP_SLOT_CASES]
+)
+def test_a_markup_slot_is_one_the_constructor_escapes_itself(
+    name: str, cls: type, param: str
+) -> None:
+    """The criterion ``Component.markup_slots`` documents (review S2): the template prints the
+    name as given because the constructor already ``conditional_escape``d it, so a plain string
+    cannot reach the page raw and a marked-safe one is markup the developer wrote."""
+    plain = getattr(_build(cls, param, "a <i> & b"), param)
+    assert isinstance(plain, SafeString) and str(plain) == "a &lt;i&gt; &amp; b", (name, param)
+    marked = getattr(_build(cls, param, mark_safe("<b>x</b>")), param)
+    assert str(marked) == "<b>x</b>", (name, param)
 
 
 def test_an_undeclared_markup_slot_template_escapes_a_marked_safe_value() -> None:

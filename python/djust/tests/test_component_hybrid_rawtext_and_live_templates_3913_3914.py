@@ -514,12 +514,34 @@ class TestOrdinaryTextIsEscapedOnTheComponentPath:
         out = _draw_keep("<i>{{ v }}</i><u>{{ w }}</u>", {"v"}, v=marked, w=marked)
         assert out == "<i><b>x</b></i><u>&lt;b&gt;x&lt;/b&gt;</u>"
 
-    def test_a_tag_in_ordinary_text_is_not_a_slot_and_is_not_named(self, caplog) -> None:
-        template = "<p>{% firstof v w %}</p>"
-        assert hybrid.plan(template, True).raw_tags == ()
+    @pytest.mark.parametrize(
+        ("template", "tag"),
+        [
+            ("<p>{% firstof v w %}</p>", "firstof"),
+            ("<p>{% cycle v w %}</p>", "cycle"),
+            (
+                "{% load i18n %}<p>{% blocktranslate %}{{ v }}{% endblocktranslate %}</p>",
+                "blocktranslate",
+            ),
+        ],
+    )
+    def test_a_tag_that_prints_a_value_in_ordinary_text_is_named(
+        self, template: str, tag: str, caplog
+    ) -> None:
+        """Review S1: a tag is not a slot, so a marked-safe value it prints keeps its markup on
+        the Component path; the once-per-class warning names it (as it does in a raw element)."""
+        assert hybrid.plan(template, True).raw_tags == (("text", tag),)
+        cls = type("Texty", (Component,), {"template": template, "get_context_data": lambda s: {}})
         with caplog.at_level(logging.WARNING, logger="djust.components._hybrid_attrs"):
-            _draw(template, v="", w="x")
-        assert "firstof" not in caplog.text
+            cls().render()
+        (record,) = [r for r in caplog.records if "Texty" in r.getMessage()]
+        assert f"text:{tag}" in record.getMessage(), record.getMessage()
+
+    def test_a_non_printing_tag_or_a_silent_one_in_ordinary_text_is_not_named(self, caplog) -> None:
+        template = '<p>{% if v %}{% url "x" as u %}{% firstof v as f %}{% endif %}</p>'
+        assert hybrid.plan(template, True).raw_tags == ()
+        # a LiveComponent / BoundComponent keeps its text slots: nothing to name there
+        assert hybrid.plan("<p>{% firstof v w %}</p>", False).raw_tags == ()
 
     @pytest.mark.parametrize("kind", ["mark_safe", "safestring-subclass", "lazy-safe"])
     def test_the_live_classes_keep_a_text_slots_markup(self, kind: str) -> None:

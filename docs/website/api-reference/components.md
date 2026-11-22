@@ -22,6 +22,10 @@ Return template context. Override to provide data to the template.
 
 Renders the component to an HTML string. Called automatically by `__str__()`.
 
+#### `markup_slots: ClassVar[frozenset[str]]`
+
+Names of the template's parameters that are documented as markup (default: empty). Every other `{{ value }}` in the text of a `template` is escaped whatever the value is marked as, like the Rust instance. A name listed here keeps a marked-safe value's markup in a text slot, and the class's constructor must escape a plain string itself (`Modal` `body` / `footer`, `Tooltip` `content`, `Offcanvas` `body`). See [Components guide](../guides/components.md).
+
 **Usage:**
 
 ```python

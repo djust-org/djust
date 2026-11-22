@@ -390,7 +390,7 @@ class Component(TemplateMutatorGuard, ABC):
     #: text slot of ``template`` is escaped whatever the value is marked as, like the Rust
     #: instance does. A class lists a parameter here only when its constructor escapes it itself
     #: (so the value reaching the template is already safe) or documents it as markup.
-    markup_slots: ClassVar[frozenset] = frozenset()
+    markup_slots: ClassVar[frozenset[str]] = frozenset()
 
     #: Names of declared third-party assets this component needs (ADR-040).
     #: Check djust.B007 fails when a name is not declared in any manifest.

@@ -485,11 +485,20 @@ class _Scanner:
                 self.shapes.append("element name built by a tag")
             if self.raw in _ESCAPED_TEXT:
                 self._raw_atom(token, start, end, kind, self.raw)
-            elif self.text and not self.raw and kind == "var":
-                # A ``{% %}`` / ``{% blocktranslate %}`` here is not a slot: what a tag prints in
-                # ordinary text is the tag's own markup, and the translator's is kept.
-                if token[2:-2].strip() not in self.keep:
-                    self._raw_atom(token, start, end, kind, "text")
+            elif self.text and not self.raw:
+                if kind == "var":
+                    if token[2:-2].strip() not in self.keep:
+                        self._raw_atom(token, start, end, kind, "text")
+                elif kind == "blk":
+                    # a {% blocktranslate %} is not rewritten (its variables are keyed by the
+                    # catalog), so a marked-safe value it prints keeps its markup: named (S1)
+                    self.raw_tags.append(("text", _tag_name(token)))
+                else:
+                    # a tag is not a slot, and a marked-safe value it prints (``{% firstof v %}``,
+                    # ``{% cycle v %}``) keeps its markup: named by the warning, not escaped (S1)
+                    name = "#" if token.startswith("{#") else _tag_name(token)
+                    if name not in _NON_PRINTING and not _AS_VAR.search(token):
+                        self.raw_tags.append(("text", name))
             return
         if s in ("dq", "sq", "unq"):
             self._flush()
@@ -1550,7 +1559,8 @@ def _warn_once(owner: str, rewrite: Plan, file: bool = False) -> None:
         advice.append("quote an attribute value")
     if raw_tags:
         fragments.append(
-            "tags that print text inside <textarea> / <title> / a comment, not escaped %s"
+            "tags that print text inside <textarea> / <title> / a comment (or, in a Component's "
+            "own text, a marked-safe value's markup), not escaped %s"
         )
         args.append([f"{e}:{n}" for e, n in raw_tags])
         advice.append("escape what a tag prints")
