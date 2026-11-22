@@ -30,8 +30,8 @@ Engine path: the Rust extractor (``crates/djust_templates/src/parser.rs``), the 
 row serializers (``serialize_queryset``, ``optimization/codegen.py``), the Python JIT
 (``mixins/jit.py``, ``template/rendering.py``) and the Rust ``dictsort``.
 
-The LiveView entry is the explicit default (#4264); ``liveview-legacy`` keeps the deprecated
-``exposure_policy = "legacy"`` view covered.
+The LiveView entry is the explicit default (#4264); ``liveview-legacy`` keeps the deprecated legacy
+exposure policy covered (through the shared legacy render helper).
 
 Refs #3911, #3910, #3912, #3918, #3919, #3920, #3862, #4264.
 """
