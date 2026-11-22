@@ -419,6 +419,11 @@ def resolve_template_inheritance(
     Args:
         template_path: Path to the child template (e.g., "products.html")
         template_dirs: List of directories to search for templates
+        source: The child's source, when it is in hand (a ``from_string`` template);
+            ``template_path`` then names it. A relative ``./`` / ``../`` name in
+            ``{% extends %}`` or ``{% include %}``, in the child and in each parent,
+            resolves against the name of the template that holds it, as Django does
+            (#4265); a ``template_path`` like ``<string>`` gives it nothing to resolve against.
 
     Returns:
         The merged template string with all inheritance resolved
