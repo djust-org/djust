@@ -43,7 +43,7 @@ from ..render_env import apply_render_env
 from ..request_scoped import is_request_scoped_data
 from .. import _per_turn
 from .context import PROCESSOR_RECORD_ATTR, PROCESSOR_REPLAY_ATTR, _keeps_out_of_state
-from .context import _state_model_values
+from .context import _holds_db_value, _state_model_values
 from .context import _request_scoped_keys as request_scoped_keys
 
 logger = logging.getLogger(__name__)
@@ -568,6 +568,25 @@ class RustBridgeMixin:
 
         def get_template(self) -> str: ...
 
+        _jit_serialized_keys: Set[str]
+
+        def _jit_serialize_context(
+            self,
+            context: Dict[str, Any],
+            template_content: str,
+            keys: Optional[Iterable[str]] = None,
+            add_counts: bool = True,
+            into: Optional[Set[str]] = None,
+        ) -> Set[str]: ...
+
+        def _deep_serialize_dict(
+            self, d: Dict[str, Any], template_content: Optional[str] = None, var_name: str = ""
+        ) -> Dict[str, Any]: ...
+
+        def _deep_serialize_sequence(
+            self, items: List[Any], template_content: Optional[str] = None, var_name: str = ""
+        ) -> List[Any]: ...
+
     #: Adaptive loop-cache bypass (#3071). After this many consecutive
     #: renders whose loop-cache hit rate is below
     #: ``_LOOP_CACHE_MIN_HIT_RATIO``, the view turns the loop render cache off
@@ -952,6 +971,57 @@ class RustBridgeMixin:
         return token
 
     @recorded_render
+    def _explicit_jit_serialize(self, context: Any, keys: Set[str], nested_keys: List[str]) -> None:
+        """Run the legacy JIT over an explicit context's walked names (#4069 review S1).
+
+        ``keys``: top-level QuerySets / model lists whose rows the template walks past
+        their columns. ``nested_keys``: plain dicts / lists holding a QuerySet / Model
+        inside a container (the #3788 walks). A JIT
+        failure is logged and leaves the value to the normalize pass (the rows captured
+        for the sidecar still answer the loop alias), as legacy's JIT failure does; a
+        recursive partial re-raises, as on legacy.
+        """
+        from .context import _jit_serialization_enabled
+        from .jit import _jit_template_content
+
+        if not _jit_serialization_enabled():
+            return
+        template_content: Optional[str] = None
+        try:
+            template_content = _jit_template_content(self)
+            if not template_content:
+                return
+            self._nested_template_source = [template_content]
+            self._jit_serialize_context(
+                context,
+                template_content,
+                keys=keys,
+                add_counts=False,
+                into=self._jit_serialized_keys,
+            )
+            for key in nested_keys:
+                value = context[key]
+                walk = (
+                    self._deep_serialize_dict
+                    if type(value) is dict
+                    else self._deep_serialize_sequence
+                )
+                dict.__setitem__(context, key, walk(value, template_content, key))
+        except Exception as exc:  # noqa: BLE001 - the normalize pass serializes what is left
+            if template_content and "djust:recursive-partial" in template_content:
+                raise
+            from .._exposure_diagnostics import log_failure_for
+
+            # Value-free on an explicit owner: the exception text can carry row data.
+            log_failure_for(
+                logger,
+                (self,),
+                exc,
+                "JIT auto-serialization failed",
+                level="warning",
+                traceback=True,
+            )
+
     def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
         """Sync Python state to Rust backend.
 
@@ -1030,6 +1100,7 @@ class RustBridgeMixin:
                 _overlay_raw.update(_state_model_values(full_context))
 
             _raw_models_for_sidecar = {}
+            _explicit_jit_keys: Dict[str, Any] = {}
             _qs_roots: Optional[FrozenSet[str]] = None
             _walk_paths: Optional[Dict[str, FrozenSet[str]]] = None
             for _key, _val in full_context.items():
@@ -1048,9 +1119,10 @@ class RustBridgeMixin:
                 # ``u -> users.<N>``; the normalized column dicts cannot answer
                 # it. Keep the EVALUATED ROWS (never the QuerySet, so
                 # ``{{ users.query }}`` stays unreachable, #4241) when the
-                # template walks past a row's columns. ``list(qs)`` fills the
-                # result cache the normalize loop below reads: no second query.
-                # The rows are floored with every other sidecar value below.
+                # template walks past a row's columns. Such a name first goes
+                # through the JIT (#4069 review S1, below); only a name the JIT
+                # did not serialize keeps its rows, floored with every other
+                # sidecar value below.
                 # Explicit only: legacy's JIT serialized these rows with their
                 # relation paths, and reaches here raw only when the JIT failed
                 # (logged there; a re-walk would raise the same error again).
@@ -1072,6 +1144,37 @@ class RustBridgeMixin:
                         else next(type(_r) for _r in _val if isinstance(_r, _DjModel))
                     )
                     if rows_need_live_walk(_model_cls, _paths):
+                        _explicit_jit_keys[_key] = _val
+
+            # #4069 review S1: an explicit view's walked rows also go through the
+            # JIT, as legacy's do, so each row dict CARRIES the relation values the
+            # template reads. A filtered operand (``users|slice``, ``dictsort``,
+            # ``{% with %}``, ``|first``) has no sidecar alias and answers from those
+            # dicts; the row cap applies; and the value is part of the loop render
+            # cache's item hash. A dict holding a QuerySet / Model goes through the
+            # template-aware container walk (#3788). The captured rows above stay for
+            # the method / alias shapes the JIT does not serialize.
+            if type(full_context) is ExplicitRenderContext:
+                # ``_all_method_rows`` is NOT reset here: ``serialize_for_template``
+                # in the view's own ``get_context_data`` already wrote it this render.
+                self._jit_serialized_keys = set()
+                _nested_db_keys = [
+                    _key
+                    for _key, _val in full_context.items()
+                    if _key not in _explicit_jit_keys
+                    and (type(_val) is dict or type(_val) is list)
+                    and not any(isinstance(_r, _DjModel) for _r in _val)
+                    and _holds_db_value(_val)
+                ]
+                if _explicit_jit_keys or _nested_db_keys:
+                    self._explicit_jit_serialize(
+                        full_context, set(_explicit_jit_keys), _nested_db_keys
+                    )
+                # A name the JIT did not serialize keeps its evaluated rows for the
+                # sidecar alias walk. A serialized one needs none (as on legacy), and
+                # evaluating it here would cost the outer query a second time.
+                for _key, _val in _explicit_jit_keys.items():
+                    if _key not in self._jit_serialized_keys:
                         _raw_models_for_sidecar[_key] = list(_val)
 
             for _key, _val in list(full_context.items()):

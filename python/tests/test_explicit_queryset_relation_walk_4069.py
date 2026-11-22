@@ -155,3 +155,68 @@ def test_explicit_relation_walk_query_count(world):
     baseline = _outer_selects("{% for u in users %}{{ u.username }}{% endfor %}")
     walked = _outer_selects("{% for u in users %}{{ u.groups.count }}{% endfor %}")
     assert walked == baseline, (baseline, walked)
+
+
+# -- train/2.0-ah review S1: the shapes the row capture alone did not answer ----------------------
+#
+# A filtered operand has no sidecar loop alias (#2504) and a QuerySet inside a container has no
+# top-level capture, so an explicit view rendered these empty. The explicit sync now runs the JIT
+# over the walked names (as legacy does), so each row dict carries the relation values.
+
+
+def _nested_users() -> dict:
+    return {"page": {"users": User.objects.all().order_by("pk")}}
+
+
+def _rows_of_dicts() -> dict:
+    return {"rows": [{"label": "all", "users": User.objects.all().order_by("pk")}]}
+
+
+FILTERED_SHAPES = [
+    pytest.param(
+        "{% for u in users|slice:':2' %}{{ u.groups.count }};{% endfor %}", _users, id="slice"
+    ),
+    pytest.param(
+        "{% for u in users|dictsort:'username' %}{{ u.groups.count }};{% endfor %}",
+        _users,
+        id="dictsort",
+    ),
+    pytest.param(
+        "{% with first=users|first %}{{ first.groups.count }}{% endwith %}", _users, id="with-first"
+    ),
+    pytest.param(
+        "{% for u in users|slice:':2' %}{{ u.groups.count }};{% endfor %}",
+        _user_list,
+        id="slice-list",
+    ),
+    pytest.param(
+        "{% for u in page.users %}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]"
+        "{% endfor %}",
+        _nested_users,
+        id="queryset-in-dict",
+    ),
+    pytest.param(
+        "{% for r in rows %}{% for u in r.users %}{{ u.groups.count }};{% endfor %}{% endfor %}",
+        _rows_of_dicts,
+        id="queryset-in-list-of-dicts",
+    ),
+]
+
+
+@pytest.mark.parametrize("source,factory", FILTERED_SHAPES)
+def test_explicit_filtered_and_nested_shapes_match_django(world, source, factory):
+    expected = _django(source, factory())
+    assert expected.strip(";[],") not in ("", "0")  # non-vacuous oracle
+    assert _render(source, factory, "explicit") == expected
+
+
+def test_explicit_jit_rows_keep_the_floor(world):
+    """The JIT rows on an explicit view are floored as legacy's are: no hash through a
+    filtered operand's relation walk. A pin, no gate-off: the JIT's floor is legacy's,
+    pinned by test_queryset_all_followups_3788 (now explicit)."""
+    source = (
+        "{% for u in users|slice:':2' %}{{ u.password }}|"
+        "{{ u.groups.first.user_set.first.password }};{% endfor %}"
+    )
+    got = _render(source, _users, "explicit")
+    assert "pbkdf2" not in got and "secret" not in got, got

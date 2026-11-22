@@ -73,6 +73,7 @@ def test_the_harness_sees_the_flag(world):
 HELD_LIST = [
     ("held-list-column", "{% for x in us %}<li>{{ x.email }}</li>{% endfor %}"),
     ("held-list-relation", "{% for x in us %}<li>{{ x.groups.count }}</li>{% endfor %}"),
+    ("held-list-filtered", "{% for x in us|slice:':2' %}<li>{{ x.groups.count }}</li>{% endfor %}"),
 ]
 
 

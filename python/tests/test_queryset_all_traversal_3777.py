@@ -84,13 +84,11 @@ def _liveview_render(source: str, context: dict) -> str:
 
 
 def _legacy_liveview_render(source: str, context: dict) -> str:
-    """The legacy policy's LiveView, kept for the shapes an explicit view
-    does not answer yet: a loop over a FILTERED operand
-    (``users|slice:':2'``, ``dictsort``, ``{% with %}``, ``|first``) and a
-    model list nested in a dict. Neither reaches the render sidecar's loop
-    alias (#2504); the row capture of #4069 serves a top-level name only.
-    The state-model overlay (#3936, ``state_models_as_handles``) covers the
-    filtered operand."""
+    """The legacy policy's LiveView, kept for what is legacy's own: the JIT
+    handler's error log (``test_the_jit_handler_logs_it``). The filtered
+    operand and container shapes run explicit since the train/2.0-ah review
+    (S1): the explicit sync runs the JIT over the names whose rows the
+    template walks."""
 
     class _V(LiveView):
         exposure_policy = "legacy"
