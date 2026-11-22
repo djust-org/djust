@@ -150,6 +150,12 @@ def _method_read_rows_take_the_jit(full_context: Any) -> bool:
     return type(full_context) is ExplicitRenderContext
 
 
+def _explicit_fk_rows_take_the_jit(model_class: Any, paths: FrozenSet[str]) -> bool:
+    """Does an explicit view's QuerySet go through the JIT because its rows' forward relation is read
+    as one segment (review N4)? A function so the gate-off test can turn it off."""
+    return _paths_read_a_relation(model_class, paths)
+
+
 def _overlay_model_class(value: Any) -> Any:
     """The model class behind one overlay value (a ``Model``, a ``QuerySet``, a model list)."""
     from django.db.models import Model, QuerySet
@@ -1246,7 +1252,12 @@ class RustBridgeMixin:
                         if _is_qs
                         else next(type(_r) for _r in _val if isinstance(_r, _DjModel))
                     )
-                    if rows_need_live_walk(_model_cls, _paths, full_context):
+                    if rows_need_live_walk(_model_cls, _paths, full_context) or (
+                        # Review N4: a forward FK read as one segment (``{{ p.content_type }}``)
+                        # was walked per row through the sidecar alias (2N+1 queries); the JIT
+                        # selects it with the rows, as legacy's does.
+                        _is_qs and _explicit_fk_rows_take_the_jit(_model_cls, _paths)
+                    ):
                         _explicit_jit_keys[_key] = _val
 
             # #4069 review S1: an explicit view's walked rows also go through the

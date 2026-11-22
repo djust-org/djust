@@ -331,3 +331,35 @@ def test_gate_off_without_the_jit_an_explicit_rebinding_reads_empty(world, monke
     monkeypatch.setattr(rust_bridge, "_method_read_rows_take_the_jit", lambda ctx: False)
     _, source, _ = S1_CASES[1]
     assert _render(source, _qs, "explicit") == "3|,,,"
+
+
+# -- review N4: an explicit QuerySet loop reading a forward FK as one segment -------------------
+#
+# Pre-existing, with the overlay on or off: ``{% for p in perms %}{{ p.content_type }}`` on an
+# explicit view walked each row's FK through the sidecar alias (2N+1 queries). Its rows now go
+# through the JIT, which selects the relation with them, as legacy's do.
+
+FK_ONE_SEGMENT = [
+    "{% for p in perms %}{{ p.content_type }};{% endfor %}",
+    "{% for p in perms %}{% if p.content_type %}y{% endif %}{% endfor %}",
+]
+
+
+@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
+@pytest.mark.parametrize("source", FK_ONE_SEGMENT)
+def test_an_explicit_fk_loop_is_one_query(world, source, flag):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
+    want = DjangoTemplate(source).render(DjangoContext(_perms()))
+    out, queries = _measure(source, _perms, "explicit", flag=flag)
+    assert out == want
+    assert queries == 1, queries
+
+
+def test_gate_off_an_explicit_fk_loop_walks_each_row(world, monkeypatch):
+    from djust.mixins import rust_bridge
+
+    monkeypatch.setattr(rust_bridge, "_explicit_fk_rows_take_the_jit", lambda *a: False)
+    _, queries = _measure(FK_ONE_SEGMENT[0], _perms_sliced, "explicit", flag=False)
+    assert queries > 5, queries
