@@ -1049,8 +1049,9 @@ class RustBridgeMixin:
         framework itself requires (after a restore whose state differs from
         the page, or after a save that failed) stays, because the page and
         the server's diff baseline would otherwise disagree. Keys named in
-        ``set_changed_keys(keys)`` stay marked changed; only the full-HTML
-        request is withdrawn. A no-op when nothing was requested.
+        ``set_changed_keys(keys)`` stay marked changed; only the render
+        request (full HTML from ``request_full_render()``, or the diffed
+        render from ``set_changed_keys()``) is withdrawn. A no-op when nothing was requested.
 
         Replaces assigning ``self._force_full_html = False``, which keeps
         working (and, unlike this method, also clears a framework request).

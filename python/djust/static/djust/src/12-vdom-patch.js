@@ -1453,8 +1453,8 @@ function _morphElementInner(existing, desired) {
             // An open native dialog (#4286): `showModal()` put `open` there and
             // the server never renders it, so a full-page morph would close the
             // dialog. 35-dj-dialog.js owns `open` while the server says
-            // dj-dialog="open"; a server close (dj-dialog="close") still goes
-            // through its observer, which calls close().
+            // dj-dialog="open"; otherwise (dj-dialog="close", or none) the
+            // morph removes `open` as before.
             if (name === 'open' && existing.tagName === 'DIALOG' &&
                 (desired.getAttribute('dj-dialog') || '').trim().toLowerCase() === 'open') continue;
             existing.removeAttribute(name);

@@ -102,4 +102,46 @@ describe('html_update morph and an open native dialog (#4286)', () => {
         expect(doc.getElementById('m')).toBe(dialog);
         expect(dialog.hasAttribute('open')).toBe(false);
     });
+
+    it('removes `open` when the desired dialog has no dj-dialog at all', async () => {
+        const dom = createDom('<dialog id="m" dj-dialog="open">x</dialog>');
+        const doc = dom.window.document;
+        const dialog = doc.getElementById('m');
+        await flush(dom);
+        expect(dialog.hasAttribute('open')).toBe(true);
+
+        dom.window.djust.morphChildren(
+            doc.getElementById('root'),
+            desiredRoot(dom, '<dialog id="m">x</dialog>'),
+        );
+        await flush(dom);
+
+        expect(dialog.hasAttribute('open')).toBe(false);
+    });
+
+    it('keeps `open` through a real html_update frame', async () => {
+        const dom = createDom('<dialog id="m" dj-dialog="open"><p id="count">0</p></dialog>');
+        const doc = dom.window.document;
+        const dialog = doc.getElementById('m');
+        await flush(dom);
+        expect(dialog.hasAttribute('open')).toBe(true);
+
+        const ws = new dom.window.djust.LiveViewWebSocket();
+        ws.enabled = true;
+        ws.ws = new dom.window.WebSocket();
+        ws.viewMounted = true;
+        await ws.handleMessage({
+            type: 'html_update',
+            version: 2,
+            event_name: 'typed',
+            html:
+                '<div dj-view="test.views.TestView" dj-root>' +
+                '<dialog id="m" dj-dialog="open"><p id="count">2</p></dialog></div>',
+        });
+        await flush(dom);
+
+        expect(doc.getElementById('m')).toBe(dialog);
+        expect(dialog.hasAttribute('open')).toBe(true);
+        expect(doc.getElementById('count').textContent).toBe('2');
+    });
 });

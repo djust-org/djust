@@ -8557,11 +8557,18 @@ class ViewRuntime(RuntimeTurnPort):
             await sync_to_async(view._sync_state_to_rust)()
         html, patches, version = await sync_to_async(view.render_with_diff)()
         wire_version = self.transport.next_client_version(html, version)
-        if force_html:
-            # An explicit catch-up turn (#3200): the browser missed a withheld
-            # frame, so a patch against its DOM is not safe.
-            view._force_full_html = False
+        from .mixins.rust_bridge import full_html_requested
+
+        if force_html or full_html_requested(view):
+            # An explicit catch-up turn (#3200) or a full-page request: a
+            # patch against the browser's DOM is not safe / not wanted.
             patches = None
+        # Consume any render request once, as the WebSocket twins do
+        # (_background_render.py, websocket.py): set_changed_keys()'s
+        # RENDER_REQUESTED keeps the diff, but must not leak to later ticks
+        # or events (#4286).
+        if getattr(view, "_force_full_html", False):
+            view._force_full_html = False
 
         if patches is not None:
             patch_list = fast_json_loads(patches) if isinstance(patches, str) else patches

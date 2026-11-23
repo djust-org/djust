@@ -545,7 +545,7 @@ def archive(self, item_id: int, **kwargs):
 
 After an in-place write on an object djust compares by identity (a model instance held in state), name the attribute instead: `self.set_changed_keys("rows")`.
 
-Either form sends the render as a diff (`patch`), like any other turn. Before 2.0.0rc3 it sent the whole page, which closed an open `{% modal native=True %}`. Use `request_full_render()` when the page should be replaced rather than patched.
+Either form sends the render as a diff (`patch`) on the view route, like any other turn (an event routed to a component with `component_id` is still answered with the full-HTML `component_event` frame). Before 2.0.0rc3 it sent the whole page, which closed an open `{% modal native=True %}`. Use `request_full_render()` when the page should be replaced rather than patched.
 
 ---
 

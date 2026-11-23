@@ -140,6 +140,48 @@ class TickBoxView(LiveView):
         self.set_changed_keys()
 
 
+class ParamsBoxView(LiveView):
+    """The url_change path: ``handle_params`` writes an opaque object."""
+
+    exposure_policy = "explicit"
+    template = f'<div dj-root dj-view="{_HERE}.ParamsBoxView"><p id="n">{{{{ n }}}}</p></div>'
+
+    def mount(self, request, **kwargs):
+        self._box = Box()
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["n"] = len(self._box.text)
+        return context
+
+    def handle_params(self, params, uri):
+        self._box.text += "x"
+        self.set_changed_keys()
+
+
+class OneShotTickView(LiveView):
+    """Asks for a render on its first tick only."""
+
+    exposure_policy = "explicit"
+    tick_interval = 50
+    template = f'<div dj-root dj-view="{_HERE}.OneShotTickView"><p id="n">{{{{ n }}}}</p></div>'
+
+    def mount(self, request, **kwargs):
+        self._box = Box()
+        self._ticked = False
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["n"] = len(self._box.text)
+        return context
+
+    def handle_tick(self):
+        if not self._ticked:
+            self._ticked = True
+            self._box.text += "x"
+            self.set_changed_keys()
+
+
 async def _dispatch(view, event, **params):
     runtime, transport = await _mounted_event_runtime(view)
     transport.sent.clear()
@@ -239,3 +281,50 @@ async def test_tick_that_calls_set_changed_keys_sends_a_patch():
     assert [f["type"] for f in frames] == ["patch"], consumer.sent
     assert '"1"' in _patch_text(frames[0]), frames[0]
     assert not consumer.view_instance.__dict__.get("_force_full_html")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_url_change_that_calls_set_changed_keys_sends_a_patch():
+    """The url_change sentinel branch: a diff, and the flag is consumed."""
+    runtime, transport = await _mounted_event_runtime(ParamsBoxView())
+    transport.sent.clear()
+    await runtime.dispatch_url_change({"type": "url_change", "params": {"a": "1"}, "uri": "/"})
+    frames = _updates(transport.sent)
+    assert [f["type"] for f in frames] == ["patch"], transport.sent
+    assert not runtime.view_instance.__dict__.get("_force_full_html")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_sse_runtime_tick_consumes_the_render_request():
+    """The runtime tick (SSE) answers with a patch and does not leak the flag.
+
+    Without the consume in ``_render_async_result`` the leaked flag bypasses
+    the unchanged-state check, so a later tick that changes nothing renders
+    again, and so does the next event.
+    """
+    runtime, transport = await _mounted_event_runtime(OneShotTickView())
+    view = runtime.view_instance
+    transport.sent.clear()
+    assert await runtime._tick_once(view) is True
+    frames = _updates(transport.sent)
+    assert [f["type"] for f in frames] == ["patch"], transport.sent
+    assert '"1"' in _patch_text(frames[0]), frames[0]
+    assert not view.__dict__.get("_force_full_html"), "the tick consumed the request"
+    transport.sent.clear()
+    assert await runtime._tick_once(view) is False, "a later quiet tick renders nothing"
+    assert _updates(transport.sent) == []
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_sse_async_result_with_a_full_page_request_sends_html():
+    """A real ``True`` on the runtime async path is honoured, then consumed."""
+    runtime, transport = await _mounted_event_runtime(OneShotTickView())
+    view = runtime.view_instance
+    transport.sent.clear()
+    view._force_full_html = True
+    await runtime._render_async_result("tick", source="tick")
+    assert [f["type"] for f in _updates(transport.sent)] == ["html_update"], transport.sent
+    assert view._force_full_html is False
