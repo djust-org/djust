@@ -970,6 +970,12 @@ class FeedView(LiveView):
         self.offset += self._page_size
 ```
 
+A test that called `_get_private_state()` to check what a view keeps now raises on an
+explicit view. Use `LiveViewTestClient.persisted_state()` (or `djust.testing.persisted_state(view)`)
+instead: it returns what the view would save, split by destination, and
+`"name" not in persisted_state(view).names` asserts that a value a page only reads is saved nowhere
+([Asserting what is saved](../testing/index.md#asserting-what-is-saved)).
+
 ## 4. Still to be removed before the final release
 
 These still work on the 2.0 development line. Each is to be removed, or made
@@ -1025,4 +1031,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 8994727a25e2 -->
+<!-- generated-doc prose-sha256: f2988a37179e -->

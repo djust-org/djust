@@ -145,6 +145,31 @@ assert len(state["items"]) == 3
 
 ---
 
+#### `persisted_state() -> PersistedState`
+
+What the mounted view would save, split by destination, for a view under explicit exposure (a legacy view raises `TypeError`; it persists `get_state()`). `get_state()` is what the view holds; this is what it keeps between requests. It is a read-only projection: nothing is written to the session. Also available as `djust.testing.persisted_state(view)`, which takes the view instance.
+
+| Field | Contents |
+|---|---|
+| `server` | `state(persist="server")` fields and component records |
+| `snapshot` | `state(persist="client")` fields (the signed back-navigation snapshot) |
+| `client` | `state(client=True)` fields |
+| `automatic` | automatic state: public attributes the view set (in `mount()` or a handler) and did not declare, encoded as stored |
+| `automatic_private` | the underscore attributes automatic state keeps |
+| `automatic_components` | automatic state's component records |
+| `automatic_bytes` | the encoded size of the automatic state, the figure `DJUST_AUTOMATIC_STATE_MAX_KB` limits and warns on |
+| `names` | every name saved anywhere (a property) |
+
+```python
+saved = client.persisted_state()
+assert "secret_rows" not in saved.names      # rows the page only reads are saved nowhere
+assert saved.automatic_bytes < 20_000
+```
+
+A value returned only from `get_context_data()` is computed again for every render and is in no destination. With `automatic_state = False` (or `DJUST_AUTOMATIC_STATE = False`) the `automatic*` fields are empty and `automatic_bytes` is 0. A view over its limit raises `StateLimitExceeded`, as a save would.
+
+---
+
 ### Example: Full Test
 
 ```python

@@ -368,6 +368,23 @@ markers = [
 ]
 ```
 
+### Asserting what is saved
+
+`get_state()` is what a view holds, not what it saves. To check what an explicit view keeps between
+requests, and that a value the page only reads is not among it:
+
+```python
+client = LiveViewTestClient(InvoiceView)
+client.mount()
+saved = client.persisted_state()
+assert "invoice_rows" not in saved.names          # loaded for the render, saved nowhere
+assert saved.server["draft_note"] == "x"          # state(persist="server")
+```
+
+`persisted_state()` splits the state by destination (`server`, `snapshot`, `client`, `automatic`,
+`automatic_private`, `automatic_components`) and reports `automatic_bytes`, the size the state limits
+use. It writes nothing. See the [testing API reference](../api-reference/testing.md).
+
 ### Failing a test on an unsupplied template name
 
 Under explicit exposure a template name that nothing supplies renders empty, and the
