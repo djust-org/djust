@@ -449,6 +449,7 @@ def _dispatch_api_authenticated(
             validation.get("error") or "Parameter validation failed",
             details={
                 "expected": validation.get("expected", []),
+                "missing": validation.get("missing", []),
                 "provided": validation.get("provided", []),
                 "type_errors": validation.get("type_errors") or [],
             },
@@ -710,6 +711,7 @@ def _dispatch_server_function_checked(
             validation.get("error") or "Parameter validation failed",
             details={
                 "expected": validation.get("expected", []),
+                "missing": validation.get("missing", []),
                 "provided": validation.get("provided", []),
                 "type_errors": validation.get("type_errors") or [],
             },

@@ -735,7 +735,9 @@ parameter with that name, or has a `**` catch-all:
 
 `search(value)` therefore receives just `value`, and `save` receives every
 field through `**fields`. `dj-value-*` arguments are always sent, and one that
-reuses a generated name is rejected. `_target` is never sent. Only
+reuses a generated name is rejected. The one exception is a component's identity
+`name` (ADR-033 D5), which the framework marks `data-djust-optional` and sends only
+when the handler declares it (#4285). `_target` is never sent. Only
 `dj-value-*` names become arguments: `data-*` attributes are ignored for strict
 handlers. (The JSON `dj-params` attribute is not read at all since 2.0.)
 

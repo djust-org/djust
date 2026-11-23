@@ -565,7 +565,7 @@ The browser knows each strict handler's signature, so a `dj-input` bound to
 `key` and `code` are sent only when the handler declares them or has a `**`
 catch-all. A component's identity `name` (ADR-033 D5: `{% toggle_group name=... %}`,
 or `Component(name=...)` through `event_attrs`) follows the same rule: the framework
-marks it `data-djust-optional`, so a handler that does not declare `name` is not
+marks it `data-djust-optional` (framework-internal; don't write it yourself), so a handler that does not declare `name` is not
 sent it. A `dj-value-name` you write yourself is still checked, and still refused
 when undeclared. That is why a strict handler no longer needs `**kwargs`. The server
 checks every event again, including ones a script sends by hand.
@@ -1088,4 +1088,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: d0900bbc959e -->
+<!-- generated-doc prose-sha256: 2b89dcad5603 -->

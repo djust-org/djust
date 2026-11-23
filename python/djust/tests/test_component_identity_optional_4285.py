@@ -80,3 +80,25 @@ def test_browser_payload_without_name_is_accepted():
     assert client.send_event("set_status", value="done")["success"] is True
     refused = client.send_event("set_status", name="status", value="done")
     assert refused["success"] is False
+
+
+class _RequiredValueView(LiveView):
+    """The issue's repro: a required ``value: str`` and no ``name`` parameter."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>x</div>"
+
+    @event_handler(parameter_policy="strict")
+    def set_status(self, value: str):
+        self.picked = value
+
+
+def test_rendered_toggle_group_payload_reaches_a_required_value_handler():
+    html = _render(
+        "{% toggle_group name='status' options=options value='open' event='set_status' %}"
+    )
+    assert 'data-djust-optional="name"' in html
+    client = LiveViewTestClient(_RequiredValueView)
+    client.mount()
+    # What the browser sends for a marked, undeclared ``name``: just the value.
+    assert client.send_event("set_status", value="done")["success"] is True

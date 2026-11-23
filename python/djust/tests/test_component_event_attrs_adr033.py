@@ -81,7 +81,12 @@ class TestEventAttrs:
     def test_name_rides_along_only_when_set(self):
         assert "dj-value-name" not in Rating(value=1).event_attrs("set_rating", value=1)
         out = Rating(value=1, name="service").event_attrs("set_rating", value=2)
-        assert out == 'dj-click="set_rating" dj-value-value:int="2" dj-value-name="service"'
+        # #4285: the identity stamp is marked optional, so a strict handler that does not
+        # declare ``name`` still accepts the event.
+        assert out == (
+            'dj-click="set_rating" dj-value-value:int="2" dj-value-name="service"'
+            ' data-djust-optional="name"'
+        )
 
     def test_a_form_field_name_is_not_an_identity(self):
         """Review 🔴1: 26 components mean the HTML field name by ``name`` and

@@ -316,7 +316,8 @@ def _mismatch_message(
     parts: list[str] = []
     if not has_var_positional and len(positional) > len(slots):
         count = len([n for n in slots if n not in trusted])
-        parts.append(f"the handler takes {count} positional arguments")
+        noun = "argument" if count == 1 else "arguments"
+        parts.append(f"the handler takes {count} positional {noun}")
     filled = slots[: len(positional)]
     duplicate = [n for n in filled if n in params and n not in trusted]
     if duplicate:
@@ -328,7 +329,7 @@ def _mismatch_message(
         for n, p in declared.items()
         if p.kind is kinds.POSITIONAL_ONLY and n in params and n not in trusted
     ]
-    if positional_only and not has_var_keyword:
+    if positional_only:
         parts.append("; ".join(f"'{n}' is positional-only" for n in positional_only))
     allowed = _keyword_names(signature, trusted)
     if not has_var_keyword and any(k not in allowed and k not in positional_only for k in params):

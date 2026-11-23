@@ -28,6 +28,10 @@ class _V(LiveView):
         pass
 
     @event_handler(parameter_policy="strict")
+    def pos_only_kw(self, x: str, /, **kw):
+        pass
+
+    @event_handler(parameter_policy="strict")
     def typed(self, count: int):
         pass
 
@@ -71,13 +75,19 @@ def test_duplicate_positional_and_named():
 
 def test_too_many_positional():
     r = _check("only_value", {}, positional=["a", "b"])
-    assert "takes 1 positional arguments" in r["error"]
+    assert "takes 1 positional argument" in r["error"]
+    assert "1 positional arguments" not in r["error"]
 
 
 def test_positional_only_passed_by_keyword():
     r = _check("pos_only", {"x": "a"})
     assert "'x' is positional-only" in r["error"]
     assert "undeclared" not in r["error"]
+
+
+def test_positional_only_with_catch_all_is_named_too():
+    r = _check("pos_only_kw", {"x": "a"})
+    assert "'x' is positional-only" in r["error"]
 
 
 def test_type_error_message_unchanged():
