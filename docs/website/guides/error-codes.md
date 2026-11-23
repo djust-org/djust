@@ -496,6 +496,16 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 **Fix**: Set `DJUST_REFRESH_ON_ANY_WRITE = True` (every write a view's step makes re-reads everything it holds), or call `self.rows_changed(Model)` after the write. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C042"]}` when those tables only change through your own statements.
 
+### C043: Invalid DJUST_UNSUPPLIED_NAMES
+
+**Severity**: Error
+
+**What causes it**: `DJUST_UNSUPPLIED_NAMES` is set to a value that is not `"debug"`, `"warn"` or `"error"`. The setting chooses how a template name a view holds but does not supply is reported (#4279). A bad value does not break rendering; it behaves as `"debug"`, which is why the check fails at startup instead.
+
+**Fix**: Set it to `"debug"`, `"warn"` or `"error"`, or remove it.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

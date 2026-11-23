@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 import weakref
-from types import FunctionType
+from types import FunctionType, MappingProxyType
 from typing import Any, Mapping
 
 from ._exposure import ExposureConfigurationError
@@ -52,21 +52,112 @@ class UnsuppliedTemplateNameError(ExposureConfigurationError):
     """
 
 
+_INVALID_MODE_LOGGED = False
+
+
+def _normalised_mode(value: Any) -> "str | None":
+    """The mode ``value`` names (case-insensitive), or None when it is not one."""
+    if type(value) is not str:
+        return None
+    mode = value.strip().lower()
+    return mode if mode in _MODES else None
+
+
+def invalid_mode_message(value: Any) -> str:
+    return "%s must be one of %s; got %s." % (
+        SETTING,
+        ", ".join('"%s"' % m for m in _MODES),
+        repr(value)[:80],
+    )
+
+
 def unsupplied_names_mode() -> str:
-    """The ``DJUST_UNSUPPLIED_NAMES`` mode; any other value is a configuration error.
+    """The ``DJUST_UNSUPPLIED_NAMES`` mode.
 
-    A typo must not silently turn strictness off, so it raises instead of falling back.
+    An invalid value is reported once at ERROR level and treated as ``"debug"``: a
+    dev-only diagnostic setting must not take a production render down. ``manage.py
+    check`` fails on it at startup (djust.C043).
     """
+    global _INVALID_MODE_LOGGED
     from django.conf import settings
-    from django.core.exceptions import ImproperlyConfigured
 
-    mode = getattr(settings, SETTING, "debug")
-    if type(mode) is not str or mode not in _MODES:
-        raise ImproperlyConfigured(
-            "%s must be one of %s; got %s."
-            % (SETTING, ", ".join('"%s"' % m for m in _MODES), repr(mode))
-        )
+    value = getattr(settings, SETTING, "debug")
+    mode = _normalised_mode(value)
+    if mode is None:
+        if not _INVALID_MODE_LOGGED:
+            _INVALID_MODE_LOGGED = True
+            logger.error('%s Using "debug" until it is fixed.', invalid_mode_message(value))
+        return "debug"
     return mode
+
+
+#: The names Django's own context processors supply, so no processor runs to learn them.
+_KNOWN_PROCESSOR_KEYS: Mapping[str, frozenset] = MappingProxyType(
+    {
+        "django.contrib.auth.context_processors.auth": frozenset({"user", "perms"}),
+        "django.contrib.messages.context_processors.messages": frozenset(
+            {"messages", "DEFAULT_MESSAGE_LEVELS"}
+        ),
+        "django.template.context_processors.request": frozenset({"request"}),
+        "django.template.context_processors.debug": frozenset({"debug", "sql_queries"}),
+        "django.template.context_processors.i18n": frozenset(
+            {"LANGUAGES", "LANGUAGE_CODE", "LANGUAGE_BIDI"}
+        ),
+        "django.template.context_processors.tz": frozenset({"TIME_ZONE"}),
+        "django.template.context_processors.static": frozenset({"STATIC_URL"}),
+        "django.template.context_processors.media": frozenset({"MEDIA_URL"}),
+        "django.template.context_processors.csrf": frozenset({"csrf_token"}),
+    }
+)
+
+
+def context_processor_names(request: Any = None) -> frozenset:
+    """Every name the configured ``TEMPLATES`` context processors can supply (B1).
+
+    A name a context processor supplies is not "unsupplied": the render path adds it
+    after the notice runs, so the notice and T027 must count it. Django's own
+    processors come from a known map; any other is called with ``request`` (or a fake
+    ``RequestFactory`` request) inside a ``try``. A processor that cannot be resolved
+    or raises supplies nothing here, which is what the render does with it too.
+    Never raises.
+    """
+    names: set[str] = set()
+    try:
+        from django.conf import settings
+
+        from .utils import is_app_dirs_template_backend
+
+        paths: list[Any] = []
+        for config in getattr(settings, "TEMPLATES", []) or []:
+            if is_app_dirs_template_backend(config.get("BACKEND")):
+                paths.extend((config.get("OPTIONS") or {}).get("context_processors") or [])
+    except Exception:  # noqa: BLE001
+        return frozenset()
+    fake = None
+    for path in paths:
+        try:
+            if isinstance(path, str) and path in _KNOWN_PROCESSOR_KEYS:
+                names.update(_KNOWN_PROCESSOR_KEYS[path])
+                continue
+            if isinstance(path, str):
+                from django.utils.module_loading import import_string
+
+                processor = import_string(path)
+            else:
+                processor = path
+            if request is None and fake is None:
+                from django.contrib.auth.models import AnonymousUser
+                from django.test import RequestFactory
+
+                fake = RequestFactory().get("/")
+                fake.user = AnonymousUser()
+                fake.session = {}
+            supplied = processor(request if request is not None else fake)
+            if supplied:
+                names.update(k for k in supplied if type(k) is str)
+        except Exception:  # noqa: BLE001 — a processor that fails supplies nothing
+            continue
+    return frozenset(names)
 
 
 #: Where the warning sends a reader.
@@ -139,11 +230,20 @@ def _advice(view: Any, name: str) -> str:
 def unsupplied_template_names(view: Any, context: Mapping[str, Any]) -> list[str]:
     """Names the view's template reads, the view holds, and ``context`` lacks."""
     paths = view.template_paths()
-    return sorted(
+    candidates = [
         name
         for name in paths
         if type(name) is str and name not in context and _held_by_view(view, name)
-    )
+    ]
+    if not candidates:
+        return []
+    supplied = _processor_names(view)
+    return sorted(name for name in candidates if name not in supplied)
+
+
+def _processor_names(view: Any) -> frozenset:
+    """The names the view's context processors add after the notice runs (B1)."""
+    return context_processor_names(getattr(view, "request", None))
 
 
 #: The suffix the legacy policy derived a count from (``items`` -> ``items_count``).
@@ -183,7 +283,7 @@ def unsupplied_count_names(
         stem = name[: -len(COUNT_SUFFIX)]
         if not stem or stem not in context or _held_by_view(view, name):
             continue
-        if _is_sized_collection(context[stem]):
+        if _is_sized_collection(context[stem]) and name not in _processor_names(view):
             found.append((name, stem))
     return sorted(found)
 

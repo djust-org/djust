@@ -20,6 +20,7 @@ class Page(LiveView):
     shown = state("a", client=True)
     hidden = state("b")
     kept = state("k", persist="server")
+    not_rendered = state("NR_SENTINEL", render=False)
 
     def mount(self, request, **kwargs):
         self.secret_rows = ["row"]
@@ -60,6 +61,8 @@ def test_persisted_state_splits_destinations():
     assert "kept" in saved.server and "kept" not in saved.automatic
     assert "shown" in saved.client
     assert saved.automatic["hidden"] == "b"
+    # S2: declared fields without persist= are saved in automatic state, render=False too.
+    assert saved.automatic["not_rendered"] == "NR_SENTINEL"
     assert {"secret_rows", "kept", "shown", "hidden"} <= saved.names
 
 
@@ -102,3 +105,13 @@ def test_automatic_bytes_matches_saved_envelope_size():
         _automatic_state.project(client.view_instance).text.encode()
     )
     assert saved.automatic_bytes > 0
+
+
+def test_unsupplied_template_name_error_is_importable_from_the_public_module():
+    """S3: the error a test catches is importable from djust.testing, not a private module."""
+    from django.core.exceptions import ImproperlyConfigured
+
+    import djust.testing as public
+
+    assert "UnsuppliedTemplateNameError" in public.__all__
+    assert issubclass(public.UnsuppliedTemplateNameError, ImproperlyConfigured)

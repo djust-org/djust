@@ -38,6 +38,7 @@ import math
 import re as _re_filters
 from collections.abc import Mapping
 from html.parser import HTMLParser
+from types import MappingProxyType
 from typing import Any, cast
 
 from django.utils.functional import Promise
@@ -2725,7 +2726,7 @@ RAW_BODY_TAGS = frozenset({"split_pane", "tabs"})
 
 #: Separator tokens of a raw-body tag (``{% pane %}`` inside ``{% split_pane %}``). For template path
 #: extraction the segments are one body rendered with the same context, so the separator is dropped.
-RAW_BODY_SEGMENT_TAGS = {"split_pane": "pane"}
+RAW_BODY_SEGMENT_TAGS: Mapping[str, str] = MappingProxyType({"split_pane": "pane"})
 
 
 def _checked_raw_handler(name: str, compile_func: Any, library: Any) -> Any:

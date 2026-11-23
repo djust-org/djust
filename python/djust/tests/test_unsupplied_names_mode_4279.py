@@ -12,7 +12,6 @@ import warnings
 from typing import Any
 
 import pytest
-from django.core.exceptions import ImproperlyConfigured
 
 from djust import LiveView, state
 from djust import _exposure_unsupplied
@@ -149,11 +148,91 @@ def test_error_mode_is_quiet_for_a_supplying_view_and_a_legacy_view(settings):
     assert "[x]" in _render(Legacy)[1]
 
 
-def test_invalid_mode_raises_improperly_configured(settings):
+def test_invalid_mode_falls_back_to_debug_and_logs_once(settings, caplog):
+    """S1: a typo in a dev-only setting must not take every production render down."""
     settings.DJUST_UNSUPPLIED_NAMES = "erorr"
-    with pytest.raises(ImproperlyConfigured) as excinfo:
+    settings.DEBUG = False
+    _exposure_unsupplied._INVALID_MODE_LOGGED = False
+    with caplog.at_level(logging.ERROR, logger=LOGGER):
         _render(Holds)
-    assert "DJUST_UNSUPPLIED_NAMES" in str(excinfo.value) and '"error"' in str(excinfo.value)
+        _render(Holds)
+    bad = [r for r in caplog.records if "DJUST_UNSUPPLIED_NAMES" in r.getMessage()]
+    assert len(bad) == 1 and '"error"' in bad[0].getMessage()
+
+
+def test_mode_is_case_insensitive(settings):
+    settings.DJUST_UNSUPPLIED_NAMES = "Error"
+    with pytest.raises(UnsuppliedTemplateNameError):
+        _render(Holds)
+
+
+def test_c043_reports_an_invalid_mode_and_accepts_valid_ones(settings):
+    from djust.checks.configuration import _check_unsupplied_names_mode
+
+    for good in ("debug", "warn", "error", "Error"):
+        settings.DJUST_UNSUPPLIED_NAMES = good
+        found: list = []
+        _check_unsupplied_names_mode(found)
+        assert found == [], good
+    for bad in ("off", None, "warning", 1):
+        settings.DJUST_UNSUPPLIED_NAMES = bad
+        found = []
+        _check_unsupplied_names_mode(found)
+        assert [m.id for m in found] == ["djust.C043"], bad
+    del settings.DJUST_UNSUPPLIED_NAMES
+    found = []
+    _check_unsupplied_names_mode(found)
+    assert found == []
+
+
+def proc_supplies_widget(request):
+    return {"widget_4278": "w"}
+
+
+class HoldsUser(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>[{{ user }}][{{ widget_4278 }}]</div>"
+
+    def mount(self, request, **kwargs):
+        self.user = request.user
+        self.widget_4278 = "view"
+
+
+def test_a_name_a_context_processor_supplies_is_not_unsupplied(settings):
+    """B1: ``user`` (auth) and a project processor's key render, so "error" must not raise."""
+    templates = [dict(t) for t in settings.TEMPLATES]
+    options = dict(templates[0].get("OPTIONS", {}))
+    options["context_processors"] = [
+        "django.contrib.auth.context_processors.auth",
+        "djust.tests.test_unsupplied_names_mode_4279.proc_supplies_widget",
+    ]
+    templates[0] = {**templates[0], "OPTIONS": options}
+    settings.TEMPLATES = templates
+    settings.DJUST_UNSUPPLIED_NAMES = "error"
+    from djust.mixins.context import _context_processors_cache
+
+    _context_processors_cache.clear()
+    try:
+        _render(HoldsUser)  # raised UnsuppliedTemplateNameError before the fix
+    finally:
+        _context_processors_cache.clear()
+
+
+def test_a_held_name_no_processor_supplies_still_raises(settings):
+    settings.DJUST_UNSUPPLIED_NAMES = "error"
+    templates = [dict(t) for t in settings.TEMPLATES]
+    options = dict(templates[0].get("OPTIONS", {}))
+    options["context_processors"] = []
+    templates[0] = {**templates[0], "OPTIONS": options}
+    settings.TEMPLATES = templates
+    from djust.mixins.context import _context_processors_cache
+
+    _context_processors_cache.clear()
+    try:
+        with pytest.raises(UnsuppliedTemplateNameError):
+            _render(HoldsUser)
+    finally:
+        _context_processors_cache.clear()
 
 
 def test_error_mode_sees_a_name_in_a_tab_include(settings, tmp_path):

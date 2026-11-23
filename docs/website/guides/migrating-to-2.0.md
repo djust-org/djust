@@ -229,7 +229,7 @@ List the names your template reads. Each one is either declared with `state()`
 the template reads that nothing supplies
 renders as an empty string, with no error and no warning** (with `DEBUG`
 on djust logs it once; set `DJUST_UNSUPPLIED_NAMES = "error"` in your test
-settings to make each one fail the test that renders it). This is the
+settings to make each one fail the test that renders it; never in production settings). This is the
 mistake to look for: after the switch, open every state of the page and look
 for blanks. Remember names used only inside `{% if %}`, in `{% include %}`d
 templates and in a base template.
@@ -492,7 +492,7 @@ object for every event, rebuilt from its saved state as in 1.3.
   class raises `ExposureConfigurationError`, see
   [Behaviour that now raises](#behaviour-that-now-raises)). Keep setting
   `self.page_title = "..."` in `mount()` or a handler: that still updates the
-  browser tab. But neither that nor a class attribute `page_title = "..."`
+  tab over the live connection. But neither that nor a class attribute `page_title = "..."`
   supplies `{{ page_title }}` to the template, which renders it empty, with no
   error. T027 and `DJUST_UNSUPPLIED_NAMES` do not report it either, because
   it is a framework name. Supply it from `get_context_data()`
@@ -1060,4 +1060,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 3813a5d782a8 -->
+<!-- generated-doc prose-sha256: 423cc0f911fc -->

@@ -55,12 +55,29 @@ import time
 from dataclasses import dataclass
 from uuid import uuid4
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, Iterator, List, Optional, Tuple, Type
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Type,
+)
 
 from django.core.exceptions import PermissionDenied
 from django.test import RequestFactory
 
 # Live sessions and real transports for tests of explicit views (#4191).
+if TYPE_CHECKING:
+    from .live_view import LiveView
+
+from ._exposure_unsupplied import (  # noqa: F401 - re-exported public API, listed in __all__
+    UnsuppliedTemplateNameError,
+)
 from ._testing_live import (  # re-exported public API, listed in __all__
     LivePage,
     LiveSocket,
@@ -97,6 +114,8 @@ __all__ = [
     "LiveViewSmokeTest",
     "PersistedState",
     "persisted_state",
+    # Raised by a render under DJUST_UNSUPPLIED_NAMES = "error" (#4279).
+    "UnsuppliedTemplateNameError",
 ]
 
 if "pytest" in __import__("sys").modules:
@@ -366,8 +385,10 @@ class PersistedState:
     ``server`` is the ``state(persist="server")`` fields and component records (the
     session envelope); ``snapshot`` the ``persist="client"`` fields (the signed
     back-navigation snapshot); ``client`` the ``client=True`` fields (what ``get_state()``
-    hands the browser). ``automatic`` is automatic state (#4107): the public attributes a
-    view set in ``mount()`` or a handler and did not declare, encoded as stored;
+    hands the browser). ``automatic`` is everything automatic state (#4107) saves under a
+    public name: the declared ``state()`` fields without ``persist=`` (including
+    ``render=False`` ones) and the undeclared public attributes a view set in ``mount()``
+    or a handler, encoded as stored;
     ``automatic_private`` its underscore twin and ``automatic_components`` its component
     records. ``automatic_bytes`` is the encoded size of all of it, the figure the
     ``DJUST_AUTOMATIC_STATE_*_KB`` limit and warning use. Values are detached copies.
@@ -394,7 +415,7 @@ class PersistedState:
         )
 
 
-def persisted_state(view: Any) -> PersistedState:
+def persisted_state(view: "LiveView") -> PersistedState:
     """The state an explicit view would persist, split by destination (#4280).
 
     A read-only projection: it does not touch the session and saves nothing. Use it to
@@ -405,8 +426,12 @@ def persisted_state(view: Any) -> PersistedState:
 
     The view must use the explicit policy (the default); a legacy view persists
     ``get_state()`` and raises ``TypeError``. Over its limit the automatic state raises
-    ``StateLimitExceeded``, as a save would; with ``automatic_state = False`` (or
+    ``StateLimitExceeded``, as a save would (but an over-limit ``persist="server"``
+    projection raises ``ExposureError``, where a real save drops the component records and
+    saves without them); with ``automatic_state = False`` (or
     ``DJUST_AUTOMATIC_STATE = False``) the ``automatic*`` fields are empty and the size 0.
+    Calling it spends the once-per-class "large state" / "not saved" notices, so a test that
+    calls it first hides them from a later real save in the same process.
     """
     from . import _automatic_state
     from ._exposure import explicit_state_projection, uses_legacy_exposure

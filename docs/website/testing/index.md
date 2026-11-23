@@ -397,9 +397,16 @@ Set `DJUST_UNSUPPLIED_NAMES` in your test settings:
 | `"warn"` | log once per view class and name, whatever `DEBUG` says |
 | `"error"` | raise `UnsuppliedTemplateNameError` on every render that leaves a held name unsupplied, whatever `DEBUG` says |
 
-The error names the view and the names, never their values. Any other value raises
-`ImproperlyConfigured`, so a typo does not turn the check off. Only a view under explicit
-exposure is checked.
+The error names the view and the names, never their values. Import it with
+`from djust.testing import UnsuppliedTemplateNameError` (it subclasses
+`ImproperlyConfigured` through `ExposureConfigurationError`). A name a `TEMPLATES` context
+processor supplies (`user`, `messages`, a project processor's keys) counts as supplied. Only
+a view under explicit exposure is checked.
+
+The value is matched case-insensitively and validated at startup by `manage.py check`
+(`djust.C043`); at render time an invalid value is logged once and behaves as `"debug"`.
+Use `"error"` in test settings only: it raises out of the render (HTTP 500 or a socket
+error). `"warn"` re-reads the template on every render, so prefer it on staging only.
 
 ## Test File Conventions
 

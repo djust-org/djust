@@ -397,7 +397,17 @@ def test_unsupplied_notice_names_a_held_name_read_in_a_tab_include(panel_dir, se
     import logging
 
     from djust import _exposure_unsupplied
-    from djust.tests.test_exposure_runtime import make_request
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import RequestFactory
+
+    def make_request():
+        request = RequestFactory().get("/runtime-explicit/")
+        request.user = AnonymousUser()
+        request.tenant = None
+        request.session = SessionStore()
+        request.session.create()
+        return request
 
     settings.DEBUG = True
     _exposure_unsupplied._REPORTED.pop(_HeldInTab, None)

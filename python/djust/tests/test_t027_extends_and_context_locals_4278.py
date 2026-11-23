@@ -30,6 +30,9 @@ def templates(tmp_path, settings):
         "inc_page.html": '<div dj-root>{% include "t4278/_part.html" %}</div>',
         "_part.html": "<i>{{ from_include }}</i>",
         "flat.html": "<div dj-root>{{ count }}{{ extra }}{{ shown }}</div>",
+        "user_base.html": "<nav>{{ user }}{{ site_widget }}</nav>{% block body %}{% endblock %}",
+        "user_child.html": '{% extends "t4278/user_base.html" %}{% block body %}<div dj-root>'
+        "</div>{% endblock %}",
         "plain_extends.html": '{% extends "t4278/base.html" %}{% block body %}'
         "<div dj-root></div>{% endblock %}",
     }
@@ -80,6 +83,19 @@ class IncludeOnly(LiveView):
     exposure_policy = "explicit"
     template_name = "t4278/inc_page.html"
     from_include = "x"
+
+
+class HoldsUserInLayout(LiveView):
+    exposure_policy = "explicit"
+    template_name = "t4278/user_child.html"
+
+    def mount(self, request, **kwargs):
+        self.user = request.user
+        self.site_widget = "w"
+
+
+def project_processor_4278(request):
+    return {"site_widget": "w"}
 
 
 class UpdateBase(LiveView):
@@ -179,7 +195,7 @@ def test_t027_still_skips_an_unfollowable_override(templates, monkeypatch):
     (info,) = _info(messages)
     assert info.id == "djust.T027"
     assert info.msg.startswith("T027: skipped 1 view(s) whose get_context_data()")
-    assert "and 0 view(s) whose template" in info.msg
+    assert "0 view(s) whose template" in info.msg
     assert "DJUST_UNSUPPLIED_NAMES" in info.hint
 
 
@@ -188,7 +204,7 @@ def test_t027_skips_inline_extends_and_counts_it(templates, monkeypatch):
     assert _named(messages, InlineExtends) == []
     (info,) = _info(messages)
     assert "skipped 0 view(s) whose get_context_data()" in info.msg
-    assert "and 1 view(s) whose template" in info.msg
+    assert "1 view(s) whose template" in info.msg
 
 
 def test_t018_still_skips_return_context():
@@ -224,3 +240,34 @@ def test_t027_counts_names_a_provider_contract_renders(templates, monkeypatch):
         tenant = "held"
 
     assert _named(_run(monkeypatch, WithoutProvider), WithoutProvider) == ["tenant"]
+
+
+def _processors(settings, *paths):
+    templates = [dict(t) for t in settings.TEMPLATES]
+    options = dict(templates[0].get("OPTIONS", {}))
+    options["context_processors"] = list(paths)
+    templates[0] = {**templates[0], "OPTIONS": options}
+    settings.TEMPLATES = templates
+
+
+def test_t027_counts_names_a_context_processor_supplies(templates, settings, monkeypatch):
+    """B1: a layout reading ``{{ user }}`` / a project processor's key is not "renders empty"."""
+    _processors(
+        settings,
+        "django.contrib.auth.context_processors.auth",
+        "djust.tests.test_t027_extends_and_context_locals_4278.project_processor_4278",
+    )
+    assert _named(_run(monkeypatch, HoldsUserInLayout), HoldsUserInLayout) == []
+
+
+def test_t027_still_reports_those_names_without_the_processors(templates, settings, monkeypatch):
+    _processors(settings)
+    assert sorted(_named(_run(monkeypatch, HoldsUserInLayout), HoldsUserInLayout)) == [
+        "site_widget",
+        "user",
+    ]
+
+
+def test_t027_info_names_the_skipped_views(templates, monkeypatch):
+    (info,) = _info(_run(monkeypatch, Unfollowable))
+    assert "Unfollowable" in info.msg

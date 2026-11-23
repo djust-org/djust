@@ -2112,6 +2112,9 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
         return errors
 
     skipped_override = 0
+    skipped_labels: list[str] = []
+    skipped_unreadable = 0
+    processor_names: Optional[frozenset] = None
     skipped_template = 0
     discovered = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
     for cls in sorted(
@@ -2126,8 +2129,13 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
         loaded = _static_template_source(cls)
         if loaded is None:
             continue
+        if processor_names is None:
+            from djust._exposure_unsupplied import context_processor_names
+
+            processor_names = context_processor_names()
         if _t027_get_context_data_is_too_dynamic(cls):
             skipped_override += 1
+            skipped_labels.append("%s.%s" % (cls.__module__, cls.__qualname__))
             continue
         own_src, template_name, template_path = loaded
         src = _t027_template_source(own_src, template_name)
@@ -2147,6 +2155,9 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                 # Names a mixin's provider contract renders (TenantMixin's ``tenant``): its
                 # ``get_context_data()`` sets them by a computed key the AST walk cannot read.
                 | {name for contract in provider_contracts_for(cls) for name in contract.rendered}
+                # Names the configured TEMPLATES context processors add on every render
+                # (``user``, ``perms``, ``messages``, a project processor's keys).
+                | processor_names
             )
             if _get_context_data_reaches_base(cls):
                 supplied |= set(rendered_state_names(cls))
@@ -2159,6 +2170,7 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                 own_lines.setdefault(ref_name, ref_line)
         except Exception:  # noqa: BLE001 — a view this cannot read is skipped, not guessed at
             logger.debug("T027: could not statically read %s", cls_label)
+            skipped_unreadable += 1
             continue
         if not template_path:
             try:
@@ -2246,13 +2258,27 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                     line_number=line if template_name else None,
                 )
             )
-    if skipped_override or skipped_template:
+    if skipped_override or skipped_template or skipped_unreadable:
         errors.append(
             DjustInfo(
                 "T027: skipped %d view(s) whose get_context_data() cannot be followed "
-                "statically and %d view(s) whose template could not be resolved (an "
-                "inline template with {%% extends %%}, or one that failed to load) -- "
-                "names those views read are not checked." % (skipped_override, skipped_template),
+                "statically%s, %d view(s) whose template could not be resolved (an "
+                "inline template with {%% extends %%}, or one that failed to load) and "
+                "%d view(s) it could not read -- names those views read are not checked."
+                % (
+                    skipped_override,
+                    (
+                        " (%s%s)"
+                        % (
+                            ", ".join(sorted(skipped_labels)[:5]),
+                            ", ..." if len(skipped_labels) > 5 else "",
+                        )
+                    )
+                    if skipped_labels
+                    else "",
+                    skipped_template,
+                    skipped_unreadable,
+                ),
                 hint=(
                     'Set DJUST_UNSUPPLIED_NAMES = "error" in test settings to fail a render '
                     "that leaves a held name unsupplied, which covers these views at runtime. "

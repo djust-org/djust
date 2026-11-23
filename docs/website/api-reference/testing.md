@@ -147,17 +147,17 @@ assert len(state["items"]) == 3
 
 #### `persisted_state() -> PersistedState`
 
-What the mounted view would save, split by destination, for a view under explicit exposure (a legacy view raises `TypeError`; it persists `get_state()`). `get_state()` is what the view holds; this is what it keeps between requests. It is a read-only projection: nothing is written to the session. Also available as `djust.testing.persisted_state(view)`, which takes the view instance.
+What the mounted view would save, split by destination, for a view under explicit exposure (a legacy view raises `TypeError`; it persists `get_state()`). `get_state()` is what the view holds; this is what it keeps between requests. It is a read-only projection: nothing is written to the session. Also available as `djust.testing.persisted_state(view)`, which takes the view instance. Calling it spends the once-per-class "large state" notices, so a later real save in the same process does not repeat them, and an over-limit `persist="server"` projection raises `ExposureError` where a real save drops the component records and saves without them.
 
 | Field | Contents |
 |---|---|
 | `server` | `state(persist="server")` fields and component records |
 | `snapshot` | `state(persist="client")` fields (the signed back-navigation snapshot) |
 | `client` | `state(client=True)` fields |
-| `automatic` | automatic state: public attributes the view set (in `mount()` or a handler) and did not declare, encoded as stored |
+| `automatic` | everything automatic state saves under a public name: declared `state()` fields without `persist=` (including `render=False` ones) and undeclared public attributes the view set, encoded as stored |
 | `automatic_private` | the underscore attributes automatic state keeps |
 | `automatic_components` | automatic state's component records |
-| `automatic_bytes` | the encoded size of the automatic state, the figure `DJUST_AUTOMATIC_STATE_MAX_KB` limits and warns on |
+| `automatic_bytes` | the encoded size of the automatic state, the figure `DJUST_AUTOMATIC_STATE_MAX_KB` limits and `DJUST_AUTOMATIC_STATE_WARN_KB` warns on |
 | `names` | every name saved anywhere (a property) |
 
 ```python

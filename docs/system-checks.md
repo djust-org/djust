@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 128 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 129 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -53,6 +53,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C040 | Config | Error | `DJUST_STATE_SAVE_INTERVAL` or a view's `state_save_interval` cannot be used |
 | C041 | Config | Info | A state save interval is set while `DJUST_STATE_STORE_STRICT` is on |
 | C042 | Config | Info | A model's rows may be changed by the database itself (an unmanaged model, a `DB_*` cascade) while `DJUST_REFRESH_ON_ANY_WRITE` is off |
+| C043 | Config | Error | "`DJUST_UNSUPPLIED_NAMES` is not `\"debug\"`, `\"warn\"` or `\"error\"` (#4279)" |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -404,6 +405,13 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: a model with `Meta.managed = False` (a database view, a table another system owns) or a relation whose `on_delete` is named `DB_*` (the database performs it), while `DJUST_REFRESH_ON_ANY_WRITE` is off. After a step of a view writes, djust re-reads what the view holds only when the written table is one the view read (#4112). A change the database makes by itself (a trigger, a cascade, a view over the written table) is not a statement djust sees, so a view holding those rows keeps showing them as they were.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C042"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C042"]`
 - **False positives**: an unmanaged model whose rows change only through your own Django statements (then the refresh is exact and the message can be suppressed). A trigger on a managed table is not detected.
+
+### C043 — Invalid `DJUST_UNSUPPLIED_NAMES`
+- **Severity**: Error
+- **Method**: Settings inspection (`django.conf.settings.DJUST_UNSUPPLIED_NAMES`)
+- **What it detects**: `DJUST_UNSUPPLIED_NAMES` is set to something other than `"debug"`, `"warn"` or `"error"` (matched case-insensitively). At render time an invalid value is logged once at ERROR level and behaves as `"debug"`, so the strictness the setting was meant to add is silently off. An absent setting is the `"debug"` default and never reports.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C043"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C043"]`
+- **False positives**: None
 
 ### C501 — Retired
 - **Retired in**: 2.0 (time-travel debugging was removed, #4184)
