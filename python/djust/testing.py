@@ -866,6 +866,7 @@ class LiveViewTestClient:
                 "validation_details": {
                     "expected_params": validation["expected"],
                     "provided_params": validation["provided"],
+                    "missing_params": validation.get("missing", []),
                     "type_errors": validation["type_errors"],
                 },
                 "state_before": state_before,

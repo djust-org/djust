@@ -57,12 +57,15 @@ class ParameterError(ValueError):
 
     ``public_message`` is the text a client may be shown. It is set from the
     framework-written message at the raise site, so error envelopes read it
-    rather than formatting the exception object.
+    rather than formatting the exception object. A signature-mismatch message
+    may name *declared* parameters (never an undeclared one, a count of them,
+    or a value); ``missing`` carries the declared names that were not supplied.
     """
 
-    def __init__(self, public_message: str) -> None:
+    def __init__(self, public_message: str, missing: tuple[str, ...] = ()) -> None:
         super().__init__(public_message)
         self.public_message = public_message
+        self.missing = missing
 
 
 @dataclass(frozen=True)
@@ -277,6 +280,76 @@ def _check_decimal(value: Decimal) -> None:
         raise ValueError
 
 
+_MISMATCH_FALLBACK = "Arguments do not match the handler signature; check required, extra, duplicate and positional values."
+
+
+def _keyword_names(signature: inspect.Signature, trusted: frozenset[str]) -> set[str]:
+    """Declared names a client may supply by keyword."""
+    return {
+        name
+        for name, p in signature.parameters.items()
+        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and name not in trusted
+    }
+
+
+def _mismatch_message(
+    signature: inspect.Signature,
+    params: dict[str, Any],
+    positional: list[Any] | tuple[Any, ...],
+    trusted: frozenset[str],
+) -> tuple[str, tuple[str, ...]]:
+    """Say which rule a failed bind broke, from declared names and counts only.
+
+    Never reads the ``TypeError`` text and never names or counts a client key
+    that is not declared (ADR-036 D5): an undeclared key gets a fixed label.
+    """
+    kinds = inspect.Parameter
+    declared = signature.parameters
+    slots = [
+        n
+        for n, p in declared.items()
+        if p.kind in (kinds.POSITIONAL_ONLY, kinds.POSITIONAL_OR_KEYWORD)
+    ]
+    has_var_positional = any(p.kind is kinds.VAR_POSITIONAL for p in declared.values())
+    has_var_keyword = any(p.kind is kinds.VAR_KEYWORD for p in declared.values())
+    parts: list[str] = []
+    if not has_var_positional and len(positional) > len(slots):
+        count = len([n for n in slots if n not in trusted])
+        parts.append(f"the handler takes {count} positional arguments")
+    filled = slots[: len(positional)]
+    duplicate = [n for n in filled if n in params and n not in trusted]
+    if duplicate:
+        parts.append(
+            "; ".join(f"'{n}' was supplied both positionally and by name" for n in duplicate)
+        )
+    positional_only = [
+        n
+        for n, p in declared.items()
+        if p.kind is kinds.POSITIONAL_ONLY and n in params and n not in trusted
+    ]
+    if positional_only and not has_var_keyword:
+        parts.append("; ".join(f"'{n}' is positional-only" for n in positional_only))
+    allowed = _keyword_names(signature, trusted)
+    if not has_var_keyword and any(k not in allowed and k not in positional_only for k in params):
+        parts.append("an undeclared argument was sent")
+    covered = set(filled)
+    missing = tuple(
+        n
+        for n, p in declared.items()
+        if p.kind in (kinds.POSITIONAL_ONLY, kinds.POSITIONAL_OR_KEYWORD, kinds.KEYWORD_ONLY)
+        and p.default is kinds.empty
+        and n not in trusted
+        and n not in covered
+        and not (n in params and p.kind is not kinds.POSITIONAL_ONLY)
+    )
+    if missing:
+        parts.append("a required argument is missing: " + ", ".join(f"'{n}'" for n in missing))
+    if not parts:
+        return _MISMATCH_FALLBACK, ()
+    return f"Arguments do not match the handler signature: {'; '.join(parts)}.", missing
+
+
 @dataclass(frozen=True)
 class ParameterContract:
     """Compiled once from server-owned declarations; independent of transport.
@@ -379,6 +452,16 @@ class ParameterContract:
             for name, spec in self.types
         )
 
+    def undeclared_keys(self, params: dict[str, Any]) -> list[str]:
+        """Client keys no declared parameter can take (empty with a ``**``).
+
+        For a server-side debug log only: never put these in a response.
+        """
+        if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in self.signature.parameters.values()):
+            return []
+        allowed = _keyword_names(self.signature, self.trusted)
+        return [k for k in params if type(k) is str and k not in allowed]
+
     def bind(
         self,
         params: dict[str, Any],
@@ -403,10 +486,10 @@ class ParameterContract:
             # trusted keyword below and fails as a duplicate.
             bound = self.signature.bind(*positional, **params, **trusted)
         except TypeError:
-            # inspect's message can include an arbitrary client-supplied key.
-            raise ParameterError(
-                "Arguments do not match the handler signature; check required, extra, duplicate and positional values."
-            ) from None
+            # inspect's message can include an arbitrary client-supplied key, so
+            # classify from the declared signature and counts instead.
+            message, missing = _mismatch_message(self.signature, params, positional, self.trusted)
+            raise ParameterError(message, missing) from None
         for name, spec in self.types:
             if name not in bound.arguments:
                 continue  # Python applies the server-owned default at invocation.

@@ -290,11 +290,22 @@ def _validate_strict_handler_params(
     except ParameterError as exc:
         # Never return the original payload or arbitrary client-supplied keys in
         # an error envelope. Declared names and fixed type labels are sufficient.
+        if type(params) is dict and logger.isEnabledFor(logging.DEBUG):
+            # Server log only, and only at DEBUG: the names a client sent that
+            # the handler does not declare. Never part of the response.
+            undeclared = contract.undeclared_keys(params)
+            if undeclared:
+                logger.debug(
+                    "Strict handler %s refused undeclared argument names: %s",
+                    getattr(handler, "__qualname__", "<handler>"),
+                    sanitize_for_log(", ".join(undeclared[:10]), max_length=200),
+                )
         return {
             "valid": False,
             "error": exc.public_message,
             "expected": expected,
             "provided": [],
+            "missing": list(exc.missing),
             "type_errors": None,
             "coerced_params": {},
         }

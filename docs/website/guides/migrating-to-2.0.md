@@ -558,7 +558,7 @@ is the contract:
 | carries a key the handler does not declare | rejected, unless the handler has `**kwargs` | rejected, unless the handler has a `**` catch-all |
 | is a `dj-input`, `dj-change` or `dj-submit` | the browser also sends `field` and `_target` | the browser sends only what the handler declares; `_target` is never sent |
 | passes arguments as `data-*` attributes | read | ignored: use `dj-value-*` |
-| is rejected | the error text can repeat the value that was sent | the error names the parameter and the expected type, never the value |
+| is rejected | the error text can repeat the value that was sent | the error names the rule that failed and the declared parameter, never a value or an undeclared key; set the `djust.validation` logger to DEBUG to log undeclared key names on the server |
 
 The browser knows each strict handler's signature, so a `dj-input` bound to
 `search(self, value: str)` sends only `value`. Form fields, `value`, `field`,
@@ -1088,4 +1088,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 03e677ab598d -->
+<!-- generated-doc prose-sha256: d0900bbc959e -->
