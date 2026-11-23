@@ -1141,7 +1141,19 @@ class RustBridgeMixin:
           1. Instance attribute changes — snapshot-based (_changed_keys from handle_event)
           2. TypedState dirty flags — in-place dict mutation tracking
           3. Computed value changes — id() reference comparison against previous render
+
+        Runs inside ``LIVEVIEW_CONFIG["sync_turn_wrapper"]``'s ``"render"`` step
+        as a whole (#4276): not only ``get_context_data()`` but the queries the
+        sync makes after it (the explicit JIT serialization, the rows listed for
+        the template's sidecar, the normalize pass). Inside a render step
+        already (a ``render*`` method), it nests and enters nothing again.
         """
+        from ..sync_turn import run_sync_step
+
+        run_sync_step(self, "render", self._sync_state_to_rust_body, preloaded_context)
+
+    def _sync_state_to_rust_body(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
+        """:meth:`_sync_state_to_rust`, inside its ``"render"`` step."""
         if self._rust_view:
             # Per-render, before anything is formatted (#2209, #2221).
             self._apply_render_env()

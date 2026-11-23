@@ -518,7 +518,7 @@ def _function_node(module, qualname):
 @pytest.mark.parametrize(
     "module_name, qualname",
     [
-        ("djust.mixins.rust_bridge", "RustBridgeMixin._sync_state_to_rust"),
+        ("djust.mixins.rust_bridge", "RustBridgeMixin._sync_state_to_rust_body"),
         ("djust.mixins.template", "TemplateMixin._render_full_template_inner"),
     ],
 )

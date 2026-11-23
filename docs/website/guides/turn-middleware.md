@@ -157,7 +157,8 @@ Background work also runs the chain itself: once before the callback starts
 A middleware wraps the whole turn, which is async: the turn runs the view's
 sync code in separate hops (the handler, `mount`, `handle_params`, a
 `start_async` callback and its `handle_async_result`, `handle_tick`, the
-render's `get_context_data()`, where the JIT evaluates the view's QuerySets,
+render (its `get_context_data()`, the JIT that evaluates the QuerySets the
+context holds, and the template engine's walks of the models it reads),
 the authorization checks, the `on_mount` hooks, `connected()` and, off the event
 loop, a released view's teardown hooks) with awaits between them. With
 `worker_threads` a pool thread runs other sessions' hops in those gaps, and
@@ -201,7 +202,7 @@ def _as_caller(user_id):
   | `"hook"` | another sync view hook: a push handler (in the stock turn and in the worker-pool one-hop turn), `handle_info`, `handle_cursor_move()`, `update_presence_heartbeat()`, and the `get_presence_key()` / `untrack_presence()` reads |
   | `"async"` | a `start_async` / `@background` callback **and** the `handle_async_result` call that receives its outcome (two separate entries) |
   | `"tick"` | `handle_tick()` |
-  | `"render"` | every call djust makes to `get_context_data()`, on every transport |
+  | `"render"` | a render, on every transport: `get_context_data()`, the state sync that evaluates the QuerySets the context holds (the explicit JIT, the rows serialized for the template), and the template engine run, including the relations a template follows on a model and the template-time hooks below. Since #4276; before, only the `get_context_data()` call was inside, and the queries after it ran with no scope. One render is one entry: the steps inside it nest |
   | `"auth"` | an authorization decision that runs your code: `check_permissions()`, Django's access mixins and replayed `dispatch` decorators (`test_func`), `@permission_required` on a handler, and the object-permission check (`get_object()` + `has_object_permission()`) |
   | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the signed client snapshot's restore gate (`_should_restore_snapshot()`), the restore of a legacy lazy child's private state (`_restore_private_state()`, which re-fetches private model references; a guarded step, so a wrapper that swallows a failure cannot leave a half-restored view), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
   | `"state_store"` | a call into the project's [state store](../state/state-store.md) (`DJUST_STATE_STORE`): the load of a view's saved state, its save after a turn, and the deletion of evicted states. Entered only when a store outside the session is configured (new with #4132) |
@@ -241,7 +242,7 @@ def _as_caller(user_id):
 
   | Request | Entries, in order |
   |---|---|
-  | HTTP page GET | `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, only when the view has one), `"mount"`, `"handle_params"`, `"auth"` (object check, when `get_object()` is overridden), `"render"` (one step: the GET's own `get_context_data()`; the render that follows reads that context instead of entering a second step, #3725) |
+  | HTTP page GET | `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, only when the view has one), `"mount"`, `"handle_params"`, `"auth"` (object check, when `get_object()` is overridden), `"render"` three times: the GET's own `get_context_data()` (evaluated once, #3725), then the page render and the diff-baseline render, which read that context and each run the template engine (#4276) |
   | HTTP POST event (legacy view: 2.0 keeps no state between requests, so every POST is this) | `"auth"`, `"mount"`, `"handle_params"`, `"auth"`, `"event"`, `"render"` |
 
   Each is one entry on the thread that runs it. Keep the wrapper cheap.
@@ -335,8 +336,9 @@ Everything above is the sync code djust runs on a worker thread through
   `get_form_class()`, `get_form_kwargs()` and `_create_form()` under `"mount"` and
   `"event"`. `serialize_for_template()` is an app helper the framework never
   calls, so it runs wherever your code calls it. `get_http_status()` runs in the
-  HTTP response phase. The *other* component and tag hooks are not here: see
-  [template-time hooks](#not-wrapped-template-time-form-and-tag-hooks).
+  HTTP response phase. The component and tag hooks the template calls run
+  under `"render"`: see
+  [template-time hooks](#template-time-form-and-tag-hooks-inside-the-render-step).
 - **Identity resolution before the scope exists.** `establish_mount_session` and
   `fresh_socket_request` call Django's `get_user()`, which runs your authentication
   backend's `get_user()` to find the caller; the scope is built from that caller,
@@ -346,40 +348,38 @@ Everything above is the sync code djust runs on a worker thread through
   are covered, not unwrapped: the auth re-check goes through the `"auth"` leaves,
   and discarding a child whose auth now fails runs its teardown hooks as
   `"lifecycle"` steps (see above).
-- **The render plumbing around `get_context_data()`** (template build, Rust state
-  sync, HTML post-processing). Only the `get_context_data()` calls inside it are
-  `"render"` steps.
-- **`get_template()` inside the render** (while the template is built for a view
-  render) runs in the framework's render plumbing with no step open; an HTTP GET
-  shows none. Only the direct call from a hot reload is a `"render"` step.
+- **The page plumbing around a render** (the template source build before it,
+  HTML post-processing after it). The render itself, from `get_context_data()`
+  through the template engine, is a `"render"` step (#4276).
+- **`get_template()` before the render**: an HTTP GET reads it with no step open
+  before its page render, and again inside the render step; a hot reload's
+  direct call is a `"render"` step.
 - **A task you start yourself** with `create_task()`: it inherits the context
   variables of the turn but is not a sync step. Handlers run inside an `"event"`
   step, so what they call directly is covered; a task they start is not.
 
-### Not wrapped: template-time form and tag hooks
+### Template-time form and tag hooks: inside the render step
 
-The `"render"` step covers the call to `get_context_data()`. The template engine
-runs **after** it returns, and nothing around the template engine is a step. Any
-hook that a template tag, a filter or a component's `{{ component }}` calls therefore
-runs with **no step open and no wrapper scope**, on every transport. Checked by
-running each one with a recording wrapper (`test_sync_turn_inside_audit_3646.py`):
+Until #4276 the `"render"` step covered only the call to `get_context_data()`,
+and the template engine ran after it returned, with no step open. Since #4276
+the whole render is the step, so a hook that a template tag, a filter or a
+component's `{{ component }}` calls runs **inside `"render"`**, on every
+transport. Checked by running each one with a recording wrapper
+(`test_sync_turn_inside_audit_3646.py`):
 
 | Hook | Called by | Step open |
 |---|---|---|
-| `FormMixin.as_live()` / `as_live_field()` | `{% live_form %}` / `{% live_field %}` | none |
-| `get_field_value()` (including `AdminFormMixin`) | the `field_value` filter | none (it also runs under `"render"` when an admin view's own `get_context_data()` calls it) |
-| `_ensure_form_state()` | the same tags and filters | none (under `"event"` when `submit_form()` calls it) |
-| form adapters' `render_field()` and `_merge_widget_attrs()` | `as_live_field()` | none |
-| `Component.get_context_data()` and `_render_custom()` | `{{ component }}` | none |
-| `_on_sticky_update()` | `{% live_render ... sticky=True %}` while the parent renders | none |
+| `FormMixin.as_live()` / `as_live_field()` | `{% live_form %}` / `{% live_field %}` | `"render"` |
+| `get_field_value()` (including `AdminFormMixin`) | the `field_value` filter, or an admin view's own `get_context_data()` | `"render"` |
+| `_ensure_form_state()` | the same tags and filters | `"render"` (`"event"` when `submit_form()` calls it) |
+| form adapters' `render_field()` and `_merge_widget_attrs()` | `as_live_field()` | `"render"` |
+| `Component.get_context_data()` and `_render_custom()` | `{{ component }}` | `"render"` |
+| `_on_sticky_update()` | `{% live_render ... sticky=True %}` while the parent renders | `"render"` |
 
-**A row read in one of these runs without the wrapper scope.** The clearest case
-is a `ModelChoiceField`: `{% live_field view "group" %}` evaluates the field's
-queryset while it renders the `<select>`, and a test shows that read happens with no
-step open. Under row-level security that read has no per-turn scope, whatever your
-wrapper does for `get_context_data()`. Read the rows in `mount()`, a handler or
-`get_context_data()` (all steps) and hand the template the result, rather than
-letting a tag or a field evaluate a queryset.
+So a `ModelChoiceField` that `{% live_field view "group" %}` evaluates while it
+renders the `<select>`, or a `{{ user.groups.count }}` the template follows on a
+model, is read inside your wrapper's scope. It also counts toward a `"render"`
+[query budget](../testing/index.md#per-view-query-budgets) when the view declares one.
 
 The snapshot-restore gate is covered: `_should_restore_snapshot()` is a
 `"lifecycle"` step, and `handle_restore()` is a `"hook"` step. (The legacy

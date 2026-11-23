@@ -440,7 +440,7 @@ def external(reason: str) -> Entry:
 
 _RENDER = (
     "render plumbing (template build, Rust state sync, HTML post-processing, diff): "
-    "get_context_data inside it is its own render step"
+    "the render methods and _sync_state_to_rust inside it enter the render step (#4276)"
 )
 _SESSION = "session, auth-state or storage I/O of the framework; calls no view hook"
 _STATE = "framework-owned bookkeeping (component ids, dirty baseline, temporary assigns)"
@@ -638,7 +638,7 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ): plumbing(_AUTH_OF_CHILD, _TENANT),
     ("runtime.py", "ViewRuntime._flush_pending_layout", "render_pending_layout"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_async_result", "view._sync_state_to_rust"): plumbing(
-        _RENDER, _GET_TEMPLATE
+        _RENDER
     ),
     (
         "runtime.py",
@@ -656,7 +656,7 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "runtime.py",
         "ViewRuntime._dispatch_url_change_inner",
         "self.view_instance._sync_state_to_rust",
-    ): plumbing(_RENDER, _GET_TEMPLATE),
+    ): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._check_auth", "run_pre_mount_auth"): leaf(),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "snapshot_codec"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_and_send", "render_view_with_diff"): plumbing(_RENDER),
@@ -672,7 +672,7 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "runtime.py",
         "ViewRuntime._dispatch_mount_body",
         "view_instance._sync_state_to_rust",
-    ): plumbing(_RENDER, _GET_TEMPLATE),
+    ): plumbing(_RENDER),
     (
         "runtime.py",
         "ViewRuntime._dispatch_mount_body",
@@ -852,10 +852,12 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
 #                                    not-threaded  no thread hand-off in the package names
 #                                                  it, so it runs in its caller's thread and
 #                                                  step (checked)
-#                                    template-time it runs while the template engine renders,
-#                                                  after get_context_data() returned, so NO
-#                                                  step is open and a row read in it has no
-#                                                  wrapper scope (checked by running it)
+#                                    template-time it runs while the template engine renders
+#                                                  with NO step open, so a row read in it has
+#                                                  no wrapper scope (checked by running it).
+#                                                  No hook has it since #4276: the render
+#                                                  methods and _sync_state_to_rust are the
+#                                                  "render" step, the template engine included
 #                                    scope-input   it produces what the scope depends on, so
 #                                                  it cannot run inside it (an ALLOWED entry
 #                                                  must declare reaching it)
@@ -887,7 +889,7 @@ HOOKS: Dict[str, str] = {
     "ContextMixin.get_context_data": "stepped:render",
     "DraftModeMixin.get_context_data": "stepped:render",
     "Component.render": "stepped:render",
-    "TemplateMixin.get_template": "unwrapped:template-time:read by the template build at template/render-plumbing time with no step open (an HTTP GET shows none); only hot reload calls it inside a render step, and the hand-off pin covers that site",
+    "TemplateMixin.get_template": "inside:none|render@mixins/request.py::RequestMixin._get_turn_body",
     # ---- cursor / presence ----
     "LiveCursorMixin.handle_cursor_move": (
         "unwrapped:not-threaded:djust 2.0 removed the socket's cursor_move frame (#3515), so the "
@@ -921,8 +923,8 @@ HOOKS: Dict[str, str] = {
     "ComponentMixin.handle_component_event": (
         "inside:event@mixins/components.py::ComponentMixin._register_component.component_callback"
     ),
-    "Component.get_context_data": "unwrapped:template-time:a component renders while the template engine runs (`{{ component }}`), after get_context_data() returned, so no step is open; row reads in it run without the wrapper scope",
-    "Component._render_custom": "unwrapped:template-time:called by Component.render at template time, so no step is open; row reads in it run without the wrapper scope",
+    "Component.get_context_data": "inside:render@components/base.py::Component.render",
+    "Component._render_custom": "inside:render@components/base.py::Component.render",
     "ContextMixin.get_render_only_context": (
         "inside:render@mixins/context.py::ContextMixin.get_context_data"
     ),
@@ -930,9 +932,7 @@ HOOKS: Dict[str, str] = {
         "unwrapped:not-threaded:an app helper for get_context_data; the framework never calls it, "
         "so it runs where the app calls it (inside the render step in the documented use)"
     ),
-    "StickyChildRegistry._on_sticky_update": (
-        "unwrapped:template-time:called by the {% live_render %} tag while the parent's template renders, so no step is open (the parent's render step covers only its get_context_data())"
-    ),
+    "StickyChildRegistry._on_sticky_update": "inside:render@templatetags/live_tags.py::_apply_sticky_input_changes",
     "StickyChildRegistry._get_all_child_views": (
         "unwrapped:not-threaded:a registry lookup, not an application hook "
         "(its docstring mentions overriding __init__)"
@@ -942,15 +942,15 @@ HOOKS: Dict[str, str] = {
     "FormMixin.get_form_kwargs": "inside:event|mount@forms.py::FormMixin.get_form",
     "FormMixin._form_class_for_restore": "unwrapped:not-threaded:called by FormMixin._djust_scrub_restored while restore_public_state restores saved state, in the thread and step of that restore (a snapshot restore, a mount, the HTTP event fallback)",
     "FormMixin._create_form": "inside:mount|event@forms.py::FormMixin.mount",
-    "FormMixin._ensure_form_state": "inside:event|none@forms.py::FormMixin.submit_form",
-    "FormMixin.as_live": "unwrapped:template-time:called by the {% live_form %} tag, at template time: no step is open, so a queryset the form's fields evaluate (a ModelChoiceField) is read without the wrapper scope",
-    "FormMixin.as_live_field": "unwrapped:template-time:called by the {% live_field %} tag, at template time: no step is open, so a queryset the field evaluates (a ModelChoiceField) is read without the wrapper scope",
+    "FormMixin._ensure_form_state": "inside:event|render@forms.py::FormMixin.submit_form",
+    "FormMixin.as_live": "inside:render@templatetags/live_tags.py::live_form",
+    "FormMixin.as_live_field": "inside:render@templatetags/live_tags.py::live_field",
     "AdminFormMixin._create_form": "inside:mount@admin_ext/forms.py::AdminFormMixin.mount",
     # An @event_handler since #4218 (the override was undeclared, so refused).
     "AdminFormMixin.validate_field": "stepped:event",
-    "AdminFormMixin.get_field_value": "inside:render|none@admin_ext/views.py::ModelListView.get_context_data",
-    "AdminTailwindAdapter.render_field": "unwrapped:template-time:called while as_live_field renders a field at template time: no step is open",
-    "BaseAdapter._merge_widget_attrs": "unwrapped:template-time:called while the form adapter renders a widget at template time: no step is open",
+    "AdminFormMixin.get_field_value": "inside:render@admin_ext/views.py::ModelListView.get_context_data",
+    "AdminTailwindAdapter.render_field": "inside:render@forms.py::FormMixin.as_live_field",
+    "BaseAdapter._merge_widget_attrs": "inside:render@frameworks.py::BaseAdapter._render_input",
     "DraftModeMixin.get_draft_key": "inside:event|render@drafts.py::DraftModeMixin.get_context_data",
     "WizardMixin.on_wizard_complete": "inside:event@wizard.py::WizardMixin.submit_wizard",
     "WizardMixin.mount": "stepped:mount",

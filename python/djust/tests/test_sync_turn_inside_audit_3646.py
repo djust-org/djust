@@ -4,8 +4,10 @@
 prove that a caller exists and names the hook; it cannot prove which ``sync_turn_wrapper``
 step is open when the hook body runs. The first version of the table asserted
 ``inside:render`` for hooks that a template tag calls, and a recording wrapper showed they
-run with NO step open: the ``"render"`` step covers ``get_context_data()``, not the
-template engine that runs afterwards.
+ran with NO step open: the ``"render"`` step covered ``get_context_data()``, not the
+template engine that runs afterwards. Since #4276 the render methods (and
+``_sync_state_to_rust``) are the ``"render"`` step, the template engine included, so
+those hooks are ``inside:render`` and this audit proves it.
 
 Each scenario here drives a real view through the real HTTP entry (``View.as_view()``: GET
 and POST event, the same ``run_sync_step`` helpers the other transports use) with a
@@ -898,10 +900,10 @@ class ChoicePage(FormMixin, LiveView):
         return context
 
 
-def test_a_row_read_by_a_template_time_form_field_runs_with_no_step_open(recording):
+def test_a_row_read_by_a_template_time_form_field_runs_inside_the_render_step(recording):
     """A ``ModelChoiceField`` queryset evaluated by ``{% live_field %}`` is a real row
-    read, and it runs with no ``sync_turn_wrapper`` step open (turn-middleware.md,
-    "Not wrapped: template-time form and tag hooks")."""
+    read. It ran with no ``sync_turn_wrapper`` step open until #4276; the render
+    methods are the ``"render"`` step now, the template engine included."""
     from django.db.models.signals import post_init
 
     row = Group.objects.create(name="audit-choice-" + uuid.uuid4().hex[:8])
@@ -917,5 +919,5 @@ def test_a_row_read_by_a_template_time_form_field_runs_with_no_step_open(recordi
         post_init.disconnect(loaded, sender=Group)
 
     assert row.name.encode() in response.content
-    # The form is also built in mount() (a step); the read the tag does is the one with none.
-    assert "none" in as_names(steps_of("group_loaded")), steps_of("group_loaded")
+    # The form is also built in mount() (a step); the read the tag does is under "render".
+    assert as_names(steps_of("group_loaded")) == {"mount", "render"}, steps_of("group_loaded")
