@@ -1627,9 +1627,12 @@ supplied (#4054): djust 1.x generated `items_count` from a QuerySet or list
 
 Moving a whole 1.x view is covered in
 [Migrating to djust 2.0](migrating-to-2.0.md). The check skips a view whose
-`get_context_data()` it cannot read statically and a template that uses
-`{% extends %}`; with `DEBUG = True` djust logs the same condition at render
-time for those too. Suppress with
+`get_context_data()` it cannot follow (for example one that passes the
+context to a helper function) and an inline `template` that uses
+`{% extends %}`, and reports how many it skipped in one Info message. A
+`template_name` view is read through its `{% extends %}` chain and its
+`{% include %}` partials. With `DEBUG = True` djust logs the same condition at
+render time for those too. Suppress with
 `DJUST_CONFIG = {"suppress_checks": ["T027"]}` or a
 `{# djust_typecheck: noqa count #}` template comment.
 

@@ -1300,12 +1300,23 @@ def _literal_str_keys(node: ast.Dict) -> set[str]:
 def _override_context_keys(func: ast.AST) -> tuple[set[str], bool]:
     """``(keys, calls_super)`` for one ``get_context_data()`` override.
 
+    See :func:`_override_context_analysis`; this is its first two results.
+    """
+    keys, calls_super, _contexts = _override_context_analysis(func)
+    return keys, calls_super
+
+
+def _override_context_analysis(func: ast.AST) -> tuple[set[str], bool, set[str]]:
+    """``(keys, calls_super, contexts)`` for one ``get_context_data()`` override.
+
     Counts only what reaches the returned context (#4224): the string keys of a
     returned literal dict; ``super().get_context_data(name=...)`` keywords; and,
     for a local returned directly or spread into a returned literal
     (``return {**ctx, ...}``) and bound only to ``super().get_context_data(...)``
     or to a literal dict, the keys of that literal and every
-    ``name["key"] = ...`` on it. An unrelated local dict and a nested helper add nothing.
+    ``name["key"] = ...``, ``name.update(key=...)``, ``name.update({"key": ...})`` and
+    ``name.setdefault("key", ...)`` on it (#4278). An unrelated local dict and a nested
+    helper add nothing. ``contexts`` is the set of returned locals proven to be the context.
     """
     nodes = _own_scope_nodes(func)
     keys: set[str] = set()
@@ -1364,7 +1375,99 @@ def _override_context_keys(func: ast.AST) -> tuple[set[str], bool]:
                     and isinstance(target.slice.value, str)
                 ):
                     keys.add(target.slice.value)
-    return keys, calls_super
+        elif isinstance(node, ast.Call):
+            method = _context_method_call(node, contexts)
+            if method == "update":
+                keys.update(kw.arg for kw in node.keywords if kw.arg)
+                if len(node.args) == 1 and isinstance(node.args[0], ast.Dict):
+                    keys |= _literal_str_keys(node.args[0])
+            elif method == "setdefault" and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    keys.add(first.value)
+    return keys, calls_super, contexts
+
+
+def _context_method_call(node: ast.Call, contexts: set[str]) -> Optional[str]:
+    """``update``/``setdefault``/... for ``ctx.update(...)`` on a context local, else None."""
+    func = node.func
+    if (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id in contexts
+    ):
+        return func.attr
+    return None
+
+
+_CONTEXT_READ_METHODS = frozenset({"get", "items", "keys", "values"})
+
+
+def _override_is_followable(func: ast.AST) -> bool:
+    """Whether T027 can read every key one ``get_context_data()`` override supplies (#4278).
+
+    Followable: every ``return`` is a literal dict, a bare ``super().get_context_data(...)``
+    or a local proven to be the context (``ctx = super()...`` / a literal dict, see
+    :func:`_override_context_analysis`), and that local is only used in forms the key
+    reader understands: returned, spread into the returned literal, ``ctx["k"] = ...``
+    with a constant string key, read (``ctx["k"]``, ``.get/.items/.keys/.values``),
+    ``.update(k=...)`` / ``.update({"k": ...})`` and ``.setdefault("k", ...)``. Anything
+    else (``helper(ctx)``, ``ctx.update(other)``, ``ctx[name] = ...``, ``ctx |= ...``)
+    could add a key this check cannot see, so the override is not followable.
+    """
+    _keys, _calls_super, contexts = _override_context_analysis(func)
+    nodes = _own_scope_nodes(func)
+    allowed: set[int] = set()
+    for node in nodes:
+        if isinstance(node, ast.Return):
+            value = node.value
+            if value is None:
+                continue
+            if isinstance(value, ast.Dict):
+                for key, item in zip(value.keys, value.values):
+                    if key is None and isinstance(item, ast.Name) and item.id in contexts:
+                        allowed.add(id(item))
+            elif isinstance(value, ast.Name):
+                if value.id not in contexts:
+                    return False
+                allowed.add(id(value))
+            elif not _is_bare_super_get_context_data_call(value):
+                return False
+        elif isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Name) and node.value.id in contexts:
+                if isinstance(node.ctx, ast.Load):
+                    allowed.add(id(node.value))
+                elif isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+                    allowed.add(id(node.value))
+        elif isinstance(node, ast.Call):
+            method = _context_method_call(node, contexts)
+            if method is None:
+                continue
+            receiver = node.func.value  # type: ignore[attr-defined]
+            if method in _CONTEXT_READ_METHODS:
+                allowed.add(id(receiver))
+            elif method == "update":
+                keywords_only = not node.args and all(kw.arg for kw in node.keywords)
+                one_dict = (
+                    len(node.args) == 1
+                    and not node.keywords
+                    and isinstance(node.args[0], ast.Dict)
+                    and all(
+                        isinstance(k, ast.Constant) and isinstance(k.value, str)
+                        for k in node.args[0].keys
+                    )
+                )
+                if keywords_only or one_dict:
+                    allowed.add(id(receiver))
+            elif method == "setdefault":
+                first = node.args[0] if node.args else None
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    allowed.add(id(receiver))
+    return all(
+        id(node) in allowed
+        for node in ast.walk(func)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in contexts
+    )
 
 
 def _get_context_data_chain_keys(cls: type) -> set[str]:
@@ -1431,6 +1534,21 @@ def _get_context_data_is_too_dynamic(cls: type) -> bool:
     ``get_context_data`` does anything this check can't statically follow,
     the WHOLE view is skipped (silently) rather than partially trusted.
     """
+    return _context_data_overrides_too_dynamic(cls, followable=False)
+
+
+def _t027_get_context_data_is_too_dynamic(cls: type) -> bool:
+    """:func:`_get_context_data_is_too_dynamic` for T027 (#4278).
+
+    T027 reads the keys a ``ctx = super().get_context_data(); ctx["k"] = ...;
+    return ctx`` override adds (``_get_context_data_chain_keys``), so an override
+    :func:`_override_is_followable` accepts is not too dynamic here. T018 harvests only
+    literal-return keys and keeps the shared, stricter rule.
+    """
+    return _context_data_overrides_too_dynamic(cls, followable=True)
+
+
+def _context_data_overrides_too_dynamic(cls: type, *, followable: bool) -> bool:
     for klass in cls.__mro__:
         if klass is object:
             continue
@@ -1451,6 +1569,8 @@ def _get_context_data_is_too_dynamic(cls: type) -> bool:
         if not tree.body or not isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
             return True
         func = tree.body[0]
+        if followable and _override_is_followable(func):
+            continue
         for node in ast.walk(func):
             if isinstance(node, ast.Return) and node.value is not None:
                 if isinstance(node.value, ast.Dict):
@@ -1934,9 +2054,39 @@ def _check_document_element_root(
 # "Holds" comes from the exposure inventory's AST scan (the names the legacy
 # policy would have exported); "reads" and "supplies" come from the same
 # helpers T018 and ``djust_typecheck`` use. Same limits as T018: a view whose
-# ``get_context_data()`` cannot be followed statically and a template that
-# uses ``{% extends %}`` are skipped rather than guessed at.
+# ``get_context_data()`` cannot be followed statically and an inline ``template``
+# that uses ``{% extends %}`` are skipped rather than guessed at, and counted in
+# one ``DjustInfo``. A ``template_name`` view is read as the runtime reads it: its
+# ``{% extends %}`` chain resolved and its ``{% include %}`` partials inlined (#4278).
 _T027_HELD_KINDS = frozenset({"instance", "state", "class_value", "property"})
+
+
+def _t027_template_source(src: str, template_name: Optional[str]) -> Optional[str]:
+    """The template source a view renders, as T027 reads it (#4278), or None.
+
+    A ``template_name`` view: the ``{% extends %}`` chain resolved, then the static
+    ``{% include %}`` partials inlined, which is what ``JITMixin._get_template_content``
+    does at runtime (one path, #1646). An inline ``template`` cannot resolve an
+    ``{% extends %}`` at runtime either, so one that has it is None; otherwise only its
+    includes are inlined. An error resolving the template is None: the view is skipped,
+    never guessed at.
+    """
+    try:
+        from djust._rust import resolve_template_inheritance
+        from djust.live_view import LiveView
+        from djust.utils import get_template_dirs
+
+        dirs = get_template_dirs()
+        has_extends = "{% extends" in src or "{%extends" in src
+        if template_name:
+            resolved = resolve_template_inheritance(template_name, dirs)
+            if resolved:
+                return LiveView._inline_includes(resolved, dirs)
+        if has_extends:
+            return None
+        return LiveView._inline_includes(src, dirs)
+    except Exception:  # noqa: BLE001 — not resolvable statically: skip, never guess
+        return None
 
 
 @register("djust")
@@ -1946,6 +2096,7 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
     if _is_check_suppressed("djust.T027"):
         return errors
     try:
+        from djust._exposure import provider_contracts_for
         from djust._exposure_providers import registered_components
         from djust._exposure_unsupplied import MIGRATION_GUIDE_URL
         from djust.live_view import LiveView
@@ -1960,6 +2111,8 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
     except ImportError:
         return errors
 
+    skipped_override = 0
+    skipped_template = 0
     discovered = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
     for cls in sorted(
         discovered,
@@ -1970,13 +2123,16 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
         policy = inspect.getattr_static(cls, "exposure_policy", None)
         if type(policy) is not str or policy != "explicit":
             continue
-        if _get_context_data_is_too_dynamic(cls):
-            continue
         loaded = _static_template_source(cls)
         if loaded is None:
             continue
-        src, template_name, template_path = loaded
-        if "{% extends" in src or "{%extends" in src:
+        if _t027_get_context_data_is_too_dynamic(cls):
+            skipped_override += 1
+            continue
+        own_src, template_name, template_path = loaded
+        src = _t027_template_source(own_src, template_name)
+        if src is None:
+            skipped_template += 1
             continue
         cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
         try:
@@ -1988,11 +2144,19 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                 | set(registered_components(cls))
                 | _extract_template_locals(src)
                 | _get_context_data_chain_keys(cls)
+                # Names a mixin's provider contract renders (TenantMixin's ``tenant``): its
+                # ``get_context_data()`` sets them by a computed key the AST walk cannot read.
+                | {name for contract in provider_contracts_for(cls) for name in contract.rendered}
             )
             if _get_context_data_reaches_base(cls):
                 supplied |= set(rendered_state_names(cls))
             silenced = _template_noqa_names(src)
             refs = _extract_referenced_names(src)
+            # The line is the view's own file's; a name read only in a base template or an
+            # include has no line there.
+            own_lines: dict[str, int] = {}
+            for ref_name, ref_line in _extract_referenced_names(own_src):
+                own_lines.setdefault(ref_name, ref_line)
         except Exception:  # noqa: BLE001 — a view this cannot read is skipped, not guessed at
             logger.debug("T027: could not statically read %s", cls_label)
             continue
@@ -2002,6 +2166,7 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
             except (OSError, TypeError):
                 template_path = ""
         reported: set[str] = set()
+        refs = [(name, own_lines.get(name)) for name, _line in refs]
         for name, line in refs:
             if name in supplied or name in reported or name in held:
                 continue
@@ -2015,10 +2180,10 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
             reported.add(name)
             errors.append(
                 DjustWarning(
-                    "%s -- the template reads '%s' at line %d (%s) and nothing supplies it: "
+                    "%s -- the template reads '%s' %s and nothing supplies it: "
                     "djust 1.x generated it from '%s', explicit exposure does not, so it "
                     "renders as empty string, with no error."
-                    % (cls_label, name, line, template_name or "<inline>", stem),
+                    % (cls_label, name, _t027_where(line, template_name), stem),
                     hint=(
                         "Use {{ %s|length }} in the template, or return '%s' from "
                         "%s.get_context_data(). See %s. If the name is supplied in a way "
@@ -2045,10 +2210,10 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
             reported.add(name)
             errors.append(
                 DjustWarning(
-                    "%s -- the template reads '%s' at line %d (%s) and the view holds it "
+                    "%s -- the template reads '%s' %s and the view holds it "
                     "as an attribute, but nothing supplies it to the template: under "
                     "explicit exposure it renders as empty string, with no error."
-                    % (cls_label, name, line, template_name or "<inline>"),
+                    % (cls_label, name, _t027_where(line, template_name)),
                     hint=(
                         "Explicit exposure is the default since djust 2.0: a template gets "
                         "the view's declared state() fields and what get_context_data() "
@@ -2081,7 +2246,30 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                     line_number=line if template_name else None,
                 )
             )
+    if skipped_override or skipped_template:
+        errors.append(
+            DjustInfo(
+                "T027: skipped %d view(s) whose get_context_data() cannot be followed "
+                "statically and %d view(s) whose template could not be resolved (an "
+                "inline template with {%% extends %%}, or one that failed to load) -- "
+                "names those views read are not checked." % (skipped_override, skipped_template),
+                hint=(
+                    'Set DJUST_UNSUPPLIED_NAMES = "error" in test settings to fail a render '
+                    "that leaves a held name unsupplied, which covers these views at runtime. "
+                    "Or suppress this check with DJUST_CONFIG = {'suppress_checks': ['T027']}."
+                ),
+                id="djust.T027",
+            )
+        )
     return errors
+
+
+def _t027_where(line: Optional[int], template_name: Optional[str]) -> str:
+    """Where T027 found a read: a line of the view's own template, or a template it pulls in."""
+    label = template_name or "<inline>"
+    if line is None:
+        return "in a template it extends or includes (%s)" % label
+    return "at line %d (%s)" % (line, label)
 
 
 # T026 — a ``{% load %}`` tag's library labels. ``{% load a b %}`` and
