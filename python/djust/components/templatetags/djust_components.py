@@ -4635,7 +4635,7 @@ def toggle_group(
         buttons.append(
             f'<button type="button" class="toggle-group-btn{active_cls}" '
             f'aria-pressed="{aria_pressed}" '
-            f'dj-value-name="{e_name}"{click_attr}{disabled_attr}>'
+            f'dj-value-name="{e_name}" data-djust-optional="name"{click_attr}{disabled_attr}>'
             f"{icon_html}"
             f'<span class="toggle-group-label">{opt_label}</span>'
             f"</button>"

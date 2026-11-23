@@ -159,11 +159,14 @@ component has to say which instance it is, give it a `name`:
 self.ratings = [Rating(name=f"row-{row.pk}", value=row.stars) for row in rows]
 
 @event_handler()
-def set_rating(self, value, name=None, **kwargs):
+def set_rating(self, value: int, name: str = ""):
     ...
 ```
 
 Every trigger the instance renders then carries `dj-value-name="row-7"`.
+Under the strict parameter contract the browser sends `name` only when the
+handler declares it (or has a `**` catch-all), so a handler that does not need
+the identity can omit it.
 (Form-field components whose constructor already takes `name`, such as
 `DatePicker`, use it as the HTML field name instead, and it is not stamped
 on triggers.)
@@ -1591,7 +1594,9 @@ browser's top layer, an inert page behind it, and native Escape. When the
 browser closes it (Escape, or a click on the backdrop), `close_event` is sent to
 the server, so `open` stays in step. The focus trap and return focus to the
 opener work as for the default modal. The default (`native=False`) markup is
-unchanged.
+unchanged. An open native dialog stays open across a full-page update
+(`request_full_render()`, a restore or a recovery): the client keeps `open` on a
+`<dialog dj-dialog="open">` while the server still renders it open (#4286).
 
 Both forms take `role="alertdialog"` for a dialog that needs an answer (the
 default is `dialog`). `description="..."` renders a description paragraph that

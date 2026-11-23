@@ -995,7 +995,10 @@ class TestEventSpineEnumeration:
         from djust.runtime import ViewRuntime
 
         src = inspect.getsource(ViewRuntime._render_and_send)
-        assert "if force_html:" in src, "force_html patch-discard missing from _render_and_send"
+        assert "if force_html is True:" in src, (
+            "force_html patch-discard missing from _render_and_send (only an explicit "
+            "True discards the diff; set_changed_keys RENDER_REQUESTED keeps it, #4286)"
+        )
         assert "patches = None" in src, "force_html must discard patches"
         # ref echoed on all three frame branches (patch / compression / no-diff).
         assert src.count('msg["ref"] = event_ref') == 3, (

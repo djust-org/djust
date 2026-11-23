@@ -89,7 +89,8 @@ class ReviewView(LiveView):
 ```
 
 `event=` still renames the event (`Rating(event="rate_delivery")`); it is
-the verb, `name` is the noun.
+the verb, `name` is the noun. Under the strict parameter contract the browser
+sends `name` only to a handler that declares it (or has a `**` catch-all).
 
 **Which shape when.** A fixed widget with behaviour of its own — tabs, an
 accordion, a modal — is a

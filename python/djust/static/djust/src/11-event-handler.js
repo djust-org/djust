@@ -264,7 +264,11 @@ function _strictBinding(element, eventName, generated = {}, positional = [], con
             // eslint-disable-next-line security/detect-object-injection
             if (named.has(key) || open) sent[key] = generated[key];
         }
+        // #4285: keys the framework stamped (a component's identity `name`) are
+        // sent only when the handler declares them, like generated values.
+        const optional = new Set((element.getAttribute('data-djust-optional') || '').split(/\s+/).filter(Boolean));
         const values = _collectStrictEventParams(element, sent, positional, (key, hint) => {
+            if (optional.has(key) && !named.has(key) && !open) return null;
             const type = (named.get(key) || open || {type: 'Any'}).type
                 .replace(/^Optional\[(.*)\]$/, '$1').replace(/^list\[.*/, 'list');
             // A dj-value-* name may not reuse any generated name, sent or not.

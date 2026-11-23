@@ -345,7 +345,18 @@ def test_a_strict_handler_refuses_a_parameter_it_does_not_declare(fn_urls):
     answer = _post(browser, "/fn/", "pick", choice="1", extra="x")
     assert answer.status_code == 400, answer.content[:300]
     assert answer.json()["validation_details"]["expected_params"] == ["choice"]
+    # #4287: the HTTP envelope carries missing_params like every other transport.
+    assert answer.json()["validation_details"]["missing_params"] == []
     assert "picked=2" not in answer.content.decode()
+
+
+@pytest.mark.django_db
+def test_a_strict_handler_names_its_missing_parameter_over_http(fn_urls):
+    browser = Client()
+    browser.get("/fn/")
+    answer = _post(browser, "/fn/", "pick")
+    assert answer.status_code == 400, answer.content[:300]
+    assert answer.json()["validation_details"]["missing_params"] == ["choice"]
 
 
 @pytest.mark.django_db

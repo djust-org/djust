@@ -558,12 +558,16 @@ is the contract:
 | carries a key the handler does not declare | rejected, unless the handler has `**kwargs` | rejected, unless the handler has a `**` catch-all |
 | is a `dj-input`, `dj-change` or `dj-submit` | the browser also sends `field` and `_target` | the browser sends only what the handler declares; `_target` is never sent |
 | passes arguments as `data-*` attributes | read | ignored: use `dj-value-*` |
-| is rejected | the error text can repeat the value that was sent | the error names the parameter and the expected type, never the value |
+| is rejected | the error text can repeat the value that was sent | the error names the rule that failed and the declared parameter, never a value or an undeclared key; set the `djust.validation` logger to DEBUG to log undeclared key names on the server |
 
 The browser knows each strict handler's signature, so a `dj-input` bound to
 `search(self, value: str)` sends only `value`. Form fields, `value`, `field`,
 `key` and `code` are sent only when the handler declares them or has a `**`
-catch-all. That is why a strict handler no longer needs `**kwargs`. The server
+catch-all. A component's identity `name` (ADR-033 D5: `{% toggle_group name=... %}`,
+or `Component(name=...)` through `event_attrs`) follows the same rule: the framework
+marks it `data-djust-optional` (framework-internal; don't write it yourself), so a handler that does not declare `name` is not
+sent it. A `dj-value-name` you write yourself is still checked, and still refused
+when undeclared. That is why a strict handler no longer needs `**kwargs`. The server
 checks every event again, including ones a script sends by hand.
 
 ### Before and after
@@ -1084,4 +1088,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 66b4fe5e8baa -->
+<!-- generated-doc prose-sha256: 2b89dcad5603 -->
