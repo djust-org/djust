@@ -935,6 +935,27 @@ no longer has between requests and reconnects:
   under the session and page and reused by the next request or reconnect. Each
   view instance builds its own now, as an explicit view always did.
 
+  So a page GET makes no call to the state backend at all (no `set()`,
+  `refresh()` or `get()`, with `DJUST_AUTOMATIC_STATE` on or off), and the
+  `DjustPerformanceWarning: Large LiveView state` warning, which that `set()`
+  measured, no longer fires for page loads (#4281). It fires only for a
+  snapshot your own code stores in the backend. A test that budgeted a page's
+  size by wrapping the backend's `set()` now records nothing. What 2.0 bounds
+  instead is the state it persists for a view:
+
+  - fields declared `state(..., persist="server")`: 64 KB encoded per view
+    ([explicit exposure, Size](../state/explicit-exposure.md#supported-configuration));
+  - automatic state: a WARNING names the largest attributes past 100 KB
+    (`DJUST_AUTOMATIC_STATE_WARN_KB`), and a change past 512 KB
+    (`DJUST_AUTOMATIC_STATE_MAX_KB`, or `automatic_state_max_kb` on the view)
+    is refused ([Keeping state across a reconnect](#keeping-state-across-a-reconnect)).
+
+  A change over either limit is refused with a `state_too_large` error and a
+  WARNING. To keep a budget test, measure the state the view would persist:
+  `djust.testing.persisted_state(view)` returns it, and its `automatic_bytes`
+  is the encoded size of the automatic state, the number the limits above
+  apply to. The renderer a connection holds in memory is not measured.
+
 Keys a 1.x server left in a session are never read. Declare what must survive
 on an explicit view; private attributes stay private and are rebuilt by
 `mount()`:
@@ -1023,4 +1044,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 9e44b123bbe7 -->
+<!-- generated-doc prose-sha256: 8d82c8890176 -->
