@@ -53,7 +53,7 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
 
     class Legacy(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "legacy"  # legacy subject: #4279 error mode stays quiet for a legacy view
         template = "<div dj-root>[{{ held_name }}]</div>"
 
         def mount(self, request, **kwargs):

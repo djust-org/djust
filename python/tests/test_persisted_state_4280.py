@@ -44,7 +44,7 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
 
     class Legacy(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "legacy"  # legacy subject: #4280 persisted_state() refuses a legacy view
         template = "<div dj-root></div>"
 
 
