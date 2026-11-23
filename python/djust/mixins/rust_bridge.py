@@ -640,6 +640,34 @@ def _warn_rows_without_id(view: Any) -> None:
         )
 
 
+# ``_force_full_html`` holds one of three values (#4286):
+#
+# - falsy: nothing was requested;
+# - ``True``: send this turn's render as full HTML (``request_full_render()``,
+#   a restore, a dropped save, a catch-up), discarding the diff;
+# - ``RENDER_REQUESTED``: ``set_changed_keys()`` asked for the turn to RENDER
+#   (past the unchanged-state skip) but the render is still diffed and sent as
+#   a ``patch``.
+#
+# The sentinel is truthy on purpose. Every site that bypasses the skip,
+# consumes the flag or resyncs the full context to Rust keeps its truthiness
+# test, so a site that forgets about the sentinel still renders; only the
+# sites that DISCARD PATCHES test for ``True`` (:func:`full_html_requested`),
+# and one that forgets fails safe as a full-HTML frame (the parallel-path
+# drift class, #1646). A plain ``str`` so it pickles with the view.
+RENDER_REQUESTED = "render"
+
+
+def full_html_requested(view: Any) -> bool:
+    """Whether ``view`` asked for this turn's render as full HTML (#4286).
+
+    True only for an explicit full-page request (``_force_full_html is
+    True``); ``set_changed_keys()``'s :data:`RENDER_REQUESTED` forces the
+    render but keeps the diff.
+    """
+    return getattr(view, "_force_full_html", False) is True
+
+
 class RustBridgeMixin:
     """Rust integration: _initialize_rust_view, _sync_state_to_rust."""
 
@@ -654,6 +682,8 @@ class RustBridgeMixin:
         # instantiated standalone). See streaming.py for the same pattern.
         request: Any
         _rust_view: Any
+        # False, True (full HTML) or RENDER_REQUESTED (render, keep the diff).
+        _force_full_html: Union[bool, str]
         _websocket_session_id: Optional[str]
         _django_session_key: Optional[str]
         _cached_csrf_token: Optional[str]
@@ -859,9 +889,13 @@ class RustBridgeMixin:
                 self.rows[i].name = name  # in-place write on a model instance
                 self.set_changed_keys("rows")
 
-        This forces a full re-render of the view. When a targeted diff matters
-        (large views, hot paths), prefer building a NEW value immutably
-        instead — djust diffs that efficiently::
+        This forces the view to re-render this turn. The render is still
+        diffed and sent as a ``patch`` (#4286), so DOM state the server does
+        not render (an open native ``<dialog>``, focus, a caret) survives it;
+        use :meth:`request_full_render` for a full-HTML frame. Context is
+        resynced to the renderer in full, so for a large view on a hot path
+        prefer building a NEW value immutably instead — djust tracks that
+        change precisely::
 
             self.rows = [
                 {**r, "done": not r["done"]} if j == i else r
@@ -873,7 +907,7 @@ class RustBridgeMixin:
         touched no public ``self.*`` attribute, but ``get_context_data()`` will
         return different HTML on the next render (it re-queries the DB). Auto
         change-detection sees no changed attr and would auto-skip the event; the
-        zero-arg form forces a full re-render without naming a key::
+        zero-arg form forces the re-render without naming a key::
 
             def switch_branch(self, message_id, child_id):
                 msg = Message.objects.get(id=message_id)
@@ -891,7 +925,7 @@ class RustBridgeMixin:
         from declared ``state()`` fields or plain attributes re-renders on its
         own, and this call covers what no snapshot can see (an attribute write
         on an opaque object, a DB/external change). A named key may be the
-        public field name; either form forces the full render.
+        public field name; either form forces the render (sent as a diff).
 
         Note:
             Distinct from the Rust-side ``RustLiveView.set_changed_keys`` (the
@@ -903,15 +937,14 @@ class RustBridgeMixin:
         # turn's first public request, so ``cancel_full_render()`` can undo
         # exactly what the request added (#4129) and never a full render the
         # framework itself required (a restore, a dropped save).
-        if "_djust_full_render_prior" not in self.__dict__:
-            self._djust_full_render_prior = bool(getattr(self, "_force_full_html", False))
+        self._record_full_render_prior()
         if keys is None:
             # Zero-arg form (#1992): the handler changed only EXTERNAL state (a
             # DB row, a cache) with no public ``self.*`` change, but
             # ``get_context_data()`` will render different HTML next time. Force
-            # a full re-render without naming a key — ``_force_full_html`` below
+            # the re-render without naming a key — ``_request_render()`` below
             # is the actual bypass; there is no key to add to ``_changed_keys``.
-            self._force_full_html = True
+            self._request_render()
             return
         key_iter: Iterable[str] = (keys,) if isinstance(keys, str) else keys
         existing: Set[str] = getattr(self, "_changed_keys", None) or set()
@@ -924,7 +957,23 @@ class RustBridgeMixin:
         # auto-skip. ``_force_full_html`` is the sanctioned skip bypass: honored
         # on every skip path (runtime event spine, WS deferred-activity, WS tick)
         # and consumed (reset) after the render it forces.
-        self._force_full_html = True
+        self._request_render()
+
+    def _record_full_render_prior(self) -> None:
+        # Remember whether a render was already pending before this turn's
+        # first public request, so ``cancel_full_render()`` can undo exactly
+        # what the request added (#4129). The raw value: a framework ``True``
+        # restores as ``True`` (#4286).
+        if "_djust_full_render_prior" not in self.__dict__:
+            self._djust_full_render_prior = getattr(self, "_force_full_html", False) or False
+
+    def _request_render(self) -> None:
+        # set_changed_keys() forces the RENDER, not a full page (#4286): the
+        # sentinel bypasses every skip but keeps the diff. Upgrade only — a
+        # full-HTML request already pending (a restore, a dropped save,
+        # request_full_render()) stays a full page.
+        if getattr(self, "_force_full_html", False) is not True:
+            self._force_full_html = RENDER_REQUESTED
 
     # --- public render controls (#4129) ------------------------------------
 
@@ -937,7 +986,7 @@ class RustBridgeMixin:
         lasts one turn — the framework consumes it whether or not the turn
         would have rendered.
 
-        A full render requested in the same turn (``set_changed_keys()``,
+        A render requested in the same turn (``set_changed_keys()``,
         :meth:`request_full_render`) wins over this: the forced render is
         never dropped silently (#2834).
 
@@ -981,14 +1030,16 @@ class RustBridgeMixin:
     def request_full_render(self) -> None:
         """Send this turn's render as full HTML rather than as a diff.
 
-        The same as the zero-argument ``set_changed_keys()``: use it after a
-        change djust cannot see, such as a database-only write that
-        ``get_context_data()`` will read back. Undo it in the same turn with
-        :meth:`cancel_full_render`.
+        Like the zero-argument ``set_changed_keys()`` it forces the render
+        after a change djust cannot see, but the page is replaced rather than
+        patched. ``set_changed_keys()`` sends a diff (#4286); use this only
+        when a diff against the browser's DOM is not wanted. Undo it in the
+        same turn with :meth:`cancel_full_render`.
 
         Replaces assigning ``self._force_full_html = True``, which keeps working.
         """
-        self.set_changed_keys()
+        self._record_full_render_prior()
+        self._force_full_html = True
 
     def cancel_full_render(self) -> None:
         """Undo a full render requested earlier in this turn.
