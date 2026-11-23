@@ -210,3 +210,103 @@ def test_a_direct_state_sync_reads_inside_the_wrapper(user):
             client.view_instance._sync_state_to_rust()
     assert seen == [True]
     assert ENTERED == ["render"]
+
+
+class PageWithModelProperty(LiveView):
+    template = "<div dj-root><p>{{ me.username }}</p></div>"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["me"] = get_user_model().objects.get(username="u1")
+        return context
+
+
+def test_a_page_get_normalizes_a_model_property_inside_the_wrapper(user):
+    """A page GET normalizes each model of its context, which runs the model's
+    ``@property`` methods: a property that queries runs inside the render step."""
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.middleware import SessionMiddleware
+    from django.test import RequestFactory
+
+    from djust.serialization import DjangoJSONEncoder
+
+    User = get_user_model()
+    seen: List[tuple] = []
+
+    def record(execute, sql, params, many, context):
+        seen.append((sql, IN_SCOPE.get()))
+        return execute(sql, params, many, context)
+
+    probe = property(lambda self: User.objects.filter(pk=self.pk).count())
+    request = RequestFactory().get("/page-4276/")
+    request.user = AnonymousUser()
+    SessionMiddleware(lambda r: None).process_request(request)
+    request.session.save()
+    with (
+        mock.patch.object(User, "n_probe_4276", probe, create=True),
+        mock.patch.dict(DjangoJSONEncoder._property_cache, clear=True),
+        mock.patch("djust.sync_turn._wrapper", return_value=scope),
+        override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]),
+        connection.execute_wrapper(record),
+    ):
+        response = PageWithModelProperty.as_view()(request)
+    assert response.status_code == 200
+    assert "<p>u1</p>" in response.content.decode()
+    user_reads = [(sql, in_scope) for sql, in_scope in seen if '"auth_user"' in sql]
+    assert any("COUNT(" in sql for sql, _ in user_reads), user_reads
+    assert all(in_scope for _, in_scope in user_reads), user_reads
+
+
+def test_a_background_render_enters_the_wrapper_once(user):
+    """A background render (an async result, a push outside the push hop) syncs the
+    state and renders as one ``"render"`` step: one wrapper entry, every query in it."""
+    from types import SimpleNamespace
+
+    from djust._background_render import render_background_sync
+
+    seen: List[bool] = []
+
+    def record(execute, sql, params, many, context):
+        seen.append(IN_SCOPE.get())
+        return execute(sql, params, many, context)
+
+    with mock.patch("djust.sync_turn._wrapper", return_value=scope):
+        client = LiveViewTestClient(LoopRelationWalk)
+        client.mount()
+        client.render()
+        del ENTERED[:]
+        with connection.execute_wrapper(record):
+            result = render_background_sync(client.view_instance, SimpleNamespace())
+    assert result is not None
+    assert ENTERED == ["render"]
+    assert len(seen) >= 2 and all(seen), seen
+
+
+@contextlib.contextmanager
+def swallowing(view: Any, step: str, turn: Any):
+    # A wrapper that suppresses whatever its body raises.
+    try:
+        yield
+    except Exception:
+        pass
+
+
+class FailingRender(LiveView):
+    template = "<div dj-root><p>x</p></div>"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        if getattr(self, "fail_4276", False):
+            raise ValueError("boom")
+        return context
+
+
+def test_a_wrapper_that_suppresses_a_render_failure_is_an_error(user):
+    """A render whose wrapper swallowed its exception raises a clear error instead of
+    returning ``None`` (which ``render_with_diff()``'s callers fail to unpack)."""
+    with mock.patch("djust.sync_turn._wrapper", return_value=swallowing):
+        client = LiveViewTestClient(FailingRender)
+        client.mount()
+        client.view_instance.fail_4276 = True
+        with pytest.raises(RuntimeError, match="suppressed an exception raised by FailingRender"):
+            client.view_instance.render_with_diff()

@@ -1557,6 +1557,23 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
         }
     }
 
+    // The morph below matches ids only among one parent's children; id-less
+    // elements match by position. When id-less siblings before a container's
+    // id-less ancestor are added or removed, that ancestor is morphed into the
+    // wrong desired node, and the container is removed and re-created from the
+    // server's copy, losing the rows or client children it holds. So record
+    // every append/prepend/ignore container the answer also renders, and put
+    // it back afterwards (#4283).
+    const kept = new Map();
+    for (const newElement of djUpdateElements) {
+        const updateMode = newElement.getAttribute('dj-update');
+        if (!newElement.id || (updateMode !== 'append' && updateMode !== 'prepend' && updateMode !== 'ignore')) {
+            continue;
+        }
+        const existingElement = existingRoot.querySelector(`#${CSS.escape(newElement.id)}`);
+        if (existingElement) kept.set(newElement.id, { existingElement, newElement });
+    }
+
     // Then the whole tree, as an answer without dj-update is (#4283): every
     // node is morphed, with or without an id. morphElement keeps an
     // ignore container's client-owned children (reconciling only embedded
@@ -1564,6 +1581,14 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
     // replace container. The id-only pass this replaces dropped a change to
     // any top-level child without an id.
     morphChildren(existingRoot, newRoot);
+
+    for (const [id, { existingElement, newElement }] of kept) {
+        const current = existingRoot.querySelector(`#${CSS.escape(id)}`);
+        if (!current || current === existingElement) continue;
+        current.replaceWith(existingElement);
+        // Attributes follow the answer; the children keep their rule.
+        morphElement(existingElement, newElement);
+    }
 }
 
 /**
@@ -2304,7 +2329,7 @@ window.djust.saveFocusState = saveFocusState;
 window.djust.restoreFocusState = restoreFocusState;
 window.djust.morphChildren = morphChildren;
 window.djust.morphElement = morphElement;
-window.djust._applyDjUpdateElements = applyDjUpdateElements;
+window.djust._applyDjUpdateElements = applyDjUpdateElements; // for tests
 
 /**
  * Group patches by their parent path for batching.

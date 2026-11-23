@@ -93,6 +93,35 @@ describe('a whole-page answer with a dj-update element (#4283)', () => {
         expect(Array.from(root.querySelectorAll('#rows li')).map((li) => li.id)).toEqual(['r2', 'r3', 'r1']);
     });
 
+    it('keeps the rows and client children of containers under shifted id-less siblings', () => {
+        // An id-less sibling added before an id-less wrapper shifts the
+        // positional match: the wrappers are morphed into the wrong desired
+        // nodes. The containers inside must still keep what they hold.
+        const root = page(
+            '<div class="n">n1</div>' +
+            '<div class="wrap"><ul id="m" dj-update="append"><li id="a">a</li><li id="b">b</li></ul></div>' +
+            '<div class="w2"><div id="dj-flash-container" dj-update="ignore"></div></div>'
+        );
+        const list = root.querySelector('#m');
+        const flash = root.querySelector('#dj-flash-container');
+        flash.innerHTML = '<p class="msg">client flash</p>';
+        apply(root, answer(
+            '<div class="n">n1</div><div class="n">n2</div>' +
+            '<div class="wrap"><ul id="m" dj-update="append" data-v="2"><li id="c">c</li></ul></div>' +
+            '<div class="w2"><div id="dj-flash-container" dj-update="ignore"></div></div>'
+        ));
+        expect(root.querySelectorAll('.n').length).toBe(2);
+        expect(root.querySelectorAll('#m').length).toBe(1);
+        expect(root.querySelector('#m')).toBe(list);
+        expect(list.parentElement.className).toBe('wrap');
+        expect(list.getAttribute('data-v')).toBe('2');
+        expect(Array.from(list.querySelectorAll('li')).map((li) => li.id)).toEqual(['a', 'b', 'c']);
+        expect(root.querySelectorAll('#dj-flash-container').length).toBe(1);
+        expect(root.querySelector('#dj-flash-container')).toBe(flash);
+        expect(flash.parentElement.className).toBe('w2');
+        expect(root.querySelectorAll('.msg').length).toBe(1);
+    });
+
     it('creates a dj-update container the page did not have yet', () => {
         const root = page('<p>x</p>');
         apply(root, answer('<p>x</p>' + FLASH));

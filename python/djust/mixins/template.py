@@ -35,13 +35,30 @@ def _render_step(method: Callable[..., Any]) -> Callable[..., Any]:
     stay outermost, or its ``reading(view)`` would make it take its nested branch
     and skip ``render_completed()`` (#4112). The ``_sync_state_to_rust`` and
     ``get_context_data()`` steps inside nest and enter the wrapper no second time.
+
+    A wrapper whose ``__exit__`` suppresses an exception would make the method
+    return ``None`` (and ``render_with_diff()``'s caller fail to unpack it, far
+    from the cause): a body that did not complete raises ``RuntimeError`` here.
     """
 
     @functools.wraps(method)
     def stepped(self: Any, *args: Any, **kwargs: Any) -> Any:
         from ..sync_turn import run_sync_step
 
-        return run_sync_step(self, "render", method, self, *args, **kwargs)
+        completed: list = []
+
+        def body() -> Any:
+            result = method(self, *args, **kwargs)
+            completed.append(None)
+            return result
+
+        result = run_sync_step(self, "render", body)
+        if not completed:
+            raise RuntimeError(
+                "The sync_turn_wrapper suppressed an exception raised by %s.%s()"
+                % (type(self).__name__, method.__name__)
+            )
+        return result
 
     return stepped
 

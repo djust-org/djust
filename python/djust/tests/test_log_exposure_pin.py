@@ -97,6 +97,9 @@ RUNTIME_LEGACY_GATED = {
 }
 
 RUNTIME_FRAMEWORK_ONLY = {
+    ("_session_row_gone", "Could not tell whether the session row still exi"): (
+        "session store exists() check; logs the exception type only"
+    ),
     ("join_listen_channels", "Error joining db_notify group for %s: %s"): (
         "channel-layer group_add"
     ),

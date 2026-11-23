@@ -530,8 +530,9 @@ def _session_row_gone(session: Any) -> bool:
     False when that cannot be told: a failed check is a storage error too."""
     try:
         return not type(session)().exists(session.session_key)
-    except Exception:  # noqa: BLE001 — the store did not answer: not a logout
-        logger.debug("Could not tell whether the session row still exists", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — the store did not answer: not a logout
+        # The type only: a storage error can carry server-only values.
+        logger.debug("Could not tell whether the session row still exists (%s)", type(exc).__name__)
         return False
 
 

@@ -81,34 +81,43 @@ logger = logging.getLogger(__name__)
 OPAQUE_PATHS_ATTR = "_http_fallback_opaque_paths"
 
 
-def patches_touch_opaque(view: Any, patches: Any, html: Any = None) -> bool:
+_UNSET: Any = object()
+
+
+def patches_touch_opaque(view: Any, patches: Any, html: Any = None, *, after: Any = _UNSET) -> bool:
     """Whether a patch addresses a ``dj-update="ignore"`` element, or a node under
-    one (#4283): its path is the element's path or starts with it. A patch
-    without a path counts as touching. Such an answer is the whole page, which
-    keeps the client's children of the element.
+    one (#4283): its path is the element's path or starts with it. A ``Replace``
+    of an ancestor touches it too (it sends the server's children of the
+    element). A patch without a path counts as touching. Such an answer is the
+    whole page, which keeps the client's children of the element.
 
     The client resolves each patch's path against the DOM as the patches before
     it left it, so the element's path is taken from both ends: the baseline
     render (kept by :func:`prepare_baseline`) and ``html``, the render after the
-    handler. A path that only matches by coincidence costs a whole page, never
-    a wrong patch. The differ itself emits nothing under such an element (it
-    splices the previous render's children in), so what this catches in
+    handler; ``after`` is that render's :func:`render_shape`, when the caller
+    already has it. A path that only matches by coincidence costs a whole page,
+    never a wrong patch. The differ itself emits nothing under such an element
+    (it splices the previous render's children in), so what this catches in
     practice is a change to the element's own attributes.
     """
     opaque = set(view.__dict__.get(OPAQUE_PATHS_ATTR) or ())
     if not opaque:
         return False
-    if html is not None:
-        after = render_shape(html)
-        if after is None:
-            return True
+    if after is _UNSET:
+        after = render_shape(html) if html is not None else _UNSET
+    if after is None:
+        return True
+    if after is not _UNSET:
         opaque.update(after.opaque_paths)
     for patch in patches:
         path = patch.get("path") if isinstance(patch, dict) else None
         if not isinstance(path, list):
             return True
+        replaces = patch.get("type") == "Replace"
         for prefix in opaque:
             if tuple(path[: len(prefix)]) == prefix:
+                return True
+            if replaces and tuple(prefix[: len(path)]) == tuple(path):
                 return True
     return False
 

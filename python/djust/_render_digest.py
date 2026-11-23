@@ -459,11 +459,22 @@ def render_shape(html: Any) -> RenderShape | None:
     return RenderShape(shape, opaque_paths, client_owned)
 
 
-def render_token(view: Any, request: Any, html: Any) -> str | None:
+def answer_shape(request: Any, html: Any) -> RenderShape | None:
+    """:func:`render_shape` of the rendered root ``html`` in its canonical form."""
+    return render_shape(canonical_html(html, request)) if isinstance(html, str) else None
+
+
+_UNSET: Any = object()
+
+
+def render_token(view: Any, request: Any, html: Any, found: Any = _UNSET) -> str | None:
     """``<digest>.<shape>`` for the rendered root ``html``: what the page GET
-    and every fallback answer carry, or ``None`` when either half is missing."""
+    and every fallback answer carry, or ``None`` when either half is missing.
+    ``found`` is :func:`answer_shape`'s result, when the caller has it."""
     digest = render_digest(view, request, html)
-    shape = dom_shape(canonical_html(html, request)) if isinstance(html, str) else None
+    if found is _UNSET:
+        found = answer_shape(request, html)
+    shape = None if found is None else found.shape
     if not digest or not shape:
         return None
     return digest + "." + shape

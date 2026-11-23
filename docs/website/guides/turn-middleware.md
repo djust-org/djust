@@ -242,7 +242,7 @@ def _as_caller(user_id):
 
   | Request | Entries, in order |
   |---|---|
-  | HTTP page GET | `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, only when the view has one), `"mount"`, `"handle_params"`, `"auth"` (object check, when `get_object()` is overridden), `"render"` three times: the GET's own `get_context_data()` (evaluated once, #3725), then the page render and the diff-baseline render, which read that context and each run the template engine (#4276) |
+  | HTTP page GET | `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, only when the view has one), `"mount"`, `"handle_params"`, `"auth"` (object check, when `get_object()` is overridden), `"render"` three times: the GET's own `get_context_data()` (evaluated once, #3725), together with the context processors and the normalizing of the context's models (whose `@property` and `get_*` methods may query), then the page render and the diff-baseline render, which read that context and each run the template engine (#4276) |
   | HTTP POST event (legacy view: 2.0 keeps no state between requests, so every POST is this) | `"auth"`, `"mount"`, `"handle_params"`, `"auth"`, `"event"`, `"render"` |
 
   Each is one entry on the thread that runs it. Keep the wrapper cheap.

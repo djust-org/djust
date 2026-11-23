@@ -151,6 +151,10 @@ def test_patches_touch_opaque_matches_the_path_and_everything_under_it():
     # The parent's child list: an insert next to the region does not enter it.
     assert not patches_touch_opaque(view, [{"type": "InsertChild", "path": [], "index": 2}])
     assert patches_touch_opaque(view, [{"type": "Unknown"}])
+    # A Replace of an ancestor sends the server's children of the region.
+    assert patches_touch_opaque(view, [{"type": "Replace", "path": []}])
+    assert not patches_touch_opaque(view, [{"type": "Replace", "path": [1]}])
+    assert not patches_touch_opaque(view, [{"type": "SetAttr", "path": []}])
 
 
 def test_the_render_after_the_handler_supplies_the_regions_path_too():

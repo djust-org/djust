@@ -253,7 +253,10 @@ The phases are the ones the smoke test uses. `"mount"` is `mount()` plus `handle
 a mount phase is reported once, when it first goes over, so its figure reads `at least N`.
 `"event"` is the handler's own queries, in the smoke test and at run time alike (the per-event
 object-permission re-check is not counted in either). An int budget is the mount phase plus the
-first render that follows it.
+first render that follows it. On an HTTP page GET that first render is the GET's own context
+pass (`get_context_data()`, the context processors and the normalizing of the context's
+models); the page render and the diff-baseline render after it are judged only against a
+`"render"` budget. A socket or SSE mount's first render is the template render itself.
 
 `"render"` is one render pass, and each pass is judged on its own. Since #4276 a pass counts
 every query the render makes, not only those of `get_context_data()`: the QuerySets the context
