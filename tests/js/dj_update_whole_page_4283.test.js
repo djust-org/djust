@@ -68,6 +68,20 @@ describe('a whole-page answer with a dj-update element (#4283)', () => {
         expect(root.querySelector('p').textContent).toBe('b');
     });
 
+    it('keeps an id-less ignored stream target as the client left it', () => {
+        // The markdown-stream demo's target: the server's children of the
+        // region (the settled render) are not applied by a whole-page answer;
+        // only stream ops write it. Its siblings still follow the answer.
+        const target = '<article dj-stream="md_stream" dj-update="ignore">';
+        const root = page('<button>Start</button>' + target + '</article>');
+        const article = root.querySelector('article');
+        apply(root, answer('<button disabled>Start</button>' + target
+            + '<p><strong>md4187</strong></p></article>'));
+        expect(root.querySelector('article')).toBe(article);
+        expect(article.innerHTML).toBe('');
+        expect(root.querySelector('button').hasAttribute('disabled')).toBe(true);
+    });
+
     it('keeps focus and typed text', () => {
         const root = page('<form><input name="q" value=""></form><p>0</p>' + FLASH);
         const input = root.querySelector('input');
