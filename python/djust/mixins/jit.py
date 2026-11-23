@@ -1183,10 +1183,13 @@ class JITMixin:
             # section, or comment may contain include-looking literal text.
             from django.template.base import DebugLexer, TokenType
             from .._rust import raw_block_end_tag
+            from ..components.rust_handlers import RAW_BODY_SEGMENT_TAGS, RAW_BODY_TAGS
 
             replacements = []
             in_comment = False
             raw_end = None
+            # Open raw-body tags that have separator tokens (``split_pane``/``pane``).
+            segment_stack: list = []
             for token in DebugLexer(content).tokenize():
                 if token.token_type != TokenType.BLOCK:
                     continue
@@ -1202,7 +1205,16 @@ class JITMixin:
                 elif bits[0] == "endcomment":
                     in_comment = False
                 elif not in_comment:
-                    raw_end = raw_block_end_tag(bits[0])
+                    # Component bodies (``tabs``, ``split_pane``) are template source rendered
+                    # with the same context: descend into them. Every other raw tag keeps its skip.
+                    raw_end = None if bits[0] in RAW_BODY_TAGS else raw_block_end_tag(bits[0])
+                    if bits[0] in RAW_BODY_SEGMENT_TAGS:
+                        segment_stack.append(bits[0])
+                    elif segment_stack and bits[0] == "end" + segment_stack[-1]:
+                        segment_stack.pop()
+                    elif segment_stack and bits[0] == RAW_BODY_SEGMENT_TAGS[segment_stack[-1]]:
+                        # Not a tag outside its parent, so the extractor cannot parse it.
+                        replacements.append((token.position, ""))
                     if bits[0] == "include":
                         start, end = token.position
                         match = _INCLUDE_RE.fullmatch(content[start:end])

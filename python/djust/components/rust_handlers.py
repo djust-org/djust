@@ -2723,6 +2723,10 @@ NATIVE_BLOCK_HANDLERS = [
 #: ``test_raw_body_tags_are_exactly_the_bridged_tags_that_read_their_children``.
 RAW_BODY_TAGS = frozenset({"split_pane", "tabs"})
 
+#: Separator tokens of a raw-body tag (``{% pane %}`` inside ``{% split_pane %}``). For template path
+#: extraction the segments are one body rendered with the same context, so the separator is dropped.
+RAW_BODY_SEGMENT_TAGS = {"split_pane": "pane"}
+
 
 def _checked_raw_handler(name: str, compile_func: Any, library: Any) -> Any:
     """``LibraryRawBlockTagHandler`` whose arguments are checked when the template compiles.
