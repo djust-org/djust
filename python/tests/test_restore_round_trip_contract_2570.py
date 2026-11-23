@@ -206,7 +206,7 @@ def test_the_sync_skip_flag_is_only_set_by_the_sync_itself() -> None:
 
     from djust.mixins import rust_bridge
 
-    sync_src = inspect.getsource(rust_bridge.RustBridgeMixin._sync_state_to_rust)
+    sync_src = inspect.getsource(rust_bridge.RustBridgeMixin._sync_state_to_rust_body)
     assert "self._sync_done_this_cycle = True" in sync_src
 
 
@@ -313,7 +313,7 @@ def test_the_snapshot_restore_twin_forces_a_full_html_render() -> None:
         "dispatch_mount must set _force_full_html on a restore mount"
     )
 
-    sync_src = inspect.getsource(rust_bridge.RustBridgeMixin._sync_state_to_rust)
+    sync_src = inspect.getsource(rust_bridge.RustBridgeMixin._sync_state_to_rust_body)
     assert re.search(
         r'if getattr\(self, "_force_full_html", False\):\s*\n\s*prev_refs = \{\}', sync_src
     ), "_force_full_html must empty prev_refs (a full sync)"

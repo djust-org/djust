@@ -26,6 +26,43 @@ if TYPE_CHECKING:  # pragma: no cover — imported only for type hints
 logger = logging.getLogger(__name__)
 
 
+def _render_step(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Run a render method's body inside ``LIVEVIEW_CONFIG["sync_turn_wrapper"]``'s
+    ``"render"`` step (#4276): the Rust render walks the sidecar's models (a
+    relation the template reads is a query), which ran outside the wrapper.
+
+    Applied UNDER :func:`~djust._held_rows.recorded_render`: that decorator must
+    stay outermost, or its ``reading(view)`` would make it take its nested branch
+    and skip ``render_completed()`` (#4112). The ``_sync_state_to_rust`` and
+    ``get_context_data()`` steps inside nest and enter the wrapper no second time.
+
+    A wrapper whose ``__exit__`` suppresses an exception would make the method
+    return ``None`` (and ``render_with_diff()``'s caller fail to unpack it, far
+    from the cause): a body that did not complete raises ``RuntimeError`` here.
+    """
+
+    @functools.wraps(method)
+    def stepped(self: Any, *args: Any, **kwargs: Any) -> Any:
+        from ..sync_turn import run_sync_step
+
+        completed: list = []
+
+        def body() -> Any:
+            result = method(self, *args, **kwargs)
+            completed.append(None)
+            return result
+
+        result = run_sync_step(self, "render", body)
+        if not completed:
+            raise RuntimeError(
+                "The sync_turn_wrapper suppressed an exception raised by %s.%s()"
+                % (type(self).__name__, method.__name__)
+            )
+        return result
+
+    return stepped
+
+
 # ---------------------------------------------------------------------------
 # Module-level regexes for streaming render split (hoisted for perf — see
 # PR review: avoid re.compile() on every request).
@@ -951,6 +988,7 @@ class TemplateMixin:
         return normalized
 
     @recorded_render
+    @_render_step
     def render(self, request: Optional["HttpRequest"] = None) -> str:
         """
         Render the view to HTML.
@@ -1888,6 +1926,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
 
     @reconcile_child_render(whole_page=True)
     @recorded_render
+    @_render_step
     def render_full_template(
         self,
         request: Optional["HttpRequest"] = None,
@@ -2342,6 +2381,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
 
     @reconcile_child_render()
     @recorded_render
+    @_render_step
     def render_with_diff(
         self,
         request: Optional["HttpRequest"] = None,

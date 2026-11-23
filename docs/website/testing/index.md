@@ -253,15 +253,22 @@ The phases are the ones the smoke test uses. `"mount"` is `mount()` plus `handle
 a mount phase is reported once, when it first goes over, so its figure reads `at least N`.
 `"event"` is the handler's own queries, in the smoke test and at run time alike (the per-event
 object-permission re-check is not counted in either). An int budget is the mount phase plus the
-first render that follows it.
+first render that follows it. On an HTTP page GET that first render is the GET's own context
+pass (`get_context_data()`, the context processors and the normalizing of the context's
+models); the page render and the diff-baseline render after it are judged only against a
+`"render"` budget. A socket or SSE mount's first render is the template render itself.
 
-`"render"` is one `get_context_data()` pass, and each pass is judged on its own. An HTTP GET
-makes one pass: the request evaluates the view's context once and the render that follows reads
-that context instead of evaluating it again, whether or not the view overrides
-`get_context_data()` or calls `super()`. (A GET used to call an overriding view's
-`get_context_data()` twice, so an `int` budget and the page's real cost differed by a factor of
-two: #3725.) A WebSocket or SSE mount makes one pass, and so does each event, which evaluates
-the context afresh because the handler changed state.
+`"render"` is one render pass, and each pass is judged on its own. Since #4276 a pass counts
+every query the render makes, not only those of `get_context_data()`: the QuerySets the context
+holds when the render evaluates them (a lazy QuerySet returned from `get_context_data()` is read
+there), and the relations the template follows on a model (`{{ user.groups.count }}`). This is
+what the smoke test measures around `client.render()` too; a view near its budget may now
+report over at run time. An HTTP GET evaluates the view's context once, in a pass of its own,
+and the page render and diff-baseline render that follow read that context instead of
+evaluating it again, whether or not the view overrides `get_context_data()` or calls `super()`
+(a GET used to call an overriding view's `get_context_data()` twice: #3725); each of those two
+renders is a pass of its own. A WebSocket or SSE mount makes one pass, and so does each event,
+which evaluates the context afresh because the handler changed state.
 
 Two paths still make more than one pass, and a budget has to allow for the passes they make:
 the HTTP POST fallback of a view on the legacy exposure policy evaluates once to save

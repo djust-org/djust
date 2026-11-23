@@ -389,6 +389,30 @@
    "html": "<div dj-root=\"\"><p>x</p></div>",
    "shape": "aa10c54c05cc0185",
    "client": "same"
+  },
+  {
+   "name": "ignore_region_with_client_children_4283",
+   "html": "<div dj-root=\"\"><p>a</p><div id=\"dj-flash-container\" class=\"dj-flash-container\" dj-update=\"ignore\" data-dj-auto-dismiss=\"5000\"><div class=\"msg\">saved</div> text</div><p>b</p></div>",
+   "shape": "90b59d1a36c0131b",
+   "client": "same"
+  },
+  {
+   "name": "ignore_region_empty_4283",
+   "html": "<div dj-root=\"\"><p>a</p><div id=\"dj-flash-container\" class=\"dj-flash-container\" dj-update=\"ignore\" data-dj-auto-dismiss=\"5000\"></div><p>b</p></div>",
+   "shape": "90b59d1a36c0131b",
+   "client": "same"
+  },
+  {
+   "name": "ignore_region_nested_same_tag_4283",
+   "html": "<div dj-root=\"\"><section id=\"w\" dj-update=\"ignore\"><section><b>x</b></section><textarea>t</textarea></section><i>after</i></div>",
+   "shape": "26745a0f526c0e87",
+   "client": "same"
+  },
+  {
+   "name": "append_region_is_walked_4283",
+   "html": "<div dj-root=\"\"><ul id=\"rows\" dj-update=\"append\"><li id=\"r1\">one</li></ul></div>",
+   "shape": "7419ca49826c0f24",
+   "client": "same"
   }
  ]
 }

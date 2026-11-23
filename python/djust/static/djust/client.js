@@ -789,9 +789,9 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             const newRoot = _parseRootFrameHtml(data.html, liveviewRoot);
 
             // Handle dj-update="append|prepend|ignore" for efficient list updates.
-            // When no dj-update elements exist, applyDjUpdateElements falls back
-            // to morphChildren internally, which preserves JS state (canvas contexts,
-            // event listeners, hook properties) better than innerHTML replacement.
+            // applyDjUpdateElements always morphs the whole tree (#4283), which
+            // preserves JS state (canvas contexts, event listeners, hook
+            // properties) better than innerHTML replacement.
             _withOwnedChildMount(data.owned_children,
                 () => applyDjUpdateElements(liveviewRoot, newRoot));
 
@@ -10725,16 +10725,9 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
     // Find all elements with dj-update attribute in the new content
     const djUpdateElements = newRoot.querySelectorAll('[dj-update]');
 
-    if (djUpdateElements.length === 0) {
-        // No dj-update elements — morph to preserve event listeners
-        morphChildren(existingRoot, newRoot);
-        return;
-    }
-
-    // Track which elements we've handled specially
-    const handledIds = new Set();
-
-    // Process each dj-update element
+    // First pass: an append/prepend container merges the server's new rows
+    // into the ones it accumulated. The morph below keeps them: it does not
+    // recurse into such a container's children.
     for (const newElement of djUpdateElements) {
         const updateMode = newElement.getAttribute('dj-update');
         const elementId = newElement.id;
@@ -10743,128 +10736,64 @@ function _applyDjUpdateElementsInner(existingRoot, newRoot) {
             console.warn('[LiveView:dj-update] Element with dj-update must have an id:', newElement);
             continue;
         }
+        if (updateMode !== 'append' && updateMode !== 'prepend') continue;
 
         const existingElement = existingRoot.querySelector(`#${CSS.escape(elementId)}`);
         if (!existingElement) {
-            // Element doesn't exist yet, will be created by full update
+            // Element doesn't exist yet: the morph below creates it
             continue;
         }
-
-        handledIds.add(elementId);
-
-        switch (updateMode) {
-            case 'append': {
-                // Get new children that don't already exist
-                const existingChildIds = new Set(
-                    Array.from(existingElement.children)
-                        .map(child => child.id)
-                        .filter(id => id)
-                );
-
-                for (const newChild of Array.from(newElement.children)) {
-                    if (newChild.id && !existingChildIds.has(newChild.id)) {
-                        // Clone and append new child
-                        existingElement.appendChild(newChild.cloneNode(true));
-                        if (globalThis.djustDebug) {
-                            djLog(`[LiveView:dj-update] Appended #${newChild.id} to #${elementId}`);
-                        }
-                    }
-                }
-                break;
+        const existingChildIds = new Set(
+            Array.from(existingElement.children)
+                .map(child => child.id)
+                .filter(id => id)
+        );
+        const added = Array.from(newElement.children)
+            .filter(child => child.id && !existingChildIds.has(child.id));
+        if (updateMode === 'append') {
+            for (const newChild of added) existingElement.appendChild(newChild.cloneNode(true));
+        } else {
+            const firstExisting = existingElement.firstChild;
+            for (const newChild of added.reverse()) {
+                existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
             }
-
-            case 'prepend': {
-                // Get new children that don't already exist
-                const existingChildIds = new Set(
-                    Array.from(existingElement.children)
-                        .map(child => child.id)
-                        .filter(id => id)
-                );
-
-                const firstExisting = existingElement.firstChild;
-                for (const newChild of Array.from(newElement.children).reverse()) {
-                    if (newChild.id && !existingChildIds.has(newChild.id)) {
-                        // Clone and prepend new child
-                        existingElement.insertBefore(newChild.cloneNode(true), firstExisting);
-                        if (globalThis.djustDebug) {
-                            djLog(`[LiveView:dj-update] Prepended #${newChild.id} to #${elementId}`);
-                        }
-                    }
-                }
-                break;
-            }
-
-            case 'ignore':
-                _reconcileIgnoredOwnedChildren(existingElement, newElement);
-                // Client-owned contents remain untouched outside cold child reconciliation.
-                if (globalThis.djustDebug) {
-                    djLog(`[LiveView:dj-update] Ignoring #${elementId}`);
-                }
-                break;
-
-            case 'replace':
-            default:
-                // Morph to preserve event listeners
-                morphElement(existingElement, newElement);
-                break;
+        }
+        if (globalThis.djustDebug && added.length) {
+            djLog(`[LiveView:dj-update] ${updateMode}ed ${added.length} to #${elementId}`);
         }
     }
 
-    // For elements NOT handled by dj-update, do standard updates
-    // This ensures non-dj-update parts of the page still get updated
-
-    // Get all top-level elements in both roots
-    const existingChildren = Array.from(existingRoot.children);
-    const newChildren = Array.from(newRoot.children);
-
-    // Create a map of new children by id for quick lookup
-    const newChildMap = new Map();
-    for (const child of newChildren) {
-        if (child.id) {
-            newChildMap.set(child.id, child);
-        }
-    }
-
-    // Update or add elements
-    for (const newChild of newChildren) {
-        if (newChild.id && handledIds.has(newChild.id)) {
-            // Already handled by dj-update, skip
+    // The morph below matches ids only among one parent's children; id-less
+    // elements match by position. When id-less siblings before a container's
+    // id-less ancestor are added or removed, that ancestor is morphed into the
+    // wrong desired node, and the container is removed and re-created from the
+    // server's copy, losing the rows or client children it holds. So record
+    // every append/prepend/ignore container the answer also renders, and put
+    // it back afterwards (#4283).
+    const kept = new Map();
+    for (const newElement of djUpdateElements) {
+        const updateMode = newElement.getAttribute('dj-update');
+        if (!newElement.id || (updateMode !== 'append' && updateMode !== 'prepend' && updateMode !== 'ignore')) {
             continue;
         }
-
-        if (newChild.id) {
-            const existing = existingRoot.querySelector(`#${CSS.escape(newChild.id)}`);
-            if (existing) {
-                // Check if this element contains dj-update children
-                if (newChild.querySelector('[dj-update]')) {
-                    // Recursively process
-                    applyDjUpdateElements(existing, newChild);
-                } else {
-                    // Morph to preserve event listeners
-                    morphElement(existing, newChild);
-                }
-            } else {
-                // New element, append it
-                existingRoot.appendChild(newChild.cloneNode(true));
-            }
-        }
+        const existingElement = existingRoot.querySelector(`#${CSS.escape(newElement.id)}`);
+        if (existingElement) kept.set(newElement.id, { existingElement, newElement });
     }
 
-    // Handle elements that exist in old but not in new (remove them)
-    // But preserve dj-update elements since their children are managed differently
-    for (const existing of existingChildren) {
-        if (existing.id && !handledIds.has(existing.id) && !newChildMap.has(existing.id)) {
-            // Check if it's a dj-update element
-            if (!existing.hasAttribute('dj-update')) {
-                if (globalThis.djust
-                    && typeof globalThis.djust.maybeDeferRemoval === 'function'
-                    && globalThis.djust.maybeDeferRemoval(existing)) {
-                    continue;
-                }
-                teardownPollsIn(existing);
-                existing.remove();
-            }
-        }
+    // Then the whole tree, as an answer without dj-update is (#4283): every
+    // node is morphed, with or without an id. morphElement keeps an
+    // ignore container's client-owned children (reconciling only embedded
+    // views), does not recurse into append/prepend containers, and morphs a
+    // replace container. The id-only pass this replaces dropped a change to
+    // any top-level child without an id.
+    morphChildren(existingRoot, newRoot);
+
+    for (const [id, { existingElement, newElement }] of kept) {
+        const current = existingRoot.querySelector(`#${CSS.escape(id)}`);
+        if (!current || current === existingElement) continue;
+        current.replaceWith(existingElement);
+        // Attributes follow the answer; the children keep their rule.
+        morphElement(existingElement, newElement);
     }
 }
 
@@ -10946,7 +10875,8 @@ function getSignificantChildren(node) {
 // resolved with, so two trees with one shape resolve every path to
 // corresponding nodes; and since the shape holds each element's attributes and
 // text, rows that were reordered give another shape unless they are equal in
-// all of that, in which case their order makes no difference. The server
+// all of that, in which case their order makes no difference. The children of
+// a dj-update="ignore" element are the client's and are left out (#4283). The server
 // computes the same value from its render (`dom_shape`,
 // python/djust/_render_digest.py); the page-POST fallback applies a patch
 // answer, which is addressed by path, only while the DOM has the shape of the
@@ -11008,8 +10938,11 @@ function domShape(root) {
                 put('<' + child.tagName.toLowerCase() + attrs.sort().join(''));
                 // dj-disable-with shows other text while its request is out.
                 const shown = child.getAttribute('data-djust-original-text');
-                if (shown === null) walk(child);
-                else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) put('"' + _shapeText(shown) + '\0');
+                // A dj-update="ignore" subtree is the client's (#4283): not walked.
+                if (child.getAttribute('dj-update') !== 'ignore') {
+                    if (shown === null) walk(child);
+                    else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) put('"' + _shapeText(shown) + '\0');
+                }
                 put('>');
             }
         }
@@ -11602,6 +11535,7 @@ window.djust.saveFocusState = saveFocusState;
 window.djust.restoreFocusState = restoreFocusState;
 window.djust.morphChildren = morphChildren;
 window.djust.morphElement = morphElement;
+window.djust._applyDjUpdateElements = applyDjUpdateElements; // for tests
 
 /**
  * Group patches by their parent path for batching.

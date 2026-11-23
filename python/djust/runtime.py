@@ -510,12 +510,30 @@ def _store_session_writes_sync(session: Any, source: str) -> None:
 
     try:
         save_session_writes(session)
-    except (LateSaveDropped, StateSuperseded, UpdateError):
-        # Logged out (the row is gone) or the tab restored elsewhere while the
-        # turn ran: nothing is revived, nothing more is written.
+    except (LateSaveDropped, StateSuperseded):
+        # The tab restored elsewhere while the turn ran: nothing more is written.
         logger.debug("Session writes of a %s turn dropped: the session moved on", source)
+    except UpdateError:
+        # Django's db store raises UpdateError for ANY database error on the
+        # update, not only for a deleted row (#4274). Only a row that is really
+        # gone is a logout, dropped quietly; anything else is a storage error.
+        if _session_row_gone(session):
+            logger.debug("Session writes of a %s turn dropped: the session moved on", source)
+        else:
+            logger.warning("Session writes of a %s turn were not stored", source)
     except Exception:  # noqa: BLE001 — storage errors can carry server-only values
         logger.warning("Session writes of a %s turn were not stored", source)
+
+
+def _session_row_gone(session: Any) -> bool:
+    """Whether ``session``'s stored row no longer exists (a logout deleted it).
+    False when that cannot be told: a failed check is a storage error too."""
+    try:
+        return not type(session)().exists(session.session_key)
+    except Exception as exc:  # noqa: BLE001 — the store did not answer: not a logout
+        # The type only: a storage error can carry server-only values.
+        logger.debug("Could not tell whether the session row still exists (%s)", type(exc).__name__)
+        return False
 
 
 async def store_turn_session_writes(view: Any, source: str = "event") -> None:

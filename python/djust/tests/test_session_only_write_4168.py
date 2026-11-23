@@ -20,7 +20,7 @@ import asyncio
 import contextlib
 import json
 import uuid
-from typing import Any, Callable, Dict, Iterator
+from typing import Any, Dict, Iterator
 from unittest import mock
 
 import pytest
@@ -184,15 +184,40 @@ def _stored(key: str) -> Dict[str, Any]:
     return dict(SessionStore(key).load())
 
 
-async def _until_stored(key: str, wanted: Callable[[Dict[str, Any]], bool], what: str) -> None:
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + HANG_S
-    while True:
-        stored = await sync_to_async(_stored)(key)
-        if wanted(stored):
-            return
-        assert loop.time() < deadline, f"{what} never reached the session store: {stored}"
-        await asyncio.sleep(0.05)
+@contextlib.asynccontextmanager
+async def _store_done(source: str) -> Any:
+    """An event set once a turn of ``source`` has finished storing its session
+    writes (#4274).
+
+    The tests wait for this, close the connection (which stops ticks, so no
+    later write overlaps) and then read the row ONCE. Polling the row while the
+    turn writes it raced: with the worker pool the save runs on another
+    thread's connection to the shared-cache in-memory test database, whose
+    table lock fails the overlapping write at once (it ignores the busy
+    timeout), and the turn's write was lost.
+
+    ``source`` is what the runtime passes to ``store_turn_session_writes``:
+    ``"tick"``, ``"push"``, ``"db_notify"`` or ``"event"``. The legacy socket
+    mount's own store (``"mount"``) is not waited for.
+    """
+    from djust import runtime
+
+    done = asyncio.Event()
+    real = runtime.store_turn_session_writes
+
+    async def spy(view: Any, turn_source: str = "event") -> None:
+        try:
+            await real(view, turn_source)
+        finally:
+            if turn_source == source:
+                done.set()
+
+    with mock.patch.object(runtime, "store_turn_session_writes", spy):
+        yield done
+
+
+async def _wait(done: asyncio.Event) -> None:
+    await asyncio.wait_for(done.wait(), HANG_S)
 
 
 # -- SSE ----------------------------------------------------------------------
@@ -362,6 +387,42 @@ async def test_a_legacy_write_keeps_another_requests_write(transport):
     assert seen.get("other") == "kept" and seen.get("k") == "v", seen
 
 
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+async def test_a_storage_error_on_a_turn_session_save_is_logged_not_dropped(policy, caplog):
+    """#4274: Django's db session store turns ANY database error on the update
+    into ``UpdateError`` (a locked table, say). While the row still exists that
+    is a storage failure, logged as one, not a logout dropped at DEBUG."""
+    from channels.layers import get_channel_layer
+    from django.contrib.sessions.backends.base import UpdateError
+
+    def failing_save(self: Any, must_create: bool = False) -> None:
+        raise UpdateError
+
+    view = PushWriter if policy == "explicit" else LegacyPushWriter
+    with _settings():
+        client = await sync_to_async(_page)(view)
+        key = _key(client)
+        async with _store_done("db_notify") as done:
+            comm = await _ws_mount(view, key)
+            try:
+                with (
+                    mock.patch.object(SessionStore, "save", failing_save),
+                    caplog.at_level("DEBUG", logger="djust.runtime"),
+                ):
+                    await get_channel_layer().group_send(
+                        "djust_db_notify_sow4168",
+                        {"type": "db_notify", "channel": "sow4168", "payload": {}},
+                    )
+                    await _wait(done)
+            finally:
+                await comm.disconnect()
+        exists = await sync_to_async(SessionStore().exists)(key)
+    assert exists
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert any("db_notify turn were not stored" in r.getMessage() for r in warnings), caplog.text
+    assert "the session moved on" not in caplog.text
+
+
 async def test_a_legacy_save_after_a_logout_is_dropped_quietly(caplog):
     """The session was deleted by another request: the frame still goes, the
     session is not revived, and nothing is logged as a failure."""
@@ -424,19 +485,20 @@ async def test_a_tick_that_only_writes_the_session_is_stored(transport, policy, 
     with _settings(pool):
         client = await sync_to_async(_page)(view)
         key = _key(client)
-        if transport == "ws":
-            comm = await _ws_mount(view, key)
-            try:
-                await _until_stored(key, lambda s: s.get("ticked") == "yes", "the tick's write")
-            finally:
-                await comm.disconnect()
-        else:
-            sse = _Sse(view, key)
-            try:
-                await sse.open()
-                await _until_stored(key, lambda s: s.get("ticked") == "yes", "the tick's write")
-            finally:
-                sse.close()
+        async with _store_done("tick") as done:
+            if transport == "ws":
+                comm = await _ws_mount(view, key)
+                try:
+                    await _wait(done)
+                finally:
+                    await comm.disconnect()
+            else:
+                sse = _Sse(view, key)
+                try:
+                    await sse.open()
+                    await _wait(done)
+                finally:
+                    sse.close()
         seen = await sync_to_async(_read)(client)
     assert seen.get("ticked") == "yes", seen
 
@@ -455,22 +517,23 @@ async def test_a_push_that_renders_nothing_still_stores_the_session(
     with _settings(pool):
         client = await sync_to_async(_page)(view)
         key = _key(client)
-        if transport == "ws":
-            comm = await _ws_mount(view, key)
-            try:
-                await apush_to_view(_path_of(view), handler="handle_quiet")
-                await _until_stored(key, lambda s: s.get("pushed") == "yes", "the push's write")
-            finally:
-                await comm.disconnect()
-        else:
-            sse = _Sse(view, key)
-            try:
-                session = await sse.open()
-                mounted = session.runtime.view_instance
-                assert await session.runtime.server_push(mounted, {"handler": "handle_quiet"})
-                await _until_stored(key, lambda s: s.get("pushed") == "yes", "the push's write")
-            finally:
-                sse.close()
+        async with _store_done("push") as done:
+            if transport == "ws":
+                comm = await _ws_mount(view, key)
+                try:
+                    await apush_to_view(_path_of(view), handler="handle_quiet")
+                    await _wait(done)
+                finally:
+                    await comm.disconnect()
+            else:
+                sse = _Sse(view, key)
+                try:
+                    session = await sse.open()
+                    mounted = session.runtime.view_instance
+                    assert await session.runtime.server_push(mounted, {"handler": "handle_quiet"})
+                    await _wait(done)
+                finally:
+                    sse.close()
         seen = await sync_to_async(_read)(client)
     assert seen.get("pushed") == "yes", seen
 
@@ -484,15 +547,16 @@ async def test_a_db_notify_that_renders_nothing_stores_the_session(policy, pool,
     with _settings(pool):
         client = await sync_to_async(_page)(view)
         key = _key(client)
-        comm = await _ws_mount(view, key)
-        try:
-            await get_channel_layer().group_send(
-                "djust_db_notify_sow4168",
-                {"type": "db_notify", "channel": "sow4168", "payload": {}},
-            )
-            await _until_stored(key, lambda s: s.get("notified") == "yes", "handle_info's write")
-        finally:
-            await comm.disconnect()
+        async with _store_done("db_notify") as done:
+            comm = await _ws_mount(view, key)
+            try:
+                await get_channel_layer().group_send(
+                    "djust_db_notify_sow4168",
+                    {"type": "db_notify", "channel": "sow4168", "payload": {}},
+                )
+                await _wait(done)
+            finally:
+                await comm.disconnect()
         seen = await sync_to_async(_read)(client)
     assert seen.get("notified") == "yes", seen
 
@@ -507,27 +571,31 @@ async def test_a_legacy_rendering_turn_stores_under_its_own_source(turn, pool, f
     from djust import runtime
 
     sources = []
-    real = runtime.store_turn_session_writes
-
-    async def spy(view: Any, source: str = "event") -> None:
-        sources.append(source)
-        await real(view, source)
-
     view = LegacyRenderingWriter
     wanted = "ticked" if turn == "tick" else "notified"
-    with _settings(pool), mock.patch.object(runtime, "store_turn_session_writes", spy):
+    with _settings(pool):
         client = await sync_to_async(_page)(view)
         key = _key(client)
-        comm = await _ws_mount(view, key)
-        try:
-            if turn == "db_notify":
-                await get_channel_layer().group_send(
-                    "djust_db_notify_sow4168r",
-                    {"type": "db_notify", "channel": "sow4168r", "payload": {}},
-                )
-            await _until_stored(key, lambda s: s.get(wanted) == "yes", f"the {turn}'s write")
-        finally:
-            await comm.disconnect()
+        async with _store_done(turn) as done:
+            real = runtime.store_turn_session_writes
+
+            async def spy(view: Any, source: str = "event") -> None:
+                sources.append(source)
+                await real(view, source)
+
+            with mock.patch.object(runtime, "store_turn_session_writes", spy):
+                comm = await _ws_mount(view, key)
+                try:
+                    if turn == "db_notify":
+                        await get_channel_layer().group_send(
+                            "djust_db_notify_sow4168r",
+                            {"type": "db_notify", "channel": "sow4168r", "payload": {}},
+                        )
+                    await _wait(done)
+                finally:
+                    await comm.disconnect()
+        stored = await sync_to_async(_stored)(key)
+    assert stored.get(wanted) == "yes", stored
     assert turn in sources, sources
     assert "push" not in sources, sources
 
@@ -547,7 +615,8 @@ async def test_a_url_change_handle_params_write_is_read_by_a_plain_view(transpor
             comm = await _ws_mount(view, key)
             try:
                 await comm.send_json_to(message)
-                await _until_stored(key, lambda s: s.get("q") == "1", "handle_params' write")
+                # The turn stores its session writes before its reply frame.
+                await asyncio.wait_for(comm.receive_json_from(), HANG_S)
             finally:
                 await comm.disconnect()
         elif transport == "sse":

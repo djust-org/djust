@@ -398,9 +398,9 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             const newRoot = _parseRootFrameHtml(data.html, liveviewRoot);
 
             // Handle dj-update="append|prepend|ignore" for efficient list updates.
-            // When no dj-update elements exist, applyDjUpdateElements falls back
-            // to morphChildren internally, which preserves JS state (canvas contexts,
-            // event listeners, hook properties) better than innerHTML replacement.
+            // applyDjUpdateElements always morphs the whole tree (#4283), which
+            // preserves JS state (canvas contexts, event listeners, hook
+            // properties) better than innerHTML replacement.
             _withOwnedChildMount(data.owned_children,
                 () => applyDjUpdateElements(liveviewRoot, newRoot));
 
