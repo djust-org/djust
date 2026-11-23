@@ -39,10 +39,25 @@ What the copy cannot isolate is the request, which both renders share:
 No pre-render is made, and the answer is the whole page, for a view with
 ``temporary_assigns`` or streams and for a page whose template embeds another
 view: there the browser's DOM is by design not the server's render. A render
-that holds a ``dj-update`` container, a virtual list or an embedded child is
-answered with the whole page too. A view that cannot be copied (it holds a
-lock, a connection, an open file), and a pre-render that raises, are not the
-request's failure: the handler runs and the answer is the whole page.
+that holds a ``dj-update="append"`` / ``"prepend"`` / ``"replace"``
+container, a virtual list (``dj-virtual``) or an embedded child is answered
+with the whole page too. These are read from the render's start tags, not its
+text: ``dj-update`` written in the page's content (a code sample) changes
+nothing (#4283).
+
+A ``dj-update="ignore"`` element (``{% dj_flash %}``'s container) does not
+turn patches off (#4283). Its children are the client's, so both shapes leave
+them out (``_render_digest.render_shape``) and a patch elsewhere on the page
+addresses the same node in both trees. Its path is kept on the view
+(``_http_fallback_opaque_paths``): an answer whose patches address the element
+or anything under it (:func:`patches_touch_opaque`) is the whole page, which
+keeps its client-owned children. (The differ emits nothing under such an
+element, whose previous children it splices into the new render; a change to
+the element's own attributes is what this catches.)
+
+A view that cannot be copied (it holds a lock, a connection, an open file),
+and a pre-render that raises, are not the request's failure: the handler runs
+and the answer is the whole page.
 """
 
 from __future__ import annotations
@@ -51,12 +66,51 @@ import copy
 import logging
 from typing import Any
 
-from ._render_digest import render_digest, supplied_token, tokens_match
+from ._render_digest import (
+    canonical_html,
+    render_digest,
+    render_shape,
+    supplied_token,
+    tokens_match,
+)
 
 logger = logging.getLogger(__name__)
 
-#: A render containing either of these is not patched over this transport.
-_CLIENT_OWNED_MARKERS = ("dj-update", "dj-virtual")
+#: Where :func:`prepare_baseline` keeps the paths of the matched render's
+#: ``dj-update="ignore"`` elements, for :func:`patches_touch_opaque`.
+OPAQUE_PATHS_ATTR = "_http_fallback_opaque_paths"
+
+
+def patches_touch_opaque(view: Any, patches: Any, html: Any = None) -> bool:
+    """Whether a patch addresses a ``dj-update="ignore"`` element, or a node under
+    one (#4283): its path is the element's path or starts with it. A patch
+    without a path counts as touching. Such an answer is the whole page, which
+    keeps the client's children of the element.
+
+    The client resolves each patch's path against the DOM as the patches before
+    it left it, so the element's path is taken from both ends: the baseline
+    render (kept by :func:`prepare_baseline`) and ``html``, the render after the
+    handler. A path that only matches by coincidence costs a whole page, never
+    a wrong patch. The differ itself emits nothing under such an element (it
+    splices the previous render's children in), so what this catches in
+    practice is a change to the element's own attributes.
+    """
+    opaque = set(view.__dict__.get(OPAQUE_PATHS_ATTR) or ())
+    if not opaque:
+        return False
+    if html is not None:
+        after = render_shape(html)
+        if after is None:
+            return True
+        opaque.update(after.opaque_paths)
+    for patch in patches:
+        path = patch.get("path") if isinstance(patch, dict) else None
+        if not isinstance(path, list):
+            return True
+        for prefix in opaque:
+            if tuple(path[: len(prefix)]) == prefix:
+                return True
+    return False
 
 
 def patches_enabled(view: Any) -> bool:
@@ -141,10 +195,11 @@ def prepare_baseline(view: Any, request: Any) -> bool:
         with baseline._processor_context(request):
             baseline._prepare_child_ids()
             html, _, _ = render_view_with_diff(baseline, request)
+        found = render_shape(canonical_html(html, request)) if isinstance(html, str) else None
         if (
-            isinstance(html, str)
+            found is not None
             and not _holds_other_views(baseline)
-            and not any(marker in html for marker in _CLIENT_OWNED_MARKERS)
+            and not found.client_owned
             and tokens_match(html, request, render_digest(view, request, html), supplied)
         ):
             renderer = getattr(baseline, "_rust_view", None)
@@ -153,6 +208,7 @@ def prepare_baseline(view: Any, request: Any) -> bool:
                 # tree. None of the copy's Python state comes with it.
                 view._rust_view = renderer
                 view._rust_view_explicit = getattr(baseline, "_rust_view_explicit", False)
+                view.__dict__[OPAQUE_PATHS_ATTR] = tuple(found.opaque_paths)
                 matched = True
     except Exception as exc:  # noqa: BLE001 - see the module docstring
         from ._exposure_diagnostics import log_failure_for

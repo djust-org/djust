@@ -872,11 +872,25 @@ def test_a_view_whose_render_consumes_its_rows_is_not_pre_rendered(renders, url,
     assert "patches" not in answer and answer["version"] == 1
 
 
-def test_a_client_owned_region_in_the_render_selects_the_whole_page(renders):
+def test_an_ignored_region_the_patches_do_not_touch_keeps_the_patch_answer(renders):
+    """#4283: a ``dj-update="ignore"`` element is opaque to the shape; a change
+    elsewhere on the page is still answered with patches."""
     client, digest = _open("/p/ignored/")
     answer, count = _counted(renders, client, "/p/ignored/", "increment", digest)
     assert count == 2
-    assert _is_whole_page_of(answer, ">1</b>")
+    assert answer["patches"] == [{"type": "SetText", "path": [1, 1, 0], "text": "1"}]
+
+
+def test_an_append_region_in_the_render_selects_the_whole_page(renders, monkeypatch):
+    """A ``dj-update="append"`` container still selects the whole page (#4283)."""
+    from djust import _http_fallback_baseline
+
+    # Streams are not pre-rendered at all; let the render reach the shape check.
+    monkeypatch.setattr(_http_fallback_baseline, "_consumed_by_a_render", lambda view: False)
+    client, digest = _open("/p/streamed/")
+    answer, count = _counted(renders, client, "/p/streamed/", "increment", digest)
+    assert count == 2
+    assert "patches" not in answer and answer["version"] == 1
 
 
 def _without_child_numbers(answer: dict) -> dict:

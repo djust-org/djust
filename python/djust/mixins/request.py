@@ -2326,6 +2326,8 @@ class RequestMixin:
                         logger.debug("Failed to inject debug info", exc_info=True)
 
             if patches_json:
+                from .._http_fallback_baseline import patches_touch_opaque
+
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
 
@@ -2349,7 +2351,11 @@ class RequestMixin:
                     _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
-                if baseline_matched and 0 <= patch_count <= PATCH_THRESHOLD:
+                if (
+                    baseline_matched
+                    and 0 <= patch_count <= PATCH_THRESHOLD
+                    and not patches_touch_opaque(self, patches, html)
+                ):
                     from .._render_digest import path_addressed
 
                     response_data = {
