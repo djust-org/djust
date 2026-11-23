@@ -800,3 +800,88 @@ def test_ci_mode_adds_every_strict_xfail_file_to_a_selection():
 def test_strict_xfails_do_not_rescue_an_empty_selection_or_change_full():
     assert _xfail(["docs/nowhere.txt"], ci=True).full
     assert _xfail(["pyproject.toml"], ci=True).full
+
+
+# --------------------------------------------------------------------------
+# CI mode: a selection too big for its one shard runs as FULL shards
+# --------------------------------------------------------------------------
+# PR #4284 selected 744 files; CI ran them as one shard and the job was cancelled
+# at its 45-minute timeout with no failure, where FULL's 8 shards finish in ~13 min.
+
+BIG = ["tests/unit/test_big_%03d.py" % i for i in range(40)]
+BIG_TEXTS = {**CI_TEXTS, **{t: "from djust.forms import Form\n" for t in BIG}}
+
+
+def _big(tests, durations):
+    return st.select_tests(
+        ["python/djust/forms.py"],
+        [*CI_TESTS, *tests],
+        BIG_TEXTS.__getitem__,
+        "feat/x",
+        ci=True,
+        gates=(),
+        durations=durations,
+    )
+
+
+def _timed(tests, seconds_per_file):
+    # Fast-tier tests of 0.5 s each per file, plus a slow-tier test PR CI deselects.
+    out = {}
+    for t in tests:
+        for i in range(int(seconds_per_file * 2)):
+            out["%s::test_%d" % (t, i)] = 0.5
+        out[t + "::test_slow"] = 500.0
+    return out
+
+
+def test_ci_mode_a_selection_over_the_shard_budget_is_full():
+    sel = _big(BIG, _timed(BIG, 20.0))  # 40 files x 20 s = 800 s > 600 s
+    assert sel.full
+    assert "one CI shard" in sel.reason
+
+
+def test_ci_mode_a_selection_under_the_shard_budget_keeps_its_files():
+    # The slow tier (500 s per file here) is not counted: PR CI runs -m "not slow".
+    sel = _big(BIG, _timed(BIG, 10.0))  # 400 s
+    assert not sel.full, sel.reason
+    assert set(BIG) <= set(sel.tests)
+
+
+def test_ci_mode_charges_an_unrecorded_file_the_mean_recorded_file():
+    recorded = _timed(BIG[:10], 20.0)  # 10 x 20 s, mean 20 s
+    assert _big(BIG[:10], recorded).tests
+    assert _big(BIG, recorded).full  # 10 recorded + 30 at the 20 s mean = 800 s
+
+
+def test_ci_mode_without_durations_caps_the_file_count():
+    many = ["tests/unit/test_big_%03d.py" % i for i in range(st.CI_SHARD_MAX_FILES + 1)]
+    texts = {**CI_TEXTS, **{t: "from djust.forms import Form\n" for t in many}}
+    sel = st.select_tests(
+        ["python/djust/forms.py"], [*CI_TESTS, *many], texts.__getitem__, "feat/x", ci=True
+    )
+    assert sel.full and str(st.CI_SHARD_MAX_FILES) in sel.reason
+    assert not _big(BIG, {}).full
+
+
+def test_the_shard_cap_is_what_makes_the_big_selection_full(monkeypatch):
+    """Gate-off: without the cap, the same big selection would run as one shard."""
+    monkeypatch.setattr(st, "CI_SHARD_BUDGET_SECONDS", float("inf"))
+    sel = _big(BIG, _timed(BIG, 20.0))
+    assert not sel.full, sel.reason
+    assert set(BIG) <= set(sel.tests)
+
+
+def test_the_shard_cap_is_ci_mode_only():
+    sel = st.select_tests(
+        ["tests/unit/test_big_000.py"],
+        [*CI_TESTS, *BIG],
+        BIG_TEXTS.__getitem__,
+        "feat/x",
+        durations=_timed(BIG, 100.0),
+    )
+    assert sel.tests == ["tests/unit/test_big_000.py"]
+
+
+def test_load_durations_reads_the_committed_file():
+    durations = st.load_durations(ROOT)
+    assert durations and all(isinstance(v, (int, float)) for v in durations.values())

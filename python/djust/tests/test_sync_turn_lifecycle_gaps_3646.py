@@ -889,24 +889,32 @@ def _entered_by(view_class, *requests_):
 
 
 def test_the_guides_entries_per_request_for_a_page_get():
-    # One ``render`` step: the GET evaluates ``get_context_data()`` once and the
-    # render that follows reads that context instead of entering a second step
-    # (#3725). A page GET used to enter ``render`` twice.
-    assert _entered_by(SequencePage, _page_request("GET")) == [
-        "auth",
-        "mount",
-        "handle_params",
-        "auth",
-        "render",
-    ]
-    assert _entered_by(SequencePageWithOnMount, _page_request("GET")) == [
-        "auth",
-        "lifecycle",
-        "mount",
-        "handle_params",
-        "auth",
-        "render",
-    ]
+    # The GET evaluates ``get_context_data()`` once (#3725): its own ``render``
+    # entry. The page render and the diff-baseline render that follow read that
+    # context, and each is a ``render`` entry of its own since #4276, because the
+    # template engine's model walks are queries the wrapper has to scope.
+    renders = ["render", "render", "render"]
+    assert (
+        _entered_by(SequencePage, _page_request("GET"))
+        == [
+            "auth",
+            "mount",
+            "handle_params",
+            "auth",
+        ]
+        + renders
+    )
+    assert (
+        _entered_by(SequencePageWithOnMount, _page_request("GET"))
+        == [
+            "auth",
+            "lifecycle",
+            "mount",
+            "handle_params",
+            "auth",
+        ]
+        + renders
+    )
 
 
 def test_the_guides_entries_per_request_for_a_post_event():

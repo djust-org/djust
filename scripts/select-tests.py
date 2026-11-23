@@ -38,7 +38,8 @@ remains the authoritative full run.
 ``--ci``: pull-request CI's selection. Targeted, plus the rules at
 ``CI_CONFIG_PREFIXES`` (CI configuration, docs and test support select their
 consumers; every selection adds the Makefile's ``MERGE_GATES`` and every test
-file with a strict xfail, #4259). The merge
+file with a strict xfail, #4259), and FULL when the selection is too big for
+the ONE shard CI runs it as (``CI_SHARD_BUDGET_SECONDS``). The merge
 queue still runs everything (docs/testing-strategy.md, "Pull-request CI runs
 the selection").
 
@@ -66,11 +67,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -175,6 +177,24 @@ DOC_SCANNER_RE = re.compile(r"\*\.md\b")
 # are FULL anyway, and a global ``xfail_strict`` should widen this to any xfail.
 STRICT_XFAIL_RE = re.compile(r"xfail\((?:[^()]|\([^()]*\))*?\bstrict\s*=\s*True\b", re.S)
 FULL_SUITE_BRANCH_RE = re.compile(r"flip|routing|convergence", re.IGNORECASE)
+
+# CI mode runs a selection as ONE shard; FULL fans out to FULL_SHARDS (8) shards
+# in .github/workflows/test.yml. A big selection on one shard is slower than FULL
+# and can outlive the job's 45-minute timeout: PR #4284 selected 744 files (~29 min
+# of recorded fast-tier time) and was cancelled at 45 min with no failure, while a
+# FULL run's shards each finish in 6-13 min. So a selection whose recorded
+# fast-tier time exceeds the budget answers FULL. Calibration, from that run: 29
+# recorded minutes took ~35 min of wall clock on the runner's 4 xdist workers
+# (~1.2 wall min per recorded min), so 600 s is ~12 min of tests, about one FULL
+# shard, and far under the 45-minute timeout. The estimate counts only tests at or
+# under ``SLOW_SECONDS`` (PR CI runs ``-m "not slow"``, tests/slow_tier.py) and
+# charges a file with no recorded test the mean recorded file. Without a durations
+# file, more than ``CI_SHARD_MAX_FILES`` files (600 s at the mean ~1.6 s per file,
+# rounded down) answers FULL instead.
+DURATIONS_FILE = ".test_durations"
+SLOW_SECONDS = 1.0  # tests/slow_tier.py SLOW_SECONDS
+CI_SHARD_BUDGET_SECONDS = 600.0
+CI_SHARD_MAX_FILES = 300
 
 # Workspace-wide cargo run when these change.
 CARGO_WORKSPACE_FILES = frozenset({"Cargo.toml", "Cargo.lock"})
@@ -384,6 +404,7 @@ def select_tests(
     gates: Iterable[str] = (),
     support: Iterable[str] = (),
     global_files: Iterable[str] = (),
+    durations: Mapping[str, float] | None = None,
 ) -> Selection:
     """Select files only when every change maps to an existing test.
 
@@ -401,6 +422,8 @@ def select_tests(
     ``CI_CONFIG_PREFIXES``; ``gates`` are the test files every CI selection runs,
     ``support`` every test-support module and ``global_files`` the files that make
     a support module reach every test (the ``conftest.py`` files, ``pyproject.toml``).
+    ``durations`` (``.test_durations``, node id to seconds) sizes a CI selection
+    against the one shard it would run on (``ci_shard_overflow``).
     """
     targeted = targeted or ci
     changed = sorted(set(changed))
@@ -530,6 +553,10 @@ def select_tests(
     if unclassified:
         return Selection(True, "unclassified changed file(s): " + ", ".join(unclassified))
     tests = sorted(chosen)
+    if ci:
+        overflow = ci_shard_overflow(tests, durations)
+        if overflow:
+            return Selection(True, overflow)
     reason = "%d test file(s) selected for %d changed file(s)" % (len(tests), len(changed))
     if waived:
         reason += "; %s=1: direct selection instead of FULL for: %s" % (
@@ -537,6 +564,42 @@ def select_tests(
             "; ".join(waived),
         )
     return Selection(False, reason, tests)
+
+
+def ci_shard_overflow(tests: list[str], durations: Mapping[str, float] | None) -> str | None:
+    """Why ``tests`` are too many for one CI shard, or None (``CI_SHARD_BUDGET_SECONDS``)."""
+    per_file: dict[str, float] = {}
+    for nodeid, seconds in (durations or {}).items():
+        if isinstance(seconds, (int, float)) and seconds <= SLOW_SECONDS:
+            f = nodeid.split("::", 1)[0]
+            per_file[f] = per_file.get(f, 0.0) + seconds
+    if not per_file:
+        if len(tests) > CI_SHARD_MAX_FILES:
+            return "%d test files selected, over the %d one CI shard can run (no %s)" % (
+                len(tests),
+                CI_SHARD_MAX_FILES,
+                DURATIONS_FILE,
+            )
+        return None
+    mean = sum(per_file.values()) / len(per_file)
+    estimate = sum(per_file.get(t, mean) for t in tests)
+    if estimate > CI_SHARD_BUDGET_SECONDS:
+        return (
+            "%d test files selected, ~%.0f s of recorded fast-tier time in %s, over the "
+            "%.0f s one CI shard can run: running every root as FULL shards"
+            % (len(tests), estimate, DURATIONS_FILE, CI_SHARD_BUDGET_SECONDS)
+        )
+    return None
+
+
+def load_durations(root: Path) -> dict[str, float]:
+    """``.test_durations`` (pytest-split's node id to seconds), or {} when unreadable."""
+    try:
+        data = json.loads((root / DURATIONS_FILE).read_text())
+    except (OSError, ValueError) as exc:
+        print("select-tests: %s unreadable (%s)" % (DURATIONS_FILE, exc), file=sys.stderr)
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 # --------------------------------------------------------------------------
@@ -719,6 +782,7 @@ def main(argv: list[str] | None = None) -> int:
         gates=merge_gates(root) if args.ci else (),
         support=_test_support_files(root) if args.ci else (),
         global_files=_global_files(root) if args.ci else (),
+        durations=load_durations(root) if args.ci else None,
     )
     if sel.full:
         print("select-tests: FULL suite — %s" % sel.reason, file=sys.stderr)

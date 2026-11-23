@@ -5275,10 +5275,17 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # render_with_diff for the full raw HTML). The fresh Rust version is
             # DISCARDED (#1788) — only the HTML is taken; ``version`` stays the
             # consumer-owned ``_recovery_version``.
-            def _sync_and_render() -> Any:
+            def _sync_and_diff() -> Any:
                 if hasattr(view, "_sync_state_to_rust"):
                     view._sync_state_to_rust()
-                fresh_html, _patches, _fresh_version = view.render_with_diff()
+                return view.render_with_diff()
+
+            def _sync_and_render() -> Any:
+                from .sync_turn import run_sync_step
+
+                # One render step for the pair (#4276): the two methods' own
+                # render steps nest in it.
+                fresh_html, _patches, _fresh_version = run_sync_step(view, "render", _sync_and_diff)
                 return fresh_html, contract_snapshot()
 
             try:

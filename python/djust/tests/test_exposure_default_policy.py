@@ -469,7 +469,22 @@ def test_t027_is_quiet_for_a_supplying_view_a_legacy_view_and_when_suppressed(se
     assert _t027(_OneXStyle) == []
 
 
-def test_t027_skips_a_get_context_data_it_cannot_follow_and_honours_noqa():
+def test_t027_follows_a_returned_context_skips_an_unfollowable_one_and_honours_noqa():
+    class Unfollowable(LiveView):
+        exposure_policy = "explicit"
+        template = "<div dj-root>{{ count }}</div>"
+
+        def mount(self, request, **kwargs):
+            self.count = 0
+
+        def _fill(self, context):
+            context["count"] = self.count
+
+        def get_context_data(self, **kwargs):
+            context = super().get_context_data(**kwargs)
+            self._fill(context)
+            return context
+
     class Dynamic(LiveView):
         exposure_policy = "explicit"
         template = "<div dj-root>{{ count }}</div>"
@@ -489,5 +504,6 @@ def test_t027_skips_a_get_context_data_it_cannot_follow_and_honours_noqa():
         def mount(self, request, **kwargs):
             self.count = 0
 
-    assert _t027(Dynamic) == []
+    assert _t027(Unfollowable) == []  # skipped: the key is written by a call it cannot follow
+    assert _t027(Dynamic) == []  # followed: ``count`` is supplied
     assert _t027(Silenced) == []

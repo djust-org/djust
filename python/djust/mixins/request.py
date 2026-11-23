@@ -870,27 +870,27 @@ class RequestMixin:
         # messages, etc.). This is intentional — those callers only need
         # serialized view state, not request-scoped processor context.
         t0 = time.perf_counter()
+        from ..components.base import LiveComponent
         from ..sync_turn import run_sync_step
 
-        context = run_sync_step(self, "render", self.get_context_data)
-        self._cached_context = dict(context)
-        context = self._apply_context_processors(context, request)
+        def _context_and_state() -> Any:
+            # Nested in the render step below: runs directly.
+            context = run_sync_step(self, "render", self.get_context_data)
+            self._cached_context = dict(context)
+            context = self._apply_context_processors(context, request)
+
+            # Serialize state for rendering (but don't store in session).
+            # Normalizing a model runs its @property and get_* methods, which
+            # often query: part of the render step, so inside the wrapper
+            # (#4276), as are the context processors (a lazy user, messages).
+            state = {k: v for k, v in context.items() if not isinstance(v, LiveComponent)}
+            for key, value in list(state.items()):
+                if isinstance(value, models.Model) or is_model_list(value):
+                    state[key] = normalize_django_value(value)
+            return state
+
+        state_serializable = run_sync_step(self, "render", _context_and_state)
         t_get_context = (time.perf_counter() - t0) * 1000
-
-        # Serialize state for rendering (but don't store in session)
-        from ..components.base import LiveComponent
-
-        state = {k: v for k, v in context.items() if not isinstance(v, LiveComponent)}
-
-        t0 = time.perf_counter()
-        for key, value in list(state.items()):
-            if isinstance(value, models.Model):
-                state[key] = normalize_django_value(value)
-            elif is_model_list(value):
-                state[key] = normalize_django_value(value)
-
-        state_serializable = state
-        t_json = (time.perf_counter() - t0) * 1000
 
         t0_sc = time.perf_counter()
         from django.contrib.sessions.backends.base import UpdateError
@@ -1008,13 +1008,12 @@ class RequestMixin:
         t_total = (time.perf_counter() - t_start) * 1000
         logger.debug(
             "[LIVEVIEW GET TIMING] mount=%.2fms assign_ids=%.2fms "
-            "get_context=%.2fms json=%.2fms save_components=%.2fms "
+            "get_context=%.2fms save_components=%.2fms "
             "get_template=%.2fms render_full=%.2fms "
             "render_diff=%.2fms TOTAL=%.2fms",
             t_mount,
             t_assign,
             t_get_context,
-            t_json,
             t_save_components,
             t_get_template,
             t_render_full,
@@ -1025,7 +1024,7 @@ class RequestMixin:
         # Expose timing breakdown for metrics middleware
         request._djust_timing = {
             "mount_ms": round(t_mount, 2),
-            "context_ms": round(t_get_context + t_json, 2),
+            "context_ms": round(t_get_context, 2),
             "render_ms": round(t_render_full, 2),
             "vdom_ms": round(t_render_diff, 2),
         }
@@ -2299,11 +2298,17 @@ class RequestMixin:
             # delivers; the client echoes it with its next fallback POST.
             # Skipped when the patches are off for this view or project (#4114).
             from .._http_fallback_baseline import patches_enabled
+            from .._render_digest import answer_shape
 
-            if patches_enabled(self):
+            # One walk of the answer, for its token and the touch check below
+            # (None when the patches are off: the touch check then picks the
+            # whole page).
+            answer_patches = patches_enabled(self)
+            answer_found = answer_shape(request, html) if answer_patches else None
+            if answer_patches:
                 from .._render_digest import ANSWER_FIELD, render_token
 
-                answer_digest = render_token(self, request, html)
+                answer_digest = render_token(self, request, html, answer_found)
                 if answer_digest:
                     response_fields[ANSWER_FIELD] = answer_digest
 
@@ -2326,6 +2331,8 @@ class RequestMixin:
                         logger.debug("Failed to inject debug info", exc_info=True)
 
             if patches_json:
+                from .._http_fallback_baseline import patches_touch_opaque
+
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
 
@@ -2349,7 +2356,11 @@ class RequestMixin:
                     _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
-                if baseline_matched and 0 <= patch_count <= PATCH_THRESHOLD:
+                if (
+                    baseline_matched
+                    and 0 <= patch_count <= PATCH_THRESHOLD
+                    and not patches_touch_opaque(self, patches, after=answer_found)
+                ):
                     from .._render_digest import path_addressed
 
                     response_data = {

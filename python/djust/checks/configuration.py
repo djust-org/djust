@@ -641,6 +641,35 @@ def _check_event_parameter_policy(errors: list[CheckMessage]) -> None:
         )
 
 
+def _check_unsupplied_names_mode(errors: list[CheckMessage]) -> None:
+    """C043 -- ``DJUST_UNSUPPLIED_NAMES`` must be "debug", "warn" or "error" (#4279).
+
+    The render path falls back to "debug" on a bad value (and logs once), so a typo
+    would silently turn the strictness off; this makes it fail at startup.
+    """
+    from django.conf import settings
+
+    from djust._exposure_unsupplied import SETTING, _normalised_mode, invalid_mode_message
+
+    if _is_check_suppressed("djust.C043"):
+        return
+    if not hasattr(settings, SETTING):
+        return
+    value = getattr(settings, SETTING)
+    if _normalised_mode(value) is None:
+        errors.append(
+            DjustError(
+                invalid_mode_message(value),
+                hint=(
+                    "An invalid value is ignored at render time (it behaves as "
+                    '"debug"), so the strictness you meant to set is off.'
+                ),
+                id="djust.C043",
+                fix_hint='Set `DJUST_UNSUPPLIED_NAMES` to `"debug"`, `"warn"` or `"error"`.',
+            )
+        )
+
+
 def _check_ws_path(errors: list[CheckMessage]) -> None:
     """C025 — ``DJUST_WS_PATH`` must be a path starting with a single ``/`` (#3186).
 
@@ -2023,6 +2052,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C022 -- ADR-036 project event parameter policy
     _check_event_parameter_policy(errors)
+
+    # C043 -- DJUST_UNSUPPLIED_NAMES is not "debug" / "warn" / "error" (#4279)
+    _check_unsupplied_names_mode(errors)
 
     # C025 -- DJUST_WS_PATH is not a root-relative path (#3186)
     _check_ws_path(errors)

@@ -310,3 +310,108 @@ def test_a_plain_object_read_whole_and_by_field_carries_its_text():
     assert [row["title"] for row in rows] == ["one", "two"]
     one = view.serialize_for_template(_cards()[0], "featured")
     assert one == {"__str__": str(_cards()[0]), "title": "one"}
+
+
+# ---------------------------------------------------------------------------
+# #4277: includes inside component bodies ({% tabs %}, {% split_pane %})
+# ---------------------------------------------------------------------------
+
+_PANEL_TABS = (
+    "{% load djust_components %}"
+    '<div dj-root dj-view="tests.@@">'
+    '{% tabs id="t" %}{% tab id="a" label="A" %}{% include "jit_paths/_panel.html" %}{% endtab %}'
+    "{% endtabs %}</div>"
+)
+_PANEL_SPLIT = (
+    "{% load djust_components %}"
+    '<div dj-root dj-view="tests.@@">'
+    '{% split_pane id="s" %}{% include "jit_paths/_panel.html" %}{% pane %}{{ right_name }}'
+    "{% endsplit_pane %}</div>"
+)
+
+
+@pytest.fixture
+def panel_dir(partial_dir):
+    (partial_dir / "jit_paths" / "_panel.html").write_text("{{ panel_name }}{{ panel_rows }}")
+    return partial_dir
+
+
+def _view(template, name):
+    return type(
+        name, (LiveView,), {"exposure_policy": "legacy", "template": template.replace("@@", name)}
+    )
+
+
+def test_include_inside_tabs_is_inlined_for_template_paths(panel_dir):
+    view = _view(_PANEL_TABS, "InTabsView")()
+    assert "{{ panel_name }}" in view._get_template_content()
+    assert {"panel_name", "panel_rows"} <= set(view.template_paths())
+
+
+def test_include_inside_split_pane_is_inlined_for_template_paths(panel_dir):
+    view = _view(_PANEL_SPLIT, "InSplitView")()
+    assert "{{ panel_name }}" in view._get_template_content()
+    assert {"panel_name", "panel_rows", "right_name"} <= set(view.template_paths())
+
+
+def test_names_in_both_split_pane_segments_are_extracted(panel_dir):
+    template = (
+        "{% load djust_components %}"
+        '<div dj-root dj-view="tests.@@">'
+        '{% split_pane id="s" %}{{ left_name }}{% pane %}{{ right_name }}{% endsplit_pane %}</div>'
+    )
+    paths = _view(template, "BothSegmentsView")().template_paths()
+    assert {"left_name", "right_name"} <= set(paths)
+
+
+def test_include_inside_an_opaque_raw_block_is_still_not_inlined(panel_dir):
+    from djust._rust import register_raw_block_tag_handler, unregister_raw_block_tag_handler
+
+    class Opaque:
+        def render(self, args, body, context):
+            return ""
+
+    template = (
+        '<div dj-root dj-view="tests.OpaqueView">{% opaque_x %}'
+        '{% include "jit_paths/_panel.html" %}{% endopaque_x %}</div>'
+    )
+    register_raw_block_tag_handler("opaque_x", "endopaque_x", Opaque())
+    try:
+        content = _view(template, "OpaqueView")()._get_template_content()
+    finally:
+        unregister_raw_block_tag_handler("opaque_x")
+    assert '{% include "jit_paths/_panel.html" %}' in content
+    assert "{{ panel_name }}" not in content
+
+
+class _HeldInTab(LiveView):
+    exposure_policy = "explicit"
+    template = _PANEL_TABS.replace("@@", "_HeldInTab")
+
+    def mount(self, request, **kwargs):
+        self.panel_name = "n"
+
+
+@pytest.mark.django_db
+def test_unsupplied_notice_names_a_held_name_read_in_a_tab_include(panel_dir, settings, caplog):
+    import logging
+
+    from djust import _exposure_unsupplied
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import RequestFactory
+
+    def make_request():
+        request = RequestFactory().get("/runtime-explicit/")
+        request.user = AnonymousUser()
+        request.tenant = None
+        request.session = SessionStore()
+        request.session.create()
+        return request
+
+    settings.DEBUG = True
+    _exposure_unsupplied._REPORTED.pop(_HeldInTab, None)
+    with caplog.at_level(logging.WARNING, logger="djust.exposure"):
+        _HeldInTab().get(make_request())
+    messages = [r.getMessage() for r in caplog.records if "_HeldInTab" in r.getMessage()]
+    assert any("{{ panel_name }}" in m for m in messages)

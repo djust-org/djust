@@ -227,7 +227,9 @@ persistence the view does not have today.
 List the names your template reads. Each one is either declared with `state()`
 (step 3), which renders it, or returned from `get_context_data()`. **A name
 the template reads that nothing supplies
-renders as an empty string, with no error and no warning.** This is the
+renders as an empty string, with no error and no warning** (with `DEBUG`
+on djust logs it once; set `DJUST_UNSUPPLIED_NAMES = "error"` in your test
+settings to make each one fail the test that renders it; never in production settings). This is the
 mistake to look for: after the switch, open every state of the page and look
 for blanks. Remember names used only inside `{% if %}`, in `{% include %}`d
 templates and in a base template.
@@ -269,6 +271,21 @@ values that are the view's state. It takes two independent grants:
 - `render=False`: kept out of the template. Rendering is the default for a
   declared field; it is not a grant, and it never puts the value in
   `get_state()` or the session.
+
+**A field named `state`.** A class-body `state = state("ok")` rebinds the name
+`state` to the field, so every later `state(...)` in the same class body fails
+with `TypeError: 'StateProperty' object is not callable` (the traceback points
+at the next field, not at the one that shadowed it). Rename the field (`load_state`),
+declare it last in the class body, or write `djust.state(...)` for the others:
+
+<!-- djust-example: skip -- the shadowing mistake this paragraph describes -->
+<!-- doc-snippet-check: anti-pattern -->
+```python
+class SearchView(LiveView):
+    exposure_policy = "explicit"
+    state = state("idle")  # from here on, state is a StateProperty, not the function
+    page = state(1)  # TypeError: 'StateProperty' object is not callable
+```
 
 Anything you do not want saved or sent (a service object, a model instance, a
 cache) stays a plain attribute set in `mount()`. Assigning a plain attribute
@@ -471,6 +488,17 @@ object for every event, rebuilt from its saved state as in 1.3.
 
 ### Other things explicit exposure refuses
 
+- **`page_title` is a framework setting.** It cannot be a `state()` field (the
+  class raises `ExposureConfigurationError`, see
+  [Behaviour that now raises](#behaviour-that-now-raises)). Keep setting
+  `self.page_title = "..."` in `mount()` or a handler: that still updates the
+  tab over the live connection. But neither that nor a class attribute `page_title = "..."`
+  supplies `{{ page_title }}` to the template, which renders it empty, with no
+  error. T027 and `DJUST_UNSUPPLIED_NAMES` do not report it either, because
+  it is a framework name. Supply it from `get_context_data()`
+  (`ctx["page_title"] = self.page_title`), typically once in a shared base
+  view's `get_context_data()` for a layout's `<title>`; that is the only place
+  that reaches the template.
 - **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare a
   `LiveComponent` in the class body: `nav = Tabs(active="overview")`; each
   view gets its own copy. A plain component (`Rating`, `Badge` and the other
@@ -869,6 +897,9 @@ To open or close from your own handler, set the state:
   naming the field, whether it is declared on the view, on a mixin or on a base
   class. Such a field used to import and then crash a system check or a
   management command, or fail at render. Rename it (`template_name_value`).
+  For `page_title`, keep setting `self.page_title` and supply it to the
+  template from `get_context_data()`
+  ([`page_title` is a framework setting](#other-things-explicit-exposure-refuses)).
 
 ### Defaults that changed
 
@@ -935,6 +966,30 @@ no longer has between requests and reconnects:
   under the session and page and reused by the next request or reconnect. Each
   view instance builds its own now, as an explicit view always did.
 
+  So a page GET makes no call to the state backend at all (no `set()`,
+  `refresh()` or `get()`, with `DJUST_AUTOMATIC_STATE` on or off), and the
+  `DjustPerformanceWarning: Large LiveView state` warning, which that `set()`
+  measured, no longer fires for page loads (#4281). It fires only for a
+  snapshot your own code stores in the backend. A test that budgeted a page's
+  size by wrapping the backend's `set()` now records nothing. What 2.0 bounds
+  instead is the state it persists for a view:
+
+  - fields declared `state(..., persist="server")`: 64 KB encoded per view
+    ([explicit exposure, Size](../state/explicit-exposure.md#supported-configuration));
+  - automatic state: a WARNING names the largest attributes past 100 KB
+    (`DJUST_AUTOMATIC_STATE_WARN_KB`), and a change past 512 KB
+    (`DJUST_AUTOMATIC_STATE_MAX_KB`, or `automatic_state_max_kb` on the view)
+    is refused ([Keeping state across a reconnect](#keeping-state-across-a-reconnect)).
+
+  A change over either limit is refused with a `state_too_large` error and a
+  WARNING. To keep a budget test, measure the state the view would persist:
+  `djust.testing.persisted_state(view)` returns it, and its `automatic_bytes`
+  is the encoded size of the automatic state, the number the limits above
+  apply to. It describes an explicit view (the default): a view still on
+  `exposure_policy = "legacy"` raises `TypeError`, and a state over its limit
+  raises `StateLimitExceeded`, as the save would. The renderer a connection
+  holds in memory is not measured.
+
 Keys a 1.x server left in a session are never read. Declare what must survive
 on an explicit view; private attributes stay private and are rebuilt by
 `mount()`:
@@ -967,6 +1022,12 @@ class FeedView(LiveView):
     def more(self):
         self.offset += self._page_size
 ```
+
+A test that called `_get_private_state()` to check what a view keeps now raises on an
+explicit view. Use `LiveViewTestClient.persisted_state()` (or `djust.testing.persisted_state(view)`)
+instead: it returns what the view would save, split by destination, and
+`"name" not in persisted_state(view).names` asserts that a value a page only reads is saved nowhere
+([Asserting what is saved](../testing/index.md#asserting-what-is-saved)).
 
 ## 4. Still to be removed before the final release
 
@@ -1023,4 +1084,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 9e44b123bbe7 -->
+<!-- generated-doc prose-sha256: 66b4fe5e8baa -->

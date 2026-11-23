@@ -496,6 +496,16 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 **Fix**: Set `DJUST_REFRESH_ON_ANY_WRITE = True` (every write a view's step makes re-reads everything it holds), or call `self.rows_changed(Model)` after the write. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C042"]}` when those tables only change through your own statements.
 
+### C043: Invalid DJUST_UNSUPPLIED_NAMES
+
+**Severity**: Error
+
+**What causes it**: `DJUST_UNSUPPLIED_NAMES` is set to a value that is not `"debug"`, `"warn"` or `"error"`. The setting chooses how a template name a view holds but does not supply is reported (#4279). A bad value does not break rendering; it behaves as `"debug"`, which is why the check fails at startup instead.
+
+**Fix**: Set it to `"debug"`, `"warn"` or `"error"`, or remove it.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
@@ -1627,9 +1637,13 @@ supplied (#4054): djust 1.x generated `items_count` from a QuerySet or list
 
 Moving a whole 1.x view is covered in
 [Migrating to djust 2.0](migrating-to-2.0.md). The check skips a view whose
-`get_context_data()` it cannot read statically and a template that uses
-`{% extends %}`; with `DEBUG = True` djust logs the same condition at render
-time for those too. Suppress with
+`get_context_data()` it cannot follow (for example one that passes the
+context to a helper function) and an inline `template` that uses
+`{% extends %}`, and reports how many it skipped in one Info message. A
+`template_name` view is read through its `{% extends %}` chain and its
+`{% include %}` partials. With `DEBUG = True` djust logs the same condition at
+render time for those too, and `DJUST_UNSUPPLIED_NAMES = "error"` in your test
+settings turns it into an error that fails the test that renders it. Suppress with
 `DJUST_CONFIG = {"suppress_checks": ["T027"]}` or a
 `{# djust_typecheck: noqa count #}` template comment.
 

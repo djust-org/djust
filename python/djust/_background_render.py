@@ -93,9 +93,16 @@ def render_background_sync(view: Any, runtime: Any) -> BackgroundRender | None:
     (#3074) calls it inside the same hop as the push hooks; the caller then
     owns the ``settle_render_operation`` + ``_discard_baseline`` handling.
     """
-    if hasattr(view, "_sync_state_to_rust"):
-        view._sync_state_to_rust()
-    html, patches, _version = view.render_with_diff()
+    from .sync_turn import run_sync_step
+
+    def _sync_and_render() -> Any:
+        if hasattr(view, "_sync_state_to_rust"):
+            view._sync_state_to_rust()
+        return view.render_with_diff()
+
+    # One render step for the pair (#4276): one wrapper entry and one query
+    # budget pass; the two methods' own render steps nest in it.
+    html, patches, _version = run_sync_step(view, "render", _sync_and_render)
     fields = render_contract_fields(view, runtime)
     if fields is None:  # invalid metadata must never accompany a DOM frame
         _discard_baseline(view)

@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 128 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 129 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -53,6 +53,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C040 | Config | Error | `DJUST_STATE_SAVE_INTERVAL` or a view's `state_save_interval` cannot be used |
 | C041 | Config | Info | A state save interval is set while `DJUST_STATE_STORE_STRICT` is on |
 | C042 | Config | Info | A model's rows may be changed by the database itself (an unmanaged model, a `DB_*` cascade) while `DJUST_REFRESH_ON_ANY_WRITE` is off |
+| C043 | Config | Error | "`DJUST_UNSUPPLIED_NAMES` is not `\"debug\"`, `\"warn\"` or `\"error\"` (#4279)" |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -404,6 +405,13 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: a model with `Meta.managed = False` (a database view, a table another system owns) or a relation whose `on_delete` is named `DB_*` (the database performs it), while `DJUST_REFRESH_ON_ANY_WRITE` is off. After a step of a view writes, djust re-reads what the view holds only when the written table is one the view read (#4112). A change the database makes by itself (a trigger, a cascade, a view over the written table) is not a statement djust sees, so a view holding those rows keeps showing them as they were.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C042"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C042"]`
 - **False positives**: an unmanaged model whose rows change only through your own Django statements (then the refresh is exact and the message can be suppressed). A trigger on a managed table is not detected.
+
+### C043 — Invalid `DJUST_UNSUPPLIED_NAMES`
+- **Severity**: Error
+- **Method**: Settings inspection (`django.conf.settings.DJUST_UNSUPPLIED_NAMES`)
+- **What it detects**: `DJUST_UNSUPPLIED_NAMES` is set to something other than `"debug"`, `"warn"` or `"error"` (matched case-insensitively). At render time an invalid value is logged once at ERROR level and behaves as `"debug"`, so the strictness the setting was meant to add is silently off. An absent setting is the `"debug"` default and never reports.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C043"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C043"]`
+- **False positives**: None
 
 ### C501 — Retired
 - **Retired in**: 2.0 (time-travel debugging was removed, #4184)
@@ -1229,7 +1237,14 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   literal, `super().get_context_data(name=...)` keywords, and the keys and
   `name["key"] = ...` writes of a returned local bound to
   `super().get_context_data(...)` or a literal. A local dict that is not
-  returned and code in a nested function supply nothing (#4224).
+  returned and code in a nested function supply nothing (#4224). Since #4278
+  the returned local may also be filled by `name.update(key=...)`,
+  `name.update({"key": ...})` and `name.setdefault("key", ...)`, so the
+  common `ctx = super().get_context_data(**kwargs); ctx["k"] = ...; return ctx`
+  override is checked. A template is read as the runtime reads it: the
+  `{% extends %}` chain is resolved and `{% include %}` partials are inlined, so
+  a name read only in a base template or an include is reported (without a line
+  number, because it is not in the view's own file).
 - **Also detects** (#4054): a template name `X_count` that nothing supplies,
   when `X` is supplied (returned from `get_context_data()` or a declared
   field). djust 1.x generated `items_count` from a QuerySet or list `items`;
@@ -1245,12 +1260,17 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T027"]}`, or one name
   with a `{# djust_typecheck: noqa name #}` template comment
 - **Not checked**: a view on the deprecated 1.x exposure policy (`djust.V028`); a view
-  whose `get_context_data()` does more than return a literal dict or
-  `super().get_context_data()` (its keys cannot be read statically); a
-  template that uses `{% extends %}`; a name the template reads only through
-  an `{% include %}`. With `DEBUG = True` the same condition is logged at
-  render time for every view, once per view and name, on the `djust.exposure`
-  logger; at render time the `X_count` notice is given only when `X` is a
+  whose `get_context_data()` does something the check cannot follow (it
+  passes the context to a helper, calls `ctx.update(other)`, writes
+  `ctx[name] = ...` with a non-literal key, or returns something other than
+  a literal dict, `super().get_context_data()` or the context local); an inline
+  `template` that uses `{% extends %}`. These views are counted in one
+  `djust.T027` Info message ("T027: skipped N view(s) ..."), so a clean run
+  can be told from one that examined nothing. With `DEBUG = True` the same
+  condition is logged at render time for every view, once per view and name,
+  on the `djust.exposure` logger (`DJUST_UNSUPPLIED_NAMES = "warn"` logs it
+  whatever `DEBUG` is; `"error"` raises `UnsuppliedTemplateNameError` on every
+  such render, which fails a test, #4279); at render time the `X_count` notice is given only when `X` is a
   QuerySet, list, tuple or set (the values 1.x counted).
 
 <!-- END GENERATED check-sections:T -->

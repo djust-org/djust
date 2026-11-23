@@ -253,15 +253,22 @@ The phases are the ones the smoke test uses. `"mount"` is `mount()` plus `handle
 a mount phase is reported once, when it first goes over, so its figure reads `at least N`.
 `"event"` is the handler's own queries, in the smoke test and at run time alike (the per-event
 object-permission re-check is not counted in either). An int budget is the mount phase plus the
-first render that follows it.
+first render that follows it. On an HTTP page GET that first render is the GET's own context
+pass (`get_context_data()`, the context processors and the normalizing of the context's
+models); the page render and the diff-baseline render after it are judged only against a
+`"render"` budget. A socket or SSE mount's first render is the template render itself.
 
-`"render"` is one `get_context_data()` pass, and each pass is judged on its own. An HTTP GET
-makes one pass: the request evaluates the view's context once and the render that follows reads
-that context instead of evaluating it again, whether or not the view overrides
-`get_context_data()` or calls `super()`. (A GET used to call an overriding view's
-`get_context_data()` twice, so an `int` budget and the page's real cost differed by a factor of
-two: #3725.) A WebSocket or SSE mount makes one pass, and so does each event, which evaluates
-the context afresh because the handler changed state.
+`"render"` is one render pass, and each pass is judged on its own. Since #4276 a pass counts
+every query the render makes, not only those of `get_context_data()`: the QuerySets the context
+holds when the render evaluates them (a lazy QuerySet returned from `get_context_data()` is read
+there), and the relations the template follows on a model (`{{ user.groups.count }}`). This is
+what the smoke test measures around `client.render()` too; a view near its budget may now
+report over at run time. An HTTP GET evaluates the view's context once, in a pass of its own,
+and the page render and diff-baseline render that follow read that context instead of
+evaluating it again, whether or not the view overrides `get_context_data()` or calls `super()`
+(a GET used to call an overriding view's `get_context_data()` twice: #3725); each of those two
+renders is a pass of its own. A WebSocket or SSE mount makes one pass, and so does each event,
+which evaluates the context afresh because the handler changed state.
 
 Two paths still make more than one pass, and a budget has to allow for the passes they make:
 the HTTP POST fallback of a view on the legacy exposure policy evaluates once to save
@@ -367,6 +374,46 @@ markers = [
     "asyncio: marks async tests",
 ]
 ```
+
+### Asserting what is saved
+
+`get_state()` is what a view holds, not what it saves. To check what an explicit view keeps between
+requests, and that a value the page only reads is not among it:
+
+```python
+client = LiveViewTestClient(InvoiceView)
+client.mount()
+saved = client.persisted_state()
+assert "invoice_rows" not in saved.names          # loaded for the render, saved nowhere
+assert saved.server["draft_note"] == "x"          # state(persist="server")
+```
+
+`persisted_state()` splits the state by destination (`server`, `snapshot`, `client`, `automatic`,
+`automatic_private`, `automatic_components`) and reports `automatic_bytes`, the size the state limits
+use. It writes nothing. See the [testing API reference](../api-reference/testing.md).
+
+### Failing a test on an unsupplied template name
+
+Under explicit exposure a template name that nothing supplies renders empty, and the
+`djust.exposure` log that names it runs only while `DEBUG` is on, which a test run is not.
+Set `DJUST_UNSUPPLIED_NAMES` in your test settings:
+
+| value | effect |
+|---|---|
+| `"debug"` (default) | log once per view class and name while `DEBUG` is on |
+| `"warn"` | log once per view class and name, whatever `DEBUG` says |
+| `"error"` | raise `UnsuppliedTemplateNameError` on every render that leaves a held name unsupplied, whatever `DEBUG` says |
+
+The error names the view and the names, never their values. Import it with
+`from djust.testing import UnsuppliedTemplateNameError` (it subclasses
+`ImproperlyConfigured` through `ExposureConfigurationError`). A name a `TEMPLATES` context
+processor supplies (`user`, `messages`, a project processor's keys) counts as supplied. Only
+a view under explicit exposure is checked.
+
+The value is matched case-insensitively and validated at startup by `manage.py check`
+(`djust.C043`); at render time an invalid value is logged once and behaves as `"debug"`.
+Use `"error"` in test settings only: it raises out of the render (HTTP 500 or a socket
+error). `"warn"` re-reads the template on every render, so prefer it on staging only.
 
 ## Test File Conventions
 

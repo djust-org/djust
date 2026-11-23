@@ -1,4 +1,4 @@
-"""DEBUG-only notice for a template name an explicit view holds but does not supply.
+"""Notice (or error) for a template name an explicit view holds but does not supply.
 
 Under explicit exposure (ADR-038, the default) a template gets the view's
 declared ``state()`` fields (#4050), what ``get_context_data()`` returns and
@@ -6,7 +6,8 @@ what the framework's providers hand it. A view written for the attribute walk
 sets ``self.count`` in ``mount()`` without declaring it and reads
 ``{{ count }}`` in its template: that name renders empty, and Django's
 template semantics make an unknown name silent. This module makes it audible
-while ``DEBUG`` is on.
+while ``DEBUG`` is on, and, with ``DJUST_UNSUPPLIED_NAMES`` (#4279), always
+(``"warn"``) or as an error a test run cannot miss (``"error"``).
 
 A declared field is supplied by the base ``get_context_data()``, so it is
 reported only when it still did not arrive: it was declared
@@ -20,8 +21,8 @@ sized value (a QuerySet, list, tuple or set) and nothing supplies
 empty. The notice points at ``{{ X|length }}``.
 
 The check runs where the render path settles its context
-(``ContextMixin._context_for_render``). With ``DEBUG`` off it is one settings
-read and returns. It names attributes and never reads their values (the
+(``ContextMixin._context_for_render``). In the default mode with ``DEBUG`` off it
+is one settings read and returns. It names attributes and never reads their values (the
 ``_count`` check looks at the stem's type, never its contents: a QuerySet is
 not evaluated).
 """
@@ -30,10 +31,134 @@ from __future__ import annotations
 
 import logging
 import weakref
-from types import FunctionType
+from types import FunctionType, MappingProxyType
 from typing import Any, Mapping
 
+from ._exposure import ExposureConfigurationError
+
 logger = logging.getLogger("djust.exposure")
+
+#: The setting that chooses how an unsupplied name is reported (#4279).
+SETTING = "DJUST_UNSUPPLIED_NAMES"
+#: ``"debug"`` logs under ``DEBUG`` (the default); ``"warn"`` logs whatever ``DEBUG`` is;
+#: ``"error"`` raises on every render that leaves a name unsupplied.
+_MODES = ("debug", "warn", "error")
+
+
+class UnsuppliedTemplateNameError(ExposureConfigurationError):
+    """A render left a template name the view holds unsupplied (``DJUST_UNSUPPLIED_NAMES = "error"``).
+
+    Names only, never values: the message is safe to show the developer.
+    """
+
+
+_INVALID_MODE_LOGGED = False
+
+
+def _normalised_mode(value: Any) -> "str | None":
+    """The mode ``value`` names (case-insensitive), or None when it is not one."""
+    if type(value) is not str:
+        return None
+    mode = value.strip().lower()
+    return mode if mode in _MODES else None
+
+
+def invalid_mode_message(value: Any) -> str:
+    return "%s must be one of %s; got %s." % (
+        SETTING,
+        ", ".join('"%s"' % m for m in _MODES),
+        repr(value)[:80],
+    )
+
+
+def unsupplied_names_mode() -> str:
+    """The ``DJUST_UNSUPPLIED_NAMES`` mode.
+
+    An invalid value is reported once at ERROR level and treated as ``"debug"``: a
+    dev-only diagnostic setting must not take a production render down. ``manage.py
+    check`` fails on it at startup (djust.C043).
+    """
+    global _INVALID_MODE_LOGGED
+    from django.conf import settings
+
+    value = getattr(settings, SETTING, "debug")
+    mode = _normalised_mode(value)
+    if mode is None:
+        if not _INVALID_MODE_LOGGED:
+            _INVALID_MODE_LOGGED = True
+            logger.error('%s Using "debug" until it is fixed.', invalid_mode_message(value))
+        return "debug"
+    return mode
+
+
+#: The names Django's own context processors supply, so no processor runs to learn them.
+_KNOWN_PROCESSOR_KEYS: Mapping[str, frozenset] = MappingProxyType(
+    {
+        "django.contrib.auth.context_processors.auth": frozenset({"user", "perms"}),
+        "django.contrib.messages.context_processors.messages": frozenset(
+            {"messages", "DEFAULT_MESSAGE_LEVELS"}
+        ),
+        "django.template.context_processors.request": frozenset({"request"}),
+        "django.template.context_processors.debug": frozenset({"debug", "sql_queries"}),
+        "django.template.context_processors.i18n": frozenset(
+            {"LANGUAGES", "LANGUAGE_CODE", "LANGUAGE_BIDI"}
+        ),
+        "django.template.context_processors.tz": frozenset({"TIME_ZONE"}),
+        "django.template.context_processors.static": frozenset({"STATIC_URL"}),
+        "django.template.context_processors.media": frozenset({"MEDIA_URL"}),
+        "django.template.context_processors.csrf": frozenset({"csrf_token"}),
+    }
+)
+
+
+def context_processor_names(request: Any = None) -> frozenset:
+    """Every name the configured ``TEMPLATES`` context processors can supply (B1).
+
+    A name a context processor supplies is not "unsupplied": the render path adds it
+    after the notice runs, so the notice and T027 must count it. Django's own
+    processors come from a known map; any other is called with ``request`` (or a fake
+    ``RequestFactory`` request) inside a ``try``. A processor that cannot be resolved
+    or raises supplies nothing here, which is what the render does with it too.
+    Never raises.
+    """
+    names: set[str] = set()
+    try:
+        from django.conf import settings
+
+        from .utils import is_app_dirs_template_backend
+
+        paths: list[Any] = []
+        for config in getattr(settings, "TEMPLATES", []) or []:
+            if is_app_dirs_template_backend(config.get("BACKEND")):
+                paths.extend((config.get("OPTIONS") or {}).get("context_processors") or [])
+    except Exception:  # noqa: BLE001
+        return frozenset()
+    fake = None
+    for path in paths:
+        try:
+            if isinstance(path, str) and path in _KNOWN_PROCESSOR_KEYS:
+                names.update(_KNOWN_PROCESSOR_KEYS[path])
+                continue
+            if isinstance(path, str):
+                from django.utils.module_loading import import_string
+
+                processor = import_string(path)
+            else:
+                processor = path
+            if request is None and fake is None:
+                from django.contrib.auth.models import AnonymousUser
+                from django.test import RequestFactory
+
+                fake = RequestFactory().get("/")
+                fake.user = AnonymousUser()
+                fake.session = {}
+            supplied = processor(request if request is not None else fake)
+            if supplied:
+                names.update(k for k in supplied if type(k) is str)
+        except Exception:  # noqa: BLE001 — a processor that fails supplies nothing
+            continue
+    return frozenset(names)
+
 
 #: Where the warning sends a reader.
 MIGRATION_GUIDE_URL = "https://docs.djust.org/guides/migrating-to-2.0/"
@@ -105,11 +230,20 @@ def _advice(view: Any, name: str) -> str:
 def unsupplied_template_names(view: Any, context: Mapping[str, Any]) -> list[str]:
     """Names the view's template reads, the view holds, and ``context`` lacks."""
     paths = view.template_paths()
-    return sorted(
+    candidates = [
         name
         for name in paths
         if type(name) is str and name not in context and _held_by_view(view, name)
-    )
+    ]
+    if not candidates:
+        return []
+    supplied = _processor_names(view)
+    return sorted(name for name in candidates if name not in supplied)
+
+
+def _processor_names(view: Any) -> frozenset:
+    """The names the view's context processors add after the notice runs (B1)."""
+    return context_processor_names(getattr(view, "request", None))
 
 
 #: The suffix the legacy policy derived a count from (``items`` -> ``items_count``).
@@ -149,22 +283,28 @@ def unsupplied_count_names(
         stem = name[: -len(COUNT_SUFFIX)]
         if not stem or stem not in context or _held_by_view(view, name):
             continue
-        if _is_sized_collection(context[stem]):
+        if _is_sized_collection(context[stem]) and name not in _processor_names(view):
             found.append((name, stem))
     return sorted(found)
 
 
 def warn_unsupplied_template_names(view: Any, context: Any) -> None:
-    """Log, once per view class and name, each name that will render empty.
+    """Report each name that will render empty, as ``DJUST_UNSUPPLIED_NAMES`` says (#4279).
 
-    Only under ``DEBUG`` and only for a view whose policy is ``"explicit"``.
-    Never raises: a diagnostic must not break the render it describes.
+    ``"debug"`` (the default): log once per view class and name, under ``DEBUG`` only.
+    ``"warn"``: the same log whatever ``DEBUG`` is. ``"error"``: raise
+    :class:`UnsuppliedTemplateNameError` on every render that leaves a name unsupplied
+    (no once-per-name memory: each test must fail on its own). Only for a view whose
+    policy is ``"explicit"``. In the log modes it never raises: a diagnostic must not
+    break the render it describes. An invalid setting value does raise.
     """
-    try:
-        from django.conf import settings
+    from django.conf import settings
 
-        if getattr(settings, "DEBUG", False) is not True:
-            return
+    mode = unsupplied_names_mode()
+    if mode == "debug" and getattr(settings, "DEBUG", False) is not True:
+        return
+    strict: list[tuple[list[tuple[str, str]], list[str]]] = []
+    try:
         policy = getattr(view, "exposure_policy", None)
         if type(policy) is not str or policy != "explicit":
             return
@@ -175,41 +315,86 @@ def warn_unsupplied_template_names(view: Any, context: Any) -> None:
         if reported is None:
             reported = _REPORTED[cls] = set()
         paths = view.template_paths()
-        for name, stem in unsupplied_count_names(view, context, paths):
-            if name in reported:
-                continue
-            reported.add(name)
-            logger.warning(
-                "%s.%s: the template reads {{ %s }} and nothing supplies it, so it renders "
-                "empty. djust 1.x generated it from %s; explicit exposure does not. Use "
-                "{{ %s|length }} in the template, or return %s from get_context_data(). See %s",
-                cls.__module__,
-                cls.__qualname__,
-                name,
-                stem,
-                stem,
-                name,
-                MIGRATION_GUIDE_URL,
-            )
-        for name in unsupplied_template_names(view, context):
-            if name in reported:
-                continue
-            reported.add(name)
-            logger.warning(
-                "%s.%s: the template reads {{ %s }} and the view sets %s, but nothing "
-                "supplies it to the template, so it renders empty. %s "
-                "Persisting it or sending it to the browser takes its own grant "
-                "(persist=, client=True). See %s",
-                cls.__module__,
-                cls.__qualname__,
-                name,
-                name,
-                _advice(view, name),
-                MIGRATION_GUIDE_URL,
-            )
+        counts = unsupplied_count_names(view, context, paths)
+        names = unsupplied_template_names(view, context)
+        if mode == "error":
+            if counts or names:
+                strict.append((counts, names))
+        else:
+            _log_unsupplied(view, cls, reported, counts, names)
     except Exception:  # noqa: BLE001 — never let the diagnostic break a render
         # No exception text: it can carry view values (ADR-038 D-a).
         logger.debug("Unsupplied-template-name check could not run")
+    if strict:
+        counts, names = strict[0]
+        raise UnsuppliedTemplateNameError(_strict_message(view, counts, names))
+
+
+def _strict_message(view: Any, counts: list[tuple[str, str]], names: list[str]) -> str:
+    """The ``"error"`` mode message: the view, the names, the advice. Never a value."""
+    cls = type(view)
+    parts = []
+    for name in names:
+        parts.append("{{ %s }} (%s)" % (name, _advice(view, name)))
+    for name, stem in counts:
+        parts.append(
+            "{{ %s }} (djust 1.x generated it from %s; use {{ %s|length }} or return %s "
+            "from get_context_data())" % (name, stem, stem, name)
+        )
+    return (
+        "%s.%s: the template reads %d name(s) that nothing supplies, so they render "
+        'empty: %s. %s = "error" makes this an error; set it to "warn" to log '
+        "instead. See %s"
+        % (
+            cls.__module__,
+            cls.__qualname__,
+            len(parts),
+            "; ".join(parts),
+            SETTING,
+            MIGRATION_GUIDE_URL,
+        )
+    )
+
+
+def _log_unsupplied(
+    view: Any,
+    cls: type,
+    reported: "set[str]",
+    counts: "list[tuple[str, str]]",
+    names: "list[str]",
+) -> None:
+    for name, stem in counts:
+        if name in reported:
+            continue
+        reported.add(name)
+        logger.warning(
+            "%s.%s: the template reads {{ %s }} and nothing supplies it, so it renders "
+            "empty. djust 1.x generated it from %s; explicit exposure does not. Use "
+            "{{ %s|length }} in the template, or return %s from get_context_data(). See %s",
+            cls.__module__,
+            cls.__qualname__,
+            name,
+            stem,
+            stem,
+            name,
+            MIGRATION_GUIDE_URL,
+        )
+    for name in names:
+        if name in reported:
+            continue
+        reported.add(name)
+        logger.warning(
+            "%s.%s: the template reads {{ %s }} and the view sets %s, but nothing "
+            "supplies it to the template, so it renders empty. %s "
+            "Persisting it or sending it to the browser takes its own grant "
+            "(persist=, client=True). See %s",
+            cls.__module__,
+            cls.__qualname__,
+            name,
+            name,
+            _advice(view, name),
+            MIGRATION_GUIDE_URL,
+        )
 
 
 #: Context-processor names templates use for authorization decisions

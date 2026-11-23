@@ -135,6 +135,10 @@ REMAINING_4082: dict[str, str] = {
 #: and later tests OF the legacy policy (each statement gives its reason inline).
 OTHER_LEGACY_FILES: frozenset[str] = frozenset(
     {
+        # #4276, #4279, #4280: tests OF legacy behaviour next to the explicit fix (reason inline).
+        "python/djust/tests/test_sync_turn_render_evaluation_4276.py",
+        "python/djust/tests/test_unsupplied_names_mode_4279.py",
+        "python/tests/test_persisted_state_4280.py",
         # #4241: qs.count / qs.exists render on the native renderer under the legacy
         # policy too, until the legacy arm is removed.
         "python/tests/test_queryset_count_exists_4241.py",

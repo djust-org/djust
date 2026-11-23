@@ -521,8 +521,18 @@ def test_the_kitchen_sink_modal_opens(transport):
 
 
 @pytest.mark.parametrize("transport", ["ws", "sse", "http"])
-def test_the_markdown_stream_starts(transport, monkeypatch):
-    """``start_stream`` streams the reply into the page (a short reply here)."""
+def test_the_markdown_stream_starts(transport, monkeypatch, caplog):
+    """``start_stream`` streams the reply into the page (a short reply here).
+
+    Over the HTTP fallback there is no live channel: each ``stream_to()`` logs
+    a warning and returns, and the stream target (``dj-update="ignore"``) is
+    the client's. Its server-rendered children are not part of the answer
+    (#4283: the region is opaque, the answer is patches around it); before
+    #4283 the region's mere presence made the answer the whole page, which
+    carried them, but the client keeps an ignored element's children on a
+    whole-page answer too (``tests/js/dj_update_whole_page_4283.test.js``), so
+    no browser ever showed them.
+    """
     from djust.testing import close_live_pages, open_live_page
     from djust_demos.views import markdown_stream_demo
 
@@ -532,9 +542,20 @@ def test_the_markdown_stream_starts(transport, monkeypatch):
     page = open_live_page("/demos/markdown-stream/")
     assert "md4187" not in page.html
 
+    if transport == "http":
+        caplog.set_level("WARNING", logger="djust.streaming")
+        try:
+            answers = asyncio.run(_drive(page, transport, "start_stream", {}, 1))
+        finally:
+            close_live_pages()
+        assert "html" not in answers[0] and "patches" in answers[0], answers
+        assert "md4187" not in json.dumps(answers), answers
+        unsent = [r for r in caplog.records if "stream_to() called" in r.getMessage()]
+        # One per character of the reply, and the settling call in ``finally``.
+        assert len(unsent) == len("**md4187**") + 1, [r.getMessage() for r in caplog.records]
+        return
+
     async def run():
-        if transport == "http":
-            return json.dumps(await _drive(page, transport, "start_stream", {}, 1))
         connect = page.connect if transport == "ws" else page.connect_sse
         connection = await connect()
         try:
