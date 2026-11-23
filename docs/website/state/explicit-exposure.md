@@ -443,7 +443,11 @@ not moved yet):
    supply, and `python manage.py check` reports it as `djust.T027`. Neither
    reports a declared field that rendered; both still name one declared
    `render=False`, or one dropped by a `get_context_data()` that does not build
-   on `super()`.
+   on `super()`. A test run has `DEBUG` off, so the log never fires there: set
+   `DJUST_UNSUPPLIED_NAMES = "error"` in your test settings and each render that
+   leaves such a name unsupplied raises `UnsuppliedTemplateNameError`, naming the
+   view and the names (never their values), so the test fails. `"warn"` logs
+   whatever `DEBUG` is, for staging; `"debug"` is the default.
 
 **Cost.** An explicit WebSocket event costs roughly twice a djust 1.x one, because
 of the per-turn authorization and the state save. The measured numbers and

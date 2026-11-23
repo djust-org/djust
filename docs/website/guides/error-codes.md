@@ -1632,7 +1632,8 @@ context to a helper function) and an inline `template` that uses
 `{% extends %}`, and reports how many it skipped in one Info message. A
 `template_name` view is read through its `{% extends %}` chain and its
 `{% include %}` partials. With `DEBUG = True` djust logs the same condition at
-render time for those too. Suppress with
+render time for those too, and `DJUST_UNSUPPLIED_NAMES = "error"` in your test
+settings turns it into an error that fails the test that renders it. Suppress with
 `DJUST_CONFIG = {"suppress_checks": ["T027"]}` or a
 `{# djust_typecheck: noqa count #}` template comment.
 

@@ -1258,10 +1258,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   a literal dict, `super().get_context_data()` or the context local); an inline
   `template` that uses `{% extends %}`. These views are counted in one
   `djust.T027` Info message ("T027: skipped N view(s) ..."), so a clean run
-  can be told from one that examined nothing. With `DJUST_UNSUPPLIED_NAMES`
-  unset and `DEBUG = True` the same condition is logged at
-  render time for every view, once per view and name, on the `djust.exposure`
-  logger; at render time the `X_count` notice is given only when `X` is a
+  can be told from one that examined nothing. With `DEBUG = True` the same
+  condition is logged at render time for every view, once per view and name,
+  on the `djust.exposure` logger (`DJUST_UNSUPPLIED_NAMES = "warn"` logs it
+  whatever `DEBUG` is; `"error"` raises `UnsuppliedTemplateNameError` on every
+  such render, which fails a test, #4279); at render time the `X_count` notice is given only when `X` is a
   QuerySet, list, tuple or set (the values 1.x counted).
 
 <!-- END GENERATED check-sections:T -->

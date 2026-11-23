@@ -227,7 +227,9 @@ persistence the view does not have today.
 List the names your template reads. Each one is either declared with `state()`
 (step 3), which renders it, or returned from `get_context_data()`. **A name
 the template reads that nothing supplies
-renders as an empty string, with no error and no warning.** This is the
+renders as an empty string, with no error and no warning** (with `DEBUG`
+on djust logs it once; set `DJUST_UNSUPPLIED_NAMES = "error"` in your test
+settings to make each one fail the test that renders it). This is the
 mistake to look for: after the switch, open every state of the page and look
 for blanks. Remember names used only inside `{% if %}`, in `{% include %}`d
 templates and in a base template.
@@ -1023,4 +1025,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 9e44b123bbe7 -->
+<!-- generated-doc prose-sha256: 8994727a25e2 -->

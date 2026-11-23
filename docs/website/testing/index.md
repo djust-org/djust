@@ -368,6 +368,22 @@ markers = [
 ]
 ```
 
+### Failing a test on an unsupplied template name
+
+Under explicit exposure a template name that nothing supplies renders empty, and the
+`djust.exposure` log that names it runs only while `DEBUG` is on, which a test run is not.
+Set `DJUST_UNSUPPLIED_NAMES` in your test settings:
+
+| value | effect |
+|---|---|
+| `"debug"` (default) | log once per view class and name while `DEBUG` is on |
+| `"warn"` | log once per view class and name, whatever `DEBUG` says |
+| `"error"` | raise `UnsuppliedTemplateNameError` on every render that leaves a held name unsupplied, whatever `DEBUG` says |
+
+The error names the view and the names, never their values. Any other value raises
+`ImproperlyConfigured`, so a typo does not turn the check off. Only a view under explicit
+exposure is checked.
+
 ## Test File Conventions
 
 - Tests live in `tests/` at the project root or in `myapp/tests/`
