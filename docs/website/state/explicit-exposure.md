@@ -77,6 +77,11 @@ cannot be a `state()` field at all: the view class raises
 field is declared on the view, a mixin or a base class (#4070). A `get_context_data()` that returns a new dict without calling
 `super().get_context_data()` supplies no declared field (nor any provider).
 
+`page_title` is such a framework name: `self.page_title = "..."` updates the
+browser tab, but neither it nor a class attribute named `page_title` reaches the
+template, so `{{ page_title }}` renders empty. Return it from
+`get_context_data()` (`ctx["page_title"] = self.page_title`).
+
 The rule applies to `state()` only. A `@computed` value, an `assign_async()`
 result and an ordinary attribute still have to be returned from
 `get_context_data()`.

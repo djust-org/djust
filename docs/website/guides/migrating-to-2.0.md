@@ -272,6 +272,21 @@ values that are the view's state. It takes two independent grants:
   declared field; it is not a grant, and it never puts the value in
   `get_state()` or the session.
 
+**A field named `state`.** A class-body `state = state("ok")` rebinds the name
+`state` to the field, so every later `state(...)` in the same class body fails
+with `TypeError: 'StateProperty' object is not callable` (the traceback points
+at the next field, not at the one that shadowed it). Rename the field (`load_state`),
+declare it last in the class body, or write `djust.state(...)` for the others:
+
+<!-- djust-example: skip -- the shadowing mistake this paragraph describes -->
+<!-- doc-snippet-check: anti-pattern -->
+```python
+class SearchView(LiveView):
+    exposure_policy = "explicit"
+    state = state("idle")  # from here on, state is a StateProperty, not the function
+    page = state(1)  # TypeError: 'StateProperty' object is not callable
+```
+
 Anything you do not want saved or sent (a service object, a model instance, a
 cache) stays a plain attribute set in `mount()`. Assigning a plain attribute
 in a handler still re-renders the view. The checks `djust.V006` and
@@ -473,6 +488,17 @@ object for every event, rebuilt from its saved state as in 1.3.
 
 ### Other things explicit exposure refuses
 
+- **`page_title` is a framework setting.** It cannot be a `state()` field (the
+  class raises `ExposureConfigurationError`, see
+  [Behaviour that now raises](#behaviour-that-now-raises)). Keep setting
+  `self.page_title = "..."` in `mount()` or a handler: that still updates the
+  browser tab. But neither that nor a class attribute `page_title = "..."`
+  supplies `{{ page_title }}` to the template, which renders it empty, with no
+  error. T027 and `DJUST_UNSUPPLIED_NAMES` do not report it either, because
+  it is a framework name. Supply it from `get_context_data()`
+  (`ctx["page_title"] = self.page_title`), typically once in a shared base
+  view's `get_context_data()` for a layout's `<title>`; that is the only place
+  that reaches the template.
 - **Components assigned in `mount()`** (`self.nav = Tabs(...)`). Declare a
   `LiveComponent` in the class body: `nav = Tabs(active="overview")`; each
   view gets its own copy. A plain component (`Rating`, `Badge` and the other
@@ -871,6 +897,9 @@ To open or close from your own handler, set the state:
   naming the field, whether it is declared on the view, on a mixin or on a base
   class. Such a field used to import and then crash a system check or a
   management command, or fail at render. Rename it (`template_name_value`).
+  For `page_title`, keep setting `self.page_title` and supply it to the
+  template from `get_context_data()`
+  ([`page_title` is a framework setting](#other-things-explicit-exposure-refuses)).
 
 ### Defaults that changed
 
@@ -1031,4 +1060,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: f2988a37179e -->
+<!-- generated-doc prose-sha256: 3813a5d782a8 -->
