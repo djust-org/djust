@@ -49,6 +49,7 @@ LOOP = "<div dj-root>{% for u in users %}<p>{{ u.pk }}</p>{% endfor %}</div>"
 
 
 class ExplicitRows(LiveView):
+    exposure_policy = "explicit"
     template = LOOP
 
     def get_context_data(self, **kwargs):
@@ -68,6 +69,7 @@ class LegacyAddedAfterSuper(LiveView):
 
 
 class LoopRelationWalk(LiveView):
+    exposure_policy = "explicit"
     template = (
         "<div dj-root>{% for u in users %}<p>{{ u.username }}:{{ u.groups.count }}</p>"
         "{% endfor %}</div>"
@@ -80,6 +82,7 @@ class LoopRelationWalk(LiveView):
 
 
 class SidecarRelation(LiveView):
+    exposure_policy = "explicit"
     template = "<div dj-root><p>{{ me.username }}:{{ me.groups.count }}</p></div>"
 
     def get_context_data(self, **kwargs):
@@ -89,6 +92,7 @@ class SidecarRelation(LiveView):
 
 
 class BudgetedRows(ExplicitRows):
+    exposure_policy = "explicit"
     query_budget = {"render": 0}
 
 
@@ -213,6 +217,7 @@ def test_a_direct_state_sync_reads_inside_the_wrapper(user):
 
 
 class PageWithModelProperty(LiveView):
+    exposure_policy = "explicit"
     template = "<div dj-root><p>{{ me.username }}</p></div>"
 
     def get_context_data(self, **kwargs):
@@ -292,6 +297,7 @@ def swallowing(view: Any, step: str, turn: Any):
 
 
 class FailingRender(LiveView):
+    exposure_policy = "explicit"
     template = "<div dj-root><p>x</p></div>"
 
     def get_context_data(self, **kwargs):
