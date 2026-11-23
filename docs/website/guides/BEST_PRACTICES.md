@@ -770,7 +770,9 @@ encoded, and automatic state with a WARNING past 100 KB
 (`DJUST_AUTOMATIC_STATE_MAX_KB`); a refused change reports `state_too_large`.
 To budget it in a test, assert on `djust.testing.persisted_state(view).automatic_bytes`
 (the encoded size of what the view would persist) rather than wrapping the
-backend. What follows still describes what a view holds in memory per
+backend. It describes an explicit view (the default): a legacy view raises
+`TypeError`, and a state over its limit raises `StateLimitExceeded`, as the save
+would. What follows still describes what a view holds in memory per
 connection, which nothing measures. The snapshot holds three things, and the
 warning prints each one's size:
 

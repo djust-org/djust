@@ -954,7 +954,10 @@ no longer has between requests and reconnects:
   WARNING. To keep a budget test, measure the state the view would persist:
   `djust.testing.persisted_state(view)` returns it, and its `automatic_bytes`
   is the encoded size of the automatic state, the number the limits above
-  apply to. The renderer a connection holds in memory is not measured.
+  apply to. It describes an explicit view (the default): a view still on
+  `exposure_policy = "legacy"` raises `TypeError`, and a state over its limit
+  raises `StateLimitExceeded`, as the save would. The renderer a connection
+  holds in memory is not measured.
 
 Keys a 1.x server left in a session are never read. Declare what must survive
 on an explicit view; private attributes stay private and are rebuilt by
@@ -1044,4 +1047,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 8d82c8890176 -->
+<!-- generated-doc prose-sha256: fc6142765962 -->
