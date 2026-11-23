@@ -873,7 +873,7 @@ class RequestMixin:
         from ..components.base import LiveComponent
         from ..sync_turn import run_sync_step
 
-        def _context_and_state():
+        def _context_and_state() -> Any:
             # Nested in the render step below: runs directly.
             context = run_sync_step(self, "render", self.get_context_data)
             self._cached_context = dict(context)

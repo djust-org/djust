@@ -2230,7 +2230,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             shell_html = self._inject_handler_metadata(shell_html, request=request)
             return shell_html
         else:
-            return self.render(request)
+            return cast(str, self.render(request))
 
     @staticmethod
     def _stamp_dj_view(

@@ -11,7 +11,7 @@ import os
 import re
 import textwrap
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from django.core.checks import CheckMessage, register
 
@@ -2081,10 +2081,10 @@ def _t027_template_source(src: str, template_name: Optional[str]) -> Optional[st
         if template_name:
             resolved = resolve_template_inheritance(template_name, dirs)
             if resolved:
-                return LiveView._inline_includes(resolved, dirs)
+                return cast(str, LiveView._inline_includes(resolved, dirs))
         if has_extends:
             return None
-        return LiveView._inline_includes(src, dirs)
+        return cast(str, LiveView._inline_includes(src, dirs))
     except Exception:  # noqa: BLE001 — not resolvable statically: skip, never guess
         return None
 
