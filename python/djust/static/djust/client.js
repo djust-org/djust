@@ -5405,7 +5405,8 @@ function _lookupParameterContract(transport, viewPath, viewId, componentId, even
 // ADR-036 staged collector. Deliberately not called by legacy binders. The
 // owner-scoped binder must supply only documented generated application values;
 // routing context is attached afterwards, never collected from markup here.
-// `accept(key, hint)` lets the binder veto a dj-value-* argument (contract checks).
+// `accept(key, hint)` lets the binder veto a dj-value-* argument (contract checks);
+// it returns null to skip one silently (a framework-marked optional key, #4285).
 function _collectStrictEventParams(element, generated = {}, positional = [], accept = () => true) {
     const reject = () => { throw new Error('Invalid strict event arguments'); };
     const values = Object.create(null);
@@ -5473,7 +5474,9 @@ function _collectStrictEventParams(element, generated = {}, positional = [], acc
         if (parts.length > 2 || (parts.length === 2 && !parts[1])) reject();
         const key = parts[0].replace(/-/g, '_');
         const hint = parts[1];
-        if (!accept(key, hint)) reject();
+        const verdict = accept(key, hint);
+        if (verdict === null) continue;
+        if (!verdict) reject();
         let value = attr.value;
         const text = value.replace(/^[ \t\n\r\v\f]+|[ \t\n\r\v\f]+$/g, '');
         if (hint) {
@@ -8799,7 +8802,11 @@ function _strictBinding(element, eventName, generated = {}, positional = [], con
             // eslint-disable-next-line security/detect-object-injection
             if (named.has(key) || open) sent[key] = generated[key];
         }
+        // #4285: keys the framework stamped (a component's identity `name`) are
+        // sent only when the handler declares them, like generated values.
+        const optional = new Set((element.getAttribute('data-djust-optional') || '').split(/\s+/).filter(Boolean));
         const values = _collectStrictEventParams(element, sent, positional, (key, hint) => {
+            if (optional.has(key) && !named.has(key) && !open) return null;
             const type = (named.get(key) || open || {type: 'Any'}).type
                 .replace(/^Optional\[(.*)\]$/, '$1').replace(/^list\[.*/, 'list');
             // A dj-value-* name may not reuse any generated name, sent or not.

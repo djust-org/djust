@@ -467,7 +467,9 @@ class Component(TemplateMutatorGuard, ABC):
             name: Optional instance identity (ADR-033 D5). Every event the
                 component emits through :meth:`event_attrs` carries it as
                 ``dj-value-name``, so one handler can serve several instances:
-                ``def set_rating(self, value, name=None, **kwargs)``. The
+                ``def set_rating(self, value: int, name: str = "")``. Under
+                the strict contract ``name`` is sent only when the handler
+                declares it or has a ``**`` catch-all. The
                 word HTML forms use for the same thing; ``event=`` stays a
                 rename of the verb.
             **kwargs: Component properties
@@ -535,7 +537,9 @@ class Component(TemplateMutatorGuard, ABC):
         key become hyphens (``item_id`` → ``dj-value-item-id``; the client
         maps them back). When the instance was given an identity ``name``
         (a class without a ``name`` parameter of its own — see ``__init__``)
-        it is appended as ``dj-value-name`` unless the caller passed one. A falsy *event*
+        it is appended as ``dj-value-name`` unless the caller passed one, together
+        with ``data-djust-optional="name"``: a strict handler receives it only
+        when it declares ``name`` or has a ``**`` catch-all (#4285). A falsy *event*
         renders nothing, so ``f"<button {self.event_attrs(self.event)}>"``
         is the whole conditional. Every value is HTML-escaped here; pass raw
         Python values, not pre-escaped strings.
@@ -544,7 +548,8 @@ class Component(TemplateMutatorGuard, ABC):
             return ""
         parts = [f'{attr_name("dj-" + str(trigger))}="{_html.escape(str(event), quote=True)}"']
         instance_name = self.__dict__.get("_identity")
-        if instance_name and "name" not in params:
+        stamped_identity = bool(instance_name) and "name" not in params
+        if stamped_identity:
             params["name"] = instance_name
         for key, value in params.items():
             if value is None:
@@ -566,6 +571,10 @@ class Component(TemplateMutatorGuard, ABC):
                 suffix, text = "", str(value)
             attr = attr_name("dj-value-" + str(key).replace("_", "-"))
             parts.append(f'{attr}{suffix}="{_html.escape(text, quote=True)}"')
+        if stamped_identity:
+            # #4285: a strict handler gets the framework-stamped identity only
+            # when it declares ``name`` (or has a ``**`` catch-all).
+            parts.append('data-djust-optional="name"')
         return " ".join(parts)
 
     def __setattr__(self, name: str, value: Any) -> None:

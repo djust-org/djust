@@ -159,11 +159,14 @@ component has to say which instance it is, give it a `name`:
 self.ratings = [Rating(name=f"row-{row.pk}", value=row.stars) for row in rows]
 
 @event_handler()
-def set_rating(self, value, name=None, **kwargs):
+def set_rating(self, value: int, name: str = ""):
     ...
 ```
 
 Every trigger the instance renders then carries `dj-value-name="row-7"`.
+Under the strict parameter contract the browser sends `name` only when the
+handler declares it (or has a `**` catch-all), so a handler that does not need
+the identity can omit it.
 (Form-field components whose constructor already takes `name`, such as
 `DatePicker`, use it as the HTML field name instead, and it is not stamped
 on triggers.)
