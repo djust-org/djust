@@ -24,6 +24,7 @@ import pytest
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.mixins.rust_bridge import RENDER_REQUESTED
 from djust.tests.test_transport_behavioral_parity import (
     _EventSpineMixin,
     _mounted_event_runtime,
@@ -174,12 +175,12 @@ class TestSetChangedKeys1981:
         )
         v.set_changed_keys("rows")
         assert v._changed_keys == {"rows"}
-        assert v._force_full_html is True
+        assert v._force_full_html == RENDER_REQUESTED  # #4286: render, keep the diff
 
         v2 = _InPlaceView()
         v2.set_changed_keys(["a", "b"])  # iterable form
         assert v2._changed_keys == {"a", "b"}
-        assert v2._force_full_html is True
+        assert v2._force_full_html == RENDER_REQUESTED  # #4286: render, keep the diff
 
     def test_set_changed_keys_unions_with_existing(self):
         """Repeated calls accumulate (don't clobber) — a handler can mark several

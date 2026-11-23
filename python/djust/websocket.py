@@ -578,9 +578,11 @@ def _resolve_skip_render(view_instance: Any) -> bool:
     consumes ``_skip_render`` (resets it when set) so a stale True never leaks
     into the next turn.
 
-    ``_force_full_html`` (#1981, set by ``set_changed_keys()``) ALWAYS wins
-    over ``_skip_render``: a handler that explicitly asked for a forced
-    full-HTML render must not be silently dropped by a concurrently-set
+    ``_force_full_html`` (#1981) ALWAYS wins over ``_skip_render``, whether
+    it holds ``True`` (a full-HTML render: ``request_full_render()``, a
+    restore) or ``RENDER_REQUESTED`` (``set_changed_keys()``: a forced render
+    still sent as a diff, #4286): a handler that explicitly asked for a
+    forced render must not be silently dropped by a concurrently-set
     ``_skip_render`` — silently dropping it is the #1646 "hatch dropped"
     class, and the flag would also leak into a later unrelated turn. This is
     the resolution ``_tick_once`` has had since #2822; before #2834 the other

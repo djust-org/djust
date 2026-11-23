@@ -1594,7 +1594,9 @@ browser's top layer, an inert page behind it, and native Escape. When the
 browser closes it (Escape, or a click on the backdrop), `close_event` is sent to
 the server, so `open` stays in step. The focus trap and return focus to the
 opener work as for the default modal. The default (`native=False`) markup is
-unchanged.
+unchanged. An open native dialog stays open across a full-page update
+(`request_full_render()`, a restore or a recovery): the client keeps `open` on a
+`<dialog dj-dialog="open">` while the server still renders it open (#4286).
 
 Both forms take `role="alertdialog"` for a dialog that needs an answer (the
 default is `dialog`). `description="..."` renders a description paragraph that

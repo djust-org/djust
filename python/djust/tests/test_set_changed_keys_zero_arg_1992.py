@@ -23,6 +23,7 @@ import pytest
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.mixins.rust_bridge import RENDER_REQUESTED
 from djust.tests.test_transport_behavioral_parity import (
     _EventSpineMixin,
     _mounted_event_runtime,
@@ -106,7 +107,7 @@ class TestZeroArgSetChangedKeys1992:
         (there are none to add)."""
         v = _DbOnlyView()
         v.set_changed_keys()
-        assert v._force_full_html is True
+        assert v._force_full_html == RENDER_REQUESTED  # #4286: render, keep the diff
         assert getattr(v, "_changed_keys", None) in (None, set())
 
     def test_keyed_form_unchanged(self):
@@ -114,4 +115,4 @@ class TestZeroArgSetChangedKeys1992:
         v = _DbOnlyView()
         v.set_changed_keys("rows")
         assert v._changed_keys == {"rows"}
-        assert v._force_full_html is True
+        assert v._force_full_html == RENDER_REQUESTED  # #4286: render, keep the diff
