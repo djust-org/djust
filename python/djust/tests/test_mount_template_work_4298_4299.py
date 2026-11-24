@@ -299,6 +299,8 @@ def test_a_class_overriding_a_build_helper_is_not_kept(settings, shell_templates
     settings.DEBUG = False
 
     class Custom(ShellPage):
+        exposure_policy = "explicit"
+
         def _extract_liveview_root_with_wrapper(self, template):
             return super()._extract_liveview_root_with_wrapper(template)
 
