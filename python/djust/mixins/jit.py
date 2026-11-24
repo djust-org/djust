@@ -558,9 +558,10 @@ _SHELL_CHILDREN_CACHE_MAX = 256
 
 
 #: ``TemplateMixin.get_template()``'s result and the attributes it sets, by view
-#: class, ``template_name`` and dirs (#4299): ``(result, ((attr, value), ...))``.
+#: class, ``template_name``, dirs and template text (#4299):
+#: ``(result, ((attr, value), ...))``.
 _get_template_cache: Dict[
-    Tuple[Any, str, Tuple[str, ...]], Tuple[str, Tuple[Tuple[str, Any], ...]]
+    Tuple[Any, str, Tuple[str, ...], str], Tuple[str, Tuple[Tuple[str, Any], ...]]
 ] = {}
 _GET_TEMPLATE_CACHE_MAX = 256
 

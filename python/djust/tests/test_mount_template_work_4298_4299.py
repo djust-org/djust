@@ -335,3 +335,20 @@ def test_every_theme_tag_that_renders_the_catalogue_is_unscanned():
             if re.search(r"gallery|_preview_template|theme_components|_thumbnail_html", body):
                 reaching.add(node.name)
     assert reaching == set(runtime._LIBRARY_UNSCANNED_TAGS["theme_tags"])
+
+
+def test_a_loader_that_serves_new_text_rebuilds_get_template(settings, shell_templates, builds):
+    """A kept result is keyed by the template's text, so a reset loader is seen."""
+    from django.template import engines
+
+    settings.DEBUG = False
+    ShellPage().get_template()
+    (shell_templates / "t4295_page.html").write_text(
+        '{% extends "t4295_base.html" %}{% block main %}<div dj-root>Reloaded {{ n }}</div>'
+        "{% endblock %}"
+    )
+    for backend in engines.all():
+        for loader in getattr(getattr(backend, "engine", None), "template_loaders", ()):
+            getattr(loader, "reset", lambda: None)()
+    assert "Reloaded" in ShellPage().get_template()
+    assert len(builds) == 2

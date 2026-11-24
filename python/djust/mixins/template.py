@@ -830,12 +830,14 @@ class TemplateMixin:
         initialization, and before #4299 the page-shell reconstruction too),
         and each call loaded the template, resolved its inheritance, searched
         for the root and bridged its tag libraries again. The result and the
-        attributes it sets depend only on the view class, ``template_name`` and
-        the template directories, so while render caches are on (``DEBUG``
-        off, when Django's cached loader also serves a template unchanged) they
-        are kept per that key. A template refresh (hot reload, a change of
-        ``DEBUG``, ``TEMPLATES`` or ``INSTALLED_APPS``) clears them with the
-        other render caches.
+        attributes it sets depend on the view class, ``template_name``, the
+        template directories and the template's text, so while render caches
+        are on (``DEBUG`` off) they are kept per that key: the template is
+        still loaded (a dict lookup under Django's cached loader), and a loader
+        that serves new text builds again. A Django 6 named partial is not
+        kept. A template refresh (hot reload, a change of ``DEBUG``,
+        ``TEMPLATES`` or ``INSTALLED_APPS``) clears them with the other render
+        caches.
         """
         from .._render_caches import render_caches_enabled
         from .jit import _GET_TEMPLATE_CACHE_MAX, _get_template_cache
@@ -845,15 +847,21 @@ class TemplateMixin:
         # bridging too; the miss that filled the entry already bridged them
         # into the process-wide registries the later renders use.
         cls = type(self)
-        key = (
-            (cls, cast(str, self.template_name), tuple(get_template_dirs()))
-            if render_caches_enabled()
+        name = cast(str, self.template_name)
+        key = None
+        if (
+            render_caches_enabled()
+            and "#" not in name
             and all(
                 getattr(cls, helper, None) is getattr(TemplateMixin, helper)
                 for helper in _GET_TEMPLATE_HELPERS
             )
-            else None
-        )
+        ):
+            from django.template import loader
+
+            source = getattr(getattr(loader.get_template(name), "template", None), "source", None)
+            if isinstance(source, str):
+                key = (cls, name, tuple(get_template_dirs()), source)
         if key is not None:
             hit = _get_template_cache.get(key)
             if hit is not None:
