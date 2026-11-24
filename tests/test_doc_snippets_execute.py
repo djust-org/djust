@@ -1657,6 +1657,10 @@ def absorbing_catch_alls(text: str) -> list[str]:
     rule that the 2.0 policy retired (#4239). A catch-all the body reads (a form's
     fields, a dict of extras) is a real parameter and is left alone. A fence
     marked ``before`` or ``anti-pattern`` is left out.
+
+    Known limits: any ``ast.Name`` reference to the catch-all counts as a read
+    (``print(kwargs)`` passes), and a decorator imported under another name is
+    not recognised, so its handler is skipped.
     """
     findings = []
     for lineno, code, marker in _load_extractor()(_DocText(text)):
@@ -1695,9 +1699,9 @@ def test_absorbing_catch_all_scan_flags_only_an_unread_catch_all():
 
 
 @pytest.mark.parametrize(
-    "path", _WEBSITE_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _WEBSITE_DOCS]
+    "path", _SCANNED_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _SCANNED_DOCS]
 )
-def test_website_handlers_have_no_absorbing_catch_all(path):
+def test_docs_have_no_absorbing_catch_all(path):
     """#4239: a handler a guide shows takes a ``**`` catch-all only when it reads it."""
     findings = absorbing_catch_alls(path.read_text(encoding="utf-8"))
     assert not findings, (

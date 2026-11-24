@@ -140,7 +140,7 @@ class TodoListComponent(LiveComponent):
         return self.items
 
     @event_handler()
-    def add_todo(self, **kwargs):
+    def add_todo(self):
         """Add new todo item"""
         text = self.new_todo.strip()
         if not text:
@@ -160,12 +160,12 @@ class TodoListComponent(LiveComponent):
         self.send_parent("todo_added", {"item": new_item})
 
     @event_handler()
-    def set_new_todo(self, value: str = "", **kwargs):
+    def set_new_todo(self, value: str = ""):
         """Keep the input value on the server until the button is clicked."""
         self.new_todo = value
 
     @event_handler()
-    def toggle_todo(self, id: str = None, **kwargs):
+    def toggle_todo(self, id: str = None):
         """Toggle todo completion status"""
         if id:
             todo_id = int(id)
@@ -181,7 +181,7 @@ class TodoListComponent(LiveComponent):
                     break
 
     @event_handler()
-    def delete_todo(self, id: str = None, **kwargs):
+    def delete_todo(self, id: str = None):
         """Delete todo item"""
         if id:
             todo_id = int(id)
@@ -191,13 +191,13 @@ class TodoListComponent(LiveComponent):
             self.send_parent("todo_deleted", {"id": todo_id})
 
     @event_handler()
-    def set_filter(self, filter: str = None, **kwargs):
+    def set_filter(self, filter: str = None):
         """Change filter"""
         if filter:
             self.filter = filter
 
     @event_handler()
-    def clear_completed(self, **kwargs):
+    def clear_completed(self):
         """Remove all completed items"""
         deleted_ids = [item['id'] for item in self.items if item['completed']]
         self.items = [item for item in self.items if not item['completed']]
@@ -374,12 +374,12 @@ class UserListComponent(LiveComponent):
         ]
 
     @event_handler()
-    def search(self, value: str = None, **kwargs):
+    def search(self, value: str = None):
         """Update search term"""
         self.search_term = value or ""
 
     @event_handler()
-    def select_user(self, user_id: str = None, **kwargs):
+    def select_user(self, user_id: str = None):
         """Select a user"""
         if user_id:
             self.selected_id = int(user_id)
@@ -718,19 +718,19 @@ class ProductGridComponent(LiveComponent):
         }
 
     @event_handler()
-    def filter_category(self, value: str = None, **kwargs):
+    def filter_category(self, value: str = None):
         self.category_filter = value or ""
 
     @event_handler()
-    def filter_price(self, value: str = None, **kwargs):
+    def filter_price(self, value: str = None):
         self.price_filter = value or ""
 
     @event_handler()
-    def search(self, value: str = None, **kwargs):
+    def search(self, value: str = None):
         self.search_term = value or ""
 
     @event_handler()
-    def add_to_cart(self, product_id: str = None, **kwargs):
+    def add_to_cart(self, product_id: str = None):
         if product_id:
             product = next((p for p in self.products if p['id'] == int(product_id)), None)
             if product:

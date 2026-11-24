@@ -278,7 +278,7 @@ class TabsComponent(LiveComponent):
         self.active = active or tabs[0]["id"]
 
     @event_handler()
-    def switch_tab(self, tab: str = "", **kwargs):
+    def switch_tab(self, tab: str = ""):
         """Event handler - updates state"""
         self.active = tab
         self.send_parent("tab_changed", {"tab": tab})

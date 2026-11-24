@@ -230,7 +230,7 @@ class SettingsView(LiveView):
     ))
 
     @event_handler()
-    def save_settings(self, theme: str = "", **kwargs):
+    def save_settings(self, theme: str = ""):
         self.theme_radio.value = theme
         self.saved_theme = theme
 ```

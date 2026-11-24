@@ -39,7 +39,7 @@ class ProductSearchView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)  # Wait 500ms after typing stops
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         # dj-input sends the field's current text as `value`
         self.results = Product.objects.filter(name__icontains=value)[:10]
 ```
@@ -112,7 +112,7 @@ class ProductSearchView(LiveView):
     @event_handler
     @debounce(wait=0.5)
     @cache(ttl=300, key_params=["value"])  # ← Add this line (5 min cache)
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         self.results = Product.objects.filter(name__icontains=value)[:10]
 ```
 
@@ -190,7 +190,7 @@ def on_scroll(self, scroll_y: int = 0, **kwargs):
 **Shared State (coordinate components)**:
 ```python
 @event_handler
-def update_filter(self, value: str = "", **kwargs):
+def update_filter(self, value: str = ""):
     self.filter = value
     self.results = self.apply_filter(value)  # one re-render updates both
 ```
@@ -252,7 +252,7 @@ JavaScript is only needed for:
 @event_handler           # Callable from the browser
 @debounce(wait=0.5)      # Wait for typing to stop
 @cache(ttl=60)           # Cache for 1 minute
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.results = expensive_query(value)
 ```
 

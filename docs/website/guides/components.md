@@ -1117,8 +1117,8 @@ class ClaimsListView(LiveView):
         return {**super().get_context_data(**kwargs), "rows": self.rows}
 
     @event_handler()
-    def open_claim(self, value: str = ""):
-        self.live_redirect(reverse("claims:detail", kwargs={"claim_id": value}))
+    def open_claim(self, row_key: str = ""):
+        self.live_redirect(reverse("claims:detail", kwargs={"claim_id": row_key}))
 ```
 
 ```django

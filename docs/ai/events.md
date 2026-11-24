@@ -47,7 +47,7 @@ from djust.decorators import event_handler, debounce, throttle
 
 # Input/change: parameter MUST be named `value`
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.query = value
     self._refresh()
 
@@ -65,14 +65,14 @@ def save(self, **form_data):
 # Debounce — the client waits 0.5s after the last keystroke, then sends once
 @event_handler()
 @debounce(wait=0.5)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.query = value
     self._refresh()
 
 # Throttle — the client sends at most once per second
 @event_handler()
 @throttle(interval=1.0)
-def on_scroll(self, position: int = 0, **kwargs):
+def on_scroll(self, position: int = 0):
     self.scroll_pos = position
 ```
 

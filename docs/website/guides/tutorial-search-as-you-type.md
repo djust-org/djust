@@ -186,7 +186,7 @@ are all the framework needs to figure out which template fragments
 need re-rendering. The diff is sent over the WebSocket as a minimal
 JSON patch — not a full HTML re-render.
 
-> **Why no `**kwargs`?** The signature is the contract. The named
+> **Why no `**kwargs`?** Under the strict policy the signature is the contract. The named
 > parameter `value` receives the input's text, coerced to `str`, and a
 > handler is sent only the parameters it declares.
 

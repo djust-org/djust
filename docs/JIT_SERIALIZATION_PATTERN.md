@@ -123,7 +123,7 @@ class PropertyListView(BaseViewWithNavbar):
 
     @event_handler()
     @debounce(wait=0.5)  # client collapses the keystroke burst into one send
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         """Event handler for search (input events deliver the typed text as `value`)"""
         self.search_query = value
         self._refresh_properties()

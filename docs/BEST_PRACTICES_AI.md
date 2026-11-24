@@ -115,7 +115,7 @@ class ProductListView(LiveView):
 
     @event_handler()
     @debounce(wait=0.5)
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         """
         Event handler for search input
 
@@ -131,13 +131,13 @@ class ProductListView(LiveView):
         self._refresh_products()
 
     @event_handler()
-    def filter_by_category(self, value: str = "all", **kwargs):
+    def filter_by_category(self, value: str = "all"):
         """Event handler for category filter"""
         self.filter_category = value
         self._refresh_products()
 
     @event_handler()
-    def sort_by_field(self, value: str = "name", **kwargs):
+    def sort_by_field(self, value: str = "name"):
         """Event handler for sorting"""
         self.sort_by = value
         self._refresh_products()
@@ -289,13 +289,13 @@ class PropertyListView(BaseViewWithNavbar):
 ```python
 # ✅ CORRECT: Use 'value' for form inputs
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     """Receives value from @input/@change events"""
     self.search_query = value
 
 # ❌ WRONG: Different parameter name
 @event_handler()
-def search(self, query: str = "", **kwargs):
+def search(self, query: str = ""):
     """Won't receive the input value!"""
     self.search_query = query  # Always "" (default)
 
@@ -346,19 +346,19 @@ def delete_item(self, item_id: int):
 # Debouncing — the client waits 0.5s after the last keystroke, then sends once
 @event_handler()
 @debounce(wait=0.5)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.search_query = value
     self._refresh_results()
 
 # Throttling — the client sends at most once per second
 @event_handler()
 @throttle(interval=1.0)
-def track_scroll(self, position: int = 0, **kwargs):
+def track_scroll(self, position: int = 0):
     self.scroll_position = position
 
 # A server action; add a JS Command chain for feedback before the server answers
 @event_handler()
-def like_post(self, post_id: int, **kwargs):
+def like_post(self, post_id: int):
     post = Post.objects.get(id=post_id)
     post.likes += 1
     post.save()
@@ -366,7 +366,7 @@ def like_post(self, post_id: int, **kwargs):
 # Client-side caching
 @event_handler()
 @cache(ttl=300, key_params=["query"])  # 5 min cache
-def autocomplete(self, query: str = "", **kwargs):
+def autocomplete(self, query: str = ""):
     return City.objects.filter(name__istartswith=query)[:10]
 ```
 
@@ -409,12 +409,12 @@ def get_context_data(self, **kwargs):
 ```python
 # ❌ WRONG
 @event_handler()
-def search(self, query: str = "", **kwargs):
+def search(self, query: str = ""):
     self.search_query = query  # Won't work!
 
 # ✅ CORRECT
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.search_query = value  # Works!
 ```
 
@@ -428,7 +428,7 @@ def search(self, value: str = "", **kwargs):
 
 # ✅ CORRECT
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     """Auto-discovered and validated"""
     self.search_query = value
 ```
@@ -455,13 +455,13 @@ def get_context_data(self, **kwargs):
 ```python
 # ❌ WRONG
 @event_handler()
-def filter_status(self, value: str, **kwargs):
+def filter_status(self, value: str):
     """No default - will error if value missing"""
     self.status = value
 
 # ✅ CORRECT
 @event_handler()
-def filter_status(self, value: str = "all", **kwargs):
+def filter_status(self, value: str = "all"):
     """Safe with default"""
     self.status = value
 ```
@@ -598,7 +598,7 @@ class SecureLeaseView(LiveView):
         super().mount(request, **kwargs)
 
     @event_handler()
-    def delete_lease(self, lease_id: int, **kwargs):
+    def delete_lease(self, lease_id: int):
         """Re-verify permissions in event handlers"""
         lease = Lease.objects.get(id=lease_id)
 
@@ -615,7 +615,7 @@ class SecureLeaseView(LiveView):
 from decimal import Decimal, InvalidOperation
 
 @event_handler()
-def update_rent(self, value: str = "", **kwargs):
+def update_rent(self, value: str = ""):
     """Validate and sanitize all inputs"""
 
     # 1. Type validation (automatic with type hints)
@@ -706,7 +706,7 @@ def _refresh_items(self):
 # Cache expensive queries
 @event_handler()
 @cache(ttl=300, key_params=["query"])  # 5 min cache
-def autocomplete(self, query: str = "", **kwargs):
+def autocomplete(self, query: str = ""):
     """Client caches results for repeated queries"""
     return City.objects.filter(
         name__istartswith=query
@@ -715,7 +715,7 @@ def autocomplete(self, query: str = "", **kwargs):
 # Cached filter.
 @event_handler()
 @cache(ttl=60)
-def apply_filter(self, filter: str = "all", **kwargs):
+def apply_filter(self, filter: str = "all"):
     """Caches the response."""
     self.filter = filter
     self._refresh_results()
@@ -995,17 +995,17 @@ class PropertyListView(LiveView):
 
     @event_handler()
     @debounce(wait=0.5)
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         self.search_query = value
         self._refresh_properties()
 
     @event_handler()
-    def set_filter_status(self, value: str = "all", **kwargs):
+    def set_filter_status(self, value: str = "all"):
         self.filter_status = value
         self._refresh_properties()
 
     @event_handler()
-    def sort_by_field(self, value: str = "address", **kwargs):
+    def sort_by_field(self, value: str = "address"):
         self.sort_by = value
         self._refresh_properties()
 

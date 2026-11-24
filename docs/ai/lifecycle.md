@@ -28,7 +28,7 @@ class MyView(LiveView):
         return context
 
     @event_handler()
-    def do_search(self, value: str = "", **kwargs):
+    def do_search(self, value: str = ""):
         """Event handlers update state, then call _refresh()."""
         self.search = value
         self._refresh()

@@ -18,7 +18,7 @@ This guide explains how to write effective event handlers in djust LiveView appl
 
 ## The Signature Is the Contract
 
-Under the 2.0 default (`parameter_policy="strict"`), a handler receives exactly the parameters its signature declares. Declare each argument the binding sends, and nothing else: `**kwargs` is not required, and a handler that does not read it should not take it.
+Under the strict policy (`event_parameter_policy = "strict"`, opt-in until 2.0.0 final), a handler receives exactly the parameters its signature declares. Declare each argument the binding sends, and nothing else: `**kwargs` is not required, and a handler that does not read it should not take it.
 
 ```python
 @event_handler()
@@ -34,7 +34,7 @@ def delete_item(self, item_id: int = 0):
     Item.objects.filter(id=item_id).delete()
 ```
 
-Legacy `dj-input`/`dj-change` bindings also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: declare those names, or take a typed catch-all (`**fields: str`) that the body reads. See [Event arguments (`dj-value-*`)](website/core-concepts/events.md#event-arguments-dj-value-) for the full rule.
+Legacy `dj-input`/`dj-change` bindings also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: declare those names, or take a typed catch-all (`**fields: str`) that the body reads. See [Event arguments (`dj-value-*`)](website/core-concepts/events.md#event-arguments-dj-value) for the full rule.
 
 ## Parameter Naming Convention
 
@@ -65,21 +65,21 @@ def search(self, query: str = ""):
     self.search_query = query  # Will always be "" (default)
 ```
 
-### `_target` parameter for shared handlers
+### `field` parameter for shared handlers
 
-When multiple form fields share one `dj-change` or `dj-input` handler, the `_target` parameter identifies which field triggered the event (the element's `name` attribute, falling back to `id`, then `null`):
+When multiple form fields share one `dj-change` or `dj-input` handler, declare `field` to learn which field triggered the event (the element's `name` attribute, falling back to `id`):
 
 ```python
 @event_handler()
-def validate(self, value: str = "", _target: str = ""):
-    """_target tells you which field triggered the event"""
-    if _target == "email":
+def validate(self, value: str, field: str):
+    """field tells you which field triggered the event"""
+    if field == "email":
         self.email_error = "" if "@" in value else "Invalid email"
-    elif _target == "username":
+    elif field == "username":
         self.username_error = "" if len(value) >= 3 else "Too short"
 ```
 
-For `dj-submit`, `_target` is the submitter button's `name` (if available). Matches Phoenix LiveView's `_target` convention.
+For `dj-submit`, `_target` is the submitter button's `name` (if available); declare `_target` to receive it. Matches Phoenix LiveView's `_target` convention.
 
 ### Custom event parameters
 
@@ -596,7 +596,6 @@ def save_property(
     name: str = "",
     address: str = "",
     price: float = 0.0,
-    **kwargs
 ):
     """Save property from form submission"""
     if self.edit_property_id:

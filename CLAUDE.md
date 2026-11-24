@@ -170,6 +170,7 @@ class MyView(LiveView):
 ```
 
 ### Event Handlers — always use `@event_handler`
+Examples assume the strict parameter policy; under legacy a `dj-input` also sends `field`.
 ```python
 from djust.decorators import event_handler
 

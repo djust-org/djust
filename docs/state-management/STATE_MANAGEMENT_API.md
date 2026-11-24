@@ -155,7 +155,7 @@ class ContactFormView(DraftModeMixin, FormMixin, LiveView):
 
     @debounce(wait=1.0)
     @event_handler()
-    def auto_save(self, **kwargs):
+    def auto_save(self):
         # Optional server-side auto-save
         pass
 ```
@@ -244,7 +244,7 @@ class SearchView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)  # Wait 500ms after user stops typing
-    def on_search(self, value: str = "", **kwargs):
+    def on_search(self, value: str = ""):
         """
         Called only after user stops typing for 500ms.
         No manual setTimeout/clearTimeout needed!
@@ -415,7 +415,7 @@ class DashboardView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)
-    def update_temperature(self, value: int = 72, **kwargs):
+    def update_temperature(self, value: int = 72):
         """One handler sets both values; one re-render shows both."""
         self.temperature = max(0, min(120, int(value)))
         self.celsius = round((self.temperature - 32) * 5 / 9)
@@ -484,7 +484,7 @@ class AutocompleteView(LiveView):
     @event_handler
     @cache(ttl=300)           # Cache for 5 minutes
     @debounce(wait=0.3)       # Debounce requests
-    def search(self, query: str = "", **kwargs):
+    def search(self, query: str = ""):
         """
         Client checks cache first:
         - Cache hit: Returns instantly (< 1ms)
@@ -955,7 +955,7 @@ class SaveFormView(LiveView):
     """
 
     @event_handler
-    def save_data(self, title: str = "", content: str = "", **kwargs):
+    def save_data(self, title: str = "", content: str = ""):
         """
         While this handler runs:
         - Submit button is disabled and has opacity-50 class
@@ -1376,7 +1376,7 @@ def search(self, query: str = "") -> list[SearchResult]:
 
 ```python
 @event_handler()
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int = 0):
     """
     If the server raises, the client receives an error frame and the
     view's state is unchanged.
@@ -1406,7 +1406,7 @@ client:
 
 ```python
 @event_handler()
-def transfer_funds(self, amount: int = 0, **kwargs):
+def transfer_funds(self, amount: int = 0):
     if amount > self.balance:
         raise ValueError("Insufficient funds")  # Error frame — but the TEXT is
     # replaced with a generic string when DEBUG is False
