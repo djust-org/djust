@@ -29,3 +29,8 @@ def test_no_mount_no_state_is_reported():
 def test_state_on_a_plain_mixin_parent_is_not_reported():
     mixin = type("V002StateMixin", (), {"count": state(0)})
     assert _v002_for("V002MixinChild", (mixin, LiveView)) == []
+
+
+def test_state_on_a_mixin_listed_after_liveview_is_not_reported():
+    mixin = type("V002CounterMixin", (), {"count": state(0)})
+    assert _v002_for("V002MixinAfter", (LiveView, mixin)) == []

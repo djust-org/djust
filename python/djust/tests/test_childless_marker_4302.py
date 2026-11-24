@@ -61,7 +61,9 @@ def test_live_render_in_source_still_counts(libs):
 
 
 def test_setting_path_still_works(libs):
-    assert runtime._source_may_register_children("{% load app_unmarked %}", ("app_unmarked",)) is False
+    assert (
+        runtime._source_may_register_children("{% load app_unmarked %}", ("app_unmarked",)) is False
+    )
 
 
 def test_check_warns_for_inclusion_tag_in_marked_library(libs, settings):
@@ -87,3 +89,35 @@ def test_check_silent_for_marked_library_with_only_simple_tags(monkeypatch, sett
     found = []
     _check_childless_inclusion_tags(found)
     assert found == []
+
+
+def test_subset_load_from_marked_library(libs):
+    assert runtime._source_may_register_children("{% load sidebar from app_marked %}") is False
+
+
+def test_check_covers_libraries_listed_in_the_setting(libs, settings, monkeypatch):
+    settings.DEBUG = True
+    monkeypatch.setattr(
+        runtime, "_project_childless_libraries", lambda: ("app_unmarked_inclusion",)
+    )
+    found = []
+    _check_childless_inclusion_tags(found)
+    assert any("app_unmarked_inclusion" in m.msg for m in found)
+
+
+def test_check_respects_suppress_checks(libs, settings):
+    settings.DEBUG = True
+    settings.DJUST_CONFIG = {"suppress_checks": ["C044"]}
+    found = []
+    _check_childless_inclusion_tags(found)
+    assert found == []
+
+
+def test_only_the_inclusion_tag_is_reported(monkeypatch, settings):
+    settings.DEBUG = True
+    known = {"app_both": _with_inclusion()}
+    monkeypatch.setattr(template_libraries, "_find_library", lambda n: known[n], raising=False)
+    monkeypatch.setattr(template_libraries, "_library_map", lambda: dict(known))
+    found = []
+    _check_childless_inclusion_tags(found)
+    assert len(found) == 1 and "'panel'" in found[0].msg

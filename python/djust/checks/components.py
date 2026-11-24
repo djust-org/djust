@@ -493,11 +493,7 @@ def check_liveviews(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
             # #4233: a view whose state is all ``state()`` fields needs no mount().
             declares_state = False
             for klass in cls.__mro__:
-                if klass is LiveView:
-                    break
-                if any(
-                    getattr(type(v), "_djust_state_field", False) for v in vars(klass).values()
-                ):
+                if any(getattr(type(v), "_djust_state_field", False) for v in vars(klass).values()):
                     declares_state = True
                     break
             if not has_mount and not declares_state and not _is_check_suppressed("djust.V002"):

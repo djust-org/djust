@@ -417,7 +417,7 @@ console.log("debug info"); // noqa: Q003
 ### C044 — Inclusion tag in a `djust_childless` library
 - **Severity**: Warning
 - **Method**: Tag library inspection (DEBUG only; resolves every installed tag library)
-- **What it detects**: a tag library that sets `register.djust_childless = True` and also registers a tag built with `Library.inclusion_tag`. The page-shell scan reads the page's own templates and does not follow the template an inclusion tag renders, so a `{% live_render %}` inside it would not be registered.
+- **What it detects**: a tag library that sets `register.djust_childless = True`, or is listed in `LIVEVIEW_CONFIG['childless_tag_libraries']`, and also registers a tag built with `Library.inclusion_tag`. The page-shell scan reads the page's own templates and does not follow the template an inclusion tag renders, so a `{% live_render %}` inside it would not be registered.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C044"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C044"]`
 - **False positives**: An inclusion template that never mounts a child view; suppress the check once you have confirmed that.
 
@@ -998,10 +998,10 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 
 ### T010 — dj-click used for navigation
 - **Severity**: Warning
-- **Method**: Regex/AST (heuristic: dj-click handlers that call redirect or navigate)
+- **Method**: Template scan (regex over each tag: `dj-click` plus a navigation-style attribute)
 - **What it detects**: an element with `dj-click` and a navigation-style attribute (`data-view`, `data-tab`, `data-page`, `data-section`, or the same names as `dj-value-*`); prefer `dj-patch` for URL state updates. Names are matched whole, so `data-viewport` and `dj-value-viewer` do not count
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T010"]`
-- **False positives**: Click handlers that navigate as a side effect of other work (e.g. save-and-redirect)
+- **False positives**: In-view tab or page state that is not URL state, such as djust's own Tabs component (`dj-click="activate_tab" dj-value-tab=...`); suppress it for those templates
 
 ### T011 — Unsupported Django template tags
 - **Severity**: Warning

@@ -671,7 +671,10 @@ def _check_unsupplied_names_mode(errors: list[CheckMessage]) -> None:
 
 
 def _check_childless_inclusion_tags(errors: list[CheckMessage]) -> None:
-    """C044 -- an ``inclusion_tag`` in a ``djust_childless`` library (#4302).
+    """C044 -- an ``inclusion_tag`` in a childless library (#4302).
+
+    Childless means ``register.djust_childless = True`` or a name in
+    ``LIVEVIEW_CONFIG['childless_tag_libraries']``.
 
     The page-shell scan reads the page's own templates, not the template an
     inclusion tag renders, so a ``{% live_render %}`` there would not be seen.
@@ -684,7 +687,10 @@ def _check_childless_inclusion_tags(errors: list[CheckMessage]) -> None:
     try:
         from djust import template_libraries
 
-        names = list(template_libraries._library_map())
+        from djust.runtime import _project_childless_libraries
+
+        vouched = set(_project_childless_libraries())
+        names = sorted({*template_libraries._library_map(), *vouched})
     except Exception:  # noqa: BLE001 — a broken library map is not this check's job
         return
     for name in names:
@@ -692,7 +698,7 @@ def _check_childless_inclusion_tags(errors: list[CheckMessage]) -> None:
             found = template_libraries._find_library(name)
         except Exception:  # noqa: BLE001 — an unloadable library is not this check's job
             continue
-        if getattr(found, "djust_childless", False) is not True:
+        if name not in vouched and getattr(found, "djust_childless", False) is not True:
             continue
         tags = getattr(found, "tags", None)
         if not isinstance(tags, dict):
@@ -702,7 +708,7 @@ def _check_childless_inclusion_tags(errors: list[CheckMessage]) -> None:
                 continue
             errors.append(
                 DjustWarning(
-                    "Tag library %r is marked djust_childless but %r is an inclusion tag." % (name, tag),
+                    "Tag library %r is childless but %r is an inclusion tag." % (name, tag),
                     hint=(
                         "The page-shell scan does not follow inclusion templates, so a "
                         "{%% live_render %%} in the template of {%% %s %%} would not be "
@@ -711,7 +717,7 @@ def _check_childless_inclusion_tags(errors: list[CheckMessage]) -> None:
                     ),
                     id="djust.C044",
                     fix_hint=(
-                        "Remove `register.djust_childless = True` from `%s`, or keep "
+                        "Drop `%s` from the childless marker or setting, or keep "
                         "`{%% live_render %%}` out of the template `%s` renders." % (name, tag)
                     ),
                 )
