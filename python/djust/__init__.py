@@ -88,7 +88,7 @@ if TYPE_CHECKING:
     from .db import notify_on_save, send_pg_notify
     from .markdown import render_markdown as render_markdown
 
-__version__ = "2.0.0rc3"
+__version__ = "2.0.0rc4"
 
 # The Rust extension is required (2.0): a missing build fails here, loudly.
 from ._rust import render_template, diff_html, RustLiveView  # noqa: E402

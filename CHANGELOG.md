@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0rc4] - 2026-11-24
+
+> **Upgrading from rc3.** Under explicit exposure, a Model, model list or
+> QuerySet that the template reads only plain fields off now reaches the
+> renderer reduced to those fields, as on 1.x, instead of every concrete
+> column (#4290). If you passed values through
+> `self.serialize_for_template()` to get that shape, the workaround is no
+> longer needed. New in rc4: `djust.testing.rendered_state(view)` shows what
+> a render handed the template engine (#4291). As in rc3,
+> `exposure_policy = "legacy"` and opt-in strict parameters still work and
+> are removed before 2.0.0 final (#4171, #4189). See the
+> [2.0 migration guide](docs/website/guides/migrating-to-2.0.md).
+
+### Added
+
+- **`djust.testing.rendered_state(view)` and `LiveViewTestClient.rendered_state()`** return a detached copy of the state the last render handed the template engine, so a data-minimization test no longer reads the private `view._rust_view.get_state()`. `get_state()` under explicit exposure returns only `client=True` fields, and `persisted_state()` answers what a save keeps, not what the renderer received (#4291).
+
+### Fixed
+
+- **Explicit exposure no longer hands the renderer every field of a Model or row list the template reads only columns off.** A top-level Model, model list or QuerySet whose relations the template does not walk now goes through the template-path JIT, as on 1.x, so the renderer's state (and its snapshot) carries the fields the template names, not every concrete column less `djust_exclude_fields`. A single Model whose relations or methods the template walks keeps its normalized fields, and one the template reads nothing off keeps only its identity keys; a row list read with no field path (`{% regroup %}`, `{{ rows.0 }}`) keeps whole rows, as the JIT gives it (#2736). A `dictsort:<variable>` naming a non-column keeps the normalized rows. The migration guide notes the change (#4290).
+
 ## [2.0.0rc3] - 2026-11-24
 
 > **Upgrading from rc2.** Two behaviour changes to check. `set_changed_keys()`
