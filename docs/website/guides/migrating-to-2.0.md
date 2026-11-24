@@ -58,11 +58,11 @@ not supply. `python manage.py check` reports the same statically as
 `djust.T027`. A field declared with `state()` is supplied: it renders without
 a `get_context_data()` ([#4050](https://github.com/djust-org/djust/issues/4050)).
 
-> **Where 2.0 is today.** 2.0.0rc4 is a release candidate. Install it with
+> **Where 2.0 is today.** 2.0.0rc5 is a release candidate. Install it with
 > `pip install --pre djust` (a plain `pip install djust` still installs 1.3.x).
-> In 2.0.0rc4 the removals listed under [Removed names](#3-replace-removed-names-and-settings)
+> In 2.0.0rc5 the removals listed under [Removed names](#3-replace-removed-names-and-settings)
 > have landed, and explicit exposure is the default: a view that states no
-> policy is explicit. The legacy modes are still present in rc4: a view that
+> policy is explicit. The legacy modes are still present in rc5: a view that
 > states `exposure_policy = "legacy"` still works and raises a
 > `DeprecationWarning`, and strict event parameters are still an opt-in. They
 > are removed before 2.0.0 final, which makes explicit exposure and strict
@@ -1106,4 +1106,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: f5408b4dc443 -->
+<!-- generated-doc prose-sha256: b3910c891b2a -->
