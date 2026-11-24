@@ -190,6 +190,19 @@ class TestTheExtractorSaysWhatTheRowNeeds:
                 id="nested-all-rows",
             ),
             pytest.param(
+                "{% for p in perms %}{{ p.content_type }} {{ p.content_type.model }}{% endfor %}",
+                "perms",
+                ["content_type", "content_type.__str__", "content_type.model"],
+                id="a-nested-object-read-whole-and-by-field-4269",
+            ),
+            pytest.param(
+                "{% for p in perms %}{% if p.content_type %}{{ p.content_type.model }}{% endif %}"
+                "{% endfor %}",
+                "perms",
+                ["content_type", "content_type.model"],
+                id="a-nested-truth-test-asks-no-text-4269",
+            ),
+            pytest.param(
                 "{% for k, v in pairs %}{{ k }}{{ v.pk }}{% endfor %}",
                 "pairs",
                 ["pk"],
@@ -339,6 +352,13 @@ ROW_CASES = [
 ]
 
 
+#: A related object printed whole beside a field read off it (#4269).
+NESTED_WHOLE_AND_FIELD = [
+    "{% for p in perms %}{{ p.content_type }} {{ p.content_type.model }};{% endfor %}",
+    "{% for p in perms %}{{ p.content_type.model }}={{ p.content_type|upper }};{% endfor %}",
+]
+
+
 @pytest.mark.django_db
 class TestRowsRenderLikeDjango:
     @pytest.mark.parametrize("shape", SHAPES)
@@ -413,6 +433,27 @@ class TestRowsRenderLikeDjango:
         got, want = _agrees(render, source, {"perms": perms})
         assert got == want
         assert want.count(",") >= 3, want
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    @pytest.mark.parametrize("render", ENTRIES)
+    @pytest.mark.parametrize("source", NESTED_WHOLE_AND_FIELD, ids=["whole-then-field", "filtered"])
+    def test_a_nested_object_read_whole_and_by_field_prints_its_text(
+        self, db, render, shape, source
+    ) -> None:
+        """#4269: the nested dict carried only ``model``, so ``{{ p.content_type }}`` printed
+        ``{'model': 'logentry'}``; it carries the object's text now."""
+        perms = Permission.objects.order_by("pk")[:4]
+        perms = perms if shape == "QuerySet" else list(perms)
+        got, want = _agrees(render, source, {"perms": perms})
+        assert got == want
+        assert "{" not in got and want.count(";") == 4, got
+
+    @pytest.mark.parametrize("render", ENTRIES)
+    def test_a_single_models_nested_object_read_whole_and_by_field(self, db, render) -> None:
+        source = "{{ p.content_type }}|{{ p.content_type.app_label }}"
+        got, want = _agrees(render, source, {"p": Permission.objects.order_by("pk").first()})
+        assert got == want
+        assert "{" not in got, got
 
     @pytest.mark.parametrize("render", ENTRIES)
     @pytest.mark.parametrize(

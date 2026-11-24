@@ -88,6 +88,12 @@ FORWARD_FK = [
     ("fk-single-unsliced", "{% for p in perms %}{{ p.content_type }};{% endfor %}", _perms),
     ("fk-dotted", "{% for p in perms %}{{ p.content_type.model }};{% endfor %}", _perms_sliced),
     ("fk-model", "{{ p.content_type }}|{{ p.content_type.app_label }}", _perm),
+    # #4269: printed whole AND read by field
+    (
+        "fk-whole-and-dotted",
+        "{% for p in perms %}{{ p.content_type }} {{ p.content_type.model }};{% endfor %}",
+        _perms_sliced,
+    ),
 ]
 
 PROBES = (
@@ -544,3 +550,51 @@ def test_gate_off_a_legacy_projection_through_the_jit_reads_empty(world, monkeyp
     finally:
         clear_jit_cache()
         clear_render_caches()
+
+
+# -- #4269: a related object printed whole beside a field read off it -------------------------
+
+FK_WHOLE_AND_DOTTED = PROBES_BY_NAME["fk-whole-and-dotted"]
+
+
+def _perms_list() -> dict:
+    from django.contrib.auth.models import Permission
+
+    return {"perms": list(Permission.objects.order_by("pk")[:5])}
+
+
+@pytest.mark.parametrize("factory", [_perms_sliced, _perms_list], ids=["queryset", "list"])
+@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_a_related_object_read_whole_and_by_field_prints_its_text(
+    world, fresh_jit, policy, flag, factory
+):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
+    want = DjangoTemplate(FK_WHOLE_AND_DOTTED).render(DjangoContext(factory()))
+    assert want.startswith("Administration | log entry logentry;"), want
+    assert _render(FK_WHOLE_AND_DOTTED, factory, policy, flag=flag) == want
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_gate_off_without_the_nested_text_path_the_row_prints_a_dict(
+    world, fresh_jit, monkeypatch, policy
+):
+    """Gate-off: with the extractor's nested ``__str__`` paths stripped, the nested dict holds only
+    ``model`` and prints as one, the issue's ``{'model': 'logentry'}``."""
+    from djust.mixins import jit
+
+    real = jit._cached_extract_template_variables
+
+    def without_nested_text(template_content):
+        found = real(template_content)
+        if found is None:
+            return None
+        return {
+            name: [path for path in paths if not path.endswith("." + jit.ROW_TEXT_PATH)]
+            for name, paths in found.items()
+        }
+
+    monkeypatch.setattr(jit, "_cached_extract_template_variables", without_nested_text)
+    assert "{'model': 'logentry'}" in _render(FK_WHOLE_AND_DOTTED, _perms_sliced, policy)
