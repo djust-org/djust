@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0rc5] - 2026-11-24
+
+> **Upgrading from rc4.** Two live-mount performance fixes and no behaviour
+> change to check. A page that loads `djust_components`, `djust_flash`,
+> `theme_tags` or a filter-only tag library now also skips the extra
+> page-shell render that rc4 introduced the skip for (#4298); a project can
+> name its own child-free libraries in
+> `LIVEVIEW_CONFIG['childless_tag_libraries']`. With `DEBUG` off a mount no
+> longer rebuilds the view's template twice (#4299). As in rc4,
+> `exposure_policy = "legacy"` and opt-in strict parameters still work and
+> are removed before 2.0.0 final (#4171, #4189). See the
+> [2.0 migration guide](docs/website/guides/migrating-to-2.0.md).
+
+### Fixed
+
+- **A live mount still rendered the whole page when it loaded djust's component, flash or theme tags (#4298).** The #4295 page-shell skip treated every `{% load %}` outside Django's own libraries as one that might embed a child view. It now also clears `djust_components`, `djust_flash` and `theme_tags` (and reads the templates they render, so an overridden one that embeds a child still keeps the render), a library that registers only filters, the filters loaded with `{% load name from library %}`, and libraries a project lists in the new `LIVEVIEW_CONFIG['childless_tag_libraries']`.
+- **Every live mount ran the whole `get_template()` pipeline twice (#4299).** With `DEBUG` off, a `template_name` view's `get_template()` result is now kept per view class, template name, template directories and template text, and cleared with the other render caches (and by a template edit the hot-reload watcher sees). A page-shell render that #4295 skips no longer calls `get_template()` first, and the mount frame's `cache_config` and `handler_config` share one decorator scan.
+
 ## [2.0.0rc4] - 2026-11-24
 
 > **Upgrading from rc3.** Under explicit exposure, a Model, model list or
