@@ -113,13 +113,9 @@ def test_filtered_rebinding_reads_reverse_relation(people, source, policy):
     assert _render(source, _ctx, policy) == expected
 
 
-def test_flag_off_is_unchanged_and_the_flag_is_live(people, monkeypatch):
+def test_flag_off_is_unchanged_and_the_flag_is_live(people):
     """Non-vacuity: the explicit default path still renders the filtered rebinding empty with
-    the flag off (the declared gap), and the flag turns it into Django's answer. #4290's JIT of
-    a single Model answers it too, so its gate is off here."""
-    from djust.mixins import rust_bridge
-
-    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
+    the flag off (the declared gap), and the flag turns it into Django's answer."""
     source = "{% with q=u|default:u %}{{ q.groups.count }}{% endwith %}"
     assert _render(source, _ctx, flag=False) == ""
     assert _render(source, _ctx, flag=True) == "2"
@@ -159,9 +155,6 @@ def test_fail_closed_when_floor_raises(people, monkeypatch):
 
     def boom(*a, **k):
         raise RuntimeError("floor refused")
-
-    # The normalized dict (#4290's gate off), which has no ``groups.count``.
-    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
 
     source = "{% with q=u|default:u %}[{{ q.groups.count }}]{{ q.password }}{% endwith %}"
     off = _render(source, _ctx, flag=False)

@@ -235,12 +235,8 @@ def test_the_overlay_keeps_the_row_cap(world, policy):
     assert on == off == "[staff,][staff,][]"
 
 
-def test_the_overlay_still_serves_a_filtered_rebinding(world, monkeypatch):
-    """Non-vacuity: the keys the overlay keeps still get their handle (the declared change).
-    #4290's JIT of a single Model answers the rebinding as well, so its gate is off here."""
-    from djust.mixins import rust_bridge
-
-    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
+def test_the_overlay_still_serves_a_filtered_rebinding(world):
+    """Non-vacuity: the keys the overlay keeps still get their handle (the declared change)."""
     source = "{% with q=u|default:u %}{{ q.groups.count }}{% endwith %}"
     assert _render(source, _one, "explicit", flag=True) == "2"
     assert _render(source, _one, "explicit", flag=False) == ""

@@ -121,12 +121,7 @@ def test_queryset_reads_are_unchanged(world, policy, name, source):
     assert on not in ("", "|", ":"), on
 
 
-def test_the_harness_sees_the_flag(world, monkeypatch):
-    # #4290 serializes a single Model through the JIT, which answers this rebinding too; its
-    # gate off restores the normalized dict, whose gap the overlay is proven against.
-    from djust.mixins import rust_bridge
-
-    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
+def test_the_harness_sees_the_flag(world):
     source = MUST_DIFFER["filtered-rebinding"]
     on = _render(source, _single, "explicit", flag=True)
     off = _render(source, _single, "explicit", flag=False)

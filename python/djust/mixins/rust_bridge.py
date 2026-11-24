@@ -1330,10 +1330,19 @@ class RustBridgeMixin:
             for _key, _val in full_context.items():
                 if isinstance(_val, _DjModel):
                     _raw_models_for_sidecar[_key] = _val
-                    if _explicit and _plain_rows_take_the_jit(
-                        _val, type(_val), frozenset(), full_context
-                    ):
-                        _explicit_plain_keys.add(_key)
+                    if _explicit:
+                        if _walk_paths is None:
+                            _walk_paths = _queryset_row_walk_paths_for(self)
+                        _m_paths = _walk_paths.get(_key) or frozenset()
+                        # #4290: a Model the template reads only columns / properties off is
+                        # reduced to them. One whose relations or methods it walks keeps the
+                        # normalized dict, which the sidecar and the overlay handle answer
+                        # as before (a forward FK read whole prints its ``__str__``).
+                        if not (
+                            rows_need_live_walk(type(_val), _m_paths, full_context)
+                            or _paths_read_a_relation(type(_val), _m_paths)
+                        ) and _plain_rows_take_the_jit(_val, type(_val), _m_paths, full_context):
+                            _explicit_plain_keys.add(_key)
                     continue
                 _is_qs = isinstance(_val, _DjQuerySet)
                 if _is_qs:

@@ -147,7 +147,9 @@ the renderer `username`; `email` stays out of its state. 2.0.0rc1 to rc3
 copied every concrete field (less `djust_exclude_fields`) of a value whose
 relations the template did not walk (#4290); if you worked around that with
 `self.serialize_for_template(value, name)` in `get_context_data()`, the
-workaround is no longer needed and does no harm. A row list the template
+workaround is no longer needed and does no harm. A single Model whose
+relations or methods the template walks (`{{ person.groups.count }}`,
+`{{ order.customer }}`) keeps its full normalized fields. A row list the template
 reads no field path off (`{% regroup %}`, `{{ rows.0 }}`) keeps whole rows,
 as on 1.3, and a `dictsort:<variable>` loop
 whose variable names a property or method rather than a column keeps the
@@ -1104,4 +1106,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 41ccd4172f46 -->
+<!-- generated-doc prose-sha256: 68b5e114326c -->
