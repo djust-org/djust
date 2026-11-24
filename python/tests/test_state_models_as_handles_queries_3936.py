@@ -365,3 +365,105 @@ def test_gate_off_an_explicit_fk_loop_walks_each_row(world, monkeypatch):
     monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
     _, queries = _measure(FK_ONE_SEGMENT[0], _perms_sliced, "explicit", flag=False)
     assert queries > 5, queries
+
+
+# -- #4272: a method-read QuerySet whose rows read a forward FK whole ---------------------------
+#
+# ``{{ perms.count }}`` filed ``count`` beside the row paths, so each Rust row was one key short and
+# every row went through the codegen fallback, whose plain leaf shipped the ``ContentType`` itself;
+# ``normalize_django_value`` then auto-called its ``get_*`` methods (one query per row).
+
+COUNT_AND_FK = "{{ perms.count }}:{% for p in perms %}{{ p.content_type }};{% endfor %}"
+FK_ALONE = "{% for p in perms %}{{ p.content_type }};{% endfor %}"
+
+
+@pytest.fixture
+def fresh_jit():
+    from djust._render_caches import clear_render_caches
+    from djust.session_utils import clear_jit_cache
+
+    clear_jit_cache()
+    clear_render_caches()
+    yield
+    clear_jit_cache()
+    clear_render_caches()
+
+
+@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_a_method_read_fk_loop_queries_as_the_loop_alone(world, fresh_jit, policy, flag):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
+    out, queries = _measure(COUNT_AND_FK, _perms_sliced, policy, flag=flag)
+    _, alone = _measure(FK_ALONE, _perms_sliced, policy, flag=flag)
+    assert out == DjangoTemplate(COUNT_AND_FK).render(DjangoContext(_perms_sliced()))
+    assert queries == alone == 1, (queries, alone)
+
+
+def test_the_codegen_leaf_ships_a_related_models_text_as_rust_does(world):
+    """The codegen fallback's plain leaf and Rust ``serialize_queryset`` agree on a related model
+    read whole: its text, not the instance."""
+    from django.contrib.auth.models import Permission
+
+    from djust._rust import serialize_queryset
+    from djust.optimization.codegen import compile_serializer, generate_serializer_code
+
+    perm = Permission.objects.select_related("content_type").order_by("pk").first()
+    code = generate_serializer_code("Permission", ["content_type", "codename"], "_ser_4272")
+    row = compile_serializer(code, "_ser_4272")(perm)
+    (rust_row,) = serialize_queryset([perm], ["content_type", "codename"], None)
+    assert row["content_type"] == rust_row["content_type"] == str(perm.content_type)
+
+
+def test_gate_off_the_codegen_leaf_ships_the_instance(world, monkeypatch):
+    from django.contrib.auth.models import Permission
+
+    from djust.optimization import codegen
+
+    monkeypatch.setattr(codegen, "leaf_value", lambda value: value)
+    perm = Permission.objects.select_related("content_type").order_by("pk").first()
+    code = codegen.generate_serializer_code("Permission", ["content_type"], "_ser_4272_off")
+    row = codegen.compile_serializer(code, "_ser_4272_off")(perm)
+    assert row["content_type"] is perm.content_type
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_gate_off_a_method_read_fk_loop_is_n_plus_one(world, fresh_jit, monkeypatch, policy):
+    """Gate-off: with neither the method paths dropped nor the leaf floored, every row takes the
+    codegen fallback and auto-calls ``ContentType.get_*`` (the issue's 6 queries for 5 rows); with
+    only the leaf gated off, dropping the method paths alone keeps the loop at one query."""
+    from djust.mixins import jit
+    from djust.optimization import codegen
+
+    monkeypatch.setattr(codegen, "leaf_value", lambda value: value)
+    out, queries = _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    assert queries == 1, queries
+    monkeypatch.setattr(jit, "_method_root_row_paths", lambda model, paths: paths)
+    jit._expected_keys_cache.clear()
+    from djust.session_utils import clear_jit_cache
+
+    clear_jit_cache()
+    out_off, queries_off = _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    assert out_off == out
+    assert queries_off > 5, queries_off
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_gate_off_keeping_the_method_paths_sends_rows_through_codegen(
+    world, fresh_jit, monkeypatch, policy
+):
+    from djust.mixins import jit
+
+    compiled = []
+    real = jit.compile_serializer
+    monkeypatch.setattr(jit, "compile_serializer", lambda *a: compiled.append(a) or real(*a))
+    _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    assert compiled == []
+    monkeypatch.setattr(jit, "_method_root_row_paths", lambda model, paths: paths)
+    from djust.session_utils import clear_jit_cache
+
+    clear_jit_cache()
+    jit._expected_keys_cache.clear()
+    _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    assert compiled

@@ -36,10 +36,12 @@ logger = logging.getLogger(__name__)
 _template_hash_cache: Dict[str, str] = {}
 _TEMPLATE_HASH_CACHE_MAX = 256
 
-# Cache (template_hash, variable_name, resolved sort keys) → expected top-level key count.
-# The resolved sort keys are part of the key because the path set depends on them
-# (``dictsort:<variable>``, #3910): a count cached for one key is wrong for the next.
-_expected_keys_cache: Dict[Tuple[str, str, Tuple[str, ...]], int] = {}
+# Cache (template_hash, variable_name, row paths, resolved sort keys) → expected top-level
+# key count. The paths are part of the key (#4272): the same template and name build a
+# different path set for another model (a method name that is a model attribute stays a
+# row read) or another sort key (``dictsort:<variable>``, #3910), and a count cached for
+# one set sent every row of the next through the codegen fallback.
+_expected_keys_cache: Dict[Tuple[str, str, Tuple[str, ...], Tuple[str, ...]], int] = {}
 
 # Pre-compiled regex for {% include %} — handles normal and doubled quotes from Rust resolver
 _INCLUDE_RE = re.compile(
@@ -297,6 +299,28 @@ def queryset_method_roots(template_content: Optional[str]) -> FrozenSet[str]:
         _queryset_method_roots_cache.clear()
     _queryset_method_roots_cache[content_hash] = result
     return result
+
+
+def _method_root_row_paths(model_class: Any, paths: List[str]) -> List[str]:
+    """``paths`` without the ones a QuerySet METHOD answers (#4272).
+
+    ``{{ qs.count }}`` / ``.exists`` / ``.first.x`` / ``.last.x`` read off a
+    top-level QuerySet file ``count`` / ``first.x`` beside the row paths, but
+    the render sidecar answers them (:func:`queryset_method_roots`), not the
+    rows. Left in, they made each row one key short of what the Rust
+    serializer ships, which sent every row through the codegen fallback (and
+    a forward FK read whole through ``normalize_django_value``, which
+    auto-calls the related model's ``get_*`` methods: one query per row). A
+    model attribute of the same name is a row read and stays (the same rule
+    as Rust ``all_is_read_through_methods``).
+    """
+    kept = []
+    for path in paths:
+        head = path.split(".", 1)[0]
+        if head in ALL_CHAIN_METHODS and not hasattr(model_class, head):
+            continue
+        kept.append(path)
+    return kept
 
 
 _queryset_row_walk_cache: Dict[str, Dict[str, FrozenSet[str]]] = {}
@@ -574,6 +598,7 @@ def clear_template_source_caches() -> None:
     _template_hash_cache.clear()
     _variable_extraction_cache.clear()
     _item_key_only_cache.clear()
+    _expected_keys_cache.clear()
 
 
 def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]]:
@@ -1276,6 +1301,14 @@ class JITMixin:
             paths_for_var, key_variables = split_variable_keys(
                 _paths_for_variable(variable_paths_map, variable_name)
             )
+            if "." not in variable_name and variable_name in queryset_method_roots(
+                template_content
+            ):
+                # Only beside a row read: a template reading nothing but methods keeps
+                # them, so the rows stay as small as before (never every column).
+                paths_for_var = (
+                    _method_root_row_paths(queryset.model, paths_for_var) or paths_for_var
+                )
             # Only beside field reads: rows read whole carry every column already.
             sort_keys = (
                 resolve_variable_keys(key_variables, context, queryset.model, self)
@@ -1371,7 +1404,7 @@ class JITMixin:
 
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)
-            ek_cache_key = (template_hash, variable_name, tuple(sort_keys))
+            ek_cache_key = (template_hash, variable_name, tuple(paths_for_var), tuple(sort_keys))
             if ek_cache_key not in _expected_keys_cache:
                 _expected_keys_cache[ek_cache_key] = len(
                     set(p.split(".")[0] for p in paths_for_var)
