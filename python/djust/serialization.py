@@ -253,6 +253,21 @@ class ModelName(str):
     __slots__ = ()
 
 
+def value_text(value: Any) -> str:
+    """The text Django prints for a non-model value read whole (#4269 review).
+
+    What ``render_value_in_context`` does with the active settings: a datetime in
+    the current time zone, then localized (a date, a datetime, a ``Decimal``, a
+    float), then ``str``. The text a row carries under ``__str__`` beside the
+    fields read off the same value (``{{ u.date_joined }}{{ u.date_joined.year }}``),
+    for the codegen serializer and its Rust twin alike.
+    """
+    from django.utils.formats import localize
+    from django.utils.timezone import template_localtime
+
+    return str(localize(template_localtime(value)))
+
+
 def model_identity(obj: Any) -> Dict[str, Any]:
     """The identity map standing in for a Django model — the ONLY producer.
 

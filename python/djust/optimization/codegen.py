@@ -160,6 +160,25 @@ def _is_sequence(value: Any) -> bool:
     return isinstance(value, QuerySet)
 
 
+def leaf_value(value: Any) -> Any:
+    """A plain attribute leaf as the row carries it (#4272).
+
+    A related model read whole (``{{ p.content_type }}``) ships its text, as the
+    Rust serializer's leaf does (``queryset_template_value``). Shipped as the
+    instance, it went through ``normalize_django_value``, which auto-calls the
+    related model's ``get_*`` methods (``ContentType.get_all_objects_for_this_type``):
+    one query or more per row on every sync. A ``__str__`` that raises ships
+    nothing, as Rust's leaf does.
+    """
+    if hasattr(value, "_meta") and hasattr(value, "pk") and not isinstance(value, type):
+        try:
+            return str(value)
+        except Exception:  # noqa: BLE001 -- Rust's leaf ships null for a raising __str__
+            logger.debug("__str__() failed during serialization")
+            return None
+    return value
+
+
 #: The path-tree key that records a node's own name is ALSO read whole (#3788).
 #: Only an ``all`` node carries it. It is never an attribute: the helpers that
 #: list a node's names skip it, as they skip ``__list_item__``.
@@ -179,7 +198,8 @@ def add_row_text(value: Any, row: Dict[str, Any]) -> None:
 
     A model gets its identity map (``model_identity``, the one producer: ``id``,
     ``pk``, ``__str__``, ``__model__``), so the renderer prints ``__str__`` and
-    treats the map as a model rather than a dict. Anything else gets its text.
+    treats the map as a model rather than a dict. Anything else gets the text Django
+    prints for it (``value_text``: a date localized, #4269 review).
     Keys the paths already filled win. A ``__str__`` that raises leaves the
     text out, as a whole-row serializer does. The Rust twin is
     ``serialize_object_with_paths``.
@@ -190,7 +210,9 @@ def add_row_text(value: Any, row: Dict[str, Any]) -> None:
 
             extra = model_identity(value)
         else:
-            extra = {ROW_TEXT_KEY: str(value)}
+            from djust.serialization import value_text
+
+            extra = {ROW_TEXT_KEY: value_text(value)}
     except Exception:  # noqa: BLE001 — a whole-row serializer leaves the text out too
         logger.debug("__str__() failed during serialization")
         return
@@ -726,7 +748,7 @@ def _generate_nested_access(
                 )
             else:
                 # Direct attribute
-                lines.append(f"{ind}    {result_var}['{root_attr}'] = {obj_access}")
+                lines.append(f"{ind}    {result_var}['{root_attr}'] = _djust_leaf({obj_access})")
         return
 
     # Process nested tree
@@ -927,7 +949,9 @@ def _generate_nested_access(
                 )
             else:
                 # Direct attribute
-                lines.append(f"{ind}    {dict_path_full}['{attr_name}'] = {obj_access}")
+                lines.append(
+                    f"{ind}    {dict_path_full}['{attr_name}'] = _djust_leaf({obj_access})"
+                )
 
 
 def _row_text_line(lines: List[str], indent: int, obj_var: str, dict_path: str) -> None:
@@ -984,6 +1008,7 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         "_djust_all_methods": all_methods_value,
         "_djust_all_rows": capped_all_rows,
         "_djust_row_text": add_row_text,
+        "_djust_leaf": leaf_value,
     }
 
     try:

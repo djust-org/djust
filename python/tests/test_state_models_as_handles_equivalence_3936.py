@@ -15,6 +15,8 @@ import re
 
 import pytest
 from django.contrib.auth.models import User
+from django.template import Context as DjangoContext
+from django.template import Template as DjangoTemplate
 
 from python.tests.test_queryset_all_traversal_3777 import CASES, world  # noqa: F401
 from python.tests.test_sliced_list_of_models_3888 import FILTERED, READS, UNFILTERED
@@ -113,11 +115,9 @@ QUERYSET_READS = [
 def test_queryset_reads_are_unchanged(world, policy, name, source):
     on = _render(source, _user_qs, policy, flag=True)
     assert on == _render(source, _user_qs, policy, flag=False)
-    if name.startswith("qs-top-all"):
-        # ``users.all`` on a top-level QuerySet held in state renders empty on a LiveView with the
-        # overlay on or off (Django: the rows). Pre-existing, outside this flag; pinned as equal.
-        assert on in ("", "0"), on
-        return
+    # ``users.all`` on a top-level QuerySet held in state rendered empty, overlay on or off; it
+    # renders Django's rows and count since #4270.
+    assert on == DjangoTemplate(source).render(DjangoContext(_user_qs())), on
     assert on not in ("", "|", ":"), on
 
 

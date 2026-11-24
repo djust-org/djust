@@ -88,6 +88,12 @@ FORWARD_FK = [
     ("fk-single-unsliced", "{% for p in perms %}{{ p.content_type }};{% endfor %}", _perms),
     ("fk-dotted", "{% for p in perms %}{{ p.content_type.model }};{% endfor %}", _perms_sliced),
     ("fk-model", "{{ p.content_type }}|{{ p.content_type.app_label }}", _perm),
+    # #4269: printed whole AND read by field
+    (
+        "fk-whole-and-dotted",
+        "{% for p in perms %}{{ p.content_type }} {{ p.content_type.model }};{% endfor %}",
+        _perms_sliced,
+    ),
 ]
 
 PROBES = (
@@ -134,9 +140,15 @@ PROBES = (
             _one,
         ),
         ("model-column", "{{ u.username }}", _one),
-        # review S4: the QuerySet spelled through ``.all`` and through a ``{% with %}`` alias
+        # review S4: the QuerySet spelled through ``.all`` (#4270) and through a ``{% with %}`` alias
         ("qs-top-all", "{% for u in users.all %}{{ u.username }};{% endfor %}", _qs),
         ("qs-top-all-count", "{{ users.all.count }}", _qs),
+        (
+            "qs-top-all-reads",
+            "{{ users.all.0.username }}|{{ users.all|length }}|{{ users.all.first.username }}|"
+            "{% for u in users.all %}{{ u.groups.count }}{{ u.password }};{% endfor %}",
+            _qs,
+        ),
         ("qs-with-count", "{% with x=users %}{{ x.count }}{% endwith %}", _qs),
         (
             "qs-with-loop-walk",
@@ -145,6 +157,8 @@ PROBES = (
         ),
     ]
 )
+
+PROBES_BY_NAME = {name: source for name, source, _ in PROBES}
 
 
 def _measure(source: str, factory, policy: str, flag: bool, twice: bool = False) -> tuple[str, int]:
@@ -207,14 +221,55 @@ DJANGO_ANSWERS = {
     "qs-nested-all": "staff,ops,;staff,;;",
     "qs-row-count": "2;1;0;",
     "qs-loop-and-method": "staff,ops,2;staff,1;0;",
+    # #4270: empty on both policies before
+    "qs-top-all": "u0;u1;u2;",
+    "qs-top-all-count": "3",
+    # the password stays floored (Django prints the hash; the floor is the documented difference)
+    "qs-top-all-reads": "u0|3|u0|2;1;0;",
+    # #4271: a legacy view read a ``.values()`` row's keys empty (``;;;``)
+    "values-loop": "u0;u1;u2;",
+    "values-length": "3",
+    "values-index": "u0",
+    "values-flat-loop": "u0;u1;u2;",
+    "values-flat-length": "3",
+    "values-flat-index": "u0",
+    "values-pairs-loop": "u0;u1;u2;",
+    "values-pairs-length": "3",
 }
 
 
+@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
 @pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("name", sorted(DJANGO_ANSWERS))
-def test_the_overlay_keeps_djangos_answer(world, policy, name):
+def test_the_overlay_keeps_djangos_answer(world, policy, name, flag):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
     source, factory = next((s, f) for n, s, f in PROBES if n == name)
-    assert _render(source, factory, policy, flag=True) == DJANGO_ANSWERS[name]
+    if "password" not in source:
+        assert DjangoTemplate(source).render(DjangoContext(factory())) == DJANGO_ANSWERS[name]
+    assert _render(source, factory, policy, flag=flag) == DJANGO_ANSWERS[name]
+
+
+def test_gate_off_without_all_as_a_root_method_users_all_renders_empty(world, monkeypatch):
+    """Gate-off (#4270): with ``all`` not a QuerySet root method, the sidecar does not hold the
+    QuerySet and ``users.all`` reads the serialized row list, which has no ``all``."""
+    from djust._render_caches import clear_render_caches
+    from djust.mixins import jit
+    from djust.optimization.codegen import ALL_CHAIN_METHODS
+    from djust.session_utils import clear_jit_cache
+
+    monkeypatch.setattr(jit, "QUERYSET_ROOT_METHODS", ALL_CHAIN_METHODS)
+    monkeypatch.setattr(jit, "_queryset_method_roots_cache", {})
+    clear_jit_cache()
+    clear_render_caches()
+    try:
+        for policy in ("explicit", "legacy"):
+            assert _render("{{ users.all.count }}", _qs, policy) == ""
+            assert _render(PROBES_BY_NAME["qs-top-all"], _qs, policy) == ""
+    finally:
+        clear_jit_cache()
+        clear_render_caches()
 
 
 @pytest.mark.parametrize("policy", ["explicit", "legacy"])
@@ -365,3 +420,276 @@ def test_gate_off_an_explicit_fk_loop_walks_each_row(world, monkeypatch):
     monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
     _, queries = _measure(FK_ONE_SEGMENT[0], _perms_sliced, "explicit", flag=False)
     assert queries > 5, queries
+
+
+# -- #4272: a method-read QuerySet whose rows read a forward FK whole ---------------------------
+#
+# ``{{ perms.count }}`` filed ``count`` beside the row paths, so each Rust row was one key short and
+# every row went through the codegen fallback, whose plain leaf shipped the ``ContentType`` itself;
+# ``normalize_django_value`` then auto-called its ``get_*`` methods (one query per row).
+
+COUNT_AND_FK = "{{ perms.count }}:{% for p in perms %}{{ p.content_type }};{% endfor %}"
+FK_ALONE = "{% for p in perms %}{{ p.content_type }};{% endfor %}"
+
+
+@pytest.fixture
+def fresh_jit():
+    from djust._render_caches import clear_render_caches
+    from djust.session_utils import clear_jit_cache
+
+    clear_jit_cache()
+    clear_render_caches()
+    yield
+    clear_jit_cache()
+    clear_render_caches()
+
+
+@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_a_method_read_fk_loop_queries_as_the_loop_alone(world, fresh_jit, policy, flag):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
+    out, queries = _measure(COUNT_AND_FK, _perms_sliced, policy, flag=flag)
+    _, alone = _measure(FK_ALONE, _perms_sliced, policy, flag=flag)
+    assert out == DjangoTemplate(COUNT_AND_FK).render(DjangoContext(_perms_sliced()))
+    assert queries == alone == 1, (queries, alone)
+
+
+def test_the_codegen_leaf_ships_a_related_models_text_as_rust_does(world):
+    """The codegen fallback's plain leaf and Rust ``serialize_queryset`` agree on a related model
+    read whole: its text, not the instance."""
+    from django.contrib.auth.models import Permission
+
+    from djust._rust import serialize_queryset
+    from djust.optimization.codegen import compile_serializer, generate_serializer_code
+
+    perm = Permission.objects.select_related("content_type").order_by("pk").first()
+    code = generate_serializer_code("Permission", ["content_type", "codename"], "_ser_4272")
+    row = compile_serializer(code, "_ser_4272")(perm)
+    (rust_row,) = serialize_queryset([perm], ["content_type", "codename"], None)
+    assert row["content_type"] == rust_row["content_type"] == str(perm.content_type)
+
+
+def test_gate_off_the_codegen_leaf_ships_the_instance(world, monkeypatch):
+    from django.contrib.auth.models import Permission
+
+    from djust.optimization import codegen
+
+    monkeypatch.setattr(codegen, "leaf_value", lambda value: value)
+    perm = Permission.objects.select_related("content_type").order_by("pk").first()
+    code = codegen.generate_serializer_code("Permission", ["content_type"], "_ser_4272_off")
+    row = codegen.compile_serializer(code, "_ser_4272_off")(perm)
+    assert row["content_type"] is perm.content_type
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_gate_off_a_method_read_fk_loop_is_n_plus_one(world, fresh_jit, monkeypatch, policy):
+    """Gate-off: with neither the method paths dropped nor the leaf floored, every row takes the
+    codegen fallback and auto-calls ``ContentType.get_*`` (the issue's 6 queries for 5 rows); with
+    only the leaf gated off, dropping the method paths alone keeps the loop at one query."""
+    from djust.mixins import jit
+    from djust.optimization import codegen
+
+    monkeypatch.setattr(codegen, "leaf_value", lambda value: value)
+    out, queries = _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    assert queries == 1, queries
+    monkeypatch.setattr(jit, "_method_root_row_paths", lambda model, paths: paths)
+    from djust.session_utils import clear_jit_cache
+
+    clear_jit_cache()
+    out_off, queries_off = _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    assert out_off == out
+    assert queries_off > 5, queries_off
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_gate_off_keeping_the_method_paths_sends_rows_through_codegen(
+    world, fresh_jit, monkeypatch, policy
+):
+    from djust.mixins import jit
+
+    compiled = []
+    real = jit.compile_serializer
+    monkeypatch.setattr(jit, "compile_serializer", lambda *a: compiled.append(a) or real(*a))
+    _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    assert compiled == []
+    monkeypatch.setattr(jit, "_method_root_row_paths", lambda model, paths: paths)
+    from djust.session_utils import clear_jit_cache
+
+    clear_jit_cache()
+    _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    assert compiled
+
+
+# -- #4271: a legacy view reads a projection's rows as Django does ------------------------------
+
+
+def test_a_legacy_projection_keeps_its_count_key(world):
+    """The legacy ``<name>_count`` key still counts a projection the JIT now leaves alone, with the
+    one query the loop already runs."""
+    source = "{{ rows_count }}|{% for r in rows %}{{ r.username }};{% endfor %}"
+    assert _measure(source, _values, "legacy", flag=True) == ("3|u0;u1;u2;", 1)
+
+
+@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
+def test_gate_off_a_legacy_projection_through_the_jit_reads_empty(world, monkeypatch, flag):
+    from djust._render_caches import clear_render_caches
+    from djust.mixins import context
+    from djust.session_utils import clear_jit_cache
+
+    monkeypatch.setattr(context, "_projection_skips_the_jit", lambda qs: False)
+    clear_jit_cache()
+    clear_render_caches()
+    try:
+        source = PROBES_BY_NAME["values-loop"]
+        assert _render(source, _values, "legacy", flag=flag) == ";;;"
+        assert _render(source, _values, "explicit", flag=flag) == "u0;u1;u2;"
+    finally:
+        clear_jit_cache()
+        clear_render_caches()
+
+
+# -- #4269: a related object printed whole beside a field read off it -------------------------
+
+FK_WHOLE_AND_DOTTED = PROBES_BY_NAME["fk-whole-and-dotted"]
+
+
+def _perms_list() -> dict:
+    from django.contrib.auth.models import Permission
+
+    return {"perms": list(Permission.objects.order_by("pk")[:5])}
+
+
+@pytest.mark.parametrize("factory", [_perms_sliced, _perms_list], ids=["queryset", "list"])
+@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_a_related_object_read_whole_and_by_field_prints_its_text(
+    world, fresh_jit, policy, flag, factory
+):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
+    want = DjangoTemplate(FK_WHOLE_AND_DOTTED).render(DjangoContext(factory()))
+    assert want.startswith("Administration | log entry logentry;"), want
+    assert _render(FK_WHOLE_AND_DOTTED, factory, policy, flag=flag) == want
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_gate_off_without_the_nested_text_path_the_row_prints_a_dict(
+    world, fresh_jit, monkeypatch, policy
+):
+    """Gate-off: with the extractor's nested ``__str__`` paths stripped, the nested dict holds only
+    ``model`` and prints as one, the issue's ``{'model': 'logentry'}``."""
+    from djust.mixins import jit
+
+    real = jit._cached_extract_template_variables
+
+    def without_nested_text(template_content):
+        found = real(template_content)
+        if found is None:
+            return None
+        return {
+            name: [path for path in paths if not path.endswith("." + jit.ROW_TEXT_PATH)]
+            for name, paths in found.items()
+        }
+
+    monkeypatch.setattr(jit, "_cached_extract_template_variables", without_nested_text)
+    assert "{'model': 'logentry'}" in _render(FK_WHOLE_AND_DOTTED, _perms_sliced, policy)
+
+
+# -- review (#4270): ``users.all`` answers from the rows the JIT fetched ------------------------
+
+ALL_QUERY_COUNTS = [
+    ("all-count", "{{ users.all.count }}", 1),
+    ("all-loop", "{% for u in users.all %}{{ u.username }};{% endfor %}", 1),
+    (
+        "all-nested-all",
+        "{% for u in users.all %}{% for g in u.groups.all %}{{ g.name }},{% endfor %};{% endfor %}",
+        2,
+    ),
+    (
+        "plain-nested-all",
+        "{% for u in users %}{% for g in u.groups.all %}{{ g.name }},{% endfor %};{% endfor %}",
+        2,
+    ),
+    (
+        "all-count-beside-loop",
+        "{{ users.all.count }}|{% for u in users %}{{ u.username }};{% endfor %}",
+        1,
+    ),
+]
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("name,source,want", ALL_QUERY_COUNTS, ids=[c[0] for c in ALL_QUERY_COUNTS])
+def test_users_all_queries_as_users_does(world, fresh_jit, policy, name, source, want):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
+    out, queries = _measure(source, _qs, policy, flag=True)
+    assert out == DjangoTemplate(source).render(DjangoContext(_qs()))
+    assert queries == want, queries
+
+
+def test_the_held_queryset_leaves_the_state_queryset_alone(world):
+    from djust.mixins.jit import held_evaluated_queryset
+
+    state = User.objects.order_by("pk")
+    evaluated = state.all()
+    list(evaluated)
+    held = held_evaluated_queryset(evaluated)
+    assert held.all() is held and held is not evaluated
+    assert "all" not in vars(evaluated) and "all" not in vars(state)
+    assert state._result_cache is None
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_gate_off_a_fresh_all_re_queries(world, fresh_jit, monkeypatch, policy):
+    from djust.mixins import jit
+
+    monkeypatch.setattr(jit, "_answers_all_from_its_rows", lambda rows: False)
+    _, source, _ = ALL_QUERY_COUNTS[2]
+    assert _measure(source, _qs, policy, flag=True)[1] == 4
+    assert _measure(ALL_QUERY_COUNTS[0][1], _qs, policy, flag=True)[1] == 2
+
+
+# -- review (#4272): a QuerySet read only through its methods builds no serializer -------------
+
+METHODS_ONLY = [
+    "{{ users.count }}",
+    "{{ users.all.count }}",
+    "{% for u in users.all %}{{ u }};{% endfor %}",
+    "{{ users.count }}|{{ users.0 }}|{{ users|length }}",
+]
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("source", METHODS_ONLY)
+def test_a_methods_only_queryset_builds_no_serializer(
+    world, fresh_jit, monkeypatch, policy, source
+):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
+    from djust.mixins import jit
+
+    compiled = []
+    real = jit.compile_serializer
+    monkeypatch.setattr(jit, "compile_serializer", lambda *a: compiled.append(a) or real(*a))
+    for twice in (False, True):
+        out, queries = _measure(source, _qs, policy, flag=True, twice=twice)
+        assert out == DjangoTemplate(source).render(DjangoContext(_qs()))
+    assert compiled == []
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_gate_off_methods_only_rows_take_the_codegen(world, fresh_jit, monkeypatch, policy):
+    from djust.mixins import jit
+
+    compiled = []
+    real = jit.compile_serializer
+    monkeypatch.setattr(jit, "compile_serializer", lambda *a: compiled.append(a) or real(*a))
+    monkeypatch.setattr(jit, "_method_root_row_paths", lambda model, paths: paths)
+    _measure("{{ users.count }}", _qs, policy, flag=True)
+    assert compiled
