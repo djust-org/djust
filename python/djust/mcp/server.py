@@ -1229,7 +1229,7 @@ def create_server() -> "FastMCP":
                             "fix": (
                                 "Add @event_handler() decorator:\n"
                                 "@event_handler()\n"
-                                "def %s(self, ..., **kwargs):" % item.name
+                                "def %s(self, <declared, typed parameters>):" % item.name
                             ),
                         }
                     )
@@ -1498,7 +1498,7 @@ def create_server() -> "FastMCP":
         if "search" in feature_set:
             lines.append("")
             lines.append("    @event_handler()")
-            lines.append("    def search(self, value: str = '', **kwargs):")
+            lines.append("    def search(self, value: str = ''):")
             lines.append("        self.search_query = value")
             lines.append("        self.page = 1" if "pagination" in feature_set else "")
             lines.append("        self._refresh()")
@@ -1506,25 +1506,25 @@ def create_server() -> "FastMCP":
         if "crud" in feature_set:
             lines.append("")
             lines.append("    @event_handler()")
-            lines.append("    def select_item(self, item_id: int = 0, **kwargs):")
+            lines.append("    def select_item(self, item_id: int = 0):")
             lines.append("        self.selected_item = Item.objects.filter(pk=item_id).first()")
             lines.append("")
             lines.append("    @event_handler()")
-            lines.append("    def delete_item(self, item_id: int = 0, **kwargs):")
+            lines.append("    def delete_item(self, item_id: int = 0):")
             lines.append("        Item.objects.filter(pk=item_id).delete()")
             lines.append("        self._refresh()")
 
         if "pagination" in feature_set:
             lines.append("")
             lines.append("    @event_handler()")
-            lines.append("    def go_to_page(self, page: int = 1, **kwargs):")
+            lines.append("    def go_to_page(self, page: int = 1):")
             lines.append("        self.page = page")
             lines.append("        self._refresh()")
 
         if "streaming" in feature_set:
             lines.append("")
             lines.append("    @event_handler()")
-            lines.append("    def stream_update(self, content: str = '', **kwargs):")
+            lines.append("    def stream_update(self, content: str = ''):")
             lines.append("        self.stream_to('output', content)")
 
         # get_context_data
@@ -1612,9 +1612,9 @@ def create_server() -> "FastMCP":
 
         # Build signature
         if params:
-            lines.append("    def %s(self, %s, **kwargs):" % (handler_name, params))
+            lines.append("    def %s(self, %s):" % (handler_name, params))
         else:
-            lines.append("    def %s(self, **kwargs):" % handler_name)
+            lines.append("    def %s(self):" % handler_name)
 
         lines.append("        # TODO: implement")
         lines.append("        self._refresh()")

@@ -127,7 +127,7 @@ class CounterWidget(LiveComponent):
         self.count = count
 
     @event_handler()
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
         self.trigger_update()
         self.send_parent("count_changed", {"count": self.count})

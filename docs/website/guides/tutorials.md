@@ -361,16 +361,16 @@ class OnboardingView(TutorialMixin, LiveView):
     ]
 
     @event_handler
-    def create_project(self, **kwargs):
+    def create_project(self):
         Project.objects.create(owner=self.request.user)
 
     @event_handler
-    def save_title(self, title: str, **kwargs):
+    def save_title(self, title: str):
         self.project.title = title
         self.project.save()
 
     @event_handler
-    def send_invite(self, email: str, **kwargs):
+    def send_invite(self, email: str):
         Invitation.objects.create(project=self.project, email=email)
 ```
 
@@ -401,7 +401,7 @@ class AdaptiveTutorial(TutorialMixin, LiveView):
 
     @event_handler
     @background
-    async def start_tutorial(self, **kwargs):
+    async def start_tutorial(self):
         if self.tutorial_running:
             return
         self.tutorial_running = True

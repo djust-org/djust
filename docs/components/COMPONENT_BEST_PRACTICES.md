@@ -134,7 +134,7 @@ template = """
         {% for item in items %}
         <li class="{% if item.done %}completed{% endif %}">
             {{ item.text }}
-            <button dj-click="toggle_item" data-id="{{ item.id }}">✓</button>
+            <button dj-click="toggle_item" dj-value-id="{{ item.id }}">✓</button>
         </li>
         {% endfor %}
     </ul>
@@ -158,7 +158,7 @@ class TabsComponent(LiveComponent):
         <ul class="nav nav-tabs">
             {% for tab in tabs %}
             <li class="nav-item">
-                <button dj-click="switch_tab" data-tab="{{ tab.id }}"
+                <button dj-click="switch_tab" dj-value-tab="{{ tab.id }}"
                         class="nav-link {% if tab.id == active %}active{% endif %}">
                     {{ tab.label }}
                 </button>

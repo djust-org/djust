@@ -318,7 +318,7 @@ class HelloView(LiveView):
     name = state("World")
 
     @event_handler()
-    def update_name(self, value: str = "", **kwargs):
+    def update_name(self, value: str = ""):
         self.name = value
 ```
 

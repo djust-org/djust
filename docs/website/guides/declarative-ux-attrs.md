@@ -438,7 +438,7 @@ The skeleton integrates with the existing [async work patterns](loading-states.m
 ```python
 class ReportView(LiveView):
     @event_handler
-    def generate_report(self, **kwargs):
+    def generate_report(self):
         self.loading = True
         self.start_async(self._build)
 
@@ -610,7 +610,7 @@ native `close` event, and reset the flag there:
 
 ```python
 @event_handler
-def close_modal(self, **kwargs):
+def close_modal(self):
     self.modal_open = False
 ```
 
@@ -661,7 +661,7 @@ the browser's native form-submit (full page navigation, no AJAX):
 ```python
 class CheckoutView(LiveView):
     @event_handler
-    def pay(self, **kwargs):
+    def pay(self):
         result = stripe.PaymentIntent.create(...)
         if result.ok:
             self.trigger_submit('#stripe-form')   # client posts the form natively
@@ -733,7 +733,7 @@ class ChatView(LiveView):
         return {**super().get_context_data(**kwargs), "messages": self.messages}
 
     @event_handler
-    def send(self, value: str = "", **kwargs):
+    def send(self, value: str = ""):
         self.messages = [*self.messages, value]
         self.composer = ""   # cleared server-side…
 ```

@@ -46,7 +46,7 @@ class TabbedView(LiveView):
     notes_visible = state(False)
 
     @event_handler
-    def switch_tab(self, tab: str = "", **kwargs):
+    def switch_tab(self, tab: str = ""):
         self.profile_visible = tab == "profile"
         self.notes_visible = tab == "notes"
 ```
@@ -236,7 +236,7 @@ Auth runs in **two phases** and it's important to keep them distinct:
   <!-- doc-snippet-check: skip -->
   ```python
   @event_handler()
-  def purchase(self, **kwargs):
+  def purchase(self):
       if not self.is_activity_visible("checkout"):
           return  # or raise / log
       ...

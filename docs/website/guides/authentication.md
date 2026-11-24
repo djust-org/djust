@@ -286,19 +286,19 @@ class ProjectView(LiveView):
     login_required = True
 
     @event_handler()
-    def search(self, query: str = "", **kwargs):
+    def search(self, query: str = ""):
         # Any authenticated user can search
         self.results = Project.objects.filter(name__icontains=query)
 
     @permission_required("projects.delete_project")
     @event_handler()
-    def delete_project(self, project_id: int, **kwargs):
+    def delete_project(self, project_id: int):
         # Only users with delete permission
         Project.objects.get(pk=project_id).delete()
 
     @permission_required(AnyOf("projects.archive_project", "projects.delete_project"))
     @event_handler()
-    def archive_project(self, project_id: int, **kwargs):
+    def archive_project(self, project_id: int):
         # Users with either permission
         ...
 ```

@@ -518,7 +518,7 @@ class OrderView(LiveView):
 # After: render the message into <p role="status" aria-live="polite">{{ status }}</p>
 class OrderView(LiveView):
     @event_handler()
-    def save(self, **kwargs):
+    def save(self):
         self.status = "Order saved"
         self.push_commands(JS.focus("#order-summary"))
 ```
@@ -577,23 +577,23 @@ from djust.decorators import client_state, event_handler, optimistic
 
 @optimistic
 @event_handler
-def increment(self, **kwargs):
+def increment(self):
     self.count += 1
 
 @client_state(keys=["filter"])  # removed in 2.0, #4006
 @event_handler
-def update_filter(self, filter: str = "", **kwargs):
+def update_filter(self, filter: str = ""):
     self.filter = filter
 
 # After
 from djust.decorators import event_handler
 
 @event_handler
-def increment(self, **kwargs):
+def increment(self):
     self.count += 1
 
 @event_handler
-def update_filter(self, filter: str = "", **kwargs):
+def update_filter(self, filter: str = ""):
     self.filter = filter
 ```
 
@@ -727,7 +727,7 @@ class Counter(LiveView):
         self.count = 0
 
     @event_handler
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
 ```
 

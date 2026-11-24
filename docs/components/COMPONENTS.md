@@ -62,7 +62,7 @@ class TodoList(LiveComponent):
         <ul>
         {% for item in items %}
             <li>
-                <input type="checkbox" dj-change="toggle" data-id="{{ item.id }}">
+                <input type="checkbox" dj-change="toggle" dj-value-id="{{ item.id }}">
                 {{ item.text }}
             </li>
         {% endfor %}
@@ -73,7 +73,7 @@ class TodoList(LiveComponent):
         self.items = items or []
 
     @event_handler()
-    def toggle(self, id: int = 0, **kwargs):
+    def toggle(self, id: int = 0):
         item = next((i for i in self.items if i['id'] == id), None)
         if item is None:
             return
@@ -361,14 +361,14 @@ class FilterWidget(LiveComponent):
             self.items = items
 
     @event_handler()
-    def on_search(self, value: str = "", **kwargs):
+    def on_search(self, value: str = ""):
         """Handle search input"""
         self.search_query = value
         # Notify parent of filter change
         self.send_parent("filter_changed", self._get_filter_state())
 
     @event_handler()
-    def on_category_change(self, value: str = "", **kwargs):
+    def on_category_change(self, value: str = ""):
         """Handle category selection"""
         self.selected_category = value
         self.send_parent("filter_changed", self._get_filter_state())

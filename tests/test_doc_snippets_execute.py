@@ -36,7 +36,7 @@ needs arguments is fired with the ones its template binding sends
 run, not only parsed. 1.3 code that a migration guide shows as the thing being
 replaced carries ``<!-- doc-snippet-check: before -->`` and is not executed.
 ``test_docs_pass_event_arguments_as_dj_value`` reads every template in
-``docs/website`` for an event argument passed as ``data-*``.
+the teaching docs for an event argument passed as ``data-*``.
 
 Outcomes that are not doc defects are *not* failures and are recorded as
 such: a block importing the reader's own app or a library the test env lacks,
@@ -116,7 +116,7 @@ DOC_FILES = [path for path in DOC_FILES if not _DATED_RECORD.search(path.name)]
 KNOWN_FAILURES: dict[str, str] = {
     # --- deliberate ---
     # was docs/website/guides/error-overlay.md line 44
-    "docs/website/guides/error-overlay.md@7a3e8f4c": (
+    "docs/website/guides/error-overlay.md@18289390": (
         "deliberate: OrderView.charge raises ValueError('amount must be positive') to show what "
         "the overlay displays; fired with no args, amount=0 takes that branch"
     ),
@@ -1483,6 +1483,15 @@ _BEFORE_FENCE_RE = re.compile(
     r"^<!-- doc-snippet-check: (?:before|anti-pattern) -->\n(```+)[^\n]*\n.*?^\1\s*$",
     re.DOTALL | re.MULTILINE,
 )
+#: An event attribute whose element may carry an argument: the ones fired above
+#: plus the ones that bind without a click (#4235).
+_ARGUMENT_EVENT_ATTR = (
+    r"dj-(?:click|dblclick|submit|change|input|keydown|keyup|keypress|blur|focus"
+    r"|mouseenter|mouseleave|paste|click-away|mounted|shortcut|(?:window|document)-[a-z]+)"
+    r"(?:\.[A-Za-z0-9_.-]+)?"
+)
+#: Every teaching document, in and out of docs/website (#4235).
+_SCANNED_DOCS = sorted({*DOC_FILES, *REPO_ROOT.glob("docs/website/*.md")})
 _WEBSITE_DOCS = sorted(
     {*REPO_ROOT.glob("docs/website/*.md"), *REPO_ROOT.glob("docs/website/*/*.md")}
 )
@@ -1501,7 +1510,7 @@ def data_argument_findings(text: str) -> list[str]:
     findings = []
     for tag in _TAG_RE.finditer(text):
         attrs = _attrs(tag.group(0))
-        if not any(re.fullmatch(_EVENT_ATTR, a) for a in attrs):
+        if not any(re.fullmatch(_ARGUMENT_EVENT_ATTR, a) for a in attrs):
             continue
         arguments = [a for a in attrs if a.startswith("data-") and not _DATA_MARKERS.match(a)]
         if arguments:
@@ -1513,6 +1522,15 @@ def data_argument_findings(text: str) -> list[str]:
 def test_data_argument_scan_finds_a_data_argument_and_spares_markers():
     assert data_argument_findings('<button dj-click="delete" data-item-id="5">x</button>')
     assert data_argument_findings('<button\n  dj-click="go"\n  data-dj-tab="a">x</button>')
+    for tag in (
+        '<div dj-click-away="close" data-menu="m">',
+        '<div dj-mounted="init" data-chart-id="1">',
+        '<div dj-shortcut="escape:close" data-x="1">',
+        '<div dj-window-keydown.escape="close" data-x="1">',
+        '<div dj-document-scroll="s" data-a="1">',
+    ):
+        assert data_argument_findings(tag), tag
+    assert set(DOC_FILES) <= set(_SCANNED_DOCS)
     assert not data_argument_findings('<button dj-click="delete" dj-value-item-id="5">x</button>')
     assert not data_argument_findings(
         '<button dj-click="inc" data-component-id="c1">+</button>'
@@ -1528,7 +1546,7 @@ def test_data_argument_scan_finds_a_data_argument_and_spares_markers():
 
 
 @pytest.mark.parametrize(
-    "path", _WEBSITE_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _WEBSITE_DOCS]
+    "path", _SCANNED_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _SCANNED_DOCS]
 )
 def test_docs_pass_event_arguments_as_dj_value(path):
     """#4188: every example passes event arguments the 2.0 way, ``dj-value-*``."""
@@ -1617,7 +1635,7 @@ def test_dj_value_pin_finds_an_undeclared_argument():
 
 
 @pytest.mark.parametrize(
-    "path", _WEBSITE_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _WEBSITE_DOCS]
+    "path", _SCANNED_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _SCANNED_DOCS]
 )
 def test_dj_value_arguments_match_the_documented_handler(path):
     """#4188: a ``dj-value-*`` argument a guide's markup sends is declared by its handler."""
@@ -1625,6 +1643,71 @@ def test_dj_value_arguments_match_the_documented_handler(path):
     assert not findings, (
         f"{path.relative_to(REPO_ROOT)} sends dj-value-* arguments its own handler does not "
         "declare, which strict dispatch refuses:\n  " + "\n  ".join(findings)
+    )
+
+
+_HANDLER_DECORATOR = re.compile(r"\b(event_handler|server_function|action)\b")
+
+
+def absorbing_catch_alls(text: str) -> list[str]:
+    """Each handler a document defines with a ``**`` catch-all its body never reads.
+
+    A strict handler is declared by its signature (#4188). A ``**kwargs`` that is
+    only accepted and dropped opens the handler to every name and teaches the 1.3
+    rule that the 2.0 policy retired (#4239). A catch-all the body reads (a form's
+    fields, a dict of extras) is a real parameter and is left alone. A fence
+    marked ``before`` or ``anti-pattern`` is left out.
+
+    Known limits: any ``ast.Name`` reference to the catch-all counts as a read
+    (``print(kwargs)`` passes), and a decorator imported under another name is
+    not recognised, so its handler is skipped.
+    """
+    findings = []
+    for lineno, code, marker in _load_extractor()(_DocText(text)):
+        if marker in ("anti-pattern", "before"):
+            continue
+        try:
+            tree = ast.parse(textwrap.dedent(code))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            kwarg = node.args.kwarg
+            if kwarg is None:
+                continue
+            if not any(_HANDLER_DECORATOR.search(ast.unparse(d)) for d in node.decorator_list):
+                continue
+            read = any(
+                isinstance(n, ast.Name) and n.id == kwarg.arg
+                for stmt in node.body
+                for n in ast.walk(stmt)
+            )
+            if not read:
+                findings.append(f"line {lineno + node.lineno}: {node.name}(**{kwarg.arg})")
+    return findings
+
+
+def test_absorbing_catch_all_scan_flags_only_an_unread_catch_all():
+    flagged = "```python\n@event_handler()\ndef h(self, **kwargs):\n    pass\n```\n"
+    assert absorbing_catch_alls(flagged) == ["line 3: h(**kwargs)"]
+    kept = "```python\n@event_handler()\ndef h(self, **fields: str):\n    return fields\n```\n"
+    assert not absorbing_catch_alls(kept)
+    undecorated = "```python\ndef mount(self, request, **kwargs):\n    pass\n```\n"
+    assert not absorbing_catch_alls(undecorated)
+    assert not absorbing_catch_alls("<!-- doc-snippet-check: before -->\n" + flagged)
+
+
+@pytest.mark.parametrize(
+    "path", _SCANNED_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _SCANNED_DOCS]
+)
+def test_docs_have_no_absorbing_catch_all(path):
+    """#4239: a handler a guide shows takes a ``**`` catch-all only when it reads it."""
+    findings = absorbing_catch_alls(path.read_text(encoding="utf-8"))
+    assert not findings, (
+        f"{path.relative_to(REPO_ROOT)} defines handlers with a ** catch-all the body never "
+        "reads; strict dispatch is by signature, so declare the arguments instead:\n  "
+        + "\n  ".join(findings)
     )
 
 

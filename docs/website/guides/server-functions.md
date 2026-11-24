@@ -38,7 +38,7 @@ class ProductView(LiveView):
     api_name = "catalog.product"
 
     @server_function
-    def search(self, q: str = "", **kwargs) -> list[dict]:
+    def search(self, q: str = "") -> list[dict]:
         hits = Product.objects.filter(name__icontains=q)[:10]
         return [{"id": p.id, "name": p.name, "price": str(p.price)} for p in hits]
 ```
@@ -81,7 +81,7 @@ never touches the input's element.
 from djust.decorators import server_function
 
 @server_function
-def my_fn(self, arg1: int = 0, **kwargs) -> dict:
+def my_fn(self, arg1: int = 0) -> dict:
     ...
 ```
 
@@ -213,7 +213,7 @@ class InboxView(LiveView):
     # or: permission_required = "inbox.view_message"
 
     @server_function
-    def unread_count(self, **kwargs) -> int:
+    def unread_count(self) -> int:
         return Message.objects.filter(to=self.request.user, read=False).count()
 ```
 

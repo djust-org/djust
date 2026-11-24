@@ -184,7 +184,7 @@ class TodoView(LiveView):
         self.toggle = str(flip("is-done", to="#todo").push("toggle_todo"))
 
     @event_handler
-    def toggle_todo(self, **kwargs):
+    def toggle_todo(self):
         self.done = not self.done  # the server's re-render confirms the flip
         self._set_toggle()
 ```
@@ -291,7 +291,7 @@ class FilterView(LiveView):
         self.products = list(PRODUCTS)
 
     @event_handler
-    def update_category(self, value: str = "", **kwargs):
+    def update_category(self, value: str = ""):
         # One handler sets both values; one render sends both.
         self.category = value
         self.products = [p for p in PRODUCTS if not value or p["category"] == value]

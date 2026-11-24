@@ -231,7 +231,7 @@ class AvatarView(UploadMixin, LiveView):
     # ... mount() as before ...
 
     @event_handler
-    def save_avatar(self, **kwargs):
+    def save_avatar(self):
         self.error = ""
         latest = None
 
@@ -269,7 +269,7 @@ class AvatarView(UploadMixin, LiveView):
         self.avatar_size = len(data)
 
     @event_handler
-    def reset_avatar(self, **kwargs):
+    def reset_avatar(self):
         self.avatar_url = ""
         self.avatar_name = ""
         self.avatar_size = 0

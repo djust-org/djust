@@ -310,7 +310,7 @@ Update the browser URL without remounting the view. `params` is merged into the 
 
 ```python
 @event_handler()
-def go_to_page(self, page: int = 1, **kwargs):
+def go_to_page(self, page: int = 1):
     self.live_patch(params={"page": page})
 ```
 
@@ -320,7 +320,7 @@ Navigate to a different LiveView over the existing WebSocket. The current view i
 
 ```python
 @event_handler()
-def logout(self, **kwargs):
+def logout(self):
     self.live_redirect("/login/")
 ```
 
@@ -358,7 +358,7 @@ Schedule a callback to run in a background thread after flushing the current vie
 
 ```python
 @event_handler()
-def generate_report(self, **kwargs):
+def generate_report(self):
     self.generating = True  # Sent to client immediately
     self.start_async(self._do_generate, name="report")
 
@@ -383,7 +383,7 @@ Cancel a pending or running async task by name.
 
 ```python
 @event_handler()
-def cancel_export(self, **kwargs):
+def cancel_export(self):
     self.cancel_async("export")
     self.exporting = False
 ```
@@ -431,7 +431,7 @@ Queue a flash message to be sent to the connected client. The message is rendere
 
 ```python
 @event_handler()
-def save(self, **kwargs):
+def save(self):
     save_item(self.name)
     self.put_flash("success", "Item saved!")
 ```
@@ -448,7 +448,7 @@ Queue a command to clear flash messages on the client.
 
 ```python
 @event_handler()
-def dismiss_errors(self, **kwargs):
+def dismiss_errors(self):
     self.clear_flash("error")   # clear only errors
     self.clear_flash()          # clear all
 ```
@@ -468,7 +468,7 @@ def mount(self, request, **kwargs):
     self.page_title = "Dashboard"
 
 @event_handler()
-def select_tab(self, tab: str = "", **kwargs):
+def select_tab(self, tab: str = ""):
     self.page_title = f"Dashboard - {tab.title()}"
 ```
 
@@ -480,7 +480,7 @@ Get or set document `<meta>` tags. Setting this property to a dict queues side-c
 
 ```python
 @event_handler()
-def select_article(self, article_id: int = 0, **kwargs):
+def select_article(self, article_id: int = 0):
     article = Article.objects.get(pk=article_id)
     self.page_meta = {
         "description": article.summary,
@@ -538,7 +538,7 @@ djust re-renders when a public attribute changes. A handler that changes only th
 from djust.decorators import event_handler
 
 @event_handler
-def archive(self, item_id: int, **kwargs):
+def archive(self, item_id: int):
     Item.objects.filter(pk=item_id).update(archived=True)  # database only
     self.set_changed_keys()  # get_context_data() re-queries; render the result
 ```

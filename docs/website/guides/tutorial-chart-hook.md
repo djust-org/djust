@@ -203,7 +203,7 @@ class RevenueDashboardView(LiveView):
         ])
 
     @event_handler
-    def set_range(self, range: str = "", **kwargs):
+    def set_range(self, range: str = ""):
         if range not in RANGE_PRESETS:
             return
         self.selected_range = range

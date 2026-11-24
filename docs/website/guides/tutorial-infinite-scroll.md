@@ -122,7 +122,7 @@ class ActivityFeedView(LiveView):
         self.has_more = len(first_page) == PAGE_SIZE
 
     @event_handler
-    def load_more(self, **kwargs):
+    def load_more(self):
         if not self.has_more:
             return
         page = self._fetch(after_id=self.cursor)

@@ -23,7 +23,7 @@ class Inbox(AudioMixin, LiveView):
     }
 
     @event_handler()
-    def finish(self, **kwargs):
+    def finish(self):
         # Complete the work and render visible confirmation too.
         self.play_sound("notifications", "done")
 ```

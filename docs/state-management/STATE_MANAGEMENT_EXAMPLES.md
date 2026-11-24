@@ -71,7 +71,7 @@ from djust.decorators import debounce, event_handler
 
 @event_handler
 @debounce(wait=0.5)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.query = value
     self.results = Model.objects.filter(name__icontains=value)
 ```
@@ -81,7 +81,7 @@ def search(self, value: str = "", **kwargs):
 from djust.decorators import event_handler
 
 @event_handler
-def increment(self, **kwargs):
+def increment(self):
     self.count += 1
 ```
 
@@ -93,7 +93,7 @@ from djust.decorators import cache, event_handler
 # so keep cached handlers to read-only lookups.
 @event_handler
 @cache(ttl=300, key_params=["value"])
-def get_weather(self, value: str = "", **kwargs):
+def get_weather(self, value: str = ""):
     self.weather = fetch_weather_api(value)
 ```
 
@@ -105,7 +105,7 @@ FILTER_FIELDS = {"category", "min_price"}
 
 @event_handler
 @debounce(wait=0.3)
-def apply_filters(self, value: str = "", field: str = "", **kwargs):
+def apply_filters(self, value: str = "", field: str = ""):
     # dj-change sends the input's name as `field` and its value as `value`
     if field not in FILTER_FIELDS:
         return
@@ -145,7 +145,7 @@ from djust.decorators import event_handler, throttle
 
 @event_handler
 @throttle(interval=1.0, leading=True, trailing=False)
-def load_more(self, **kwargs):
+def load_more(self):
     self.page += 1
     self.items = Item.objects.all()[: self.page * 20]
 ```
@@ -167,7 +167,7 @@ The order of `@debounce`, `@throttle` and `@cache` does not matter. Each one onl
 @event_handler
 @debounce(wait=0.5)
 @cache(ttl=60, key_params=["value"])
-def my_handler(self, value: str = "", **kwargs):
+def my_handler(self, value: str = ""):
     pass
 ```
 
@@ -216,7 +216,7 @@ class ProductSearchView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)
-    def search(self, value: str = "", field: str = "", **kwargs):
+    def search(self, value: str = "", field: str = ""):
         """Update one filter (named by the input's `name`) and re-run the search."""
         if field not in self.SEARCH_FIELDS:
             return
@@ -323,7 +323,7 @@ class ShoppingCartView(LiveView):
         self.total = sum(item.subtotal for item in self.cart_items)
 
     @event_handler
-    def update_quantity(self, item_id: int = 0, value: int = 1, **kwargs):
+    def update_quantity(self, item_id: int = 0, value: int = 1):
         """
         Update cart item quantity.
 
@@ -352,7 +352,7 @@ class ShoppingCartView(LiveView):
             pass
 
     @event_handler
-    def remove_item(self, item_id: int = 0, **kwargs):
+    def remove_item(self, item_id: int = 0):
         """Remove item from cart."""
         try:
             item = CartItem.objects.get(id=item_id, user=self.request.user)
@@ -364,7 +364,7 @@ class ShoppingCartView(LiveView):
             pass
 
     @event_handler
-    def clear_cart(self, **kwargs):
+    def clear_cart(self):
         """Clear entire cart."""
         CartItem.objects.filter(user=self.request.user).delete()
         self.cart_items = []
@@ -453,7 +453,7 @@ class ProductFilterView(LiveView):
 
     @event_handler
     @debounce(wait=0.3)
-    def apply_filters(self, value: str = "", field: str = "", **kwargs):
+    def apply_filters(self, value: str = "", field: str = ""):
         """Update the filter named by the input's `name`, then re-query."""
         if field in self.INT_FIELDS:
             setattr(self, field, int(value or 0))
@@ -475,7 +475,7 @@ class ProductFilterView(LiveView):
         self.results = Product.objects.filter(**filters).order_by(self.sort)
 
     @event_handler
-    def reset_filters(self, **kwargs):
+    def reset_filters(self):
         """Reset to defaults."""
         self.category = ""
         self.min_price = 0
@@ -523,7 +523,7 @@ class LiveChatView(DraftModeMixin, LiveView):
 
     @event_handler
     @throttle(interval=2.0, leading=True, trailing=False)
-    def typing_indicator(self, **kwargs):
+    def typing_indicator(self):
         """
         Broadcast typing indicator.
 
@@ -535,7 +535,7 @@ class LiveChatView(DraftModeMixin, LiveView):
         notify_room_typing(self.room.id, self.request.user.username)  # your helper
 
     @event_handler
-    def send_message(self, message: str = "", **kwargs):
+    def send_message(self, message: str = ""):
         """
         Send chat message.
 
@@ -660,13 +660,13 @@ class MessageComposerView(DraftModeMixin, FormMixin, LiveView):
         self.body = ""
 
     @event_handler
-    def add_attachment(self, file_data, **kwargs):
+    def add_attachment(self, file_data):
         """Add attachment."""
         # Handle file upload
         self.attachments.append(file_data)
 
     @event_handler
-    def remove_attachment(self, index: int = 0, **kwargs):
+    def remove_attachment(self, index: int = 0):
         """Remove attachment."""
         if 0 <= index < len(self.attachments):
             self.attachments.pop(index)
@@ -717,7 +717,7 @@ class DashboardView(LiveView):
 
     @event_handler
     @throttle(interval=5.0, leading=True, trailing=False)
-    def refresh(self, **kwargs):
+    def refresh(self):
         """
         Manual refresh.
 
@@ -728,7 +728,7 @@ class DashboardView(LiveView):
         self.last_updated = timezone.now()
 
     @event_handler
-    def change_period(self, value: str = "24h", **kwargs):
+    def change_period(self, value: str = "24h"):
         """Change time period (dj-change sends the selected option as `value`)."""
         self.period = value if value in self.PERIODS else "24h"
         self.metrics = self.fetch_metrics(self.period)
@@ -817,7 +817,7 @@ class SalesChartView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)
-    def update_chart(self, value: str = "", field: str = "", **kwargs):
+    def update_chart(self, value: str = "", field: str = ""):
         """Update the filter named by the input's `name`, then recalculate."""
         if field in ("start_date", "end_date"):
             if value:
@@ -1012,7 +1012,7 @@ class ProductBulkActionsView(LiveView):
         self.products = Product.objects.all()
 
     @event_handler
-    def toggle_select(self, product_id: int = 0, **kwargs):
+    def toggle_select(self, product_id: int = 0):
         """Toggle product selection (dj-value-product-id:int on the checkbox)."""
         if product_id in self.selected_ids:
             self.selected_ids.remove(product_id)
@@ -1020,30 +1020,30 @@ class ProductBulkActionsView(LiveView):
             self.selected_ids.append(product_id)
 
     @event_handler
-    def select_all(self, **kwargs):
+    def select_all(self):
         """Select all products."""
         self.selected_ids = [p.id for p in self.products]
 
     @event_handler
-    def deselect_all(self, **kwargs):
+    def deselect_all(self):
         """Deselect all products."""
         self.selected_ids = []
 
     @event_handler
-    def bulk_delete(self, **kwargs):
+    def bulk_delete(self):
         """Delete selected products."""
         Product.objects.filter(id__in=self.selected_ids).delete()
         self.products = Product.objects.all()
         self.selected_ids = []
 
     @event_handler
-    def bulk_activate(self, **kwargs):
+    def bulk_activate(self):
         """Activate selected products."""
         Product.objects.filter(id__in=self.selected_ids).update(is_active=True)
         self.products = Product.objects.all()
 
     @event_handler
-    def bulk_deactivate(self, **kwargs):
+    def bulk_deactivate(self):
         """Deactivate selected products."""
         Product.objects.filter(id__in=self.selected_ids).update(is_active=False)
         self.products = Product.objects.all()
@@ -1087,7 +1087,6 @@ class ProductInlineEditView(LiveView):
         product_id: int = 0,
         field: str = "",
         value: str = "",
-        **kwargs
     ):
         """
         Update product field inline.
@@ -1111,12 +1110,12 @@ class ProductInlineEditView(LiveView):
             pass
 
     @event_handler
-    def start_editing(self, product_id: int = 0, field: str = "", **kwargs):
+    def start_editing(self, product_id: int = 0, field: str = ""):
         """Mark cell as being edited."""
         self.editing_cell = f"{product_id}_{field}"
 
     @event_handler
-    def stop_editing(self, **kwargs):
+    def stop_editing(self):
         """Stop editing."""
         self.editing_cell = None
 
@@ -1151,7 +1150,7 @@ class CollaborativeEditorView(LiveView):
 
     @event_handler
     @debounce(wait=1.0)
-    def update_content(self, value: str = "", **kwargs):
+    def update_content(self, value: str = ""):
         """
         Update document content (<textarea dj-input="update_content">).
 
@@ -1230,7 +1229,6 @@ class SharedWhiteboardView(LiveView):
         y: int = 0,
         color: str = "#000000",
         tool: str = "pen",
-        **kwargs
     ):
         """
         Handle drawing action.
@@ -1253,7 +1251,7 @@ class SharedWhiteboardView(LiveView):
         notify_board_action(self.board.id, action.id)
 
     @event_handler
-    def clear_board(self, **kwargs):
+    def clear_board(self):
         """Clear entire board."""
         DrawingAction.objects.filter(board=self.board).delete()
         self.actions = DrawingAction.objects.none()

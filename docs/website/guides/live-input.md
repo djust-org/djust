@@ -69,23 +69,23 @@ class NotesView(LiveView):
     plan_choices = state([("free", "Free"), ("pro", "Pro")])
 
     @event_handler()
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         self.query = value
 
     @event_handler()
-    def set_body(self, value: str = "", **kwargs):
+    def set_body(self, value: str = ""):
         self.body = value
 
     @event_handler()
-    def set_status(self, value: str = "", **kwargs):
+    def set_status(self, value: str = ""):
         self.status = value
 
     @event_handler()
-    def toggle_notifications(self, **kwargs):
+    def toggle_notifications(self):
         self.notifications_enabled = not self.notifications_enabled
 
     @event_handler()
-    def set_plan(self, value: str = "", **kwargs):
+    def set_plan(self, value: str = ""):
         self.plan = value
 ```
 

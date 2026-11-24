@@ -177,7 +177,7 @@ from djust.decorators import event_handler, rate_limit
 class MyView(LiveView):
     @rate_limit(rate=5, burst=3)
     @event_handler
-    def expensive_operation(self, **kwargs):
+    def expensive_operation(self):
         """Limited to 5/sec sustained, 3 burst"""
         ...
 ```
@@ -301,7 +301,7 @@ class ProjectView(LiveView):
 
     @permission_required("projects.delete_project")
     @event_handler()
-    def delete_project(self, project_id: int, **kwargs):
+    def delete_project(self, project_id: int):
         Project.objects.get(pk=project_id).delete()
 ```
 
@@ -495,7 +495,7 @@ logger.info("Query: %s", sanitize_for_log(user_query))
 from djust.decorators import event_handler
 
 @event_handler
-def my_handler(self, **kwargs):
+def my_handler(self):
     pass
 ```
 

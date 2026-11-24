@@ -64,7 +64,7 @@ class S3BrowserView(LiveView):
         self.buckets = [b["Name"] for b in response["Buckets"]]
 
     @event_handler()
-    def select_bucket(self, bucket_name: str = "", **kwargs):
+    def select_bucket(self, bucket_name: str = ""):
         self.selected_bucket = bucket_name
         client = self._get_s3_client()
         response = client.list_objects_v2(Bucket=bucket_name, MaxKeys=50)
@@ -116,7 +116,7 @@ class ProductCatalogView(LiveView):
         self._products = self._fetch_products()
 
     @event_handler()
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         self.search_query = value
         self._products = self._fetch_products(query=value)
 
@@ -167,7 +167,7 @@ class DashboardView(LiveView):
             self.metrics = self._metrics_client.get_recent(limit=20)
 
     @event_handler()
-    def refresh_metrics(self, **kwargs):
+    def refresh_metrics(self):
         if self._metrics_client:
             self.metrics = self._metrics_client.get_recent(limit=20)
 ```
@@ -300,7 +300,7 @@ class S3View(LiveView):
         self.files = [obj["Key"] for obj in resp.get("Contents", [])]
 
     @event_handler()
-    def delete_file(self, key: str = "", **kwargs):
+    def delete_file(self, key: str = ""):
         self._s3().delete_object(Bucket="my-bucket", Key=key)
         self.files = [f for f in self.files if f != key]
 ```
@@ -328,7 +328,7 @@ class WeatherView(LiveView):
         self.forecast = self._fetch_weather(self.city)
 
     @event_handler()
-    def change_city(self, value: str = "", **kwargs):
+    def change_city(self, value: str = ""):
         self.city = value
         self.forecast = self._fetch_weather(value)
 ```
@@ -359,7 +359,7 @@ class LeaderboardView(LiveView):
         ]
 
     @event_handler()
-    def refresh(self, **kwargs):
+    def refresh(self):
         self._load_scores()
 ```
 

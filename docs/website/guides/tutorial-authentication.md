@@ -178,7 +178,7 @@ class TeamAdminView(LoginRequiredMixin, LiveView):
 
     @event_handler
     @permission_required("myapp.manage_team_members")
-    def remove_member(self, member_id: int = 0, **kwargs):
+    def remove_member(self, member_id: int = 0):
         # The global permission above is not per team. This is the check
         # that stops an admin of team A from editing team B's roster.
         if not self._is_team_admin():

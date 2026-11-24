@@ -96,7 +96,7 @@ class ChatView(LiveView):
     # At most one prompt every 10 s on average, with a burst of 3.
     @rate_limit(rate=0.1, burst=3)
     @action
-    def submit(self, prompt: str = "", **kwargs):
+    def submit(self, prompt: str = ""):
         prompt = prompt.strip()
         if not prompt:
             raise ValueError("Type a prompt first.")
@@ -107,7 +107,7 @@ class ChatView(LiveView):
         self.start_async(self._stream, prompt, name=_STREAM)
 
     @action
-    def stop(self, **kwargs):
+    def stop(self):
         self.cancel_async(_STREAM)  # name must match start_async(name=...)
         self.streaming = False      # the stream loop sees this and stops
 ```

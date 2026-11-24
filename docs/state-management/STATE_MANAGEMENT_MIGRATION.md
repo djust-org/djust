@@ -101,7 +101,7 @@ class SliderView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)
-    def update_value(self, value: int = 0, **kwargs):
+    def update_value(self, value: int = 0):
         self.value = max(0, min(100, value))
 ```
 
@@ -288,7 +288,7 @@ class SearchView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)  # That's it!
-    def search(self, query: str = "", **kwargs):
+    def search(self, query: str = ""):
         self.query = query
         self.results = Product.objects.filter(name__icontains=query)[:20]
 ```
@@ -373,7 +373,7 @@ class CounterView(LiveView):
     count = state(0)
 
     @event_handler
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
 ```
 
@@ -491,7 +491,7 @@ class DashboardView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)
-    def update_temperature(self, value: int = 72, **kwargs):
+    def update_temperature(self, value: int = 72):
         # Every value that depends on the temperature is set here, so one
         # re-render updates the display and the gauge together.
         self.temperature = max(0, min(120, int(value)))
@@ -584,7 +584,7 @@ class CommentFormView(DraftModeMixin, LiveView):
     comment_text = state("")
 
     @event_handler
-    def save_comment(self, comment_text: str = "", **kwargs):
+    def save_comment(self, comment_text: str = ""):
         Comment.objects.create(text=comment_text, author=self.request.user)
         self.comment_text = ""  # Auto-clears draft
 ```
@@ -685,7 +685,7 @@ class AutocompleteView(LiveView):
     @event_handler
     @cache(ttl=300)      # Auto-caching with 5-min TTL
     @debounce(wait=0.3)
-    def search(self, query: str = "", **kwargs):
+    def search(self, query: str = ""):
         self.query = query
         self.results = Language.objects.filter(name__istartswith=query)[:10]
 ```
@@ -763,7 +763,7 @@ class FormView(LiveView):
     """
 
     @event_handler
-    def save_data(self, title: str = "", **kwargs):
+    def save_data(self, title: str = ""):
         time.sleep(2)  # Simulate slow operation
         MyModel.objects.create(title=title)
 ```
@@ -883,13 +883,13 @@ class ProductSearchView(DraftModeMixin, LiveView):
     @event_handler
     @cache(ttl=300)
     @debounce(wait=0.5)
-    def search(self, query: str = "", **kwargs):
+    def search(self, query: str = ""):
         self.query = query
         self.results = self._do_search()
 
     @event_handler
     @cache(ttl=300)
-    def apply_filters(self, category: str = "", min_price: int = 0, **kwargs):
+    def apply_filters(self, category: str = "", min_price: int = 0):
         self.category = category
         self.min_price = min_price
         self.results = self._do_search()

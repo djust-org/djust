@@ -4,7 +4,7 @@ This guide explains how to write effective event handlers in djust LiveView appl
 
 ## Table of Contents
 
-- [The **kwargs Requirement](#the-kwargs-requirement)
+- [The Signature Is the Contract](#the-signature-is-the-contract)
 - [Parameter Naming Convention](#parameter-naming-convention)
 - [Inline Handler Arguments](#inline-handler-arguments)
 - [The @event_handler Decorator](#the-event_handler-decorator)
@@ -16,33 +16,25 @@ This guide explains how to write effective event handlers in djust LiveView appl
 - [Debugging Tips](#debugging-tips)
 - [Security](#security)
 
-## The **kwargs Requirement
+## The Signature Is the Contract
 
-Every event handler **must** accept `**kwargs`. The djust client sends metadata parameters alongside your explicit arguments (such as `_targetElement` identifying the DOM element that triggered the event). Without `**kwargs`, your handler will reject these extra parameters with a validation error.
+Under the strict policy (`event_parameter_policy = "strict"`, opt-in until 2.0.0 final), a handler receives exactly the parameters its signature declares. Declare each argument the binding sends, and nothing else: `**kwargs` is not required, and a handler that does not read it should not take it.
 
 ```python
-# Wrong -- will raise a validation error at runtime
 @event_handler()
 def increment(self):
     self.count += 1
 
-# Correct -- accepts client metadata
 @event_handler()
-def increment(self, **kwargs):
-    self.count += 1
-```
-
-This applies to all event handlers, including those with explicit parameters:
-
-```python
-@event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.query = value
 
 @event_handler()
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int = 0):
     Item.objects.filter(id=item_id).delete()
 ```
+
+Legacy `dj-input`/`dj-change` bindings also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: declare those names, or take a typed catch-all (`**fields: str`) that the body reads. See [Event arguments (`dj-value-*`)](website/core-concepts/events.md#event-arguments-dj-value) for the full rule.
 
 ## Parameter Naming Convention
 
@@ -53,13 +45,13 @@ Form elements (`<input>`, `<select>`, `<textarea>`) send their value using the `
 **✅ Correct:**
 ```python
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     """value matches what dj-input/dj-change sends"""
     self.search_query = value
     self._refresh_properties()
 
 @event_handler()
-def filter_by_status(self, value: str = "all", **kwargs):
+def filter_by_status(self, value: str = "all"):
     """value parameter for select/dropdown changes"""
     self.filter_status = value
     self._refresh_properties()
@@ -68,62 +60,60 @@ def filter_by_status(self, value: str = "all", **kwargs):
 **❌ Wrong:**
 ```python
 @event_handler()
-def search(self, query: str = "", **kwargs):
+def search(self, query: str = ""):
     """Won't work! dj-input sends 'value', not 'query'"""
     self.search_query = query  # Will always be "" (default)
 ```
 
-### `_target` parameter for shared handlers
+### `field` parameter for shared handlers
 
-When multiple form fields share one `dj-change` or `dj-input` handler, the `_target` parameter identifies which field triggered the event (the element's `name` attribute, falling back to `id`, then `null`):
+When multiple form fields share one `dj-change` or `dj-input` handler, declare `field` to learn which field triggered the event (the element's `name` attribute, falling back to `id`):
 
 ```python
 @event_handler()
-def validate(self, value: str = "", _target: str = "", **kwargs):
-    """_target tells you which field triggered the event"""
-    if _target == "email":
+def validate(self, value: str, field: str):
+    """field tells you which field triggered the event"""
+    if field == "email":
         self.email_error = "" if "@" in value else "Invalid email"
-    elif _target == "username":
+    elif field == "username":
         self.username_error = "" if len(value) >= 3 else "Too short"
 ```
 
-For `dj-submit`, `_target` is the submitter button's `name` (if available). Matches Phoenix LiveView's `_target` convention.
+For `dj-submit`, `_target` is the submitter button's `name` (if available); declare `_target` to receive it. Matches Phoenix LiveView's `_target` convention.
 
 ### Custom event parameters
 
-For custom events (not form inputs), pass parameters via `data-dj-*` attributes.
-The `data-dj-` prefix is stripped automatically, so `data-dj-property-id` maps to
-the `property_id` Python parameter:
+For custom events (not form inputs), pass parameters via `dj-value-*` attributes.
+The `dj-value-` prefix is stripped and kebab-case becomes snake_case, so
+`dj-value-property-id` maps to the `property_id` Python parameter:
 
 ```python
 @event_handler()
-def delete_property(self, property_id: int, **kwargs):
-    """property_id comes from data-dj-property-id attribute"""
+def delete_property(self, property_id: int):
+    """property_id comes from dj-value-property-id attribute"""
     property = Property.objects.get(id=property_id)
     property.delete()
 ```
 
 Template usage:
 ```html
-<button dj-click="delete_property" data-dj-property-id="{{ property.id }}">
+<button dj-click="delete_property" dj-value-property-id="{{ property.id }}">
     Delete
 </button>
 ```
 
-> **Note:** Plain `data-*` attributes (without the `dj-` prefix) also work —
-> `data-property-id` maps to `property_id` too. The `data-dj-*` convention is
-> recommended for consistency with `dj-click`, `dj-change`, and other djust
-> attributes, and to avoid collisions with non-djust libraries.
+> **Note:** Plain `data-*` attributes are not event arguments: a strict handler never
+> receives them. Use `dj-value-*`.
 
 ## Inline Handler Arguments
 
-You can pass arguments directly in the handler attribute using function-call syntax. This provides a cleaner alternative to `data-*` attributes for simple values.
+You can pass arguments directly in the handler attribute using function-call syntax. This provides a cleaner alternative to `dj-value-*` attributes for simple values.
 
 ### Basic Usage
 
 ```html
-<!-- Instead of using data-* attributes -->
-<button dj-click="set_period" data-value="month">30 Days</button>
+<!-- Instead of using dj-value-* attributes -->
+<button dj-click="set_period" dj-value-value="month">30 Days</button>
 
 <!-- You can use inline arguments -->
 <button dj-click="set_period('month')">30 Days</button>
@@ -133,7 +123,7 @@ Both approaches call the same handler:
 
 ```python
 @event_handler()
-def set_period(self, value: str, **kwargs):
+def set_period(self, value: str):
     """Set the time period filter"""
     self.period = value
     self._refresh_data()
@@ -151,7 +141,7 @@ Inline arguments are automatically parsed into their appropriate types:
 | `true` / `false` | `True` / `False` | `bool` |
 | `null` | `None` | `NoneType` |
 
-**Limitation**: Only primitive types are supported. Arrays and objects (e.g., `handler([1,2,3])` or `handler({key: 'value'})`) are not supported. For complex data, use `data-*` attributes with JSON strings and parse them in your handler.
+**Limitation**: Only primitive types are supported. Arrays and objects (e.g., `handler([1,2,3])` or `handler({key: 'value'})`) are not supported. For complex data, use a `dj-value-*` attribute with a JSON string and parse it in your handler.
 
 ### Multiple Arguments
 
@@ -164,50 +154,50 @@ Pass multiple arguments separated by commas:
 
 ```python
 @event_handler()
-def sort_by(self, field: str, ascending: bool = True, **kwargs):
+def sort_by(self, field: str, ascending: bool = True):
     """Sort items by field"""
     self.sort_field = field
     self.sort_ascending = ascending
 
 @event_handler()
-def filter(self, field: str, value: str, page: int = 1, **kwargs):
+def filter(self, field: str, value: str, page: int = 1):
     """Filter items"""
     self.filters[field] = value
     self.current_page = page
 ```
 
-### Combining with data-dj-* Attributes
+### Combining with dj-value-* Attributes
 
-You can combine inline arguments with `data-dj-*` attributes. Inline arguments map to parameters by position, while `data-dj-*` attributes map by name:
+You can combine inline arguments with `dj-value-*` attributes. Inline arguments map to parameters by position, while `dj-value-*` attributes map by name:
 
 ```html
 <button dj-click="update_item('delete')"
-        data-dj-item-id="{{ item.id }}"
-        data-dj-confirm="true">
+        dj-value-item-id="{{ item.id }}"
+        dj-value-confirm="true">
     Delete Item
 </button>
 ```
 
 ```python
 @event_handler()
-def update_item(self, action: str, item_id: int = 0, confirm: bool = False, **kwargs):
+def update_item(self, action: str, item_id: int = 0, confirm: bool = False):
     """
     action comes from inline arg ('delete')
-    item_id comes from data-dj-item-id
-    confirm comes from data-dj-confirm
+    item_id comes from dj-value-item-id
+    confirm comes from dj-value-confirm
     """
     if action == 'delete' and confirm:
         Item.objects.filter(id=item_id).delete()
 ```
 
-**Note**: If both an inline argument and a `data-*` attribute provide the same parameter, the inline argument takes precedence.
+**Note**: If both an inline argument and a `dj-value-*` attribute provide the same parameter, the inline argument takes precedence.
 
 ### When to Use Each Approach
 
 | Approach | Best For |
 |----------|----------|
 | **Inline arguments** | Static values known at template render time |
-| **data-* attributes** | Dynamic values from template context (e.g., `{{ item.id }}`) |
+| **dj-value-* attributes** | Dynamic values from template context (e.g., `{{ item.id }}`) |
 | **Combined** | Action type as inline arg + entity ID from context |
 
 ### Examples
@@ -236,8 +226,8 @@ def update_item(self, action: str, item_id: int = 0, confirm: bool = False, **kw
 {% for item in items %}
 <div class="item-row">
     <span>{{ item.name }}</span>
-    <button dj-click="item_action('edit')" data-dj-item-id="{{ item.id }}">Edit</button>
-    <button dj-click="item_action('delete')" data-dj-item-id="{{ item.id }}">Delete</button>
+    <button dj-click="item_action('edit')" dj-value-item-id="{{ item.id }}">Edit</button>
+    <button dj-click="item_action('delete')" dj-value-item-id="{{ item.id }}">Delete</button>
 </div>
 {% endfor %}
 ```
@@ -270,7 +260,7 @@ from djust.decorators import event_handler, debounce, throttle
 
 @event_handler()
 @debounce(wait=0.5)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     """Debounced search - waits 500ms after user stops typing"""
     self.search_query = value
     self._refresh_results()
@@ -340,14 +330,14 @@ class MyView(LiveView):
 
 ### Automatic Type Coercion
 
-Template `data-dj-*` attributes always send values as strings. djust **automatically coerces** these strings to the expected types based on your type hints:
+Template `dj-value-*` attributes always send values as strings. djust **automatically coerces** these strings to the expected types based on your type hints:
 
 ```python
 @event_handler()
 def update_quantity(self, item_id: int, quantity: int = 1):
     """
     item_id and quantity are automatically coerced from strings.
-    Template sends: data-dj-item-id="123" data-dj-quantity="5"
+    Template sends: dj-value-item-id="123" dj-value-quantity="5"
     Handler receives: item_id=123, quantity=5 (as integers)
     """
     self.items[item_id].quantity = quantity
@@ -380,7 +370,6 @@ def example_types(
     price: float = 0.0,       # Coerced from "9.99" to 9.99
     active: bool = False,     # Coerced from "true" to True
     tags: list = [],          # Coerced from "a,b,c" to ["a","b","c"]
-    **kwargs                  # Accept any additional params
 ):
     pass
 ```
@@ -391,7 +380,7 @@ If you need raw string values, disable coercion with `coerce_types=False`:
 
 ```python
 @event_handler(coerce_types=False)
-def raw_handler(self, value: str = "", **kwargs):
+def raw_handler(self, value: str = ""):
     """Receives raw string values from template, no coercion"""
     # value is exactly what the template sent
     pass
@@ -408,7 +397,6 @@ def filter_items(
     category: str = "all",        # Optional with default
     min_price: float = 0.0,       # Optional with default
     max_price: float = 9999.99,   # Optional with default
-    **kwargs
 ):
     """All parameters are optional with sensible defaults"""
     queryset = Item.objects.all()
@@ -470,7 +458,7 @@ def _refresh_properties(self):
 
     self._properties = items
 
-def get_context_data(self, **kwargs):
+def get_context_data(self):
     """Derived and render-only values; the declared fields are already in it."""
     context = super().get_context_data(**kwargs)
     context["properties"] = self._properties  # serialized by the Rust JIT
@@ -521,25 +509,15 @@ Open browser DevTools → Console:
 ERROR    Handler 'search' missing required parameters: ['name']
 ```
 
-### Using **kwargs for Flexibility
+### Taking a Catch-All
 
-Accept any parameters with `**kwargs`:
+Add a typed `**fields: str` only when the body reads it (for example, a form whose field names are not known ahead of time):
 
 ```python
 @event_handler()
-def flexible_handler(self, value: str = "", **kwargs):
-    """
-    Accepts any parameters beyond 'value'.
-    Useful when:
-    - Parameters are optional/dynamic
-    - Template might send data-* attributes
-    - You want to future-proof the handler
-    """
-    self.value = value
-
-    # Access optional parameters
-    if 'extra_data' in kwargs:
-        self.extra_data = kwargs['extra_data']
+def save_form(self, **fields: str):
+    for name, value in fields.items():
+        setattr(self, name, value)
 ```
 
 ## Common Patterns
@@ -549,7 +527,7 @@ def flexible_handler(self, value: str = "", **kwargs):
 ```python
 @event_handler()
 @debounce(wait=0.5)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     """
     Wait 500ms after user stops typing before searching.
     Reduces server load and improves UX.
@@ -570,7 +548,7 @@ Template:
 
 ```python
 @event_handler()
-def filter_by_status(self, value: str = "all", **kwargs):
+def filter_by_status(self, value: str = "all"):
     """Filter items by status dropdown selection"""
     self.filter_status = value
     self._refresh_results()
@@ -618,7 +596,6 @@ def save_property(
     name: str = "",
     address: str = "",
     price: float = 0.0,
-    **kwargs
 ):
     """Save property from form submission"""
     if self.edit_property_id:
@@ -692,15 +669,15 @@ def search(self, value: str = ""):
 
 **Symptoms**: Error in console: `received unexpected parameters: ['extra']`
 
-**Solution**: Add `**kwargs` to accept any parameters:
+**Solution**: Declare the parameter the binding sends (the signature is the contract), or remove the extra `dj-value-*` attribute:
 
 ```python
-# ❌ Strict - rejects unexpected params
+# Strict - rejects a parameter the signature does not declare
 def handler(self, value: str = ""):
     pass
 
-# ✅ Flexible - accepts extra params
-def handler(self, value: str = "", **kwargs):
+# Declare the extra name
+def handler(self, value: str = "", extra: str = ""):
     pass
 ```
 
@@ -714,7 +691,7 @@ def handler(self, value: str = "", **kwargs):
 
 ```python
 # Template sends invalid string for int
-<button dj-click="delete_item" data-dj-item-id="not_a_number">Delete</button>
+<button dj-click="delete_item" dj-value-item-id="not_a_number">Delete</button>
 
 # ❌ This will fail - "not_a_number" can't be coerced to int
 @event_handler()
@@ -722,7 +699,7 @@ def delete_item(self, item_id: int):
     pass
 
 # ✅ Correct - template sends valid integer string
-<button dj-click="delete_item" data-dj-item-id="{{ item.id }}">Delete</button>
+<button dj-click="delete_item" dj-value-item-id="{{ item.id }}">Delete</button>
 
 # Handler receives item_id as int (automatically coerced)
 @event_handler()
@@ -765,7 +742,7 @@ class MyView(LiveView):
         self.count += 1
 
     @event_handler(description="Search items")
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         """Also callable via WebSocket"""
         self.query = value
 
@@ -788,7 +765,7 @@ from djust.decorators import event_handler, rate_limit
 class MyView(LiveView):
     @rate_limit(rate=2, burst=3)
     @event_handler
-    def generate_report(self, **kwargs):
+    def generate_report(self):
         """Limited to 2/sec sustained, 3 burst"""
         self.report = expensive_computation()
 ```
