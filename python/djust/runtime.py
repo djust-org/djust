@@ -3477,8 +3477,9 @@ def _library_is_childless(
 ) -> bool:
     """Whether loading ``library`` (or only ``items`` of it) can mount no child view.
 
-    True for ``_CHILDLESS_TAG_LIBRARIES``, for a library the project vouches for,
-    and for one whose loaded part registers no tag: a filter cannot mount a
+    True for ``_CHILDLESS_TAG_LIBRARIES``, for a library the project vouches for
+    (the ``childless_tag_libraries`` setting, or ``register.djust_childless = True``
+    in the library itself), and for one whose loaded part registers no tag: a filter cannot mount a
     child view (#4298). A library that cannot be found keeps the full render.
     """
     if library in vouched or (
@@ -3489,6 +3490,8 @@ def _library_is_childless(
         from .template_libraries import _find_library
 
         found = _find_library(library)
+        if getattr(found, "djust_childless", False) is True:
+            return True
         module = _DJUST_LIBRARY_MODULES.get(library)
         if module is not None:
             from importlib import import_module

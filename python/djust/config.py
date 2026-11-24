@@ -269,7 +269,9 @@ class LiveViewConfig:
         # view with ``{% live_render %}``. A live mount of an explicit
         # ``template_name`` page skips the full page-shell render when no
         # template of the page can mount one (#4295); a ``{% load %}`` of any
-        # other library that registers tags keeps that render (#4298).
+        # other library that registers tags keeps that render (#4298). A library
+        # can also vouch for itself with ``register.djust_childless = True``
+        # (#4302); inclusion-tag templates are not scanned either way.
         "childless_tag_libraries": [],
         # Once-a-day notice of newer releases / security advisories on the
         # dev server and in ``manage.py check``. Cached, silent on failure,

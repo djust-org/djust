@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 129 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 130 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -54,6 +54,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C041 | Config | Info | A state save interval is set while `DJUST_STATE_STORE_STRICT` is on |
 | C042 | Config | Info | A model's rows may be changed by the database itself (an unmanaged model, a `DB_*` cascade) while `DJUST_REFRESH_ON_ANY_WRITE` is off |
 | C043 | Config | Error | "`DJUST_UNSUPPLIED_NAMES` is not `\"debug\"`, `\"warn\"` or `\"error\"` (#4279)" |
+| C044 | Config | Warning | "`inclusion_tag` in a tag library marked `djust_childless` (#4302)" |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -412,6 +413,13 @@ console.log("debug info"); // noqa: Q003
 - **What it detects**: `DJUST_UNSUPPLIED_NAMES` is set to something other than `"debug"`, `"warn"` or `"error"` (matched case-insensitively). At render time an invalid value is logged once at ERROR level and behaves as `"debug"`, so the strictness the setting was meant to add is silently off. An absent setting is the `"debug"` default and never reports.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C043"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C043"]`
 - **False positives**: None
+
+### C044 — Inclusion tag in a `djust_childless` library
+- **Severity**: Warning
+- **Method**: Tag library inspection (DEBUG only; resolves every installed tag library)
+- **What it detects**: a tag library that sets `register.djust_childless = True` and also registers a tag built with `Library.inclusion_tag`. The page-shell scan reads the page's own templates and does not follow the template an inclusion tag renders, so a `{% live_render %}` inside it would not be registered.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C044"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C044"]`
+- **False positives**: An inclusion template that never mounts a child view; suppress the check once you have confirmed that.
 
 ### C501 — Retired
 - **Retired in**: 2.0 (time-travel debugging was removed, #4184)

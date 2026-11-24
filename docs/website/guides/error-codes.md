@@ -506,6 +506,16 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
+### C044: Inclusion tag in a djust_childless library
+
+**Severity**: Warning
+
+**What causes it**: A library vouches that none of its tags mount a child view with `register.djust_childless = True`, but one of its tags is an `inclusion_tag`. djust does not read inclusion templates when deciding whether a page can skip the full page-shell render (#4295), so a `{% live_render %}` in one would leave its child unregistered.
+
+**Fix**: Drop the marker, or make sure the inclusion template never mounts a child view and suppress this check.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
