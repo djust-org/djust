@@ -62,7 +62,7 @@ class TodoList(LiveComponent):
         <ul>
         {% for item in items %}
             <li>
-                <input type="checkbox" dj-change="toggle" data-id="{{ item.id }}">
+                <input type="checkbox" dj-change="toggle" dj-value-id="{{ item.id }}">
                 {{ item.text }}
             </li>
         {% endfor %}

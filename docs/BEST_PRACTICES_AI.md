@@ -306,9 +306,9 @@ def submit_form(self, **form_data):
     email = form_data.get('email')
     name = form_data.get('name')
 
-# ✅ CORRECT: Button with data attributes
+# ✅ CORRECT: Button with a dj-value-* argument
 @event_handler()
-def delete_item(self, item_id: int, **kwargs):
+def delete_item(self, item_id: int):
     """Type validation enforced"""
     Item.objects.filter(id=item_id).delete()
 ```
@@ -324,8 +324,8 @@ def delete_item(self, item_id: int, **kwargs):
     <option value="all">All</option>
 </select>
 
-<!-- Button with data -->
-<button dj-click="delete_item" data-item-id="{{ item.id }}">
+<!-- Button with an argument -->
+<button dj-click="delete_item" dj-value-item-id="{{ item.id }}">
     Delete
 </button>
 

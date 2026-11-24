@@ -51,9 +51,9 @@ def search(self, value: str = "", **kwargs):
     self.query = value
     self._refresh()
 
-# Button with data attributes: data-item-id="5" -> item_id=5
+# Button with an argument: dj-value-item-id="5" -> item_id=5
 @event_handler()
-def delete(self, item_id: int = 0, **kwargs):
+def delete(self, item_id: int = 0):
     Item.objects.filter(id=item_id).delete()
     self._refresh()
 
@@ -78,7 +78,7 @@ def on_scroll(self, position: int = 0, **kwargs):
 
 Template bindings:
 ```html
-<button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
+<button dj-click="delete" dj-value-item-id="{{ item.id }}">Delete</button>
 <input dj-input="search" value="{{ query }}" />
 <select dj-change="filter"><option value="all">All</option></select>
 <form dj-submit="save">{% csrf_token %}<button type="submit">Save</button></form>
@@ -87,5 +87,5 @@ Template bindings:
 Rules:
 - `value` is the magic parameter name for `dj-input`/`dj-change` events
 - Give a parameter a default when a binding may omit it
-- `data-*` attributes are converted: `data-item-id` -> `item_id`
+- `dj-value-*` attributes are converted: `dj-value-item-id="5"` -> `item_id=5`
 - Type hints enable automatic coercion: `item_id: int` converts `"5"` to `5`

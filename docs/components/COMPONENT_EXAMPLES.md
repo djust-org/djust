@@ -56,19 +56,19 @@ class TodoListComponent(LiveComponent):
                 <ul class="nav nav-pills mb-3">
                     <li class="nav-item">
                         <button class="nav-link {% if filter == 'all' %}active{% endif %}"
-                                dj-click="set_filter" data-filter="all">
+                                dj-click="set_filter" dj-value-filter="all">
                             All ({{ total_count }})
                         </button>
                     </li>
                     <li class="nav-item">
                         <button class="nav-link {% if filter == 'active' %}active{% endif %}"
-                                dj-click="set_filter" data-filter="active">
+                                dj-click="set_filter" dj-value-filter="active">
                             Active ({{ active_count }})
                         </button>
                     </li>
                     <li class="nav-item">
                         <button class="nav-link {% if filter == 'completed' %}active{% endif %}"
-                                dj-click="set_filter" data-filter="completed">
+                                dj-click="set_filter" dj-value-filter="completed">
                             Completed ({{ completed_count }})
                         </button>
                     </li>
@@ -83,14 +83,14 @@ class TodoListComponent(LiveComponent):
                                    type="checkbox"
                                    {% if item.completed %}checked{% endif %}
                                    dj-change="toggle_todo"
-                                   data-id="{{ item.id }}">
+                                   dj-value-id="{{ item.id }}">
                             <label class="form-check-label {% if item.completed %}text-decoration-line-through text-muted{% endif %}">
                                 {{ item.text }}
                             </label>
                         </div>
                         <button class="btn btn-sm btn-danger"
                                 dj-click="delete_todo"
-                                data-id="{{ item.id }}">
+                                dj-value-id="{{ item.id }}">
                             ×
                         </button>
                     </li>
@@ -327,7 +327,7 @@ class UserListComponent(LiveComponent):
                     {% for user in filtered_users %}
                     <button class="list-group-item list-group-item-action {% if user.id == selected_id %}active{% endif %}"
                             dj-click="select_user"
-                            data-user-id="{{ user.id }}">
+                            dj-value-user-id="{{ user.id }}">
                         <div class="d-flex w-100 justify-content-between">
                             <h6 class="mb-1">{{ user.name }}</h6>
                             <small>{{ user.role }}</small>
@@ -650,7 +650,7 @@ class ProductGridComponent(LiveComponent):
                             <h4 class="text-primary">${{ product.price }}</h4>
                             <button class="btn btn-primary w-100"
                                     dj-click="add_to_cart"
-                                    data-product-id="{{ product.id }}">
+                                    dj-value-product-id="{{ product.id }}">
                                 Add to Cart
                             </button>
                         </div>

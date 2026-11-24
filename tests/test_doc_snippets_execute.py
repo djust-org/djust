@@ -36,7 +36,7 @@ needs arguments is fired with the ones its template binding sends
 run, not only parsed. 1.3 code that a migration guide shows as the thing being
 replaced carries ``<!-- doc-snippet-check: before -->`` and is not executed.
 ``test_docs_pass_event_arguments_as_dj_value`` reads every template in
-``docs/website`` for an event argument passed as ``data-*``.
+the teaching docs for an event argument passed as ``data-*``.
 
 Outcomes that are not doc defects are *not* failures and are recorded as
 such: a block importing the reader's own app or a library the test env lacks,
@@ -1483,6 +1483,15 @@ _BEFORE_FENCE_RE = re.compile(
     r"^<!-- doc-snippet-check: (?:before|anti-pattern) -->\n(```+)[^\n]*\n.*?^\1\s*$",
     re.DOTALL | re.MULTILINE,
 )
+#: An event attribute whose element may carry an argument: the ones fired above
+#: plus the ones that bind without a click (#4235).
+_ARGUMENT_EVENT_ATTR = (
+    r"dj-(?:click|dblclick|submit|change|input|keydown|keyup|keypress|blur|focus"
+    r"|mouseenter|mouseleave|paste|click-away|mounted|shortcut|(?:window|document)-[a-z]+)"
+    r"(?:\.[A-Za-z0-9_.-]+)?"
+)
+#: Every teaching document, in and out of docs/website (#4235).
+_SCANNED_DOCS = sorted({*DOC_FILES, *REPO_ROOT.glob("docs/website/*.md")})
 _WEBSITE_DOCS = sorted(
     {*REPO_ROOT.glob("docs/website/*.md"), *REPO_ROOT.glob("docs/website/*/*.md")}
 )
@@ -1501,7 +1510,7 @@ def data_argument_findings(text: str) -> list[str]:
     findings = []
     for tag in _TAG_RE.finditer(text):
         attrs = _attrs(tag.group(0))
-        if not any(re.fullmatch(_EVENT_ATTR, a) for a in attrs):
+        if not any(re.fullmatch(_ARGUMENT_EVENT_ATTR, a) for a in attrs):
             continue
         arguments = [a for a in attrs if a.startswith("data-") and not _DATA_MARKERS.match(a)]
         if arguments:
@@ -1513,6 +1522,15 @@ def data_argument_findings(text: str) -> list[str]:
 def test_data_argument_scan_finds_a_data_argument_and_spares_markers():
     assert data_argument_findings('<button dj-click="delete" data-item-id="5">x</button>')
     assert data_argument_findings('<button\n  dj-click="go"\n  data-dj-tab="a">x</button>')
+    for tag in (
+        '<div dj-click-away="close" data-menu="m">',
+        '<div dj-mounted="init" data-chart-id="1">',
+        '<div dj-shortcut="escape:close" data-x="1">',
+        '<div dj-window-keydown.escape="close" data-x="1">',
+        '<div dj-document-scroll="s" data-a="1">',
+    ):
+        assert data_argument_findings(tag), tag
+    assert set(DOC_FILES) <= set(_SCANNED_DOCS)
     assert not data_argument_findings('<button dj-click="delete" dj-value-item-id="5">x</button>')
     assert not data_argument_findings(
         '<button dj-click="inc" data-component-id="c1">+</button>'
@@ -1528,7 +1546,7 @@ def test_data_argument_scan_finds_a_data_argument_and_spares_markers():
 
 
 @pytest.mark.parametrize(
-    "path", _WEBSITE_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _WEBSITE_DOCS]
+    "path", _SCANNED_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _SCANNED_DOCS]
 )
 def test_docs_pass_event_arguments_as_dj_value(path):
     """#4188: every example passes event arguments the 2.0 way, ``dj-value-*``."""
@@ -1617,7 +1635,7 @@ def test_dj_value_pin_finds_an_undeclared_argument():
 
 
 @pytest.mark.parametrize(
-    "path", _WEBSITE_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _WEBSITE_DOCS]
+    "path", _SCANNED_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _SCANNED_DOCS]
 )
 def test_dj_value_arguments_match_the_documented_handler(path):
     """#4188: a ``dj-value-*`` argument a guide's markup sends is declared by its handler."""

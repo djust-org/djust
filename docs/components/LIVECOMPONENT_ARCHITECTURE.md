@@ -85,7 +85,7 @@ class TabsComponent(LiveComponent):
         <ul class="nav">
             {% for tab in tabs %}
             <li class="{% if tab.id == active_tab %}active{% endif %}"
-                dj-click="switch_tab" data-tab="{{ tab.id }}">
+                dj-click="switch_tab" dj-value-tab="{{ tab.id }}">
                 {{ tab.label }}
             </li>
             {% endfor %}
