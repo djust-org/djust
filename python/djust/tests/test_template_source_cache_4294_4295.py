@@ -28,6 +28,14 @@ MODULE = __name__
 
 
 @pytest.fixture
+def hot_reload(monkeypatch):
+    """Hot reload running: a template edit clears the render caches."""
+    from djust.dev_server import hot_reload_server
+
+    monkeypatch.setattr(hot_reload_server, "is_running", lambda: True)
+
+
+@pytest.fixture
 def reads(monkeypatch):
     """Count calls of the uncached template-source resolution."""
     calls: list = []
@@ -74,7 +82,7 @@ def test_debug_still_reads_the_source_each_call(settings, reads):
     assert len(reads) == 2
 
 
-def test_debug_notice_reads_the_template_once_per_class(settings, reads, caplog):
+def test_debug_notice_reads_the_template_once_per_class(settings, reads, hot_reload, caplog):
     settings.DEBUG = True
     _exposure_unsupplied._REPORTED.clear()
     view = Cards()
@@ -91,7 +99,17 @@ def test_debug_notice_reads_the_template_once_per_class(settings, reads, caplog)
     assert reads == ["Cards", "Cards"]
 
 
-def test_debug_notice_paths_follow_a_changed_inline_template(settings, reads, caplog):
+def test_debug_notice_without_hot_reload_reads_once_per_render(settings, reads):
+    """Nothing would clear a kept copy when a template is edited, so none is kept."""
+    settings.DEBUG = True
+    view = Cards()
+    view.held = "x"
+    for _ in range(3):
+        warn_unsupplied_template_names(view, {"held": "x", "cards": []})
+    assert len(reads) == 3, "one read per render (it was two: the notice and its helper)"
+
+
+def test_debug_notice_paths_follow_a_changed_inline_template(settings, reads, hot_reload, caplog):
     settings.DEBUG = True
     _exposure_unsupplied._REPORTED.clear()
     view = Cards()
@@ -105,7 +123,7 @@ def test_debug_notice_paths_follow_a_changed_inline_template(settings, reads, ca
     assert len(reads) == 2
 
 
-def test_error_mode_reads_the_template_once_per_render(settings, reads):
+def test_error_mode_reads_the_template_once_per_render(settings, reads, hot_reload):
     settings.DEBUG = True
     settings.DJUST_UNSUPPLIED_NAMES = "error"
     view = Cards()
@@ -115,16 +133,11 @@ def test_error_mode_reads_the_template_once_per_render(settings, reads):
     assert len(reads) == 2
 
 
-class OverridesPaths(Cards):
-    def template_paths(self):
-        return {"held": []}
-
-
-def test_an_overridden_template_paths_is_asked_every_time(settings, reads):
+def test_an_overridden_template_paths_is_asked_once_per_render(settings, hot_reload):
     settings.DEBUG = True
     calls = []
 
-    class Counting(OverridesPaths):
+    class Counting(Cards):
         def template_paths(self):
             calls.append(1)
             return {"held": []}
@@ -133,7 +146,7 @@ def test_an_overridden_template_paths_is_asked_every_time(settings, reads):
     view.held = "x"
     for _ in range(2):
         warn_unsupplied_template_names(view, {"held": "x"})
-    assert len(calls) == 2
+    assert len(calls) == 2, "never kept, and asked once per render (it was twice)"
 
 
 # --- #4295 -------------------------------------------------------------------
@@ -147,11 +160,8 @@ def test_an_overridden_template_paths_is_asked_every_time(settings, reads):
         ("{% load i18n %}{% load humanize %}<div dj-root></div>", False),
         ("{% load naturaltime from humanize %}<div dj-root></div>", False),
         ('{% load live_tags %}{% live_render "a.B" %}<div dj-root></div>', True),
-        ("{% include partial %}<div dj-root></div>", True),
-        ('{% include "missing.html" %}<div dj-root></div>', True),
         ("{% load crispy_forms_tags %}<div dj-root></div>", True),
         ("{% load mytag from custom_lib %}<div dj-root></div>", True),
-        ("", True),
         (None, True),
     ],
 )
@@ -159,30 +169,38 @@ def test_source_may_register_children(source, expected):
     assert runtime._source_may_register_children(source) is expected
 
 
+SHELL_FILES = {
+    "t4295_base.html": "<html><body><nav>{{ title }}</nav>{% block main %}{% endblock %}</body></html>",
+    "t4295_page.html": '{% extends "t4295_base.html" %}{% load static %}{% block main %}'
+    '<div dj-root>{% include "t4295_part.html" %}</div>{% endblock %}',
+    "t4295_part.html": "Page={{ n }}",
+    "t4295_child_base.html": '<html><body>{% include "t4295_child_nav.html" %}'
+    "{% block main %}{% endblock %}</body></html>",
+    "t4295_child_nav.html": '{% load live_tags %}{% live_render "x.Y" sticky=True %}',
+    "t4295_child_page.html": '{% extends "t4295_child_base.html" %}{% block main %}'
+    "<div dj-root>Page={{ n }}</div>{% endblock %}",
+    # The review's cases: a library loaded at the top of the child (dropped by
+    # inheritance resolution), and an include that itself extends a parent.
+    "t4295_loads_page.html": '{% extends "t4295_base.html" %}{% load myapp_tags %}'
+    "{% block main %}<div dj-root>{% sidebar %}</div>{% endblock %}",
+    "t4295_pbase.html": '{% load live_tags %}{% live_render "x.Y" %}{% block b %}{% endblock %}',
+    "t4295_pchild.html": '{% extends "t4295_pbase.html" %}{% block b %}x{% endblock %}',
+    "t4295_incl_extends_page.html": '{% extends "t4295_base.html" %}{% block main %}'
+    '<div dj-root>{% include "t4295_pchild.html" %}</div>{% endblock %}',
+    "t4295_var_include_page.html": '{% extends "t4295_base.html" %}{% block main %}'
+    "<div dj-root>{% include partial_name %}</div>{% endblock %}",
+    "t4295_missing_page.html": '{% extends "t4295_base.html" %}{% block main %}'
+    '<div dj-root>{% include "t4295_nowhere.html" %}</div>{% endblock %}',
+}
+
+
 @pytest.fixture
 def shell_templates(settings, tmp_path):
     templates = copy.deepcopy(settings.TEMPLATES)
     templates[0]["DIRS"] = [str(tmp_path), *templates[0].get("DIRS", [])]
     settings.TEMPLATES = templates
-    (tmp_path / "t4295_base.html").write_text(
-        "<html><body><nav>{{ title }}</nav>{% block main %}{% endblock %}</body></html>"
-    )
-    (tmp_path / "t4295_page.html").write_text(
-        '{% extends "t4295_base.html" %}{% block main %}'
-        '<div dj-root>{% include "t4295_part.html" %}</div>{% endblock %}'
-    )
-    (tmp_path / "t4295_part.html").write_text("Page={{ n }}")
-    (tmp_path / "t4295_child_base.html").write_text(
-        '<html><body>{% include "t4295_child_nav.html" %}'
-        "{% block main %}{% endblock %}</body></html>"
-    )
-    (tmp_path / "t4295_child_nav.html").write_text(
-        '{% load live_tags %}{% live_render "x.Y" sticky=True %}'
-    )
-    (tmp_path / "t4295_child_page.html").write_text(
-        '{% extends "t4295_child_base.html" %}{% block main %}'
-        "<div dj-root>Page={{ n }}</div>{% endblock %}"
-    )
+    for name, text in SHELL_FILES.items():
+        (tmp_path / name).write_text(text)
     from djust.utils import clear_template_dirs_cache
 
     clear_template_dirs_cache()
@@ -235,32 +253,68 @@ def test_a_shell_child_in_an_include_keeps_the_full_render(
     assert len(full_renders) == 2
 
 
-def test_the_shell_answer_is_cached_per_template(settings, shell_templates, reads):
+@pytest.mark.parametrize(
+    "template_name",
+    [
+        "t4295_loads_page.html",
+        "t4295_incl_extends_page.html",
+        "t4295_var_include_page.html",
+        "t4295_missing_page.html",
+        "t4295_not_a_template.html",
+    ],
+)
+def test_what_the_scan_cannot_rule_out_keeps_the_full_render(
+    settings, shell_templates, template_name
+):
     settings.DEBUG = False
+    view = type("Page", (ShellPage,), {"template_name": template_name})()
+    assert runtime._page_shell_may_register_children(view) is True
+
+
+def test_engine_builtins_keep_the_full_render(settings, shell_templates):
+    templates = copy.deepcopy(settings.TEMPLATES)
+    templates[0].setdefault("OPTIONS", {})["builtins"] = ["myapp.templatetags.tags"]
+    settings.TEMPLATES = templates
+    assert runtime._page_shell_may_register_children(ShellPage()) is True
+
+
+def test_a_tag_handler_registered_outside_djust_keeps_the_full_render(
+    settings, shell_templates, monkeypatch
+):
+    from djust import template_tags
+
+    class Outside:
+        __module__ = "myapp.tags"
+
+    handlers = {**template_tags.get_registered_handlers(), "sidebar": Outside()}
+    monkeypatch.setattr(template_tags, "get_registered_handlers", lambda: handlers)
+    assert runtime._page_shell_may_register_children(ShellPage()) is True
+
+
+def test_the_shell_answer_is_cached_per_template(settings, shell_templates, monkeypatch):
+    settings.DEBUG = False
+    scans = []
+    original = runtime._templates_may_register_children
+    monkeypatch.setattr(
+        runtime, "_templates_may_register_children", lambda n: scans.append(n) or original(n)
+    )
     for _ in range(3):
-        assert runtime._page_shell_may_register_children(_got(ShellPage())) is False
-    assert reads == ["ShellPage"]
+        assert runtime._page_shell_may_register_children(ShellPage()) is False
+    assert scans == ["t4295_page.html"]
 
 
 def test_an_edited_shell_is_read_again_after_a_template_refresh(settings, shell_templates):
     settings.DEBUG = False
-    assert runtime._page_shell_may_register_children(_got(ShellPage())) is False
+    assert runtime._page_shell_may_register_children(ShellPage()) is False
     (shell_templates / "t4295_part.html").write_text('{% load live_tags %}{% live_render "x.Y" %}')
     clear_render_caches()
-    assert runtime._page_shell_may_register_children(_got(ShellPage())) is True
+    assert runtime._page_shell_may_register_children(ShellPage()) is True
 
 
-def test_an_overridden_template_source_keeps_the_full_render(
-    settings, shell_templates, full_renders
-):
+def test_an_overridden_get_template_keeps_the_full_render(settings, shell_templates, full_renders):
     class Custom(ShellPage):
-        def _get_template_content(self):
-            return "<div dj-root></div>"
+        def get_template(self):
+            return super().get_template()
 
     runtime._reconstruct_explicit_page_shell(Custom(), RequestFactory().get("/"))
     assert len(full_renders) == 1
-
-
-def _got(view):
-    view.get_template()
-    return view

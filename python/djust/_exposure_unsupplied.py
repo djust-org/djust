@@ -169,14 +169,28 @@ _REPORTED: "weakref.WeakKeyDictionary[type, set[str]]" = weakref.WeakKeyDictiona
 #: The log modes' template paths, by view class: ``(source key, paths)`` (#4294).
 #: With ``DEBUG`` on the JIT source is not cached, so ``template_paths()`` resolves
 #: the inheritance and inlines every include on each call; the notice would pay
-#: that on every render. Kept while the view's template source key is unchanged,
-#: and cleared with the render caches (hot reload, ``override_settings``).
+#: that on every render. Kept while the view's template source key is unchanged
+#: and something clears it when a template changes: render caches are on, or hot
+#: reload is running (its template refresh clears the render caches, and this).
 _PATHS_BY_CLASS: "weakref.WeakKeyDictionary[type, tuple[Any, Any]]" = weakref.WeakKeyDictionary()
 
 
 def clear_unsupplied_paths_cache() -> None:
     """Forget the log modes' template paths (a template may have changed)."""
     _PATHS_BY_CLASS.clear()
+
+
+def _templates_stay_fresh() -> bool:
+    """Whether a template edit clears the render caches before the next render."""
+    from ._render_caches import render_caches_enabled
+
+    if render_caches_enabled():
+        return True
+    try:
+        from .dev_server import hot_reload_server
+    except ImportError:  # watchdog is optional
+        return False
+    return bool(hot_reload_server.is_running())
 
 
 def _log_mode_paths(view: Any, cls: type) -> Any:
@@ -193,6 +207,8 @@ def _log_mode_paths(view: Any, cls: type) -> Any:
         or "template_paths" in getattr(view, "__dict__", {})
         or "_get_template_content" in getattr(view, "__dict__", {})
     ):
+        return view.template_paths()
+    if not _templates_stay_fresh():
         return view.template_paths()
     key = _template_source_key(view)
     if key is None:

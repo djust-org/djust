@@ -550,9 +550,9 @@ _template_source_cache: Dict[Tuple[str, str, Tuple[str, ...]], str] = {}
 _TEMPLATE_SOURCE_CACHE_MAX = 256
 
 
-#: Whether a template's page shell could mount a child view, by source key
+#: Whether a template's page shell could mount a child view, by template name and dirs
 #: (``runtime._page_shell_may_register_children``, #4295).
-_shell_children_cache: Dict[Tuple[str, str, Tuple[str, ...]], bool] = {}
+_shell_children_cache: Dict[Tuple[str, Tuple[str, ...]], bool] = {}
 _SHELL_CHILDREN_CACHE_MAX = 256
 
 
