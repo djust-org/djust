@@ -140,7 +140,7 @@ class CommentThreadView(LiveView):
         ]
 
     @action
-    def post_comment(self, body: str = "", **kwargs):
+    def post_comment(self, body: str = ""):
         body = body.strip()
         if not body:
             raise ValueError("Comment cannot be empty.")

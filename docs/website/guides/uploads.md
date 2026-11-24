@@ -45,7 +45,7 @@ class ProfileView(UploadMixin, LiveView):
         )
 
     @event_handler()
-    def save_avatar(self, **kwargs):
+    def save_avatar(self):
         for entry in self.consume_uploaded_entries('avatar'):
             # safe_client_name, never client_name: see the note below.
             path = default_storage.save(
@@ -183,7 +183,7 @@ class GalleryView(UploadMixin, LiveView):
         )
 
     @event_handler()
-    def upload_photos(self, **kwargs):
+    def upload_photos(self):
         for entry in self.consume_uploaded_entries('photos'):
             path = default_storage.save(
                 f'gallery/{uuid4().hex}/{entry.safe_client_name}', entry.file
@@ -343,7 +343,7 @@ class UploadView(LiveView, UploadMixin):
         )
 
     @event_handler()
-    def save_uploads(self, **kwargs):
+    def save_uploads(self):
         for entry in self.consume_uploaded_entries("asset"):
             # entry.writer_result is whatever on_complete() returned
             url = entry.writer_result["url"]

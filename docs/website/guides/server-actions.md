@@ -36,7 +36,7 @@ class TodoView(LiveView):
     todos = state(default_factory=list)
 
     @action
-    def create_todo(self, title: str = "", **kwargs):
+    def create_todo(self, title: str = ""):
         if not title:
             raise ValueError("Title is required")
         todo = Todo.objects.create(title=title, user=self.request.user)
@@ -83,10 +83,10 @@ to react to it.
 
 ```python
 @action
-def create_todo(self, **kwargs): ...
+def create_todo(self): ...
 
 @action(description="Create a new todo item")
-def create_todo(self, **kwargs): ...
+def create_todo(self): ...
 ```
 
 The optional `description=` is metadata for tooling that introspects
@@ -189,7 +189,7 @@ class TodoView(LiveView):
     todos = state(default_factory=list)
 
     @action
-    def create_todo(self, title: str = "", **kwargs):
+    def create_todo(self, title: str = ""):
         if not title:
             raise ValueError("Title cannot be empty")
         todo = Todo.objects.create(title=title, user=self.request.user)

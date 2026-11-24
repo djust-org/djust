@@ -322,7 +322,7 @@ class TabsComponent(LiveComponent):
             **kwargs: Additional event data
 
         Example template:
-            <button dj-click="switch_tab" data-tab="{{ tab.id }}">
+            <button dj-click="switch_tab" dj-value-tab="{{ tab.id }}">
         """
         if tab:
             self.active_tab = tab
@@ -331,16 +331,16 @@ class TabsComponent(LiveComponent):
 
 **Event Handler Signature:**
 - Method name matches event name in template (`dj-click="switch_tab"`)
-- Parameters come from `data-*` attributes
-- `**kwargs` captures additional data
+- Parameters come from `dj-value-*` attributes
+- Declare each parameter the binding sends; the signature is the contract
 
 **Template Binding:**
 ```html
 <!-- Triggers: component.switch_tab(tab="profile") -->
-<button dj-click="switch_tab" data-tab="profile">Profile</button>
+<button dj-click="switch_tab" dj-value-tab="profile">Profile</button>
 
 <!-- Triggers: component.page_changed(page="2", size="10") -->
-<button dj-click="page_changed" data-page="2" data-size="10">Next</button>
+<button dj-click="page_changed" dj-value-page="2" dj-value-size="10">Next</button>
 ```
 
 ### Parent Communication
@@ -406,7 +406,7 @@ class TabsComponent(LiveComponent):
                     <button
                         class="nav-link {% if tab.id == active_tab %}active{% endif %}"
                         dj-click="switch_tab"
-                        data-tab="{{ tab.id }}"
+                        dj-value-tab="{{ tab.id }}"
                         {% if tab.disabled %}disabled{% endif %}>
                         {{ tab.label }}
                         {% if tab.badge %}
@@ -570,7 +570,7 @@ self.pagination.go_to_page(5)
     "type": "event",
     "target": "tabs_abc123",  # Component ID
     "event": "switch_tab",
-    "params": {"tab": "settings"}  # From data-* attributes
+    "params": {"tab": "settings"}  # From dj-value-* attributes
 }
 ```
 

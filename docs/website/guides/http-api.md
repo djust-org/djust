@@ -58,7 +58,7 @@ class InventoryView(LiveView):
 
     @event_handler(expose_api=True)
     @permission_required("inventory.change_item")
-    def update_quantity(self, item_id: int, quantity: int, **kwargs):
+    def update_quantity(self, item_id: int, quantity: int):
         """Update the stock count for an item."""
         item = self.items[item_id]
         item.quantity = quantity
@@ -146,15 +146,15 @@ class ClaimListView(LiveView):
         return [c.as_dict() for c in self._filtered_claims()]
 
     @event_handler(expose_api=True)
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         self.search_query = value  # state mutation only
 
     @event_handler(expose_api=True)
-    def filter_by_status(self, status: str = "", **kwargs):
+    def filter_by_status(self, status: str = ""):
         self.status = status
 
     @event_handler(expose_api=True)
-    def clear(self, **kwargs):
+    def clear(self):
         self.search_query = ""
         self.status = ""
 ```
@@ -182,7 +182,7 @@ class ClaimListView(LiveView):
         return [c.as_dict() for c in self._filtered_claims()]
 
     @event_handler(expose_api=True, serialize="serialize_saved_claim")
-    def save_claim(self, id: int = 0, **kwargs):
+    def save_claim(self, id: int = 0):
         c = Claim.objects.get(pk=id)
         c.status = "saved"
         c.save()
@@ -340,7 +340,7 @@ class MyView(LiveView):
     api_auth_classes = [TokenAuth, SessionAuth]  # tried in order
 
     @event_handler(expose_api=True)
-    def ping(self, **kwargs):
+    def ping(self):
         return {"ok": True}
 ```
 

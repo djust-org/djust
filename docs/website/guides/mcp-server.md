@@ -279,13 +279,13 @@ class ProductListView(LiveView):
         self._items = qs
 
     @event_handler()
-    def search(self, value: str = '', **kwargs):
+    def search(self, value: str = ''):
         self.search_query = value
         self.page = 1
         self._refresh()
 
     @event_handler()
-    def go_to_page(self, page: int = 1, **kwargs):
+    def go_to_page(self, page: int = 1):
         self.page = page
         self._refresh()
 

@@ -33,7 +33,7 @@ class ChatView(LiveView):
         self.page_title = "Chat"
 
     @event_handler()
-    def new_message(self, **kwargs):
+    def new_message(self):
         self.unread += 1
         self.page_title = f"Chat ({self.unread} unread)"
 ```
@@ -49,7 +49,7 @@ def mount(self, request, **kwargs):
     self.page_title = "Dashboard"
 
 @event_handler()
-def select_tab(self, tab: str = "", **kwargs):
+def select_tab(self, tab: str = ""):
     self.page_title = f"Dashboard - {tab.title()}"
 ```
 
@@ -79,7 +79,7 @@ Set `self.page_meta` to a dictionary to update or create `<meta>` tags in the do
 
 ```python
 @event_handler()
-def select_article(self, article_id: int = 0, **kwargs):
+def select_article(self, article_id: int = 0):
     article = Article.objects.get(pk=article_id)
     self.page_title = article.title
     self.page_meta = {
@@ -127,7 +127,7 @@ class InboxView(LiveView):
         return {**super().get_context_data(**kwargs), "unread": self.unread}
 
     @event_handler()
-    def mark_read(self, message_id: int = 0, **kwargs):
+    def mark_read(self, message_id: int = 0):
         Message.objects.filter(pk=message_id).update(read=True)
         self.unread = max(0, self.unread - 1)
         self._update_title()
@@ -143,7 +143,7 @@ class InboxView(LiveView):
 
 ```python
 @event_handler()
-def toggle_recording(self, **kwargs):
+def toggle_recording(self):
     self.recording = not self.recording
     prefix = "● REC" if self.recording else "◼ Stopped"
     self.page_title = f"{prefix} - Studio"
@@ -153,7 +153,7 @@ def toggle_recording(self, **kwargs):
 
 ```python
 @event_handler()
-def navigate_to_product(self, product_id: int = 0, **kwargs):
+def navigate_to_product(self, product_id: int = 0):
     product = Product.objects.get(pk=product_id)
     self.page_title = f"{product.name} | Store"
     self.page_meta = {
@@ -170,7 +170,7 @@ def navigate_to_product(self, product_id: int = 0, **kwargs):
 
 ```python
 @event_handler()
-def save(self, **kwargs):
+def save(self):
     save_data(self._form_data)
     self.put_flash("success", "Changes saved!")
     self.page_title = f"{self.project_name} - Saved"

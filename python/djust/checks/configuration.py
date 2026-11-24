@@ -670,6 +670,60 @@ def _check_unsupplied_names_mode(errors: list[CheckMessage]) -> None:
         )
 
 
+def _check_childless_inclusion_tags(errors: list[CheckMessage]) -> None:
+    """C044 -- an ``inclusion_tag`` in a childless library (#4302).
+
+    Childless means ``register.djust_childless = True`` or a name in
+    ``LIVEVIEW_CONFIG['childless_tag_libraries']``.
+
+    The page-shell scan reads the page's own templates, not the template an
+    inclusion tag renders, so a ``{% live_render %}`` there would not be seen.
+    DEBUG only: it resolves every installed tag library.
+    """
+    from django.conf import settings
+
+    if not settings.DEBUG or _is_check_suppressed("djust.C044"):
+        return
+    try:
+        from djust import template_libraries
+
+        from djust.runtime import _project_childless_libraries
+
+        vouched = set(_project_childless_libraries())
+        names = sorted({*template_libraries._library_map(), *vouched})
+    except Exception:  # noqa: BLE001 — a broken library map is not this check's job
+        return
+    for name in names:
+        try:
+            found = template_libraries._find_library(name)
+        except Exception:  # noqa: BLE001 — an unloadable library is not this check's job
+            continue
+        if name not in vouched and getattr(found, "djust_childless", False) is not True:
+            continue
+        tags = getattr(found, "tags", None)
+        if not isinstance(tags, dict):
+            continue
+        for tag, fn in sorted(tags.items()):
+            if "InclusionNode" not in getattr(getattr(fn, "__code__", None), "co_names", ()):
+                continue
+            errors.append(
+                DjustWarning(
+                    "Tag library %r is childless but %r is an inclusion tag." % (name, tag),
+                    hint=(
+                        "The page-shell scan does not follow inclusion templates, so a "
+                        "{%% live_render %%} in the template of {%% %s %%} would not be "
+                        "registered. Drop the marker, or make sure the inclusion template "
+                        "never mounts a child view." % tag
+                    ),
+                    id="djust.C044",
+                    fix_hint=(
+                        "Drop `%s` from the childless marker or setting, or keep "
+                        "`{%% live_render %%}` out of the template `%s` renders." % (name, tag)
+                    ),
+                )
+            )
+
+
 def _check_ws_path(errors: list[CheckMessage]) -> None:
     """C025 — ``DJUST_WS_PATH`` must be a path starting with a single ``/`` (#3186).
 
@@ -2055,6 +2109,9 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
 
     # C043 -- DJUST_UNSUPPLIED_NAMES is not "debug" / "warn" / "error" (#4279)
     _check_unsupplied_names_mode(errors)
+
+    # C044 -- inclusion tag in a djust_childless library (#4302, DEBUG only)
+    _check_childless_inclusion_tags(errors)
 
     # C025 -- DJUST_WS_PATH is not a root-relative path (#3186)
     _check_ws_path(errors)

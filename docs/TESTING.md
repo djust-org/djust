@@ -236,7 +236,7 @@ class TestCounterView:
             count = state(0)
 
             @event_handler
-            def increment(self, **kwargs):
+            def increment(self):
                 self.count += 1
 
         view = CounterView()
@@ -350,7 +350,7 @@ class TestEventHandlers:
                 self.results = []
 
             @event_handler
-            def search(self, value: str = "", **kwargs):
+            def search(self, value: str = ""):
                 self.query = value
                 self.results = [f"Result for {value}"]
 
@@ -439,7 +439,7 @@ class TestAlertComponent:
             alert_warning = AlertComponent(message="Warning!", dismissible=True)
 
             @event_handler
-            def dismiss(self, component_id: str = None, **kwargs):
+            def dismiss(self, component_id: str = None):
                 """Handle alert dismissal."""
                 if component_id and hasattr(self, component_id):
                     component = getattr(self, component_id)

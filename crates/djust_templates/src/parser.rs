@@ -4081,7 +4081,20 @@ fn extract_from_variable(
     } else {
         // Has a path (e.g., "lease.property.name")
         let path = parts[1..].join(".");
-        variables.entry(root).or_default().push(path);
+        // The value at the path is read whole too (`{{ p.content_type }}`):
+        // settled into `content_type.__str__` when the same path is also read
+        // by field (`{{ p.content_type.model }}`), so the nested dict the
+        // serializers build carries the object's text (#4269). Not after an
+        // index (`rows.0` is a row, filed as the root's own read) or a
+        // relation method (`all` / `first` / `last`, whose rows and methods
+        // the serializers build their own way).
+        let last = parts[parts.len() - 1];
+        let whole = !is_index_segment(last) && !matches!(last, "all" | "first" | "last");
+        let entry = variables.entry(root).or_default();
+        if whole {
+            entry.push(format!("{path}.{WHOLE_READ_MARK}"));
+        }
+        entry.push(path);
     }
 }
 
@@ -4374,10 +4387,11 @@ fn merge_without_whole_reads(
     variables: &mut std::collections::HashMap<String, Vec<String>>,
 ) {
     for (root, paths) in local {
-        variables
-            .entry(root)
-            .or_default()
-            .extend(paths.into_iter().filter(|path| path != WHOLE_READ_MARK_STR));
+        variables.entry(root).or_default().extend(
+            paths
+                .into_iter()
+                .filter(|path| !path.ends_with(WHOLE_READ_MARK)),
+        );
     }
 }
 
@@ -7990,5 +8004,106 @@ mod own_reads_tests_4258 {
         let mut variables = std::collections::HashMap::new();
         record_regroup_item_key(&regroup_args(), &mut variables);
         assert!(!variables.is_empty());
+    }
+
+    // #4269: a nested value read whole AND by field carries its text.
+    fn full_paths(template: &str, root: &str) -> Vec<String> {
+        extract_template_variables(template)
+            .unwrap()
+            .get(root)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn strs(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|p| p.to_string()).collect()
+    }
+
+    #[test]
+    fn a_nested_value_read_whole_and_by_field_files_its_text_4269() {
+        let t = "{% for p in perms %}{{ p.content_type }} {{ p.content_type.model }}{% endfor %}";
+        assert_eq!(
+            full_paths(t, "perms"),
+            strs(&["content_type", "content_type.__str__", "content_type.model"])
+        );
+        assert_eq!(
+            full_paths("{{ p.content_type }}{{ p.content_type.app_label }}", "p"),
+            strs(&[
+                "content_type",
+                "content_type.__str__",
+                "content_type.app_label"
+            ])
+        );
+        // Read whole alone: no text path, the leaf ships the text already.
+        assert_eq!(
+            full_paths(
+                "{% for p in perms %}{{ p.content_type }}{% endfor %}",
+                "perms"
+            ),
+            strs(&["content_type"])
+        );
+        // A filter argument prints the value too.
+        assert_eq!(
+            full_paths("{{ x|default:p.owner }}{{ p.owner.name }}", "p"),
+            strs(&["owner", "owner.__str__", "owner.name"])
+        );
+    }
+
+    #[test]
+    fn a_nested_value_used_but_not_printed_files_no_text_4269() {
+        // Iterated: the whole read of the path is the list, not a row.
+        assert_eq!(
+            full_paths("{% for x in p.items %}{{ x.name }}{% endfor %}", "p"),
+            strs(&["items", "items.name"])
+        );
+        assert_eq!(
+            full_paths(
+                "{{ p.items }}{% for x in p.items %}{{ x.name }}{% endfor %}",
+                "p"
+            ),
+            strs(&["items", "items.name"])
+        );
+        // A condition tests the value; it does not print it.
+        assert_eq!(
+            full_paths(
+                "{% if p.content_type %}{{ p.content_type.model }}{% endif %}",
+                "p"
+            ),
+            strs(&["content_type", "content_type.model"])
+        );
+        // A `{% with %}` binding is not a read either.
+        assert_eq!(
+            full_paths("{% with c=p.content_type %}{{ c.model }}{% endwith %}", "p"),
+            strs(&["content_type", "content_type.model"])
+        );
+        // An index is the root's own row read, unchanged.
+        assert_eq!(
+            full_paths("{{ rows.0 }}{{ rows.0.name }}", "rows"),
+            strs(&["name"])
+        );
+        // A relation method builds its own rows.
+        assert_eq!(
+            full_paths("{{ u.groups.first }}{{ u.groups.first.name }}", "u"),
+            strs(&["groups.first", "groups.first.name"])
+        );
+        assert_eq!(
+            full_paths("{{ u.groups.last }}{{ u.groups.last.name }}", "u"),
+            strs(&["groups.last", "groups.last.name"])
+        );
+        assert_eq!(
+            full_paths("{{ u.groups.all }}{{ u.groups.all.count }}", "u"),
+            strs(&["groups.all", "groups.all.count"])
+        );
+        // The marks never reach the item-key or own-read maps.
+        let t = "{% for p in perms %}{{ p.content_type }}{{ p.content_type.model }}{% endfor %}";
+        assert!(extract_item_key_only_reads(t).unwrap().is_empty());
+        assert_eq!(
+            paths(t, "p"),
+            Some(strs(&[
+                "content_type",
+                "content_type.__str__",
+                "content_type.model"
+            ]))
+        );
     }
 }

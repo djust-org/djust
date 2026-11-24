@@ -178,7 +178,7 @@ class ChatView(LiveView):
     streaming = state(False)
 
     @event_handler
-    def start(self, **kwargs):
+    def start(self):
         if self.streaming:
             return
         self.llm_output = ""
@@ -189,7 +189,7 @@ class ChatView(LiveView):
         self.start_async(self._stream, name=_STREAM)
 
     @event_handler
-    def reset(self, **kwargs):
+    def reset(self):
         self.cancel_async(_STREAM)   # name MUST match start_async(name=...)
         self.streaming = False       # the async loop yields, sees this, stops
         self.llm_output = ""

@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 129 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 130 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -54,6 +54,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C041 | Config | Info | A state save interval is set while `DJUST_STATE_STORE_STRICT` is on |
 | C042 | Config | Info | A model's rows may be changed by the database itself (an unmanaged model, a `DB_*` cascade) while `DJUST_REFRESH_ON_ANY_WRITE` is off |
 | C043 | Config | Error | "`DJUST_UNSUPPLIED_NAMES` is not `\"debug\"`, `\"warn\"` or `\"error\"` (#4279)" |
+| C044 | Config | Warning | "`inclusion_tag` in a tag library marked `djust_childless` (#4302)" |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -413,6 +414,13 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C043"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C043"]`
 - **False positives**: None
 
+### C044 — Inclusion tag in a `djust_childless` library
+- **Severity**: Warning
+- **Method**: Tag library inspection (DEBUG only; resolves every installed tag library)
+- **What it detects**: a tag library that sets `register.djust_childless = True`, or is listed in `LIVEVIEW_CONFIG['childless_tag_libraries']`, and also registers a tag built with `Library.inclusion_tag`. The page-shell scan reads the page's own templates and does not follow the template an inclusion tag renders, so a `{% live_render %}` inside it would not be registered.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C044"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C044"]`
+- **False positives**: An inclusion template that never mounts a child view; suppress the check once you have confirmed that.
+
 ### C501 — Retired
 - **Retired in**: 2.0 (time-travel debugging was removed, #4184)
 - **What it did**: noted, under `DEBUG`, that `LIVEVIEW_CONFIG['time_travel_enabled']` was on
@@ -475,12 +483,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### V002 — LiveView missing mount() method
 - **Severity**: Info
 - **Method**: Runtime (class inspection)
-- **What it detects**: A LiveView subclass does not define `mount()`
+- **What it detects**: A LiveView subclass does not define `mount()` (and no class below `LiveView` in its MRO does), and declares no `state()` fields
 - **Suppression** (any of):
   - `abstract = True` class attribute on the LiveView subclass (skips all per-class checks)
   - `DJUST_CONFIG = {"suppress_checks": ["V002"]}` — global (fixed in #1607)
   - `SILENCED_SYSTEM_CHECKS = ["djust.V002"]`
-- **False positives**: Views that require no state initialisation
+- **False positives**: Views that require no state initialisation. A view that declares any `state()` field, on itself or a parent mixin, is skipped (#4233)
 
 ### V003 — mount() has wrong signature
 - **Severity**: Error
@@ -990,10 +998,10 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 
 ### T010 — dj-click used for navigation
 - **Severity**: Warning
-- **Method**: Regex/AST (heuristic: dj-click handlers that call redirect or navigate)
-- **What it detects**: `dj-click` triggers navigation; prefer `dj-patch` for URL state updates
+- **Method**: Template scan (regex over each tag: `dj-click` plus a navigation-style attribute)
+- **What it detects**: an element with `dj-click` and a navigation-style attribute (`data-view`, `data-tab`, `data-page`, `data-section`, or the same names as `dj-value-*`); prefer `dj-patch` for URL state updates. Names are matched whole, so `data-viewport` and `dj-value-viewer` do not count
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T010"]`
-- **False positives**: Click handlers that navigate as a side effect of other work (e.g. save-and-redirect)
+- **False positives**: In-view tab or page state that is not URL state, such as djust's own Tabs component (`dj-click="activate_tab" dj-value-tab=...`); suppress it for those templates
 
 ### T011 — Unsupported Django template tags
 - **Severity**: Warning

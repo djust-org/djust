@@ -142,7 +142,7 @@ class TodoListView(LiveView):
         ]
 
     @event_handler
-    def toggle_todo(self, todo_id: int = 0, **kwargs):
+    def toggle_todo(self, todo_id: int = 0):
         # Scoped to the user: another user's todo id is "not found",
         # the same as an id that doesn't exist.
         todo = Todo.objects.filter(id=todo_id, user=self.request.user).first()

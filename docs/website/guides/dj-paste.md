@@ -51,8 +51,7 @@ Positional args bind to the handler's leading named parameters, ahead of the pas
 @event_handler
 def handle_paste(self, room: str = "", room_id: int = 0,
                  text: str = "", html: str = "",
-                 has_files: bool = False, files: list = None,
-                 **kwargs):
+                 has_files: bool = False, files: list = None):
     ...
 ```
 
@@ -78,7 +77,7 @@ class ChatView(UploadMixin, LiveView):
         )
 
     @event_handler
-    def handle_paste(self, text: str = "", has_files: bool = False, **kwargs):
+    def handle_paste(self, text: str = "", has_files: bool = False):
         if has_files:
             # Files arrive via the upload pipeline — nothing more to do here.
             return

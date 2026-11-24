@@ -122,7 +122,7 @@ class ProfileView(LiveView):
         }
 
     @action
-    def save_profile(self, name: str = "", email: str = "", **kwargs):
+    def save_profile(self, name: str = "", email: str = ""):
         self.name = name.strip()
         self.email = email.strip()
         # Persist to DB, etc. (omitted)

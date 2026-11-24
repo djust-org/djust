@@ -126,7 +126,7 @@ class NewIssueView(LiveView):
     # "no suggestions".
     @rate_limit(rate=5, burst=10)
     @server_function
-    def search_tags(self, q: str = "", limit: int = 8, **kwargs) -> list[dict]:
+    def search_tags(self, q: str = "", limit: int = 8) -> list[dict]:
         q = q.strip()[:64]
         if not q:
             return []
@@ -139,7 +139,7 @@ class NewIssueView(LiveView):
         return [{"id": t.id, "name": t.name} for t in hits]
 
     @action
-    def add_tag(self, id: int = 0, **kwargs):
+    def add_tag(self, id: int = 0):
         # Look the tag up by id. The browser also knows the name, but a
         # caller can send any name it likes.
         tag = Tag.objects.filter(pk=id).first()
@@ -150,12 +150,12 @@ class NewIssueView(LiveView):
         self.selected_tags.append({"id": tag.id, "name": tag.name})
 
     @action
-    def remove_tag(self, id: int = 0, **kwargs):
+    def remove_tag(self, id: int = 0):
         self.selected_tags = [t for t in self.selected_tags if t["id"] != id]
 
     @rate_limit(rate=0.2, burst=5)  # 5 issues, then one every 5 seconds
     @action
-    def submit(self, title: str = "", description: str = "", **kwargs):
+    def submit(self, title: str = "", description: str = ""):
         # dj-submit sends the form's named fields as kwargs.
         title = title.strip()
         self.title = title

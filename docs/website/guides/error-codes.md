@@ -506,6 +506,16 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
+### C044: Inclusion tag in a djust_childless library
+
+**Severity**: Warning
+
+**What causes it**: A library vouches that none of its tags mount a child view with `register.djust_childless = True`, but one of its tags is an `inclusion_tag`. djust does not read inclusion templates when deciding whether a page can skip the full page-shell render (#4295), so a `{% live_render %}` in one would leave its child unregistered.
+
+**Fix**: Drop the marker, or make sure the inclusion template never mounts a child view and suppress this check.
+
+---
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
@@ -608,7 +618,7 @@ DJUST_CONFIG = {"suppress_checks": ["V001"]}  # honored as of #1604
 
 **Severity**: Info
 
-**What causes it**: A LiveView subclass does not define a `mount()` method. While not strictly required, `mount()` is where you initialize state.
+**What causes it**: A LiveView subclass does not define a `mount()` method and declares no `state()` fields. While not strictly required, `mount()` is where you initialize state. A view whose state is all `state()` fields needs no `mount()` and is not reported (#4233).
 
 **Fix**:
 
@@ -1342,7 +1352,7 @@ document.addEventListener('djust:navigate-end', (e) => { ... });
 
 **Severity**: Warning
 
-**What causes it**: A template element uses `dj-click` together with navigation-related data attributes (`data-view`, `data-tab`, `data-page`, or `data-section`). This pattern suggests you're implementing navigation, which should use `dj-patch` instead for proper URL updates and browser history support.
+**What causes it**: A template element uses `dj-click` together with navigation-related data attributes (`data-view`, `data-tab`, `data-page`, or `data-section`, or the `dj-value-*` form of each such as `dj-value-tab`). This pattern suggests you're implementing navigation, which should use `dj-patch` instead for proper URL updates and browser history support.
 
 **What you see**: Navigation works but the browser URL doesn't update, and the back button doesn't work as expected. Users cannot bookmark or share specific views.
 
@@ -1352,6 +1362,9 @@ document.addEventListener('djust:navigate-end', (e) => { ... });
 ```html
 <!-- WRONG -- dj-click for navigation -->
 <button dj-click="show_settings" data-view="settings">Settings</button>
+
+<!-- WRONG -- the same navigation sent as an event param -->
+<button dj-click="show" dj-value-tab="settings">Settings</button>
 
 <!-- CORRECT -- use dj-patch for navigation -->
 <a href="?view=settings" dj-patch>Settings</a>

@@ -881,7 +881,12 @@ def test_push_with_in_memory_layer(db_cluster, survival):
     # B's own push reaches B; A's push from before it never does.
     assert browser.get("B", "/_mn/push/?value=2")[0] == 200
     got_b = probe_from(on_b.until(lambda f: f.get("source") == "broadcast"))
-    after = probe_from(on_b.event("probe"))
+    # The push frame already brought B's page up to date, so a probe that
+    # changes nothing answers with an empty patch list (#4303): no patch means
+    # the page still shows what the push frame put there.
+    frames = on_b.event("probe")
+    assert [f for f in frames if f.get("type") == "error"] == [], frames
+    after = probe_from(frames) or got_b
     survival.observe(
         "sessions",
         "push_memory",

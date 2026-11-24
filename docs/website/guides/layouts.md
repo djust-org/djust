@@ -15,12 +15,12 @@ class EditorView(LiveView):
     fullscreen = state(False)
 
     @event_handler
-    def enter_fullscreen(self, **kwargs):
+    def enter_fullscreen(self):
         self.fullscreen = True
         self.set_layout("layouts/fullscreen.html")
 
     @event_handler
-    def exit_fullscreen(self, **kwargs):
+    def exit_fullscreen(self):
         self.fullscreen = False
         self.set_layout("layouts/app.html")
 ```

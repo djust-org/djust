@@ -43,7 +43,7 @@ class ShopView(LiveView):
         self.client = requests.Session()
 
     @event_handler()
-    def ping(self, **kwargs):
+    def ping(self):
         self.pings += 1
 
     def toggle_cart(self, **kwargs):

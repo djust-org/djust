@@ -92,7 +92,7 @@ class SearchView(LiveView):
     error = state("")
 
     @event_handler
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         self.query = value
         self.error = ""
         q = value.strip()
@@ -208,7 +208,7 @@ client captures it:
 ```python
 class CommentView(LiveView):
     @event_handler
-    def post(self, body: str = "", **kwargs):
+    def post(self, body: str = ""):
         if not body.strip():
             self.push_event("flash", {"type": "error", "message": "Empty comment"})
             return

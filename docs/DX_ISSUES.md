@@ -103,12 +103,12 @@ Each issue should lead to either: a better error message, a `djust_checks` syste
 ```python
 # Before (broken after this change)
 @event_handler()
-def set_theme(self, dj_mode: str = "light", **kwargs):
+def set_theme(self, dj_mode: str = "light"):
     self.mode = dj_mode
 
 # After (correct)
 @event_handler()
-def set_theme(self, mode: str = "light", **kwargs):
+def set_theme(self, mode: str = "light"):
     self.mode = mode
 ```
 

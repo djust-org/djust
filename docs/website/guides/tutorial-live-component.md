@@ -104,21 +104,21 @@ class StarRating(LiveComponent):
         }
 
     @event_handler
-    def hover_star(self, n: int = 0, **kwargs):
+    def hover_star(self, n: int = 0):
         if self.read_only:
             return
         self.hover = n
         self.trigger_update()
 
     @event_handler
-    def hover_clear(self, **kwargs):
+    def hover_clear(self):
         if self.read_only:
             return
         self.hover = 0
         self.trigger_update()
 
     @event_handler
-    def commit_rating(self, n: int = 0, **kwargs):
+    def commit_rating(self, n: int = 0):
         if self.read_only or n < 1 or n > self.max:
             return
         self.value = n

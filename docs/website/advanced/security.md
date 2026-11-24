@@ -86,7 +86,7 @@ from djust.decorators import event_handler, rate_limit
 class MyView(LiveView):
     @rate_limit(rate=5, burst=3)
     @event_handler
-    def expensive_operation(self, **kwargs):
+    def expensive_operation(self):
         """Limited to 5/sec sustained, 3 burst."""
         ...
 ```

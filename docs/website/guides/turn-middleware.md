@@ -137,7 +137,7 @@ sync code djust runs in a thread, and to every task the turn starts:
 
 ```python
 @event_handler()
-def generate(self, **kwargs):
+def generate(self):
     self.start_async(self._generate)       # current_caller is still set in there
 
 def _generate(self):

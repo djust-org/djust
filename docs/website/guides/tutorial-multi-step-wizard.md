@@ -128,7 +128,7 @@ class SignupWizardView(LiveView):
         return {f: getattr(self, f) for fields in STEP_FIELDS.values() for f in fields}
 
     @event_handler
-    def next_step(self, **kwargs):
+    def next_step(self, **kwargs: str):
         # Accept only the fields the CURRENT step owns. A crafted event
         # sent at step 2 can't overwrite the email validated at step 1.
         for field in STEP_FIELDS.get(self.step, ()):
@@ -142,13 +142,13 @@ class SignupWizardView(LiveView):
             self.step += 1
 
     @event_handler
-    def back_step(self, **kwargs):
+    def back_step(self):
         self.errors = {}
         if self.step > 1:
             self.step -= 1
 
     @action
-    def submit(self, **kwargs):
+    def submit(self):
         if self.step != 3:
             raise ValueError("Wizard incomplete.")
         # Re-run EVERY step's validator on the final values. Don't trust

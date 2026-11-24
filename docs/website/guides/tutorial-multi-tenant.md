@@ -207,7 +207,7 @@ class DashboardView(TenantScopedMixin, LiveView):
         ]
 
     @action
-    def select_account(self, account_id: int = 0, **kwargs):
+    def select_account(self, account_id: int = 0):
         # Even with a tampered account_id, the lookup is scoped to the
         # current tenant: DoesNotExist for any account in another tenant.
         try:
