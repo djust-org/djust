@@ -483,12 +483,12 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### V002 — LiveView missing mount() method
 - **Severity**: Info
 - **Method**: Runtime (class inspection)
-- **What it detects**: A LiveView subclass does not define `mount()`
+- **What it detects**: A LiveView subclass does not define `mount()` (and no class below `LiveView` in its MRO does), and declares no `state()` fields
 - **Suppression** (any of):
   - `abstract = True` class attribute on the LiveView subclass (skips all per-class checks)
   - `DJUST_CONFIG = {"suppress_checks": ["V002"]}` — global (fixed in #1607)
   - `SILENCED_SYSTEM_CHECKS = ["djust.V002"]`
-- **False positives**: Views that require no state initialisation
+- **False positives**: Views that require no state initialisation. A view that declares any `state()` field, on itself or a parent mixin, is skipped (#4233)
 
 ### V003 — mount() has wrong signature
 - **Severity**: Error

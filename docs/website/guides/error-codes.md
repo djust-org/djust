@@ -618,7 +618,7 @@ DJUST_CONFIG = {"suppress_checks": ["V001"]}  # honored as of #1604
 
 **Severity**: Info
 
-**What causes it**: A LiveView subclass does not define a `mount()` method. While not strictly required, `mount()` is where you initialize state.
+**What causes it**: A LiveView subclass does not define a `mount()` method and declares no `state()` fields. While not strictly required, `mount()` is where you initialize state. A view whose state is all `state()` fields needs no `mount()` and is not reported (#4233).
 
 **Fix**:
 
