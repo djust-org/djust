@@ -361,5 +361,7 @@ def test_gate_off_an_explicit_fk_loop_walks_each_row(world, monkeypatch):
     from djust.mixins import rust_bridge
 
     monkeypatch.setattr(rust_bridge, "_explicit_fk_rows_take_the_jit", lambda *a: False)
+    # #4290 would hand the rows to the JIT as plain-column rows; its gate off too.
+    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
     _, queries = _measure(FK_ONE_SEGMENT[0], _perms_sliced, "explicit", flag=False)
     assert queries > 5, queries

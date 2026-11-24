@@ -114,6 +114,7 @@ __all__ = [
     "LiveViewSmokeTest",
     "PersistedState",
     "persisted_state",
+    "rendered_state",
     # Raised by a render under DJUST_UNSUPPLIED_NAMES = "error" (#4279).
     "UnsuppliedTemplateNameError",
 ]
@@ -454,6 +455,32 @@ def persisted_state(view: "LiveView") -> PersistedState:
         components = dict(projection.components)
         size = len(projection.text.encode("utf-8"))
     return PersistedState(server, snapshot, client, automatic, private, components, size)
+
+
+def rendered_state(view: "LiveView") -> Dict[str, Any]:
+    """The state the last render handed the template engine (#4291).
+
+    A detached copy of the renderer's state after the last render: every name the template
+    could read, as the template reads it. Renders merge into that state (a name a later render
+    no longer supplies keeps its last value), so it is the accumulated state, not only what the
+    last sync sent (a Model / QuerySet / model list reduced to
+    the fields the template names, under explicit exposure). Use it to assert that a render
+    hands the template only what it reads, for data minimization:
+    ``assert "email" not in rendered_state(view)["person"]``.
+
+    It is not ``view.get_state()``, which under explicit exposure returns only
+    ``state(client=True)`` fields, nor :func:`persisted_state`, which is what a save keeps.
+    Mutating the returned dict changes nothing in the view.
+
+    Raises:
+        RuntimeError: If the view has not rendered yet (no renderer state to read).
+    """
+    import copy
+
+    rust_view = getattr(view, "_rust_view", None)
+    if rust_view is None:
+        raise RuntimeError("The view has not rendered yet; call render() first.")
+    return copy.deepcopy(dict(rust_view.get_state()))
 
 
 class LiveViewTestClient:
@@ -1116,6 +1143,16 @@ class LiveViewTestClient:
         if not self._mounted or not self.view_instance:
             raise RuntimeError("View not mounted. Call client.mount() first.")
         return persisted_state(self.view_instance)
+
+    def rendered_state(self) -> Dict[str, Any]:
+        """What the last render handed the template engine (see :func:`rendered_state`).
+
+        Raises:
+            RuntimeError: If view not mounted, or not rendered yet
+        """
+        if not self._mounted or not self.view_instance:
+            raise RuntimeError("View not mounted. Call client.mount() first.")
+        return rendered_state(self.view_instance)
 
     def render(self, engine: str = "rust") -> str:
         """

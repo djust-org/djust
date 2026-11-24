@@ -170,6 +170,22 @@ A value returned only from `get_context_data()` is computed again for every rend
 
 ---
 
+#### `rendered_state() -> dict`
+
+What the last render handed the template engine: every name the template could read, as the template reads it. Under explicit exposure a Model, a model list or a QuerySet is reduced to the fields the template names, so this is where a data-minimization test looks. It returns a detached copy (mutating it changes nothing in the view) and raises `RuntimeError` before the first render. Also available as `djust.testing.rendered_state(view)`, which takes the view instance.
+
+It answers a different question from its neighbours: `get_state()` is what the view holds (under explicit exposure, its `state(client=True)` fields), `persisted_state()` is what a save keeps, and `rendered_state()` is what the renderer received.
+
+```python
+client.mount()
+client.render()
+person = client.rendered_state()["person"]
+assert "username" in person
+assert "email" not in person          # the template never reads it
+```
+
+---
+
 ### Example: Full Test
 
 ```python

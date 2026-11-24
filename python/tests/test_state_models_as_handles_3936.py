@@ -369,3 +369,13 @@ def test_flag_off_sync_sends_no_empty_overlay_to_a_view_without_one(people):
             assert len(spy.calls) == expect_calls, (flag, spy.calls)
             if flag:
                 assert spy.calls[-1] == {} and not spy._real.has_render_handles()
+
+
+def test_a_model_the_template_also_walks_keeps_its_handle(people):
+    """#4290 review: a single Model the JIT reduced to the paths the template reads keeps its
+    overlay handle even when the template walks a relation off it, so a custom filter is still
+    handed the floor proxy, not the reduced dict."""
+    src = "{% load cc3949 %}{{ u.groups.count }}|{{ u|cc3949_filter }}"
+    count, _, payload = _render(src, _ctx).partition("|")
+    assert count == "2"
+    assert json.loads(payload)["type"] == PROXY

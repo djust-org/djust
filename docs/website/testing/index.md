@@ -392,6 +392,14 @@ assert saved.server["draft_note"] == "x"          # state(persist="server")
 `automatic_private`, `automatic_components`) and reports `automatic_bytes`, the size the state limits
 use. It writes nothing. See the [testing API reference](../api-reference/testing.md).
 
+To check what a render handed the template engine (the neighbouring question), use
+`rendered_state()`. A Model or row list arrives reduced to the fields the template reads:
+
+```python
+client.render()
+assert "email" not in client.rendered_state()["person"]   # the template prints only username
+```
+
 ### Failing a test on an unsupplied template name
 
 Under explicit exposure a template name that nothing supplies renders empty, and the
