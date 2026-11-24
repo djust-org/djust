@@ -448,6 +448,47 @@ class TestRowsRenderLikeDjango:
         assert got == want
         assert "{" not in got and want.count(";") == 4, got
 
+    @pytest.mark.parametrize("shape", SHAPES)
+    @pytest.mark.parametrize("render", ENTRIES)
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "{% for u in users %}{{ u.date_joined }}|{{ u.date_joined.year }};{% endfor %}",
+            "{% for t in tenants %}{{ t.move_in_date }}|{{ t.move_in_date.year }};{% endfor %}",
+            "{% for t in tenants %}{{ t.monthly_income }}|{{ t.monthly_income.is_signed }};"
+            "{% endfor %}",
+            "{% for t in tenants %}{{ t.created_at }}|{{ t.created_at.month }};{% endfor %}",
+        ],
+        ids=["datetime", "date", "decimal", "datetime-auto"],
+    )
+    def test_a_value_read_whole_and_by_field_prints_djangos_text(
+        self, world, render, shape, source
+    ) -> None:
+        """#4269 review: the ``__str__`` beside a field read off a date, a datetime or a
+        ``Decimal`` is the text Django prints (localized), not Python's ``str()``."""
+        import datetime
+        import decimal
+
+        from djust_rentals.models import Tenant
+
+        for n, user in enumerate(User.objects.order_by("pk")):
+            Tenant.objects.create(
+                user=user,
+                phone="1",
+                emergency_contact_name="e",
+                emergency_contact_phone="2",
+                move_in_date=datetime.date(2024, 1 + n, 5),
+                monthly_income=decimal.Decimal("1234.50") * (n + 1),
+            )
+        tenants = Tenant.objects.order_by("pk")
+        context = {
+            "users": _users(shape),
+            "tenants": tenants if shape == "QuerySet" else list(tenants),
+        }
+        got, want = _agrees(render, source, context)
+        assert got == want
+        assert want.count(";") == 3
+
     @pytest.mark.parametrize("render", ENTRIES)
     def test_a_single_models_nested_object_read_whole_and_by_field(self, db, render) -> None:
         source = "{{ p.content_type }}|{{ p.content_type.app_label }}"
@@ -599,29 +640,29 @@ class TestAVariableKeyCarriesOneColumn:
             got, want = _agrees(render, self.SOURCE, context)
             assert got == want, key
 
-    def test_the_expected_key_count_is_cached_per_resolved_sort_key(self, world) -> None:
+    def test_the_expected_key_count_follows_the_resolved_sort_key(self, world, monkeypatch) -> None:
         """The JIT's expected-key count decides whether a row the Rust serializer built short
-        (a path it could not read) is rebuilt through the Python codegen. The path set now
-        depends on the resolved sort key, so the count is cached per key: cached per template
-        alone, the count from ``key="pk"`` (a field the template already reads) stood for
-        ``key="email"`` too, one short, and a missing path there went unnoticed.
+        (a path it could not read) is rebuilt through the Python codegen. The path set depends
+        on the resolved sort key, so the count does too: once cached per template alone, the
+        count from ``key="pk"`` (a field the template already reads) stood for ``key="email"``
+        too, one short, and a missing path there went unnoticed. It is computed from the paths
+        now (#4272 review).
 
         Legacy entry: an explicit view JITs a variable key only when its value names a method
         or is dotted (#4264), so a plain-column key never reaches the JIT there."""
         from djust.mixins import jit
 
+        seen = []
+        real = jit.expected_row_keys
+        monkeypatch.setattr(
+            jit, "expected_row_keys", lambda paths: seen.append(real(paths)) or real(paths)
+        )
         source = "{% for u in users|dictsort:key %}{{ u.pk }}:{{ u.is_authenticated }},{% endfor %}"
-        jit._expected_keys_cache.clear()
         for key in ("pk", "email"):
             context = {"users": _users("QuerySet"), "key": key}
             got, want = _agrees(_legacy_liveview_render, source, context)
             assert got == want, key
-        counts = {
-            cache_key[-1]: count
-            for cache_key, count in jit._expected_keys_cache.items()
-            if cache_key[1] == "users"
-        }
-        assert counts == {("pk",): 2, ("email",): 3}
+        assert seen == [2, 3]
 
     @pytest.mark.parametrize("render", [_backend_render, _liveview_render])
     def test_a_floored_column_renders_empty_where_django_sorts(self, world, render) -> None:

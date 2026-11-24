@@ -36,12 +36,14 @@ logger = logging.getLogger(__name__)
 _template_hash_cache: Dict[str, str] = {}
 _TEMPLATE_HASH_CACHE_MAX = 256
 
-# Cache (template_hash, variable_name, row paths, resolved sort keys) → expected top-level
-# key count. The paths are part of the key (#4272): the same template and name build a
-# different path set for another model (a method name that is a model attribute stays a
-# row read) or another sort key (``dictsort:<variable>``, #3910), and a count cached for
-# one set sent every row of the next through the codegen fallback.
-_expected_keys_cache: Dict[Tuple[str, str, Tuple[str, ...], Tuple[str, ...]], int] = {}
+
+def expected_row_keys(paths: List[str]) -> int:
+    """The top-level keys a row serialized by ``paths`` carries; a Rust row with fewer is rebuilt
+    through the codegen. Computed from the paths each time: the path set depends on the model,
+    the method reads and the resolved sort key (#3910, #4272), and a count cached per template
+    and name once stood for another path set."""
+    return len({path.split(".")[0] for path in paths})
+
 
 # Pre-compiled regex for {% include %} — handles normal and doubled quotes from Rust resolver
 _INCLUDE_RE = re.compile(
@@ -613,7 +615,6 @@ def clear_template_source_caches() -> None:
     _template_hash_cache.clear()
     _variable_extraction_cache.clear()
     _item_key_only_cache.clear()
-    _expected_keys_cache.clear()
 
 
 def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]]:
@@ -666,8 +667,56 @@ def keep_rows_for_all_methods(view: Any, name: str, rows: Any) -> None:
     holds an evaluated top-level QuerySet whose template reads one of its methods
     (``{{ qs.count }}``, #4241); its filled result cache answers it. Written
     to ``__dict__`` so it is not state; ``get_context_data`` resets it per render.
+
+    An evaluated QuerySet is held as :func:`held_evaluated_queryset`, so
+    ``{{ qs.all.count }}`` and ``{% for u in qs.all %}`` answer from the rows
+    already fetched (#4270 review).
     """
+    if _answers_all_from_its_rows(rows):
+        rows = held_evaluated_queryset(rows)
     view.__dict__.setdefault("_all_method_rows", {})[name] = rows
+
+
+def _method_read_identity_rows(view: Any, queryset: Any, name: str) -> List[Any]:
+    """The rows of a QuerySet the template reads only through its methods (``{{ qs.count }}``,
+    ``{% for u in qs.all %}{{ u }}``, #4272/#4270 review): the sidecar answers every read, so
+    each row ships as its identity map (its text, no column, no auto-called ``get_*``), with no
+    serializer built per render. The evaluated QuerySet goes to the sidecar."""
+    items = list(queryset)
+    keep_rows_for_all_methods(view, name, queryset)
+    return [model_identity(item) for item in items]
+
+
+def _itself(value: Any) -> Any:
+    return value
+
+
+def _answers_all_from_its_rows(rows: Any) -> bool:
+    """An evaluated QuerySet's ``all()`` is answered from its fetched rows (#4270 review). The
+    gate the sidecar capture asks."""
+    from django.db.models import QuerySet
+
+    return isinstance(rows, QuerySet) and rows._result_cache is not None
+
+
+def held_evaluated_queryset(queryset: Any) -> Any:
+    """A clone of an EVALUATED ``queryset`` whose ``all()`` is itself (#4270 review).
+
+    Django's ``all()`` is an unevaluated clone, so ``{% for u in users.all %}``
+    re-ran the SELECT the JIT had just run, and lost its prefetched relations
+    (``u.groups.all`` then queried per row). The clone shares the fetched rows
+    (with their prefetch caches) and is never the caller's state QuerySet, which
+    is not mutated. Every other method (``count``, ``exists``, a slice) already
+    answers from a filled result cache as Django's does.
+    """
+    import functools
+
+    held = queryset._chain()
+    held._result_cache = queryset._result_cache
+    held._prefetch_done = queryset._prefetch_done
+    # An instance attribute: ``_chain()`` never copies it, so only this clone answers so.
+    held.all = functools.partial(_itself, held)
+    return held
 
 
 def _jit_template_content(view: Any) -> Optional[str]:
@@ -1319,11 +1368,10 @@ class JITMixin:
             if "." not in variable_name and variable_name in queryset_method_roots(
                 template_content
             ):
-                # Only beside a row read: a template reading nothing but methods keeps
-                # them, so the rows stay as small as before (never every column).
-                paths_for_var = (
-                    _method_root_row_paths(queryset.model, paths_for_var) or paths_for_var
-                )
+                row_paths = _method_root_row_paths(queryset.model, paths_for_var)
+                if paths_for_var and not row_paths and not key_variables and not recursive_relation:
+                    return _method_read_identity_rows(self, queryset, variable_name)
+                paths_for_var = row_paths
             # Only beside field reads: rows read whole carry every column already.
             sort_keys = (
                 resolve_variable_keys(key_variables, context, queryset.model, self)
@@ -1419,12 +1467,7 @@ class JITMixin:
 
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)
-            ek_cache_key = (template_hash, variable_name, tuple(paths_for_var), tuple(sort_keys))
-            if ek_cache_key not in _expected_keys_cache:
-                _expected_keys_cache[ek_cache_key] = len(
-                    set(p.split(".")[0] for p in paths_for_var)
-                )
-            expected_keys = _expected_keys_cache[ek_cache_key]
+            expected_keys = expected_row_keys(paths_for_var)
             if result and len(result[0]) < expected_keys:
                 # Heuristic: if the first item has fewer top-level keys than expected,
                 # Rust likely can't access some paths (e.g. @property). A nullable FK

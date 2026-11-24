@@ -170,7 +170,7 @@ def leaf_value(value: Any) -> Any:
     one query or more per row on every sync. A ``__str__`` that raises ships
     nothing, as Rust's leaf does.
     """
-    if hasattr(value, "_meta") and hasattr(value, "pk"):
+    if hasattr(value, "_meta") and hasattr(value, "pk") and not isinstance(value, type):
         try:
             return str(value)
         except Exception:  # noqa: BLE001 -- Rust's leaf ships null for a raising __str__
@@ -198,7 +198,8 @@ def add_row_text(value: Any, row: Dict[str, Any]) -> None:
 
     A model gets its identity map (``model_identity``, the one producer: ``id``,
     ``pk``, ``__str__``, ``__model__``), so the renderer prints ``__str__`` and
-    treats the map as a model rather than a dict. Anything else gets its text.
+    treats the map as a model rather than a dict. Anything else gets the text Django
+    prints for it (``value_text``: a date localized, #4269 review).
     Keys the paths already filled win. A ``__str__`` that raises leaves the
     text out, as a whole-row serializer does. The Rust twin is
     ``serialize_object_with_paths``.
@@ -209,7 +210,9 @@ def add_row_text(value: Any, row: Dict[str, Any]) -> None:
 
             extra = model_identity(value)
         else:
-            extra = {ROW_TEXT_KEY: str(value)}
+            from djust.serialization import value_text
+
+            extra = {ROW_TEXT_KEY: value_text(value)}
     except Exception:  # noqa: BLE001 — a whole-row serializer leaves the text out too
         logger.debug("__str__() failed during serialization")
         return

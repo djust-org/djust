@@ -495,7 +495,6 @@ def test_gate_off_a_method_read_fk_loop_is_n_plus_one(world, fresh_jit, monkeypa
     out, queries = _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
     assert queries == 1, queries
     monkeypatch.setattr(jit, "_method_root_row_paths", lambda model, paths: paths)
-    jit._expected_keys_cache.clear()
     from djust.session_utils import clear_jit_cache
 
     clear_jit_cache()
@@ -519,7 +518,6 @@ def test_gate_off_keeping_the_method_paths_sends_rows_through_codegen(
     from djust.session_utils import clear_jit_cache
 
     clear_jit_cache()
-    jit._expected_keys_cache.clear()
     _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
     assert compiled
 
@@ -598,3 +596,100 @@ def test_gate_off_without_the_nested_text_path_the_row_prints_a_dict(
 
     monkeypatch.setattr(jit, "_cached_extract_template_variables", without_nested_text)
     assert "{'model': 'logentry'}" in _render(FK_WHOLE_AND_DOTTED, _perms_sliced, policy)
+
+
+# -- review (#4270): ``users.all`` answers from the rows the JIT fetched ------------------------
+
+ALL_QUERY_COUNTS = [
+    ("all-count", "{{ users.all.count }}", 1),
+    ("all-loop", "{% for u in users.all %}{{ u.username }};{% endfor %}", 1),
+    (
+        "all-nested-all",
+        "{% for u in users.all %}{% for g in u.groups.all %}{{ g.name }},{% endfor %};{% endfor %}",
+        2,
+    ),
+    (
+        "plain-nested-all",
+        "{% for u in users %}{% for g in u.groups.all %}{{ g.name }},{% endfor %};{% endfor %}",
+        2,
+    ),
+    (
+        "all-count-beside-loop",
+        "{{ users.all.count }}|{% for u in users %}{{ u.username }};{% endfor %}",
+        1,
+    ),
+]
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("name,source,want", ALL_QUERY_COUNTS, ids=[c[0] for c in ALL_QUERY_COUNTS])
+def test_users_all_queries_as_users_does(world, fresh_jit, policy, name, source, want):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
+    out, queries = _measure(source, _qs, policy, flag=True)
+    assert out == DjangoTemplate(source).render(DjangoContext(_qs()))
+    assert queries == want, queries
+
+
+def test_the_held_queryset_leaves_the_state_queryset_alone(world):
+    from djust.mixins.jit import held_evaluated_queryset
+
+    state = User.objects.order_by("pk")
+    evaluated = state.all()
+    list(evaluated)
+    held = held_evaluated_queryset(evaluated)
+    assert held.all() is held and held is not evaluated
+    assert "all" not in vars(evaluated) and "all" not in vars(state)
+    assert state._result_cache is None
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_gate_off_a_fresh_all_re_queries(world, fresh_jit, monkeypatch, policy):
+    from djust.mixins import jit
+
+    monkeypatch.setattr(jit, "_answers_all_from_its_rows", lambda rows: False)
+    _, source, _ = ALL_QUERY_COUNTS[2]
+    assert _measure(source, _qs, policy, flag=True)[1] == 4
+    assert _measure(ALL_QUERY_COUNTS[0][1], _qs, policy, flag=True)[1] == 2
+
+
+# -- review (#4272): a QuerySet read only through its methods builds no serializer -------------
+
+METHODS_ONLY = [
+    "{{ users.count }}",
+    "{{ users.all.count }}",
+    "{% for u in users.all %}{{ u }};{% endfor %}",
+    "{{ users.count }}|{{ users.0 }}|{{ users|length }}",
+]
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("source", METHODS_ONLY)
+def test_a_methods_only_queryset_builds_no_serializer(
+    world, fresh_jit, monkeypatch, policy, source
+):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
+    from djust.mixins import jit
+
+    compiled = []
+    real = jit.compile_serializer
+    monkeypatch.setattr(jit, "compile_serializer", lambda *a: compiled.append(a) or real(*a))
+    for twice in (False, True):
+        out, queries = _measure(source, _qs, policy, flag=True, twice=twice)
+        assert out == DjangoTemplate(source).render(DjangoContext(_qs()))
+    assert compiled == []
+
+
+@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+def test_gate_off_methods_only_rows_take_the_codegen(world, fresh_jit, monkeypatch, policy):
+    from djust.mixins import jit
+
+    compiled = []
+    real = jit.compile_serializer
+    monkeypatch.setattr(jit, "compile_serializer", lambda *a: compiled.append(a) or real(*a))
+    monkeypatch.setattr(jit, "_method_root_row_paths", lambda model, paths: paths)
+    _measure("{{ users.count }}", _qs, policy, flag=True)
+    assert compiled

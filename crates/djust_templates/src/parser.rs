@@ -8086,6 +8086,14 @@ mod own_reads_tests_4258 {
             full_paths("{{ u.groups.first }}{{ u.groups.first.name }}", "u"),
             strs(&["groups.first", "groups.first.name"])
         );
+        assert_eq!(
+            full_paths("{{ u.groups.last }}{{ u.groups.last.name }}", "u"),
+            strs(&["groups.last", "groups.last.name"])
+        );
+        assert_eq!(
+            full_paths("{{ u.groups.all }}{{ u.groups.all.count }}", "u"),
+            strs(&["groups.all", "groups.all.count"])
+        );
         // The marks never reach the item-key or own-read maps.
         let t = "{% for p in perms %}{{ p.content_type }}{{ p.content_type.model }}{% endfor %}";
         assert!(extract_item_key_only_reads(t).unwrap().is_empty());

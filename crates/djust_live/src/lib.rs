@@ -5842,6 +5842,17 @@ fn row_identity(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     })
 }
 
+/// `djust.serialization.value_text`, resolved once per process (#4269 review).
+fn row_value_text(py: Python<'_>) -> PyResult<&Py<PyAny>> {
+    static FN: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    FN.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+        Ok(py
+            .import("djust.serialization")?
+            .getattr("value_text")?
+            .unbind())
+    })
+}
+
 /// Serialize a single Python object based on path tree
 fn serialize_object_with_paths(
     py: Python,
@@ -5863,7 +5874,7 @@ fn serialize_object_with_paths(
     // `__model__`, `djust.serialization.model_identity`, the one producer), so
     // the renderer prints `__str__` and treats the map as a model, not a dict
     // (`{{ u.items }}` is empty, as on Django). Keys the paths already filled
-    // win. A non-model row gets its text only; a `__str__` that raises leaves
+    // win. A non-model row gets its text only (`value_text`); a `__str__` that raises leaves
     // the key out, as a whole row's serializer does.
     if tree.contains_key(ROW_TEXT_KEY) {
         if obj.hasattr("_meta").unwrap_or(false) {
@@ -5876,7 +5887,8 @@ fn serialize_object_with_paths(
                     }
                 }
             }
-        } else if let Ok(text) = obj.str() {
+        } else if let Ok(text) = row_value_text(py)?.bind(py).call1((obj,)) {
+            // The text Django prints (a date localized), not `str()` (#4269 review).
             result.set_item(ROW_TEXT_KEY, text)?;
         }
     }
