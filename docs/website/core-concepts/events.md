@@ -651,7 +651,7 @@ Under the strict parameter policy, the handler's Python signature is the
 event's contract. Named parameters, their annotations and their defaults
 decide what an event may carry. Values are converted exactly, and an event
 that doesn't fit is rejected before your code runs. The examples in these
-guides are written for it. In 2.0.0rc3 it is still an opt-in; it becomes the
+guides are written for it. In 2.0.0rc4 it is still an opt-in; it becomes the
 only behaviour before 2.0.0 final
 ([#4171](https://github.com/djust-org/djust/issues/4171)). Turn it on for the
 whole project:
