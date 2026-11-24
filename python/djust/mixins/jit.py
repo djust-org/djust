@@ -550,15 +550,25 @@ _template_source_cache: Dict[Tuple[str, str, Tuple[str, ...]], str] = {}
 _TEMPLATE_SOURCE_CACHE_MAX = 256
 
 
-#: Whether a template's page shell could mount a child view, by template name and dirs
-#: (``runtime._page_shell_may_register_children``, #4295).
-_shell_children_cache: Dict[Tuple[str, Tuple[str, ...]], bool] = {}
+#: Whether a template's page shell could mount a child view, by template name, dirs
+#: and the project's child-free libraries (``runtime._page_shell_may_register_children``,
+#: #4295, #4298).
+_shell_children_cache: Dict[Tuple[str, Tuple[str, ...], Tuple[str, ...]], bool] = {}
 _SHELL_CHILDREN_CACHE_MAX = 256
+
+
+#: ``TemplateMixin.get_template()``'s result and the attributes it sets, by view
+#: class, ``template_name`` and dirs (#4299): ``(result, ((attr, value), ...))``.
+_get_template_cache: Dict[
+    Tuple[Any, str, Tuple[str, ...]], Tuple[str, Tuple[Tuple[str, Any], ...]]
+] = {}
+_GET_TEMPLATE_CACHE_MAX = 256
 
 
 def clear_template_source_caches() -> None:
     """Forget every cached extraction source, hash and variable map."""
     _template_source_cache.clear()
+    _get_template_cache.clear()
     _shell_children_cache.clear()
     _template_hash_cache.clear()
     _variable_extraction_cache.clear()

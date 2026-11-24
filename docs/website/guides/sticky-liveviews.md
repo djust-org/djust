@@ -182,6 +182,34 @@ What the user sees when it goes wrong:
 A discarded child is never picked up by a later page, mount,
 `mount_batch` or `url_change` on the same connection.
 
+### Live mounts and the page shell
+
+A live mount of an explicit `template_name` page renders the whole page
+once, as the HTTP GET does, only to register the children its page shell
+(the part outside `dj-root`) embeds. djust skips that render when no
+template of the page can embed a child. It reads every template the page
+is built from (the `{% extends %}` parents and `{% include %}` partials)
+and skips the render only when none names `live_render` and every
+`{% load %}` is of a library that cannot embed one:
+
+- Django's own libraries and djust's `live_tags`, `djust_components`,
+  `djust_flash` and `theme_tags` (the templates djust's libraries render,
+  such as an overridden `djust_components/toast.html`, are read too; a
+  file that uses the catalogue's `component_preview` or
+  `component_thumbnail` keeps the render);
+- a library that registers only filters, or the filters loaded from one
+  with `{% load name from library %}`;
+- a library your project lists in `LIVEVIEW_CONFIG`:
+
+```python
+# Template tag libraries whose tags never embed a child view.
+LIVEVIEW_CONFIG = {"childless_tag_libraries": ["myapp_tags"]}
+```
+
+List only libraries whose tags never render `{% live_render %}`, or a
+template that does: a page-shell child of a skipped render is not
+registered, so its events have no view to reach.
+
 ## The `sticky` class attribute
 
 Two class attributes control sticky behavior:
