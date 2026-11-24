@@ -220,6 +220,15 @@ DJANGO_ANSWERS = {
     "qs-top-all-count": "3",
     # the password stays floored (Django prints the hash; the floor is the documented difference)
     "qs-top-all-reads": "u0|3|u0|2;1;0;",
+    # #4271: a legacy view read a ``.values()`` row's keys empty (``;;;``)
+    "values-loop": "u0;u1;u2;",
+    "values-length": "3",
+    "values-index": "u0",
+    "values-flat-loop": "u0;u1;u2;",
+    "values-flat-length": "3",
+    "values-flat-index": "u0",
+    "values-pairs-loop": "u0;u1;u2;",
+    "values-pairs-length": "3",
 }
 
 
@@ -507,3 +516,31 @@ def test_gate_off_keeping_the_method_paths_sends_rows_through_codegen(
     jit._expected_keys_cache.clear()
     _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
     assert compiled
+
+
+# -- #4271: a legacy view reads a projection's rows as Django does ------------------------------
+
+
+def test_a_legacy_projection_keeps_its_count_key(world):
+    """The legacy ``<name>_count`` key still counts a projection the JIT now leaves alone, with the
+    one query the loop already runs."""
+    source = "{{ rows_count }}|{% for r in rows %}{{ r.username }};{% endfor %}"
+    assert _measure(source, _values, "legacy", flag=True) == ("3|u0;u1;u2;", 1)
+
+
+@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
+def test_gate_off_a_legacy_projection_through_the_jit_reads_empty(world, monkeypatch, flag):
+    from djust._render_caches import clear_render_caches
+    from djust.mixins import context
+    from djust.session_utils import clear_jit_cache
+
+    monkeypatch.setattr(context, "_projection_skips_the_jit", lambda qs: False)
+    clear_jit_cache()
+    clear_render_caches()
+    try:
+        source = PROBES_BY_NAME["values-loop"]
+        assert _render(source, _values, "legacy", flag=flag) == ";;;"
+        assert _render(source, _values, "explicit", flag=flag) == "u0;u1;u2;"
+    finally:
+        clear_jit_cache()
+        clear_render_caches()

@@ -192,6 +192,12 @@ def _is_projection(queryset: Any) -> bool:
     return getattr(queryset, "_fields", None) is not None
 
 
+def _projection_skips_the_jit(queryset: Any) -> bool:
+    """A projection QuerySet is left to the normalize pass, never the JIT (#4271): its rows are
+    dicts / tuples, not models. The gate the legacy context serializer asks."""
+    return _is_projection(queryset)
+
+
 def _state_model_values(context: Any) -> Dict[str, Any]:
     """The top-level context values that hold a model (a ``Model``, a ``QuerySet``, a list or
     tuple containing a ``Model``), for the render-time handle overlay (#3936). Empty when the
@@ -1093,6 +1099,14 @@ class ContextMixin:
             if keys is not None and key not in keys:
                 continue
             if isinstance(value, QuerySet):
+                if _projection_skips_the_jit(value):
+                    # ``.values()`` / ``.values_list()`` rows are dicts / tuples, which
+                    # the JIT's model serializer read empty (``;;;`` on a legacy view,
+                    # #4271). They hold only the columns asked for; the normalize pass
+                    # lists them, as it does on an explicit view.
+                    if add_counts and f"{key}_count" not in context:
+                        context[f"{key}_count"] = len(value)
+                    continue
                 serialized = self._jit_serialize_queryset(value, template_content, key, context)
                 set_value(key, serialized)
                 jit_serialized_keys.add(key)
