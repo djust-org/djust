@@ -235,8 +235,12 @@ def test_the_overlay_keeps_the_row_cap(world, policy):
     assert on == off == "[staff,][staff,][]"
 
 
-def test_the_overlay_still_serves_a_filtered_rebinding(world):
-    """Non-vacuity: the keys the overlay keeps still get their handle (the declared change)."""
+def test_the_overlay_still_serves_a_filtered_rebinding(world, monkeypatch):
+    """Non-vacuity: the keys the overlay keeps still get their handle (the declared change).
+    #4290's JIT of a single Model answers the rebinding as well, so its gate is off here."""
+    from djust.mixins import rust_bridge
+
+    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
     source = "{% with q=u|default:u %}{{ q.groups.count }}{% endwith %}"
     assert _render(source, _one, "explicit", flag=True) == "2"
     assert _render(source, _one, "explicit", flag=False) == ""
@@ -361,5 +365,7 @@ def test_gate_off_an_explicit_fk_loop_walks_each_row(world, monkeypatch):
     from djust.mixins import rust_bridge
 
     monkeypatch.setattr(rust_bridge, "_explicit_fk_rows_take_the_jit", lambda *a: False)
+    # #4290 would hand the rows to the JIT as plain-column rows; its gate off too.
+    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
     _, queries = _measure(FK_ONE_SEGMENT[0], _perms_sliced, "explicit", flag=False)
     assert queries > 5, queries

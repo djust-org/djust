@@ -156,6 +156,35 @@ def _explicit_fk_rows_take_the_jit(model_class: Any, paths: FrozenSet[str]) -> b
     return _paths_read_a_relation(model_class, paths)
 
 
+def _plain_rows_take_the_jit(
+    value: Any, model_class: Any, paths: FrozenSet[str], context: Any
+) -> bool:
+    """Does an explicit view's Model, or model list / QuerySet whose rows the template reads
+    only columns off, go through the JIT, reduced to the paths the template reads (#4290)?
+
+    Yes, as on 1.x, unless:
+
+    - it is a ``.values()`` / ``.values_list()`` QuerySet: its rows are dicts / tuples, which
+      the JIT's model serializer reads empty (#4271), and they hold only the columns asked for;
+    - a ``dictsort:<variable>`` names something that is not one of the row model's columns this
+      render (a property, a ``get_*`` method): the JIT row carries a column only (#3910), so
+      such a list keeps the normalized rows it sorted by before.
+
+    A function so the gate-off test can turn it off.
+    """
+    from django.db.models import QuerySet
+    from django.db.models.query import ModelIterable
+
+    from .jit import resolve_variable_keys, split_variable_keys
+
+    if isinstance(value, QuerySet) and not issubclass(value._iterable_class, ModelIterable):
+        return False
+    _, variables = split_variable_keys(sorted(paths))
+    if not variables:
+        return True
+    return len(resolve_variable_keys(variables, context, model_class)) == len(set(variables))
+
+
 def _overlay_model_class(value: Any) -> Any:
     """The model class behind one overlay value (a ``Model``, a ``QuerySet``, a model list)."""
     from django.db.models import Model, QuerySet
@@ -173,6 +202,7 @@ def _overlay_skip_keys(
     full_context: Any,
     walked_keys: Any = (),
     qs_roots: Optional[FrozenSet[str]] = None,
+    plain_keys: Any = (),
 ) -> FrozenSet[str]:
     """The state keys the flag-off path already answers with Django's semantics (#3936, B-H1).
 
@@ -191,7 +221,9 @@ def _overlay_skip_keys(
 
     Every other key still gets its handle: a single model on an explicit view, a model list or
     QuerySet the template reads only columns off, and every value a filtered rebinding or a
-    custom filter / tag is handed.
+    custom filter / tag is handed. ``plain_keys`` are those names on an explicit view: the JIT
+    reduced them to the paths the template reads (#4290), but did not walk their rows, so they
+    keep their handle whatever the template reads off them.
     """
     from django.db.models import QuerySet
 
@@ -206,7 +238,7 @@ def _overlay_skip_keys(
         roots = _queryset_method_roots_for(view) if qs_roots is None else qs_roots
         skip.update(k for k, v in raw.items() if isinstance(v, QuerySet) and k in roots)
     jit_keys = getattr(view, "_jit_serialized_keys", None) or ()
-    pending = [k for k in raw if k in jit_keys and k not in skip]
+    pending = [k for k in raw if k in jit_keys and k not in skip and k not in plain_keys]
     if pending:
         walk_paths = _queryset_row_walk_paths_for(view)
         for key in pending:
@@ -1146,13 +1178,30 @@ class RustBridgeMixin:
             if not template_content:
                 return
             self._nested_template_source = [template_content]
-            self._jit_serialize_context(
-                context,
-                template_content,
-                keys=keys,
-                add_counts=False,
-                into=self._jit_serialized_keys,
-            )
+            # One name at a time (#4290 review): a name whose serializer raises leaves only
+            # itself to the normalize pass, not every name after it.
+            for key in sorted(keys):
+                try:
+                    self._jit_serialize_context(
+                        context,
+                        template_content,
+                        keys={key},
+                        add_counts=False,
+                        into=self._jit_serialized_keys,
+                    )
+                except Exception as exc:  # noqa: BLE001 - the normalize pass serializes it
+                    if "djust:recursive-partial" in template_content:
+                        raise
+                    from .._exposure_diagnostics import log_failure_for
+
+                    log_failure_for(
+                        logger,
+                        (self,),
+                        exc,
+                        "JIT auto-serialization failed",
+                        level="warning",
+                        traceback=True,
+                    )
             for key in nested_keys:
                 value = context[key]
                 walk = (
@@ -1268,11 +1317,23 @@ class RustBridgeMixin:
 
             _raw_models_for_sidecar = {}
             _explicit_jit_keys: Dict[str, Any] = {}
+            # #4290: the DB values of an explicit context whose rows the template does NOT
+            # walk (a Model, a model list / QuerySet read only by its columns). They go
+            # through the JIT too, reduced to the paths the template reads, as 1.x's did;
+            # the normalize pass below copied every field of them into the renderer's state.
+            # Kept apart from ``_explicit_jit_keys``: the overlay still hands these a handle,
+            # and the sidecar keeps no evaluated rows for them.
+            _explicit_plain_keys: Set[str] = set()
+            _explicit = type(full_context) is ExplicitRenderContext
             _qs_roots: Optional[FrozenSet[str]] = None
             _walk_paths: Optional[Dict[str, FrozenSet[str]]] = None
             for _key, _val in full_context.items():
                 if isinstance(_val, _DjModel):
                     _raw_models_for_sidecar[_key] = _val
+                    if _explicit and _plain_rows_take_the_jit(
+                        _val, type(_val), frozenset(), full_context
+                    ):
+                        _explicit_plain_keys.add(_key)
                     continue
                 _is_qs = isinstance(_val, _DjQuerySet)
                 if _is_qs:
@@ -1310,13 +1371,16 @@ class RustBridgeMixin:
                     if _walk_paths is None:
                         _walk_paths = _queryset_row_walk_paths_for(self)
                     _paths = _walk_paths.get(_key)
-                    if not _paths:
-                        continue
                     _model_cls = (
                         _val.model
                         if _is_qs
                         else next(type(_r) for _r in _val if isinstance(_r, _DjModel))
                     )
+                    if not _paths:
+                        # No field path read off the rows (``{% regroup %}``, ``{{ rows.0 }}``,
+                        # ``|length``): whole rows, as the JIT's own no-path list gives
+                        # (#2736), so the normalize pass below serializes them.
+                        continue
                     if rows_need_live_walk(_model_cls, _paths, full_context) or (
                         # Review N4: a forward FK read as one segment (``{{ p.content_type }}``)
                         # was walked per row through the sidecar alias (2N+1 queries); the JIT
@@ -1324,6 +1388,8 @@ class RustBridgeMixin:
                         _is_qs and _explicit_fk_rows_take_the_jit(_model_cls, _paths)
                     ):
                         _explicit_jit_keys[_key] = _val
+                    elif _plain_rows_take_the_jit(_val, _model_cls, _paths, full_context):
+                        _explicit_plain_keys.add(_key)
 
             # #4069 review S1: an explicit view's walked rows also go through the
             # JIT, as legacy's do, so each row dict CARRIES the relation values the
@@ -1345,9 +1411,11 @@ class RustBridgeMixin:
                     and not any(isinstance(_r, _DjModel) for _r in _val)
                     and _holds_db_value(_val)
                 ]
-                if _explicit_jit_keys or _nested_db_keys:
+                if _explicit_jit_keys or _explicit_plain_keys or _nested_db_keys:
                     self._explicit_jit_serialize(
-                        full_context, set(_explicit_jit_keys), _nested_db_keys
+                        full_context,
+                        set(_explicit_jit_keys) | _explicit_plain_keys,
+                        _nested_db_keys,
                     )
                 # A name the JIT did not serialize keeps its evaluated rows for the
                 # sidecar alias walk. A serialized one needs none (as on legacy), and
@@ -1360,6 +1428,15 @@ class RustBridgeMixin:
                         # method answers come from the JIT's EVALUATED QuerySet
                         # (``_all_method_rows``), not the caller's unevaluated one,
                         # so ``{{ qs.count }}`` costs no second query.
+                        _evaluated = (getattr(self, "_all_method_rows", None) or {}).get(_key)
+                        if _evaluated is not None:
+                            _raw_models_for_sidecar[_key] = _evaluated
+                # #4290: the same for a method-read QuerySet whose rows the template reads
+                # only columns off; the JIT's evaluated rows answer ``{{ qs.count }}``.
+                for _key in _explicit_plain_keys:
+                    if _key in self._jit_serialized_keys and isinstance(
+                        _raw_models_for_sidecar.get(_key), _DjQuerySet
+                    ):
                         _evaluated = (getattr(self, "_all_method_rows", None) or {}).get(_key)
                         if _evaluated is not None:
                             _raw_models_for_sidecar[_key] = _evaluated
@@ -2073,7 +2150,12 @@ class RustBridgeMixin:
                 if _overlay_raw:
                     _skip.update(
                         _overlay_skip_keys(
-                            self, _overlay_raw, full_context, _explicit_jit_keys, _qs_roots
+                            self,
+                            _overlay_raw,
+                            full_context,
+                            _explicit_jit_keys,
+                            _qs_roots,
+                            _explicit_plain_keys,
                         )
                     )
                 _handles = _render_handles(_overlay_raw, full_context, _skip)

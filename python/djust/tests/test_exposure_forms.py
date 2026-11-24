@@ -683,20 +683,13 @@ async def test_a_record_with_prefetched_relations_is_never_reused(recheck_urls, 
 @pytest.mark.parametrize("policy", ["explicit", "legacy"])
 async def test_loading_a_deferred_field_is_a_change_to_the_record(recheck_urls, policy):
     """A deferred field loaded since the record was authorized forces the full check. The
-    legacy render leaves ``codename`` deferred, so the record is reused until a handler loads
-    it; the explicit render serializes every field of ``object`` and loads it itself, so such
-    a record is checked in full on every event."""
+    render leaves ``codename`` deferred (the template does not read it; on an explicit view
+    too since #4290), so the record is reused until a handler loads it."""
     DEFER[0] = True
     user, record, _ = await sync_to_async(_recheck_world)()
     async with _recheck_socket(policy, user, record) as socket:
         RECHECKS.clear()
         await _recheck_event(socket, 1, "validate_field", {"field": "name", "value": "a"})
-        if policy == "explicit":
-            assert RECHECKS == ["lookup", "permission"], RECHECKS
-            RECHECKS.clear()
-            await _recheck_event(socket, 2, "validate_field", {"field": "name", "value": "ab"})
-            assert RECHECKS == ["lookup", "permission"], RECHECKS
-            return
         await _recheck_event(socket, 2, "touch", {"change": "deferred"})
         assert RECHECKS == [], RECHECKS
         await _recheck_event(socket, 3, "validate_field", {"field": "name", "value": "ab"})

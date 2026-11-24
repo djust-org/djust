@@ -138,6 +138,22 @@ warning on the `djust.exposure` logger that names the template's
 `items_count` and points at `{{ items|length }}`, once per view and name, and
 `manage.py check` reports it as `djust.T027` when `items` is supplied.
 
+**Models and rows carry only what the template reads.** As under the 1.3
+default, a Model, a model list or a QuerySet in the template context reaches
+the renderer reduced to the fields the template names, not every column
+(the identity keys `id`, `pk` and `__model__` only when the template prints
+the value whole or reads nothing off it). `{{ person.username }}` hands
+the renderer `username`; `email` stays out of its state. 2.0.0rc1 to rc3
+copied every concrete field (less `djust_exclude_fields`) of a value whose
+relations the template did not walk (#4290); if you worked around that with
+`self.serialize_for_template(value, name)` in `get_context_data()`, the
+workaround is no longer needed and does no harm. A row list the template
+reads no field path off (`{% regroup %}`, `{{ rows.0 }}`) keeps whole rows,
+as on 1.3, and a `dictsort:<variable>` loop
+whose variable names a property or method rather than a column keeps the
+full rows it sorts by. `djust.testing.rendered_state(view)` shows what a
+render handed the renderer.
+
 ### Step 1: run the inventory
 
 ```bash
@@ -1088,4 +1104,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 0eadb4dc6090 -->
+<!-- generated-doc prose-sha256: 41ccd4172f46 -->

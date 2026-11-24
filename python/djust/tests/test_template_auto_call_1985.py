@@ -195,7 +195,7 @@ class TestReportedSymptoms:
         html, _, _ = client.render_with_patches()
         assert "[2]" in html
 
-    def test_orm_autocall_warning_is_emitted_once(self, caplog):
+    def test_orm_autocall_warning_is_emitted_once(self, caplog, monkeypatch):
         """Observability rider: an auto-call bound to a Manager/QuerySet emits
         a one-shot warning on the djust.templates logger (debug mode — the
         Rust side reads settings.DEBUG live, so override_settings works).
@@ -204,6 +204,11 @@ class TestReportedSymptoms:
         from django.contrib.auth.models import User
         from django.test import override_settings
 
+        from djust.mixins import rust_bridge
+
+        # The auto-call is the sidecar's: #4290's JIT would answer ``warnee.groups.count``
+        # from the reduced dict before the sidecar walk runs.
+        monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
         user = User.objects.create_user(username="warn-probe")
 
         class _V(LiveView):

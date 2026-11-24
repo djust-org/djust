@@ -113,9 +113,13 @@ def test_filtered_rebinding_reads_reverse_relation(people, source, policy):
     assert _render(source, _ctx, policy) == expected
 
 
-def test_flag_off_is_unchanged_and_the_flag_is_live(people):
+def test_flag_off_is_unchanged_and_the_flag_is_live(people, monkeypatch):
     """Non-vacuity: the explicit default path still renders the filtered rebinding empty with
-    the flag off (the declared gap), and the flag turns it into Django's answer."""
+    the flag off (the declared gap), and the flag turns it into Django's answer. #4290's JIT of
+    a single Model answers it too, so its gate is off here."""
+    from djust.mixins import rust_bridge
+
+    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
     source = "{% with q=u|default:u %}{{ q.groups.count }}{% endwith %}"
     assert _render(source, _ctx, flag=False) == ""
     assert _render(source, _ctx, flag=True) == "2"
@@ -155,6 +159,9 @@ def test_fail_closed_when_floor_raises(people, monkeypatch):
 
     def boom(*a, **k):
         raise RuntimeError("floor refused")
+
+    # The normalized dict (#4290's gate off), which has no ``groups.count``.
+    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
 
     source = "{% with q=u|default:u %}[{{ q.groups.count }}]{{ q.password }}{% endwith %}"
     off = _render(source, _ctx, flag=False)
@@ -369,3 +376,13 @@ def test_flag_off_sync_sends_no_empty_overlay_to_a_view_without_one(people):
             assert len(spy.calls) == expect_calls, (flag, spy.calls)
             if flag:
                 assert spy.calls[-1] == {} and not spy._real.has_render_handles()
+
+
+def test_a_model_the_template_also_walks_keeps_its_handle(people):
+    """#4290 review: a single Model the JIT reduced to the paths the template reads keeps its
+    overlay handle even when the template walks a relation off it, so a custom filter is still
+    handed the floor proxy, not the reduced dict."""
+    src = "{% load cc3949 %}{{ u.groups.count }}|{{ u|cc3949_filter }}"
+    count, _, payload = _render(src, _ctx).partition("|")
+    assert count == "2"
+    assert json.loads(payload)["type"] == PROXY

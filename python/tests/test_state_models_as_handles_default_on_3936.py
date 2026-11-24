@@ -57,7 +57,11 @@ def test_gate_off_a_false_default_renders_the_rebinding_empty(people, monkeypatc
     1.x gap), so the default-on cells above are not vacuous."""
     from djust.config import config
 
+    from djust.mixins import rust_bridge
+
     monkeypatch.setitem(LiveViewConfig._defaults, "state_models_as_handles", False)
+    # #4290's JIT of a single Model answers the rebinding as well; its gate off.
+    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
     config._rebuild_from_settings(keep_programmatic=True)
     try:
         assert state_models_as_handles_enabled() is False
@@ -68,10 +72,15 @@ def test_gate_off_a_false_default_renders_the_rebinding_empty(people, monkeypatc
     assert state_models_as_handles_enabled() is True
 
 
-def test_explicit_false_is_the_kill_switch(people):
+def test_explicit_false_is_the_kill_switch(people, monkeypatch):
     """``False`` restores the dict: the rebinding renders empty, a custom filter gets a ``dict``,
     and a sync sends no overlay to a view that never had one."""
     import json
+
+    from djust.mixins import rust_bridge
+
+    # #4290's JIT of a single Model answers the rebinding as well; its gate off.
+    monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
 
     with override_settings(LIVEVIEW_CONFIG=FLAG_OFF):
         assert _render_default(REBINDING, _ctx, "explicit") == ""
