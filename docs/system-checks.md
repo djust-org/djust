@@ -999,7 +999,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 ### T010 — dj-click used for navigation
 - **Severity**: Warning
 - **Method**: Regex/AST (heuristic: dj-click handlers that call redirect or navigate)
-- **What it detects**: `dj-click` triggers navigation; prefer `dj-patch` for URL state updates
+- **What it detects**: an element with `dj-click` and a navigation-style attribute (`data-view`, `data-tab`, `data-page`, `data-section`, or the same names as `dj-value-*`); prefer `dj-patch` for URL state updates. Names are matched whole, so `data-viewport` and `dj-value-viewer` do not count
 - **Suppression**: `SILENCED_SYSTEM_CHECKS = ["djust.T010"]`
 - **False positives**: Click handlers that navigate as a side effect of other work (e.g. save-and-redirect)
 

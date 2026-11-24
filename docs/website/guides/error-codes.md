@@ -1352,7 +1352,7 @@ document.addEventListener('djust:navigate-end', (e) => { ... });
 
 **Severity**: Warning
 
-**What causes it**: A template element uses `dj-click` together with navigation-related data attributes (`data-view`, `data-tab`, `data-page`, or `data-section`). This pattern suggests you're implementing navigation, which should use `dj-patch` instead for proper URL updates and browser history support.
+**What causes it**: A template element uses `dj-click` together with navigation-related data attributes (`data-view`, `data-tab`, `data-page`, or `data-section`, or the `dj-value-*` form of each such as `dj-value-tab`). This pattern suggests you're implementing navigation, which should use `dj-patch` instead for proper URL updates and browser history support.
 
 **What you see**: Navigation works but the browser URL doesn't update, and the back button doesn't work as expected. Users cannot bookmark or share specific views.
 
@@ -1362,6 +1362,9 @@ document.addEventListener('djust:navigate-end', (e) => { ... });
 ```html
 <!-- WRONG -- dj-click for navigation -->
 <button dj-click="show_settings" data-view="settings">Settings</button>
+
+<!-- WRONG -- the same navigation sent as an event param -->
+<button dj-click="show" dj-value-tab="settings">Settings</button>
 
 <!-- CORRECT -- use dj-patch for navigation -->
 <a href="?view=settings" dj-patch>Settings</a>

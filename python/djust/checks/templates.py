@@ -117,7 +117,10 @@ _DOC_DISPATCHED_DJUST_EVENTS = frozenset(
         "layout-changed",
     }
 )
-_NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
+# Navigation-style attributes: ``data-view`` and the ``dj-value-view`` form that
+# the click sends as an event param (#4237). The boundaries keep ``data-viewport``,
+# ``data-views`` and ``dj-value-viewer`` from matching.
+_NAV_DATA_ATTRS = re.compile(r"(?<![\w-])(?:data|dj-value)-(view|tab|page|section)(?![\w-])")
 # T012 (#3225) — the attributes that only work inside a connected LiveView.
 # Derived from the client's directive table in ``djust._template_bindings``:
 # every server-event directive (``DIRECTIVES``: dj-click, dj-viewport-bottom,
@@ -1859,9 +1862,10 @@ def _check_click_for_navigation(
 ) -> None:
     """T010: Detect dj-click with navigation-style data attributes.
 
-    Elements with both dj-click and navigation-style data attributes (data-view,
-    data-tab, data-page, data-section) should use dj-patch instead for proper URL
-    updates and back-button support.
+    Elements with both dj-click and navigation-style attributes (``data-view``,
+    ``data-tab``, ``data-page``, ``data-section``, or the ``dj-value-*`` form of
+    each, with an optional ``:type`` suffix) should use dj-patch instead for
+    proper URL updates and back-button support.
     """
     tag_re = re.compile(r"<[a-zA-Z][^>]*>", re.DOTALL)
     _line_counter = LineCounter(content)
