@@ -3491,9 +3491,9 @@ def _library_is_childless(
         found = _find_library(library)
         module = _DJUST_LIBRARY_MODULES.get(library)
         if module is not None:
-            import importlib
+            from importlib import import_module
 
-            if found is getattr(importlib.import_module(module), "register", None):
+            if found is getattr(import_module(module), "register", None):
                 return True
         tags = getattr(found, "tags", None)
     except Exception:  # noqa: BLE001 — an unknown library: assume it may
