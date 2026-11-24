@@ -265,6 +265,12 @@ class LiveViewConfig:
         # Set to False if you orchestrate the file watcher externally (e.g.
         # watchfiles wrapping uvicorn) and want full manual control.
         "hot_reload_auto_enable": True,
+        # Tag libraries (``{% load %}`` names) whose tags never mount a child
+        # view with ``{% live_render %}``. A live mount of an explicit
+        # ``template_name`` page skips the full page-shell render when no
+        # template of the page can mount one (#4295); a ``{% load %}`` of any
+        # other library that registers tags keeps that render (#4298).
+        "childless_tag_libraries": [],
         # Once-a-day notice of newer releases / security advisories on the
         # dev server and in ``manage.py check``. Cached, silent on failure,
         # never runs with DEBUG=False. See docs/website/guides/update-check.md.

@@ -218,6 +218,11 @@ def djust_handlers_only(monkeypatch):
 
 @pytest.fixture
 def shell_templates(settings, tmp_path, monkeypatch):
+    yield from shell_template_dir(settings, tmp_path, monkeypatch)
+
+
+def shell_template_dir(settings, tmp_path, monkeypatch):
+    """``SHELL_FILES`` in a template dir searched first (shared with #4298/#4299)."""
     djust_handlers_only(monkeypatch)
     templates = copy.deepcopy(settings.TEMPLATES)
     templates[0]["DIRS"] = [str(tmp_path), *templates[0].get("DIRS", [])]
@@ -319,7 +324,9 @@ def test_the_shell_answer_is_cached_per_template(settings, shell_templates, monk
     scans = []
     original = runtime._templates_may_register_children
     monkeypatch.setattr(
-        runtime, "_templates_may_register_children", lambda n: scans.append(n) or original(n)
+        runtime,
+        "_templates_may_register_children",
+        lambda n, *a: scans.append(n) or original(n, *a),
     )
     for _ in range(3):
         assert runtime._page_shell_may_register_children(ShellPage()) is False

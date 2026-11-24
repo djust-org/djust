@@ -3197,24 +3197,86 @@ def _reconstruct_explicit_page_shell(view: Any, request: Any) -> None:
         return
     from ._child_rendering import render_view_full_template
 
-    view.get_template()
-    if getattr(view, "_full_template", None) is None:
-        return
     if not _page_shell_may_register_children(view):
         # Nothing in the page can mount a child view, so the full render
-        # would register nothing; its HTML is never sent (#4295).
+        # would register nothing; its HTML is never sent (#4295). Asked before
+        # ``get_template()``, which a skipped render need not pay for (#4299).
+        return
+    # Refreshes ``_full_template`` should the view have changed its template
+    # since its Rust view was built; with ``DEBUG`` off it is a kept copy.
+    view.get_template()
+    if getattr(view, "_full_template", None) is None:
         return
     render_view_full_template(view, request)
     view._cached_context = None
 
 
-#: Tag libraries whose tags never mount a child view: Django's own and djust's
+#: Tag libraries whose tags never mount a child view: Django's own, djust's
 #: ``live_tags`` (whose only child-mounting tag, ``live_render``, is found by
-#: name). Any other ``{% load %}`` may hold a tag that does, so it keeps the
-#: full page-shell render (#4295).
+#: name), and djust's component, flash and theme libraries (#4298), whose tags
+#: render only the templates ``_LIBRARY_RENDERED_TEMPLATES`` names. Any other
+#: ``{% load %}`` of a library with tags may hold a tag that does, so it keeps
+#: the full page-shell render (#4295) unless the project lists it in
+#: ``LIVEVIEW_CONFIG['childless_tag_libraries']``.
 _CHILDLESS_TAG_LIBRARIES = frozenset(
-    {"static", "i18n", "l10n", "tz", "cache", "humanize", "live_tags"}
+    {
+        "static",
+        "i18n",
+        "l10n",
+        "tz",
+        "cache",
+        "humanize",
+        "live_tags",
+        "djust_components",
+        "djust_flash",
+        "theme_tags",
+    }
 )
+#: The templates a library on ``_CHILDLESS_TAG_LIBRARIES`` renders from its tags.
+#: A project can override any of them (an app template dir earlier in the search
+#: order), so a page that loads the library scans them as it scans an include.
+#: ``*`` stands for a theme name: ``theme_tags`` picks the active theme's copy
+#: first. ``python/djust/tests/test_mount_template_work_4298_4299.py`` keeps this in step
+#: with the libraries' source.
+_LIBRARY_RENDERED_TEMPLATES: Dict[str, Tuple[str, ...]] = {
+    "djust_components": (
+        "djust_components/toast.html",
+        "djust_components/progress.html",
+        "djust_components/badge.html",
+        "djust_components/pagination.html",
+        "djust_components/avatar.html",
+    ),
+    "theme_tags": (
+        "djust_theming/theme_head.html",
+        "djust_theming/theme_switcher.html",
+        "djust_theming/themes/*/theme_switcher.html",
+        "djust_theming/components/theme_panel.html",
+        "djust_theming/themes/*/components/theme_panel.html",
+        "djust_theming/components/theme_mode_button.html",
+        "djust_theming/themes/*/components/theme_mode_button.html",
+        "djust_theming/components/preset_selector_dropdown.html",
+        "djust_theming/themes/*/components/preset_selector_dropdown.html",
+        "djust_theming/components/preset_selector_grid.html",
+        "djust_theming/themes/*/components/preset_selector_grid.html",
+        "djust_theming/components/preset_selector_list.html",
+        "djust_theming/themes/*/components/preset_selector_list.html",
+    ),
+}
+#: The module each djust name on ``_CHILDLESS_TAG_LIBRARIES`` must resolve to: an
+#: app's own library of the same name (a later app wins in Django's map) or an
+#: ``OPTIONS['libraries']`` entry is not vouched for by the name alone (#4298).
+_DJUST_LIBRARY_MODULES: Dict[str, str] = {
+    "live_tags": "djust.templatetags.live_tags",
+    "djust_components": "djust.components.templatetags.djust_components",
+    "djust_flash": "djust.templatetags.djust_flash",
+    "theme_tags": "djust.theming.templatetags.theme_tags",
+}
+#: Tags of a child-free library that render more than the scan can read: the
+#: component catalogue's previews render any component template, through
+#: other libraries and whole views. A file that uses one keeps the render.
+_LIBRARY_UNSCANNED_TAGS: Dict[str, Tuple[str, ...]] = {
+    "theme_tags": ("component_preview", "component_thumbnail"),
+}
 _LOAD_TAG_RE = re.compile(r"\{%\s*load\s+(.*?)\s*%\}", re.DOTALL)
 #: ``{% extends X %}`` / ``{% include X %}``: the operand, quoted or not.
 _TEMPLATE_REF_RE = re.compile(
@@ -3224,15 +3286,26 @@ _TEMPLATE_REF_RE = re.compile(
 _SHELL_SCAN_MAX_TEMPLATES = 64
 
 
+def _project_childless_libraries() -> Tuple[str, ...]:
+    """``LIVEVIEW_CONFIG['childless_tag_libraries']``: names a project vouches for (#4298)."""
+    from .config import config as djust_config
+
+    names = djust_config.get("childless_tag_libraries") or ()
+    if isinstance(names, str):
+        names = (names,)
+    return tuple(sorted(str(name) for name in names))
+
+
 def _page_shell_may_register_children(view: Any) -> bool:
     """Whether a full render of ``view``'s page could mount a child view (#4295).
 
     Reads the raw text of every template the page is built from: the
     ``template_name`` file, each ``{% extends %}`` parent and each
-    ``{% include %}`` partial, followed recursively. ``False`` only when no file
-    names ``live_render``, every ``extends`` / ``include`` operand is a quoted
-    template name that resolves, and no file loads a tag library outside
-    ``_CHILDLESS_TAG_LIBRARIES``. A tag no template has to load (an engine's
+    ``{% include %}`` partial, followed recursively, plus the templates a loaded
+    djust library renders (``_LIBRARY_RENDERED_TEMPLATES``). ``False`` only when
+    no file names ``live_render``, every ``extends`` / ``include`` operand is a
+    quoted template name that resolves, and every ``{% load %}`` is child-free
+    (``_library_is_childless``). A tag no template has to load (an engine's
     ``builtins``, a djust tag handler registered outside djust) could mount a
     child unseen, so either keeps the full render. Anything else the scan
     cannot read answers ``True``: the full render runs, as before.
@@ -3253,12 +3326,13 @@ def _page_shell_may_register_children(view: Any) -> bool:
     try:
         if _unloaded_tags_may_mount_children():
             return True
-        key = (name, tuple(get_template_dirs())) if render_caches_enabled() else None
+        vouched = _project_childless_libraries()
+        key = (name, tuple(get_template_dirs()), vouched) if render_caches_enabled() else None
         if key is not None:
             cached = _shell_children_cache.get(key)
             if cached is not None:
                 return cached
-        answer = _templates_may_register_children(name)
+        answer = _templates_may_register_children(name, vouched)
     except Exception:  # noqa: BLE001 — undecidable: keep the full render
         logger.debug("Page-shell child scan could not read the templates")
         return True
@@ -3285,10 +3359,11 @@ def _unloaded_tags_may_mount_children() -> bool:
     return False
 
 
-def _templates_may_register_children(name: str) -> bool:
+def _templates_may_register_children(name: str, vouched: Tuple[str, ...] = ()) -> bool:
     """``_page_shell_may_register_children`` for the page whose root file is ``name``."""
     pending = [name]
     seen: set = set()
+    libraries_seen: set = set()
     while pending:
         current = pending.pop()
         if current in seen:
@@ -3297,8 +3372,14 @@ def _templates_may_register_children(name: str) -> bool:
         if len(seen) > _SHELL_SCAN_MAX_TEMPLATES:
             return True
         source = _template_file_source(current)
-        if source is None or _source_may_register_children(source):
+        if source is None:
             return True
+        loaded = _source_childless_loads(source, vouched)
+        if loaded is None:
+            return True
+        for library in loaded - libraries_seen:
+            libraries_seen.add(library)
+            pending.extend(_library_rendered_templates(library))
         for match in _TEMPLATE_REF_RE.finditer(source):
             operand = match.group(1)
             if len(operand) < 3 or operand[0] not in "\"'" or operand[-1] != operand[0]:
@@ -3306,6 +3387,28 @@ def _templates_may_register_children(name: str) -> bool:
             # A Django 6 named partial (``"page.html#card"``) lives in its file.
             pending.append(operand[1:-1].partition("#")[0])
     return False
+
+
+def _library_rendered_templates(library: str) -> List[str]:
+    """The templates ``library``'s tags may render, as the scan should read them.
+
+    A plain name is read like an include (it must resolve). A ``*`` pattern is a
+    theme's own copy, read wherever a template directory has one.
+    """
+    import glob
+    import os
+
+    from .utils import get_template_dirs
+
+    names: List[str] = []
+    for entry in _LIBRARY_RENDERED_TEMPLATES.get(library, ()):
+        if "*" not in entry:
+            names.append(entry)
+            continue
+        for template_dir in get_template_dirs():
+            for path in sorted(glob.glob(os.path.join(glob.escape(template_dir), entry))):
+                names.append(os.path.relpath(path, template_dir).replace(os.sep, "/"))
+    return names
 
 
 def _template_file_source(name: str) -> Optional[str]:
@@ -3335,19 +3438,71 @@ def _template_file_source(name: str) -> Optional[str]:
     return None
 
 
-def _source_may_register_children(content: Any) -> bool:
-    """Whether one template file's own text could mount a child view."""
-    if not isinstance(content, str):
-        return True
-    if "live_render" in content:
-        return True
+def _source_childless_loads(content: Any, vouched: Tuple[str, ...] = ()) -> Optional[set]:
+    """The libraries one template file loads, or ``None`` when it could mount a child.
+
+    ``None`` when the text names ``live_render`` or loads a library that
+    ``_library_is_childless`` cannot clear.
+    """
+    if not isinstance(content, str) or "live_render" in content:
+        return None
+    loaded: set = set()
     for match in _LOAD_TAG_RE.finditer(content):
         words = match.group(1).split()
-        # ``{% load name1 name2 %}`` or ``{% load tag from library %}``.
-        libraries = words[words.index("from") + 1 :] if "from" in words else words
-        if any(lib not in _CHILDLESS_TAG_LIBRARIES for lib in libraries):
-            return True
-    return False
+        # ``{% load name1 name2 %}`` or ``{% load tag1 tag2 from library %}``
+        # (Django's own test: three words or more, ``from`` the penultimate).
+        if len(words) >= 3 and words[-2] == "from":
+            libraries, items = words[-1:], tuple(words[:-2])
+        else:
+            libraries, items = words, None
+        for library in libraries:
+            if not _library_is_childless(library, items, vouched):
+                return None
+            for tag in _LIBRARY_UNSCANNED_TAGS.get(library, ()):
+                if (items is None or tag in items) and re.search(
+                    r"\{%-?\s*" + tag + r"\b", content
+                ):
+                    return None
+            loaded.add(library)
+    return loaded
+
+
+def _source_may_register_children(content: Any, vouched: Tuple[str, ...] = ()) -> bool:
+    """Whether one template file's own text could mount a child view."""
+    return _source_childless_loads(content, vouched) is None
+
+
+def _library_is_childless(
+    library: str, items: Optional[Tuple[str, ...]], vouched: Tuple[str, ...] = ()
+) -> bool:
+    """Whether loading ``library`` (or only ``items`` of it) can mount no child view.
+
+    True for ``_CHILDLESS_TAG_LIBRARIES``, for a library the project vouches for,
+    and for one whose loaded part registers no tag: a filter cannot mount a
+    child view (#4298). A library that cannot be found keeps the full render.
+    """
+    if library in vouched or (
+        library in _CHILDLESS_TAG_LIBRARIES and library not in _DJUST_LIBRARY_MODULES
+    ):
+        return True
+    try:
+        from .template_libraries import _find_library
+
+        found = _find_library(library)
+        module = _DJUST_LIBRARY_MODULES.get(library)
+        if module is not None:
+            from importlib import import_module
+
+            if found is getattr(import_module(module), "register", None):
+                return True
+        tags = getattr(found, "tags", None)
+    except Exception:  # noqa: BLE001 — an unknown library: assume it may
+        return False
+    if not isinstance(tags, dict):
+        return False
+    if items is None:
+        return not tags
+    return not any(item in tags for item in items)
 
 
 def _explicit_descendant(root: Any, view_id: Any) -> Any:
@@ -4412,8 +4567,16 @@ class ViewRuntime(RuntimeTurnPort):
             except Exception:  # noqa: BLE001 — an asset check must never break mount
                 logger.warning("dj-track-static check failed; no stale assets reported")
 
+        # Both configs read the same decorator scan: run it once per mount (#4299).
+        try:
+            decorator_metadata: Optional[List[Tuple[str, Dict[str, Any]]]] = (
+                _public_decorator_metadata(view_instance)
+            )
+        except Exception:  # noqa: BLE001 — each extractor rescans and drops its own config
+            decorator_metadata = None
+
         # Optional cache_config (mirrors WS consumer)
-        cache_config = self._extract_cache_config(view_instance)
+        cache_config = self._extract_cache_config(view_instance, decorator_metadata)
         if cache_config:
             mount_msg["cache_config"] = cache_config
 
@@ -4423,7 +4586,7 @@ class ViewRuntime(RuntimeTurnPort):
         # CSP-strict (no inline <script>) and survives the #1610 mount morph,
         # unlike the `window.handlerMetadata` script tag, which the client
         # now reads only as an HTTP-path fallback.
-        handler_config = self._extract_handler_config(view_instance)
+        handler_config = self._extract_handler_config(view_instance, decorator_metadata)
         if handler_config:
             mount_msg["handler_config"] = handler_config
 
@@ -6392,15 +6555,23 @@ class ViewRuntime(RuntimeTurnPort):
 
         return own_route_kwargs(view_instance, page_url)
 
-    def _extract_cache_config(self, view_instance: Any) -> Optional[Dict[str, Any]]:
+    def _extract_cache_config(
+        self,
+        view_instance: Any,
+        metadata: Optional[List[Tuple[str, Dict[str, Any]]]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Extract @cache decorator metadata from the view's handlers.
 
         Sole live copy after the mount flip (#1919/#1920): the bespoke
         ``LiveViewConsumer`` twin was removed as dead code in #1921.
+        ``metadata`` is a ``_public_decorator_metadata`` scan the caller
+        already ran (#4299); without it the view is scanned here.
         """
         try:
+            if metadata is None:
+                metadata = _public_decorator_metadata(view_instance)
             cache_config: Dict[str, Any] = {}
-            for attr_name, decorators in _public_decorator_metadata(view_instance):
+            for attr_name, decorators in metadata:
                 cache_info = decorators.get("cache")
                 if cache_info:
                     cache_config[attr_name] = cache_info
@@ -6414,7 +6585,11 @@ class ViewRuntime(RuntimeTurnPort):
     #: start costing every mount bytes it has no consumer for.
     _CLIENT_RATE_LIMIT_KEYS = ("debounce", "throttle")
 
-    def _extract_handler_config(self, view_instance: Any) -> Optional[Dict[str, Any]]:
+    def _extract_handler_config(
+        self,
+        view_instance: Any,
+        metadata: Optional[List[Tuple[str, Dict[str, Any]]]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Extract @debounce / @throttle metadata from the view's handlers.
 
         Mirrors :meth:`_extract_cache_config`; ships on the mount frame as
@@ -6422,8 +6597,10 @@ class ViewRuntime(RuntimeTurnPort):
         ``static/djust/src/05-handler-rate-limit.js`` (#2656).
         """
         try:
+            if metadata is None:
+                metadata = _public_decorator_metadata(view_instance)
             handler_config: Dict[str, Any] = {}
-            for attr_name, decorators in _public_decorator_metadata(view_instance):
+            for attr_name, decorators in metadata:
                 entry = {
                     key: decorators[key]
                     for key in self._CLIENT_RATE_LIMIT_KEYS
