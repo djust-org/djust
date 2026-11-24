@@ -421,19 +421,14 @@ async def test_a_websocket_mount_runs_the_override_once(name):
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#3725 sibling, tracked in #3733 and not fixed here: an EXPLICIT view whose page shell comes from "
-        "template_name evaluates the override three times on a live mount "
-        "(runtime._reconstruct_explicit_page_shell renders the full page with no cached "
-        "context, then the root renders again). Delete this marker when it is one."
-    ),
-)
 @pytest.mark.parametrize(
     "name", [n for n in ALL if n.startswith("V_explicit") and n.endswith("_shell")]
 )
-async def test_an_explicit_page_shell_websocket_mount_runs_the_override_once(name):
+async def test_an_explicit_page_shell_websocket_mount_runs_the_override_once(name, monkeypatch):
+    """A shell that can mount no child view skips the full page render on mount (#4295)."""
+    from .test_template_source_cache_4294_4295 import djust_handlers_only
+
+    djust_handlers_only(monkeypatch)
     communicator = await _connect()
     try:
         await _mount(communicator, name)

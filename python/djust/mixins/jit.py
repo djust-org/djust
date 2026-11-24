@@ -550,9 +550,16 @@ _template_source_cache: Dict[Tuple[str, str, Tuple[str, ...]], str] = {}
 _TEMPLATE_SOURCE_CACHE_MAX = 256
 
 
+#: Whether a template's page shell could mount a child view, by template name and dirs
+#: (``runtime._page_shell_may_register_children``, #4295).
+_shell_children_cache: Dict[Tuple[str, Tuple[str, ...]], bool] = {}
+_SHELL_CHILDREN_CACHE_MAX = 256
+
+
 def clear_template_source_caches() -> None:
     """Forget every cached extraction source, hash and variable map."""
     _template_source_cache.clear()
+    _shell_children_cache.clear()
     _template_hash_cache.clear()
     _variable_extraction_cache.clear()
     _item_key_only_cache.clear()
@@ -1063,7 +1070,10 @@ class JITMixin:
         Use it with :meth:`serialize_for_template` to hand the template a value
         that is not a model.
         """
-        content = self._get_template_content()
+        # The cached source every internal caller reads (#4294): with render
+        # caches on, a ``get_context_data()`` that calls this per key must not
+        # re-resolve the inheritance and re-inline every include each time.
+        content = _jit_template_content(self)
         if not content:
             return {}
         found = public_template_paths(_cached_extract_template_variables(content))
@@ -1097,7 +1107,7 @@ class JITMixin:
 
         from ..utils import is_model_list
 
-        content = self._get_template_content() or ""
+        content = _jit_template_content(self) or ""  # cached, as template_paths (#4294)
         if isinstance(value, QuerySet):
             return self._jit_serialize_queryset(value, content, name)
         if isinstance(value, models.Model):

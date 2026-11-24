@@ -166,6 +166,61 @@ MIGRATION_GUIDE_URL = "https://docs.djust.org/guides/migrating-to-2.0/"
 #: Names already reported, by view class. Weak: view classes can be collected.
 _REPORTED: "weakref.WeakKeyDictionary[type, set[str]]" = weakref.WeakKeyDictionary()
 
+#: The log modes' template paths, by view class: ``(source key, paths)`` (#4294).
+#: With ``DEBUG`` on the JIT source is not cached, so ``template_paths()`` resolves
+#: the inheritance and inlines every include on each call; the notice would pay
+#: that on every render. Kept while the view's template source key is unchanged
+#: and something clears it when a template changes: render caches are on, or hot
+#: reload is running (its template refresh clears the render caches, and this).
+_PATHS_BY_CLASS: "weakref.WeakKeyDictionary[type, tuple[Any, Any]]" = weakref.WeakKeyDictionary()
+
+
+def clear_unsupplied_paths_cache() -> None:
+    """Forget the log modes' template paths (a template may have changed)."""
+    _PATHS_BY_CLASS.clear()
+
+
+def _templates_stay_fresh() -> bool:
+    """Whether a template edit clears the render caches before the next render."""
+    from ._render_caches import render_caches_enabled
+
+    if render_caches_enabled():
+        return True
+    try:
+        from .dev_server import hot_reload_server
+    except ImportError:  # watchdog is optional
+        return False
+    return bool(hot_reload_server.is_running())
+
+
+def _log_mode_paths(view: Any, cls: type) -> Any:
+    """``view.template_paths()``, kept per view class and template source key.
+
+    A view that overrides ``template_paths`` or ``_get_template_content`` is
+    asked every time: its answer may depend on more than the template.
+    """
+    from .mixins.jit import JITMixin, _template_source_key
+
+    if (
+        getattr(cls, "template_paths", None) is not JITMixin.template_paths
+        or getattr(cls, "_get_template_content", None) is not JITMixin._get_template_content
+        or "template_paths" in getattr(view, "__dict__", {})
+        or "_get_template_content" in getattr(view, "__dict__", {})
+    ):
+        return view.template_paths()
+    if not _templates_stay_fresh():
+        return view.template_paths()
+    key = _template_source_key(view)
+    if key is None:
+        return view.template_paths()
+    held = _PATHS_BY_CLASS.get(cls)
+    if held is not None and held[0] == key:
+        return held[1]
+    paths = view.template_paths()
+    _PATHS_BY_CLASS[cls] = (key, paths)
+    return paths
+
+
 _NOT_VALUES = (FunctionType, staticmethod, classmethod, type)
 
 
@@ -227,9 +282,12 @@ def _advice(view: Any, name: str) -> str:
     )
 
 
-def unsupplied_template_names(view: Any, context: Mapping[str, Any]) -> list[str]:
+def unsupplied_template_names(
+    view: Any, context: Mapping[str, Any], paths: Any = None
+) -> list[str]:
     """Names the view's template reads, the view holds, and ``context`` lacks."""
-    paths = view.template_paths()
+    if paths is None:
+        paths = view.template_paths()
     candidates = [
         name
         for name in paths
@@ -314,9 +372,11 @@ def warn_unsupplied_template_names(view: Any, context: Any) -> None:
         reported = _REPORTED.get(cls)
         if reported is None:
             reported = _REPORTED[cls] = set()
-        paths = view.template_paths()
+        # One template read per render, not one per helper (#4294); in the log
+        # modes, one per view class while its template is unchanged.
+        paths = view.template_paths() if mode == "error" else _log_mode_paths(view, cls)
         counts = unsupplied_count_names(view, context, paths)
-        names = unsupplied_template_names(view, context)
+        names = unsupplied_template_names(view, context, paths)
         if mode == "error":
             if counts or names:
                 strict.append((counts, names))

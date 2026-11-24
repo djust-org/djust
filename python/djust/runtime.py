@@ -3200,8 +3200,154 @@ def _reconstruct_explicit_page_shell(view: Any, request: Any) -> None:
     view.get_template()
     if getattr(view, "_full_template", None) is None:
         return
+    if not _page_shell_may_register_children(view):
+        # Nothing in the page can mount a child view, so the full render
+        # would register nothing; its HTML is never sent (#4295).
+        return
     render_view_full_template(view, request)
     view._cached_context = None
+
+
+#: Tag libraries whose tags never mount a child view: Django's own and djust's
+#: ``live_tags`` (whose only child-mounting tag, ``live_render``, is found by
+#: name). Any other ``{% load %}`` may hold a tag that does, so it keeps the
+#: full page-shell render (#4295).
+_CHILDLESS_TAG_LIBRARIES = frozenset(
+    {"static", "i18n", "l10n", "tz", "cache", "humanize", "live_tags"}
+)
+_LOAD_TAG_RE = re.compile(r"\{%\s*load\s+(.*?)\s*%\}", re.DOTALL)
+#: ``{% extends X %}`` / ``{% include X %}``: the operand, quoted or not.
+_TEMPLATE_REF_RE = re.compile(
+    r"\{%\s*(?:extends|include)\s+(\"[^\"]*\"|'[^']*'|[^\s%]+)", re.DOTALL
+)
+#: More templates than this in one page means the scan gives up (renders).
+_SHELL_SCAN_MAX_TEMPLATES = 64
+
+
+def _page_shell_may_register_children(view: Any) -> bool:
+    """Whether a full render of ``view``'s page could mount a child view (#4295).
+
+    Reads the raw text of every template the page is built from: the
+    ``template_name`` file, each ``{% extends %}`` parent and each
+    ``{% include %}`` partial, followed recursively. ``False`` only when no file
+    names ``live_render``, every ``extends`` / ``include`` operand is a quoted
+    template name that resolves, and no file loads a tag library outside
+    ``_CHILDLESS_TAG_LIBRARIES``. A tag no template has to load (an engine's
+    ``builtins``, a djust tag handler registered outside djust) could mount a
+    child unseen, so either keeps the full render. Anything else the scan
+    cannot read answers ``True``: the full render runs, as before.
+    """
+    from ._render_caches import render_caches_enabled
+    from .mixins.jit import _SHELL_CHILDREN_CACHE_MAX, _shell_children_cache
+    from .utils import get_template_dirs
+
+    from .mixins.template import TemplateMixin
+
+    name = getattr(view, "template_name", None)
+    if type(name) is not str or not name:
+        return True
+    if getattr(
+        type(view), "get_template", None
+    ) is not TemplateMixin.get_template or "get_template" in getattr(view, "__dict__", {}):
+        return True  # the page may not be built from these files
+    try:
+        if _unloaded_tags_may_mount_children():
+            return True
+        key = (name, tuple(get_template_dirs())) if render_caches_enabled() else None
+        if key is not None:
+            cached = _shell_children_cache.get(key)
+            if cached is not None:
+                return cached
+        answer = _templates_may_register_children(name)
+    except Exception:  # noqa: BLE001 — undecidable: keep the full render
+        logger.debug("Page-shell child scan could not read the templates")
+        return True
+    if key is not None:
+        if len(_shell_children_cache) >= _SHELL_CHILDREN_CACHE_MAX:
+            _shell_children_cache.clear()
+        _shell_children_cache[key] = answer
+    return answer
+
+
+def _unloaded_tags_may_mount_children() -> bool:
+    """Whether a tag reachable without ``{% load %}`` may come from outside djust."""
+    from django.conf import settings
+
+    from .template_tags import get_registered_handlers
+
+    for config in getattr(settings, "TEMPLATES", ()) or ():
+        if (config.get("OPTIONS") or {}).get("builtins"):
+            return True
+    for handler in get_registered_handlers().values():
+        module = getattr(handler if isinstance(handler, type) else type(handler), "__module__", "")
+        if not str(module).startswith("djust."):
+            return True
+    return False
+
+
+def _templates_may_register_children(name: str) -> bool:
+    """``_page_shell_may_register_children`` for the page whose root file is ``name``."""
+    pending = [name]
+    seen: set = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if len(seen) > _SHELL_SCAN_MAX_TEMPLATES:
+            return True
+        source = _template_file_source(current)
+        if source is None or _source_may_register_children(source):
+            return True
+        for match in _TEMPLATE_REF_RE.finditer(source):
+            operand = match.group(1)
+            if len(operand) < 3 or operand[0] not in "\"'" or operand[-1] != operand[0]:
+                return True  # a variable template name: unknowable here
+            # A Django 6 named partial (``"page.html#card"``) lives in its file.
+            pending.append(operand[1:-1].partition("#")[0])
+    return False
+
+
+def _template_file_source(name: str) -> Optional[str]:
+    """The raw text of template ``name``, as the template engine would find it."""
+    import os
+
+    from .utils import get_template_dirs
+
+    for template_dir in get_template_dirs():
+        path = os.path.join(template_dir, name)
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as handle:
+                return handle.read()
+    from django.template import TemplateDoesNotExist, engines
+
+    for backend in engines.all():
+        engine = getattr(backend, "engine", None)
+        if engine is None:
+            continue
+        try:
+            template, _origin = engine.find_template(name)
+        except TemplateDoesNotExist:
+            continue
+        source = getattr(template, "source", None)
+        if isinstance(source, str):
+            return source
+    return None
+
+
+def _source_may_register_children(content: Any) -> bool:
+    """Whether one template file's own text could mount a child view."""
+    if not isinstance(content, str):
+        return True
+    if "live_render" in content:
+        return True
+    for match in _LOAD_TAG_RE.finditer(content):
+        words = match.group(1).split()
+        # ``{% load name1 name2 %}`` or ``{% load tag from library %}``.
+        libraries = words[words.index("from") + 1 :] if "from" in words else words
+        if any(lib not in _CHILDLESS_TAG_LIBRARIES for lib in libraries):
+            return True
+    return False
 
 
 def _explicit_descendant(root: Any, view_id: Any) -> Any:
