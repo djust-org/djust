@@ -655,7 +655,8 @@ def note_template_change(path: str) -> int:
     every class, because an edit of an included file changes them without
     touching the view's own template.
 
-    Dev-only (the file watcher); returns how many classes were reset.
+    Also clears the per-template render caches. Dev-only (the file watcher);
+    returns how many classes were reset.
     """
     from djust.live_view import LiveView
 
@@ -680,6 +681,11 @@ def note_template_change(path: str) -> int:
                     logger.debug("HVR: could not reset %s of %s", name, cls.__qualname__)
         reset += dropped
         stack.extend(cls.__subclasses__())
+    # The per-template render caches, ``get_template()``'s kept result among
+    # them (#4299), are derived from the template too.
+    from djust._render_caches import clear_render_caches
+
+    clear_render_caches()
     logger.debug("HVR: %s changed; reset the template caches of %d view classes", path, reset)
     return reset
 
