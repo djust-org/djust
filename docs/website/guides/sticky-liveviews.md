@@ -210,6 +210,18 @@ List only libraries whose tags never render `{% live_render %}`, or a
 template that does: a page-shell child of a skipped render is not
 registered, so its events have no view to reach.
 
+A library can also vouch for itself, without a project setting, by marking
+its `Library` object:
+
+```python
+register = template.Library()
+register.djust_childless = True
+```
+
+The same caveat applies. Inclusion-tag templates are not scanned for
+`{% live_render %}`; in DEBUG, check `C044` warns about an `inclusion_tag`
+in a marked library.
+
 ## The `sticky` class attribute
 
 Two class attributes control sticky behavior:

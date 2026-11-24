@@ -358,7 +358,7 @@ class _OwnerContext:
         except ContractError:
             return []  # djust.C022 / V016 report the invalid policy.
         payload = binding.payload
-        findings = _routing_findings(payload)
+        findings = _routing_findings(payload, strict=policy == "strict")
         if policy == "strict":
             findings += _strict_findings(binding, method)
         else:
@@ -374,12 +374,15 @@ _NAME_HINT = (
 )
 
 
-def _routing_findings(payload: Any) -> list[Finding]:
+def _routing_findings(payload: Any, strict: bool = False) -> list[Finding]:
     from djust._template_bindings import ROUTING_KEYS
 
     findings = []
     seen = set()
-    for key, (attribute, _value, _hint) in [*payload.legacy.items(), *payload.values.items()]:
+    # ``values`` is the strict path's dj-value-* set; a legacy handler never reads it
+    # for the fixed-payload directives (#4240).
+    supplied = [*payload.legacy.items(), *(payload.values.items() if strict else ())]
+    for key, (attribute, _value, _hint) in supplied:
         if key in ROUTING_KEYS and attribute not in seen:
             seen.add(attribute)
             findings.append(
