@@ -3200,8 +3200,81 @@ def _reconstruct_explicit_page_shell(view: Any, request: Any) -> None:
     view.get_template()
     if getattr(view, "_full_template", None) is None:
         return
+    if not _page_shell_may_register_children(view):
+        # Nothing in the page can mount a child view, so the full render
+        # would register nothing; its HTML is never sent (#4295).
+        return
     render_view_full_template(view, request)
     view._cached_context = None
+
+
+#: Tag libraries whose tags never mount a child view: Django's own and djust's
+#: ``live_tags`` (whose only child-mounting tag, ``live_render``, is found by
+#: name). Any other ``{% load %}`` may hold a tag that does, so it keeps the
+#: full page-shell render (#4295).
+_CHILDLESS_TAG_LIBRARIES = frozenset(
+    {"static", "i18n", "l10n", "tz", "cache", "humanize", "live_tags"}
+)
+_LOAD_TAG_RE = re.compile(r"\{%\s*load\s+(.*?)\s*%\}", re.DOTALL)
+_INCLUDE_TAG_RE = re.compile(r"\{%\s*include\b")
+
+
+def _page_shell_may_register_children(view: Any) -> bool:
+    """Whether a full render of ``view``'s page could mount a child view (#4295).
+
+    Reads the template source the JIT reads (the ``{% extends %}`` chain with
+    every static ``{% include %}`` inlined). ``False`` only when that source
+    names no ``live_render``, has no include left unresolved (a variable
+    template name, or a partial that could not be read), and loads no tag
+    library outside ``_CHILDLESS_TAG_LIBRARIES``. Anything it cannot read
+    answers ``True``: the full render runs, as before.
+    """
+    from ._render_caches import render_caches_enabled
+    from .mixins.jit import (
+        _SHELL_CHILDREN_CACHE_MAX,
+        JITMixin,
+        _jit_template_content,
+        _shell_children_cache,
+        _template_source_key,
+    )
+
+    if getattr(
+        type(view), "_get_template_content", None
+    ) is not JITMixin._get_template_content or "_get_template_content" in getattr(
+        view, "__dict__", {}
+    ):
+        return True
+    key = _template_source_key(view) if render_caches_enabled() else None
+    if key is not None:
+        cached = _shell_children_cache.get(key)
+        if cached is not None:
+            return cached
+    try:
+        content = _jit_template_content(view)
+    except Exception:  # noqa: BLE001 — undecidable: keep the full render
+        logger.debug("Page-shell child scan could not read the template source")
+        return True
+    answer = _source_may_register_children(content)
+    if key is not None:
+        if len(_shell_children_cache) >= _SHELL_CHILDREN_CACHE_MAX:
+            _shell_children_cache.clear()
+        _shell_children_cache[key] = answer
+    return answer
+
+
+def _source_may_register_children(content: Any) -> bool:
+    """``_page_shell_may_register_children`` for one template source."""
+    if not isinstance(content, str) or not content:
+        return True
+    if "live_render" in content or _INCLUDE_TAG_RE.search(content):
+        return True
+    for match in _LOAD_TAG_RE.finditer(content):
+        words = match.group(1).split()
+        # ``{% load name1 name2 %}`` or ``{% load tag from library %}``.
+        libraries = words[words.index("from") + 1 :] if "from" in words else words
+        if any(lib not in _CHILDLESS_TAG_LIBRARIES for lib in libraries):
+            return True
+    return False
 
 
 def _explicit_descendant(root: Any, view_id: Any) -> Any:

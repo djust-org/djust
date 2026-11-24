@@ -41,6 +41,9 @@ def clear_render_caches() -> None:
     from .mixins.jit import clear_template_source_caches
 
     clear_template_source_caches()
+    from ._exposure_unsupplied import clear_unsupplied_paths_cache
+
+    clear_unsupplied_paths_cache()
     try:
         from ._rust import clear_dj_model_fields_cache
     except ImportError:  # the extension is optional at import time
