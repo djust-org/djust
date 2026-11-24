@@ -11,6 +11,7 @@ from djust.testing import LiveViewTestClient, rendered_state
 
 
 class Page(LiveView):
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ shown }} {{ extra }}</div>"
     shown = state("a")
 

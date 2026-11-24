@@ -27,6 +27,7 @@ def _rendered(view_class):
 
 
 class Probe(LiveView):
+    exposure_policy = "explicit"
     template = (
         "<div dj-root>{{ person.username }} {% for p in people %}{{ p.username }}{% endfor %}</div>"
     )
@@ -49,6 +50,7 @@ def test_model_and_model_list_carry_only_the_paths_read():
 
 
 class Unread(LiveView):
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ people|length }}</div>"
 
     def get_context_data(self, **kwargs):
@@ -68,6 +70,7 @@ def test_a_model_the_template_reads_nothing_off_keeps_only_identity():
 
 
 class WholeValue(LiveView):
+    exposure_policy = "explicit"
     template = "<div dj-root>[{{ person }}]</div>"
 
     def get_context_data(self, **kwargs):
@@ -83,6 +86,7 @@ def test_a_model_printed_whole_still_renders_its_text():
 
 
 class QS(LiveView):
+    exposure_policy = "explicit"
     template = (
         "<div dj-root>{{ users.count }}|{% for u in users %}{{ u.username }};{% endfor %}</div>"
     )
@@ -118,6 +122,7 @@ def test_gate_off_restores_the_whole_rows(monkeypatch):
 
 
 class ValuesRows(LiveView):
+    exposure_policy = "explicit"
     template = "<div dj-root>{% for r in rows %}{{ r.username }};{% endfor %}</div>"
 
     def get_context_data(self, **kwargs):
@@ -137,6 +142,7 @@ def test_a_values_queryset_keeps_its_rows():
 
 
 class SortedBy(LiveView):
+    exposure_policy = "explicit"
     template = "<div dj-root>{% for p in people|dictsort:key %}{{ p.username }};{% endfor %}</div>"
     sort_key = "username"
 
@@ -151,6 +157,7 @@ class SortedBy(LiveView):
 
 
 class SortedByProperty(SortedBy):
+    exposure_policy = "explicit"
     sort_key = "is_authenticated"
 
 
