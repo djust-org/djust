@@ -247,7 +247,7 @@ class CheckoutView(LiveView):
         return context
 
     @event_handler()
-    def next_step(self, **kwargs):
+    def next_step(self):
         self.step = min(self.step + 1, 3)
 
     def _should_restore_snapshot(self, request) -> bool:

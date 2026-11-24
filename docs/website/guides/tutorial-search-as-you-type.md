@@ -159,7 +159,7 @@ class SearchView(LiveView):
     error = state("")
 
     @event_handler
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         self.query = value
         self.error = ""
 
@@ -186,10 +186,9 @@ are all the framework needs to figure out which template fragments
 need re-rendering. The diff is sent over the WebSocket as a minimal
 JSON patch — not a full HTML re-render.
 
-> **Why `**kwargs`?** djust passes the whole event payload to
-> handlers. The named parameter `value` extracts the text coerced to
-> `str`; `**kwargs` accepts the rest (`field`, `_target`) without
-> raising.
+> **Why no `**kwargs`?** The signature is the contract. The named
+> parameter `value` receives the input's text, coerced to `str`, and a
+> handler is sent only the parameters it declares.
 
 ---
 

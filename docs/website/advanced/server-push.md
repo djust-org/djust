@@ -139,7 +139,7 @@ class JobView(LiveView):
     step = state("queued")
 
     @event_handler()
-    async def start(self, **kwargs):
+    async def start(self):
         # A task created from an async handler runs on the connection's loop.
         self._follower = asyncio.get_running_loop().create_task(self._follow())
 
@@ -212,7 +212,7 @@ class SharedNoteView(LiveView):
         return {**super().get_context_data(**kwargs), "content": self.content}
 
     @event_handler
-    def update_content(self, value: str = "", **kwargs):
+    def update_content(self, value: str = ""):
         self.content = value
         Note.objects.filter(pk=self.kwargs["pk"]).update(content=value)
         push_to_view(

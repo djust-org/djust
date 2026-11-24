@@ -376,7 +376,7 @@ mounted() {
 ```python
 # server: any handler that changes the data
 @event_handler()
-def set_period(self, value: str = "", **kwargs):
+def set_period(self, value: str = ""):
     self.points_json = json.dumps(self.compute(value))
 ```
 
@@ -491,7 +491,7 @@ class DashboardView(LiveView):
         return [120, 180, 150, 210]
 
     @event_handler()
-    def refresh_data(self, **kwargs):
+    def refresh_data(self):
         self.sales_data = self.fetch_sales()
 
     def get_context_data(self, **kwargs):

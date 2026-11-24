@@ -706,7 +706,7 @@ signature cannot declare. It follows the same policy as any other handler:
 ```python
 # 1.3
 @event_handler()
-def restore(self, _form_values=None, _data_attrs=None, **kwargs):
+def restore(self, _form_values=None, _data_attrs=None):
     title = (_form_values or {}).get("title", "")
 
 # 2.0
@@ -1106,4 +1106,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: b3910c891b2a -->
+<!-- generated-doc prose-sha256: 68d58f21ec6d -->

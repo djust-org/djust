@@ -116,7 +116,7 @@ DOC_FILES = [path for path in DOC_FILES if not _DATED_RECORD.search(path.name)]
 KNOWN_FAILURES: dict[str, str] = {
     # --- deliberate ---
     # was docs/website/guides/error-overlay.md line 44
-    "docs/website/guides/error-overlay.md@7a3e8f4c": (
+    "docs/website/guides/error-overlay.md@18289390": (
         "deliberate: OrderView.charge raises ValueError('amount must be positive') to show what "
         "the overlay displays; fired with no args, amount=0 takes that branch"
     ),
@@ -1643,6 +1643,67 @@ def test_dj_value_arguments_match_the_documented_handler(path):
     assert not findings, (
         f"{path.relative_to(REPO_ROOT)} sends dj-value-* arguments its own handler does not "
         "declare, which strict dispatch refuses:\n  " + "\n  ".join(findings)
+    )
+
+
+_HANDLER_DECORATOR = re.compile(r"\b(event_handler|server_function|action)\b")
+
+
+def absorbing_catch_alls(text: str) -> list[str]:
+    """Each handler a document defines with a ``**`` catch-all its body never reads.
+
+    A strict handler is declared by its signature (#4188). A ``**kwargs`` that is
+    only accepted and dropped opens the handler to every name and teaches the 1.3
+    rule that the 2.0 policy retired (#4239). A catch-all the body reads (a form's
+    fields, a dict of extras) is a real parameter and is left alone. A fence
+    marked ``before`` or ``anti-pattern`` is left out.
+    """
+    findings = []
+    for lineno, code, marker in _load_extractor()(_DocText(text)):
+        if marker in ("anti-pattern", "before"):
+            continue
+        try:
+            tree = ast.parse(textwrap.dedent(code))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            kwarg = node.args.kwarg
+            if kwarg is None:
+                continue
+            if not any(_HANDLER_DECORATOR.search(ast.unparse(d)) for d in node.decorator_list):
+                continue
+            read = any(
+                isinstance(n, ast.Name) and n.id == kwarg.arg
+                for stmt in node.body
+                for n in ast.walk(stmt)
+            )
+            if not read:
+                findings.append(f"line {lineno + node.lineno}: {node.name}(**{kwarg.arg})")
+    return findings
+
+
+def test_absorbing_catch_all_scan_flags_only_an_unread_catch_all():
+    flagged = "```python\n@event_handler()\ndef h(self, **kwargs):\n    pass\n```\n"
+    assert absorbing_catch_alls(flagged) == ["line 3: h(**kwargs)"]
+    kept = "```python\n@event_handler()\ndef h(self, **fields: str):\n    return fields\n```\n"
+    assert not absorbing_catch_alls(kept)
+    undecorated = "```python\ndef mount(self, request, **kwargs):\n    pass\n```\n"
+    assert not absorbing_catch_alls(undecorated)
+    assert not absorbing_catch_alls("<!-- doc-snippet-check: before -->\n" + flagged)
+
+
+@pytest.mark.parametrize(
+    "path", _WEBSITE_DOCS, ids=[p.relative_to(REPO_ROOT).as_posix() for p in _WEBSITE_DOCS]
+)
+def test_website_handlers_have_no_absorbing_catch_all(path):
+    """#4239: a handler a guide shows takes a ``**`` catch-all only when it reads it."""
+    findings = absorbing_catch_alls(path.read_text(encoding="utf-8"))
+    assert not findings, (
+        f"{path.relative_to(REPO_ROOT)} defines handlers with a ** catch-all the body never "
+        "reads; strict dispatch is by signature, so declare the arguments instead:\n  "
+        + "\n  ".join(findings)
     )
 
 

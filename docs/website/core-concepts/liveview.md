@@ -15,7 +15,7 @@ class MyView(LiveView):
     items = state(default_factory=list)
 
     @event_handler()
-    def increment(self, **kwargs):
+    def increment(self):
         """Handle a dj-click="increment" event."""
         self.count += 1
 ```
@@ -137,7 +137,7 @@ from djust.decorators import event_handler, permission_required
 
 @event_handler()
 @permission_required("myapp.can_delete")
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int = 0):
     Item.objects.filter(pk=item_id).delete()
 ```
 

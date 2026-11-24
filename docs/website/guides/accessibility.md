@@ -609,7 +609,7 @@ class OrderView(LiveView):
     status = state("")
 
     @event_handler()
-    def save(self, **kwargs):
+    def save(self):
         self.status = "Order saved"
         self.push_commands(JS.focus("#order-summary"))
 ```

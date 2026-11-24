@@ -83,7 +83,7 @@ push from an earlier event also satisfies the assertion.
 ```python
 class SaveView(LiveView):
     @event_handler
-    def save(self, **kwargs):
+    def save(self):
         self.push_event("flash", {"type": "success", "message": "saved"})
 
 client = LiveViewTestClient(SaveView).mount()
@@ -99,7 +99,7 @@ Verify the handler queued a navigation.
 ```python
 class FilterView(LiveView):
     @event_handler
-    def filter(self, **kwargs):
+    def filter(self):
         self.live_patch(params={"page": 2, "category": "books"}, path="/items/")
 
 client = LiveViewTestClient(FilterView).mount()
@@ -117,7 +117,7 @@ can assert on their results.
 ```python
 class ReportView(LiveView):
     @event_handler
-    def generate(self, **kwargs):
+    def generate(self):
         self.generating = True
         self.start_async(self._build_report)
 
@@ -153,7 +153,7 @@ does not log the test client in.
 ```python
 class LoginView(LiveView):
     @event_handler
-    def submit(self, email="", password="", **kwargs):
+    def submit(self, email: str = "", password: str = ""):
         if check_credentials(email, password):
             self.live_redirect("/dashboard/", params={"welcome": "1"})
 
@@ -184,7 +184,7 @@ class ChatView(LiveView):
         self.stream("messages", [])
 
     @event_handler
-    def post(self, text="", **kwargs):
+    def post(self, text: str = ""):
         from uuid import uuid4
         self.stream_insert("messages", {"id": uuid4().hex, "text": text})
 

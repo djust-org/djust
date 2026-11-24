@@ -32,7 +32,7 @@ from djust.decorators import event_handler, debounce
 
 @event_handler()
 @debounce(wait=0.5)  # 500ms after last keystroke
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.results = Product.objects.filter(name__icontains=value)[:20]
 ```
 
@@ -47,7 +47,7 @@ from djust.decorators import event_handler, throttle
 
 @event_handler()
 @throttle(interval=0.1)  # Max 10 calls/second
-def on_scroll(self, position: int = 0, **kwargs):
+def on_scroll(self, position: int = 0):
     self.scroll_position = position
 ```
 
@@ -83,7 +83,7 @@ from djust.decorators import event_handler, cache
 
 @event_handler()
 @cache(ttl=300, key_params=["value"])  # Cache for 5 minutes per unique value
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.results = Product.objects.filter(name__icontains=value)[:20]
 ```
 
@@ -97,7 +97,7 @@ Decorators compose — apply multiple to one handler. Their order does not chang
 @event_handler()
 @debounce(wait=0.5)   # wait for typing to stop
 @cache(ttl=60)        # reuse a cached response for a repeated value
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.results = Product.objects.filter(name__icontains=value)[:20]
 ```
 

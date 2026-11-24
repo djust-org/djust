@@ -61,7 +61,7 @@ different fire mechanism.
 ```python
 class DashboardView(LiveView):
     @event_handler
-    def show_tour_step_1(self, **kwargs):
+    def show_tour_step_1(self):
         self.push_commands(
             JS.add_class("tour-highlight", to="#btn-create")
               .focus("#btn-create")  # focusing also scrolls it into view
@@ -139,13 +139,13 @@ class DashboardView(LiveView):
         self.show_tour_button = not progress.completed
 
     @event_handler
-    def start_tour(self, **kwargs):
+    def start_tour(self):
         self.tour_active = True
         self.tour_step = 1
         self._dispatch_step(1)
 
     @event_handler
-    def next_tour_step(self, **kwargs):
+    def next_tour_step(self):
         self.tour_step += 1
         if self.tour_step > len(TOUR_STEPS):
             self._finish_tour()
@@ -153,7 +153,7 @@ class DashboardView(LiveView):
         self._dispatch_step(self.tour_step)
 
     @event_handler
-    def skip_tour(self, **kwargs):
+    def skip_tour(self):
         TourProgress.objects.filter(user=self.request.user).update(
             skipped_at_step=self.tour_step,
             completed=True,  # don't show again — they explicitly opted out

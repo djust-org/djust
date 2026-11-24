@@ -128,7 +128,7 @@ the paste handler to the component or child:
 ```python
 # The component that renders dj-paste owns the event.
 @event_handler()
-def paste(self, text: str = "", **kwargs):
+def paste(self, text: str = ""):
     self.pasted_text = text
 ```
 

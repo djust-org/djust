@@ -165,7 +165,7 @@ class MyView(LiveView):
     count = state(0)
 
     @event_handler
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
 ```
 
@@ -174,7 +174,7 @@ class MyView(LiveView):
 from djust.decorators import event_handler
 
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     """Use 'value' param for @input/@change events"""
     self.query = value
 ```
@@ -194,7 +194,7 @@ from djust.decorators import event_handler, background
 
 class ReportView(LiveView):
     @event_handler
-    def generate_report(self, **kwargs):
+    def generate_report(self):
         self.generating = True  # Sent to client immediately
         self.start_async(self._do_generate)  # Runs after response sent
 
@@ -206,7 +206,7 @@ class ReportView(LiveView):
 class ContentView(LiveView):
     @event_handler
     @background
-    def generate_content(self, prompt: str = "", **kwargs):
+    def generate_content(self, prompt: str = ""):
         self.generating = True
         self.content = call_llm(prompt)  # Entire handler runs in background
         self.generating = False

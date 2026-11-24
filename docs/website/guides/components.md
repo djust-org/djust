@@ -143,7 +143,7 @@ so the handler below re-renders the dot:
 
 ```python
 @event_handler()
-def toggle_status(self, **kwargs):
+def toggle_status(self):
     self.status.color = "red" if self.status.color == "green" else "green"
 ```
 
@@ -247,12 +247,12 @@ class CounterWidget(LiveComponent):
         self.count = kwargs.get("initial", 0)
 
     @event_handler()
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
         self.trigger_update()
 
     @event_handler()
-    def decrement(self, **kwargs):
+    def decrement(self):
         self.count -= 1
         self.trigger_update()
 
@@ -315,7 +315,7 @@ class Tabs(LiveComponent):
     """
 
     @event_handler()
-    def select(self, value: str = "", **kwargs):
+    def select(self, value: str = ""):
         self.state.active = value
 
 
@@ -424,7 +424,7 @@ class TodoItem(LiveComponent):
         self.todo_id = kwargs.get("todo_id")
 
     @event_handler()
-    def toggle(self, **kwargs):
+    def toggle(self):
         self.completed = not self.completed
         # Notify parent
         self.send_parent("todo_toggled", {
@@ -585,12 +585,12 @@ def mount(self, request, **kwargs):
     )
 
 @event_handler()
-def save(self, **kwargs):
+def save(self):
     # ... save logic ...
     self.alert.show("Changes saved!", "success")
 
 @event_handler()
-def on_error(self, **kwargs):
+def on_error(self):
     self.alert.show("Something went wrong", "danger")
 ```
 
@@ -606,11 +606,11 @@ def mount(self, request, **kwargs):
     )
 
 @event_handler()
-def delete_clicked(self, **kwargs):
+def delete_clicked(self):
     self.confirm_modal.show()
 
 @event_handler()
-def dismiss(self, **kwargs):
+def dismiss(self):
     self.confirm_modal.hide()
 ```
 
@@ -779,7 +779,7 @@ class SearchBox(LiveComponent):
 When building a custom component:
 
 - [ ] `@event_handler()` on every method wired to a `dj-*` event
-- [ ] `**kwargs` in every event handler signature
+- [ ] Each event handler declares the parameters its binding sends (no `**kwargs` unless it reads one)
 - [ ] `data-component-id="{{ component_id }}"` on every element with `dj-*` events
 - [ ] `trigger_update()` after state changes that should re-render
 - [ ] `send_parent()` for events the parent needs to know about
@@ -1117,7 +1117,7 @@ class ClaimsListView(LiveView):
         return {**super().get_context_data(**kwargs), "rows": self.rows}
 
     @event_handler()
-    def open_claim(self, value: str = "", **kwargs):
+    def open_claim(self, value: str = ""):
         self.live_redirect(reverse("claims:detail", kwargs={"claim_id": value}))
 ```
 
@@ -2064,7 +2064,7 @@ from djust.components.components.voice_input import clean_transcript
 from djust.decorators import event_handler
 
 @event_handler()
-def transcribe(self, text: str = "", **kwargs):
+def transcribe(self, text: str = ""):
     transcript = clean_transcript(text, max_length=500)
     if transcript:
         self.transcript = transcript

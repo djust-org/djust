@@ -46,7 +46,7 @@ class ItemView(LiveView):
     name = state("")
 
     @event_handler()
-    def save(self, **kwargs):
+    def save(self):
         if not self.name:
             self.put_flash("error", "Name is required.")
             return
@@ -123,7 +123,7 @@ This adds the class `dj-flash-top-right` to the container. You provide the CSS:
 
 ```python
 @event_handler()
-def reset(self, **kwargs):
+def reset(self):
     self.clear_flash()  # removes all visible flash messages
 ```
 
@@ -131,7 +131,7 @@ def reset(self, **kwargs):
 
 ```python
 @event_handler()
-def dismiss_errors(self, **kwargs):
+def dismiss_errors(self):
     self.clear_flash("error")  # removes only error-level messages
 ```
 
@@ -276,7 +276,7 @@ Flash messages work with `start_async()` and `@background`:
 
 ```python
 @event_handler()
-def generate_report(self, **kwargs):
+def generate_report(self):
     self.generating = True
     self.put_flash("info", "Generating report...")
     self.start_async(self._do_generate)
@@ -297,7 +297,7 @@ You can queue multiple flash messages in a single handler -- they are all delive
 
 ```python
 @event_handler()
-def bulk_import(self, **kwargs):
+def bulk_import(self):
     results = import_records(self._data)
     self.put_flash("success", f"{results.created} records created.")
     if results.skipped:

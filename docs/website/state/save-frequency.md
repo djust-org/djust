@@ -56,11 +56,11 @@ from djust.decorators import event_handler
 
 class CheckoutView(LiveView):
     @event_handler(save=True)          # in storage before the page shows it
-    def place_order(self, **kwargs):
+    def place_order(self):
         ...
 
     @event_handler()
-    def pick_step(self, step: int = 1, **kwargs):
+    def pick_step(self, step: int = 1):
         self.step = step
         if step == 3:
             self.save_state()          # only this turn

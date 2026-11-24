@@ -45,7 +45,7 @@ Given a handler like:
 ```python
 class OrderView(LiveView):
     @event_handler
-    def charge(self, amount: int = 0, **kwargs):
+    def charge(self, amount: int = 0):
         if amount <= 0:
             raise ValueError("amount must be positive")
         self._process_payment(amount)
