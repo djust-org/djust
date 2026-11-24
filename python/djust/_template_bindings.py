@@ -938,7 +938,11 @@ def _payload(
             payload.generated_complete = complete
         else:
             payload.generated_complete = False
-    elif base == "dj-mutation":
+    if spec.payload == "fixed":
+        # The client's strict path adds the element's dj-value-* to these
+        # payloads too (#4240), and rejects a key the directive generates.
+        _value_payload(element, payload, into_legacy=False)
+    if base == "dj-mutation":
         attr_list = element.attr("dj-mutation-attr")
         if element.dynamic_attrs or (attr_list is not None and is_dynamic(attr_list)):
             # Which set is sent is decided at render time: only ``mutation``
