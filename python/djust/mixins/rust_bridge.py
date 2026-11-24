@@ -106,7 +106,7 @@ _NORMALIZE_DEPTH_LIMIT = 3
 
 def _queryset_method_roots_for(view: Any) -> FrozenSet[str]:
     """Context names the view's template reads ``count`` / ``exists`` /
-    ``first`` / ``last`` directly off (#4241, #4258).
+    ``first`` / ``last`` / ``all`` directly off (#4241, #4258, #4270).
 
     The JIT keeps an evaluated QuerySet for the render sidecar on exactly this
     condition (``queryset_method_roots``); the native render's capture of a

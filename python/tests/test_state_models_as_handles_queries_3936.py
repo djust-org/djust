@@ -134,9 +134,15 @@ PROBES = (
             _one,
         ),
         ("model-column", "{{ u.username }}", _one),
-        # review S4: the QuerySet spelled through ``.all`` and through a ``{% with %}`` alias
+        # review S4: the QuerySet spelled through ``.all`` (#4270) and through a ``{% with %}`` alias
         ("qs-top-all", "{% for u in users.all %}{{ u.username }};{% endfor %}", _qs),
         ("qs-top-all-count", "{{ users.all.count }}", _qs),
+        (
+            "qs-top-all-reads",
+            "{{ users.all.0.username }}|{{ users.all|length }}|{{ users.all.first.username }}|"
+            "{% for u in users.all %}{{ u.groups.count }}{{ u.password }};{% endfor %}",
+            _qs,
+        ),
         ("qs-with-count", "{% with x=users %}{{ x.count }}{% endwith %}", _qs),
         (
             "qs-with-loop-walk",
@@ -145,6 +151,8 @@ PROBES = (
         ),
     ]
 )
+
+PROBES_BY_NAME = {name: source for name, source, _ in PROBES}
 
 
 def _measure(source: str, factory, policy: str, flag: bool, twice: bool = False) -> tuple[str, int]:
@@ -207,14 +215,46 @@ DJANGO_ANSWERS = {
     "qs-nested-all": "staff,ops,;staff,;;",
     "qs-row-count": "2;1;0;",
     "qs-loop-and-method": "staff,ops,2;staff,1;0;",
+    # #4270: empty on both policies before
+    "qs-top-all": "u0;u1;u2;",
+    "qs-top-all-count": "3",
+    # the password stays floored (Django prints the hash; the floor is the documented difference)
+    "qs-top-all-reads": "u0|3|u0|2;1;0;",
 }
 
 
+@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
 @pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("name", sorted(DJANGO_ANSWERS))
-def test_the_overlay_keeps_djangos_answer(world, policy, name):
+def test_the_overlay_keeps_djangos_answer(world, policy, name, flag):
+    from django.template import Context as DjangoContext
+    from django.template import Template as DjangoTemplate
+
     source, factory = next((s, f) for n, s, f in PROBES if n == name)
-    assert _render(source, factory, policy, flag=True) == DJANGO_ANSWERS[name]
+    if "password" not in source:
+        assert DjangoTemplate(source).render(DjangoContext(factory())) == DJANGO_ANSWERS[name]
+    assert _render(source, factory, policy, flag=flag) == DJANGO_ANSWERS[name]
+
+
+def test_gate_off_without_all_as_a_root_method_users_all_renders_empty(world, monkeypatch):
+    """Gate-off (#4270): with ``all`` not a QuerySet root method, the sidecar does not hold the
+    QuerySet and ``users.all`` reads the serialized row list, which has no ``all``."""
+    from djust._render_caches import clear_render_caches
+    from djust.mixins import jit
+    from djust.optimization.codegen import ALL_CHAIN_METHODS
+    from djust.session_utils import clear_jit_cache
+
+    monkeypatch.setattr(jit, "QUERYSET_ROOT_METHODS", ALL_CHAIN_METHODS)
+    monkeypatch.setattr(jit, "_queryset_method_roots_cache", {})
+    clear_jit_cache()
+    clear_render_caches()
+    try:
+        for policy in ("explicit", "legacy"):
+            assert _render("{{ users.all.count }}", _qs, policy) == ""
+            assert _render(PROBES_BY_NAME["qs-top-all"], _qs, policy) == ""
+    finally:
+        clear_jit_cache()
+        clear_render_caches()
 
 
 @pytest.mark.parametrize("policy", ["explicit", "legacy"])

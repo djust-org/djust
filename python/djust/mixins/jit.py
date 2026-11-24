@@ -262,10 +262,19 @@ def _item_key_only_reads(template_content: str) -> dict:
 
 _queryset_method_roots_cache: Dict[str, FrozenSet[str]] = {}
 
+#: The methods a template reads directly off a top-level QuerySet that the render
+#: sidecar answers (:func:`queryset_method_roots`): the relation chain methods
+#: plus ``all`` (#4270), whose rows (``{% for u in users.all %}``) and methods
+#: (``{{ users.all.count }}``) the serialized row list cannot answer. Not
+#: ``ALL_CHAIN_METHODS`` itself: that names what a RELATION's ``all`` is read
+#: through, and its Rust twin depends on it.
+QUERYSET_ROOT_METHODS = ALL_CHAIN_METHODS + ("all",)
+
 
 def queryset_method_roots(template_content: Optional[str]) -> FrozenSet[str]:
     """Context names the template reads ``count`` / ``exists`` / ``first`` /
-    ``last`` directly off (#4241, #4258).
+    ``last`` / ``all`` directly off (#4241, #4258, #4270;
+    :data:`QUERYSET_ROOT_METHODS`).
 
     Read from ``extract_own_reads``, which does not file a ``{% for %}`` loop
     row's reads under the iterable: ``{% for o in qs %}{{ o.first }}`` reads
@@ -289,7 +298,7 @@ def queryset_method_roots(template_content: Optional[str]) -> FrozenSet[str]:
     except Exception:  # noqa: BLE001 -- an unparseable template reads nothing
         logger.debug("extract_own_reads refused the template; no QuerySet capture")
         own_reads = {}
-    methods = set(ALL_CHAIN_METHODS)
+    methods = set(QUERYSET_ROOT_METHODS)
     result = frozenset(
         root
         for root, paths in own_reads.items()
@@ -302,7 +311,7 @@ def queryset_method_roots(template_content: Optional[str]) -> FrozenSet[str]:
 
 
 def _method_root_row_paths(model_class: Any, paths: List[str]) -> List[str]:
-    """``paths`` without the ones a QuerySet METHOD answers (#4272).
+    """``paths`` without the ones a QuerySet METHOD answers (#4272), ``all.x`` read as ``x``.
 
     ``{{ qs.count }}`` / ``.exists`` / ``.first.x`` / ``.last.x`` read off a
     top-level QuerySet file ``count`` / ``first.x`` beside the row paths, but
@@ -316,7 +325,13 @@ def _method_root_row_paths(model_class: Any, paths: List[str]) -> List[str]:
     """
     kept = []
     for path in paths:
-        head = path.split(".", 1)[0]
+        head, _, rest = path.partition(".")
+        if head == "all" and not hasattr(model_class, head):
+            # ``{% for u in users.all %}{{ u.x }}`` reads ``x`` off the same rows (#4270).
+            if not rest:
+                continue
+            path = rest
+            head, _, rest = path.partition(".")
         if head in ALL_CHAIN_METHODS and not hasattr(model_class, head):
             continue
         kept.append(path)
