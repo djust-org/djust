@@ -15,7 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > column (#4290). If you passed values through
 > `self.serialize_for_template()` to get that shape, the workaround is no
 > longer needed. New in rc4: `djust.testing.rendered_state(view)` shows what
-> a render handed the template engine (#4291). As in rc3,
+> a render handed the template engine (#4291). Two performance fixes:
+> `serialize_for_template()` reads the cached template source (#4294), and a
+> live mount skips re-rendering a page shell that holds no child view
+> (#4295). As in rc3,
 > `exposure_policy = "legacy"` and opt-in strict parameters still work and
 > are removed before 2.0.0 final (#4171, #4189). See the
 > [2.0 migration guide](docs/website/guides/migrating-to-2.0.md).
@@ -27,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Explicit exposure no longer hands the renderer every field of a Model or row list the template reads only columns off.** A top-level Model, model list or QuerySet whose relations the template does not walk now goes through the template-path JIT, as on 1.x, so the renderer's state (and its snapshot) carries the fields the template names, not every concrete column less `djust_exclude_fields`. A single Model whose relations or methods the template walks keeps its normalized fields, and one the template reads nothing off keeps only its identity keys; a row list read with no field path (`{% regroup %}`, `{{ rows.0 }}`) keeps whole rows, as the JIT gives it (#2736). A `dictsort:<variable>` naming a non-column keeps the normalized rows. The migration guide notes the change (#4290).
+- **`template_paths()` and `serialize_for_template()` read the cached template source.** With `DEBUG` off they used to resolve the `{% extends %}` chain and re-inline every `{% include %}` on each call, so a `get_context_data()` that calls `serialize_for_template()` per key paid one full template resolution per key on every render. They now read the per-template source cache every internal caller uses. With `DEBUG` on, the unsupplied-name notice (#4279) reads the template once per render, not twice, and once per view class while hot reload is running (its template refresh forgets the copy); `DJUST_UNSUPPLIED_NAMES = "error"` still reads it once per render (#4294).
+- **A live mount no longer renders the whole page shell when nothing in it can mount a child view.** An explicit-exposure view whose page shell comes from `template_name` rendered the full page on every WebSocket mount, only to register child views outside `dj-root`, and discarded the HTML. The mount now reads the page's template files (the `template_name` file, each `{% extends %}` parent and each `{% include %}` partial) and skips that render when none names `live_render`, every `extends` / `include` names a template that resolves, and none loads a tag library beyond Django's `static`, `i18n`, `l10n`, `tz`, `cache`, `humanize` and djust's `live_tags`. An engine's `builtins`, a djust tag handler registered outside djust, or a view that overrides `get_template()` keeps the full render. The answer is cached per template while render caches are on (#4295).
 
 ## [2.0.0rc3] - 2026-11-24
 
