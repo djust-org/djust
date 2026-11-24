@@ -194,8 +194,31 @@ SHELL_FILES = {
 }
 
 
+def djust_handlers_only(monkeypatch):
+    """Hide tag handlers other test modules register at import (``djust_floor_probe_2556``).
+
+    Collecting the whole suite imports them, and a handler from outside djust
+    keeps the full page-shell render by design.
+    """
+    from djust import template_tags
+
+    real = template_tags.get_registered_handlers
+
+    def owned():
+        return {
+            name: handler
+            for name, handler in real().items()
+            if (handler if isinstance(handler, type) else type(handler)).__module__.startswith(
+                "djust."
+            )
+        }
+
+    monkeypatch.setattr(template_tags, "get_registered_handlers", owned)
+
+
 @pytest.fixture
-def shell_templates(settings, tmp_path):
+def shell_templates(settings, tmp_path, monkeypatch):
+    djust_handlers_only(monkeypatch)
     templates = copy.deepcopy(settings.TEMPLATES)
     templates[0]["DIRS"] = [str(tmp_path), *templates[0].get("DIRS", [])]
     settings.TEMPLATES = templates
