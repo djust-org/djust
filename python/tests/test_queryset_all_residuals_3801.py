@@ -159,16 +159,18 @@ class TestTheMethodReadWidensNothing3801:
         assert "SECRET" in _django_render(source, MAKE_CONTEXT["QuerySet"]())  # control
 
     def test_an_event_rerender_answers_from_the_current_rows(self, world) -> None:
-        """The kept rows are rebuilt every render: a handler that changes a
-        relation is reflected in the count, not read from the first render."""
+        """A handler that changes a relation is reflected in the next render's
+        count, not read from the first render."""
         from djust.live_view import LiveView
         from djust.testing import LiveViewTestClient
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
-            def mount(self, request, **kwargs):
-                self.users = _users()
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["users"] = _users()
+                return ctx
 
             @event_handler
             def join(self, **kwargs):
@@ -180,53 +182,6 @@ class TestTheMethodReadWidensNothing3801:
         assert "[2:staff,ops,][1:staff,][0:]" in client.render()
         client.send_event("join")
         assert "[2:staff,ops,][1:staff,][1:ops,]" in client.render()
-
-    def test_only_a_name_read_both_ways_is_kept(self, world) -> None:
-        """A plain loop, and a method-only read, build no extra sidecar entry."""
-        from djust.live_view import LiveView
-        from djust.testing import LiveViewTestClient
-
-        def kept(source: str) -> dict:
-            class _V(LiveView):
-                exposure_policy = "legacy"
-
-                def mount(self, request, **kwargs):
-                    self.users = _users()
-
-            _V.template = f"<div dj-root>{source}</div>"
-            client = LiveViewTestClient(_V)
-            client.mount()
-            client.render()
-            return dict(client.view_instance.__dict__.get("_all_method_rows", {}))
-
-        assert "users" in kept(MIXED["count-then-loop"])
-        assert kept(U + LOOP + E) == {}
-        assert kept(U + "{{ u.groups.all.count }}" + E) == {}
-
-    def test_the_kept_rows_do_not_outlive_the_value(self, world) -> None:
-        """Rebuilt every render: once the name is no longer a QuerySet, the rows
-        it was kept for are released (they hold evaluated models)."""
-        from djust.live_view import LiveView
-        from djust.testing import LiveViewTestClient
-
-        class _V(LiveView):
-            exposure_policy = "legacy"
-
-            def mount(self, request, **kwargs):
-                self.users = _users()
-
-            @event_handler
-            def clear(self, **kwargs):
-                self.users = []
-
-        _V.template = f"<div dj-root>{MIXED['count-then-loop']}</div>"
-        client = LiveViewTestClient(_V)
-        client.mount()
-        client.render()
-        assert "users" in client.view_instance.__dict__["_all_method_rows"]
-        client.send_event("clear")
-        client.render()
-        assert client.view_instance.__dict__["_all_method_rows"] == {}
 
     @pytest.mark.parametrize("render", RENDERS)
     def test_a_method_alone_on_a_model_with_a_same_named_field(self, bins, render) -> None:
@@ -323,13 +278,15 @@ from djust.live_view import LiveView  # noqa: E402
 
 
 class MixedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = """<div dj-view="test_queryset_all_residuals_3801.MixedView">
     {% for u in users %}<p>{{ u.username }}:{{ u.groups.all.count }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]</p>{% endfor %}</div>"""
 
-    def mount(self, request, **kwargs):
-        self.users = User.objects.all().order_by("pk")
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["users"] = User.objects.all().order_by("pk")
+        return ctx
 
 
 def _paragraphs(html: str) -> list[str]:
@@ -351,12 +308,12 @@ def _seed() -> None:
 
 
 def test_http_get_renders_the_rows_and_the_count(transactional_db) -> None:
-    from django.contrib.sessions.middleware import SessionMiddleware
     from django.test import RequestFactory
 
+    from djust.testing import with_live_session
+
     _seed()
-    request = RequestFactory().get("/x/")
-    SessionMiddleware(lambda request: None).process_request(request)
+    request = with_live_session(RequestFactory().get("/x/"))
     response = MixedView.as_view()(request)
     assert response.status_code == 200
     got = _paragraphs(response.content.decode())
@@ -370,6 +327,7 @@ async def test_websocket_mount_renders_the_rows_and_the_count(transactional_db) 
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
 
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
     @database_sync_to_async
@@ -379,7 +337,7 @@ async def test_websocket_mount_renders_the_rows_and_the_count(transactional_db) 
 
     want = await seed()
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        communicator = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             connected, _ = await communicator.connect()
             assert connected

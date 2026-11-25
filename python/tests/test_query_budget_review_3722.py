@@ -36,6 +36,8 @@ from djust.decorators import background, event_handler
 from djust.testing import LiveViewSmokeTest, LiveViewTestClient
 
 LOGGER = "djust._query_budget"
+#: Keeps the text of a view-owned failure in the server log (``log_exception_detail``, #4180).
+DETAIL = {"log_exception_detail": True}
 
 
 def _queries(n):
@@ -44,7 +46,7 @@ def _queries(n):
 
 
 class Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
 
@@ -95,7 +97,9 @@ def _smoke_fails(views, test="test_smoke_event_queries", **attrs):
 
 
 @pytest.fixture
-def warned(caplog):
+def warned(caplog, settings):
+    # An explicit view's failures log value-free (ADR-038) unless the server log is opted in.
+    settings.LIVEVIEW_CONFIG = {**getattr(settings, "LIVEVIEW_CONFIG", {}), **DETAIL}
     caplog.set_level(logging.WARNING, logger=LOGGER)
     return lambda: [r.getMessage() for r in caplog.records if r.name == LOGGER]
 
@@ -395,7 +399,7 @@ GET_CALLS: list = []
 class CountedGet(LiveView):
     """Overrides ``get_context_data`` WITHOUT calling super: the review's case."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
 
@@ -410,7 +414,7 @@ class CountedGet(LiveView):
 class CountedGetSuper(LiveView):
     """Overrides it and calls ``super()``: the framework's own short-circuit applies inside."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = "<div dj-root>{{ n }}</div>"
 
@@ -443,24 +447,7 @@ class SpendingGetTight(SpendingGet):
     query_budget = {"render": 1}
 
 
-class PlainGet(LiveView):
-    """No override: the stock ``get_context_data`` and its ``_cached_context`` short-circuit."""
-
-    exposure_policy = "legacy"
-    login_required = False
-    template = "<div dj-root>{{ counted }}</div>"
-
-    def mount(self, request, **kwargs):
-        self.n = 1
-
-    @property
-    def counted(self):
-        GET_CALLS.append("property")
-        return 7
-
-
 urlpatterns = [
-    path("plain/", PlainGet.as_view()),
     path("counted/", CountedGet.as_view()),
     path("countedsuper/", CountedGetSuper.as_view()),
     path("spending/", SpendingGet.as_view()),
@@ -492,12 +479,6 @@ class TestWhatThePhasesCountOnTheGet:
     def test_also_once_when_the_override_calls_super(self):
         assert Client().get("/countedsuper/").status_code == 200
         assert len(GET_CALLS) == 1
-
-    def test_a_view_with_no_override_evaluates_its_context_once(self):
-        """The stock method short-circuits the second pass (``_cached_context``)."""
-        response = Client().get("/plain/")
-        assert response.status_code == 200 and b"7" in response.content
-        assert GET_CALLS == ["property"]
 
     def test_the_render_reads_the_cached_context_not_a_preloaded_one(self):
         """The render is handed no ``preloaded_context``; it reads the GET's cache itself."""

@@ -1,16 +1,18 @@
 """
-Integration tests for LiveView JIT auto-serialization (Phase 4).
+Integration tests for rendering model data a LiveView supplies from ``get_context_data()``.
 
-Tests the end-to-end JIT serialization flow:
-- Template variable extraction
-- Query optimization
-- Serializer code generation
-- LiveView integration
+An explicit view's context is exactly its declared ``state()`` fields plus what
+``get_context_data()`` returns (Phase 4's JIT serialization of the attribute
+context ran only for the legacy exposure policy, which is gone): models and
+QuerySets reach the template through the engine's floor-enforcing handles, and
+the template's relation paths resolve against them.
 
 Uses existing djust_rentals models for testing.
 """
 
 import pytest
+from djust.live_view import LiveView
+from djust.testing import LiveViewTestClient
 from django.test import TestCase
 from django.contrib.auth.models import User
 
@@ -61,357 +63,90 @@ class TestLiveViewJITIntegration(TestCase):
             status="active",
         )
 
-    def test_queryset_auto_serialization(self):
-        """Test automatic QuerySet serialization with JIT."""
-        from djust.live_view import LiveView
-
+    def _render(self, template, **context):
         class TestView(LiveView):
-            exposure_policy = "legacy"
-            template = """
-                {% for lease in leases %}
-                  {{ lease.property.name }}
-                  {{ lease.tenant.user.email }}
-                {% endfor %}
-            """
+            exposure_policy = "explicit"
 
-            def mount(self, request):
-                self.leases = Lease.objects.all()
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx.update({name: make() for name, make in context.items()})
+                return ctx
 
-        view = TestView()
-        view.mount(None)
-        context = view.get_context_data()
+        TestView.template = "<div dj-root>" + template + "</div>"
+        client = LiveViewTestClient(TestView)
+        client.mount()
+        return client.render()
 
-        # Verify serialization occurred
-        self.assertIn("leases", context)
-        self.assertIsInstance(context["leases"], list)
-        self.assertGreater(len(context["leases"]), 0)
+    def test_queryset_renders_its_relations(self):
+        """A QuerySet's rows resolve their relation paths in the template."""
+        html = self._render(
+            "{% for lease in leases %}{{ lease.property.name }}|{{ lease.tenant.user.email }}"
+            "{% endfor %}",
+            leases=lambda: Lease.objects.all(),
+        )
+        self.assertIn("Test Property|john@example.com", html)
 
-        # Verify nested attributes serialized
-        lease_data = context["leases"][0]
-        self.assertIn("property", lease_data)
-        self.assertIn("name", lease_data["property"])
-        self.assertEqual(lease_data["property"]["name"], "Test Property")
-
-        self.assertIn("tenant", lease_data)
-        self.assertIn("user", lease_data["tenant"])
-        self.assertIn("email", lease_data["tenant"]["user"])
-        self.assertEqual(lease_data["tenant"]["user"]["email"], "john@example.com")
-
-    def test_model_instance_auto_serialization(self):
-        """Test automatic Model instance serialization with JIT."""
-        from djust.live_view import LiveView
-
-        class TestView(LiveView):
-            exposure_policy = "legacy"
-            template = """
-                {{ lease.property.name }}
-                {{ lease.tenant.user.email }}
-            """
-
-            def mount(self, request):
-                self.lease = Lease.objects.first()
-
-        view = TestView()
-        view.mount(None)
-        context = view.get_context_data()
-
-        # Verify serialization
-        self.assertIn("lease", context)
-        self.assertIsInstance(context["lease"], dict)
-        self.assertEqual(context["lease"]["property"]["name"], "Test Property")
-        self.assertEqual(context["lease"]["tenant"]["user"]["email"], "john@example.com")
-
-    def test_no_template_fallback(self):
-        """Test fallback when template not available."""
-        from djust.live_view import LiveView
-
-        class TestView(LiveView):
-            exposure_policy = "legacy"
-
-            # No template defined
-
-            def mount(self, request):
-                self.lease = Lease.objects.first()
-
-        view = TestView()
-        view.mount(None)
-        context = view.get_context_data()
-
-        # Should still serialize using DjangoJSONEncoder fallback
-        self.assertIn("lease", context)
-        # DjangoJSONEncoder includes id, __str__, __model__
-        self.assertIn("id", context["lease"])
-
-    def test_no_template_access_fallback(self):
-        """Test fallback when variable not accessed in template."""
-        from djust.live_view import LiveView
-
-        class TestView(LiveView):
-            exposure_policy = "legacy"
-            template = """
-                <!-- lease not accessed -->
-                <div>Hello</div>
-            """
-
-            def mount(self, request):
-                self.lease = Lease.objects.first()
-
-        view = TestView()
-        view.mount(None)
-        context = view.get_context_data()
-
-        # Should use default DjangoJSONEncoder since no template access
-        self.assertIn("lease", context)
-        self.assertIsInstance(context["lease"], dict)
+    def test_model_instance_renders_its_relations(self):
+        html = self._render(
+            "{{ lease.property.name }}|{{ lease.tenant.user.email }}",
+            lease=lambda: Lease.objects.first(),
+        )
+        self.assertIn("Test Property|john@example.com", html)
 
     def test_multiple_querysets(self):
-        """Test serialization with multiple QuerySets."""
-        from djust.live_view import LiveView
-
-        class TestView(LiveView):
-            exposure_policy = "legacy"
-            template = """
-                {% for lease in active_leases %}
-                  {{ lease.property.name }}
-                {% endfor %}
-                {% for property in properties %}
-                  {{ property.name }}
-                  {{ property.address }}
-                {% endfor %}
-            """
-
-            def mount(self, request):
-                self.active_leases = Lease.objects.filter(status="active")
-                self.properties = Property.objects.all()
-
-        view = TestView()
-        view.mount(None)
-        context = view.get_context_data()
-
-        # Verify both QuerySets serialized
-        self.assertIn("active_leases", context)
-        self.assertIn("properties", context)
-        self.assertIsInstance(context["active_leases"], list)
-        self.assertIsInstance(context["properties"], list)
-
-        # Verify correct fields extracted
-        if context["active_leases"]:
-            lease = context["active_leases"][0]
-            self.assertIn("property", lease)
-            self.assertIn("name", lease["property"])
-
-        if context["properties"]:
-            prop = context["properties"][0]
-            self.assertIn("name", prop)
-            self.assertIn("address", prop)
+        html = self._render(
+            "{% for lease in active_leases %}[{{ lease.property.name }}]{% endfor %}"
+            "{% for property in properties %}[{{ property.name }}:{{ property.address }}]"
+            "{% endfor %}",
+            active_leases=lambda: Lease.objects.filter(status="active"),
+            properties=lambda: Property.objects.all(),
+        )
+        self.assertIn("[Test Property][Test Property:123 Main St]", html)
 
     def test_mixed_context_types(self):
-        """Test context with mix of Models, QuerySets, and primitives."""
-        from djust.live_view import LiveView
-
-        class TestView(LiveView):
-            exposure_policy = "legacy"
-            template = """
-                {{ title }}
-                {{ count }}
-                {{ lease.property.name }}
-                {% for property in properties %}
-                  {{ property.name }}
-                {% endfor %}
-            """
-
-            def mount(self, request):
-                self.title = "Dashboard"
-                self.count = 42
-                self.lease = Lease.objects.first()
-                self.properties = Property.objects.all()
-
-        view = TestView()
-        view.mount(None)
-        context = view.get_context_data()
-
-        # Verify all types handled correctly
-        self.assertEqual(context["title"], "Dashboard")
-        self.assertEqual(context["count"], 42)
-        self.assertIsInstance(context["lease"], dict)
-        self.assertIsInstance(context["properties"], list)
+        html = self._render(
+            "{{ title }}|{{ count }}|{{ lease.property.name }}"
+            "{% for property in properties %}|{{ property.name }}{% endfor %}",
+            title=lambda: "Dashboard",
+            count=lambda: 42,
+            lease=lambda: Lease.objects.first(),
+            properties=lambda: Property.objects.all(),
+        )
+        self.assertIn("Dashboard|42|Test Property|Test Property", html)
 
     def test_empty_queryset(self):
-        """Test serialization with empty QuerySet."""
-        from djust.live_view import LiveView
+        html = self._render(
+            "{% for lease in leases %}[{{ lease.property.name }}]{% endfor %}done",
+            leases=lambda: Lease.objects.filter(status="inactive"),
+        )
+        self.assertIn("<div dj-root>done</div>", html)
 
-        class TestView(LiveView):
-            exposure_policy = "legacy"
-            template = """
-                {% for lease in leases %}
-                  {{ lease.property.name }}
-                {% endfor %}
-            """
+    def test_a_missing_model_renders_empty(self):
+        """A ``None`` model, and every path read off it, renders empty."""
+        html = self._render(
+            "<{{ lease.property.name }}|{{ lease.tenant.user.email }}>", lease=lambda: None
+        )
+        self.assertIn("<|>", html)
 
-            def mount(self, request):
-                self.leases = Lease.objects.filter(status="inactive")  # No results
+    def test_repeated_renders_agree(self):
+        """A second render of the same view (a warm cache) gives the same page."""
 
-        view = TestView()
-        view.mount(None)
-        context = view.get_context_data()
-
-        # Should handle empty QuerySet gracefully
-        self.assertIn("leases", context)
-        self.assertEqual(context["leases"], [])
-
-    def test_none_value_safety(self):
-        """Test safe handling of None related objects."""
-        from djust.live_view import LiveView
-
-        # Create lease without tenant (if model allows)
-        # For this test, we'll test the serializer's None handling directly
-
-        class TestView(LiveView):
-            exposure_policy = "legacy"
-            template = """
-                {{ lease.property.name }}
-                {{ lease.tenant.user.email }}
-            """
-
-            def mount(self, request):
-                self.lease = Lease.objects.first()
-
-        view = TestView()
-        view.mount(None)
-        context = view.get_context_data()
-
-        # Should not crash on None access
-        self.assertIn("lease", context)
-        self.assertIsInstance(context["lease"], dict)
-
-
-class TestJITSerializationPerformance(TestCase):
-    """Performance tests for JIT serialization."""
-
-    def setUp(self):
-        """Create larger test dataset."""
-        # Create 10 properties, tenants, leases
-        for i in range(10):
-            user = User.objects.create(
-                username=f"user{i}",
-                email=f"user{i}@example.com",
-                first_name=f"First{i}",
-                last_name=f"Last{i}",
-            )
-            tenant = Tenant.objects.create(user=user, phone=f"555-{i:04d}")
-            prop = Property.objects.create(
-                name=f"Property {i}",
-                address=f"{i} Main St",
-                city="Test City",
-                state="CA",
-                zip_code="12345",
-                property_type="apartment",
-                bedrooms=2,
-                bathrooms=1.0,
-                square_feet=1000,
-                monthly_rent=1000 + i * 100,
-                security_deposit=1000 + i * 100,
-            )
-            Lease.objects.create(
-                property=prop,
-                tenant=tenant,
-                monthly_rent=prop.monthly_rent,
-                security_deposit=prop.security_deposit,
-                start_date="2025-01-01",
-                end_date="2025-12-31",
-                status="active",
-            )
-
-    def test_warm_cache_performance(self):
-        """Test that cache hits are fast."""
-        from djust.live_view import LiveView
-
-        class TestView(LiveView):
-            exposure_policy = "legacy"
-            template = """
-                {% for lease in leases %}
-                  {{ lease.property.name }}
-                  {{ lease.tenant.user.email }}
-                {% endfor %}
-            """
-
-            def mount(self, request):
-                self.leases = Lease.objects.all()
-
-        view = TestView()
-        view.mount(None)
-
-        # First call (cold cache)
-        context1 = view.get_context_data()
-
-        # Second call (warm cache)
-        context2 = view.get_context_data()
-
-        # Warm cache should be significantly faster
-        # (Though with small dataset, both might be sub-millisecond)
-        self.assertIsNotNone(context1)
-        self.assertIsNotNone(context2)
-
-        # Verify both produce same results
-        self.assertEqual(len(context1["leases"]), len(context2["leases"]))
-
-
-class TestJITSerializationGracefulFallback(TestCase):
-    """Test graceful fallback when JIT fails."""
-
-    def test_fallback_on_missing_extract_function(self):
-        """Test fallback when Rust extraction not available."""
-        from djust.live_view import LiveView
-        import sys
-
-        # Get the actual live_view module (not the decorator function)
-        lv_module = sys.modules["djust.live_view"]
-
-        # Temporarily disable extract_template_variables
-        original_extract = lv_module.extract_template_variables
-        lv_module.extract_template_variables = None
-
-        try:
-
+        def make():
             class TestView(LiveView):
-                exposure_policy = "legacy"
-                template = """{{ lease.property.name }}"""
+                exposure_policy = "explicit"
+                template = (
+                    "<div dj-root>{% for lease in leases %}{{ lease.property.name }}"
+                    "{% endfor %}</div>"
+                )
 
-                def mount(self, request):
-                    user = User.objects.create(username="test", email="test@test.com")
-                    tenant = Tenant.objects.create(user=user)
-                    prop = Property.objects.create(
-                        name="Test",
-                        address="Test Address",
-                        city="Test City",
-                        state="CA",
-                        zip_code="12345",
-                        property_type="apartment",
-                        bedrooms=1,
-                        bathrooms=1.0,
-                        square_feet=500,
-                        monthly_rent=1000,
-                        security_deposit=1000,
-                    )
-                    from datetime import date
+                def get_context_data(self, **kwargs):
+                    ctx = super().get_context_data(**kwargs)
+                    ctx["leases"] = Lease.objects.all()
+                    return ctx
 
-                    self.lease = Lease.objects.create(
-                        property=prop,
-                        tenant=tenant,
-                        monthly_rent=1000,
-                        security_deposit=1000,
-                        start_date=date(2025, 1, 1),
-                        end_date=date(2025, 12, 31),
-                    )
+            client = LiveViewTestClient(TestView)
+            client.mount()
+            return client
 
-            view = TestView()
-            view.mount(None)
-            context = view.get_context_data()
-
-            # Should fallback to DjangoJSONEncoder
-            self.assertIn("lease", context)
-            self.assertIsInstance(context["lease"], dict)
-
-        finally:
-            # Restore
-            lv_module.extract_template_variables = original_extract
+        client = make()
+        self.assertEqual(client.render(), client.render())

@@ -16,7 +16,7 @@ from djust.websocket import _snapshot_assigns
 
 
 class _TestView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
 
 class TestIdentitySnapshotUnified:

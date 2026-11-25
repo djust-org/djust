@@ -40,7 +40,6 @@ from __future__ import annotations
 
 import collections
 import functools
-import json
 import re
 from typing import Any, Callable
 
@@ -383,84 +382,12 @@ class TestTheSinkAnswersDjangoOnTheLiveViewPath2621:
 
 @pytest.mark.django_db
 class TestNoLiveObjectReachesAChannelThatPersists2621:
-    """The two boundaries the widening must not cross.
+    """The boundary the widening must not cross.
 
     A handle-bearing ``Encoded`` crosses back to Python as its ``display``
     string, which for a lambda is ``<function <lambda> at 0x…>`` — an address.
     Neither the session snapshot nor the client payload may carry one.
     """
-
-    # Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
-    def test_the_client_state_payload_holds_no_function_address(self) -> None:
-        """The other outbound channel, measured rather than assumed.
-
-        `get_state()` is what the client is given. A carried callable is a
-        `Value::Encoded` whose display for a lambda is
-        `<function … at 0x…>` — a server address — so "no address reaches the
-        client" is a claim that needs a measurement, not an inference from the
-        session pin above (a different channel, built by different code).
-
-        Honest about its own category: this is a BOUNDARY pin, not a change
-        pin. It stays green with the change gated off, because `get_state()`
-        reads the view's public attributes and the attribute walk drops a
-        callable before this arm ever sees it (the sibling below). The value
-        is that the claim in this class's docstring is measured rather than
-        reasoned from the session channel — and that a future change routing
-        context values into client state has to come here and face it.
-        """
-
-        class _StateView(LiveView):
-            exposure_policy = "legacy"
-            template = "<div dj-root>{{ cb }}{{ plain }}</div>"
-
-            def mount(self, request, **kwargs):
-                self.cb = plain_lambda
-                self.plain = "visible"
-
-        client = LiveViewTestClient(_StateView)
-        client.mount()
-        client.render()
-        assert client.view_instance is not None
-        state = client.view_instance.get_state()
-        blob = json.dumps(state)
-        assert "0x" not in blob and "<function" not in blob, (
-            f"a function address reached the client payload: {blob}"
-        )
-        assert state == {"plain": "visible"}, state
-
-    # Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
-    def test_a_public_callable_ATTRIBUTE_is_still_dropped_before_the_arm(self) -> None:
-        """The boundary #2621 does NOT move, stated so nobody reads the gate
-        as wider than it is.
-
-        A callable assigned as a public LiveView **attribute** never reaches
-        ``normalize_django_value`` at all: the public-attribute walk drops it
-        first (``mixins/context.py``'s ``if callable(value): continue``), and
-        that exclusion is deliberate and load-bearing — without it every
-        ``@event_handler`` on the view would become a context variable. So
-        ``{{ cb }}`` for ``self.cb = fn`` renders EMPTY, where Django's ``Context({"cb": fn})`` renders the call's result.
-
-        #2621 is about the context DICT — what ``get_context_data`` returns,
-        which is what the characterization net's rows exercise. A future
-        change that widens the attribute walk has to come here and say so.
-        """
-
-        class _AttrView(LiveView):
-            exposure_policy = "legacy"
-            template = "<div dj-root>[{{ cb }}][{{ plain }}]</div>"
-
-            def mount(self, request, **kwargs):
-                self.cb = plain_lambda
-                self.plain = "visible"
-
-        client = LiveViewTestClient(_AttrView)
-        client.mount()
-        html = client.render()
-        match = DJ_ROOT.search(html)
-        assert match is not None, html
-        assert match.group(1) == "[][visible]", (
-            f"the public-attribute walk changed: {match.group(1)!r}"
-        )
 
     def test_the_display_string_is_what_a_handle_hands_back_not_the_object(self) -> None:
         """A carried callable is a `Value::Encoded` with a transient handle,

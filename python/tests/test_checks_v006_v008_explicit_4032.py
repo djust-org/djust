@@ -3,10 +3,9 @@
 Both checks warn that a non-primitive assigned in ``mount()`` cannot be
 serialized. Under ``exposure_policy = "explicit"`` a plain attribute is never
 put in template context, the session, ``get_state()`` or a snapshot, so the
-warning is wrong there; under ``"legacy"`` it is right. The checks are
-AST-based, so the policy is read from the imported class (inherited or
-defaulted) and, for a class that is not imported, from a literal statement in
-its body.
+warning is wrong there. The checks are AST-based, so the policy is read from
+the imported class (inherited or defaulted) and, for a class that is not
+imported, from a literal statement in its body.
 """
 
 import gc
@@ -36,21 +35,6 @@ SOURCE = textwrap.dedent(
         exposure_policy = "explicit"
         template = "<div dj-root>ok</div>"
 
-        def mount(self, request, **kwargs):
-            self.pricing = PricingService()
-            self.basket = Basket()
-
-
-    class LegacyCart(LiveView):
-        exposure_policy = "legacy"
-        template = "<div dj-root>ok</div>"
-
-        def mount(self, request, **kwargs):
-            self.pricing = PricingService()
-            self.basket = Basket()
-
-
-    class InheritsLegacy(LegacyCart):
         def mount(self, request, **kwargs):
             self.pricing = PricingService()
             self.basket = Basket()
@@ -112,14 +96,6 @@ def test_explicit_views_get_neither_check(views_dir):
         pricing, basket = _mount_lines(cls)
         assert pricing not in _lines(errors, "djust.V006"), (cls, errors)
         assert basket not in _lines(errors, "djust.V008"), (cls, errors)
-
-
-def test_legacy_views_still_get_both(views_dir):
-    errors = _run(views_dir)
-    for cls in ("LegacyCart", "InheritsLegacy"):
-        pricing, basket = _mount_lines(cls)
-        assert pricing in _lines(errors, "djust.V006"), (cls, errors)
-        assert basket in _lines(errors, "djust.V008"), (cls, errors)
 
 
 def test_an_unimported_class_stating_explicit_is_skipped(tmp_path):

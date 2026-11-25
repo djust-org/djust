@@ -20,19 +20,20 @@ from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import RequestFactory, override_settings
 from unittest.mock import patch
 
-from djust import LiveView
+from djust import LiveView, state
 
 
 class _LazyChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div><p>Lazy {{ value }}</p></div>"
+    value = state("default")
 
     def mount(self, request, **kwargs):
         self.value = kwargs.get("value", "default")
 
 
 class _PageWithLazySlot(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<html><body><div dj-root>"
@@ -85,7 +86,7 @@ def _explicit_page(child: type) -> type:
 
 
 class _PlainPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<html><body><div dj-root><p>no slots</p></div></body></html>"
 
     def mount(self, request, **kwargs):

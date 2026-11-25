@@ -44,7 +44,7 @@ class TestV010TutorialMixinMRO:
             "BadView_691a",
             (LiveView, TutorialMixin),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "__module__": "myapp.test_views",
                 "template_name": "t.html",
             },
@@ -61,7 +61,7 @@ class TestV010TutorialMixinMRO:
             "GoodView_691b",
             (TutorialMixin, LiveView),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "__module__": "myapp.test_views",
                 "template_name": "t.html",
             },
@@ -79,7 +79,7 @@ class TestV010TutorialMixinMRO:
             "PlainView_691c",
             (LiveView,),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "__module__": "myapp.test_views",
                 "template_name": "t.html",
             },
@@ -96,7 +96,7 @@ class TestV010TutorialMixinMRO:
             "SuppressedView_691d",
             (LiveView, TutorialMixin),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "__module__": "myapp.test_views",
                 "template_name": "t.html",
             },
@@ -120,7 +120,7 @@ class TestV010TutorialMixinMRO:
             "HintView_691e",
             (LiveView, TutorialMixin),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "__module__": "myapp.test_views",
                 "template_name": "t.html",
             },
@@ -135,130 +135,6 @@ class TestV010TutorialMixinMRO:
         finally:
             del cls
             gc.collect()
-
-
-# ---------------------------------------------------------------------------
-# #694 — get_context_data skips non-serializable class attrs
-# ---------------------------------------------------------------------------
-
-
-class TestContextNonSerializableClassAttrs:
-    """get_context_data should skip non-serializable class-level attributes."""
-
-    def _make_view_class(self, **class_attrs):
-        """Create a minimal view class with the given class-level attributes."""
-        from djust.mixins.context import ContextMixin
-
-        class FakeView(ContextMixin):
-            exposure_policy = "legacy"
-            template_name = "test.html"
-
-            def __init__(self, **kwargs):
-                # Don't call super().__init__() — mimics View.__init__
-                pass
-
-            def _register_component(self, comp):
-                pass
-
-            def _get_template_content(self):
-                return None
-
-        # Set class-level attributes
-        for k, v in class_attrs.items():
-            setattr(FakeView, k, v)
-
-        return FakeView
-
-    def test_serializable_class_attr_included(self):
-        """A JSON-serializable class attr (str, int, etc.) is included."""
-        ViewClass = self._make_view_class(page_title="Hello", max_items=10)
-        view = ViewClass()
-        ctx = view.get_context_data()
-        assert ctx["page_title"] == "Hello"
-        assert ctx["max_items"] == 10
-
-    def test_nonserializable_class_attr_excluded(self):
-        """A non-serializable class attr (like TutorialStep) is excluded."""
-        step = TutorialStep(target="#btn", message="Click")
-        ViewClass = self._make_view_class(my_steps=[step])
-        view = ViewClass()
-        ctx = view.get_context_data()
-        assert "my_steps" not in ctx
-
-    def test_instance_attr_always_included(self):
-        """Instance attrs (set in __init__ or mount) are always included,
-        even if not serializable — they are the developer's explicit intent."""
-        from djust.mixins.context import ContextMixin
-
-        class TestView(ContextMixin):
-            exposure_policy = "legacy"
-
-            def __init__(self):
-                pass
-
-            def _register_component(self, comp):
-                pass
-
-            def _get_template_content(self):
-                return None
-
-        view = TestView()
-        view.my_data = {"key": "value"}
-        ctx = view.get_context_data()
-        assert ctx["my_data"] == {"key": "value"}
-
-    def test_serializable_list_class_attr_included(self):
-        """A list of primitives at class level is included."""
-        ViewClass = self._make_view_class(tags=["a", "b", "c"])
-        view = ViewClass()
-        ctx = view.get_context_data()
-        assert ctx["tags"] == ["a", "b", "c"]
-
-    def test_serializable_dict_class_attr_included(self):
-        """A dict of primitives at class level is included."""
-        ViewClass = self._make_view_class(config={"debug": True, "level": 3})
-        view = ViewClass()
-        ctx = view.get_context_data()
-        assert ctx["config"] == {"debug": True, "level": 3}
-
-    def test_mixed_list_with_nonserializable_excluded(self):
-        """A list containing non-serializable items is excluded."""
-        ViewClass = self._make_view_class(items=[TutorialStep(target="#a", message="a")])
-        view = ViewClass()
-        ctx = view.get_context_data()
-        assert "items" not in ctx
-
-    def test_tutorial_steps_not_in_context(self):
-        """TutorialMixin._tutorial_steps are private and never in context."""
-        from djust.mixins.context import ContextMixin
-        from djust.mixins.push_events import PushEventMixin
-        from djust.mixins.waiters import WaiterMixin
-
-        class TourView(WaiterMixin, PushEventMixin, TutorialMixin, ContextMixin):
-            exposure_policy = "legacy"
-            _tutorial_steps = [
-                TutorialStep(target="#a", message="Step 1"),
-            ]
-
-            def __init__(self, **kwargs):
-                super().__init__(**kwargs)
-
-            def start_async(self, callback, *args, name=None, **kwargs):
-                pass
-
-            def _register_component(self, comp):
-                pass
-
-            def _get_template_content(self):
-                return None
-
-        view = TourView()
-        ctx = view.get_context_data()
-        # _tutorial_steps is private (starts with _), so not in context
-        assert "_tutorial_steps" not in ctx
-        # The public property 'tutorial_steps' is callable-ish (property),
-        # and won't be in class __dict__ directly either
-        assert "tutorial_steps" not in ctx
 
 
 class TestTutorialMixinStepsProperty:
