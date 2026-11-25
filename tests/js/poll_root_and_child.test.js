@@ -17,6 +17,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
 import { withContracts } from './_open_contracts.js';
+import { packManifest } from './_parameter_manifest.js';
 import { readFileSync } from 'fs';
 import { setTimeout as nativeSleep } from 'node:timers/promises';
 
@@ -197,7 +198,7 @@ describe('dj-poll inside an embedded child view', () => {
             {name: 'room', type: 'str', kind: 'positional_or_keyword', required: false, reduced_checking: false}]}});
         const owners = [{view_id: null, component_id: null, handlers: h('host_tick')},
             {view_id: null, component_id: 'cmp-1', handlers: h('comp_tick')}];
-        return `<script type="application/json" data-djust-parameter-contracts>${JSON.stringify({view: 'app.ParentView', contracts: {version: 1, owners}})}</script>`;
+        return `<script type="application/json" data-djust-parameter-contracts>${JSON.stringify({view: 'app.ParentView', contracts: packManifest({owners})})}</script>`;
     };
     const page = (handler) => `
 <div dj-view="app.ParentView" dj-root>
