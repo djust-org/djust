@@ -72,7 +72,7 @@ textarea = TextArea(
 ## Test Results
 
 ### Python Tests
-**File:** `repo-root/test_textarea_component.py`
+**File:** `repo-root/python/djust/tests/test_textarea_component_4243.py`
 
 ✅ **All 10 tests passed:**
 1. ✓ Basic textarea rendering
