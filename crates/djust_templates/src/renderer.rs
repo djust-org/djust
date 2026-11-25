@@ -5181,7 +5181,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
 
         Node::Now(format) => {
             // {% now "Y-m-d" %} → current date/time
-            let now = chrono::Local::now();
+            // The process-local zone, as chrono's `Local` read it before
+            // #4222: `TZ`, then `/etc/localtime`.
+            let now = jiff::Zoned::now();
             Ok((django_date_format(&now, format)).into())
         }
 
@@ -7256,14 +7258,21 @@ impl ToF64 for Value {
     }
 }
 
-/// Convert Django date format characters to chrono strftime format.
+/// Render `{% now %}`'s Django date format characters.
 ///
-/// Django uses PHP-style single-character format codes (e.g., "Y" for 4-digit year).
-/// This converts the most common ones to chrono's strftime equivalents.
-fn django_date_format(dt: &chrono::DateTime<chrono::Local>, django_fmt: &str) -> String {
+/// Django uses PHP-style single-character format codes (e.g., "Y" for 4-digit
+/// year). Each arm reproduces what the chrono `strftime` specifier it used
+/// before #4222 printed, byte for byte; the jiff port changed the library, not
+/// the output.
+fn django_date_format(dt: &jiff::Zoned, django_fmt: &str) -> String {
     let mut result = String::new();
     let chars = django_fmt.chars();
     let mut escaped = false;
+    let hour12 = match dt.hour() % 12 {
+        0 => 12,
+        h => h,
+    };
+    let name = |spec: &str| dt.strftime(spec).to_string();
 
     for c in chars {
         if escaped {
@@ -7277,53 +7286,46 @@ fn django_date_format(dt: &chrono::DateTime<chrono::Local>, django_fmt: &str) ->
         }
         match c {
             // Day
-            'd' => result.push_str(&dt.format("%d").to_string()), // 01-31
-            'j' => result.push_str(&dt.format("%-d").to_string()), // 1-31
-            'D' => result.push_str(&dt.format("%a").to_string()), // Mon
-            'l' => result.push_str(&dt.format("%A").to_string()), // Monday
+            'd' => result.push_str(&format!("{:02}", dt.day())), // 01-31
+            'j' => result.push_str(&dt.day().to_string()),       // 1-31
+            'D' => result.push_str(&name("%a")),                 // Mon
+            'l' => result.push_str(&name("%A")),                 // Monday
             // Month
-            'm' => result.push_str(&dt.format("%m").to_string()), // 01-12
-            'n' => result.push_str(&dt.format("%-m").to_string()), // 1-12
-            'M' => result.push_str(&dt.format("%b").to_string()), // Jan
-            'F' => result.push_str(&dt.format("%B").to_string()), // January
+            'm' => result.push_str(&format!("{:02}", dt.month())), // 01-12
+            'n' => result.push_str(&dt.month().to_string()),       // 1-12
+            'M' => result.push_str(&name("%b")),                   // Jan
+            'F' => result.push_str(&name("%B")),                   // January
             // Year
-            'Y' => result.push_str(&dt.format("%Y").to_string()), // 2024
-            'y' => result.push_str(&dt.format("%y").to_string()), // 24
+            'Y' => result.push_str(&format!("{:04}", dt.year())), // 2024
+            'y' => result.push_str(&format!("{:02}", i32::from(dt.year()).rem_euclid(100))), // 24
             // Time
-            'H' => result.push_str(&dt.format("%H").to_string()), // 00-23
-            'i' => result.push_str(&dt.format("%M").to_string()), // 00-59
-            's' => result.push_str(&dt.format("%S").to_string()), // 00-59
-            'G' => result.push_str(&dt.format("%-H").to_string()), // 0-23
-            'g' => result.push_str(&dt.format("%-I").to_string()), // 1-12
-            'A' => result.push_str(&dt.format("%p").to_string()), // AM/PM
+            'H' => result.push_str(&format!("{:02}", dt.hour())), // 00-23
+            'i' => result.push_str(&format!("{:02}", dt.minute())), // 00-59
+            's' => result.push_str(&format!("{:02}", dt.second())), // 00-59
+            'G' => result.push_str(&dt.hour().to_string()),       // 0-23
+            'g' => result.push_str(&hour12.to_string()),          // 1-12
+            'A' => result.push_str(if dt.hour() < 12 { "AM" } else { "PM" }),
             'P' => {
                 // Django's P format: "1 a.m.", "noon", "midnight"
-                let hour = dt.format("%-I").to_string().parse::<u32>().unwrap_or(0);
-                let minute = dt.format("%M").to_string();
-                let ampm = if dt.format("%P").to_string() == "am" {
-                    "a.m."
-                } else {
-                    "p.m."
-                };
-                if minute == "00" {
-                    if hour == 12 && ampm == "p.m." {
+                let ampm = if dt.hour() < 12 { "a.m." } else { "p.m." };
+                if dt.minute() == 0 {
+                    if dt.hour() == 12 {
                         result.push_str("noon");
-                    } else if hour == 12 && ampm == "a.m." {
+                    } else if dt.hour() == 0 {
                         result.push_str("midnight");
                     } else {
-                        result.push_str(&format!("{} {}", hour, ampm));
+                        result.push_str(&format!("{} {}", hour12, ampm));
                     }
                 } else {
-                    result.push_str(&format!("{}:{} {}", hour, minute, ampm));
+                    result.push_str(&format!("{}:{:02} {}", hour12, dt.minute(), ampm));
                 }
             }
             // Week/day-of-week
-            'w' => result.push_str(&dt.format("%w").to_string()), // 0 (Sun) - 6 (Sat)
-            'W' => result.push_str(&dt.format("%V").to_string()), // ISO week number
+            'w' => result.push_str(&dt.weekday().to_sunday_zero_offset().to_string()), // 0 (Sun) - 6 (Sat)
+            'W' => result.push_str(&format!("{:02}", dt.date().iso_week_date().week())), // ISO week number
             'S' => {
                 // English ordinal suffix: st, nd, rd, th
-                let day = dt.format("%-d").to_string().parse::<u32>().unwrap_or(0);
-                let suffix = match day {
+                let suffix = match dt.day() {
                     1 | 21 | 31 => "st",
                     2 | 22 => "nd",
                     3 | 23 => "rd",
@@ -7333,38 +7335,46 @@ fn django_date_format(dt: &chrono::DateTime<chrono::Local>, django_fmt: &str) ->
             }
             't' => {
                 // Days in the month (28-31)
-                let month = dt.format("%-m").to_string().parse::<u32>().unwrap_or(1);
-                let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
-                let days = match month {
-                    1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-                    4 | 6 | 9 | 11 => 30,
-                    2 => {
-                        if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
-                            29
-                        } else {
-                            28
-                        }
-                    }
-                    _ => 30,
-                };
-                result.push_str(&days.to_string());
+                result.push_str(&dt.date().days_in_month().to_string());
             }
             'L' => {
                 // Leap year: True or False
-                let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
-                let is_leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-                result.push_str(if is_leap { "True" } else { "False" });
+                result.push_str(if dt.date().in_leap_year() {
+                    "True"
+                } else {
+                    "False"
+                });
             }
-            // Timezone
-            'e' => result.push_str(&dt.format("%Z").to_string()),
+            // Timezone: chrono's `%Z` on a `Local` time printed the numeric
+            // offset (`+01:00`), not an abbreviation.
+            'e' => result.push_str(&filters::format_offset(dt.offset(), true)),
             // ISO 8601
-            'c' => result.push_str(&dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()),
+            'c' => result.push_str(&format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{}",
+                dt.year(),
+                dt.month(),
+                dt.day(),
+                dt.hour(),
+                dt.minute(),
+                dt.second(),
+                filters::format_offset(dt.offset(), true)
+            )),
             // RFC 2822
-            'r' => result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string()),
+            'r' => result.push_str(&format!(
+                "{}, {:02} {} {:04} {:02}:{:02}:{:02} {}",
+                name("%a"),
+                dt.day(),
+                name("%b"),
+                dt.year(),
+                dt.hour(),
+                dt.minute(),
+                dt.second(),
+                filters::format_offset(dt.offset(), false)
+            )),
             // Unix timestamp
-            'U' => result.push_str(&dt.timestamp().to_string()),
+            'U' => result.push_str(&dt.timestamp().as_second().to_string()),
             // Other
-            'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
+            'N' => result.push_str(&format!("{}.", name("%b"))), // Month abbrev AP style
             _ => result.push(c), // Pass through unrecognized chars (colons, spaces, etc.)
         }
     }

@@ -27,8 +27,7 @@ smallvec.workspace = true
 regex.workspace = true
 once_cell.workspace = true
 thiserror.workspace = true
-chrono.workspace = true
-chrono-tz.workspace = true
+jiff.workspace = true
 tracing = { workspace = true }
 # 0.13.6 is the floor, not just what Cargo.lock happens to hold: RUSTSEC-2026-0414
 # (fixed in 0.13.5) and RUSTSEC-2026-0433 (fixed in 0.13.6) are both in the

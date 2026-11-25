@@ -1,0 +1,149 @@
+//! The chrono -> jiff swap keeps the date filters' contract (#4222).
+//!
+//! `chrono` and `chrono-tz` were replaced by `jiff` because RustSec marks both
+//! unmaintained. A library swap is exactly where a parser quietly widens or a
+//! range quietly shrinks, so each test here pins one of those:
+//!
+//! * the RFC 3339 grammar is chrono's, not jiff's more liberal ISO 8601 one;
+//! * zone names stay case-sensitive (jiff's lookup is not);
+//! * the far end of Python's calendar still renders, although
+//!   `jiff::Timestamp` stops ~26 hours before `datetime.max`;
+//! * the far-future DST rule applies (chrono-tz stopped at its last
+//!   precomputed transition; Django's `zoneinfo` and jiff follow the rule).
+//!
+//! Every expected string was checked against a Django 5.2 render.
+
+use djust_core::{Context, Value};
+use djust_templates::filters::django_timesince_for_tests as timesince;
+use djust_templates::timezone::{active_timezone_name, set_active_timezone};
+use djust_templates::Template;
+
+const NY: &str = "America/New_York";
+
+fn render_in(tz: Option<&str>, source: &str, value: &str) -> String {
+    assert!(
+        set_active_timezone(tz),
+        "test setup: {tz:?} should be known"
+    );
+    let mut ctx = Context::new();
+    ctx.set("v".to_string(), Value::String(value.to_string()));
+    let out = Template::new(source)
+        .expect("template should parse")
+        .render(&ctx)
+        .expect("template should render");
+    set_active_timezone(None);
+    out
+}
+
+#[test]
+fn rfc3339_grammar_is_not_widened_to_jiffs_iso8601() {
+    // chrono refused all of these, so the filter rendered Django's answer for
+    // a non-date (`""`). jiff's own parser would accept every one.
+    for refused in [
+        "2026-08-22T14:30+05:00",     // no seconds, with an offset
+        "2026-08-22T14:30:00+0500",   // offset without a colon
+        "2026-08-22T14:30:00+05",     // hour-only offset
+        "2026-08-22T14:30:00Z[UTC]",  // RFC 9557 annotation
+        "2026-08-22T14:30:00.+05:00", // a dot with no digits
+        "2026-08-22T14:30:00+24:00",  // offset out of range
+    ] {
+        assert_eq!(
+            render_in(None, r#"{{ v|date:"Y-m-d H:i" }}"#, refused),
+            "",
+            "{refused:?} must stay unparsed"
+        );
+    }
+    // ...and the shapes chrono accepted still parse: lowercase `t`/`z`, a
+    // space separator, and fractional digits past the ninth (dropped).
+    for accepted in [
+        "2026-08-22t14:30:00z",
+        "2026-08-22 14:30:00Z",
+        "2026-08-22T14:30:00.1234567891+00:00",
+    ] {
+        assert_eq!(
+            render_in(None, r#"{{ v|date:"Y-m-d H:i" }}"#, accepted),
+            "2026-08-22 14:30",
+            "{accepted:?} must still parse"
+        );
+    }
+}
+
+#[test]
+fn zone_names_stay_case_sensitive() {
+    // jiff finds `america/new_york`; chrono-tz and Python's zoneinfo do not,
+    // so Django would have refused this TIME_ZONE long before a render.
+    assert!(!set_active_timezone(Some("america/new_york")));
+    assert_eq!(active_timezone_name(), None);
+    // A backward-compatible link name is still a real zone.
+    assert!(set_active_timezone(Some("US/Eastern")));
+    assert_eq!(active_timezone_name().as_deref(), Some("US/Eastern"));
+    set_active_timezone(None);
+}
+
+#[test]
+fn the_last_day_of_the_calendar_still_renders() {
+    // `jiff::Timestamp` ends at 9999-12-30T22:00Z; Python's datetime does not.
+    // Django: '9999-12-31 18:59 EST -0500'.
+    assert_eq!(
+        render_in(
+            Some(NY),
+            r#"{{ v|date:"Y-m-d H:i T O" }}"#,
+            "9999-12-31T23:59:00+00:00"
+        ),
+        "9999-12-31 18:59 EST -0500"
+    );
+    // Naive, at the very last second, with no zone to convert into.
+    assert_eq!(
+        render_in(
+            None,
+            r#"{{ v|date:"Y-m-d H:i:s U" }}"#,
+            "9999-12-31 23:59:59"
+        ),
+        "9999-12-31 23:59:59 253402300799"
+    );
+}
+
+#[test]
+fn the_far_future_follows_the_zones_dst_rule() {
+    // Django: '2100-07-01 08:00 EDT -0400 1' and '9999-07-01 08:00 EDT -0400 1'.
+    assert_eq!(
+        render_in(
+            Some(NY),
+            r#"{{ v|date:"Y-m-d H:i T O I" }}"#,
+            "2100-07-01T12:00:00+00:00"
+        ),
+        "2100-07-01 08:00 EDT -0400 1"
+    );
+    assert_eq!(
+        render_in(
+            Some(NY),
+            r#"{{ v|date:"Y-m-d H:i T O I" }}"#,
+            "9999-07-01T12:00:00+00:00"
+        ),
+        "9999-07-01 08:00 EDT -0400 1"
+    );
+}
+
+#[test]
+fn a_negative_offset_without_an_active_zone_names_itself() {
+    // `{% localtime off %}` / USE_TZ=False: Python's
+    // `timezone(timedelta(hours=-7)).tzname(None)` is 'UTC-07:00'.
+    assert_eq!(
+        render_in(
+            None,
+            r#"{{ v|date:"H:i O Z e c" }}"#,
+            "2026-08-22T14:30:00-07:00"
+        ),
+        "14:30 -0700 -25200 UTC-07:00 2026-08-22T14:30:00-07:00"
+    );
+}
+
+#[test]
+fn timesince_reaches_the_end_of_the_calendar() {
+    let at = |y: i16, m: i8, d: i8| jiff::civil::date(y, m, d).at(0, 0, 0, 0);
+    // Django: timesince(datetime(9990, 1, 31), datetime(9999, 12, 31)).
+    assert_eq!(
+        timesince(at(9990, 1, 31), at(9999, 12, 31)),
+        "9\u{a0}years, 11\u{a0}months"
+    );
+}

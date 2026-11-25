@@ -50,13 +50,13 @@ fn try_render(source: &str, value: &str) -> Result<String, String> {
 /// A naive datetime `hours` in the past, in the shape Python's `.isoformat()`
 /// produces — no offset, which is exactly what did not parse.
 fn naive_hours_ago(hours: i64) -> String {
-    (chrono::Local::now().naive_local() - chrono::Duration::hours(hours))
-        .format("%Y-%m-%dT%H:%M:%S%.f")
+    (jiff::Zoned::now().datetime() - jiff::SignedDuration::from_hours(hours))
+        .strftime("%Y-%m-%dT%H:%M:%S%.f")
         .to_string()
 }
 
 fn aware_hours_ago(hours: i64) -> String {
-    (chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339()
+    (jiff::Timestamp::now() - jiff::SignedDuration::from_hours(hours)).to_string()
 }
 
 #[test]
@@ -106,8 +106,8 @@ fn a_date_only_value_is_measured_too() {
     // A `DateField` is one of `timesince`'s commonest inputs, and it did not
     // parse either. Yesterday is between 24 and 48 hours ago whatever the time
     // of day, so `1 day` holds all day.
-    let yesterday = (chrono::Local::now().date_naive() - chrono::Duration::days(1))
-        .format("%Y-%m-%d")
+    let yesterday = (jiff::Zoned::now().date() - jiff::Span::new().days(1))
+        .strftime("%Y-%m-%d")
         .to_string();
     // Depth-2 adds an hours component that moves through the day, so pin the
     // leading unit rather than the whole string (#1795).
@@ -149,8 +149,8 @@ fn timeuntil_gets_the_same_parse_and_the_same_refusal() {
     let err = try_render("{{ v|timeuntil }}", "09:30:00").expect_err("a bare time must be refused");
     assert!(err.contains("needs a date"), "got {err:?}");
 
-    let future = (chrono::Local::now().naive_local() + chrono::Duration::hours(30))
-        .format("%Y-%m-%dT%H:%M:%S%.f")
+    let future = (jiff::Zoned::now().datetime() + jiff::SignedDuration::from_hours(30))
+        .strftime("%Y-%m-%dT%H:%M:%S%.f")
         .to_string();
     assert!(render("{{ v|timeuntil }}", &future).starts_with(&format!("1{NBSP}day")));
 }

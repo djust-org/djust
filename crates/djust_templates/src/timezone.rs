@@ -30,20 +30,24 @@
 //! A fixed UTC offset passed per render would be free and wrong: one render can
 //! straddle a DST boundary (`America/New_York` is -0500 in January and -0400 in
 //! August, and a table of timestamps spanning six months hits both). Correct
-//! conversion needs real transition data, so `chrono-tz` is a dependency rather
-//! than an arithmetic offset. Measured cost before adopting: **+1.16 MB raw**
-//! on the extension, **+136 KB compressed** — the compressed figure being what
-//! a wheel actually ships.
+//! conversion needs real transition data, so a compiled tz database is a
+//! dependency rather than an arithmetic offset. Measured cost before adopting
+//! (`chrono-tz`, #2209): **+1.16 MB raw** on the extension, **+136 KB
+//! compressed** — the compressed figure being what a wheel actually ships.
+//! Since #4222 the database is `jiff`'s bundled copy (`tzdb-bundle-always`):
+//! `chrono`/`chrono-tz` were marked unmaintained, and `jiff` is one crate for
+//! both the arithmetic and the zones. Bundled, not read from the host's
+//! `/usr/share/zoneinfo`, so a slim container image renders the same zones.
 
 use std::cell::RefCell;
 
-use chrono_tz::Tz;
+use jiff::tz::TimeZone;
 
 thread_local! {
     /// The zone `date`/`time` formatting converts into, or `None` for "leave
     /// the value in the offset it arrived with" (`USE_TZ = False`, or no
     /// Django settings at all when this crate is embedded directly).
-    static ACTIVE_TZ: RefCell<Option<Tz>> = const { RefCell::new(None) };
+    static ACTIVE_TZ: RefCell<Option<TimeZone>> = const { RefCell::new(None) };
 }
 
 /// Set the active zone for THIS thread. `None` disables conversion.
@@ -60,23 +64,43 @@ pub fn set_active_timezone(name: Option<&str>) -> bool {
             ACTIVE_TZ.with(|c| *c.borrow_mut() = None);
             true
         }
-        Some(n) => match n.parse::<Tz>() {
-            Ok(tz) => {
+        Some(n) => match parse_zone(n) {
+            Some(tz) => {
                 ACTIVE_TZ.with(|c| *c.borrow_mut() = Some(tz));
                 true
             }
-            Err(_) => false,
+            None => false,
         },
     }
 }
 
+/// Look up an IANA zone name EXACTLY as spelled.
+///
+/// `jiff`'s lookup is case-insensitive (`america/new_york` finds
+/// `America/New_York`), while `chrono-tz`'s `FromStr` — and Python's
+/// `zoneinfo` on a case-sensitive filesystem, which is what Django validates
+/// `TIME_ZONE` with — are not. Accepting a spelling Django would refuse is a
+/// silent widening, so the canonical name must round-trip. Used for both the
+/// active zone and the default-zone lookup, one rule for both (#4222).
+pub fn parse_zone(name: &str) -> Option<TimeZone> {
+    let tz = TimeZone::get(name).ok()?;
+    (tz.iana_name() == Some(name)).then_some(tz)
+}
+
 /// The active zone for this thread, if any.
-pub fn active_timezone() -> Option<Tz> {
-    ACTIVE_TZ.with(|c| *c.borrow())
+///
+/// A `jiff` `TimeZone` is a cheap reference-counted handle, so the clone is not
+/// a copy of the zone's transition table.
+pub fn active_timezone() -> Option<TimeZone> {
+    ACTIVE_TZ.with(|c| c.borrow().clone())
 }
 
 /// The active zone's IANA name, for asserting the wiring took effect from
 /// Python. A setter with no getter cannot be tested end to end (#2017).
 pub fn active_timezone_name() -> Option<String> {
-    active_timezone().map(|tz| tz.name().to_string())
+    ACTIVE_TZ.with(|c| {
+        c.borrow()
+            .as_ref()
+            .and_then(|tz| tz.iana_name().map(str::to_string))
+    })
 }
