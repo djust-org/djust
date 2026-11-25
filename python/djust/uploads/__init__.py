@@ -331,6 +331,25 @@ def build_progress_message(ref: str, progress: int, status: str = "uploading") -
     }
 
 
+#: The ``reason`` values of a view's ``handle_upload_failed(name, entry,
+#: reason)`` (#4312): a writer's ``UploadRefused``, the size limit, the slot's
+#: ``timeout=``, a cancel by the browser, and anything else.
+UPLOAD_FAILURE_REASONS = ("refused", "too_large", "timeout", "cancelled", "error")
+
+#: The entry errors that mean the file went over its size limit.
+_TOO_LARGE_ERRORS = ("File size exceeds limit", "File too large")
+
+
+def upload_failure_reason(entry: "UploadEntry") -> str:
+    """The ``handle_upload_failed`` reason of an entry whose error is set:
+    ``refused``, ``too_large`` or ``error`` (#4312)."""
+    if entry._refused:
+        return "refused"
+    if entry.error and entry.error.startswith(_TOO_LARGE_ERRORS):
+        return "too_large"
+    return "error"
+
+
 # ============================================================================
 # UploadWriter — direct-to-destination byte stream
 # ============================================================================
@@ -651,6 +670,9 @@ class UploadConfig:
     # still unfinished then is cancelled (its writer aborted, its entry
     # dropped) and the browser is told. ``None`` (default): no limit.
     timeout: Optional[float] = None
+    # #4312 — call the view's ``handle_upload_progress(name, entry)`` at each
+    # progress step the browser is sent (every 10%). Off by default.
+    progress_hook: bool = False
 
     def __post_init__(self) -> None:
         if self.accept:
@@ -723,6 +745,9 @@ class UploadEntry:
     # resume from any other owner are refused. ``None`` when the connection has
     # no mount binding; the key is then the session alone.
     _owner: Optional[Dict[str, str]] = field(default=None, repr=False)
+    # #4312 — True when the error is a writer's ``UploadRefused`` (the
+    # ``refused`` reason of ``handle_upload_failed``).
+    _refused: bool = field(default=False, repr=False)
 
     @property
     def data(self) -> bytes:
@@ -914,6 +939,7 @@ class UploadManager:
         resumable: bool = False,
         allow_active_content: bool = False,
         timeout: Optional[float] = None,
+        progress_hook: bool = False,
     ) -> UploadConfig:
         """Configure an upload slot."""
         chunk_size = _clamp_chunk_size(name, chunk_size)
@@ -921,6 +947,8 @@ class UploadManager:
             isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0
         ):
             raise ValueError("allow_upload(timeout=) must be a positive number of seconds")
+        if not isinstance(progress_hook, bool):
+            raise ValueError("allow_upload(progress_hook=) must be True or False")
         config = UploadConfig(
             name=name,
             accept=accept,
@@ -932,6 +960,7 @@ class UploadManager:
             resumable=resumable,
             allow_active_content=allow_active_content,
             timeout=timeout,
+            progress_hook=progress_hook,
         )
         self._configs[name] = config
         if name not in self._name_to_refs:
@@ -973,6 +1002,7 @@ class UploadManager:
         refusal = _upload_refusal_message(exc)
         if refusal is not None:
             entry._error = refusal
+            entry._refused = True
             from .._log_utils import sanitize_for_log
 
             logger.warning(
@@ -1688,6 +1718,7 @@ class UploadMixin:
         resumable: bool = False,
         allow_active_content: bool = False,
         timeout: Optional[float] = None,
+        progress_hook: bool = False,
     ) -> UploadConfig:
         """
         Configure a named upload slot.
@@ -1726,10 +1757,21 @@ class UploadMixin:
                 writer is aborted, its entry dropped, and the browser's
                 ``uploadFile()`` promise rejects with "Upload timed out after
                 N seconds.". ``None`` (default) sets no limit.
+            progress_hook: Call the view's ``handle_upload_progress(name,
+                entry)`` at each progress step the browser is sent (every
+                10%), as a turn of the view with a render (#4312). Off by
+                default; the view must define ``handle_upload_progress``.
 
         Returns:
             UploadConfig object
         """
+        if progress_hook is True and not callable(getattr(self, "handle_upload_progress", None)):
+            from django.core.exceptions import ImproperlyConfigured
+
+            raise ImproperlyConfigured(
+                "allow_upload(%r, progress_hook=True) needs a handle_upload_progress(name, "
+                "entry) method on %s" % (name, type(self).__name__)
+            )
         mgr = self._ensure_upload_manager()
         cfg = mgr.configure(
             name=name,
@@ -1742,6 +1784,7 @@ class UploadMixin:
             resumable=resumable,
             allow_active_content=allow_active_content,
             timeout=timeout,
+            progress_hook=progress_hook,
         )
         return cfg
 
@@ -1848,6 +1891,8 @@ __all__ = [
     "mime_from_extension",
     "parse_upload_frame",
     "build_progress_message",
+    "UPLOAD_FAILURE_REASONS",
+    "upload_failure_reason",
     # v0.5.7 — object-storage error taxonomy (#820, #822)
     "UploadError",
     "UploadNetworkError",

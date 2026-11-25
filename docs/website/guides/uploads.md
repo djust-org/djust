@@ -117,6 +117,7 @@ class PhotosView(UploadMixin, LiveView):
 | `chunk_size` | `int` | `64512` | Chunk size for transfer (default 63KB; clamped so a chunk frame, header included, fits `max_message_size`) |
 | `auto_upload` | `bool` | `True` | Start upload immediately when files are selected |
 | `timeout` | `float` or `None` | `None` | Seconds an upload may take from its registration (from the resume, for a resumed upload). An upload unfinished by then is cancelled: its writer is aborted with a `TimeoutError`, its entry dropped, and the browser told ("Upload timed out after N seconds."). `None` sets no limit. |
+| `progress_hook` | `bool` | `False` | Call the view's `handle_upload_progress(name, entry)` at each 10% step the browser is sent. Needs that method on the view (`allow_upload` raises `ImproperlyConfigured` without it). See [Upload hooks](#upload-hooks-in-the-view). |
 
 ```python
 # Single image
@@ -136,6 +137,49 @@ A finished upload holds its place in `max_entries` until your handler consumes i
 ### Cancelling from the view
 
 `self.cancel_upload(name, ref)` aborts the upload's writer and drops its entry. At the end of the turn the browser is told: `djust:upload:progress` fires with status `cancelled` and `error` "Upload cancelled by the server.", the client stops sending chunks, and a pending `djust.uploads.uploadFile()` promise rejects with that message.
+
+## Upload hooks in the view
+
+A view hears its uploads through optional methods. Define the ones you need; a view that defines none pays nothing (no turn, no render).
+
+| Method | Called |
+|--------|--------|
+| `handle_upload_started(name, entry)` | After the server accepts the file's registration, and again after a resume (a resumed upload starts again; `entry.progress` shows what already arrived). |
+| `handle_upload_progress(name, entry)` | Only on a slot with `progress_hook=True`: at each 10% step the browser is sent (30, 60, 90, 100 for an upload whose chunks cross those steps). |
+| `handle_upload_finished(name, entry)` | After the upload completes (the writer closed, or the file was validated and written). `entry.writer_result` is set. |
+| `handle_upload_failed(name, entry, reason)` | When the upload fails. `reason` is one of `"refused"` (the writer raised `UploadRefused`; its message is `entry.error`), `"too_large"` (over `max_file_size` or the announced size), `"timeout"` (the slot's `timeout=`), `"cancelled"` (the browser cancelled an upload in flight) or `"error"` (anything else: a writer fault, a content check). |
+
+`name` is the slot name. Each hook runs as a turn of the view, like a server push: in order with the view's other frames (on the view's lane when the socket carries several views), under the render lock, followed by a render and the usual end-of-turn work (`push_event`, flash messages, `start_async`). Set `self._skip_render = True` in a hook to send no frame. A hook that raises is logged and renders nothing; the upload carries on as if the hook were absent.
+
+```python
+class DocumentView(UploadMixin, LiveView):
+    status = state("")
+
+    def mount(self, request, **kwargs):
+        self.allow_upload("doc", accept=".pdf", writer=S3Writer, progress_hook=True)
+
+    def handle_upload_started(self, name, entry):
+        self.status = "Uploading %s..." % entry.client_name
+
+    def handle_upload_progress(self, name, entry):
+        self.status = "%d%%" % entry.progress
+
+    def handle_upload_finished(self, name, entry):
+        self.status = "Processing..."
+        self.start_async(self._process, entry.writer_result)
+
+    def handle_upload_failed(self, name, entry, reason):
+        self.status = entry.error if reason == "refused" else "Upload failed (%s)" % reason
+```
+
+What calls no hook:
+
+- The view's own `cancel_upload()`: the view already knows. A started, progress or finished hook also does not run for an upload the view cancelled or consumed before the hook's turn.
+- A cancel of an upload that had already finished or failed, and the chunks that still arrive for a failed upload: `handle_upload_failed` runs once per upload.
+- An upload refused at registration (type, size, `max_entries`): it never started.
+- An upload stopped because its view's lane was full, or dropped when the connection closes.
+
+Uploads, and so these hooks, are WebSocket-only: the SSE transport and the HTTP fallback carry no file uploads.
 
 ## UploadEntry Properties
 

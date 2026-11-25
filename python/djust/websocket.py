@@ -265,6 +265,12 @@ async def _acquire_render_lock(lock: asyncio.Lock, timeout: float) -> None:
     await asyncio.wait_for(lock.acquire(), timeout=timeout)
 
 
+#: The view's optional upload hooks (#4312).
+_UPLOAD_STARTED = "handle_upload_started"
+_UPLOAD_PROGRESS = "handle_upload_progress"
+_UPLOAD_FINISHED = "handle_upload_finished"
+_UPLOAD_FAILED = "handle_upload_failed"
+
 #: Running upload-timeout tasks (#4118), held so none is collected mid-run.
 _UPLOAD_EXPIRY_TASKS: Set["asyncio.Task[None]"] = set()
 
@@ -3701,6 +3707,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     "upload_name": entry.upload_name,
                 }
             )
+            await self._run_upload_hook(mgr, _UPLOAD_STARTED, entry)
         else:
             await self.send_error("Upload rejected (check file type, size, or max entries)")
 
@@ -3733,6 +3740,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         if not upload_id or not isinstance(upload_id, str):
             await self.send_error("upload_resume requires a ref")
             return
+        resumed_entry = None
 
         session_key = self._scope_session_key()
         owner = self._upload_owner()
@@ -3797,6 +3805,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 logger.exception("upload_resume: re-attaching the upload failed")
             if resumed is not None:
                 self._arm_upload_deadline(mgr, upload_id)
+                resumed_entry = resumed
             else:
                 payload = {
                     "type": "upload_resumed",
@@ -3806,6 +3815,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     "chunks_received": [],
                 }
         await self.send_json(payload)
+        if resumed_entry is not None:
+            # A resumed upload starts again for the view too (#4312).
+            await self._run_upload_hook(mgr, _UPLOAD_STARTED, resumed_entry)
 
     async def _handle_upload_frame(self, data: bytes) -> None:
         """Handle binary upload frame (chunk, complete, cancel)."""
@@ -3894,8 +3906,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         return None
 
     async def _handle_upload_frame_for_view(self, frame: Dict[str, Any]) -> None:
-        """Apply a parsed upload frame to the upload manager of the view ``self`` runs."""
-        from .uploads import build_progress_message
+        """Apply a parsed upload frame to the upload manager of the view ``self`` runs.
+
+        Then runs the view's upload hooks the frame calls for (#4312):
+        progress, finished, or failed (``too_large``, ``refused``, ``error``,
+        ``cancelled``, ``timeout``).
+        """
+        from .uploads import build_progress_message, upload_failure_reason
 
         if not self.view_instance or not hasattr(self.view_instance, "_upload_manager"):
             return
@@ -3914,6 +3931,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             await self._expire_overdue_uploads(mgr)
             return
 
+        # The entry before the frame, and whether it was still live: a hook
+        # fires only for what this frame changed (#4312).
+        before = mgr._entries.get(ref)
+        was_live = before is not None and before.error is None and not before.complete
+
         if frame["type"] == "chunk":
             # add_chunk() internally dispatches to either the disk-buffer
             # path or (when the upload slot was configured with writer=)
@@ -3924,6 +3946,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 entry = mgr._entries.get(ref)
                 if entry and (progress % 10 == 0 or progress >= 100):
                     await self.send_json(build_progress_message(ref, progress))
+                    config = mgr.get_config(entry.upload_name)
+                    if config is not None and config.progress_hook:
+                        await self._run_upload_hook(mgr, _UPLOAD_PROGRESS, entry)
             else:
                 _real_consumer(self)._forget_upload(ref)
                 # Surface error details (writer exception, size-limit, etc.)
@@ -3933,12 +3958,18 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 if error_msg:
                     msg["error"] = error_msg
                 await self.send_json(msg)
+                if was_live and before is not None and before.error is not None:
+                    await self._run_upload_hook(
+                        mgr, _UPLOAD_FAILED, before, upload_failure_reason(before)
+                    )
 
         elif frame["type"] == "complete":
             _real_consumer(self)._forget_upload(ref)
             entry = mgr.complete_upload(ref, owner=owner)
             if entry:
                 await self.send_json(build_progress_message(ref, 100, "complete"))
+                if was_live:
+                    await self._run_upload_hook(mgr, _UPLOAD_FINISHED, entry)
             else:
                 err_entry = mgr._entries.get(ref)
                 error_msg = err_entry.error if err_entry else "Unknown error"
@@ -3951,11 +3982,117 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         "error": error_msg,
                     }
                 )
+                if was_live and before is not None and before.error is not None:
+                    await self._run_upload_hook(
+                        mgr, _UPLOAD_FAILED, before, upload_failure_reason(before)
+                    )
 
         elif frame["type"] == "cancel":
             _real_consumer(self)._forget_upload(ref)
             mgr.cancel_upload(ref, owner=owner)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
+            if was_live and before is not None and ref not in mgr._entries:
+                await self._run_upload_hook(mgr, _UPLOAD_FAILED, before, "cancelled")
+
+    async def _run_upload_hook(self, mgr: Any, hook: str, entry: Any, *extra: Any) -> None:
+        """Run the view's upload hook ``hook`` for ``entry`` as a turn (#4312).
+
+        The hooks are optional methods on the view: ``handle_upload_started``,
+        ``handle_upload_progress`` (opt-in per slot, ``progress_hook=True``),
+        ``handle_upload_finished`` and ``handle_upload_failed``. A view that
+        defines none pays nothing: no lock, no turn, no render. The caller is
+        the upload frame's own turn (on the view's lane when it has one, #3252),
+        so a hook runs in order with the view's other frames. It waits for the
+        render lock as an event does, then runs as a ``push``/``upload`` turn
+        that renders and drains, like a server push.
+        """
+        view = self.view_instance
+        if view is None or getattr(view, "_upload_manager", None) is not mgr:
+            return
+        # A hook is a method the view's class defines.
+        if not callable(getattr(type(view), hook, None)):
+            return
+        await self._render_lock.acquire()
+        await self._run_upload_hook_turn(view, hook, entry, extra)
+
+    @_binds_tenant_of(lambda self, view, *args: view)
+    @_consumer_turn("push", "upload", releases_lock=True)
+    async def _run_upload_hook_turn(
+        self, view: Any, hook: str, entry: Any, extra: Tuple[Any, ...]
+    ) -> None:
+        """Call one upload hook, render and send. Caller holds the lock (#4312).
+
+        Always releases ``_render_lock``. A hook that raises is logged and
+        renders nothing; the upload goes on as if the hook were absent. A
+        started, progress or finished hook does not run for an upload the view
+        has dropped meanwhile (cancelled or consumed by a turn that held the
+        lock).
+        """
+        from .worker_pool import offload_enabled
+
+        try:
+            dispatch_work = False
+            try:
+                if offload_enabled():
+                    # ``dispatch`` skipped Channels' per-message DB-connection
+                    # check (#3074): run it before the hook touches the DB.
+                    from channels.db import aclose_old_connections
+
+                    await aclose_old_connections()
+                if self.view_instance is not view:
+                    return
+                mgr = getattr(view, "_upload_manager", None)
+                if hook != _UPLOAD_FAILED and (
+                    mgr is None or mgr._entries.get(entry.ref) is not entry
+                ):
+                    return
+                if not await self._authorize_explicit_consumer_turn(view):
+                    return
+                fn = getattr(view, hook, None)
+                if fn is None or not callable(fn):
+                    return
+                try:
+                    await call_hook(fn, entry.upload_name, entry, *extra)
+                except Exception as exc:  # noqa: BLE001
+                    self._log_view_hook_failure(
+                        view,
+                        exc,
+                        "Upload hook %s raised on %s: %s",
+                        hook,
+                        view.__class__.__name__,
+                        exc,
+                        traceback=True,
+                    )
+                    return
+                # start_async work the hook queued runs once the lock is
+                # released (#2955).
+                dispatch_work = True
+                if self.view_instance is not view:
+                    return
+                from .push import sync_push_scope_groups
+
+                await sync_push_scope_groups(self, view)
+                if self.view_instance is not view:
+                    return
+                if _resolve_skip_render(view):
+                    # No frame of its own (#3034); queued side effects still
+                    # go out and session writes are stored (#4168).
+                    await self._store_no_frame_session_writes(view, "upload")
+                    await self._flush_all_pending()
+                    return
+                rendered = await self._render_background(view)
+                if rendered is None:
+                    return
+                await self._send_broadcast_render(rendered)
+            finally:
+                self._end_explicit_turn(view)
+                self._render_lock.release()
+                if dispatch_work and self.view_instance is view:
+                    await self._dispatch_async_work(event_name=None)
+        except Exception as e:  # noqa: BLE001
+            self._log_view_hook_failure(
+                view, e, "Error in upload hook %s: %s", hook, e, traceback=True
+            )
 
     #: Seconds before a deadline turn the view's full lane refused is tried again.
     _UPLOAD_DEADLINE_RETRY_S = 1.0
@@ -4010,21 +4147,39 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if left > 0:
                 self._arm_upload_deadline(mgr, ref, left)
                 return
-            await self._expire_overdue_uploads(mgr)
+            # The failed hooks are turns of their own: they take the render
+            # lock, so they run once this turn has released it.
+            expired = await self._expire_overdue_uploads(mgr, run_hooks=False)
+        for entry in expired:
+            await self._run_upload_hook(mgr, _UPLOAD_FAILED, entry, "timeout")
 
-    async def _expire_overdue_uploads(self, mgr: Any) -> None:
+    async def _expire_overdue_uploads(self, mgr: Any, run_hooks: bool = True) -> List[Any]:
         """Cancel the uploads of ``mgr`` past their ``timeout=`` and tell the
         browser: an ``upload_progress`` with status ``cancelled`` and the
-        reason in ``error`` (#4118)."""
+        reason in ``error`` (#4118).
+
+        Returns the expired entries. With ``run_hooks`` (the default) the
+        view's ``handle_upload_failed(name, entry, "timeout")`` runs for each
+        (#4312); a caller that holds the render lock passes False and runs
+        them after releasing it.
+        """
         from .uploads import build_progress_message
 
         if getattr(self.view_instance, "_upload_manager", None) is not mgr:
-            return  # the view was replaced or its uploads cleaned up
+            return []  # the view was replaced or its uploads cleaned up
+        held = dict(mgr._entries)
+        expired: List[Any] = []
         for ref, reason in mgr.expire_overdue():
             _real_consumer(self)._forget_upload(ref)
             message = build_progress_message(ref, 0, "cancelled")
             message["error"] = reason
             await self.send_json(message)
+            if ref in held:
+                expired.append(held[ref])
+        if run_hooks:
+            for entry in expired:
+                await self._run_upload_hook(mgr, _UPLOAD_FAILED, entry, "timeout")
+        return expired
 
     async def close(self, code: Optional[int] = None, reason: Optional[str] = None) -> None:
         """Close the socket and remember it, so later sends are dropped.

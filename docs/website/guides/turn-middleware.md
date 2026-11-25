@@ -84,12 +84,12 @@ check [C026](error-codes.md#c026-invalid-liveview_middleware).
 | `reconnect` | as for mount | a mount after the socket reconnected (a client hint; treat it exactly like `mount`) |
 | `event` | `client`, `deferred`, `api`, `server_function` | a client event, a deferred `dj_activity` replay, an HTTP API or `@server_function` call |
 | `params` | `url_change` | `handle_params` after a `live_patch` or back/forward |
-| `push` | `server_push`, `db_notify`, `tick`, `presence`, `client_push` | the server delivers data or runs a hook without a client event |
+| `push` | `server_push`, `db_notify`, `tick`, `presence`, `client_push`, `upload` | the server delivers data or runs a hook without a client event (`upload`: a view's upload hook, #4312) |
 | `async` | `start`, `result`, `catch_up` | `start_async` / `@background` work starts, and its result is handled |
 | `render` | `recovery` | the client asks for full HTML after a failed patch |
 
 Server push, ticks and `db_notify` run on the WebSocket and on SSE; presence
-runs on the WebSocket only; background work runs on WebSocket and SSE; HTTP and
+runs on the WebSocket only, as do upload hooks; background work runs on WebSocket and SSE; HTTP and
 the API have page mounts and events.
 
 ## Order
