@@ -1639,10 +1639,7 @@ fn text_loses_a_member(value: &Value) -> bool {
             // A key that is not text (`{1: "a"}`) is text in JSON, where `1` and `"1"` are the
             // same key: the handler must read the keys as they are (#3895).
             Value::Object(map) => {
-                if map
-                    .keys()
-                    .any(|key| !matches!(key, djust_core::ObjectKey::Str(_)))
-                {
+                if map.keys().any(|key| key.as_str().is_none()) {
                     return true;
                 }
                 pending.extend(map.values());

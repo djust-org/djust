@@ -3266,11 +3266,36 @@ pub fn extract_item_key_only_reads(
     Ok(item_key_only_reads_from_nodes(&nodes))
 }
 
+/// The item-key reads ([`extract_item_key_only_reads`]'s kind) that something ELSE in the
+/// template ALSO reads, per root (#4267): `{% for u in users|dictsort:'get_username' %}
+/// {{ u.get_username }}` gives `{"users": ["get_username"]}`.
+///
+/// The JIT keeps such a key in the row (the template prints it), so when it names a method
+/// the row holds the CALLED value where Django's `dictsort` sees an uncalled one. The JIT
+/// files those keys as method keys (`djust.serialization.CalledName`) and the engine's
+/// `dictsort` reads them as Django does. Only these templates pay for it.
+pub fn extract_printed_item_key_reads(
+    template: &str,
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let tokens = crate::lexer::tokenize(template)?;
+    let nodes = parse(&tokens)?;
+    Ok(item_key_reads_from_nodes(&nodes, true))
+}
+
 /// [`extract_item_key_only_reads`] over parsed nodes (a seam for tests: a
 /// `{% regroup %}` handler is registered from Python, so a Rust test builds the
 /// node by hand).
 fn item_key_only_reads_from_nodes(
     nodes: &[Node],
+) -> std::collections::HashMap<String, Vec<String>> {
+    item_key_reads_from_nodes(nodes, false)
+}
+
+/// The item-key reads per root that something else in the template also reads
+/// (`also_read`, [`extract_printed_item_key_reads`]) or that nothing else reads.
+fn item_key_reads_from_nodes(
+    nodes: &[Node],
+    also_read: bool,
 ) -> std::collections::HashMap<String, Vec<String>> {
     use std::collections::HashMap;
 
@@ -3289,7 +3314,7 @@ fn item_key_only_reads_from_nodes(
             .iter()
             .filter_map(|path| path.split_once(ITEM_KEY_MARK))
             .map(|(list_path, key)| format!("{list_path}{key}"))
-            .filter(|key| !read.contains(key))
+            .filter(|key| read.contains(key) == also_read)
             .collect();
         if keys.is_empty() {
             continue;
@@ -8148,6 +8173,30 @@ mod own_reads_tests_4258 {
         record_regroup_item_key(&regroup_args(), &mut still_skipped);
         assert!(still_skipped.is_empty());
         drop(outer);
+    }
+
+    #[test]
+    fn printed_item_key_reads_are_the_sort_keys_the_template_also_reads_4267() {
+        let source = "{% for u in users|dictsort:'get_username' %}{{ u.get_username }}{% endfor %}\
+                      {% for u in users|dictsortreversed:'email' %}{{ u.pk }}{% endfor %}\
+                      {% for g in groups %}{% for u in g.user_set.all|dictsort:'get_full_name' %}\
+                      {{ u.get_full_name }}{% endfor %}{% endfor %}";
+        let printed = super::extract_printed_item_key_reads(source).unwrap();
+        assert_eq!(
+            printed.get("users"),
+            Some(&vec!["get_username".to_string()])
+        );
+        assert_eq!(
+            printed.get("groups"),
+            Some(&vec!["user_set.all.get_full_name".to_string()])
+        );
+        let only = super::extract_item_key_only_reads(source).unwrap();
+        assert_eq!(only.get("users"), Some(&vec!["email".to_string()]));
+        assert!(
+            super::extract_printed_item_key_reads("{{ u.get_username }}")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

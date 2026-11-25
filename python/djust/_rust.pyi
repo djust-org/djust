@@ -491,6 +491,10 @@ def extract_item_key_only_reads(template: str) -> Dict[str, List[str]]:
     """The ``dictsort`` / ``regroup`` key paths nothing else in the template reads (#3919)."""
     ...
 
+def extract_printed_item_key_reads(template: str) -> Dict[str, List[str]]:
+    """The ``dictsort`` key paths something else in the template also reads (#4267)."""
+    ...
+
 def extract_own_reads(template: str) -> Dict[str, List[str]]:
     """The paths each context name reads itself, without a ``{% for %}`` loop
     variable's reads filed under its iterable (#4258)."""
@@ -1575,6 +1579,7 @@ __all__ = [
     "fast_json_dumps",
     "extract_template_variables",
     "extract_item_key_only_reads",
+    "extract_printed_item_key_reads",
     "extract_own_reads",
     "compute_template_hash",
     "crosses_as_encoded",

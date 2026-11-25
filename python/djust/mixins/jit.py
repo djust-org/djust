@@ -13,6 +13,7 @@ from .._render_caches import render_caches_enabled
 from .._rust import (
     extract_item_key_only_reads,
     extract_own_reads,
+    extract_printed_item_key_reads,
     extract_template_variables,
 )
 from ..optimization.codegen import (
@@ -23,7 +24,7 @@ from ..optimization.codegen import (
     generate_serializer_code,
 )
 from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-from ..serialization import CALLED_KEYS_KEY, model_identity, normalize_django_value
+from ..serialization import CalledName, model_identity, normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
 
 logger = logging.getLogger(__name__)
@@ -276,6 +277,125 @@ def _item_key_only_reads(template_content: str) -> dict:
         _item_key_only_cache.clear()
     _item_key_only_cache[content_hash] = result
     return result
+
+
+_printed_item_key_cache: Dict[str, dict] = {}
+
+
+def _printed_item_key_reads(template_content: str) -> dict:
+    """``extract_printed_item_key_reads`` by content hash, ``{}`` when it refuses (#4267)."""
+    content_hash = _template_hash(template_content)
+    try:
+        return _printed_item_key_cache[content_hash]
+    except KeyError:
+        pass
+    try:
+        result = dict(extract_printed_item_key_reads(template_content))
+    except Exception:  # noqa: BLE001 — the paths extraction refuses the same template
+        result = {}
+    if len(_printed_item_key_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
+        _printed_item_key_cache.clear()
+    _printed_item_key_cache[content_hash] = result
+    return result
+
+
+def _called_prefix(model_class: Any, key: str) -> Optional[str]:
+    """The leading part of sort key *key* that names a method of the row, if any (#4267).
+
+    ``get_username`` and ``get_username.upper`` both give ``get_username``; a relation's
+    rows are followed (``user_set.all.get_full_name``), and the manager itself
+    (``user_set`` before ``.all``) is a step, not a method key.
+    """
+    parts = key.split(".")
+    for end in range(1, len(parts) + 1):
+        if end < len(parts) and parts[end] == "all":
+            continue
+        prefix = ".".join(parts[:end])
+        if _names_a_callable(model_class, prefix):
+            return prefix
+    return None
+
+
+def called_sort_key_paths(
+    model_class: Any,
+    template_content: Optional[str],
+    variable_name: str,
+    key_variables: List[str] = (),  # type: ignore[assignment]
+    context: Any = None,
+    view: Any = None,
+) -> FrozenSet[str]:
+    """The row paths holding a called method that the template also sorts by (#4267).
+
+    A ``dictsort`` key the template also reads (``extract_printed_item_key_reads``), a dotted
+    key-only one, or the value of a ``dictsort:<variable>``, whose leading part names a method
+    of the row model.
+    Empty for every other template, which is what keeps their rows untouched.
+    """
+    if not template_content or model_class is None:
+        return frozenset()
+    keys = list(_paths_for_variable(_printed_item_key_reads(template_content), variable_name))
+    # A key-only path THROUGH a printed method (``dictsort:'get_username.upper'`` beside
+    # ``{{ u.get_username }}``): the row holds the method's part. A key-only method itself is
+    # not in the row (``drop_callable_sort_keys``), so filing it is a no-op.
+    keys.extend(
+        key
+        for key in _paths_for_variable(_item_key_only_reads(template_content), variable_name)
+        if "." in key
+    )
+    for variable in key_variables:
+        value = _lookup(context, variable) if context is not None else _MISSING
+        if value is _MISSING and view is not None:
+            value = _lookup(view, variable)
+        if isinstance(value, str) and value:
+            keys.append(value)
+    if not keys:
+        return frozenset()
+    found = (_called_prefix(model_class, key) for key in keys)
+    return frozenset(path for path in found if path)
+
+
+def _file_called_key(node: Any, parts: List[str]) -> None:
+    """Re-key ``parts[-1]`` of every row under ``parts`` as a :class:`CalledName`, in place
+    and in its place (a row keeps its key order)."""
+    if isinstance(node, list):
+        for item in node:
+            _file_called_key(item, parts)
+        return
+    if not isinstance(node, dict):
+        return
+    head = parts[0]
+    if len(parts) > 1:
+        _file_called_key(node.get(head), parts[1:])
+        return
+    if head not in node:
+        return
+    items = list(node.items())
+    node.clear()
+    node.update((CalledName(k) if k == head else k, v) for k, v in items)
+
+
+def mark_called_sort_keys(
+    rows: Any,
+    model_class: Any,
+    template_content: Optional[str],
+    variable_name: str,
+    key_variables: List[str] = (),  # type: ignore[assignment]
+    context: Any = None,
+    view: Any = None,
+) -> Any:
+    """*rows* with each :func:`called_sort_key_paths` key filed as a :class:`CalledName`.
+
+    One rule for every row producer (the Rust ``serialize_queryset``, the generated code,
+    the backend), applied to the rows they return, so they mark the same keys (#1646).
+    """
+    if not rows or not isinstance(rows, list):
+        return rows
+    paths = called_sort_key_paths(
+        model_class, template_content, variable_name, key_variables, context, view
+    )
+    for path in paths:
+        _file_called_key(rows, path.split("."))
+    return rows
 
 
 _queryset_method_roots_cache: Dict[str, FrozenSet[str]] = {}
@@ -631,6 +751,7 @@ def clear_template_source_caches() -> None:
     _template_hash_cache.clear()
     _variable_extraction_cache.clear()
     _item_key_only_cache.clear()
+    _printed_item_key_cache.clear()
 
 
 def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]]:
@@ -1484,9 +1605,7 @@ class JITMixin:
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)
             expected_keys = expected_row_keys(paths_for_var)
-            # The called-method marker is not a path's key (#4267): counted, it would hide a
-            # missing one.
-            if result and len(result[0]) - (CALLED_KEYS_KEY in result[0]) < expected_keys:
+            if result and len(result[0]) < expected_keys:
                 # Heuristic: if the first item has fewer top-level keys than expected,
                 # Rust likely can't access some paths (e.g. @property). A nullable FK
                 # on item 0 could cause a false positive, but the codegen fallback is
@@ -1527,7 +1646,18 @@ class JITMixin:
                 )
                 if result:
                     logger.debug("[JIT DEBUG] First item keys: %s", list(result[0].keys()))
-            return result
+            return cast(
+                List[Any],
+                mark_called_sort_keys(
+                    result,
+                    model_class,
+                    template_content,
+                    variable_name,
+                    key_variables,
+                    context,
+                    self,
+                ),
+            )
 
         except Exception as e:
             # Raises (2.0); it used to log and re-serialize every row through
@@ -1596,7 +1726,12 @@ class JITMixin:
                 ),
                 initial_caches,
             )
-        return rows
+        return cast(
+            List[Any],
+            mark_called_sort_keys(
+                rows, model_class, template_content, variable_name, key_variables, context, self
+            ),
+        )
 
     def _jit_serialize_model(
         self,

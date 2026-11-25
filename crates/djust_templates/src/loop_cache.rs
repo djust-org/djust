@@ -762,12 +762,6 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
             14u8.hash(hasher);
             s.hash(hasher);
         }
-        // Tag 15 (#4267): a row's called-method names change what `dictsort` answers, so a
-        // fragment cached for a row that carries them must not be served for one that does not.
-        Value::CalledKeys(names) => {
-            15u8.hash(hasher);
-            names.hash(hasher);
-        }
         Value::String(s) => {
             4u8.hash(hasher);
             s.hash(hasher);

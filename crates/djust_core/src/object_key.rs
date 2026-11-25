@@ -94,6 +94,14 @@ const NUM_TAG: u8 = 0xE2;
 #[derive(Debug, Clone)]
 pub enum ObjectKey {
     Str(String),
+    /// A `str` key whose value is a CALLED method's result (#4267): a path-JIT row of a
+    /// template that sorts by a method (`dictsort:'get_username'`) and also prints it
+    /// (`{{ u.get_username }}`). Django's `dictsort` never calls a method key, so it orders
+    /// bound methods and renders `""`; this key tells the engine's `dictsort` the same thing
+    /// (`value_into_sort_row_pyobject`). Everywhere else it IS a `Str`: it hashes, compares,
+    /// orders, prints and serializes as one. From Python it is a
+    /// `djust.serialization.CalledName` key, a `str` subclass only the JIT builds.
+    Method(String),
     Int(i64),
     Bool(bool),
     None,
@@ -146,7 +154,7 @@ impl ObjectKey {
     /// serialization, and the `__str__` / tag lookups.
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            ObjectKey::Str(s) => Some(s.as_str()),
+            ObjectKey::Str(s) | ObjectKey::Method(s) => Some(s.as_str()),
             _ => None,
         }
     }
@@ -155,7 +163,7 @@ impl ObjectKey {
     /// emits into the template.
     pub fn to_display_string(&self) -> Cow<'_, str> {
         match self {
-            ObjectKey::Str(s) => Cow::Borrowed(s.as_str()),
+            ObjectKey::Str(s) | ObjectKey::Method(s) => Cow::Borrowed(s.as_str()),
             ObjectKey::Other { display, .. } => Cow::Borrowed(display.as_str()),
             _ => Cow::Owned(crate::Value::from(self.clone()).to_string()),
         }
@@ -177,7 +185,7 @@ impl ObjectKey {
 impl From<ObjectKey> for crate::Value {
     fn from(key: ObjectKey) -> Self {
         match key {
-            ObjectKey::Str(s) => crate::Value::String(s),
+            ObjectKey::Str(s) | ObjectKey::Method(s) => crate::Value::String(s),
             ObjectKey::Int(n) => crate::Value::Integer(n),
             ObjectKey::Bool(b) => crate::Value::Bool(b),
             ObjectKey::None => crate::Value::None,
@@ -204,9 +212,6 @@ impl ObjectKey {
         Some(match value {
             crate::Value::String(s) | crate::Value::SafeString(s) | crate::Value::ModelName(s) => {
                 ObjectKey::Str(s.clone())
-            }
-            crate::Value::CalledKeys(names) => {
-                ObjectKey::Tuple(names.iter().cloned().map(ObjectKey::Str).collect())
             }
             crate::Value::Integer(n) => ObjectKey::Int(*n),
             crate::Value::Bool(b) => ObjectKey::Bool(*b),
@@ -297,7 +302,10 @@ impl PartialEq for ObjectKey {
             (Some(a), Some(b)) => a == b,
             (Some(_), None) | (None, Some(_)) => false,
             (None, None) => match (self, other) {
-                (ObjectKey::Str(a), ObjectKey::Str(b)) => a == b,
+                (
+                    ObjectKey::Str(a) | ObjectKey::Method(a),
+                    ObjectKey::Str(b) | ObjectKey::Method(b),
+                ) => a == b,
                 (ObjectKey::None, ObjectKey::None) => true,
                 // By `repr`, which is the more discriminating of the two: two
                 // distinct objects can share a `str()`.
@@ -319,7 +327,7 @@ impl ObjectKey {
     /// ordered against each other.
     fn type_name(&self) -> &'static str {
         match self {
-            ObjectKey::Str(_) => "<class 'str'>",
+            ObjectKey::Str(_) | ObjectKey::Method(_) => "<class 'str'>",
             ObjectKey::Int(_) | ObjectKey::BigInt(_) => "<class 'int'>",
             ObjectKey::Bool(_) => "<class 'bool'>",
             ObjectKey::None => "<class 'NoneType'>",
@@ -351,7 +359,10 @@ impl Ord for ObjectKey {
             return a.total_cmp(&b);
         }
         match (self, other) {
-            (ObjectKey::Str(a), ObjectKey::Str(b)) => a.cmp(b),
+            (
+                ObjectKey::Str(a) | ObjectKey::Method(a),
+                ObjectKey::Str(b) | ObjectKey::Method(b),
+            ) => a.cmp(b),
             (ObjectKey::Tuple(a), ObjectKey::Tuple(b)) => a.cmp(b),
             (ObjectKey::None, ObjectKey::None) => std::cmp::Ordering::Equal,
             _ => self
@@ -390,7 +401,7 @@ impl Hash for ObjectKey {
         match self {
             // NO tag — this is what makes `map.get("x")` find the bucket that
             // `ObjectKey::Str("x")` was inserted into. See the module docs.
-            ObjectKey::Str(s) => s.hash(state),
+            ObjectKey::Str(s) | ObjectKey::Method(s) => s.hash(state),
             ObjectKey::None => {
                 state.write_u8(NON_STR_TAG);
                 state.write_u8(2);
@@ -432,13 +443,13 @@ impl Hash for ObjectKey {
 // behave exactly as it did.
 impl indexmap::Equivalent<ObjectKey> for str {
     fn equivalent(&self, key: &ObjectKey) -> bool {
-        matches!(key, ObjectKey::Str(s) if s.as_str() == self)
+        matches!(key, ObjectKey::Str(s) | ObjectKey::Method(s) if s.as_str() == self)
     }
 }
 
 impl indexmap::Equivalent<ObjectKey> for String {
     fn equivalent(&self, key: &ObjectKey) -> bool {
-        matches!(key, ObjectKey::Str(s) if s == self)
+        matches!(key, ObjectKey::Str(s) | ObjectKey::Method(s) if s == self)
     }
 }
 
@@ -572,5 +583,32 @@ mod tests {
             },
             ObjectKey::Str("x".into())
         );
+    }
+
+    /// #4267: a called method's key is a `Str` to everything but `dictsort`: one bucket, equal,
+    /// the same text, the same order, the same wire spelling.
+    #[test]
+    fn a_method_key_is_a_str_everywhere() {
+        let method = ObjectKey::Method("get_username".into());
+        let column = ObjectKey::Str("get_username".into());
+        assert_eq!(method, column);
+        assert_eq!(method.cmp(&column), std::cmp::Ordering::Equal);
+        assert_eq!(method.as_str(), Some("get_username"));
+        assert_eq!(method.to_display_string(), "get_username");
+        assert_eq!(method.py_repr(), column.py_repr());
+        assert_eq!(method.type_name(), "<class 'str'>");
+        assert_eq!(
+            serde_json::to_string(&method).unwrap(),
+            serde_json::to_string(&column).unwrap()
+        );
+        let mut m: IndexMap<ObjectKey, i32> = IndexMap::new();
+        m.insert(method.clone(), 1);
+        assert_eq!(m.get("get_username"), Some(&1));
+        assert_eq!(m.get(&column), Some(&1));
+        assert_eq!(m.get(&"get_username".to_string()), Some(&1));
+        assert!(matches!(
+            crate::Value::from(method),
+            crate::Value::String(s) if s == "get_username"
+        ));
     }
 }

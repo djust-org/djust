@@ -428,6 +428,7 @@ class DjustTemplate:
             # Extract variable paths from template
             from djust.mixins.jit import (
                 drop_callable_sort_keys,
+                mark_called_sort_keys,
                 resolve_variable_keys,
                 split_variable_keys,
                 whole_rows_without_callable_sort_keys,
@@ -502,7 +503,12 @@ class DjustTemplate:
             logger.debug(
                 "[JIT] Serialized %s objects for '%s' using Rust", len(result), variable_name
             )
-            return result
+            return cast(
+                list,
+                mark_called_sort_keys(
+                    result, model_class, source, variable_name, key_variables, context
+                ),
+            )
 
         except Exception as e:
             # Graceful fallback

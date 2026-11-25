@@ -5771,17 +5771,6 @@ fn row_identity(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     })
 }
 
-/// `djust.serialization.CalledKeys`, resolved once per process (#4267).
-fn row_called_keys(py: Python<'_>) -> PyResult<&Py<PyAny>> {
-    static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
-    CLASS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
-        Ok(py
-            .import("djust.serialization")?
-            .getattr("CalledKeys")?
-            .unbind())
-    })
-}
-
 /// `djust.serialization.value_text`, resolved once per process (#4269 review).
 fn row_value_text(py: Python<'_>) -> PyResult<&Py<PyAny>> {
     static FN: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
@@ -5832,10 +5821,6 @@ fn serialize_object_with_paths(
             result.set_item(ROW_TEXT_KEY, text)?;
         }
     }
-
-    // The names whose value is a called method's result, filed beside them for `dictsort`
-    // (#4267, `djust.serialization.CalledKeys`).
-    let mut called: Vec<&str> = Vec::new();
 
     for (attr_name, node) in tree {
         if !permitted.contains(attr_name) {
@@ -5892,10 +5877,6 @@ fn serialize_object_with_paths(
                             // Method call succeeded - use the result
                             result
                                 .set_item(attr_name, queryset_template_value(&method_result, 0)?)?;
-                            // A relation's `all` is its rows, not a sort key (#4267).
-                            if attr_name != "all" {
-                                called.push(attr_name);
-                            }
                         }
                         Err(err) => {
                             // A call that raises something other than the
@@ -6028,15 +6009,6 @@ fn serialize_object_with_paths(
                 result.set_item(attr_name, PyList::new(py, list_results)?)?;
             }
         }
-    }
-
-    if !called.is_empty() {
-        called.sort_unstable();
-        let names = PyTuple::new(py, called)?;
-        result.set_item(
-            djust_core::CALLED_KEYS_KEY,
-            row_called_keys(py)?.bind(py).call1((names,))?,
-        )?;
     }
 
     Ok(result.into_any().unbind())
@@ -7542,6 +7514,18 @@ fn extract_item_key_only_reads_py(py: Python, template: String) -> PyResult<Py<P
     })
 }
 
+/// The item-key reads (`dictsort:'k'`) something else in the template also reads, per root
+/// (#4267). See `djust_templates::parser::extract_printed_item_key_reads`.
+#[pyfunction(name = "extract_printed_item_key_reads")]
+fn extract_printed_item_key_reads_py(py: Python, template: String) -> PyResult<Py<PyAny>> {
+    guard_panic("extract_printed_item_key_reads_py", move || {
+        paths_map_to_py(
+            py,
+            djust_templates::extract_printed_item_key_reads(&template),
+        )
+    })
+}
+
 /// The paths each context name reads itself, without a `{% for %}` loop
 /// variable's reads filed under its iterable (#4258). See
 /// `djust_templates::parser::extract_own_reads`.
@@ -7795,6 +7779,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // JIT auto-serialization
     m.add_function(wrap_pyfunction!(extract_template_variables_py, m)?)?;
     m.add_function(wrap_pyfunction!(extract_item_key_only_reads_py, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_printed_item_key_reads_py, m)?)?;
     m.add_function(wrap_pyfunction!(extract_own_reads_py, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_queryset_py, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_context_py, m)?)?;

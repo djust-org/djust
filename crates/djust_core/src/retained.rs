@@ -23,7 +23,9 @@ pub fn table_bytes(capacity: usize, entry: usize) -> usize {
 
 fn key_bytes(key: &ObjectKey) -> usize {
     match key {
-        ObjectKey::Str(s) | ObjectKey::Decimal(s) | ObjectKey::BigInt(s) => s.capacity(),
+        ObjectKey::Str(s) | ObjectKey::Method(s) | ObjectKey::Decimal(s) | ObjectKey::BigInt(s) => {
+            s.capacity()
+        }
         ObjectKey::Tuple(items) => {
             items.capacity() * size_of::<ObjectKey>() + items.iter().map(key_bytes).sum::<usize>()
         }
@@ -51,10 +53,6 @@ impl Value {
             | Value::BigInt(s) => s.capacity(),
             Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
                 items_bytes(items)
-            }
-            Value::CalledKeys(names) => {
-                names.capacity() * size_of::<String>()
-                    + names.iter().map(String::capacity).sum::<usize>()
             }
             Value::NamedTuple {
                 name,
