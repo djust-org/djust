@@ -3141,8 +3141,8 @@ fn settle_paths(paths: &mut Vec<String>) {
 ///
 /// The index is kept only where it is the WHOLE story of that `all`: every path
 /// through it reads an index and then a field of the row there. Any other read
-/// of the same `all` (a loop over it, `|length`, `.count`, an item key, or the
-/// indexed row printed whole, `{{ u.groups.all.0 }}`) needs the rows as a list,
+/// of the same `all` (a loop over it, `|length`, `.count`, an item key) needs the
+/// rows as a list,
 /// and a list and an indexed read cannot share one path-tree node, so the
 /// index is dropped there as before. Not for an `all` read straight off the
 /// root (`{{ qs.all.0.name }}`): a top-level QuerySet's own `all` is answered
@@ -3188,6 +3188,16 @@ fn settle_index_segments(paths: &mut Vec<String>) {
             }
         }
         if refused.is_empty() {
+            // The row at a kept index read WHOLE (`{{ u.groups.all.0 }}`,
+            // #4326) is its text: `groups.all.0.__str__`, which the serializers
+            // answer with the row's identity map, as for `{{ g }}` in a loop.
+            for path in paths.iter_mut() {
+                let segments: Vec<&str> = path.split('.').collect();
+                if segments.len() >= 3 && after_all(&segments, segments.len() - 1) {
+                    path.push('.');
+                    path.push_str(ROW_TEXT_PATH);
+                }
+            }
             return;
         }
         for path in paths.iter_mut() {
@@ -3208,7 +3218,7 @@ fn settle_index_segments(paths: &mut Vec<String>) {
 }
 
 /// Does `path` read the `all` at `prefix` other than as "an index, then a field
-/// of the row there"? (See [`settle_index_segments`].)
+/// of the row there, or the row there whole"? (See [`settle_index_segments`].)
 fn reads_all_unindexed(path: &str, prefix: &str) -> bool {
     if path == prefix {
         return true;
@@ -3219,9 +3229,7 @@ fn reads_all_unindexed(path: &str, prefix: &str) -> bool {
     else {
         return false;
     };
-    let mut segments = rest.split('.');
-    let indexed = segments.next().is_some_and(is_index_segment);
-    !indexed || segments.next().is_none()
+    !rest.split('.').next().is_some_and(is_index_segment)
 }
 
 fn drop_index_segments(paths: &mut Vec<String>) {
@@ -3856,6 +3864,23 @@ fn extract_from_nodes(
                 let mut body = HashMap::new();
                 extract_from_nodes(nodes, &mut body);
                 for (name, expr) in assignments {
+                    // `{% with n=u.groups.all|length %}` binds a COUNT (#4326):
+                    // a length read of the relation, and what the body reads
+                    // off `n` is read off an integer, not the relation.
+                    let parts = crate::filter_lexer::split_pipes(expr);
+                    let head = parts.first().copied().unwrap_or(expr).trim();
+                    if is_relation_all_head(head)
+                        && parts.get(1).is_some_and(|spec| {
+                            crate::filter_lexer::scan_filter_spec(spec.trim()).0 == "length"
+                        })
+                    {
+                        let mut local = HashMap::new();
+                        extract_from_operand(expr, &mut local);
+                        file_length_read(head, &mut local);
+                        merge_without_whole_reads(local, variables);
+                        body.remove(name);
+                        continue;
+                    }
                     // Binding is not a read of the value whole: what the body
                     // does with the alias decides that, below (#3911).
                     extract_without_whole_reads(expr, variables);
@@ -8375,15 +8400,6 @@ mod own_reads_tests_4258 {
             ),
             strs(&["groups.all", "groups.all.id", "groups.all.name"])
         );
-        // The row at the index printed whole.
-        assert_eq!(
-            full_paths("{{ u.groups.all.0 }}{{ u.groups.all.0.name }}", "u"),
-            strs(&["groups.all", "groups.all.name"])
-        );
-        assert_eq!(
-            full_paths("{{ u.groups.all.0 }}", "u"),
-            strs(&["groups.all"])
-        );
         // A method or a length read of the same `all`.
         assert_eq!(
             full_paths("{{ u.groups.all.0.name }}{{ u.groups.all.count }}", "u"),
@@ -8483,5 +8499,65 @@ mod own_reads_tests_4258 {
         let t = "{{ u.groups.all|length }}";
         assert!(extract_item_key_only_reads(t).unwrap().is_empty());
         assert_eq!(paths(t, "u"), Some(strs(&["groups.all.__len__"])));
+    }
+
+    // #4326: the row at a kept index read whole files its text.
+    #[test]
+    fn the_row_at_an_index_read_whole_files_its_text_4326() {
+        assert_eq!(
+            full_paths("{{ u.groups.all.0 }}{{ u.groups.all.0.name }}", "u"),
+            strs(&["groups.all.0.__str__", "groups.all.0.name"])
+        );
+        assert_eq!(
+            full_paths("{{ u.groups.all.0 }}", "u"),
+            strs(&["groups.all.0.__str__"])
+        );
+        assert_eq!(
+            full_paths("{% if u.groups.all.1 %}Y{% endif %}", "u"),
+            strs(&["groups.all.1.__str__"])
+        );
+        // Beside a loop the rows are a list, as before.
+        assert_eq!(
+            full_paths(
+                "{{ u.groups.all.0 }}{% for g in u.groups.all %}{{ g.id }}{% endfor %}",
+                "u"
+            ),
+            strs(&["groups.all", "groups.all.id"])
+        );
+    }
+
+    // #4326: `{% with n=u.groups.all|length %}` binds a count.
+    #[test]
+    fn a_with_bound_length_is_a_length_read_4326() {
+        assert_eq!(
+            full_paths(
+                "{% with n=u.groups.all|length %}{{ n }}{% if n > 1 %}M{% endif %}{% endwith %}",
+                "u"
+            ),
+            strs(&["groups.all.__len__"])
+        );
+        assert_eq!(
+            full_paths(
+                "{% for u in users %}{% with n=u.groups.all|length %}{{ n }}{% endwith %}{% endfor %}",
+                "users"
+            ),
+            strs(&["groups.all.__len__"])
+        );
+        // Beside a row read of the same `all`, the plain list.
+        assert_eq!(
+            full_paths(
+                "{% with n=u.groups.all|length %}{{ n }}{% endwith %}{{ u.groups.all|join:',' }}",
+                "u"
+            ),
+            strs(&["groups.all"])
+        );
+        // An alias of the relation itself is unchanged.
+        assert_eq!(
+            full_paths(
+                "{% with gs=u.groups.all %}{{ gs|length }}{% endwith %}",
+                "u"
+            ),
+            strs(&["groups.all"])
+        );
     }
 }
