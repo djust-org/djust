@@ -91,7 +91,7 @@ describe('#2971 clear_draft from an event', () => {
         );
         window.localStorage.setItem(
             'djust_draft_post_1',
-            JSON.stringify({ data: { title: 'unsent' }, timestamp: Date.now() }),
+            JSON.stringify({ data: { title: 'unsent' }, timestamp: Date.now(), format: 2 }),
         );
         return { window, document };
     }
@@ -115,7 +115,7 @@ describe('#2971 clear_draft from an event', () => {
         window.djust.reinitAfterDOMUpdate();
         // The user starts a new draft; an unrelated update arrives while the
         // flag is still on the page.
-        window.localStorage.setItem('djust_draft_post_1', '{"data":{"title":"new"}}');
+        window.localStorage.setItem('djust_draft_post_1', '{"data":{"title":"new"},"format":2}');
         window.djust.reinitAfterDOMUpdate();
         expect(window.localStorage.getItem('djust_draft_post_1')).not.toBeNull();
         // The server's next render drops the flag; a later one sets it again.

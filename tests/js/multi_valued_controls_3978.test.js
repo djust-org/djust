@@ -87,14 +87,15 @@ describe('draft manager keeps a group as a list (#3978)', () => {
         expect($('input[name="title"]').value).toBe('T');
     });
 
-    it('a draft saved before #3978 drops its group and radio entries, keeps the rest', () => {
+    it('a draft saved before #3978 is discarded whole, not partly restored (#4207)', () => {
         // The old format stored the LAST radio's value whether checked or not, and one box's
-        // boolean for a whole group: restoring either would pick the wrong choice.
-        const { $, $$ } = draftPage({ tags: true, size: 'm', title: 'Old', agree: true }, null);
+        // boolean for a whole group: nothing in it says what was chosen.
+        const { $, $$, win } = draftPage({ tags: true, size: 'm', title: 'Old', agree: true }, null);
         expect(checked($$('input[name="tags"]'))).toEqual([]);
         expect(checked($$('input[name="size"]'))).toEqual([]);
-        expect($('input[name="title"]').value).toBe('Old');
-        expect($('input[name="agree"]').checked).toBe(true); // a lone checkbox was never flattened
+        expect($('input[name="title"]').value).not.toBe('Old');
+        expect($('input[name="agree"]').checked).toBe(false);
+        expect(win.localStorage.getItem('djust_draft_k')).toBeNull();
     });
 
     it('a new save writes the current format', async () => {
