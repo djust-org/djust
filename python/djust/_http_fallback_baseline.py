@@ -166,7 +166,13 @@ def _holds_other_views(view: Any) -> bool:
     getter = getattr(view, "_get_all_child_views", None)
     if callable(getter) and getter():
         return True
-    if getattr(view, "_explicit_child_vdom_tracking", False):
+    # On Django 6 every page that goes through the authenticated-root path sets
+    # the tracking flag on its first diff render, children or not; it is the
+    # bindings it holds that say a child is on the page.
+    if getattr(view, "_explicit_child_vdom_tracking", False) and (
+        getattr(view, "_explicit_child_vdom_bindings", None)
+        or getattr(view, "_explicit_child_render_regions", None)
+    ):
         return True
     return bool(view.__dict__.get("_http_lazy_containers") or view.__dict__.get("_lazy_thunks"))
 
