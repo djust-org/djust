@@ -13,7 +13,6 @@ ledger (``tests/legacy_exposure_ledger.py``) scans the test files for it.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 import threading
 import warnings
@@ -323,13 +322,13 @@ def test_a_thread_started_inside_the_permit_does_not_inherit_it():
 
 
 def test_only_the_refusals_and_the_inventory_command_name_the_permit():
-    listed = subprocess.run(
-        ["git", "grep", "-l", "upgrade_inspection", "--", "python/djust", ":!python/djust/tests"],
-        cwd=REPO,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.split()
+    package = REPO / "python" / "djust"
+    listed = [
+        path.relative_to(REPO).as_posix()
+        for path in package.rglob("*.py")
+        if "tests" not in path.relative_to(package).parts
+        and "upgrade_inspection" in path.read_text(encoding="utf-8")
+    ]
     assert set(listed) == {
         "python/djust/_removed_settings.py",
         "python/djust/live_view.py",
