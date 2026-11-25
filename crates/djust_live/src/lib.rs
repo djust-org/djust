@@ -2651,6 +2651,9 @@ impl RustLiveViewBackend {
                                 if !node.is_text() {
                                     return None;
                                 }
+                                if newline_change_needs_parse(old_raw, new_raw) {
+                                    return None;
+                                }
                                 let old_text = text_node_value(vdom, path, old_raw)?;
                                 let new_text = text_node_value(vdom, path, new_raw)?;
                                 if is_html_whitespace_only(&old_text)
@@ -6230,6 +6233,15 @@ fn text_node_value(vdom: &VNode, path: &[usize], raw: &str) -> Option<String> {
     decode_text_entities(raw).map(std::borrow::Cow::into_owned)
 }
 
+/// Whether swapping a text node's raw HTML `old_raw` for `new_raw` could
+/// parse to something other than `new_raw` decoded: the parser drops a newline
+/// that opens the first text of `<pre>`, `<listing>` and `<textarea>`, and
+/// turns CR and CRLF into LF. The parse-skipping paths cannot see the parent,
+/// so they refuse a change in the leading newline, and any CR (#4325).
+fn newline_change_needs_parse(old_raw: &str, new_raw: &str) -> bool {
+    old_raw.starts_with('\n') != new_raw.starts_with('\n') || new_raw.contains('\r')
+}
+
 /// Decode the character references a text node's raw HTML may carry, the way
 /// the HTML parser would, for the parse-skipping fast paths (#2898).
 ///
@@ -6450,6 +6462,9 @@ fn try_text_region_fast_path(
     new_raw.push_str(&old_raw[..offset_in_text]);
     new_raw.push_str(new_mid);
     new_raw.push_str(&old_raw[end_in_raw..]);
+    if newline_change_needs_parse(old_raw, &new_raw) {
+        return None;
+    }
     let new_text = text_node_value(old_vdom, &path, &new_raw)?;
 
     // #2999: whether a whitespace-only text node survives the parse depends on
@@ -6577,8 +6592,8 @@ fn try_multi_text_region_fast_path(
             if changes.len() == MAX_TEXT_REGIONS {
                 return None;
             }
-            if new_raw.bytes().any(|b| matches!(b, b'>' | b'\r' | b'\0'))
-                || old_raw.starts_with('\n') != new_raw.starts_with('\n')
+            if new_raw.bytes().any(|b| matches!(b, b'>' | b'\0'))
+                || newline_change_needs_parse(old_raw, new_raw)
             {
                 return None;
             }

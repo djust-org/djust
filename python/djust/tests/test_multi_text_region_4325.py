@@ -50,6 +50,7 @@ VALUES = [
     "été",
     "tab\tsep",
     "&amp; literal",
+    "cr\r\nlf",
 ]
 
 
@@ -203,15 +204,31 @@ def test_text_and_attribute_change_together_take_the_full_parse() -> None:
 
 
 def test_pre_and_textarea_text_match_the_oracle() -> None:
-    # A leading newline is left out: the parser drops it right after
-    # <pre>/<textarea>, and the older FRAGMENT path (1.0) sends it anyway,
-    # a pre-existing gap outside this path (reported on #4325). This path
-    # refuses a leading-newline change itself (see the edge-value test).
     pair = _Pair(_state(_rows(2)))
     for pre, note in [("p2", "n2"), ("p3\nmid", "n3\n"), ("p5 &", "n5 <")]:
         pair.step({"pre": pre, "note": note, "title": pre + note}, ["pre", "note", "title"])
         pair.step({"pre": pre + "!", "foot": note + "!"}, ["pre", "foot"])
     assert FAST_PATH_TEXT_REGION in pair.fast_paths or 1.0 in pair.fast_paths
+
+
+@pytest.mark.parametrize("key", ["pre", "note"])
+@pytest.mark.parametrize("keys_extra", [[], ["title"]])
+@pytest.mark.parametrize(
+    "before,after",
+    [("p2", "\np3"), ("\np2", "p3"), ("\np2", "\np3"), ("p2", "\r\np3"), ("p2", "a\rb")],
+)
+def test_leading_newline_in_pre_and_textarea_matches_the_full_parse(
+    key: str, keys_extra: list, before: str, after: str
+) -> None:
+    # The parser drops a newline that opens <pre>/<textarea> text and turns
+    # CR into LF. The fragment path (alone, or with the title changing too)
+    # and the text-region paths used to send the raw "\n..." as SetText.
+    pair = _Pair(_state(_rows(2), **{key: before}))
+    updates = {key: after}
+    for extra in keys_extra:
+        updates[extra] = "changed"
+    pair.step(updates, [key] + keys_extra)
+    pair.step({key: after + "!"}, [key])
 
 
 @pytest.mark.parametrize("seed", range(40))
@@ -240,11 +257,7 @@ def test_random_turns_match_the_full_parse(seed: int) -> None:
                 keys.append("rows")
             else:
                 key = rng.choice(["title", "foot", "pre", "note"])
-                value = rng.choice(VALUES)
-                if key in ("pre", "note"):
-                    # See test_pre_and_textarea_text_match_the_oracle.
-                    value = value.lstrip("\n")
-                updates[key] = value
+                updates[key] = rng.choice(VALUES)
                 keys.append(key)
         pair.step(updates, sorted(set(keys)))
     # The sequence must actually exercise the new path, not only fall back.
