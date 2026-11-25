@@ -64,7 +64,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s child completion', trans
         }
     });
 
-    it('acknowledges a matching no-ref child event', async () => {
+    it('applies a no-ref child reply without settling the pending event (#4309)', async () => {
         const dom = environment();
         try {
             const { window } = dom;
@@ -77,50 +77,13 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s child completion', trans
             transport.lastTriggerElement = button;
             await transport.handleMessage({
                 type: 'embedded_update', view_id: 'right', event_name: 'other',
-                html: '<button dj-click="other" dj-loading.disable>done</button>',
-            });
-            expect(loading.pendingEvents.has('other')).toBe(false);
-            expect(transport.lastEventName).toBeNull();
-            expect(window.document.querySelector('button').disabled).toBe(false);
-        } finally {
-            dom.window.close();
-        }
-    });
-
-    it('does not acknowledge a different no-ref event in the same child', async () => {
-        const dom = environment();
-        try {
-            const { window } = dom;
-            const transport = new window.djust[transportName]();
-            const button = window.document.querySelector('button');
-            transport.lastEventName = 'other';
-            transport.lastTriggerElement = button;
-            await transport.handleMessage({
-                type: 'embedded_update', view_id: 'right', event_name: 'earlier',
-                html: '<button dj-click="other" dj-loading.disable>done</button>',
-            });
-            expect(transport.lastEventName).toBe('other');
-            expect(transport.lastTriggerElement).toBe(button);
-        } finally {
-            dom.window.close();
-        }
-    });
-
-    it('acknowledges its no-ref event even when the morph removes the trigger', async () => {
-        const dom = environment();
-        try {
-            const { window } = dom;
-            const transport = new window.djust[transportName]();
-            const button = window.document.querySelector('button');
-            transport.lastEventName = 'other';
-            transport.lastTriggerElement = button;
-            await transport.handleMessage({
-                type: 'embedded_update', view_id: 'right', event_name: 'other',
                 html: '<p>Saved</p>',
             });
-            expect(button.isConnected).toBe(false);
-            expect(transport.lastEventName).toBeNull();
-            expect(transport.lastTriggerElement).toBeNull();
+            expect(window.document.querySelector('[data-djust-embedded="right"]').textContent)
+                .toBe('Saved');
+            expect(loading.pendingEvents.has('other')).toBe(true);
+            expect(transport.lastEventName).toBe('other');
+            expect(transport.lastTriggerElement).toBe(button);
         } finally {
             dom.window.close();
         }

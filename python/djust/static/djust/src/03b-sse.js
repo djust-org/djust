@@ -351,7 +351,6 @@ class LiveViewSSE {
             case 'html_update': {
                 const event = acknowledgeEventRequest(this, data);
                 await handleServerResponse(data, event?.eventName, event?.trigger, this);
-                completeLegacyAsyncBatches(this, data);
                 break;
             }
 

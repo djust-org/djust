@@ -73,25 +73,15 @@ function applyEmbeddedUpdate(data, transport) {
 async function handleEmbeddedResponse(data, transport) {
     // Capture ownership before morphing: the response may remove its trigger.
     const tracked = data.ref != null && _pendingEventOwners.get(data.ref) === transport;
-    const eventName = tracked ? _pendingEventNames.get(data.ref) : transport.lastEventName;
-    const trigger = tracked ? _pendingTriggerEls.get(data.ref) : transport.lastTriggerElement;
-    const owner = trigger && trigger.closest('[data-djust-embedded]');
-    const ownerId = owner && owner.getAttribute('data-djust-embedded');
     const applied = applyEmbeddedUpdate(data, transport);
     // A legitimate reply may arrive after its owner was removed. Settle its
     // own request rather than leaking the promise, but reject malformed frames.
     if (!applied && (!tracked || typeof data.view_id !== 'string' || !data.view_id ||
         typeof data.html !== 'string')) return false;
-    if (data.source === 'async') {
-        completeLegacyAsyncBatches(transport, data);
-        return true;
-    }
-    // No-ref SSE replies must match the pending element's scope. A reply for
-    // another child must not consume the most recently sent event's state.
-    if (!tracked && (ownerId !== data.view_id ||
-        (data.event_name && data.event_name !== eventName))) {
-        return true;
-    }
+    // Background results, released activity events (whose request the queueing
+    // noop settled) and the HTTP fallback (settled by its own request) answer
+    // no pending request by ref here (#4309).
+    if (!tracked || data.source === 'async') return true;
     const event = acknowledgeEventRequest(transport, data);
     if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
     if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {

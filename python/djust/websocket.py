@@ -61,7 +61,6 @@ from .websocket_utils import (
     get_handler_coerce_setting,
 )
 from .signals import full_html_update, liveview_server_error
-from .mixins.async_work import has_pending_async_work
 from ._view_lanes import ViewLane
 from ._view_slots import ViewSlot, valid_target_id
 from ._turn_ports import ConsumerTurnPort
@@ -1143,7 +1142,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
     async def _send_noop(
         self,
-        async_pending: bool = False,
+        async_batch: Optional[str] = None,
         ref: Optional[int] = None,
         snapshot_fields: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -1155,14 +1154,16 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         touching the DOM.
 
         Args:
-            async_pending: If True, tells the client to keep loading state active
-                because a start_async() callback is running in the background.
+            async_batch: The token of the background batch this turn started.
+                Sends ``async_pending`` with it, so the client keeps its loading
+                state until that batch's ``async_complete`` (#4309).
             ref: Event reference number echoed back from the client's request (#560).
             snapshot_fields: Session-bound snapshot refresh after a committed turn.
         """
         msg: Dict[str, Any] = {"type": "noop"}
-        if async_pending:
+        if async_batch:
             msg["async_pending"] = True
+            msg["async_batch"] = async_batch
         if ref is not None:
             msg["ref"] = ref
         msg.update(snapshot_fields or {})
@@ -1853,7 +1854,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         file_path: Optional[str] = None,
         event_name: Optional[str] = None,
         broadcast: bool = False,
-        async_pending: bool = False,
+        async_batch: Optional[str] = None,
         source: Optional[str] = None,
         ref: Optional[int] = None,
         parameter_contract_snapshot: Optional[Dict[str, Any]] = None,
@@ -1876,6 +1877,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             hotreload: Whether this is a hot reload update
             file_path: File path that triggered hot reload (if hotreload=True)
             event_name: Name of the event that triggered this update (for debug payload)
+            async_batch: The token of the background batch this turn started;
+                sent with ``async_pending`` (#4309).
             source: Update source tag for client-side event sequencing (#560).
                 Values: "tick" (periodic ticks), "broadcast" (server_push),
                 "async" (start_async completions), "event" (user-initiated).
@@ -1941,8 +1944,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     response["file"] = file_path
             if broadcast:
                 response["broadcast"] = True
-            if async_pending:
+            if async_batch:
                 response["async_pending"] = True
+                response["async_batch"] = async_batch
             if event_name:
                 response["event_name"] = event_name
             if source:
@@ -1968,8 +1972,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 response["reset_form"] = True
             if cache_request_id:
                 response["cache_request_id"] = cache_request_id
-            if async_pending:
+            if async_batch:
                 response["async_pending"] = True
+                response["async_batch"] = async_batch
             if event_name:
                 response["event_name"] = event_name
             if source:
@@ -2317,21 +2322,25 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 snapshot_fields = await runtime._explicit_event_snapshot(view)
         finally:
             self._end_explicit_turn(view)
-        if not committed:
+        if not committed or runtime is None:
             return
+
+        from ._async_batch import AsyncBatch
 
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
             # it is the single owner of that reset, #2834/#2847.)
-            has_async = has_pending_async_work(view)
+            # The answer advertises the captured batch by its token, which the
+            # client completes on ``async_complete`` (#4309).
+            async_batch = AsyncBatch(view)
             await self._flush_all_pending()
             await self._send_noop(
-                async_pending=has_async, ref=event_ref, snapshot_fields=snapshot_fields
+                async_batch=async_batch.token, ref=event_ref, snapshot_fields=snapshot_fields
             )
-            # Unconditional, like the runtime twin (#1887): ``has_async`` only
-            # drives the loading flag; this is what actually starts the work
-            # ``start_async`` queued (#2946). No-op when nothing is queued.
-            await self._dispatch_async_work()
+            # Unconditional, like the runtime twin (#1887): this is what
+            # actually starts the work ``start_async`` queued (#2946). No-op
+            # when nothing is queued.
+            runtime._dispatch_async_work(event_name, async_batch)
             return
 
         # Render + diff (mirrors the simpler arm of dispatch_event).
@@ -2372,7 +2381,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         if patches is not None:
             patch_list = fast_json_loads(patches) if patches else []
 
-        has_async = has_pending_async_work(view)
+        async_batch = AsyncBatch(view)
         if patch_list is not None:
             # Render-send: arm recovery so _recovery_version tracks this deferred
             # render's version (#1817). ``html`` is the pre-strip render.
@@ -2380,7 +2389,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 patches=patch_list,
                 version=self._next_version_armed(html),
                 event_name=event_name,
-                async_pending=has_async,
+                async_batch=async_batch.token,
                 source="event",
                 ref=event_ref,
                 timing={"render": _render_ms},
@@ -2415,13 +2424,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 html=html_content,
                 version=self._next_version_armed(recovery_html),
                 event_name=event_name,
-                async_pending=has_async,
+                async_batch=async_batch.token,
                 source="event",
                 ref=event_ref,
                 snapshot_fields=snapshot_fields,
             )
         # Unconditional for the same reason as the noop arm above (#2946).
-        await self._dispatch_async_work()
+        runtime._dispatch_async_work(event_name, async_batch)
 
     def _attach_debug_payload(
         self,

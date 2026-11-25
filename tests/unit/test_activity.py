@@ -262,7 +262,7 @@ def test_deferred_events_flush_in_same_round_trip():
     # the completion list will be [0, 1, 2] when flush returns.
     completions: list = []
 
-    async def _fake_dispatch(target_view, event_name, params):
+    async def _fake_dispatch(target_view, event_name, params, event_ref=None):
         # Yield once so a create_task-based (broken) implementation would
         # return from the flush before this line executes.
         await asyncio.sleep(0)

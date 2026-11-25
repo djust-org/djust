@@ -4619,7 +4619,7 @@ class ViewRuntime(RuntimeTurnPort):
             # Queued WITHOUT permission/rate-limit check (by design: per-handler
             # auth runs on dispatch via the lock-free re-dispatcher
             # ``_dispatch_single_event``). Per-activity cap bounds memory.
-            view._queue_deferred_activity_event(_activity_name, event_name, params)
+            view._queue_deferred_activity_event(_activity_name, event_name, params, event_ref)
             # No-op so the client clears its loading state. Mirrors the runtime's
             # skip-render noop shape (type/source/event_name/ref) so the client
             # can match the ack to its pending event (#560 sequencing).
@@ -5276,7 +5276,7 @@ class ViewRuntime(RuntimeTurnPort):
             and not target_view.is_activity_visible(activity)
             and not target_view._is_activity_eager(activity)
         ):
-            target_view._queue_deferred_activity_event(activity, event_name, params)
+            target_view._queue_deferred_activity_event(activity, event_name, params, event_ref)
             noop: Dict[str, Any] = {"type": "noop", "source": "event", "event_name": event_name}
             if event_ref is not None:
                 noop["ref"] = event_ref

@@ -9,6 +9,9 @@
  * Both frames are shapes the shipped client already handles; this pins that
  * lifecycle end to end through ``handleMessage`` so 1.2.1 needs no client
  * change.
+ *
+ * Since #4309 every ``async_pending`` carries its ``async_batch`` token, and the
+ * batch's ``async_complete`` frame is what ends the loading state.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -100,12 +103,13 @@ describe('async_pending loading lifecycle over the socket (#2963)', () => {
         ws.sendEvent('generate', {});
         const ref = sentMessages.filter(m => m.type === 'event')[0].ref;
 
-        await ws.handleMessage({ type: 'noop', ref, async_pending: true });
+        await ws.handleMessage({ type: 'noop', ref, async_pending: true, async_batch: 'b1' });
         expect(loading(dom)).toBe(true);
 
         await ws.handleMessage({
             type: 'patch', patches: [], version: 2, event_name: 'generate', source: 'async',
         });
+        await ws.handleMessage({ type: 'async_complete', async_batch: 'b1' });
         expect(loading(dom)).toBe(false);
     });
 
@@ -119,13 +123,14 @@ describe('async_pending loading lifecycle over the socket (#2963)', () => {
 
         await ws.handleMessage({
             type: 'patch', patches: [], version: 2, event_name: 'generate',
-            source: 'event', ref, async_pending: true,
+            source: 'event', ref, async_pending: true, async_batch: 'b2',
         });
         expect(loading(dom)).toBe(true);
 
         await ws.handleMessage({
             type: 'patch', patches: [], version: 3, event_name: 'generate', source: 'async',
         });
+        await ws.handleMessage({ type: 'async_complete', async_batch: 'b2' });
         expect(loading(dom)).toBe(false);
     });
 

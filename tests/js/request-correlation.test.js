@@ -274,20 +274,22 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         } finally { dom.window.close(); }
     });
 
-    it('accepts a legacy unreferenced reply only when ownership is unambiguous', async () => {
+    it('a reply without a ref settles no request, even the only one (#4309)', async () => {
         const {dom, transport, button, sent, send} = setup(name);
         try {
             let completed = 0;
             send().then(() => { completed += 1; });
-            send().then(() => { completed += 1; });
-            await transport.handleMessage({type: 'noop', event_name: 'save'});
+            for (const type of ['noop', 'patch', 'embedded_update']) {
+                await transport.handleMessage({type, event_name: 'save', patches: [],
+                    view_id: 'child', html: '<button id="save" dj-click="save" dj-loading.disable>Save</button>'});
+            }
             expect(completed).toBe(0);
-            expect(button.disabled).toBe(true);
+            expect(dom.window.document.querySelector('#save').disabled).toBe(true);
+            expect(transport.lastEventName).toBe('save');
             await transport.handleMessage({type: 'noop', ref: sent[0].ref});
             expect(completed).toBe(1);
-            await transport.handleMessage({type: 'noop', event_name: 'save'});
-            expect(completed).toBe(2);
-            expect(button.disabled).toBe(false);
+            expect(dom.window.document.querySelector('#save').disabled).toBe(false);
+            expect(transport.lastEventName).toBeNull();
         } finally { dom.window.close(); }
     });
 
@@ -305,14 +307,13 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         } finally { dom.window.close(); }
     });
 
-    it('completes legacy async_pending without a batch token', async () => {
-        const {dom, transport, button, sent, send} = setup(name);
+    it.each(['noop', 'patch'])('a %s with async_pending but no batch token leaves no loading stuck (#4309)', async type => {
+        const {dom, transport, button, sent, send, loading} = setup(name);
         try {
             send();
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref, async_pending: true});
-            expect(button.disabled).toBe(true);
-            await transport.handleMessage({type: 'patch', source: 'async', event_name: 'save', patches: []});
+            await transport.handleMessage({type, ref: sent[0].ref, async_pending: true, patches: []});
             expect(button.disabled).toBe(false);
+            expect(loading.pendingEvents.size).toBe(0);
         } finally { dom.window.close(); }
     });
 
