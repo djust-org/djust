@@ -6,8 +6,8 @@ different ``id="..."`` on every request, the page-POST fallback's render digest 
 matched, and the answer was always the whole page (#4108). A component built during a
 render (or ``mount()``) of a view now derives its id from the view, the phase, its own
 class and its position in that run; one built anywhere else keeps the random id. Review
-fixes: an id never repeats one the view still holds (B1), a mount-built id is the same on
-every request (S1), and two children of one class are told apart (S2).
+fixes: two children of one class are told apart (S2). The held-component and mount-built cases
+tested legacy views only (#4198): explicit views declare components at class level.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from djust import _component_ids
 from djust._held_rows import reading, recorded_render
 from djust.decorators import event_handler
 from djust.components.layout.navbar import NavbarComponent
-from djust.sync_turn import run_sync_step, sync_step
+from djust.sync_turn import run_sync_step
 from djust.tests.http_fallback_matrix import PAGE, meta_digest, post_event
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
@@ -64,36 +64,6 @@ class CountsWithNavbar(LiveView):
         self.count += 1
 
 
-class BuiltInMount(LiveView):
-    exposure_policy = "legacy"  # legacy subject: a component assigned in mount() / on the instance is held by legacy views only (explicit views declare components at class level)
-    template = PAGE % "{{ nav.render }}"
-
-    def mount(self, request, **kwargs):
-        self.nav = NavbarComponent(brand_name="m", items=[])
-
-
-class BuiltInMountAndRender(LiveView):
-    exposure_policy = "legacy"  # legacy subject: a component assigned in mount() / on the instance is held by legacy views only (explicit views declare components at class level)
-    template = PAGE % "{{ nav.render }}{{ other.render }}"
-
-    def mount(self, request, **kwargs):
-        self.nav = NavbarComponent(brand_name="m", items=[])
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["other"] = NavbarComponent(brand_name="r", items=[])
-        return context
-
-
-class BuiltTwiceInMount(LiveView):
-    exposure_policy = "legacy"  # legacy subject: a component assigned in mount() / on the instance is held by legacy views only (explicit views declare components at class level)
-    template = PAGE % "{{ first.render }}{{ second.render }}"
-
-    def mount(self, request, **kwargs):
-        self.first = NavbarComponent(brand_name="1", items=[])
-        self.second = NavbarComponent(brand_name="2", items=[])
-
-
 class BuiltInHandler(LiveView):
     exposure_policy = "explicit"
     template = PAGE % "x"
@@ -104,22 +74,6 @@ class BuiltInHandler(LiveView):
     @event_handler
     def build(self, **kwargs):
         self.__dict__.setdefault("built", []).append(NavbarComponent(items=[]))
-
-
-class LazyAttrs(LiveView):
-    """A component built on a later render and held beside the first (B1)."""
-
-    exposure_policy = "legacy"  # legacy subject: a component assigned on the instance is held by legacy views only (explicit views declare components at class level)
-    template = PAGE % "x"
-    show_b = False
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        if "a" not in self.__dict__:
-            self.a = NavbarComponent(items=[])
-        if self.show_b and "b" not in self.__dict__:
-            self.b = NavbarComponent(items=[])
-        return ctx
 
 
 class LazyCache(LiveView):
@@ -151,10 +105,7 @@ class Twin(LiveView):
 
 
 urlpatterns = [
-    path("n/mount-and-render/", BuiltInMountAndRender.as_view()),
-    path("n/mounted-twice/", BuiltTwiceInMount.as_view()),
     path("n/navbars/", WithNavbars.as_view()),
-    path("n/mounted/", BuiltInMount.as_view()),
     path("n/counts/", CountsWithNavbar.as_view()),
 ]
 
@@ -199,53 +150,12 @@ def test_components_built_outside_a_render_keep_random_ids():
     assert re.fullmatch(r"navbarcomponent_[0-9a-f]{8}", a.component_id)
 
 
-def test_a_component_built_in_mount_has_the_same_id_on_every_request():
-    """S1: ``mount()`` runs on every request, so its id is as stable as a render's, and it
-    can never equal the id a render builds for a component of the same class."""
-    first, second = _get("/n/mounted/"), _get("/n/mounted/")
-    assert len(_navbar_ids(first)) == 1
-    assert _navbar_ids(first) == _navbar_ids(second)
-    both = _get("/n/mount-and-render/")
-    mounted, rendered = _navbar_ids(both)
-    assert mounted != rendered
-    assert _navbar_ids(_get("/n/mount-and-render/")) == [mounted, rendered]
-
-
-def test_two_components_built_in_one_mount_get_distinct_ids():
-    first = _get("/n/mounted-twice/")
-    ids = _navbar_ids(first)
-    assert len(ids) == 2 and ids[0] != ids[1]
-    assert _navbar_ids(_get("/n/mounted-twice/")) == ids
-
-
 def test_a_component_built_in_a_handler_keeps_a_random_id():
     view = BuiltInHandler()
     view.build()
     run_sync_step(view, "event", view.build)
     run_sync_step(view, "event", view.build)
     assert len({c.component_id for c in view.built}) == len(view.built) == 3
-
-
-def test_a_mount_through_sync_step_is_numbered_without_a_wrapper():
-    """The websocket reaches mount through ``sync_step`` (``call_hook``); with no
-    ``sync_turn_wrapper`` it used to be a bare attribution wrapper."""
-    a, b = BuiltInMount(), BuiltInMount()
-    sync_step(a, "mount", a.mount)(None)
-    sync_step(b, "mount", b.mount)(None)
-    assert a.nav.component_id == b.nav.component_id
-    assert re.fullmatch(r"navbarcomponent_[0-9a-f]{8}", a.nav.component_id)
-
-
-def test_an_embedded_childs_mount_keeps_random_ids():
-    """A child has no ``view_id`` when it mounts, so two of one class would number alike."""
-    from djust.auth._login_required_middleware import mark_embedded
-
-    a, b = BuiltInMount(), BuiltInMount()
-    mark_embedded(a)
-    mark_embedded(b)
-    run_sync_step(a, "mount", a.mount, None)
-    run_sync_step(b, "mount", b.mount, None)
-    assert a.nav.component_id != b.nav.component_id
 
 
 def test_an_explicit_component_id_is_used_as_given():
@@ -279,16 +189,6 @@ def test_the_fallback_answers_with_patches_for_a_page_that_builds_a_navbar_per_r
 
 
 # ------------------------------------------------------------------ B1: held components
-
-
-def test_a_component_built_on_a_later_render_does_not_take_a_held_components_id():
-    view = LazyAttrs()
-    view.render_full_template()
-    view.show_b = True
-    view.render_full_template()
-    assert view.a.component_id != view.b.component_id
-    registry = getattr(view, "_components", None) or {}
-    assert len({view.a.component_id, view.b.component_id} | set(registry)) >= 2
 
 
 def test_lazily_cached_components_get_distinct_ids():

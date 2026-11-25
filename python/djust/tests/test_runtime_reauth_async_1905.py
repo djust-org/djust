@@ -1,17 +1,11 @@
-"""ADR-022 Iter 2 Phase 2.3a — reauth-on-event hook + async source reconcile +
-binary-framing confirm (#1905). The last 2.3a fold before the 2.3b flip.
+"""ADR-022 Iter 2 Phase 2.3a — async source reconcile + binary-framing confirm (#1905).
 
-Three sub-folds:
+The reauth-on-event sub-fold (``Transport.recheck_event_auth``, the ``reauth``
+built-in) tested a legacy mechanism and is gone (#4198): an explicit view
+authorizes every turn (``authorize_explicit_turn``), covered by
+``test_explicit_turn_reauth_4198.py`` and ``test_auth_refusal_codes_3319.py``.
 
-(1) ``Transport.recheck_event_auth(view) -> bool`` — the runtime port of the WS
-    per-event auth re-check (#1777, T3). Now the turn chain's ``reauth`` built-in
-    (ADR-044 D7); originally wired into ``_dispatch_event_inner`` at
-    the SAME point the WS bespoke handler does (after the view-mounted check,
-    BEFORE the handler). GOES LIVE for SSE (events route through
-    the runtime since Iter 1, #1887); WS keeps its own inline copy until the
-    Phase 2.3b flip. #291 multiplexed-path care: the runtime clears
-    ``view_instance`` UNCONDITIONALLY on a False return; the transport close is
-    owned + gated by the hook.
+Two sub-folds remain:
 
 (2) async ``source="async"`` reconcile — the runtime's ``_render_async_result``
     frames now carry ``source="async"`` to match the WS ``_run_async_work``
@@ -30,14 +24,13 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
-from djust.config import config
 from djust.decorators import event_handler
 from djust.runtime import ViewRuntime, WSConsumerTransport
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
@@ -50,44 +43,6 @@ ALLOWED_ORIGIN = "https://example.com"
 # --------------------------------------------------------------------------- #
 # Test views.
 # --------------------------------------------------------------------------- #
-
-
-_HANDLER_RAN = False
-
-
-class _PermSSEView(LiveView):
-    """A permission_required view used for the SSE per-event reauth path.
-
-    Owner-binding (Finding #24) gates by user pk, so a logged-OUT POSTer is
-    already refused at the endpoint. The reauth gate covers the DISTINCT case
-    of a still-authenticated, still-owning POSTer whose PERMISSION was revoked
-    mid-session — exactly what login/owner binding cannot catch.
-    """
-
-    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
-    permission_required = "app.view_thing"
-    template = "<div dj-root><span>{{ count }}</span></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    @event_handler()
-    def bump(self, **kwargs):
-        global _HANDLER_RAN
-        _HANDLER_RAN = True
-        self.count += 1
-
-    @event_handler()
-    def begin_async(self, **kwargs):
-        self.loading = True
-        self.start_async(self._do_work)
-
-    def _do_work(self):
-        self.count = 99
-        self.loading = False
-
-    def get_context_data(self, **kwargs):
-        return {"count": self.count}
 
 
 class _CounterSSEView(LiveView):
@@ -136,17 +91,6 @@ def _drain(session):
     return msgs
 
 
-def _perm_user(*, has_perm: bool, pk: int = 7):
-    """An authenticated MagicMock user with controllable has_perms()."""
-    user = MagicMock()
-    user.is_authenticated = True
-    user.is_anonymous = False
-    user.pk = pk
-    user.has_perms.return_value = has_perm
-    user.has_perm.return_value = has_perm
-    return user
-
-
 async def _mount_stream(view_path, *, user, query="", session=None):
     sid = "21111111-1111-1111-1111-111111111111"
     _sse_sessions.pop(sid, None)
@@ -184,323 +128,6 @@ async def _post_event(session, sid, event, *, user, params=None, http_session=No
         request.session = http_session
     view = DjustSSEMessageView()
     return await view.post(request, session_id=sid)
-
-
-# =========================================================================== #
-# Sub-fold 1 — reauth_on_event hook (SECURITY). LIVE for SSE.
-# =========================================================================== #
-
-
-class TestSSEReauthOnEvent:
-    @override_settings(ALLOWED_HOSTS=["example.com"], LIVEVIEW_CONFIG={"reauth_on_event": True})
-    @pytest.mark.asyncio
-    async def test_revoked_permission_midsession_refuses_event_and_ends_stream(self):
-        """reauth ON: a still-owning POSTer whose permission was revoked
-        mid-session is refused — the handler does NOT run, an auth-error frame is
-        queued, the stream ends, and the runtime clears view_instance."""
-        global _HANDLER_RAN
-        _HANDLER_RAN = False
-        config.reset()
-        try:
-            path = _register(_PermSSEView)
-            with _allowlist():
-                # Mount with a user who HAS the permission (mount passes).
-                _resp, session, sid = await _mount_stream(path, user=_perm_user(has_perm=True))
-            assert session is not None, "permitted user must mount"
-            _drain(session)
-
-            # POST an event from the SAME owner whose permission is now REVOKED.
-            resp = await _post_event(session, sid, "bump", user=_perm_user(has_perm=False))
-            assert resp.status_code == 200  # endpoint owner-binding passed
-
-            assert _HANDLER_RAN is False, "handler ran despite mid-session permission revocation"
-            msgs = _drain(session)
-            errs = [m for m in msgs if m.get("type") == "error"]
-            assert errs, f"deauthorized SSE event must queue an auth-error frame, got {msgs!r}"
-            renders = [m for m in msgs if m.get("type") in ("patch", "html_update")]
-            assert not renders, f"deauthorized event must NOT render, got {msgs!r}"
-            # The runtime cleared view_instance (#291 unconditional state-clear).
-            assert session.runtime.view_instance is None, (
-                "runtime must clear view_instance on a failed reauth (#291)"
-            )
-            # The stream was ended (close → shutdown → active=False).
-            assert session.active is False, "failed reauth must end the SSE stream"
-        finally:
-            config.reset()
-
-    @override_settings(ALLOWED_HOSTS=["example.com"], LIVEVIEW_CONFIG={"reauth_on_event": True})
-    @pytest.mark.asyncio
-    async def test_still_authorized_event_renders_normally(self):
-        """reauth ON but the POSTer STILL has the permission: the event runs +
-        renders as usual (the gate only blocks the revoked case)."""
-        global _HANDLER_RAN
-        _HANDLER_RAN = False
-        config.reset()
-        try:
-            path = _register(_PermSSEView)
-            with _allowlist():
-                _resp, session, sid = await _mount_stream(path, user=_perm_user(has_perm=True))
-            assert session is not None
-            _drain(session)
-
-            resp = await _post_event(session, sid, "bump", user=_perm_user(has_perm=True))
-            assert resp.status_code == 200
-            assert _HANDLER_RAN is True, "an authorized event must run with reauth on"
-            assert session.runtime.view_instance is not None
-            msgs = _drain(session)
-            renders = [m for m in msgs if m.get("type") in ("patch", "html_update")]
-            assert renders, f"authorized event must render, got {msgs!r}"
-        finally:
-            config.reset()
-
-    @override_settings(ALLOWED_HOSTS=["example.com"], LIVEVIEW_CONFIG={"reauth_on_event": True})
-    @pytest.mark.asyncio
-    async def test_gate_off_revoked_permission_would_render(self):
-        """Gate-off witness (#1468): neuter the SSE recheck → the now-unauthorized
-        event WRONGLY runs + renders — proving the deny assertion above is
-        non-tautological (the recheck is what blocks it)."""
-        global _HANDLER_RAN
-        _HANDLER_RAN = False
-        config.reset()
-        try:
-            path = _register(_PermSSEView)
-            with _allowlist():
-                _resp, session, sid = await _mount_stream(path, user=_perm_user(has_perm=True))
-            assert session is not None
-            _drain(session)
-
-            with patch(
-                "djust.runtime.SSESessionTransport.recheck_event_auth",
-                AsyncMock(return_value=True),
-            ):
-                resp = await _post_event(session, sid, "bump", user=_perm_user(has_perm=False))
-                assert resp.status_code == 200
-
-            assert _HANDLER_RAN is True, (
-                "with the recheck gated off, the deauthorized event must run "
-                "(else the deny test is a tautology)"
-            )
-            msgs = _drain(session)
-            renders = [m for m in msgs if m.get("type") in ("patch", "html_update")]
-            assert renders, "gate-off: the deauthorized event should render"
-        finally:
-            config.reset()
-
-    @override_settings(ALLOWED_HOSTS=["example.com"], LIVEVIEW_CONFIG={"reauth_on_event": False})
-    @pytest.mark.asyncio
-    async def test_reauth_off_default_does_not_recheck(self):
-        """Default OFF: no re-check — even a revoked-permission POSTer dispatches
-        (the gate is opt-in)."""
-        global _HANDLER_RAN
-        _HANDLER_RAN = False
-        config.reset()
-        try:
-            path = _register(_PermSSEView)
-            with _allowlist():
-                _resp, session, sid = await _mount_stream(path, user=_perm_user(has_perm=True))
-            assert session is not None
-            _drain(session)
-
-            resp = await _post_event(session, sid, "bump", user=_perm_user(has_perm=False))
-            assert resp.status_code == 200
-            # With the flag off the hook returns True without consulting auth.
-            assert _HANDLER_RAN is True, "reauth off (default) must dispatch without a re-check"
-        finally:
-            config.reset()
-
-
-class TestReauthHookShape291:
-    """#291 multiplexed-path care: the runtime clears view_instance
-    UNCONDITIONALLY on a failed reauth — even when the transport close is gated
-    (a future batched-event path). Driven through a fake transport whose
-    ``recheck_event_auth`` returns False WITHOUT firing a transport close, so we
-    isolate the runtime's state-clear from the hook's transport termination."""
-
-    @pytest.mark.asyncio
-    async def test_runtime_clears_view_instance_even_if_close_is_gated(self):
-        view = MagicMock(exposure_policy="legacy")  # legacy subject: reauth_on_event
-        view._view_id = None
-
-        closed = {"called": False}
-
-        rendered = {"called": False}
-
-        class _FakeTransport:
-            session_id = "fake"
-            client_ip = None
-            _client_ip = None
-
-            async def send(self, data):
-                pass
-
-            async def send_error(self, error, **kwargs):
-                pass
-
-            async def close(self, code=1000):
-                closed["called"] = True
-
-            async def recheck_event_auth(self, v):
-                # Refuse the event but DO NOT fire a transport close (simulating a
-                # batched-event path where the close is gated on "not in batch").
-                # The runtime must STILL clear state (the security gap is closed by
-                # the state-clear, not the close).
-                return False
-
-            def event_context(self, v):
-                # Reached ONLY if the reauth gate failed to block — the gate-off
-                # witness: gate the recheck off and the event WOULD render here.
-                import contextlib
-
-                rendered["called"] = True
-                return contextlib.nullcontext()
-
-        runtime = ViewRuntime(_FakeTransport())
-        runtime.view_instance = view
-
-        # reauth runs on the turn chain's built-in (ADR-044 D7), so the event
-        # enters at the turn entry point, dispatch_event.
-        with (
-            override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True}),
-            patch.object(ViewRuntime, "_dispatch_event_render", AsyncMock()),
-        ):
-            await runtime.dispatch_event({"type": "event", "event": "bump", "params": {}})
-
-        assert runtime.view_instance is None, (
-            "runtime must clear view_instance on failed reauth even if close is gated (#291)"
-        )
-        assert closed["called"] is False, "this fake gates its own close — none should have fired"
-        assert rendered["called"] is False, "a refused event must NOT reach the render path"
-
-    @pytest.mark.asyncio
-    async def test_authorized_reauth_proceeds_to_handler(self):
-        """A True recheck lets the event proceed into event_context."""
-        reached = {"render": False}
-
-        class _FakeTransport:
-            session_id = "fake"
-            client_ip = None
-            _client_ip = None
-
-            async def send(self, data):
-                pass
-
-            async def send_error(self, error, **kwargs):
-                pass
-
-            async def close(self, code=1000):
-                pass
-
-            async def recheck_event_auth(self, v):
-                return True
-
-            def event_context(self, v):
-                import contextlib
-
-                return contextlib.nullcontext()
-
-        runtime = ViewRuntime(_FakeTransport())
-        stub = MagicMock(_view_id=None, exposure_policy="legacy")  # legacy subject: reauth_on_event
-        runtime.view_instance = stub
-
-        async def _fake_render(self, data):
-            reached["render"] = True
-
-        with (
-            override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True}),
-            patch.object(ViewRuntime, "_dispatch_event_render", _fake_render),
-        ):
-            await runtime.dispatch_event({"type": "event", "event": "bump", "params": {}})
-
-        assert runtime.view_instance is not None, "an authorized reauth must NOT clear state"
-        assert reached["render"] is True, "an authorized reauth must reach the render path"
-
-
-class TestWSReauthAdapterPort:
-    """The WS adapter ``recheck_event_auth`` port (DORMANT for live WS events
-    until Phase 2.3b, but unit-tested here so the port is correct when the flip
-    lands)."""
-
-    @override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True})
-    @pytest.mark.asyncio
-    async def test_ws_adapter_refuses_and_closes_on_deauth(self):
-        config.reset()
-        try:
-            consumer = MagicMock()
-            consumer.scope = {"session": {}}
-            consumer.send_json = AsyncMock()
-            consumer.close = AsyncMock()
-
-            view = MagicMock()
-            view.login_required = True
-            view.permission_required = None
-            view.login_url = None
-            view.request = MagicMock()
-
-            transport = WSConsumerTransport(consumer)
-            with (
-                patch("channels.auth.get_user", AsyncMock(return_value=AnonymousUser())),
-                patch(
-                    "djust.auth.core.check_view_auth_lightweight",
-                    return_value=False,
-                ),
-            ):
-                ok = await transport.recheck_event_auth(view)
-
-            assert ok is False, "WS adapter must refuse the event on deauth"
-            consumer.send_json.assert_awaited()  # navigate frame
-            navigate = consumer.send_json.await_args.args[0]
-            assert navigate.get("type") == "navigate", navigate
-            consumer.close.assert_awaited_once()
-            assert consumer.close.await_args.kwargs.get("code") == 4403
-        finally:
-            config.reset()
-
-    @override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True})
-    @pytest.mark.asyncio
-    async def test_ws_adapter_allows_when_still_authorized(self):
-        config.reset()
-        try:
-            consumer = MagicMock()
-            consumer.scope = {"session": {}}
-            consumer.send_json = AsyncMock()
-            consumer.close = AsyncMock()
-
-            view = MagicMock()
-            view.login_required = True
-            view.permission_required = None
-            view.request = MagicMock()
-
-            transport = WSConsumerTransport(consumer)
-            with (
-                patch("channels.auth.get_user", AsyncMock(return_value=MagicMock())),
-                patch("djust.auth.core.check_view_auth_lightweight", return_value=True),
-            ):
-                ok = await transport.recheck_event_auth(view)
-
-            assert ok is True
-            consumer.close.assert_not_awaited()
-        finally:
-            config.reset()
-
-    @override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True})
-    @pytest.mark.asyncio
-    async def test_ws_adapter_skips_when_view_requires_no_auth(self):
-        """A view with neither login_required nor permission_required short-circuits
-        to True WITHOUT a session read (the get_user seam is never consulted)."""
-        config.reset()
-        try:
-            consumer = MagicMock()
-            consumer.scope = {"session": {}}
-            view = MagicMock()
-            view.login_required = None
-            view.permission_required = None
-            transport = WSConsumerTransport(consumer)
-            with patch("channels.auth.get_user", AsyncMock()) as gu:
-                ok = await transport.recheck_event_auth(view)
-            assert ok is True
-            gu.assert_not_awaited()
-        finally:
-            config.reset()
 
 
 # =========================================================================== #

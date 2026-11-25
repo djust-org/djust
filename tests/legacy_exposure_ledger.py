@@ -176,6 +176,15 @@ MIGRATED_STEP3: tuple[str, ...] = (
     "python/djust/tests/test_hvr_cross_module.py",
     "python/djust/tests/test_if_branch_crossing_element_4122.py",
     "python/djust/tests/test_interactive_bindings.py",
+    "python/djust/tests/test_async_check_permissions.py",
+    "python/djust/tests/test_async_pending_flag_2963.py",
+    "python/djust/tests/test_event_loop_offload_3074.py",
+    "python/djust/tests/test_live_auth_denials_and_wrappers.py",
+    "python/djust/tests/test_multi_view_refusal_3252.py",
+    "python/djust/tests/test_runtime_reauth_async_1905.py",
+    "python/djust/tests/test_stable_component_ids_4114.py",
+    "python/djust/tests/test_turn_middleware_core.py",
+    "tests/unit/test_layout_switching.py",
     # -- end of implementer 1 --
     # -- implementer 2: #4194, #4195 (add lines here) --
     # -- end of implementer 2 --
@@ -260,12 +269,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_admin_legacy_widget_v032.py",
         "python/djust/tests/test_interactive_http_fallback_4046.py",
         # -- implementer 1: #4192, #4193, #4198 (delete lines only) --
-        "python/djust/tests/test_legacy_async_cancel_on_disconnect.py",
-        "python/djust/tests/test_legacy_context_framework_config_2960.py",
-        "python/djust/tests/test_legacy_navigation_waiters_3236.py",
-        "python/djust/tests/test_legacy_view_keeps_no_session_state.py",
-        "python/djust/tests/test_sse_legacy_close_3232.py",
-        "python/tests/test_legacy_exposure_check_4047.py",
         # -- end of implementer 1 --
         # -- implementer 2: #4194, #4195 (delete lines only) --
         "python/djust/tests/test_interactive_collections_c3.py",
