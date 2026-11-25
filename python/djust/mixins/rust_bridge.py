@@ -1274,7 +1274,7 @@ class RustBridgeMixin:
             )
 
     @recorded_render
-    def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
+    def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> bool:
         """Sync Python state to Rust backend.
 
         Phoenix-style change tracking: only sends values that actually changed
@@ -1296,13 +1296,24 @@ class RustBridgeMixin:
         sync makes after it (the explicit JIT serialization, the rows listed for
         the template's sidecar, the normalize pass). Inside a render step
         already (a ``render*`` method), it nests and enters nothing again.
+
+        Returns:
+            Whether the next ``render_with_diff()`` has anything to render
+            (#4123). ``False`` only when the sync found no changed and no
+            removed key since the previous sync, and no render was requested
+            (``_force_full_html`` / ``set_changed_keys()``): Rust then has no
+            changed keys and would render the whole template to send an empty
+            patch list. ``True`` on a first render and without a Rust view.
+            A server-originated render (an async result) may skip its render
+            on ``False``; an event turn already decided with its own snapshot.
         """
         from ..sync_turn import run_sync_step
 
-        run_sync_step(self, "render", self._sync_state_to_rust_body, preloaded_context)
+        return bool(run_sync_step(self, "render", self._sync_state_to_rust_body, preloaded_context))
 
-    def _sync_state_to_rust_body(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
+    def _sync_state_to_rust_body(self, preloaded_context: Optional[Dict[str, Any]] = None) -> bool:
         """:meth:`_sync_state_to_rust`, inside its ``"render"`` step."""
+        render_needed = True
         if self._rust_view:
             # Per-render, before anything is formatted (#2209, #2221).
             self._apply_render_env()
@@ -2264,6 +2275,9 @@ class RustBridgeMixin:
 
             if user_changed is not None:
                 self._rust_view.set_changed_keys(user_changed)
+            # #4123: nothing to render when this was not a first (or forced)
+            # sync and no key changed, was removed or was named.
+            render_needed = not prev_refs or user_changed is not None
 
             # The ``dj-update="append"|"prepend"`` containers whose rows come from
             # a ``temporary_assigns`` key must ACCUMULATE in the differ, as the
@@ -2282,3 +2296,4 @@ class RustBridgeMixin:
                 self, "_static_assigns_sent", False
             ):
                 self._static_assigns_sent = True
+        return render_needed

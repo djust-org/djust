@@ -70,9 +70,16 @@ async def _make_consumer(render_return):
 
 
 async def _run(consumer):
+    view = consumer.view_instance
+
+    def _work():
+        # A result that changes state: one that changes nothing renders and
+        # sends nothing (#4123), so it would not exercise the recovery arm.
+        view.count += 1
+
     await consumer._run_async_work(
         task_name="t",
-        callback=lambda: None,
+        callback=_work,
         args=(),
         kwargs={},
         event_name="pick",

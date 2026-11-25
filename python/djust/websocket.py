@@ -37,7 +37,9 @@ from ._background_render import (
     _discard_baseline,
     render_background,
     render_background_sync,
+    snapshot_delivers_nothing,
 )
+from ._automatic_state import turn_serial
 from ._render_operation import settle_render_operation
 from ._child_rendering import reconcile_child_render
 from . import _per_turn
@@ -1563,9 +1565,14 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # tick / broadcast paths is documented on the error arm below.)
                     if self.view_instance is not view:
                         return
-                    # Re-render and send patches (mirrors the server_push path)
-                    rendered = await self._render_background(view)
+                    # Re-render and send patches (mirrors the server_push path).
+                    # A result that changed nothing renders and sends nothing
+                    # (#4123); its pending work is still flushed.
+                    rendered = await self._render_background(view, skip_unchanged=True)
                     if rendered is None:
+                        return
+                    if rendered.unchanged:
+                        await self._flush_all_pending()
                         return
                     html, patches = rendered.html, rendered.patches
 
@@ -1700,8 +1707,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         :meth:`_run_async_work` and :meth:`_settle_cancelled_async`. Arms
         recovery so ``_recovery_version`` tracks this frame (#1817).
         """
-        rendered = await self._render_background(view)
-        if rendered is None:
+        rendered = await self._render_background(view, skip_unchanged=True)
+        if rendered is None or rendered.unchanged:
+            # Nothing changed: no render, no frame (#4123). The caller still
+            # flushes the turn's pending work.
             return
         html, patches = rendered.html, rendered.patches
         if patches is not None:
@@ -6414,25 +6423,37 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if dispatch_work and self.view_instance is view:
                 await self._dispatch_async_work(event_name=None)
 
-    async def _render_background(self, view: Any) -> Optional[BackgroundRender]:
+    async def _render_background(
+        self, view: Any, *, skip_unchanged: bool = False
+    ) -> Optional[BackgroundRender]:
         """Capture one background render under the caller's existing render lock.
 
         The root's turn was authorized at its start; its declared state is
         committed here, before the frame, and a failed save withholds the
         render (ADR-038 E3).
+
+        ``skip_unchanged`` (async results, #4123): when nothing the template
+        reads changed since the last render and the frame's snapshot fields
+        would tell the page nothing new, nothing is rendered and the result is
+        ``unchanged``: the caller sends no frame. The client's loading state
+        ends with the batch's ``async_complete`` (#4309), not with this frame.
         """
         if self.view_instance is not view:
             return None
         runtime = getattr(self, "_runtime", None)
         snapshot_fields: Dict[str, Any] = {}
+        serial_before = turn_serial(view) if skip_unchanged else None
         committed = await self._commit_explicit_background_turn(view)
         if committed is None:
             return None
         snapshot_fields = committed
+        skip = skip_unchanged and snapshot_delivers_nothing(snapshot_fields, serial_before)
         with _tenant_context(getattr(view, "_tenant", None)):
-            rendered = await render_background(view, runtime)
+            rendered = await render_background(view, runtime, skip_unchanged=skip)
         if self.view_instance is not view:
             return None
+        if rendered is not None and rendered.unchanged:
+            return rendered
         if rendered is None:
             logger.warning("Background render parameter contracts unavailable")
             await self.send_error(

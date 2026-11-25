@@ -636,6 +636,12 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("runtime.py", "ViewRuntime._render_async_result", "view._sync_state_to_rust"): plumbing(
         _RENDER
     ),
+    # #4123: the same sync, reporting whether the result has anything to render.
+    (
+        "runtime.py",
+        "ViewRuntime._render_async_result",
+        "sync_reports_render_needed",
+    ): plumbing(_RENDER),
     (
         "runtime.py",
         "ViewRuntime._dispatch_mount_body",

@@ -74,6 +74,7 @@ from . import _per_turn
 from ._params_form import run_handle_params
 from ._view_hooks import call_async_result, call_hook
 from ._held_rows import rows_written, writes_by
+from ._background_render import snapshot_delivers_nothing, sync_reports_render_needed
 
 if TYPE_CHECKING:
     from ._async_batch import AsyncBatch
@@ -8522,7 +8523,7 @@ class ViewRuntime(RuntimeTurnPort):
             async with self.transport.event_context(view):
                 if self.view_instance is not view:
                     return
-                await self._render_async_result(event_name)
+                await self._render_async_result(event_name, skip_unchanged=True)
         except Exception:  # noqa: BLE001 — a settle frame must never raise out of a task
             logger.warning("Explicit cancelled background settle failed")
 
@@ -8681,12 +8682,22 @@ class ViewRuntime(RuntimeTurnPort):
                         return
                     if released():
                         return
+                    from ._automatic_state import turn_serial
+
+                    serial_before = turn_serial(view)
                     if not await self.commit_explicit_turn(
                         view, source="async", async_result=True, released=released
                     ):
                         return
                     snapshot_fields = await self._explicit_event_snapshot(view)
-                    await self._render_async_result(event_name, snapshot_fields=snapshot_fields)
+                    # A result that changed nothing renders and sends nothing
+                    # (#4123); the batch's ``async_complete`` ends the
+                    # client's loading state (#4309).
+                    await self._render_async_result(
+                        event_name,
+                        snapshot_fields=snapshot_fields,
+                        skip_unchanged=snapshot_delivers_nothing(snapshot_fields, serial_before),
+                    )
                 finally:
                     view.__dict__.pop("_djust_event_request", None)
 
@@ -8700,8 +8711,15 @@ class ViewRuntime(RuntimeTurnPort):
         force_html: bool = False,
         source: str = "async",
         broadcast: bool = False,
+        skip_unchanged: bool = False,
     ) -> None:
         """Re-sync + re-render after background work and emit the result frame.
+
+        ``skip_unchanged`` (async results, #4123): when the sync reports that
+        nothing changed since the last render, render nothing and send no
+        frame; the turn's pending work is still flushed. The caller passes it
+        only when the frame's snapshot fields tell the page nothing new
+        (``snapshot_delivers_nothing``). A forced render always renders.
 
         Shared by the success + error paths of ``_execute_async_task``. Stamps
         the transport's client-checked wire version (#1858) and drains the
@@ -8722,7 +8740,11 @@ class ViewRuntime(RuntimeTurnPort):
         if not view:
             return
         # The turn committed its declared state before it got here.
-        if hasattr(view, "_sync_state_to_rust"):
+        if skip_unchanged and not force_html:
+            if not await sync_to_async(sync_reports_render_needed)(view):
+                await self._flush_all_pending()
+                return
+        elif hasattr(view, "_sync_state_to_rust"):
             await sync_to_async(view._sync_state_to_rust)()
         html, patches, version = await sync_to_async(view.render_with_diff)()
         wire_version = self.transport.next_client_version(html, version)
