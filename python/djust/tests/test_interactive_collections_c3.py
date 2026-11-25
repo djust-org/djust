@@ -27,6 +27,7 @@ from asgiref.sync import async_to_sync
 from django.test import RequestFactory
 
 from djust import LiveView
+from djust.decorators import state
 from djust.components.interactive import DropdownMenu
 from djust._component_state import wire_id
 
@@ -50,13 +51,15 @@ def default_rows():
 
 
 class RowsPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<div dj-root>{% for row in rows.values %}<section>{{ row }}</section>{% endfor %}"
         "{{ fixed }}<p>{{ result }}</p><i>{{ calls }}</i></div>"
     )
     rows = DropdownMenu.collection()
     fixed = DropdownMenu(label="Fixed", items=[{"label": "F", "value": "f"}])
+    result = state("none")
+    calls = state(0)
 
     def mount(self, request, **kwargs):
         self.result = "none"
@@ -231,7 +234,7 @@ def test_selection_reaches_the_collection_callback_with_the_member():
 
 def test_toggled_observes_only_client_members():
     class ObservedRows(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root>{% for row in rows.values %}{{ row }}{% endfor %}</div>"
         rows = DropdownMenu.collection()
 
@@ -254,14 +257,14 @@ def test_toggled_observes_only_client_members():
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_runtime_dispatch_routes_by_identity_and_refuses_stale_members():
-    from djust.tests.test_runtime_child_routing_1892 import _make_runtime_with_view
+    from djust.tests.test_runtime_child_routing_1892 import _mounted_runtime
 
-    view = mounted()
-    runtime, transport = _make_runtime_with_view(view)
+    view = RowsPage()
+    runtime, transport = await _mounted_runtime(view)
     target = view.rows.get("p-42")
-    old_id = target.component_id
+    old_id = wire_id(target)
 
     async def send(component_id, value):
         await runtime.dispatch_event(
@@ -288,7 +291,7 @@ async def test_runtime_dispatch_routes_by_identity_and_refuses_stale_members():
     await send(old_id, "details")
     assert len(CALLS) == calls and transport.errors
     # Disabled and unknown values never emit.
-    await send(view.rows.get("p-87").component_id, "nope")
+    await send(wire_id(view.rows.get("p-87")), "nope")
     assert len(CALLS) == calls
 
 

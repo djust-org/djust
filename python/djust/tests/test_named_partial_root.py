@@ -4,12 +4,14 @@ import django
 import pytest
 from django.template import TemplateDoesNotExist
 from django.test import override_settings, RequestFactory
-from django.contrib.auth.models import AnonymousUser
-from django.contrib.sessions.backends.signed_cookies import SessionStore
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
+from djust.testing import with_live_session
 
-pytestmark = pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 named partials")
+pytestmark = [
+    pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 named partials"),
+    pytest.mark.django_db,
+]
 
 
 def settings_for(path, debug, backend="django.template.backends.django.DjangoTemplates"):
@@ -34,11 +36,39 @@ def files(path, text="FIRST"):
     )
 
 
+class _Fields(LiveView):
+    """The names these templates read, declared: an explicit view renders only declared state."""
+
+    exposure_policy = "explicit"
+    value = state("")
+    person = state(None)
+    node = state(None)
+    root = state(None)
+    other = state(None)
+    others = state(None)
+    nodes = state(None)
+    selected = state("")
+    target = state("")
+    group = state(None)
+    extra = state(None)
+    extras = state(None)
+
+
+def assert_refused(view_class, caplog, reason):
+    """An explicit page answers a refused render with the project's 500 and no detail.
+
+    ``log_exception_detail`` (#4180) puts the refusal's reason in the server log.
+    """
+    caplog.clear()
+    with override_settings(LIVEVIEW_CONFIG={"log_exception_detail": True}):
+        response = view_class.as_view()(request())
+    assert response.status_code == 500
+    assert reason in caplog.text
+    assert reason not in response.content.decode()
+
+
 def request():
-    req = RequestFactory().get("/named-partial/")
-    req.user = AnonymousUser()
-    req.session = SessionStore()
-    return req
+    return with_live_session(RequestFactory().get("/named-partial/"))
 
 
 @pytest.mark.parametrize("debug", [False, True])
@@ -52,8 +82,8 @@ def request():
 def test_named_partial_http_and_diff(debug, backend, tmp_path):
     files(tmp_path)
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
         def mount(self, request, **kwargs):
@@ -82,8 +112,8 @@ def test_named_partial_http_and_diff(debug, backend, tmp_path):
 def test_named_partial_missing_name_raises(debug, tmp_path):
     files(tmp_path)
 
-    class MissingView(LiveView):
-        exposure_policy = "legacy"
+    class MissingView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#missing"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, debug)):
@@ -105,7 +135,7 @@ async def test_named_partial_websocket_mount_and_event(debug, tmp_path):
         DEBUG=False,
         DJUST_ALLOW_MISSING_ORIGIN=True,
     ):
-        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             assert (await comm.connect())[0]
             await comm.receive_json_from()
@@ -123,8 +153,8 @@ async def test_named_partial_websocket_mount_and_event(debug, tmp_path):
             await comm.disconnect()
 
 
-class SocketNamedView(LiveView):
-    exposure_policy = "legacy"
+class SocketNamedView(_Fields):
+    exposure_policy = "explicit"
     template_name = "sub/page.html#card"
 
     def mount(self, request, **kwargs):
@@ -147,8 +177,8 @@ def test_named_partial_jit_scopes_fields_to_selected_and_called_partials(tmp_pat
         '{% include "./piece.html" %}{% with user=person %}{% partial helper %}{% endwith %}</main>{% endpartialdef %}'
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -177,8 +207,8 @@ def test_named_partial_queryset_jit_omits_sibling_fields(tmp_path):
         username="selected", first_name="First", last_name="Last", email="secret@example.test"
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -202,8 +232,8 @@ def test_named_partial_jit_ignores_uninvoked_nested_verbatim_and_comments(tmp_pa
         "</main>{% endpartialdef %}"
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -227,8 +257,8 @@ def test_named_partial_recursive_calls_render_with_caller_context(tmp_path):
         "{% partialdef card %}<main dj-root>{% partial item %}</main>{% endpartialdef %}"
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -251,8 +281,8 @@ def test_named_partial_nested_inline_and_called_definitions(tmp_path):
         "{% partial called %}</main>{% endpartialdef %}"
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -281,8 +311,8 @@ def test_named_partial_queryset_nested_relation_is_scoped(tmp_path):
         name="selection", codename="named_partial_selection", content_type=content_type
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -304,8 +334,8 @@ def test_named_partial_jit_cache_tracks_selected_source_changes(tmp_path):
         "{% partialdef card %}<main dj-root>{{ person.username }}</main>{% endpartialdef %}"
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False), DEBUG=False):
@@ -340,8 +370,8 @@ def test_named_partial_jit_does_not_expand_calls_in_raw_blocks(tmp_path):
         "</main>{% endpartialdef %}"
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
     register_raw_block_tag_handler("named_partial_raw", "finish_named_raw", Raw())
@@ -378,8 +408,8 @@ def test_named_partial_recursion_with_model_relations(tmp_path):
         "{% partialdef card %}<main dj-root>{% partial item %}</main>{% endpartialdef %}"
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
     with connection.schema_editor() as schema:
@@ -391,14 +421,10 @@ def test_named_partial_recursion_with_model_relations(tmp_path):
         with override_settings(TEMPLATES=settings_for(tmp_path, False)):
             view = NamedView()
             view.node = root
-            html, _, _ = view.render_with_diff(None)
-            payload = view.get_context_data()["node"]
-            assert payload["child"]["child"]["label"] == "third"
-            assert "secret" not in payload["child"]
-            # Recursive root alongside ordinary objects must not claim them.
-            view.other = leaf
-            view.others = PartialNode.objects.filter(pk=leaf.pk)
-            view.get_context_data()
+            # An explicit view has no scoped JIT serialization: a recursive partial over
+            # ORM values is refused, not rendered with every field.
+            with pytest.raises(RuntimeError, match="require scoped JIT"):
+                view.render_with_diff(None)
             (folder / "aliased.html").write_text(
                 "{% partialdef item %}[{{ node.label }}]"
                 "{% if node.child %}{% with node=node.child %}{% partial item %}"
@@ -409,13 +435,11 @@ def test_named_partial_recursion_with_model_relations(tmp_path):
             aliased = NamedView()
             aliased.template_name = "sub/aliased.html#card"
             aliased.root = root
-            aliased.other = leaf
-            aliased.others = PartialNode.objects.filter(pk=leaf.pk)
-            assert "[third]" in aliased.render_with_diff(None)[0]
-            assert "secret" not in aliased.get_context_data()["root"]["child"]
+            with pytest.raises(RuntimeError, match="require scoped JIT"):
+                aliased.render_with_diff(None)
+            # The static analysis the scoped serializer is built on still scopes the fields.
             paths = set(view.template_paths().get("node", []))
-        assert all(label in html for label in ("first", "second", "third"))
-        assert "secret" not in paths
+        assert "secret" not in paths and {"label", "child"} <= paths
     finally:
         with connection.schema_editor() as schema:
             schema.delete_model(PartialNode)
@@ -437,8 +461,8 @@ def test_named_partial_jit_scopes_named_include_fields(tmp_path):
     User = get_user_model()
     User.objects.create(username="selected", first_name="First", email="secret@example.test")
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -467,8 +491,8 @@ def test_named_include_nesting_scope_raw_text_and_cycles(tmp_path):
         "{% partialdef unused %}{{ user.password }}{% endpartialdef %}"
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "sub/page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False)):
@@ -487,8 +511,8 @@ def test_named_partial_jit_cache_tracks_included_partial_source_changes(tmp_path
     piece = tmp_path / "piece.html"
     piece.write_text("{% partialdef inner %}{{ person.username }}{% endpartialdef %}")
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html#card"
 
     with override_settings(TEMPLATES=settings_for(tmp_path, False), DEBUG=False):
@@ -533,8 +557,8 @@ def test_named_partial_recursive_queryset_preserves_descendant_fields(tmp_path, 
         "{% partial item %}{% endfor %}</main>{% endpartialdef %}"
     )
 
-    class NamedView(LiveView):
-        exposure_policy = "legacy"
+    class NamedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html#card"
 
     with connection.schema_editor() as schema:
@@ -546,12 +570,10 @@ def test_named_partial_recursive_queryset_preserves_descendant_fields(tmp_path, 
         with override_settings(TEMPLATES=settings_for(tmp_path, False)):
             view = NamedView()
             view.nodes = QuerysetPartialNode.objects.filter(pk=root.pk)
-            html, _, _ = view.render_with_diff(None)
-            assert "[first]" in html
-            assert "[second]" in html
-            assert "[third]" in html
-            assert "sensitive" not in html
-            assert "(FIRST)" in html and "(SECOND)" in html and "(THIRD)" in html
+            # An explicit view is refused (no scoped JIT serialization); the serializer
+            # itself is checked below.
+            with pytest.raises(RuntimeError, match="require scoped JIT"):
+                view.render_with_diff(None)
 
             # Shared descendants and preloaded paths retain the QuerySet's
             # database behavior, and unrelated or denied fields never escape.
@@ -572,12 +594,6 @@ def test_named_partial_recursive_queryset_preserves_descendant_fields(tmp_path, 
                 assert "unused" not in row
             list_rows = view.serialize_for_template(list(roots), "nodes")
             assert list_rows == rows
-            list_view = NamedView()
-            list_view.nodes = list(roots)
-            list_context = list_view.get_context_data()["nodes"]
-            assert list_context == rows
-            assert "unused" not in list_context[0]["child"]
-            assert "[third]" in list_view.render_with_diff(None)[0]
             deferred = view.serialize_for_template(
                 QuerysetPartialNode.objects.only("label").filter(pk=root.pk), "nodes"
             )
@@ -687,13 +703,9 @@ def test_named_partial_recursive_queryset_preserves_descendant_fields(tmp_path, 
                     QuerysetPartialNode.objects.filter(pk=root.pk), "nodes"
                 )
             assert "Unsupported recursive partial" in str(error.value.__cause__)
-            unsupported.nodes = QuerysetPartialNode.objects.filter(pk=root.pk)
-            with pytest.raises(RuntimeError) as error:
-                unsupported.render_with_diff(None)
-            assert "Unsupported recursive partial" in str(error.value.__cause__)
 
-            # Nested loops and aliases with filters must fail at the real
-            # LiveView entry point, not fall back to unscoped serialization.
+            # Nested loops and aliases with filters must fail in the serializer, not
+            # fall back to unscoped serialization.
             item = (
                 "{% partialdef item %}{{ node.label }}{% if node.child %}"
                 "{% with node=node.child %}{% partial item %}{% endwith %}"
@@ -715,10 +727,10 @@ def test_named_partial_recursive_queryset_preserves_descendant_fields(tmp_path, 
                 )
                 candidate = NamedView()
                 candidate.template_name = name + "#card"
-                candidate.nodes = QuerysetPartialNode.objects.filter(pk=root.pk)
-                candidate.extras = [1]
                 with pytest.raises(RuntimeError) as error:
-                    candidate.render_with_diff(None)
+                    candidate.serialize_for_template(
+                        QuerysetPartialNode.objects.filter(pk=root.pk), "nodes"
+                    )
                 assert "Unsupported recursive partial" in str(error.value.__cause__)
     finally:
         with connection.schema_editor() as schema:
@@ -808,11 +820,11 @@ def dynamic_include_files(path):
     )
 
 
-def test_dynamic_recursive_partial_http_fails_but_nonrecursive_succeeds(tmp_path):
+def test_dynamic_recursive_partial_http_fails_but_nonrecursive_succeeds(tmp_path, caplog):
     dynamic_include_files(tmp_path)
 
-    class DynamicHttpView(LiveView):
-        exposure_policy = "legacy"
+    class DynamicHttpView(_Fields):
+        exposure_policy = "explicit"
         template_name = "dynamic_outer.html"
         selected = "dynamic_parts.html#safe"
 
@@ -832,12 +844,10 @@ def test_dynamic_recursive_partial_http_fails_but_nonrecursive_succeeds(tmp_path
             "dynamic_grandchild.html",
         ):
             DynamicHttpView.selected = selected
-            with pytest.raises(RuntimeError, match="Recursive named partials selected by dynamic"):
-                DynamicHttpView.as_view()(request())
+            assert_refused(DynamicHttpView, caplog, "Recursive named partials selected by dynamic")
         DynamicHttpView.template_name = "dynamic_filter.html"
         DynamicHttpView.selected = "dynamic_parts.html#recursive"
-        with pytest.raises(RuntimeError, match="Recursive named partials selected by dynamic"):
-            DynamicHttpView.as_view()(request())
+        assert_refused(DynamicHttpView, caplog, "Recursive named partials selected by dynamic")
 
 
 def test_dynamic_template_object_is_checked_and_plain_backend_is_unaffected(tmp_path):
@@ -845,8 +855,8 @@ def test_dynamic_template_object_is_checked_and_plain_backend_is_unaffected(tmp_
 
     dynamic_include_files(tmp_path)
 
-    class ObjectView(LiveView):
-        exposure_policy = "legacy"
+    class ObjectView(_Fields):
+        exposure_policy = "explicit"
         template_name = "dynamic_outer.html"
 
         def get_context_data(self, **kwargs):
@@ -891,8 +901,8 @@ def test_dynamic_template_object_is_checked_and_plain_backend_is_unaffected(tmp_
         assert "[one]" in result and "[two]" in result
 
 
-class DynamicPartialSocketView(LiveView):
-    exposure_policy = "legacy"
+class DynamicPartialSocketView(_Fields):
+    exposure_policy = "explicit"
     template_name = "dynamic_outer.html"
 
     def mount(self, request, **kwargs):
@@ -918,7 +928,7 @@ async def test_dynamic_recursive_partial_websocket_fails_explicitly(tmp_path):
         DEBUG=False,
         DJUST_ALLOW_MISSING_ORIGIN=True,
     ):
-        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             assert (await comm.connect())[0]
             await comm.receive_json_from()

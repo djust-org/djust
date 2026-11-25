@@ -2,11 +2,11 @@
 
 import django
 import pytest
-from django.contrib.auth.models import AnonymousUser
-from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
+from djust.decorators import state
+from djust.testing import live_session, with_live_session
 from djust.state_backends.memory import InMemoryStateBackend
 
 
@@ -32,17 +32,16 @@ def test_stateful_ordinary_include_uses_one_page_and_baseline(tmp_path, monkeypa
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
 
     class OrdinaryIncludeView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "page.html"
-        name = "value"
+        name = state("value")
 
-        def mount(self, request, **kwargs):
-            self.chooser = chooser
+        def get_context_data(self, **kwargs):
+            context = super().get_context_data(**kwargs)
+            context["chooser"] = chooser
+            return context
 
-    request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
-    request.session.create()
+    request = with_live_session(RequestFactory().get("/"))
     templates = [
         {
             "BACKEND": "django.template.backends.django.DjangoTemplates",
@@ -71,10 +70,10 @@ def test_ordinary_include_retains_root_fields_and_diff(tmp_path):
     )
 
     class OrdinaryView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "page.html"
-        name = "before"
-        shell_only = "shell"
+        name = state("before")
+        shell_only = state("shell")
 
     templates = [
         {
@@ -105,9 +104,9 @@ def test_ordinary_root_bindings_after_opaque_tag_output(tmp_path):
     )
 
     class OrdinaryView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "page.html"
-        name = "before"
+        name = state("before")
 
     templates = [
         {
@@ -136,10 +135,10 @@ def test_ordinary_root_cannot_switch_to_untrusted_competing_root(tmp_path):
     )
 
     class OrdinaryView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "page.html"
-        name = "before"
-        prefix = ""
+        name = state("before")
+        prefix = state("")
 
     templates = [
         {
@@ -173,9 +172,9 @@ def test_static_include_gaining_partial_replans_before_render(tmp_path):
     path.write_text("<main dj-root>first</main>")
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "page.html"
-        injected = "<aside dj-root>injected</aside>"
+        injected = state("<aside dj-root>injected</aside>")
 
     templates = [
         {
@@ -202,8 +201,7 @@ def test_static_include_gaining_partial_replans_before_render(tmp_path):
 
 @pytest.mark.django_db
 @pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 dependency planning")
-def test_ordinary_wrapper_competing_root_does_not_advance_baseline(tmp_path, monkeypatch):
-    from django.core.exceptions import ImproperlyConfigured
+def test_ordinary_wrapper_competing_root_does_not_advance_baseline(tmp_path, monkeypatch, caplog):
     from djust.tests.test_liveview_partial_root_parity import templates_for, write
 
     write(tmp_path, "page.html", '{% include "root.html" %}')
@@ -223,26 +221,26 @@ def test_ordinary_wrapper_competing_root_does_not_advance_baseline(tmp_path, mon
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
 
     class View(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "page.html"
         wrapper_template = "wrapper.html"
+        value = state("before")
 
-        def mount(self, request, **kwargs):
-            self.value = "before"
-
-    session = SessionStore()
-    session.create()
+    session = live_session()
 
     def request(content):
         req = RequestFactory().get("/test/")
-        req.user = AnonymousUser()
-        req.session = session
+        req.session = session  # one saved session for every request
         req.wrapper_content = content
-        return req
+        return with_live_session(req)
 
     with override_settings(TEMPLATES=templates):
         assert View.as_view()(request("<header>OK</header>")).status_code == 200
-        with pytest.raises(ImproperlyConfigured):
-            View.as_view()(request('<div dj-root dj-view="outside.Page">OUTSIDE</div>'))
+        # The page answers the refusal with the project's 500; the log names the guard.
+        with override_settings(LIVEVIEW_CONFIG={"log_exception_detail": True}):
+            refused = View.as_view()(request('<div dj-root dj-view="outside.Page">OUTSIDE</div>'))
+        assert refused.status_code == 500
+        assert "ImproperlyConfigured" in caplog.text
+        assert "OUTSIDE" not in refused.content.decode()
         # 2.0: no legacy baseline is kept in the backend to advance at all.
         assert backend._cache == {}

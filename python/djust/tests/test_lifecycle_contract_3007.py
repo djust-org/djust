@@ -32,6 +32,7 @@ from django.urls import path
 from django.utils.functional import SimpleLazyObject
 
 from djust import LiveView, event_handler, sse
+from djust.decorators import state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 from djust.tenants.middleware import get_current_tenant
 from djust.tenants.resolvers import TenantInfo
@@ -61,7 +62,7 @@ def _on_the_event_loop() -> bool:
 class _Hooked:
     """Records every lifecycle call and what the hooks could see."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     fail_connected = False
     fail_disconnected = False
 
@@ -98,6 +99,10 @@ class _Hooked:
         }
         if self.fail_disconnected:
             raise RuntimeError("disconnected failed")
+
+    def get_context_data(self, **kwargs):
+        # An explicit view renders only what it declares or supplies here.
+        return {"status": getattr(self, "status", "")}
 
     @event_handler()
     def ping(self, **kwargs):
@@ -140,7 +145,7 @@ class Refused(_Hooked, LiveView):
 class OnlyDisconnected(LiveView):
     """Defines ``disconnected`` but no ``connected``: it still runs."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.OnlyDisconnected"><b>x</b></div>'
 
     def mount(self, request, **kwargs):
@@ -154,15 +159,15 @@ class OnlyDisconnected(LiveView):
 class StateNamed(LiveView):
     """Existing code can hold state under these names: not callable, not a hook."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.StateNamed"><b>{{ label }}</b></div>'
+    connected = state(False)
+    disconnected = state(True)
+    label = state("ok")
 
     def mount(self, request, **kwargs):
         self._tag = "StateNamed"
         VIEWS[self._tag] = self
-        self.connected = False
-        self.disconnected = True
-        self.label = "ok"
 
 
 class Kid(_Hooked, LiveView):
@@ -180,11 +185,11 @@ class Parent(_Hooked, LiveView):
     )
 
     def get_context_data(self, **kwargs):
-        return {"view": self}
+        return {}
 
 
 class _Plain(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self._tag = type(self).__name__
@@ -535,7 +540,7 @@ async def test_cancelling_the_disconnect_during_the_hook_still_releases_the_view
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert view._djust_waiters_closed is True, "the view was never released"
+        assert view._djust_child_disposed is True, "the view was never released"
     finally:
         Blocking.gate.set()
         await _close(communicator)
@@ -670,8 +675,8 @@ async def test_a_disconnected_that_raises_is_logged_and_the_teardown_goes_on(cap
     # Both hooks ran, and the views were still released afterwards.
     assert sorted(_calls("disconnected")) == sorted([bad, good])
     assert "Error in disconnected()" in caplog.text or "protected" in caplog.text.lower()
-    assert VIEWS[bad]._djust_waiters_closed is True
-    assert VIEWS[good]._djust_waiters_closed is True
+    assert VIEWS[bad]._djust_child_disposed is True
+    assert VIEWS[good]._djust_child_disposed is True
     assert CONSUMERS[-1].view_instance is None
 
 
@@ -697,7 +702,7 @@ async def test_a_revoked_view_gets_disconnected_before_its_release():
     try:
         await LiveViewConsumer._release_revoked_view(view)
         assert _calls("disconnected") == [tag]
-        assert view._djust_waiters_closed is True
+        assert view._djust_child_disposed is True
     finally:
         await _close(communicator)
     assert _calls("disconnected") == [tag], "the disconnect ran it a second time"

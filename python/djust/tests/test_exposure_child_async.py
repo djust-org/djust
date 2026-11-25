@@ -35,12 +35,11 @@ async def drain_owned_tasks(child):
 
 @pytest.mark.parametrize("explicit", [False, True])
 async def test_background_contract_failure_withholds_html_and_completes_batch(
-    monkeypatch, explicit, caplog
+    monkeypatch, explicit, caplog, settings
 ):
     from djust.tests.test_runtime_child_routing_1892 import (
         _StickyChildView,
-        _make_runtime_with_view,
-        _make_sticky_parent,
+        _mounted_sticky_parent,
     )
 
     started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -54,16 +53,17 @@ async def test_background_contract_failure_withholds_html_and_completes_batch(
 
         self.start_async(work, name="contract-failure")
 
-    monkeypatch.setattr(EventChild if explicit else _StickyChildView, "begin", begin, raising=False)
     if explicit:
+        monkeypatch.setattr(EventChild, "begin", begin, raising=False)
         runtime, transport, _ = await mount()
         child_id = "menu"
         child = runtime.view_instance._get_child_view(child_id)
     else:
-        parent, child = _make_sticky_parent()
-        runtime, transport = _make_runtime_with_view(parent)
+        settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = ["djust.tests.test_runtime_child_routing_1892"]
+        parent, child, runtime, transport = await _mounted_sticky_parent()
+        monkeypatch.setattr(_StickyChildView, "begin", begin, raising=False)
         runtime._parameter_contract_view = "tests.Parent"
-        child_id = "child-1"
+        child_id = "child"
 
     original_send = transport.send
 

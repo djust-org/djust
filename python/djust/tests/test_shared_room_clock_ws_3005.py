@@ -56,7 +56,7 @@ class RecordingConsumer(LiveViewConsumer):
 
 
 class RoomView(TenantMixin, PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ room }}:{{ refreshes }}</div>"
     presence_key = "room:{room}"
     room_clock = CLOCK
@@ -111,7 +111,7 @@ class PollView(RoomView):
 
 
 class PlainView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>plain</div>"
 
     def mount(self, request, **kwargs):

@@ -8,6 +8,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.test import override_settings
 
 from djust import LiveView
+from djust.decorators import state
+from djust.testing import live_session, with_live_session
 
 pytestmark = [
     pytest.mark.django_db,
@@ -31,9 +33,46 @@ def write(directory, name, source):
     path.write_text(source, encoding="utf-8")
 
 
+class _Fields(LiveView):
+    """A view that declares the names these templates read (an explicit view renders only those)."""
+
+    exposure_policy = "explicit"
+    value = state("")
+    query = state("")
+    is_admin = state(False)
+    untrusted = state("")
+    rows = state(default_factory=list)
+    show = state(False)
+    left = state("")
+    right = state("")
+    a = state("")
+    b = state("")
+    selected = state("")
+    which = state("")
+    target = state("")
+    alternate = state("")
+
+
+def assert_refused_as_a_protected_error(view_class, request, caplog, *leaks):
+    """An explicit page answers a refused render with the project's 500, never the detail.
+
+    The refusal itself is the guard under test: ``log_exception_detail`` (#4180) puts
+    its exception class in the server log, while the page names nothing.
+    """
+    with override_settings(LIVEVIEW_CONFIG={"log_exception_detail": True}):
+        response = view_class.as_view()(request)
+    assert response.status_code == 500
+    assert "ImproperlyConfigured" in caplog.text
+    body = response.content.decode()
+    assert "ImproperlyConfigured" not in body
+    for leak in leaks:
+        assert leak not in body
+    return response
+
+
 def view_class(name="page.html"):
-    class PartialView(LiveView):
-        exposure_policy = "legacy"
+    class PartialView(_Fields):
+        exposure_policy = "explicit"
         template_name = name
 
     return PartialView
@@ -178,8 +217,8 @@ async def test_actual_websocket_mount_and_event_use_partial_root(tmp_path):
         "{% with selected=value %}{% partial page %}{% endwith %}<footer>FOOTER</footer>",
     )
 
-    class PartialRootSocketView(LiveView):
-        exposure_policy = "legacy"
+    class PartialRootSocketView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -193,7 +232,7 @@ async def test_actual_websocket_mount_and_event_use_partial_root(tmp_path):
     with override_settings(
         TEMPLATES=templates_for(tmp_path), LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=False
     ):
-        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             connected, _ = await comm.connect()
             assert connected
@@ -233,12 +272,10 @@ def test_server_patches_apply_to_browser_parsed_http_page(tmp_path):
         "{% if show %}<i>stable</i>{% endif %}<b>end</b></main>{% endpartialdef %}"
         "{% with selected=value %}{% partial page %}{% endwith %}</body></html>",
     )
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
 
-    class BrowserPartialView(LiveView):
-        exposure_policy = "legacy"
+    class BrowserPartialView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -246,8 +283,7 @@ def test_server_patches_apply_to_browser_parsed_http_page(tmp_path):
             self.show = True
 
     request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
+    request = with_live_session(request)
     with override_settings(TEMPLATES=templates_for(tmp_path)):
         response = BrowserPartialView.as_view()(request)
         assert response.status_code == 200
@@ -304,8 +340,6 @@ def test_html5_parser_context_cannot_create_a_phantom_root(tmp_path, shell, root
 
 
 def test_real_http_get_mounts_root_from_executed_partial(tmp_path):
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
 
     write(
@@ -316,16 +350,15 @@ def test_real_http_get_mounts_root_from_executed_partial(tmp_path):
         "{% with selected=value %}{% partial page %}{% endwith %}</body></html>",
     )
 
-    class HTTPPartialView(LiveView):
-        exposure_policy = "legacy"
+    class HTTPPartialView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
             self.value = "http"
 
     request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
+    request = with_live_session(request)
     with override_settings(TEMPLATES=templates_for(tmp_path)):
         response = HTTPPartialView.as_view()(request)
     assert response.status_code == 200
@@ -345,8 +378,8 @@ def test_http_and_websocket_mount_ids_match_for_partial_root(tmp_path):
         "{% with selected=value %}{% partial page %}{% endwith %}",
     )
 
-    class ParityPartialView(LiveView):
-        exposure_policy = "legacy"
+    class ParityPartialView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -357,12 +390,12 @@ def test_http_and_websocket_mount_ids_match_for_partial_root(tmp_path):
 
 
 def test_partial_root_tracks_dynamic_template_changes_and_binding_authority(tmp_path):
-    class DynamicPartialView(LiveView):
-        exposure_policy = "legacy"
-        which = "first"
-        first = "first-value"
-        second = "second-value"
-        is_admin = False
+    class DynamicPartialView(_Fields):
+        exposure_policy = "explicit"
+        which = state("first")
+        first = state("first-value")
+        second = state("second-value")
+        is_admin = state(False)
 
         @property
         def template(self):
@@ -389,13 +422,9 @@ def test_partial_root_tracks_dynamic_template_changes_and_binding_authority(tmp_
     assert view.first == "first-value"
 
 
-@pytest.mark.parametrize("policy", ["explicit"])  # 2.0 removed the legacy cache arm
-def test_partial_root_restoration_respects_exposure_cache_isolation(
-    tmp_path, rf, monkeypatch, policy
-):
+def test_partial_root_restoration_respects_exposure_cache_isolation(tmp_path, rf, monkeypatch):
     from types import SimpleNamespace
 
-    from djust.decorators import state
     from djust.state_backends.memory import InMemoryStateBackend
 
     write(
@@ -406,40 +435,25 @@ def test_partial_root_restoration_respects_exposure_cache_isolation(
     backend = InMemoryStateBackend()
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
 
-    class LegacyPartialView(LiveView):
-        exposure_policy = "legacy"
-        template_name = "page.html"
-        value = "default"
-
-    class ExplicitPartialView(LiveView):
+    class ExplicitPartialView(_Fields):
         template_name = "page.html"
         exposure_policy = "explicit"
         value = state("default", persist="server")
 
-        def get_context_data(self, **kwargs):
-            return super().get_context_data(value=self.value, **kwargs)
-
-    cls = LegacyPartialView if policy == "legacy" else ExplicitPartialView
     request = rf.get("/same-page/")
     request.session = SimpleNamespace(session_key="partial-root-session")
     with override_settings(TEMPLATES=templates_for(tmp_path)):
-        original = cls()
+        original = ExplicitPartialView()
         original.value = "original"
         first, _, _ = original.render_with_diff(request)
         assert "original" in first
-        if policy == "legacy":
-            assert backend._cache, "legacy test must exercise real snapshot storage"
-        else:
-            assert not backend._cache, "explicit render context must not enter the legacy backend"
-        restored = cls()
+        assert not backend._cache, "explicit render context must not enter the legacy backend"
+        restored = ExplicitPartialView()
         restored._initialize_rust_view(request)
-        if policy == "legacy":
-            assert "original" in restored._rust_view.render()
-        else:
-            assert "original" not in restored._rust_view.render()
-            html, _, _ = restored.render_with_diff(request)
-            assert "default" in html
-            assert not backend._cache
+        assert "original" not in restored._rust_view.render()
+        html, _, _ = restored.render_with_diff(request)
+        assert "default" in html
+        assert not backend._cache
 
 
 @pytest.mark.parametrize("transport", ["http", "diff"])
@@ -479,8 +493,8 @@ async def test_competing_forged_shell_root_rejects_websocket_mount(tmp_path):
     )
     events = []
 
-    class ForgedRootSocketView(LiveView):
-        exposure_policy = "legacy"
+    class ForgedRootSocketView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -494,7 +508,7 @@ async def test_competing_forged_shell_root_rejects_websocket_mount(tmp_path):
     with override_settings(
         TEMPLATES=templates_for(tmp_path), LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=False
     ):
-        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             connected, _ = await comm.connect()
             assert connected
@@ -539,9 +553,7 @@ def wrapper_context_processor(request):
 
 
 @pytest.mark.parametrize("forged", [False, True], ids=["benign-wrapper", "forged-wrapper"])
-def test_postprocessed_wrapper_rejects_forged_root_and_lazy_slot(tmp_path, forged):
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
+def test_postprocessed_wrapper_rejects_forged_root_and_lazy_slot(tmp_path, caplog, forged):
     from django.test import RequestFactory
 
     write(
@@ -558,14 +570,13 @@ def test_postprocessed_wrapper_rejects_forged_root_and_lazy_slot(tmp_path, forge
     templates = templates_for(tmp_path)
     templates[0]["OPTIONS"] = {"context_processors": [f"{__name__}.wrapper_context_processor"]}
 
-    class WrappedPartialView(LiveView):
-        exposure_policy = "legacy"
+    class WrappedPartialView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
         wrapper_template = "wrapper.html"
 
     request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
+    request = with_live_session(request)
     request.wrapper_content = (
         '<main dj-root dj-view="attacker.View">FORGED</main>'
         '<div dj-view="attacker.Child" dj-lazy></div>'
@@ -574,8 +585,7 @@ def test_postprocessed_wrapper_rejects_forged_root_and_lazy_slot(tmp_path, forge
     )
     with override_settings(TEMPLATES=templates):
         if forged:
-            with pytest.raises(ImproperlyConfigured):
-                WrappedPartialView.as_view()(request)
+            assert_refused_as_a_protected_error(WrappedPartialView, request, caplog, "FORGED")
             return
         response = WrappedPartialView.as_view()(request)
     assert response.status_code == 200
@@ -591,8 +601,8 @@ def test_fragment_with_dynamic_include_and_no_root_keeps_rendering(tmp_path):
     write(tmp_path, "first.html", "<b>FIRST</b>")
     write(tmp_path, "second.html", "<i>SECOND</i>")
 
-    class DynamicIncludeFragment(LiveView):
-        exposure_policy = "legacy"
+    class DynamicIncludeFragment(_Fields):
+        exposure_policy = "explicit"
         template = "<section>{% include selected %}</section>"
 
     with override_settings(TEMPLATES=templates_for(tmp_path)):
@@ -605,9 +615,8 @@ def test_fragment_with_dynamic_include_and_no_root_keeps_rendering(tmp_path):
         assert "SECOND" in html
 
 
-def test_forged_wrapper_failure_does_not_advance_cached_baseline(tmp_path, monkeypatch):
+def test_forged_wrapper_failure_does_not_advance_cached_baseline(tmp_path, monkeypatch, caplog):
     from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
 
     from djust.state_backends.memory import InMemoryStateBackend
@@ -627,16 +636,15 @@ def test_forged_wrapper_failure_does_not_advance_cached_baseline(tmp_path, monke
     backend = InMemoryStateBackend()
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
 
-    class CachedWrappedView(LiveView):
-        exposure_policy = "legacy"
+    class CachedWrappedView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
         wrapper_template = "wrapper.html"
 
         def mount(self, request, **kwargs):
             self.value = "before"
 
-    session = SessionStore()
-    session.create()
+    session = live_session()
 
     def request(content):
         result = RequestFactory().get("/cached-partial/")
@@ -650,10 +658,12 @@ def test_forged_wrapper_failure_does_not_advance_cached_baseline(tmp_path, monke
         assert response.status_code == 200
         html = response.content.decode()
         assert "dj-view=" in html and "CachedWrappedView" in html
-        with pytest.raises(ImproperlyConfigured):
-            CachedWrappedView.as_view()(
-                request('<main dj-root dj-view="attacker.View">FORGED</main>')
-            )
+        assert_refused_as_a_protected_error(
+            CachedWrappedView,
+            request('<main dj-root dj-view="attacker.View">FORGED</main>'),
+            caplog,
+            "FORGED",
+        )
         # 2.0: no legacy baseline is kept in the backend to advance at all.
         assert backend._cache == {}
         response = CachedWrappedView.as_view()(request("<header>WRAPPER</header>"))
@@ -661,8 +671,6 @@ def test_forged_wrapper_failure_does_not_advance_cached_baseline(tmp_path, monke
 
 
 def test_named_partial_root_resolves_relative_include_for_http_and_ws(tmp_path):
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
 
     write(tmp_path, "widgets/piece.html", "<b>{{ selected }}</b>")
@@ -674,16 +682,15 @@ def test_named_partial_root_resolves_relative_include_for_http_and_ws(tmp_path):
         "{% with selected=value %}{% partial page %}{% endwith %}",
     )
 
-    class RelativePartialView(LiveView):
-        exposure_policy = "legacy"
+    class RelativePartialView(_Fields):
+        exposure_policy = "explicit"
         template_name = "widgets/page.html"
 
         def mount(self, request, **kwargs):
             self.value = "relative"
 
     request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
+    request = with_live_session(request)
     with override_settings(TEMPLATES=templates_for(tmp_path)):
         response = RelativePartialView.as_view()(request)
         assert response.status_code == 200
@@ -697,9 +704,7 @@ def test_named_partial_root_resolves_relative_include_for_http_and_ws(tmp_path):
 
 
 @pytest.mark.parametrize("dynamic_include", [False, True], ids=["static", "dynamic"])
-def test_included_partial_root_cannot_precede_another_http_root(tmp_path, dynamic_include):
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
+def test_included_partial_root_cannot_precede_another_http_root(tmp_path, caplog, dynamic_include):
     from django.test import RequestFactory
 
     include = "{% include target %}" if dynamic_include else '{% include "child.html" %}'
@@ -710,19 +715,17 @@ def test_included_partial_root_cannot_precede_another_http_root(tmp_path, dynami
         "{% partialdef p %}<main dj-root>INNER</main>{% endpartialdef %}{% partial p %}",
     )
 
-    class CompetingIncludedRoots(LiveView):
-        exposure_policy = "legacy"
+    class CompetingIncludedRoots(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
             self.target = "child.html"
 
     request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
+    request = with_live_session(request)
     with override_settings(TEMPLATES=templates_for(tmp_path)):
-        with pytest.raises(ImproperlyConfigured):
-            CompetingIncludedRoots.as_view()(request)
+        assert_refused_as_a_protected_error(CompetingIncludedRoots, request, caplog, "INNER")
 
 
 @pytest.mark.django_db(transaction=True)
@@ -744,8 +747,8 @@ async def test_included_partial_root_cannot_precede_another_websocket_root(
     )
     events = []
 
-    class IncludedRootsSocketView(LiveView):
-        exposure_policy = "legacy"
+    class IncludedRootsSocketView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -759,7 +762,7 @@ async def test_included_partial_root_cannot_precede_another_websocket_root(
     with override_settings(
         TEMPLATES=templates_for(tmp_path), LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=False
     ):
-        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             connected, _ = await comm.connect()
             assert connected
@@ -800,8 +803,6 @@ def test_dynamic_root_attribute_cannot_authorize_injected_model_binding(tmp_path
 def test_stateful_include_is_evaluated_once_for_http_and_cached_baseline(tmp_path, monkeypatch):
     """The page and diff baseline must come from the same selected template."""
 
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
     from djust.state_backends.memory import InMemoryStateBackend
 
@@ -828,17 +829,17 @@ def test_stateful_include_is_evaluated_once_for_http_and_cached_baseline(tmp_pat
     backend = InMemoryStateBackend()
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
 
-    class StatefulIncludeView(LiveView):
-        exposure_policy = "legacy"
+    class StatefulIncludeView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
-        def mount(self, request, **kwargs):
-            self.chooser = chooser
+        def get_context_data(self, **kwargs):
+            context = super().get_context_data(**kwargs)
+            context["chooser"] = chooser
+            return context
 
     request = RequestFactory().get("/stateful-include/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
-    request.session.create()
+    request = with_live_session(request)
     with override_settings(TEMPLATES=templates_for(tmp_path)):
         response = StatefulIncludeView.as_view()(request)
     assert response.status_code == 200
@@ -898,8 +899,8 @@ async def test_websocket_cannot_update_field_from_forged_model_attribute(tmp_pat
     )
     mounted = []
 
-    class ForgedModelSocketView(LiveView):
-        exposure_policy = "legacy"
+    class ForgedModelSocketView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -912,7 +913,7 @@ async def test_websocket_cannot_update_field_from_forged_model_attribute(tmp_pat
     with override_settings(
         TEMPLATES=templates_for(tmp_path), LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=False
     ):
-        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             connected, _ = await comm.connect()
             assert connected
@@ -938,10 +939,8 @@ async def test_websocket_cannot_update_field_from_forged_model_attribute(tmp_pat
             globals().pop("ForgedModelSocketView", None)
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_partial_root_framework_state_is_not_application_private_state(tmp_path, policy):
+def test_partial_root_framework_state_is_not_application_private_state(tmp_path):
     from djust._exposure import explicit_state_projection
-    from djust.decorators import state
 
     write(
         tmp_path,
@@ -949,20 +948,11 @@ def test_partial_root_framework_state_is_not_application_private_state(tmp_path,
         "{% partialdef page %}<main dj-root>{{ value }}</main>{% endpartialdef %}{% partial page %}",
     )
 
-    class LegacyRootView(LiveView):
-        exposure_policy = "legacy"
-        template_name = "page.html"
-        value = "visible"
-
-    class ExplicitRootView(LiveView):
+    class ExplicitRootView(_Fields):
         template_name = "page.html"
         exposure_policy = "explicit"
         value = state("visible", persist="server")
 
-        def get_context_data(self, **kwargs):
-            return super().get_context_data(value=self.value, **kwargs)
-
-    cls = LegacyRootView if policy == "legacy" else ExplicitRootView
     framework_keys = {
         "_authenticated_partial_root",
         "_authenticated_partial_root_origin",
@@ -971,7 +961,7 @@ def test_partial_root_framework_state_is_not_application_private_state(tmp_path,
         "_pending_authenticated_page",
     }
     with override_settings(TEMPLATES=templates_for(tmp_path)):
-        view = cls()
+        view = ExplicitRootView()
         view._user_secret = "application-private"
         view.render_with_diff(None)
         # Exercise a pending transaction as well as the planned named root.
@@ -980,20 +970,14 @@ def test_partial_root_framework_state_is_not_application_private_state(tmp_path,
         view._snapshot_user_private_attrs()
         assert framework_keys <= view._framework_attrs
         assert not framework_keys & view._user_private_keys
-        if policy == "legacy":
-            private = view._get_private_state()
-            assert private["_user_secret"] == "application-private"
-            assert not framework_keys & private.keys()
-        else:
-            projection = explicit_state_projection(view, "server")
-            assert projection == {"value": "visible"}
-            assert not framework_keys & projection.keys()
+        projection = explicit_state_projection(view, "server")
+        assert projection == {"value": "visible"}
+        assert not framework_keys & projection.keys()
 
 
 def test_http_dynamic_include_transitions_between_fragment_and_partial_root(tmp_path, monkeypatch):
     """A shared session can move between a fragment and an authenticated root."""
     from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
     from djust.state_backends.memory import InMemoryStateBackend
 
@@ -1009,8 +993,8 @@ def test_http_dynamic_include_transitions_between_fragment_and_partial_root(tmp_
     monkeypatch.setattr("djust.state_backends.get_backend", lambda: backend)
     mounted = []
 
-    class DynamicIncludeView(LiveView):
-        exposure_policy = "legacy"
+    class DynamicIncludeView(_Fields):
+        exposure_policy = "explicit"
         template = "{% include selected %}"
 
         def mount(self, request, **kwargs):
@@ -1019,8 +1003,7 @@ def test_http_dynamic_include_transitions_between_fragment_and_partial_root(tmp_
             self.is_admin = False
             mounted.append(self)
 
-    session = SessionStore()
-    session.create()
+    session = live_session()
 
     def request(selected):
         result = RequestFactory().get("/dynamic-partial/")
@@ -1054,8 +1037,6 @@ def test_lazy_child_survives_partial_root_page_and_patch(tmp_path):
     import subprocess
     from pathlib import Path
 
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
 
     node = shutil.which("node")
@@ -1063,8 +1044,8 @@ def test_lazy_child_survives_partial_root_page_and_patch(tmp_path):
     if not node or not (repo / "node_modules" / "jsdom").is_dir():
         pytest.skip("node and jsdom are needed for the client replay")
 
-    class HydrationLazyChild(LiveView):
-        exposure_policy = "legacy"
+    class HydrationLazyChild(_Fields):
+        exposure_policy = "explicit"
         template = "<div><p>lazy child</p></div>"
 
     globals()["HydrationLazyChild"] = HydrationLazyChild
@@ -1077,16 +1058,15 @@ def test_lazy_child_survives_partial_root_page_and_patch(tmp_path):
         "</main>{% endpartialdef %}{% partial page %}</body></html>",
     )
 
-    class HydrationPartialView(LiveView):
-        exposure_policy = "legacy"
+    class HydrationPartialView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
             self.value = "before"
 
     request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
+    request = with_live_session(request)
     try:
         with override_settings(
             TEMPLATES=templates_for(tmp_path),
@@ -1126,8 +1106,6 @@ def test_lazy_child_survives_partial_root_page_and_patch(tmp_path):
 
 
 def test_partial_root_with_literal_angle_brackets_in_quoted_attribute(tmp_path):
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
 
     write(
@@ -1137,16 +1115,15 @@ def test_partial_root_with_literal_angle_brackets_in_quoted_attribute(tmp_path):
         "{% endpartialdef %}{% partial page %}",
     )
 
-    class LiteralAngleRootView(LiveView):
-        exposure_policy = "legacy"
+    class LiteralAngleRootView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
             self.value = "before"
 
     request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
+    request = with_live_session(request)
     with override_settings(TEMPLATES=templates_for(tmp_path)):
         response = LiteralAngleRootView.as_view()(request)
         assert response.status_code == 200
@@ -1161,12 +1138,10 @@ def test_partial_root_with_literal_angle_brackets_in_quoted_attribute(tmp_path):
 
 
 def test_named_partial_root_registers_lazy_child_from_relative_include(tmp_path):
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
 
-    class RelativeLazyChild(LiveView):
-        exposure_policy = "legacy"
+    class RelativeLazyChild(_Fields):
+        exposure_policy = "explicit"
         template = "<div><p>lazy child</p></div>"
 
     globals()["RelativeLazyChild"] = RelativeLazyChild
@@ -1182,13 +1157,12 @@ def test_named_partial_root_registers_lazy_child_from_relative_include(tmp_path)
         "{% endpartialdef %}{% partial page %}",
     )
 
-    class RelativeLazyPage(LiveView):
-        exposure_policy = "legacy"
+    class RelativeLazyPage(_Fields):
+        exposure_policy = "explicit"
         template_name = "widgets/page.html"
 
     request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
+    request = with_live_session(request)
     try:
         with override_settings(
             TEMPLATES=templates_for(tmp_path), LIVEVIEW_ALLOWED_MODULES=[__name__]
@@ -1209,8 +1183,6 @@ def test_browser_events_survive_conditional_partial_root_tag_replacement(tmp_pat
     import subprocess
     from pathlib import Path
 
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
 
     node = shutil.which("node")
@@ -1235,8 +1207,8 @@ def test_browser_events_survive_conditional_partial_root_tag_replacement(tmp_pat
     )
     from djust.decorators import event_handler
 
-    class SwitchingPartialView(LiveView):
-        exposure_policy = "legacy"
+    class SwitchingPartialView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -1249,8 +1221,7 @@ def test_browser_events_survive_conditional_partial_root_tag_replacement(tmp_pat
             self.value = "after" if self.value == "before" else "final"
 
     request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
+    request = with_live_session(request)
     with override_settings(TEMPLATES=templates_for(tmp_path)):
         response = SwitchingPartialView.as_view()(request)
         assert response.status_code == 200
@@ -1324,8 +1295,8 @@ async def test_websocket_events_continue_after_conditional_partial_root_switch(t
         "{% if alternate %}{% partial second %}{% else %}{% partial first %}{% endif %}",
     )
 
-    class SwitchingSocketView(LiveView):
-        exposure_policy = "legacy"
+    class SwitchingSocketView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
@@ -1341,7 +1312,7 @@ async def test_websocket_events_continue_after_conditional_partial_root_switch(t
     with override_settings(
         TEMPLATES=templates_for(tmp_path), LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=False
     ):
-        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             connected, _ = await comm.connect()
             assert connected
@@ -1390,8 +1361,8 @@ def test_untrusted_comment_cannot_downgrade_authored_page_root_to_fragment(tmp_p
     """Opaque markup hiding the page root must not grant shell model fields."""
     write(tmp_path, "blank.html", "")
 
-    class ConditionalRootPage(LiveView):
-        exposure_policy = "legacy"
+    class ConditionalRootPage(_Fields):
+        exposure_policy = "explicit"
         template = (
             "{{ a|safe }}<main dj-root>real</main>{{ b|safe }}"
             '<input dj-model="is_admin">{% include selected %}'
@@ -1411,8 +1382,8 @@ def test_ordinary_table_root_cannot_downgrade_to_sticky_view(tmp_path):
     """A guarded ordinary render must not choose a different live root."""
     write(tmp_path, "blank.html", "")
 
-    class StickyAndTableView(LiveView):
-        exposure_policy = "legacy"
+    class StickyAndTableView(_Fields):
+        exposure_policy = "explicit"
         template = (
             '<div dj-root dj-view="demo.Child" dj-sticky-root>STICKY_CHILD</div>'
             "<table dj-root><tbody><tr><td>{{ value }}</td></tr></tbody></table>"
@@ -1432,8 +1403,6 @@ def test_ordinary_table_root_cannot_downgrade_to_sticky_view(tmp_path):
 
 def test_partial_body_root_mounts_and_updates_through_http_and_diff(tmp_path):
     """A genuine authored body root remains the page root in both transports."""
-    from django.contrib.auth.models import AnonymousUser
-    from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
 
     write(
@@ -1444,16 +1413,15 @@ def test_partial_body_root_mounts_and_updates_through_http_and_diff(tmp_path):
         "{% partial page %}</html>",
     )
 
-    class PartialBodyView(LiveView):
-        exposure_policy = "legacy"
+    class PartialBodyView(_Fields):
+        exposure_policy = "explicit"
         template_name = "page.html"
 
         def mount(self, request, **kwargs):
             self.value = "before"
 
     request = RequestFactory().get("/")
-    request.user = AnonymousUser()
-    request.session = SessionStore()
+    request = with_live_session(request)
     with override_settings(TEMPLATES=templates_for(tmp_path)):
         response = PartialBodyView.as_view()(request)
         assert response.status_code == 200

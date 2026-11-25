@@ -46,7 +46,7 @@ from djust.decorators import event_handler
 class _RecoveryView(LiveView):
     """A counter whose event is a render-send that arms recovery (#1817)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     template = (
         '<div dj-view="djust.tests.test_recovery_version_staleness_1817._RecoveryView" '

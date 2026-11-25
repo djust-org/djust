@@ -65,7 +65,7 @@ if not settings.configured:
 
 from djust import LiveView  # noqa: E402
 from djust.components.base import LiveComponent  # noqa: E402
-from djust.decorators import event_handler  # noqa: E402
+from djust.decorators import event_handler, state  # noqa: E402
 from djust.runtime import ViewRuntime  # noqa: E402
 
 
@@ -134,10 +134,11 @@ def _frame_types(transport: MockTransport) -> List[str]:
 class _StickyChildView(LiveView):
     """A sticky child whose ``bump`` handler mutates state and re-renders."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "child"
     template = "<div>count={{ count }}</div>"
+    count = state(0)
 
     def mount(self, request, **kwargs):
         self.count = 0
@@ -146,17 +147,15 @@ class _StickyChildView(LiveView):
     def bump(self, amount: int = 1, **kwargs):
         self.count += amount
 
-    def get_context_data(self, **kwargs):
-        return {"count": self.count, "view": self}
-
 
 class _BrokenChildView(LiveView):
     """A child whose template render raises with an attacker-controlled-shaped
     message so the embedded-error escape/DEBUG-gate can be exercised."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "broken"
+    count = state(0)
 
     def mount(self, request, **kwargs):
         self.count = 0
@@ -168,21 +167,30 @@ class _BrokenChildView(LiveView):
     def get_template(self):  # noqa: D401 - test hook
         raise ValueError("boom --><script>alert(1)</script>")
 
-    def get_context_data(self, **kwargs):
-        return {"count": self.count, "view": self}
-
 
 class _ParentView(LiveView):
     """A parent page that hosts both a sticky child and a LiveComponent."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0"><h1>parent={{ parent_count }}</h1></div>'
+    parent_count = state(0)
 
     def mount(self, request, **kwargs):
         self.parent_count = 0
 
-    def get_context_data(self, **kwargs):
-        return {"parent_count": self.parent_count, "view": self}
+
+class _ParentWithChild(_ParentView):
+    """The parent that renders the sticky child through ``{% live_render %}``.
+
+    An explicit child is authorized by the mount that rendered it, so the
+    child is mounted by the parent's own template, not registered by hand.
+    """
+
+    exposure_policy = "explicit"
+    template = (
+        '<div dj-root dj-id="0"><h1>parent={{ parent_count }}</h1>{% load live_tags %}'
+        '{% live_render "djust.tests.test_runtime_child_routing_1892._StickyChildView" sticky=True %}</div>'
+    )
 
 
 class _ClickComponent(LiveComponent):
@@ -204,7 +212,18 @@ def _make_runtime_with_view(view: LiveView) -> tuple[ViewRuntime, MockTransport]
     return runtime, transport
 
 
+async def _mounted_runtime(view: LiveView) -> tuple[ViewRuntime, MockTransport]:
+    """A runtime that really mounted ``view`` on a saved session (explicit turns need an owner)."""
+    from djust.tests._live_session import amount_on_runtime
+
+    transport = MockTransport()
+    runtime = ViewRuntime(transport)
+    await amount_on_runtime(runtime, view, url="/x/")
+    return runtime, transport
+
+
 def _make_sticky_parent() -> tuple[_ParentView, _StickyChildView]:
+    """Hand-registered parent and child, for tests that never dispatch an explicit turn."""
     parent = _ParentView()
     parent.mount(None)
     child = _StickyChildView()
@@ -213,12 +232,23 @@ def _make_sticky_parent() -> tuple[_ParentView, _StickyChildView]:
     return parent, child
 
 
+async def _mounted_sticky_parent() -> tuple[
+    _ParentView, _StickyChildView, ViewRuntime, MockTransport
+]:
+    """Mount the parent on a runtime; its template mounts the sticky child."""
+    parent = _ParentWithChild()
+    runtime, transport = await _mounted_runtime(parent)
+    child = parent._get_child_view("child")
+    assert isinstance(child, _StickyChildView)
+    return parent, child, runtime, transport
+
+
 # ------------------------------------------------------------------ #
 # Subsystem 1 — view_id sticky-child routing
 # ------------------------------------------------------------------ #
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestRuntimeStickyChildRouting:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("removed", [False, True])
@@ -228,8 +258,7 @@ class TestRuntimeStickyChildRouting:
     ):
         import asyncio
 
-        parent, child = _make_sticky_parent()
-        runtime, transport = _make_runtime_with_view(parent)
+        parent, child, runtime, transport = await _mounted_sticky_parent()
         runtime._parameter_contract_view = "tests.Parent"
         release = asyncio.Event()
         started = asyncio.Event()
@@ -253,7 +282,7 @@ class TestRuntimeStickyChildRouting:
         monkeypatch.setattr(_StickyChildView, "handle_async_result", handle_result, raising=False)
         try:
             await runtime.dispatch_event(
-                {"type": "event", "event": "begin", "params": {"view_id": "child-1"}, "ref": 12}
+                {"type": "event", "event": "begin", "params": {"view_id": "child"}, "ref": 12}
             )
             ack = next(f for f in transport.sent if f.get("ref") == 12)
             assert ack["async_pending"] is True
@@ -262,7 +291,7 @@ class TestRuntimeStickyChildRouting:
             assert results == []
             assert "parent" in parent._async_tasks
             if removed:
-                monkeypatch.setattr(parent, "_get_all_child_views", lambda: {})
+                monkeypatch.setattr(parent, "_child_views", {})
             release.set()
             for _ in range(100):
                 if any(f["type"] == "async_complete" for f in transport.sent):
@@ -272,18 +301,20 @@ class TestRuntimeStickyChildRouting:
             updates = [f for f in transport.sent if f.get("source") == "async"]
             if removed:
                 assert results == []
-                assert updates == []
+                # An explicit owner reports the lost child value-free and renders nothing.
+                assert [u["code"] for u in updates] == ["async_error"]
+                assert all(u["type"] != "embedded_update" for u in updates)
             else:
                 assert results == ["child"]
                 assert len(updates) == 1
                 assert updates[0]["type"] == "embedded_update"
-                assert updates[0]["view_id"] == "child-1"
+                assert updates[0]["view_id"] == "child"
                 assert "count=9" in updates[0]["html"]
                 if strict:
                     owner = next(
                         owner
                         for owner in updates[0]["parameter_contracts"]["owners"]
-                        if owner["view_id"] == "child-1"
+                        if owner["view_id"] == "child"
                     )
                     assert owner["handlers"]["begin"]["policy"] == "strict"
                     assert updates[0]["parameter_contract_view"] == "tests.Parent"
@@ -304,14 +335,13 @@ class TestRuntimeStickyChildRouting:
         would resolve a handler on the PARENT (which has none), so this would
         emit an error / mis-route rather than an embedded_update.
         """
-        parent, child = _make_sticky_parent()
-        runtime, transport = _make_runtime_with_view(parent)
+        parent, child, runtime, transport = await _mounted_sticky_parent()
 
         await runtime.dispatch_event(
             {
                 "type": "event",
                 "event": "bump",
-                "params": {"view_id": "child-1", "amount": 3},
+                "params": {"view_id": "child", "amount": 3},
                 "ref": 7,
             }
         )
@@ -323,7 +353,7 @@ class TestRuntimeStickyChildRouting:
 
         assert "embedded_update" in _frame_types(transport), _frame_types(transport)
         frame = next(f for f in transport.sent if f.get("type") == "embedded_update")
-        assert frame["view_id"] == "child-1"
+        assert frame["view_id"] == "child"
         assert frame["event_name"] == "bump"
         assert "count=3" in frame["html"]
         assert frame["ref"] == 7  # #560 ref echo
@@ -336,8 +366,7 @@ class TestRuntimeStickyChildRouting:
         """A bogus ``view_id`` returns an ``Embedded view not found`` error and
         NEVER echoes the client-supplied id into the user-facing error string
         (security: ``sanitize_for_log`` only, in the structured ``extra``)."""
-        parent, _child = _make_sticky_parent()
-        runtime, transport = _make_runtime_with_view(parent)
+        parent, _child, runtime, transport = await _mounted_sticky_parent()
 
         payload = "<script>alert(1)</script>"
         await runtime.dispatch_event(
@@ -363,8 +392,7 @@ class TestRuntimeStickyChildRouting:
         raw id into ``error=`` the previous test would go red. Here we assert
         the positive shape that makes the security guard load-bearing.
         """
-        parent, _child = _make_sticky_parent()
-        runtime, transport = _make_runtime_with_view(parent)
+        parent, _child, runtime, transport = await _mounted_sticky_parent()
 
         await runtime.dispatch_event(
             {"type": "event", "event": "bump", "params": {"view_id": "nope-99"}}
@@ -382,7 +410,7 @@ class TestRuntimeStickyChildRouting:
 # ------------------------------------------------------------------ #
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestRuntimeComponentRouting:
     @pytest.mark.asyncio
     async def test_component_id_routes_to_component_handler(self):
@@ -397,7 +425,7 @@ class TestRuntimeComponentRouting:
         component = _ClickComponent(component_id="comp-1")
         parent._components["comp-1"] = component
 
-        runtime, transport = _make_runtime_with_view(parent)
+        runtime, transport = await _mounted_runtime(parent)
 
         await runtime.dispatch_event(
             {
@@ -429,7 +457,7 @@ class TestRuntimeComponentRouting:
         parent.mount(None)
         component = _ClickComponent(component_id="comp-2")
         parent._components["comp-2"] = component
-        runtime, _transport = _make_runtime_with_view(parent)
+        runtime, _transport = await _mounted_runtime(parent)
 
         async def wait_for_click():
             return await parent.wait_for_event("item_clicked", timeout=2.0)
@@ -455,7 +483,7 @@ class TestRuntimeComponentRouting:
         """An unknown ``component_id`` returns a ``Component not found`` error."""
         parent = _ParentView()
         parent.mount(None)
-        runtime, transport = _make_runtime_with_view(parent)
+        runtime, transport = await _mounted_runtime(parent)
 
         await runtime.dispatch_event(
             {
@@ -485,7 +513,7 @@ class TestRuntimeComponentRouting:
         parent.mount(None)
         component = _ClickComponent(component_id="comp-3")
         parent._components["comp-3"] = component
-        runtime, transport = _make_runtime_with_view(parent)
+        runtime, transport = await _mounted_runtime(parent)
 
         # Premise: the parent has no ``item_clicked`` handler — so validating
         # against the parent (the gate-off shape) WOULD fail.
@@ -510,7 +538,7 @@ class TestRuntimeComponentRouting:
 # ------------------------------------------------------------------ #
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestRuntimeEmbeddedRender:
     @pytest.mark.asyncio
     async def test_embedded_render_uses_single_sourced_helper(self):
@@ -519,8 +547,7 @@ class TestRuntimeEmbeddedRender:
         parallel copy — the #1646 cure for the embedded-render subsystem)."""
         from djust import websocket as ws_mod
 
-        parent, child = _make_sticky_parent()
-        runtime, transport = _make_runtime_with_view(parent)
+        parent, child, runtime, transport = await _mounted_sticky_parent()
 
         calls: List[Any] = []
         original = ws_mod.render_embedded_child_html
@@ -535,7 +562,7 @@ class TestRuntimeEmbeddedRender:
                 {
                     "type": "event",
                     "event": "bump",
-                    "params": {"view_id": "child-1", "amount": 1},
+                    "params": {"view_id": "child", "amount": 1},
                 }
             )
         finally:
@@ -545,53 +572,25 @@ class TestRuntimeEmbeddedRender:
         frame = next(f for f in transport.sent if f.get("type") == "embedded_update")
         assert "count=1" in frame["html"]
 
-    def test_embedded_error_escapes_and_debug_gates_verbatim(self):
-        """The security-hardened embedded-error path (escape + DEBUG-gate,
-        #1646) is preserved verbatim in the single-sourced helper.
+    def test_an_explicit_embedded_render_failure_is_value_free(self):
+        """An explicit child's render failure raises a value-free error (#1646, D-a).
 
-        DEBUG=True → escaped detail inside the comment (no comment-breakout);
-        DEBUG=False → generic message, no detail leak (CWE-209/CWE-79).
+        The legacy path returned an escaped HTML comment (``-->`` breakout,
+        CWE-79) and detail under DEBUG. An explicit child never turns the
+        exception text into page markup: the helper raises a fixed error that
+        names neither the message nor its markup, under DEBUG too.
         """
         from django.test import override_settings
 
+        from djust._exposure import ExposureError
         from djust.websocket import render_embedded_child_html
 
         child = _BrokenChildView()
         child.mount(None)
 
-        with override_settings(DEBUG=True):
-            out = render_embedded_child_html(child)
-        # The attacker-shaped ``-->`` / ``<script>`` is escaped — the comment is
-        # not broken out of, and no live tag is injected.
-        assert "-->" not in out[:-3] if out.endswith("-->") else True
-        assert "<script>" not in out
-        assert "&lt;script&gt;" in out
-        assert "&gt;" in out  # the ``>`` of ``-->`` was escaped too
-
-        with override_settings(DEBUG=False):
-            out_prod = render_embedded_child_html(child)
-        # Production: generic message, zero exception detail.
-        assert out_prod == "<!-- Error rendering embedded child -->"
-        assert "script" not in out_prod
-        assert "boom" not in out_prod
-
-    def test_gate_off_unescaped_error_would_break_out(self):
-        """GATE-OFF (#1468): prove escape() is load-bearing.
-
-        If the helper returned the RAW ``str(e)`` (the pre-#1646 shape), the
-        ``-->`` in the message would break out of the HTML comment and the
-        ``<script>`` would land in live DOM. We construct that raw string here
-        and assert it DOES break out — i.e. the escaped output the helper
-        actually produces is materially safer.
-        """
-        from django.utils.html import escape
-
-        raw_msg = "boom --><script>alert(1)</script>"
-        raw_comment = f"<!-- Error rendering embedded child: {raw_msg} -->"
-        # The unescaped (gate-off) shape breaks out of the comment + injects a tag.
-        assert "--><script>" in raw_comment
-
-        escaped_comment = f"<!-- Error rendering embedded child: {escape(raw_msg)} -->"
-        # The escaped (real) shape does NOT break out — the comment stays intact.
-        assert "--><script>" not in escaped_comment
-        assert "&lt;script&gt;" in escaped_comment
+        for debug in (True, False):
+            with override_settings(DEBUG=debug), pytest.raises(ExposureError) as refused:
+                render_embedded_child_html(child)
+            assert str(refused.value) == "Explicit child rendering unavailable"
+            assert "boom" not in str(refused.value)
+            assert "<script>" not in str(refused.value)

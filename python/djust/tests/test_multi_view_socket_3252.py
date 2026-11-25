@@ -41,7 +41,7 @@ CONSUMERS: list = []
 class _Counted:
     """A view that counts its clicks and records the pushes it handles."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def _tagged(self):
         self._tag = type(self).__name__ + ":" + uuid.uuid4().hex[:8]
@@ -50,6 +50,12 @@ class _Counted:
 
     def mount(self, request, **kwargs):
         self._tagged()
+
+    def get_context_data(self, **kwargs):
+        # An explicit view renders only what it declares or supplies here.
+        context = super().get_context_data(**kwargs)
+        context["count"] = getattr(self, "count", 0)
+        return context
 
     @event_handler()
     def click(self, **kwargs):
@@ -545,7 +551,7 @@ async def test_unmounting_one_view_leaves_the_others_live():
 
         await communicator.send_json_to({"type": "unmount", "target_id": "lazy-1"})
         await _until(
-            lambda: ("unregistered", lazy) not in EVENTS and _members(_group(Lazy)) == [],
+            lambda: ("unregistered", lazy) in EVENTS and _members(_group(Lazy)) == [],
             "the unmount",
         )
         assert _members(_group(Lazy)) == []
@@ -557,7 +563,8 @@ async def test_unmounting_one_view_leaves_the_others_live():
         assert reply["type"] == "error"
         assert (await _event(communicator, "click", target_id="lazy-2"))["type"] != "error"
         assert (await _event(communicator, "click"))["type"] != "error"
-        assert EVENTS == [("clicked", lazy2), ("clicked", page)]
+        # An explicit view's disposal runs its ``_cleanup_on_unregister``.
+        assert EVENTS == [("unregistered", lazy), ("clicked", lazy2), ("clicked", page)]
 
         # Unmounting a view that is not mounted is a no-op.
         await communicator.send_json_to({"type": "unmount", "target_id": "lazy-1"})
@@ -733,8 +740,8 @@ async def test_an_explicit_view_in_a_slot_is_authorized_on_its_own():
         assert EVENTS == [("bumped", "explicit")]
 
         # The session the explicit view was mounted under is revoked: its next
-        # event is refused, and that view is torn down. The page view (legacy,
-        # not bound to the session) and the socket are not.
+        # event is refused, and that view is torn down. The page view is bound
+        # to the same session, so its next event is refused too; the socket is not.
         await sync_to_async(request.session.delete)()
         await communicator.send_json_to(
             {"type": "event", "event": "bump", "params": {}, "target_id": "explicit", "ref": 5}
@@ -750,7 +757,7 @@ async def test_an_explicit_view_in_a_slot_is_authorized_on_its_own():
         )
         assert EVENTS == [("bumped", "explicit")]
         reply = await _event(communicator, "click")
-        assert reply["type"] in ("patch", "html_update")
+        assert reply["type"] == "error" and reply["code"] == "permission_denied", reply
     finally:
         await _close(communicator)
 
@@ -1100,12 +1107,13 @@ async def test_hydrating_a_container_again_does_not_make_the_user_leave_and_rejo
         await _hydrate(communicator, SameUser, "same")
         assert EVENTS == [("joined", "one-user")]
         await _hydrate(communicator, SameUser, "same")
-        assert [e[0] for e in EVENTS] == ["joined"]
+        assert [e[0] for e in EVENTS if e[0] != "unregistered"] == ["joined"]
         assert len(await sync_to_async(PresenceManager.list_presences)("mv3252-same")) == 1
 
         await communicator.send_json_to({"type": "unmount", "target_id": "same"})
         await _until(lambda: ("left", "one-user") in EVENTS, "the leave after the last view")
-        assert [e[0] for e in EVENTS] == ["joined", "left"]
+        # (An explicit view's disposal also records its ``unregistered`` hook.)
+        assert [e[0] for e in EVENTS if e[0] != "unregistered"] == ["joined", "left"]
     finally:
         await _close(communicator)
 

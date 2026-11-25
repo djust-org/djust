@@ -7,7 +7,7 @@ across a reconnect or a Back is now only what it declares:
 * ``state(persist="client", client=True)`` travels in a signed token the
   browser echoes back, and a tampered, expired or foreign token is refused;
 * ``handle_restore`` runs after either restore;
-* a legacy-pinned view keeps nothing and mounts fresh.
+* (a legacy-pinned view keeping nothing was a legacy-policy test, deleted with the policy, #4195).
 
 Every case here drives a real ``WebsocketCommunicator`` against
 ``LiveViewConsumer`` with a real DB session, so the frames are the ones a
@@ -73,20 +73,6 @@ class ServerKept(LiveView):
 
     def get_context_data(self, **kwargs):
         return {"count": self.count, "restored": self.restored}
-
-
-class LegacyPlain(LiveView):
-    """A legacy-pinned view with no persistence of any kind."""
-
-    exposure_policy = "legacy"
-    template = '<div dj-view="' + MOD + '.LegacyPlain" dj-id="0"><b>n={{ n }}</b></div>'
-
-    def mount(self, request, **kwargs):
-        self.n = 0
-
-    @event_handler()
-    def bump(self, **kwargs):
-        self.n += 1
 
 
 @pytest.fixture(autouse=True)
@@ -308,38 +294,6 @@ async def test_server_state_restores_on_reconnect_and_handle_restore_runs():
         assert "count=0" in fresh["html"] and "restored=no" in fresh["html"], fresh["html"]
     finally:
         await stranger.disconnect()
-
-
-# --------------------------------------------------------------------------- #
-# A legacy-pinned view keeps nothing
-# --------------------------------------------------------------------------- #
-
-
-async def test_a_legacy_view_signs_nothing_and_mounts_fresh_on_reconnect():
-    from djust.tests.test_exposure_snapshots import _removed_legacy_token
-
-    key = await sync_to_async(_fresh_key)()
-    first = await _connect(key)
-    try:
-        mounted = await _mount(first, LegacyPlain)
-        assert TOKEN not in mounted, mounted.keys()
-        changed = await _bump(first)
-        assert changed["type"] in ("patch", "html_update") and TOKEN not in changed
-    finally:
-        await first.disconnect()
-
-    second = await _connect(key)
-    try:
-        plain = await _mount(second, LegacyPlain)
-        assert "n=0" in plain["html"], plain["html"]
-        # A token djust 1.x signed for this view and session, still in a
-        # browser after the upgrade, restores nothing.
-        old = _removed_legacy_token('{"n":7}', MOD + ".LegacyPlain", key)
-        for verb in ("mount", "live_redirect_mount"):
-            echoed = await _mount(second, LegacyPlain, token=old, verb=verb)
-            assert "n=0" in echoed["html"], (verb, echoed["html"])
-    finally:
-        await second.disconnect()
 
 
 # --------------------------------------------------------------------------- #
