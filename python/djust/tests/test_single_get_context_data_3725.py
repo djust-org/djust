@@ -14,7 +14,7 @@ The render path now takes the context the request path already computed
 What is pinned here, each by running the real thing:
 
 * the call count per transport (Django test client GET; ``WebsocketCommunicator``
-  mount; SSE mount), for legacy and explicit views, with and without ``super()``,
+  mount; SSE mount), for explicit views, with and without ``super()``,
   inline template and ``{% extends %}`` page shell;
 * that the HTML carries the value computed by THE one call (``stamp``), not a
   second pass's;
@@ -122,7 +122,7 @@ def _name(policy: str, use_super: bool, shell: bool) -> str:
 
 
 VIEWS: dict = {}
-for _policy in ("legacy", "explicit"):
+for _policy in ("explicit",):
     for _super in (True, False):
         for _shell in (False, True):
             _n = _name(_policy, _super, _shell)
@@ -167,10 +167,7 @@ def _make_empty(name: str, policy: str):
     return cls
 
 
-EMPTY = {
-    name: _make_empty(name, policy)
-    for name, policy in (("E_legacy", "legacy"), ("E_explicit", "explicit"))
-}
+EMPTY = {name: _make_empty(name, policy) for name, policy in (("E_explicit", "explicit"),)}
 urlpatterns.extend(path(n.lower() + "/", v.as_view()) for n, v in EMPTY.items())
 
 

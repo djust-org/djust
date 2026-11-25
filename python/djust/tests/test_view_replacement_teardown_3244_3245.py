@@ -1,6 +1,6 @@
 """#3244 / #3245: a view a transport discards is torn down, children included.
 
-#3244 — a legacy view's embedded (``{% live_render %}``) children:
+#3244 — a view's embedded (``{% live_render %}``) children:
 
 * WebSocket ``live_redirect`` left the non-sticky children registered and
   running (SSE ``_replace_view`` unregistered them), so an explicit child of a
@@ -125,7 +125,7 @@ class ExplicitKid(_Waits, LiveView):
 
 
 class Parent(_Waits, LiveView):
-    """A legacy page embedding a non-sticky legacy child, an explicit child
+    """A page embedding a non-sticky child, an explicit child
     and a sticky child."""
 
     exposure_policy = "explicit"
@@ -160,7 +160,7 @@ class Dest(_Waits, LiveView):
 
 
 class Alpha(_Waits, LiveView):
-    """A plain legacy page (the view a second mount replaces) with a child."""
+    """A plain page (the view a second mount replaces) with a child."""
 
     exposure_policy = "explicit"
     template = (
@@ -402,7 +402,8 @@ async def test_websocket_live_redirect_tears_down_the_legacy_views_children():
         # The non-sticky legacy child: unregistered, its waiter cancelled.
         await _until(lambda: ("cleanup", kid) in EVENTS, "the legacy child's waiter cleanup")
         _assert_waiter_cleaned(kid)
-        # Navigation teardown cancels the waiter without running the unregister hook.
+        # Navigation teardown cancels the waiter without running the unregister hook
+        # (test_exposure_child_lifecycle.py:445 pins ["unmount"] alone).
         assert VIEWS[kid]._djust_child_disposed is True
         # The explicit child of the legacy parent: disposed.
         assert explicit._djust_child_disposed is True
@@ -542,7 +543,8 @@ async def test_sse_navigation_cancels_the_legacy_childrens_waiters(caplog):
 
         await _until(lambda: ("cleanup", kid) in EVENTS, "the legacy child's waiter cleanup")
         _assert_waiter_cleaned(kid)
-        # Navigation teardown cancels the waiter without running the unregister hook.
+        # Navigation teardown cancels the waiter without running the unregister hook
+        # (test_exposure_child_lifecycle.py:445 pins ["unmount"] alone).
         assert explicit._djust_child_disposed is True
         # SSE does not preserve sticky children (``_replace_view``): the old
         # page's sticky child is torn down like any other, not leaked with a
@@ -636,7 +638,8 @@ async def test_a_second_mount_tears_down_the_replaced_view(caplog, monkeypatch):
         await _until(lambda: ("cleanup", kid) in EVENTS, "Alpha's child's waiter cleanup")
         _assert_waiter_cleaned(alpha)
         _assert_waiter_cleaned(kid)
-        # Navigation teardown cancels the waiter without running the unregister hook.
+        # Navigation teardown cancels the waiter without running the unregister hook
+        # (test_exposure_child_lifecycle.py:445 pins ["unmount"] alone).
         assert VIEWS[alpha]._djust_child_disposed is True
     finally:
         await _close(communicator)
@@ -958,4 +961,4 @@ async def test_live_render_discarding_a_legacy_sticky_child_uses_the_shared_tear
     _discard_sticky_child(parent, "dock", kid)
     assert parent._get_all_child_views() == {}
     assert kid._djust_child_disposed is True
-    assert sorted(hooks) == ["unmount", "unregister"]
+    assert hooks == ["unregister", "unmount"]

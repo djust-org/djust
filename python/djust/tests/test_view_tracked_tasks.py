@@ -57,6 +57,13 @@ class _ExplicitFollower(LiveView):
         return super().get_context_data(n=self.n, **kwargs)
 
 
+class _TrackedFollower(_ExplicitFollower):
+    """The same follower, handed over through ``track_task`` instead of ``create_task``."""
+
+    async def mount(self, request, **kwargs):
+        self.track_task(asyncio.ensure_future(_follow(type(self).__name__)))
+
+
 class _Other(LiveView):
     exposure_policy = "explicit"
     template = "<div dj-root><span>other</span></div>"
@@ -125,6 +132,14 @@ async def test_explicit_view_cancels_its_own_tasks_on_disconnect():
     await comm.disconnect()
     await _until(
         lambda: ("cancelled", "_ExplicitFollower") in EVENTS, "the follower to be cancelled"
+    )
+
+
+async def test_explicit_view_cancels_a_track_task_task_on_disconnect():
+    comm = await _mounted("_TrackedFollower")
+    await comm.disconnect()
+    await _until(
+        lambda: ("cancelled", "_TrackedFollower") in EVENTS, "the tracked follower to be cancelled"
     )
 
 
