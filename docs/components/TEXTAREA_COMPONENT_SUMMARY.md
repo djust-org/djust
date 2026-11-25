@@ -74,17 +74,15 @@ textarea = TextArea(
 ### Python Tests
 **File:** `repo-root/python/djust/tests/test_textarea_component_4243.py`
 
-✅ **All 10 tests passed:**
-1. ✓ Basic textarea rendering
-2. ✓ TextArea with initial value
-3. ✓ Required textarea with asterisk
-4. ✓ Invalid validation state
-5. ✓ Valid validation state
-6. ✓ Disabled textarea
-7. ✓ Readonly textarea
-8. ✓ Help text display
-9. ✓ Rust implementation availability
-10. ✓ XSS protection (HTML escaping)
+Eight tests cover:
+1. Basic textarea rendering
+2. TextArea with initial value
+3. Required textarea with asterisk
+4. Invalid validation state
+5. Valid validation state
+6. Disabled and readonly textarea
+7. Help text display
+8. XSS protection (HTML escaping)
 
 ### Rust Tests
 **Command:** `cargo test -p djust_components simple::textarea::tests`
