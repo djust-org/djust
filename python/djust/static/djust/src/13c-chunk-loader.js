@@ -66,6 +66,24 @@ function _djustClientNonce() {
     return any ? (any.nonce || any.getAttribute('nonce') || '') : '';
 }
 
+// A chunk URL from data-djust-chunks loads only from the origin that served
+// the client script itself (static() may point at a CDN), over http(s).
+// Anything else resolves to null and the chunk is reported as unloadable.
+function _djustSameOriginScriptUrl(url, own) {
+    try {
+        const base = own.src || window.location.href;
+        const resolved = new URL(url, base);
+        const expected = new URL(base).origin;
+        if ((resolved.protocol === 'https:' || resolved.protocol === 'http:') &&
+            resolved.origin === expected) {
+            return resolved.href;
+        }
+    } catch (_e) {
+        if (globalThis.djustDebug) console.log('[djust] bad chunk URL', _e);
+    }
+    return null;
+}
+
 function _djustChunkUrl(name) {
     const own = _djustClientScript ||
         document.querySelector('script[src*="djust/client-core"]');
@@ -78,7 +96,7 @@ function _djustChunkUrl(name) {
             // eslint-disable-next-line security/detect-object-injection
             const url = map && Object.prototype.hasOwnProperty.call(map, name) ? map[name] : null;
             if (typeof url === 'string') {
-                return url;
+                return _djustSameOriginScriptUrl(url, own);
             }
         } catch (_e) {
             if (globalThis.djustDebug) console.log('[djust] unreadable data-djust-chunks', _e);

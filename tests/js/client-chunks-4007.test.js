@@ -232,6 +232,20 @@ describe('core bundle: features a patch renders after init (#4007)', () => {
         expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/cursor-overlay.js']);
     });
 
+    it('a chunk URL from another origin is refused, not loaded', async () => {
+        const { window, loader } = page('<div dj-view="app.V"><div id="tab"></div></div>', {
+            chunkMap: { 'virtual-list': 'https://elsewhere.example/chunks/virtual-list.js' },
+        });
+        const errors = [];
+        window.console.error = (...a) => errors.push(a.join(' '));
+        await until(() => window.djustInitialized, 'init');
+        const tab = window.document.getElementById('tab');
+        tab.innerHTML = '<div dj-virtual="x"></div>';
+        window.djust.reinitAfterDOMUpdate(tab);
+        await until(() => errors.length === 1, 'failure report');
+        expect(chunkRequests(loader)).toEqual([]);
+    });
+
     it('a chunk that failed is not requested again on every patch', async () => {
         const { window, loader } = page('<div dj-view="app.V"><div id="tab"></div></div>', {
             chunkMap: { 'virtual-list': '/nowhere/chunks/missing.js' },
