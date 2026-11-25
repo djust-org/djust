@@ -7844,6 +7844,9 @@ function reinitAfterDOMUpdate(scope, changes) {
     window.djust._fullRescanPending = false;
     const scoped = changes && changes.scoped && !pendingFull && !window.djust._isReconnect
         && !_changesTouchRoots(changes) ? changes : null;
+    // A page-wide scan covers what was inserted between patches; collect anew
+    // from here (#4001 review: the next scoped record includes what follows).
+    if (!scoped && (!scope || scope === document) && typeof _ambientReset === 'function') _ambientReset();
     bindLiveViewEvents(scope, scoped);
     // A clear_draft() from an event handler arrives in a patch (#2971).
     applyDraftClearFlag(scoped);
@@ -12546,10 +12549,12 @@ function _applyPatchesInner(patches, rootEl, changes = null) {
     // Recorded by a MutationObserver rather than by each patch op, so every
     // path that inserts (placements, Replace, subtrees, virtual-list renders,
     // a hook's beforeUpdate) is covered; takeRecords() reads it synchronously.
-    const observer = changes && typeof MutationObserver === 'function'
-        ? new MutationObserver(() => {}) : null;
+    // It is the page's long-lived observer (_ambientStart): what was inserted
+    // or re-attributed since the last rescan, outside any patch, joins the
+    // record too.
+    const observer = changes ? _ambientStart() : null;
     if (observer) {
-        observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+        _ambientCollect(observer.takeRecords());
     } else if (patches && patches.length) {
         // A batch nobody records (a child or sticky view's patches, a cached
         // answer): nothing tells the next scoped rescan what it inserted, so
@@ -12566,9 +12571,78 @@ function _applyPatchesInner(patches, rootEl, changes = null) {
         }
         if (observer) {
             _summarizeMutations(observer.takeRecords(), changes);
-            observer.disconnect();
+            _ambientMergeInto(changes);
         }
     }
+}
+
+// #4001 review: a scoped rescan must not see only the patch window. Before it,
+// every patch scanned the page, so an element inserted between patches (by a
+// hook's mounted(), app code, a virtual list's scroll render) was bound by the
+// next patch. One observer, started by the first scoped patch or full rescan
+// and kept for the page's life, collects those elements and dj-* changes
+// between patches; the next patch's record includes them. Cost follows the
+// mutations, not the page. Past _AMBIENT_LIMIT entries it gives up and asks
+// for one full rescan instead. `var`: read before this module runs (#1370).
+var _ambientObserver = null; // eslint-disable-line no-var
+var _ambientAdded = null; // eslint-disable-line no-var
+var _ambientAttrs = null; // eslint-disable-line no-var
+const _AMBIENT_LIMIT = 5000;
+
+function _ambientCollect(records) {
+    if (!_ambientAdded) return;
+    for (const r of records) {
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => { if (n.nodeType === 1) _ambientAdded.add(n); });
+        } else if (r.type === 'attributes') {
+            let names = _ambientAttrs.get(r.target);
+            if (!names) _ambientAttrs.set(r.target, names = new Set());
+            names.add(r.attributeName);
+        }
+    }
+    if (_ambientAdded.size + _ambientAttrs.size > _AMBIENT_LIMIT) {
+        window.djust._fullRescanPending = true;
+        _ambientAdded.clear();
+        _ambientAttrs.clear();
+    }
+}
+
+function _ambientStart() {
+    if (!_ambientObserver && typeof MutationObserver === 'function') {
+        _ambientAdded = new Set();
+        _ambientAttrs = new Map();
+        _ambientObserver = new MutationObserver(_ambientCollect);
+        _ambientObserver.observe(document,
+            { subtree: true, childList: true, attributes: true, characterData: true });
+    }
+    return _ambientObserver;
+}
+
+/** A full rescan is about to cover the page: start collecting afresh from here. */
+function _ambientReset() {
+    if (!_ambientStart()) return;
+    _ambientObserver.takeRecords();
+    _ambientAdded.clear();
+    _ambientAttrs.clear();
+}
+
+/** Add what was collected between patches to a patch's record, then forget it. */
+function _ambientMergeInto(changes) {
+    if (!_ambientAdded || (!_ambientAdded.size && !_ambientAttrs.size)) return;
+    const all = new Set(changes.inserted);
+    _ambientAdded.forEach((n) => { if (n.isConnected) all.add(n); });
+    changes.inserted = Array.from(all).filter((n) => {
+        for (let p = n.parentNode; p; p = p.parentNode) if (all.has(p)) return false;
+        return true;
+    });
+    _ambientAttrs.forEach((names, el) => {
+        if (!el.isConnected) return;
+        const mine = changes.attrs.get(el);
+        if (mine) names.forEach((n) => mine.add(n));
+        else changes.attrs.set(el, names);
+    });
+    _ambientAdded.clear();
+    _ambientAttrs = new Map();
 }
 
 /**
@@ -12679,6 +12753,7 @@ if (typeof globalThis !== 'undefined') {
     globalThis.djust = globalThis.djust || {};
     globalThis.djust.applyPatches = applyPatches;
     globalThis.djust._summarizeMutations = _summarizeMutations;
+    globalThis.djust._ambientReset = _ambientReset;
 }
 
 // ============================================================================
@@ -15410,10 +15485,12 @@ function _mountHookEl(el, hooks, deferMissing) {
     // eslint-disable-next-line security/detect-object-injection
     const hookDef = hooks[hookName];
     if (!hookDef || (typeof hookDef !== 'object' && typeof hookDef !== 'function')) {
+        if (!hookDef) _unmountedHooks().add(el);
         if (!hookDef && deferMissing && _deferMissingHookSweep()) return;
         console.warn(`[dj-hook] No hook registered for "${hookName}"`);
         return;
     }
+    _unmountedHooks().delete(el);
     const entry = { hookName, instance: _createHookInstance(hookDef, el), el };
     _activeHooks.set(_getHookElId(el), entry);
     if (_hooksMountedInPass) _hooksMountedInPass.add(entry);
@@ -15512,8 +15589,25 @@ function _updateHookEntry(entry) {
  * definition asks for every render (`updateOn: 'render'`). Cost follows the
  * change and the number of mounted hooks, not the page.
  */
+// dj-hook elements seen while their hook was not registered (#4001 review): a
+// hook registered later (a dynamic import, after the #3992 retry) is mounted by
+// the next update, as the page-wide sweep did, without a page-wide sweep.
+// `var`, filled on first use: the init sweep can run before this module (#1370).
+var _unmountedHookEls; // eslint-disable-line no-var
+function _unmountedHooks() {
+    return _unmountedHookEls || (_unmountedHookEls = new Set());
+}
+
 function _changedHookElements(changes) {
     const els = new Set(_changedMatches(changes, '[dj-hook]'));
+    const waiting = _unmountedHooks();
+    if (waiting.size) {
+        const hooks = _getHookDefs();
+        waiting.forEach((el) => {
+            if (!el.isConnected) waiting.delete(el);
+            else if (hooks[el.getAttribute('dj-hook')]) els.add(el);
+        });
+    }
     changes.touched.forEach((node) => {
         for (let el = node; el && el.nodeType === 1; el = el.parentNode) {
             const entry = el._djustHookId && _activeHooks.get(el._djustHookId);

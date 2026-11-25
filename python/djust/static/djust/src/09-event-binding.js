@@ -2422,6 +2422,9 @@ function reinitAfterDOMUpdate(scope, changes) {
     window.djust._fullRescanPending = false;
     const scoped = changes && changes.scoped && !pendingFull && !window.djust._isReconnect
         && !_changesTouchRoots(changes) ? changes : null;
+    // A page-wide scan covers what was inserted between patches; collect anew
+    // from here (#4001 review: the next scoped record includes what follows).
+    if (!scoped && (!scope || scope === document) && typeof _ambientReset === 'function') _ambientReset();
     bindLiveViewEvents(scope, scoped);
     // A clear_draft() from an event handler arrives in a patch (#2971).
     applyDraftClearFlag(scoped);

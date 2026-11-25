@@ -294,10 +294,12 @@ function _mountHookEl(el, hooks, deferMissing) {
     // eslint-disable-next-line security/detect-object-injection
     const hookDef = hooks[hookName];
     if (!hookDef || (typeof hookDef !== 'object' && typeof hookDef !== 'function')) {
+        if (!hookDef) _unmountedHooks().add(el);
         if (!hookDef && deferMissing && _deferMissingHookSweep()) return;
         console.warn(`[dj-hook] No hook registered for "${hookName}"`);
         return;
     }
+    _unmountedHooks().delete(el);
     const entry = { hookName, instance: _createHookInstance(hookDef, el), el };
     _activeHooks.set(_getHookElId(el), entry);
     if (_hooksMountedInPass) _hooksMountedInPass.add(entry);
@@ -396,8 +398,25 @@ function _updateHookEntry(entry) {
  * definition asks for every render (`updateOn: 'render'`). Cost follows the
  * change and the number of mounted hooks, not the page.
  */
+// dj-hook elements seen while their hook was not registered (#4001 review): a
+// hook registered later (a dynamic import, after the #3992 retry) is mounted by
+// the next update, as the page-wide sweep did, without a page-wide sweep.
+// `var`, filled on first use: the init sweep can run before this module (#1370).
+var _unmountedHookEls; // eslint-disable-line no-var
+function _unmountedHooks() {
+    return _unmountedHookEls || (_unmountedHookEls = new Set());
+}
+
 function _changedHookElements(changes) {
     const els = new Set(_changedMatches(changes, '[dj-hook]'));
+    const waiting = _unmountedHooks();
+    if (waiting.size) {
+        const hooks = _getHookDefs();
+        waiting.forEach((el) => {
+            if (!el.isConnected) waiting.delete(el);
+            else if (hooks[el.getAttribute('dj-hook')]) els.add(el);
+        });
+    }
     changes.touched.forEach((node) => {
         for (let el = node; el && el.nodeType === 1; el = el.parentNode) {
             const entry = el._djustHookId && _activeHooks.get(el._djustHookId);

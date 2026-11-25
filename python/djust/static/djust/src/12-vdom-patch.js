@@ -3431,10 +3431,12 @@ function _applyPatchesInner(patches, rootEl, changes = null) {
     // Recorded by a MutationObserver rather than by each patch op, so every
     // path that inserts (placements, Replace, subtrees, virtual-list renders,
     // a hook's beforeUpdate) is covered; takeRecords() reads it synchronously.
-    const observer = changes && typeof MutationObserver === 'function'
-        ? new MutationObserver(() => {}) : null;
+    // It is the page's long-lived observer (_ambientStart): what was inserted
+    // or re-attributed since the last rescan, outside any patch, joins the
+    // record too.
+    const observer = changes ? _ambientStart() : null;
     if (observer) {
-        observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+        _ambientCollect(observer.takeRecords());
     } else if (patches && patches.length) {
         // A batch nobody records (a child or sticky view's patches, a cached
         // answer): nothing tells the next scoped rescan what it inserted, so
@@ -3451,9 +3453,78 @@ function _applyPatchesInner(patches, rootEl, changes = null) {
         }
         if (observer) {
             _summarizeMutations(observer.takeRecords(), changes);
-            observer.disconnect();
+            _ambientMergeInto(changes);
         }
     }
+}
+
+// #4001 review: a scoped rescan must not see only the patch window. Before it,
+// every patch scanned the page, so an element inserted between patches (by a
+// hook's mounted(), app code, a virtual list's scroll render) was bound by the
+// next patch. One observer, started by the first scoped patch or full rescan
+// and kept for the page's life, collects those elements and dj-* changes
+// between patches; the next patch's record includes them. Cost follows the
+// mutations, not the page. Past _AMBIENT_LIMIT entries it gives up and asks
+// for one full rescan instead. `var`: read before this module runs (#1370).
+var _ambientObserver = null; // eslint-disable-line no-var
+var _ambientAdded = null; // eslint-disable-line no-var
+var _ambientAttrs = null; // eslint-disable-line no-var
+const _AMBIENT_LIMIT = 5000;
+
+function _ambientCollect(records) {
+    if (!_ambientAdded) return;
+    for (const r of records) {
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => { if (n.nodeType === 1) _ambientAdded.add(n); });
+        } else if (r.type === 'attributes') {
+            let names = _ambientAttrs.get(r.target);
+            if (!names) _ambientAttrs.set(r.target, names = new Set());
+            names.add(r.attributeName);
+        }
+    }
+    if (_ambientAdded.size + _ambientAttrs.size > _AMBIENT_LIMIT) {
+        window.djust._fullRescanPending = true;
+        _ambientAdded.clear();
+        _ambientAttrs.clear();
+    }
+}
+
+function _ambientStart() {
+    if (!_ambientObserver && typeof MutationObserver === 'function') {
+        _ambientAdded = new Set();
+        _ambientAttrs = new Map();
+        _ambientObserver = new MutationObserver(_ambientCollect);
+        _ambientObserver.observe(document,
+            { subtree: true, childList: true, attributes: true, characterData: true });
+    }
+    return _ambientObserver;
+}
+
+/** A full rescan is about to cover the page: start collecting afresh from here. */
+function _ambientReset() {
+    if (!_ambientStart()) return;
+    _ambientObserver.takeRecords();
+    _ambientAdded.clear();
+    _ambientAttrs.clear();
+}
+
+/** Add what was collected between patches to a patch's record, then forget it. */
+function _ambientMergeInto(changes) {
+    if (!_ambientAdded || (!_ambientAdded.size && !_ambientAttrs.size)) return;
+    const all = new Set(changes.inserted);
+    _ambientAdded.forEach((n) => { if (n.isConnected) all.add(n); });
+    changes.inserted = Array.from(all).filter((n) => {
+        for (let p = n.parentNode; p; p = p.parentNode) if (all.has(p)) return false;
+        return true;
+    });
+    _ambientAttrs.forEach((names, el) => {
+        if (!el.isConnected) return;
+        const mine = changes.attrs.get(el);
+        if (mine) names.forEach((n) => mine.add(n));
+        else changes.attrs.set(el, names);
+    });
+    _ambientAdded.clear();
+    _ambientAttrs = new Map();
 }
 
 /**
@@ -3564,4 +3635,5 @@ if (typeof globalThis !== 'undefined') {
     globalThis.djust = globalThis.djust || {};
     globalThis.djust.applyPatches = applyPatches;
     globalThis.djust._summarizeMutations = _summarizeMutations;
+    globalThis.djust._ambientReset = _ambientReset;
 }

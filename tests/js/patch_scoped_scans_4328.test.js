@@ -328,3 +328,108 @@ describe('#4328 SetText by parent dj-id stays in its own view', () => {
         expect(dom.window.document.querySelector('[dj-id="8"]').textContent).toBe('1');
     });
 });
+
+describe('#4001 review: what changed between patches is bound by the next one', () => {
+    // Before the scoped rescans, every patch scanned the page, so whatever was
+    // inserted or registered since the last patch was bound by the next one. A
+    // scoped rescan must keep that: the page's long-lived observer adds what
+    // was inserted or re-attributed outside any patch to the next record, and
+    // a dj-hook seen unregistered is retried once its hook is registered.
+    const HOOKS = `
+        window.log = [];
+        const def = (name, extra) => Object.assign({
+            mounted() { window.log.push(name + ':mounted'); },
+            updated() { window.log.push(name + ':updated'); },
+            destroyed() { window.log.push(name + ':destroyed'); },
+        }, extra);
+        window.def = def;
+        window.djust = window.djust || {};
+        window.djust.hooks = {
+            A: def('A'),
+            M: def('M', { mounted() {
+                window.log.push('M:mounted');
+                setTimeout(() => {
+                    const s = document.createElement('span');
+                    s.setAttribute('dj-hook', 'A');
+                    this.el.appendChild(s);
+                }, 0);
+            } }),
+        };
+    `;
+    const unrelated = async (dom, t) => {
+        const changes = await textPatch(dom, t);
+        dom.window.djust.reinitAfterDOMUpdate(undefined, changes);
+    };
+
+    it('(A) a hook registered after load mounts on the next unrelated patch', async () => {
+        const dom = env(PAGE.replace('<ul dj-id="2"></ul>', '<ul dj-id="2"></ul><div dj-id="3" dj-hook="L"></div>'),
+            { hooks: HOOKS });
+        const w = dom.window;
+        await settle();
+        w.log.length = 0;
+        w.djust.hooks.L = w.def('L');
+        await unrelated(dom, 'b');
+        expect(w.log).toEqual(['L:mounted']);
+        await unrelated(dom, 'c');
+        expect(w.log).toEqual(['L:mounted']);
+    });
+
+    it('(B) a hook element a mounted() inserts later mounts on the next patch', async () => {
+        const dom = env(PAGE, { hooks: HOOKS });
+        const w = dom.window;
+        await settle(); // the page's deferred load sweep, first
+        await insert(dom, vnode('li', '9', { 'dj-hook': 'M' }));
+        await settle();
+        expect(w.log).toEqual(['M:mounted']);
+        await unrelated(dom, 'b');
+        expect(w.log).toEqual(['M:mounted', 'A:mounted']);
+    });
+
+    it('(D) a hooked row detached and re-attached outside a patch (a virtual-list scroll) mounts again', async () => {
+        const dom = env(PAGE, { hooks: HOOKS });
+        const w = dom.window;
+        await settle();
+        const row = await insert(dom, vnode('li', '9', { 'dj-hook': 'A' }));
+        const ul = row.parentNode;
+        await settle();
+        w.log.length = 0;
+        row.remove(); // scrolled out: the pool keeps the node
+        await unrelated(dom, 'b');
+        expect(w.log).toEqual(['A:destroyed']);
+        ul.appendChild(row); // scrolled back
+        const fresh = w.document.createElement('li'); // a row first rendered by scroll
+        fresh.setAttribute('dj-hook', 'A');
+        ul.appendChild(fresh);
+        await unrelated(dom, 'c');
+        expect(w.log).toEqual(['A:destroyed', 'A:mounted', 'A:mounted']);
+    });
+
+    it('dj-poll and dj-click-away on elements app code inserted or re-marked', async () => {
+        const dom = env(PAGE);
+        const w = dom.window;
+        await unrelated(dom, 'a'); // a scoped rescan has run
+        const li = w.document.createElement('li');
+        li.setAttribute('dj-poll', 'more');
+        li.setAttribute('dj-poll-interval', '60000');
+        w.document.querySelector('ul').appendChild(li);
+        const p = w.document.querySelector('p');
+        p.setAttribute('dj-click-away', 'close');
+        await settle();
+        await unrelated(dom, 'b');
+        expect(li._djustPollIntervalId).toBeDefined();
+        expect(scopedAttrs(p)).toContain('dj-click-away');
+    });
+
+    it('dj-loading on an element app code inserted', async () => {
+        const dom = env(PAGE);
+        const w = dom.window;
+        await unrelated(dom, 'a'); // a scoped rescan has run
+        const li = w.document.createElement('li');
+        li.setAttribute('dj-loading.show', '');
+        li.setAttribute('dj-loading.for', 'more');
+        w.document.querySelector('ul').appendChild(li);
+        await settle();
+        await unrelated(dom, 'b');
+        expect(w.djust.globalLoadingManager.registeredElements.has(li)).toBe(true);
+    });
+});
