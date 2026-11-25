@@ -877,8 +877,10 @@ async def test_a_release_while_the_channel_is_created_starts_no_reader(members):
 
 async def test_a_push_published_while_mount_runs_is_delivered_after_the_mount_over_sse():
     layer = get_channel_layer()
+    GATE.clear()
     task, sid = await _start_get("BlockingPage", "/blocking/")
     await wait_until(lambda: layer.groups.get(_group_of("BlockingPage")), what="the group join")
+    await wait_until(lambda: BLOCKED, what="mount() to start")
     await apush_to_view(MOD + "BlockingPage", handler="handle_set", payload={"n": 5})
     view = BLOCKED[-1]
     await wait_until(
@@ -918,9 +920,12 @@ async def test_a_push_published_while_mount_runs_is_delivered_over_a_websocket()
 
 async def test_a_push_for_a_mount_that_is_then_refused_is_discarded():
     layer = get_channel_layer()
+    GATE.clear()
     task, sid = await _start_get("BlockingDeniedPage", "/blockingdenied/")
     group = _group_of("BlockingDeniedPage")
     await wait_until(lambda: layer.groups.get(group), what="admission")
+    # The group join can land before mount() runs: wait for the view itself.
+    await wait_until(lambda: BLOCKED, what="mount() to start")
     await apush_to_view(MOD + "BlockingDeniedPage", handler="handle_set", payload={"n": 5})
     view = BLOCKED[-1]
     runtime = view._sse_session.runtime
