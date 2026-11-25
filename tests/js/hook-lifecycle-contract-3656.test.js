@@ -127,6 +127,23 @@ describe('#3656 rule 1: mounted() runs once, and an update that mounts a hook do
         await env.ws.handleMessage(htmlFrame('<div id="outer" dj-hook="R"><span id="inner" dj-hook="R"></span></div>'));
         expect(env.log).toEqual(['outer.beforeUpdate', 'outer.updated', 'inner.mounted']);
     });
+
+    it('a mounted() that re-enters updateHooks() does not get a later new hook updated() in the same update', () => {
+        const env = createEnv('<div id="host"></div>');
+        env.djust.hooks = {
+            First: recorder(env.log, {
+                mounted() { env.log.push('first.mounted'); env.djust.updateHooks(); },
+            }),
+            R: recorder(env.log),
+        };
+        env.document.getElementById('host').innerHTML =
+            '<i id="first" dj-hook="First"></i><i id="second" dj-hook="R"></i>';
+        env.djust.updateHooks();
+        expect(env.log).toEqual(['first.mounted', 'second.mounted']);
+        env.log.length = 0;
+        env.djust.updateHooks();
+        expect(env.log).toEqual(['first.updated', 'second.updated']);
+    });
 });
 
 describe('#3656 rule 2: an instance belongs to one element node', () => {
@@ -329,6 +346,65 @@ describe('#3656 rule 8: disconnected() / reconnected() pair per instance, over W
         back.onopen();
         expect(env.log).toEqual(['a.disconnected', 'a.reconnected']);
         ws.enabled = false;
+    });
+
+    function wsEnv() {
+        const env = createEnv('<div id="a" dj-hook="R"></div>');
+        env.djust.hooks = { R: recorder(env.log) };
+        env.djust.mountHooks(env.document);
+        env.log.length = 0;
+        const ws = new env.djust.LiveViewWebSocket();
+        ws.enabled = true;
+        const open = () => {
+            ws.ws = null;
+            ws.connect('ws://localhost:8000/ws/live/');
+            return env.sockets[env.sockets.length - 1];
+        };
+        return { env, ws, open };
+    }
+
+    it('WebSocket: a failed first handshake, then a retry that opens, gives disconnected() then reconnected()', () => {
+        const { env, ws, open } = wsEnv();
+        open().onclose({ code: 1006 }); // never opened
+        const retry = open();
+        retry.readyState = 1;
+        retry.onopen();
+        expect(env.log).toEqual(['a.disconnected', 'a.reconnected']);
+        // Not offline any more: a hook mounted now gets no disconnected().
+        env.document.body.insertAdjacentHTML('beforeend', '<i id="late" dj-hook="R"></i>');
+        env.djust.updateHooks();
+        expect(env.log.slice(2)).toEqual(['a.updated', 'late.mounted']);
+        ws.enabled = false;
+    });
+
+    it('WebSocket: a drop, then a navigation disconnect() and a new socket, gives reconnected()', () => {
+        const { env, ws, open } = wsEnv();
+        const first = open();
+        first.readyState = 1;
+        first.onopen();
+        first.onclose({ code: 1006 });
+        ws.disconnect(); // resets the connection stats, as a navigation does
+        ws.enabled = true;
+        const next = open();
+        next.readyState = 1;
+        next.onopen();
+        expect(env.log).toEqual(['a.disconnected', 'a.reconnected']);
+        ws.enabled = false;
+    });
+
+    it('a working HTTP fallback counts as connected: offline hooks get reconnected()', async () => {
+        const env = createEnv('<button id="b" dj-click="go">b</button><div id="a" dj-hook="R"></div>');
+        env.djust.hooks = { R: recorder(env.log) };
+        env.djust.mountHooks(env.document);
+        env.djust.notifyHooksDisconnected();
+        env.window.fetch = async () => ({ ok: true, status: 200, json: async () => ({ patches: [] }) });
+        env.log.length = 0;
+        await env.djust.handleEvent('go', {});
+        expect(env.log[0]).toBe('a.reconnected');
+        env.log.length = 0;
+        env.document.body.insertAdjacentHTML('beforeend', '<i id="late" dj-hook="R"></i>');
+        env.djust.updateHooks();
+        expect(env.log).toEqual(['a.updated', 'late.mounted']);
     });
 
     it('a hook mounted while offline gets disconnected() after mounted(), then reconnected()', () => {

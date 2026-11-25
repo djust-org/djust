@@ -268,6 +268,10 @@ function _deferMissingHookSweep() {
 // True between a lost connection and the next open one. `var` with no
 // initializer, as _activeHooks above: an earlier module may run first.
 var _hooksOffline; // eslint-disable-line no-var
+// The hooks mounted by the updateHooks() pass in progress, nested passes
+// (a mounted() that re-enters updateHooks()) included: none of them gets
+// updated() in that update. Null outside a pass.
+var _hooksMountedInPass; // eslint-disable-line no-var
 
 function _callHook(entry, name) {
     // `name` is one of the fixed lifecycle names, never page input.
@@ -296,6 +300,7 @@ function _mountHookEl(el, hooks, deferMissing) {
     }
     const entry = { hookName, instance: _createHookInstance(hookDef, el), el };
     _activeHooks.set(_getHookElId(el), entry);
+    if (_hooksMountedInPass) _hooksMountedInPass.add(entry);
     _callHook(entry, 'mounted');
     if (_hooksOffline) {
         entry.offline = true;
@@ -391,19 +396,25 @@ function updateHooks(root) {
     _ensureHooksInit();
     root = root || document;
     const hooks = _getHookDefs();
-    _destroyDetachedHooks(root);
-    _eachHookEl(root, (el) => {
-        const elId = _getHookElId(el);
-        const entry = _activeHooks.get(elId);
-        if (entry && entry.el === el) {
-            _updateHookEntry(entry);
-            return;
-        }
-        // Another node carrying this node's hook id (a copied expando): the
-        // instance belongs to that node, so this one gets a fresh instance.
-        if (entry) _destroyHookEntry(elId, entry);
-        _mountHookEl(el, hooks, false);
-    });
+    const outermost = !_hooksMountedInPass;
+    if (outermost) _hooksMountedInPass = new Set();
+    try {
+        _destroyDetachedHooks(root);
+        _eachHookEl(root, (el) => {
+            const elId = _getHookElId(el);
+            const entry = _activeHooks.get(elId);
+            if (entry && entry.el === el) {
+                if (!_hooksMountedInPass.has(entry)) _updateHookEntry(entry);
+                return;
+            }
+            // Another node carrying this node's hook id (a copied expando): the
+            // instance belongs to that node, so this one gets a fresh instance.
+            if (entry) _destroyHookEntry(elId, entry);
+            _mountHookEl(el, hooks, false);
+        });
+    } finally {
+        if (outermost) _hooksMountedInPass = null;
+    }
 }
 
 /**

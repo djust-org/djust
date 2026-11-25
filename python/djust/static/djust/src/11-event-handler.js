@@ -624,6 +624,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
+        // A working page-POST fallback is a connection: hooks left offline by
+        // a socket that never came back get reconnected() (#3656).
+        if (!teardown) notifyHooksReconnected();
         // This response belongs to the outgoing view; never patch the new one.
         if (teardown || !ownsHttpResponse()) return;
         const data = await response.json();

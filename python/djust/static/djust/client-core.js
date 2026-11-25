@@ -1685,13 +1685,17 @@ class LiveViewWebSocket {
             document.body.style.removeProperty('--dj-reconnect-attempt');
             this._removeReconnectBanner();
 
+            // Hooks that got disconnected() get reconnected() on ANY open, the
+            // first one included: a failed first handshake or a socket that
+            // dropped before a navigation reset connectedAt still left them
+            // offline (#3656). A no-op for hooks that are not offline.
+            notifyHooksReconnected();
+
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
                 // Set reconnect flag for dj-auto-recover
                 if (window.djust) window.djust._isReconnect = true;
-                // Notify hooks of reconnection
-                notifyHooksReconnected();
                 // Public CustomEvent consumed by dj-track-static (v0.6.0)
                 // and available to application code that wants to react
                 // to reconnect without patching internal WS state.
@@ -8917,6 +8921,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
+        // A working page-POST fallback is a connection: hooks left offline by
+        // a socket that never came back get reconnected() (#3656).
+        if (!teardown) notifyHooksReconnected();
         // This response belongs to the outgoing view; never patch the new one.
         if (teardown || !ownsHttpResponse()) return;
         const data = await response.json();
@@ -15108,6 +15115,10 @@ function _deferMissingHookSweep() {
 // True between a lost connection and the next open one. `var` with no
 // initializer, as _activeHooks above: an earlier module may run first.
 var _hooksOffline; // eslint-disable-line no-var
+// The hooks mounted by the updateHooks() pass in progress, nested passes
+// (a mounted() that re-enters updateHooks()) included: none of them gets
+// updated() in that update. Null outside a pass.
+var _hooksMountedInPass; // eslint-disable-line no-var
 
 function _callHook(entry, name) {
     // `name` is one of the fixed lifecycle names, never page input.
@@ -15136,6 +15147,7 @@ function _mountHookEl(el, hooks, deferMissing) {
     }
     const entry = { hookName, instance: _createHookInstance(hookDef, el), el };
     _activeHooks.set(_getHookElId(el), entry);
+    if (_hooksMountedInPass) _hooksMountedInPass.add(entry);
     _callHook(entry, 'mounted');
     if (_hooksOffline) {
         entry.offline = true;
@@ -15231,19 +15243,25 @@ function updateHooks(root) {
     _ensureHooksInit();
     root = root || document;
     const hooks = _getHookDefs();
-    _destroyDetachedHooks(root);
-    _eachHookEl(root, (el) => {
-        const elId = _getHookElId(el);
-        const entry = _activeHooks.get(elId);
-        if (entry && entry.el === el) {
-            _updateHookEntry(entry);
-            return;
-        }
-        // Another node carrying this node's hook id (a copied expando): the
-        // instance belongs to that node, so this one gets a fresh instance.
-        if (entry) _destroyHookEntry(elId, entry);
-        _mountHookEl(el, hooks, false);
-    });
+    const outermost = !_hooksMountedInPass;
+    if (outermost) _hooksMountedInPass = new Set();
+    try {
+        _destroyDetachedHooks(root);
+        _eachHookEl(root, (el) => {
+            const elId = _getHookElId(el);
+            const entry = _activeHooks.get(elId);
+            if (entry && entry.el === el) {
+                if (!_hooksMountedInPass.has(entry)) _updateHookEntry(entry);
+                return;
+            }
+            // Another node carrying this node's hook id (a copied expando): the
+            // instance belongs to that node, so this one gets a fresh instance.
+            if (entry) _destroyHookEntry(elId, entry);
+            _mountHookEl(el, hooks, false);
+        });
+    } finally {
+        if (outermost) _hooksMountedInPass = null;
+    }
 }
 
 /**

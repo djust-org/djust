@@ -128,7 +128,8 @@ page's `mounted()`, with no `beforeUpdate()`.
    position, give the element an `id` or `dj-key`.
 2. **`mounted()` runs exactly once per instance**: on page load for the hooks
    already in the page, and after an update for the hooks it inserted. A hook
-   mounted by an update gets no `updated()` for that same update.
+   mounted by an update gets no `updated()` for that same update, also when a
+   `mounted()` calls `djust.updateHooks()` itself.
 3. **`beforeUpdate()` runs once per update, before its first DOM change**, for
    every mounted hook whose element is inside the region being updated (the
    whole view, or the container of a scoped update). Hooks outside that region
@@ -158,8 +159,10 @@ page's `mounted()`, with no `beforeUpdate()`.
 8. **`disconnected()` and `reconnected()` pair up per instance**, over WebSocket
    and SSE alike. A hook gets one `disconnected()` when the live connection
    drops, however many reconnect attempts then fail, and one `reconnected()`
-   when a connection is open again (also when the client falls back from
-   WebSocket to SSE). `reconnected()` never comes without a `disconnected()`
+   when a connection is open again: a WebSocket that opens (also the first
+   one, after a failed first handshake), an SSE stream that opens (also as
+   the fallback after WebSocket), or an event answered over the page-POST
+   HTTP fallback, which counts as connected. `reconnected()` never comes without a `disconnected()`
    before it. A hook mounted while the connection is down gets `disconnected()`
    right after `mounted()`. `reconnected()` runs as soon as the connection is
    open, before the server's render of the view arrives; that render is an

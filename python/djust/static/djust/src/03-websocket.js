@@ -483,13 +483,17 @@ class LiveViewWebSocket {
             document.body.style.removeProperty('--dj-reconnect-attempt');
             this._removeReconnectBanner();
 
+            // Hooks that got disconnected() get reconnected() on ANY open, the
+            // first one included: a failed first handshake or a socket that
+            // dropped before a navigation reset connectedAt still left them
+            // offline (#3656). A no-op for hooks that are not offline.
+            notifyHooksReconnected();
+
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
                 // Set reconnect flag for dj-auto-recover
                 if (window.djust) window.djust._isReconnect = true;
-                // Notify hooks of reconnection
-                notifyHooksReconnected();
                 // Public CustomEvent consumed by dj-track-static (v0.6.0)
                 // and available to application code that wants to react
                 // to reconnect without patching internal WS state.
