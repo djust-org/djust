@@ -297,3 +297,160 @@ async def test_a_handler_that_sends_the_page_away_is_saved_before_its_reply_when
     assert frames[-1]["type"] in ("patch", "html_update"), frames
     assert pushed[-1]["event"] == "go", pushed
     assert (at_reply, at_push) == (stored, stored)
+
+
+# ---------------------------------------------------------------------------
+# item 1: the turn serial and the "could not be restored" notice
+# ---------------------------------------------------------------------------
+
+
+async def _mount(key: str, **extra: Any) -> tuple:
+    """A socket mount of ``Counter`` whose frame carries ``extra`` (a
+    reconnect's ``reconnect`` / ``state_serial``); the communicator and the
+    mount frame."""
+    from channels.testing import WebsocketCommunicator
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.db import SessionStore
+
+    from djust.websocket import LiveViewConsumer
+
+    comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    comm.scope["session"] = await sync_to_async(SessionStore)(key)
+    comm.scope["user"] = AnonymousUser()
+    connected, _ = await comm.connect()
+    assert connected
+    await comm.receive_json_from()  # connect ack
+    frame = {"type": "mount", "view": MODULE + ".Counter", "url": sf.PATH, "tab": sf.TAB}
+    frame.update(extra)
+    await comm.send_json_to(frame)
+    mounted = await comm.receive_json_from()
+    assert mounted["type"] == "mount", mounted
+    return comm, mounted
+
+
+async def _serial(key: str) -> int:
+    return await sync_to_async(lambda: sf.only_envelope(key)["serial"])()
+
+
+async def test_every_reply_names_the_serial_of_the_state_it_shows(runtimes):
+    """Immediate turns: each change is a serial the store has at the reply.
+    Deferred turns: the reply's serial is one past the store's until the
+    flush writes it; a turn that changes nothing keeps it."""
+    with _settings(DJUST_STATE_SAVE_INTERVAL=0):
+        key = await sync_to_async(sf.page_get)(Counter)
+        comm, mounted = await _mount(key)
+        try:
+            first = (await harness.event(comm, "inc"))["state_serial"]
+            second = (await harness.event(comm, "inc"))["state_serial"]
+            same = (await harness.event(comm, "nothing"))["state_serial"]
+            stored = await _serial(key)
+        finally:
+            await comm.disconnect()
+    assert mounted["state_serial"] + 1 == first and first + 1 == second == same == stored
+    with _settings(DJUST_STATE_SAVE_INTERVAL=60):
+        key = await sync_to_async(sf.page_get)(Counter)
+        comm, mounted = await _mount(key)
+        rt = runtimes[-1]
+        try:
+            shown = (await harness.event(comm, "inc"))["state_serial"]
+            again = (await harness.event(comm, "inc"))["state_serial"]
+            before_flush = await _serial(key)
+            assert await rt.flush_state()
+            after_flush = await _serial(key)
+            later = (await harness.event(comm, "inc"))["state_serial"]
+        finally:
+            await comm.disconnect()
+    assert shown == again == before_flush + 1 == after_flush
+    assert later == after_flush + 1
+    assert mounted["state_serial"] == before_flush
+
+
+async def test_a_reconnect_behind_the_page_is_told_its_changes_were_not_restored(runtimes):
+    """The holder is gone without saving (a killed process: nothing answers
+    the flush request): the reconnect restores the last save and the page is
+    told, once, with a transient notice."""
+    from djust import _state_flush_request
+
+    with _settings(DJUST_STATE_SAVE_INTERVAL=60):
+        key = await sync_to_async(sf.page_get)(Counter)
+        comm_a, _ = await _mount(key)
+        rt_a = runtimes[-1]
+        shown = (await harness.event(comm_a, "inc"))["state_serial"]
+        # The process dies: its change is never written, its socket answers
+        # nothing (no flush at the close either).
+        rt_a._forget_state_flush()
+        rt_a.view_instance.__dict__["_djust_auto_superseded"] = True
+        await comm_a.disconnect()
+        _state_flush_request.WAIT_S, waited = 0.2, _state_flush_request.WAIT_S
+        try:
+            comm_b, mounted = await _mount(key, reconnect=True, state_serial=shown)
+            notice = await comm_b.receive_json_from(timeout=5)
+            assert await comm_b.receive_nothing(timeout=0.2)
+            await comm_b.disconnect()
+        finally:
+            _state_flush_request.WAIT_S = waited
+    assert mounted["state_serial"] == shown - 1
+    assert notice["type"] == "error" and notice["code"] == "state_not_restored", notice
+    assert notice["transient"] is True and notice["source"] == "async"
+    assert "state_snapshot_signed" not in notice
+
+
+async def test_a_reconnect_while_the_old_socket_still_holds_the_change_asks_it_to_save(runtimes):
+    """The old socket is still open (the client moved before it noticed): the
+    reconnect asks it, through the channel layer, to save first, then restores
+    every change, and the page is told nothing."""
+    with _settings(DJUST_STATE_SAVE_INTERVAL=60):
+        key = await sync_to_async(sf.page_get)(Counter)
+        comm_a, _ = await _mount(key)
+        rt_a = runtimes[-1]
+        await harness.event(comm_a, "inc")
+        shown = (await harness.event(comm_a, "inc"))["state_serial"]
+        assert rt_a.state_unsaved
+        await rt_a._flush_group_task  # joined the tab's flush group
+        try:
+            comm_b, mounted = await _mount(key, reconnect=True, state_serial=shown)
+            assert await comm_b.receive_nothing(timeout=0.3)
+            values = await sync_to_async(lambda: sf.only_envelope(key)["values"])()
+            await comm_b.disconnect()
+        finally:
+            await comm_a.disconnect()
+    assert mounted["state_serial"] == shown
+    assert values["count"] == 2
+    assert not rt_a.state_unsaved
+
+
+async def test_a_first_mount_or_an_up_to_date_reconnect_gets_no_notice(runtimes):
+    with _settings(DJUST_STATE_SAVE_INTERVAL=60):
+        key = await sync_to_async(sf.page_get)(Counter)
+        comm, mounted = await _mount(key)
+        assert await comm.receive_nothing(timeout=0.2)
+        await comm.disconnect()
+        comm, _ = await _mount(key, reconnect=True, state_serial=mounted["state_serial"])
+        assert await comm.receive_nothing(timeout=0.2)
+        await comm.disconnect()
+
+
+async def test_the_page_is_told_once_when_its_saves_keep_failing(runtimes, monkeypatch):
+    """Three failed flushes in a row: one transient notice (the page shows
+    changes a reconnect would not restore); the change stays owed."""
+    with _settings(DJUST_STATE_SAVE_INTERVAL=60):
+        key = await sync_to_async(sf.page_get)(Counter)
+        comm, _ = await _mount(key)
+        rt = runtimes[-1]
+        try:
+            await harness.event(comm, "inc")
+
+            def broken(*args, **kwargs):
+                raise OSError("store down")
+
+            monkeypatch.setattr(rt, "_save_explicit_root", broken)
+            for _ in range(4):
+                assert not await rt.flush_state()
+            notice = await comm.receive_json_from(timeout=5)
+            assert await comm.receive_nothing(timeout=0.2)
+            assert rt.state_unsaved
+        finally:
+            monkeypatch.undo()
+            await comm.disconnect()
+    assert notice["code"] == "state_error" and notice["transient"] is True, notice
+    assert "not saved yet" in notice["error"]

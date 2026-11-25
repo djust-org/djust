@@ -619,6 +619,8 @@ class LiveViewSSE {
         // #3988: as the WebSocket mount does (reconnectStateSnapshot, 03-websocket.js).
         const snapshot = reconnectStateSnapshot(viewPath);
         if (snapshot) frame.state_snapshot = snapshot;
+        const serial = reconnectStateSerial(viewPath);
+        if (serial !== null) frame.state_serial = serial;
         return this.sendMessage(frame);
     }
 

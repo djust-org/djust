@@ -167,15 +167,36 @@ What it does not catch:
   SQLite 32 to 38. On `db` and `cached_db` with a database that locks rows
   (PostgreSQL, MySQL) the check runs under the row lock.
 
-## What it does not cover yet
+## When the page is told
 
-- The page is not yet told when a reconnect restored an older state than it
-  showed (the "recent changes could not be restored" notice), nor when its
-  saves keep failing.
+Every reply and mount frame of a view whose state is saved carries
+`state_serial`, the turn serial of the state it shows: a turn whose save was
+deferred shows one past what storage has, a save writes the serial with the
+state. A reconnecting page sends its last serial back with its mount frame.
+
+- **The old connection is still open** (the browser moved before the server
+  noticed the drop): the reconnect asks it to save first, through the channel
+  layer (a WebSocket holder joins its tab's group with its first deferred
+  turn), and waits up to one second for storage to catch up. The page sees
+  every change; nothing is shown.
+- **Storage is still behind** (the process was killed, or the old connection
+  is an SSE stream, which has no channel to ask): the reconnect restores the
+  last save and the page gets a transient notice, `state_not_restored`
+  ("Your most recent changes could not be restored."), shown in the corner
+  status like a deferred save's, and dispatched as `djust:error`.
+- **Saves keep failing**: at the third failure in a row the page gets one
+  transient `state_error` ("Your recent changes are not saved yet. Saving
+  keeps trying."); the values stay live and saving goes on.
+
+## What it does not cover
+
 - daphne 4 cancels the application on SIGTERM without delivering the socket
-  close and runs no `lifespan`: a graceful stop there loses up to the interval.
+  close and runs no `lifespan`: a graceful stop there loses up to the
+  interval. See [what a graceful stop keeps, per server](../guides/deployment.md#what-a-graceful-stop-keeps-per-server).
 - A value that cannot be saved is reported when a save meets it; with an
   interval set, a value held only between two saves is never reported.
+- An HTTP fallback reply carries no serial: a page that falls back to HTTP and
+  then reconnects compares against the last socket frame it had.
 
 ## Settings
 

@@ -389,6 +389,10 @@ def _save_running_for(pending: "Optional[asyncio.Future[None]]") -> float:
     return asyncio.get_running_loop().time() - started
 
 
+#: The page's notice when its changes could not be saved three times in a row
+#: (#4164 item 1). Transient: the values are kept and saving goes on.
+_UNSAVED_NOTICE_MESSAGE = "Your recent changes are not saved yet. Saving keeps trying."
+
 #: Consecutive refused authorizations after which a flush forgets the change
 #: (a logout). Fewer would drop it on one ``cache``-engine blip, which reads
 #: as an empty session (design: save frequency, review finding 5).
@@ -1692,6 +1696,20 @@ class WSConsumerTransport:
         """WS has no captured HTTP request — the runtime synthesizes from
         ``self.scope`` (carrying the authenticated user + session)."""
         return None
+
+    async def join_state_flush_group(self, group: str) -> bool:
+        """Join the tab's state flush group (#4164 item 1): a reconnect of the
+        same tab elsewhere can then ask this socket to save. False without a
+        channel layer. Left at disconnect, with the view's other groups."""
+        consumer = self._consumer
+        layer = getattr(consumer, "channel_layer", None)
+        name = getattr(consumer, "channel_name", None)
+        if layer is None or not name:
+            return False
+        await layer.group_add(group, name)
+        joined = consumer.__dict__.setdefault("_djust_state_flush_groups", set())
+        joined.add(group)
+        return True
 
     async def on_view_mounted(self, view_instance: Any) -> None:
         """WS post-mount channel-layer wiring + tick + flags (#1919, Finding B residual).
@@ -3476,6 +3494,10 @@ class ViewRuntime(RuntimeTurnPort):
         # whose state a turn changed and no save has written yet, the one-shot
         # timer that flushes it, the flush it started, and consecutive failures.
         self._state_dirty_view: Any = None
+        # #4164 item 1: the join of the tab's flush group, and the page's
+        # "not saved yet" notice, each a task the loop must keep referenced.
+        self._flush_group_task: Optional["asyncio.Future[None]"] = None
+        self._unsaved_notice: Optional["asyncio.Future[None]"] = None
         self._state_timer: Optional[asyncio.TimerHandle] = None
         self._state_timer_delay: Optional[float] = None
         self._state_flush_task: Optional["asyncio.Future[Any]"] = None
@@ -3924,7 +3946,25 @@ class ViewRuntime(RuntimeTurnPort):
 
             if callable(getattr(view_instance, "resolve_tenant", None)):
                 request.tenant = getattr(view_instance, "_tenant", None)
+            # #4164 item 1: the serial of the last state the page was shown
+            # (a reconnect sends it). When the store is behind it, the tab's
+            # other connection is asked to save first.
+            page_serial = data.get("state_serial") if not slot_target else None
+            if type(page_serial) is not int or page_serial <= 0:
+                page_serial = None
+            from ._save_policy import holder_claims
+
+            if page_serial is not None and holder_claims(view_instance):
+                from ._state_flush_request import request_flush
+
+                await request_flush(view_instance, request, page_serial)
             restored = await sync_to_async(load_server_state)(view_instance, request)
+            if page_serial is not None:
+                from ._automatic_state import turn_serial
+
+                restored_serial = turn_serial(view_instance)
+                if restored_serial is not None and restored_serial < page_serial:
+                    view_instance.__dict__["_djust_not_restored"] = True
             from django.conf import settings
 
             incoming = data.get("state_snapshot")
@@ -4289,6 +4329,12 @@ class ViewRuntime(RuntimeTurnPort):
         # or revoke.
         if slot_target:
             mount_msg.pop("state_snapshot_signed", None)
+        else:
+            from ._automatic_state import turn_serial
+
+            serial = turn_serial(view_instance)
+            if serial is not None:
+                mount_msg["state_serial"] = serial
 
         # ADR-038 D-b / D-n: value-free service-worker cache signals — an
         # ineligibility marker for explicit pages, an HMAC identity marker the
@@ -4373,6 +4419,18 @@ class ViewRuntime(RuntimeTurnPort):
                 }
 
         await self.transport.send(mount_msg)
+        if view_instance.__dict__.pop("_djust_not_restored", False):
+            # #4164 item 1: the restore is behind what the page showed.
+            from ._state_flush_request import NOT_RESTORED_CODE, NOT_RESTORED_MESSAGE
+
+            logger.info("djust: a reconnect restored an older state than its page showed")
+            await self.transport.send_error(
+                NOT_RESTORED_MESSAGE,
+                code=NOT_RESTORED_CODE,
+                transient=True,
+                source="async",
+                view=view_path,
+            )
         # #4181: a carried sticky child whose updatable inputs this page changed
         # took them through ``_on_sticky_update``; the browser reattached its old
         # DOM with the mount frame, so it is re-rendered right after it.
@@ -6443,6 +6501,13 @@ class ViewRuntime(RuntimeTurnPort):
             "view": view._djust_mount_view_path,
             "state_snapshot_signed": None,
         }
+        from ._automatic_state import turn_serial
+
+        serial = turn_serial(view)
+        if serial is not None:
+            # #4164 item 1: the turn serial of the state this frame shows; the
+            # page sends it back when it reconnects.
+            fields["state_serial"] = serial
         # Read once: only the commit that ran in THIS turn may vouch for it.
         verified, self._explicit_binding_verified = self._explicit_binding_verified, None
         request = getattr(view, "_djust_event_request", None)
@@ -6817,13 +6882,49 @@ class ViewRuntime(RuntimeTurnPort):
         return True
 
     def _mark_state_dirty(self, view: Any) -> None:
-        """``view`` holds a change no save has written: arm the timer once."""
+        """``view`` holds a change no save has written: arm the timer once.
+
+        The state the page is shown is then one turn serial past the store's
+        (#4164 item 1), and the connection joins its tab's flush group, so a
+        reconnect elsewhere can ask it to save (:mod:`djust._state_flush_request`).
+        """
+        from ._automatic_state import note_unsaved_change
+
+        note_unsaved_change(view)
         if self._state_dirty_view is not view:
             self._state_dirty_view = view
             self._state_flush_failures = 0
         _UNSAVED_RUNTIMES.add(self)
         if self._state_timer is None:
             self._arm_state_timer(view)
+        if view.__dict__.get("_djust_flush_group") is None:
+            join = getattr(self.transport, "join_state_flush_group", None)
+            if callable(join):
+                view.__dict__["_djust_flush_group"] = ""  # asked once per view
+                task = asyncio.ensure_future(self._join_flush_group(view, join))
+                self._flush_group_task = task
+
+    async def _join_flush_group(self, view: Any, join: Callable[[str], Any]) -> None:
+        from ._state_flush_request import flush_group
+
+        try:
+            request = view.__dict__.get("_djust_event_request") or getattr(view, "request", None)
+            group = await sync_to_async(flush_group)(view, request)
+            if group is not None and await join(group):
+                view.__dict__["_djust_flush_group"] = group
+        except Exception:  # noqa: BLE001 — the interval and the close still save
+            logger.warning("djust: could not join the tab's state flush group")
+
+    async def answer_flush_request(self) -> None:
+        """Another connection of this tab is mounting and the store is behind
+        what this page showed: save now (#4164 item 1). Not interactive: the
+        10 s cap, no retry; the change stays owed when it fails."""
+        view = self._state_dirty_view
+        if not self.state_unsaved:
+            return
+        if not await self.flush_state(reason="flush_request") and self.state_unsaved:
+            if self._state_timer is None:
+                self._arm_state_timer(view)  # the interval keeps trying
 
     def _arm_state_timer(self, view: Any, delay: Optional[float] = None) -> None:
         """One ``call_later`` per connection, armed by the first unsaved change
@@ -7134,6 +7235,17 @@ class ViewRuntime(RuntimeTurnPort):
                 "djust: view state could not be saved %d times in a row; the view keeps "
                 "working and its changes stay unsaved until a save succeeds",
                 count,
+            )
+        if count == 3 and interactive and self.view_instance is view:
+            # #4164 item 1: the page is told once that what it shows is not
+            # saved yet (a reconnect now would restore an older state). The
+            # notice is transient: the page's next update clears it.
+            extra = self._explicit_error_fields(view, source="async")
+            extra.pop("state_snapshot_signed", None)
+            self._unsaved_notice = asyncio.ensure_future(
+                self.transport.send_error(
+                    _UNSAVED_NOTICE_MESSAGE, code="state_error", transient=True, **extra
+                )
             )
         if interactive and self._state_dirty_view is view:
             self._arm_state_timer(view, delay=min(interval_for(view) * count, MAX_INTERVAL_S))

@@ -919,6 +919,43 @@ _ENVELOPE = frozenset(
         "url",
     }
 )
+#: The same with the tab's turn serial (#4164 item 1). An envelope written
+#: before the serial existed reads as serial 0.
+_ENVELOPE_SERIAL = _ENVELOPE | {"serial"}
+
+#: The turn serial of the state a view holds (shown on the page), and of the
+#: state its store holds (#4164 item 1). Replies carry the first; a reconnect
+#: that restores a lower serial than its page showed tells the page so.
+_SERIAL = "_djust_turn_serial"
+_SAVED_SERIAL = "_djust_saved_serial"
+
+
+def _int(value: Any) -> int:
+    return value if type(value) is int and value >= 0 else 0
+
+
+def turn_serial(view: Any) -> Optional[int]:
+    """The turn serial of the state ``view`` holds, or None when its state is
+    not saved (nothing to compare a reconnect with)."""
+    if _not_saved(view):
+        return None
+    return _int(view.__dict__.get(_SERIAL))
+
+
+def note_unsaved_change(view: Any) -> None:
+    """A turn changed ``view`` and its save was deferred: the state it shows
+    is one serial past what any save wrote (several deferred turns share one
+    serial; it counts states the store may lack, not turns)."""
+    current = _int(view.__dict__.get(_SERIAL))
+    if current == _int(view.__dict__.get(_SAVED_SERIAL)):
+        view.__dict__[_SERIAL] = current + 1
+
+
+def _serial_owed(view: Any) -> bool:
+    """Whether the page was shown a serial no save has written yet: the next
+    save writes even when the state compares equal to the stored one, so the
+    store's serial catches up."""
+    return _int(view.__dict__.get(_SERIAL)) > _int(view.__dict__.get(_SAVED_SERIAL))
 
 
 class _Store:
@@ -1543,6 +1580,7 @@ class Saved:
         "text",
         "created",
         "url",
+        "serial",
     )
 
     def __init__(
@@ -1557,7 +1595,9 @@ class Saved:
         text: str,
         created: int,
         url: Optional[str] = None,
+        serial: int = 0,
     ) -> None:
+        self.serial = serial  # the turn serial of the stored state (#4164)
         self.url = url  # the query the state was saved under, canonical
         self.public = public
         self.private = private
@@ -1581,7 +1621,7 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
     from .serialization import StateValueError, decode_state_roundtrip
 
     envelope = _stored_envelope(view, store)
-    if type(envelope) is not dict or set(envelope) != _ENVELOPE:
+    if type(envelope) is not dict or set(envelope) not in (_ENVELOPE, _ENVELOPE_SERIAL):
         return None
     created, expires = envelope["created"], envelope["expires"]
     public, private = envelope["values"], envelope["private"]
@@ -1637,6 +1677,7 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
             _encode([public, private, envelope["remount"], components]),
             created,
             envelope["url"] if type(envelope["url"]) is str else None,
+            _int(envelope.get("serial")),
         )
     except StateValueError:
         logger.warning("djust: stored view state could not be restored and was discarded")
@@ -1914,6 +1955,9 @@ def saved(view: Any, request: Any, *, socket: bool = False) -> Optional[Saved]:
         _hold(view, store, socket=socket, write=socket and found is not None)
     # The query the state was saved under, for ``note_url`` to compare with.
     view.__dict__["_djust_auto_saved_url"] = found.url if found is not None else None
+    # The turn serial carries on from the stored state (#4164 item 1).
+    serial = found.serial if found is not None else 0
+    view.__dict__[_SERIAL] = view.__dict__[_SAVED_SERIAL] = serial
     if found is not None:
         view.__dict__["_djust_auto_basis"] = _Basis(
             _digest(found.text),
@@ -2325,14 +2369,15 @@ def stage(
     basis = _basis(view)
     skip = _per_turn.on("unchanged_save_skip")
     now = int(time.time())
-    if skip and basis is not None and hint is not None and not hint:
+    owed = _serial_owed(view)
+    if skip and basis is not None and hint is not None and not hint and not owed:
         if _still_fresh(basis, now):
             return None
     state = project(view)
     settled = view.__dict__.get("_djust_auto_settled")
     now_digest = _digest(state.text)
     unchanged = basis is not None and now_digest in (basis.stored, settled)
-    if skip and basis is not None and unchanged and _still_fresh(basis, now):
+    if skip and basis is not None and unchanged and _still_fresh(basis, now) and not owed:
         return None
     store = _store(view, request, create=create)
     if store is None:
@@ -2386,7 +2431,16 @@ def stage(
         # The query string the view last read (``note_url``), canonical; None
         # when handle_params() never ran on it.
         "url": view.__dict__.get("_djust_auto_url"),
+        # The turn serial of this state (#4164 item 1): the one the page was
+        # shown, or the next one when this save is the turn's own.
+        "serial": 0,
     }
+    previous_serials = (view.__dict__.get(_SERIAL), view.__dict__.get(_SAVED_SERIAL))
+    serial = _int(previous_serials[0])
+    if not unchanged and not owed:
+        serial += 1
+    envelope["serial"] = serial
+    view.__dict__[_SERIAL] = view.__dict__[_SAVED_SERIAL] = serial
     session = store.session
     previous = session.get(store.key, _MISSING)
     previous_basis = view.__dict__.get("_djust_auto_basis")
@@ -2446,6 +2500,7 @@ def stage(
             session[store.key] = previous
         view.__dict__["_djust_auto_basis"] = previous_basis
         view.__dict__["_djust_auto_settled"] = previous_settled
+        view.__dict__[_SERIAL], view.__dict__[_SAVED_SERIAL] = previous_serials
 
     if state_store is not None and not _kept_in_session(state_store):
         # The store write this save still owes (``write_pending``). It rides

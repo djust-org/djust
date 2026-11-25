@@ -4646,6 +4646,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         await leave_push_scope_groups(consumer)
 
+        # Leave the tab's state flush groups (#4164 item 1).
+        for group in list(getattr(consumer, "_djust_state_flush_groups", None) or ()):
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception:  # noqa: BLE001
+                logger.warning("Error leaving a state flush group")
+        if getattr(consumer, "_djust_state_flush_groups", None):
+            consumer._djust_state_flush_groups = set()
+
         # Leave db_notify groups registered by NotificationMixin.listen()
         db_notify_channels = getattr(consumer, "_db_notify_channels", None)
         if db_notify_channels:
@@ -5373,6 +5382,17 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 "payload": event.get("payload", {}),
             }
         )
+
+    async def djust_state_flush(self, event: Dict[str, Any]) -> None:
+        """A reconnect of a tab this socket holds unsaved state for asks for it
+        to be saved now (#4164 item 1, :mod:`djust._state_flush_request`)."""
+        runtime = getattr(self, "_runtime", None)
+        answer = getattr(runtime, "answer_flush_request", None)
+        if callable(answer):
+            try:
+                await answer()
+            except Exception:  # noqa: BLE001 — flush_state never raises; belt and braces
+                logger.warning("djust: a state flush request could not be answered")
 
     async def server_push(self, event: Dict[str, Any]) -> None:
         """

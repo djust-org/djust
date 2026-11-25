@@ -925,7 +925,12 @@ def _normalise(frame: Dict[str, Any]) -> Dict[str, Any]:
         frame = {**frame, "state_snapshot_signed": payload}
     # Per-connection identifiers and the background batch token, random for
     # every run. The token's presence is kept.
+    # ``state_serial`` (#4164) counts the states storage was given, which is
+    # what deferral and the save shortcuts change by design; it is not page
+    # content. Its presence is kept.
     frame = {k: v for k, v in frame.items() if k not in ("session_id", "sw_identity")}
+    if "state_serial" in frame:
+        frame["state_serial"] = "<serial>"
     if "async_batch" in frame:
         frame["async_batch"] = "<token>"
     return frame

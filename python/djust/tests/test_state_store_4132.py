@@ -366,7 +366,7 @@ def test_no_setting_is_todays_layout_and_calls_no_store(settings):
     key = _page()
     assert _bump(key) == 1
     (entry,) = _entries(key).values()
-    assert set(entry) == set(_automatic_state._ENVELOPE)
+    assert set(entry) == set(_automatic_state._ENVELOPE_SERIAL)
     assert entry["values"]["note"] == "STORE_HANDLER"
     assert not MemoryStore.CALLS
     plain = {name: value for name, value in entry.items() if name not in ("created", "expires")}
@@ -1326,7 +1326,9 @@ class Sized(LiveView):
 
     def mount(self, request, **kwargs):
         self.count = 0
-        self.blob = "x" * 3600
+        # 3550, not 3600: three sealed states of it fit a 16 KB session budget
+        # with the turn serial each envelope carries (#4164).
+        self.blob = "x" * 3550
 
     @event_handler()
     def bump(self, **kwargs):
@@ -1351,7 +1353,7 @@ def test_two_tabs_under_the_page_limit_both_survive_with_any_store(store, settin
     entries = _entries(key)
     assert len(entries) == 2, "a sibling tab was evicted"
     sizes = {entry["bytes"] for entry in entries.values()}
-    assert len(sizes) == 1 and 3600 < sizes.pop() < 4096  # under half of 8 KB
+    assert len(sizes) == 1 and 3500 < sizes.pop() < 4096  # under half of 8 KB
     if store == SEALED:
         # ... though the sealed text itself is well over half the limit.
         assert all(len(entry["sealed"]) > 4096 for entry in entries.values())

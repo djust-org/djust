@@ -825,6 +825,14 @@ class LiveView(
         self._djust_auto_saved_url: Any = None
         self._djust_auto_url_changed = False
         self._djust_restore_changed_view = True
+        # #4164: the turn serial of the state the page is shown and of the
+        # stored one, the reconnect's "not restored" flag, the tab's flush
+        # group, and a fallback request's claim waiting for a changing save.
+        self._djust_turn_serial = 0
+        self._djust_saved_serial = 0
+        self._djust_not_restored = False
+        self._djust_flush_group: Any = None
+        self._djust_auto_pending_claim: Any = None
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
 
         # v0.8.0 — @action server-action state. Initialized AFTER
