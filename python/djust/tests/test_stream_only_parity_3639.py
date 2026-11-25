@@ -416,14 +416,6 @@ class TestSnapshotContract:
         view._reset_streams()
         assert _snapshot_assigns(view) == before
 
-    def test_the_epoch_is_framework_state_and_stays_out_of_assigns(self):
-        from djust.api.dispatch import _public_assigns_snapshot_diff
-
-        view = self._view()
-        view.stream_insert("rows", {"id": 9, "body": "x"})
-        assert "_stream_epoch" in view._framework_attrs
-        assert _public_assigns_snapshot_diff(view, {"_streams"}) == {}
-
     def test_the_epoch_is_not_part_of_the_view_state(self):
         view = self._view()
         view.stream_insert("rows", {"id": 9, "body": "x"})
@@ -439,8 +431,6 @@ class TestCallSiteInventory:
     (the count-based pin of CLAUDE.md, #1125)."""
 
     EXPECTED = {
-        # the HTTP API endpoint: the ``assigns`` diff (``_streams`` never reported)
-        ("python/djust/api/dispatch.py", "_dispatch_api_authenticated"): 2,
         # the HTTP POST fallback: the DropdownMenu observation only
         ("python/djust/mixins/request.py", "_post_turn_body"): 2,
         # ViewRuntime: the event spine's pre/post and noop-token, the deferred

@@ -31,7 +31,7 @@ import sys
 import threading
 import uuid
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from asgiref.sync import async_to_sync, sync_to_async
@@ -454,13 +454,12 @@ class TestWebSocket:
             assert CALLS[0][1] != threading.get_ident()
 
     async def test_handler_permission_required_any_of_still_applies(self, flavour):
-        with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User(perms=()))):
-            comm, _ = await _ws(FLAVOURS[flavour], user=_User(perms=()))
-            try:
-                await comm.send_json_to(_event("guarded", 1))
-                frames = await _frames(comm)
-            finally:
-                await _close(comm)
+        comm, _ = await _ws(FLAVOURS[flavour], user=_User(perms=()))
+        try:
+            await comm.send_json_to(_event("guarded", 1))
+            frames = await _frames(comm)
+        finally:
+            await _close(comm)
         assert "guarded" not in RAN
         assert any(f.get("type") == "error" for f in frames), frames
 

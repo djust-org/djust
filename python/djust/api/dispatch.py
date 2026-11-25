@@ -2,11 +2,11 @@
 
 The dispatch view is a transport adapter over the existing handler pipeline. It
 reuses ``validate_handler_params``, ``check_view_auth``, ``check_handler_permission``,
-``_snapshot_assigns``/``_compute_changed_keys``, and ``DjangoJSONEncoder`` — the
-exact same safety checks and serialization the WebSocket path runs.
+and ``DjangoJSONEncoder`` — the exact same safety checks and serialization the
+WebSocket path runs.
 
 Responses:
-  200: ``{"result": <return>, "assigns": {<changed public attrs>}}``
+  200: ``{"result": <return>, "assigns": {<declared client=True fields that changed>}}``
   400: validation or JSON parse error
   401: unauthenticated (no auth class accepted the request)
   403: CSRF failed or permission denied
@@ -20,7 +20,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from typing import Any, Callable, Dict, Iterable, Optional, cast
+from typing import Any, Callable, Dict, Optional, cast
 
 from asgiref.sync import async_to_sync
 from django.core.exceptions import PermissionDenied
@@ -43,7 +43,6 @@ from djust.rate_limit import (
     reset_handler_buckets,
 )
 from djust.validation import validate_handler_params, validated_call_arguments
-from djust.websocket import _compute_changed_keys, _snapshot_assigns
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +55,8 @@ def _permission_denied(owners: tuple, exc: PermissionDenied) -> JsonResponse:
     HTTP API and ``@server_function`` now do the same (transport parity).
     Other error detail follows ADR-038 D-a (revised): detailed under DEBUG,
     value-free in production, through ``diagnostics_policy_allows``. The
-    text goes to the server log only, through that gate (value-free for a
-    nonlegacy owner outside DEBUG).
+    text goes to the server log only, through that gate (value-free
+    outside DEBUG).
     """
     from .._exposure_diagnostics import log_failure_for
 
@@ -158,37 +157,20 @@ async def _await(coro: Any) -> Any:
     return await coro
 
 
-def _client_projection(view_instance: Any) -> Optional[Dict[str, Any]]:
-    """Declared ``client=True`` values for a nonlegacy view; ``None`` for legacy.
+def _client_projection(view_instance: Any) -> Dict[str, Any]:
+    """The view's declared ``client=True`` values.
 
     ADR-038: an HTTP API response's automatic ``assigns`` may carry only fields
     explicitly permitted for client use — the projection ``get_state`` returns.
     An unavailable projection (unknown policy, failing factory) yields no
     fields rather than falling back to public attributes.
     """
-    from .._exposure import ExposureError, explicit_state_projection, uses_legacy_exposure
+    from .._exposure import ExposureError, explicit_state_projection
 
-    if uses_legacy_exposure(view_instance):
-        return None
     try:
         return explicit_state_projection(view_instance, "client")
     except ExposureError:
         return {}
-
-
-def _public_assigns_snapshot_diff(
-    view_instance: Any, changed_keys: Iterable[str]
-) -> Dict[str, Any]:
-    """Build the JSON-safe assigns diff from changed keys."""
-    diff: Dict[str, Any] = {}
-    for key in changed_keys:
-        if key.startswith("_"):
-            continue
-        try:
-            diff[key] = getattr(view_instance, key)
-        except AttributeError:
-            continue
-    return diff
 
 
 def _resolve_serializer(spec: Any, view: Any) -> Optional[Callable[..., Any]]:
@@ -456,9 +438,8 @@ def _dispatch_api_authenticated(
         )
     call_args, call_kwargs = validated_call_arguments(validation)
 
-    # 11. Snapshot pre-state. A nonlegacy view's assigns come from its
-    # declared client projection, not from public attributes (ADR-038).
-    pre = _snapshot_assigns(view)
+    # 11. Snapshot pre-state. The view's assigns come from its declared
+    # client projection, not from public attributes (ADR-038).
     pre_client = _client_projection(view)
 
     # 12. Invoke the handler.
@@ -521,17 +502,12 @@ def _dispatch_api_authenticated(
         return api_error(500, "serialize_error", "Response transform raised an unexpected error")
 
     # 13. Snapshot post-state and compute diff.
-    if pre_client is not None:
-        post_client = _client_projection(view) or {}
-        assigns_diff = {
-            key: value
-            for key, value in post_client.items()
-            if key not in pre_client or pre_client[key] != value
-        }
-    else:
-        post = _snapshot_assigns(view)
-        changed = _compute_changed_keys(pre, post)
-        assigns_diff = _public_assigns_snapshot_diff(view, changed)
+    post_client = _client_projection(view)
+    assigns_diff = {
+        key: value
+        for key, value in post_client.items()
+        if key not in pre_client or pre_client[key] != value
+    }
 
     return JsonResponse(
         {"result": return_value, "assigns": assigns_diff},

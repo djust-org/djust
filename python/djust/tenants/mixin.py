@@ -32,7 +32,6 @@ Configuration::
 """
 
 import logging
-from contextlib import nullcontext
 from typing import Any, Dict, Optional, TYPE_CHECKING
 from urllib.parse import quote
 
@@ -215,11 +214,8 @@ class TenantMixin:
 
         Called automatically before mount() and event handlers.
         """
-        from .._exposure import uses_legacy_exposure
-
         if self._tenant_resolved:
-            if not uses_legacy_exposure(self):
-                request.tenant = self._tenant
+            request.tenant = self._tenant
             return
 
         self._tenant = self.resolve_tenant(request)
@@ -231,15 +227,13 @@ class TenantMixin:
             from django.http import Http404
 
             raise Http404("Tenant not found")
-        if not uses_legacy_exposure(self):
-            request.tenant = self._tenant
+        request.tenant = self._tenant
 
     def _explicit_tenant_context(self) -> Any:
         """Scope explicit HTTP auth/render queries without leaking to the next request."""
-        from .._exposure import uses_legacy_exposure
         from .middleware import tenant_context
 
-        return nullcontext() if uses_legacy_exposure(self) else tenant_context(self._tenant)
+        return tenant_context(self._tenant)
 
     def _is_tenant_required(self) -> bool:
         """Check if tenant is required for this view."""

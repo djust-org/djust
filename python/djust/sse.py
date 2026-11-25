@@ -566,10 +566,10 @@ class SSESession:
         self._owner_session_key: Optional[str] = None
 
         # The live event-POST request, stamped by the /message/ endpoint
-        # just before dispatch so the per-event auth re-check
-        # (SSESessionTransport.recheck_event_auth, #1777) validates against the
-        # CURRENT POSTer's request.user — not the stale mount request. None until
-        # the first event POST (the re-check falls back to ``_request`` defensively).
+        # just before dispatch so the event's authorization
+        # (SSESessionTransport.explicit_event_request, ADR-038) validates against
+        # the CURRENT POSTer's request.user — not the stale mount request. None
+        # until the first event POST, and consumed by each event.
         self._event_request: Optional[Any] = None
 
         # The mount-time request (the original stream-GET's request), stamped by
@@ -1715,8 +1715,8 @@ class DjustSSEMessageView(View):
         # which pushes structured error envelopes onto the SSE queue.
         #
         # Stamp the LIVE POST request so an ``event`` frame routed through
-        # dispatch_message → dispatch_event re-validates per-event auth against the
-        # current POSTer (SSESessionTransport.recheck_event_auth, #1777); owner
+        # dispatch_message → dispatch_event is authorized against the current
+        # POSTer (SSESessionTransport.explicit_event_request, ADR-038); owner
         # binding above already ran, so this is the session owner's request.
         from ._exposure_diagnostics import (
             diagnostic_scope,

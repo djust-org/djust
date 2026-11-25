@@ -2,11 +2,10 @@
 
 ``dispatch_api`` answers ``{"result": <return>, "assigns": <diff>}``. ``result``
 is the handler's own explicit response (outside the automatic export contract,
-ADR-038 D6). ``assigns`` is automatic: ``_public_assigns_snapshot_diff`` returned
-every public attribute the handler changed, with no policy check — so an
-explicit view's undeclared or server-only values reached the HTTP client. For a
-nonlegacy view it must carry only declared ``client=True`` fields, the same
-projection ``get_state`` uses.
+ADR-038 D6). ``assigns`` is automatic: it once returned every public attribute
+the handler changed, with no policy check — so an explicit view's undeclared or
+server-only values reached the HTTP client. It carries only declared
+``client=True`` fields, the same projection ``get_state`` uses.
 """
 
 import json

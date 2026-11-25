@@ -873,17 +873,7 @@ def _revoke(user, key):
     User.objects.filter(pk=user.pk).update(is_active=False)
 
 
-@pytest.fixture
-def reauth():
-    previous = (config.get("reauth_on_event"), config.get("reauth_server_turn_interval"))
-    config.set("reauth_on_event", True)
-    config.set("reauth_server_turn_interval", 0)  # re-check every server turn
-    yield
-    config.set("reauth_on_event", previous[0])
-    config.set("reauth_server_turn_interval", previous[1])
-
-
-async def test_a_revoked_principal_stops_receiving_ticks_over_sse(reauth):
+async def test_a_revoked_principal_stops_receiving_ticks_over_sse():
     user, key = await sync_to_async(_login_key)()
     session = await _sse_for(MOD + "AuthTickPage", "/authtick/", key)
     view = session.view_instance
@@ -898,7 +888,7 @@ async def test_a_revoked_principal_stops_receiving_ticks_over_sse(reauth):
     assert view.ticks == seen
 
 
-async def test_a_revoked_principal_can_no_longer_push_over_sse(reauth):
+async def test_a_revoked_principal_can_no_longer_push_over_sse():
     user, key = await sync_to_async(_login_key)()
     session = await _sse_for(MOD + "AuthPushPage", "/authpush/", key)
     view = session.view_instance
@@ -911,7 +901,7 @@ async def test_a_revoked_principal_can_no_longer_push_over_sse(reauth):
     assert session.runtime.view_instance is None
 
 
-async def test_a_deactivated_account_alone_stops_server_turns_over_sse(reauth):
+async def test_a_deactivated_account_alone_stops_server_turns_over_sse():
     """The session row is still there; only the account is inactive."""
     user, key = await sync_to_async(_login_key)()
     session = await _sse_for(MOD + "AuthPushPage", "/authpush/", key)

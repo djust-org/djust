@@ -39,9 +39,6 @@ PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 HELPER: dict = {}
 
 LEGACY_GATED = {
-    ("render_embedded_child_html", "Failed to render embedded child %s: %s"): (
-        "a nonlegacy child raises a value-free ExposureError from None first"
-    ),
     ("_mount_one", "mount_batch: _mount_one raised for view %s"): (
         "legacy branch only; the owner is the resolved class, fail-closed if unresolvable"
     ),
@@ -84,15 +81,6 @@ RUNTIME_LEGACY_GATED = {
     ),
     ("_notify_waiters_safely", "<Name>"): (
         "inside `if diagnostics_allowed()` after restricting to both owners"
-    ),
-    ("_execute_async_task_body", "Runtime: error in start_async callback '%s' on %"): (
-        "inside `if legacy_diagnostics and uses_legacy_exposure(view)`"
-    ),
-    ("_execute_async_task_body", "Runtime: error in handle_async_result for task '"): (
-        "inside `if legacy_diagnostics and uses_legacy_exposure(view)`"
-    ),
-    ("_settle_cancelled_async", "Runtime: error settling cancelled async task for"): (
-        "inside `if uses_legacy_exposure(view)`"
     ),
 }
 
@@ -1024,15 +1012,7 @@ MIXIN_TABLES = {
             ),
         },
     ),
-    "_turn_ports.py": (
-        {},
-        {
-            ("reauth_live_turn", "reauth_on_event re-check raised %s on view %s; d"): (
-                "value-free: the exception type and view class only (the reauth "
-                "re-check fails closed)"
-            ),
-        },
-    ),
+    "_turn_ports.py": ({}, {}),
     "multiloop.py": (
         {},
         {

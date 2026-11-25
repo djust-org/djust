@@ -754,14 +754,7 @@ EXPECTED_HOOK_REFERENCES = {
         "handle_tick",
     ): "run_sync_step",
     ("_view_hooks.py", "call_tick", "handle_tick"): "sync_step",
-    # Runtime: the result turns of a start_async task, success and error arms,
-    # and the explicit-exposure twin.
-    ("runtime.py", "ViewRuntime._execute_async_task_body.complete", "handle_async_result"): (
-        "call_async_result"
-    ),
-    ("runtime.py", "ViewRuntime._execute_async_task_body.complete_error", "handle_async_result"): (
-        "call_async_result"
-    ),
+    # Runtime: the result turns of a start_async task.
     ("runtime.py", "ViewRuntime._execute_explicit_async_task.complete", "handle_async_result"): (
         "call_async_result"
     ),

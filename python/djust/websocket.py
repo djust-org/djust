@@ -63,7 +63,7 @@ from .signals import full_html_update, liveview_server_error
 from .mixins.async_work import has_pending_async_work
 from ._view_lanes import ViewLane
 from ._view_slots import ViewSlot, valid_target_id
-from ._turn_ports import ConsumerTurnPort, reauth_live_turn
+from ._turn_ports import ConsumerTurnPort
 from .turns import Turn, run_turn
 
 logger = logging.getLogger(__name__)
@@ -554,7 +554,6 @@ class _OffloadedTurn(NamedTuple):
     #: unavailable) or a :class:`BackgroundRender`.
     rendered: Any
     render_error: Optional[BaseException]
-    explicit: bool
 
 
 def _has_async_push_hook(view: Any, event: Dict[str, Any]) -> bool:
@@ -684,14 +683,13 @@ def render_embedded_child_html(child_view: Any) -> str:
     and :class:`~djust.runtime.ViewRuntime` share ONE implementation — including
     the security-hardened error path below — with no parallel copy to drift.
     """
-    from ._exposure import ExposureError, uses_legacy_exposure
+    from ._exposure import ExposureError
 
-    legacy_child = uses_legacy_exposure(child_view)
     try:
         from .sync_turn import run_sync_step
 
         context = run_sync_step(child_view, "render", child_view.get_context_data)
-        if not legacy_child and "view" in context:
+        if "view" in context:
             raise ExposureError("Explicit child context contains a reserved name")
         from django.template import engines
         from ._include_guard import include_guard_scope
@@ -718,25 +716,8 @@ def render_embedded_child_html(child_view: Any) -> str:
 
             child_view._record_dj_model_fields_from_source(template_str, get_template_dirs())
         return str(html)
-    except Exception as e:
-        if not legacy_child:
-            raise ExposureError("Explicit child rendering unavailable") from None
-        logger.error("Failed to render embedded child %s: %s", child_view.__class__.__name__, e)
-        # SECURITY (#1646 parallel-path drift): this site bypassed the
-        # central handle_exception / create_safe_error_response path, which
-        # is DEBUG-gated and generic in production. Returning the raw str(e)
-        # here (a) leaked exception detail into the live page in production
-        # (CWE-209) and (b) was unescaped, so an attacker-influenced message
-        # containing ``-->`` broke out of the HTML comment into live DOM
-        # (CWE-79 DOM XSS). escape() neutralises the comment-breakout and any
-        # tag injection in BOTH modes; production additionally emits no
-        # detail. Mirrors the DEBUG gate in simple_live_view.render_template.
-        from django.conf import settings
-        from django.utils.html import escape
-
-        if getattr(settings, "DEBUG", False):
-            return f"<!-- Error rendering embedded child: {escape(str(e))} -->"
-        return "<!-- Error rendering embedded child -->"
+    except Exception:
+        raise ExposureError("Explicit child rendering unavailable") from None
 
 
 def _find_sticky_slot_ids(html: str) -> set[str]:
@@ -882,10 +863,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # cannot concurrently access view_instance state or increment the
         # VDOM version. This prevents the version mismatch race in #560.
         self._render_lock = asyncio.Lock()
-        # Monotonic time of the last server-originated-turn auth re-check that
-        # passed (``reauth_on_event``); ``None`` until the first one, so the
-        # first turn after mount or a long gap always re-checks.
-        self._server_turn_reauth_at: Optional[float] = None
         # Track whether a user event is currently being processed so ticks
         # can yield priority to user interactions.
         self._processing_user_event = False
@@ -1477,30 +1454,27 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 await self._settle_cancelled_async(view, event_name)
                 return
 
-        # A nonlegacy root's callback starts only under current authority.
-        # Under the render lock: the check stashes, then pops, the view's
-        # authorized request, which a lock-holding turn may be relying on.
-        from ._exposure import uses_legacy_exposure
-
-        if not uses_legacy_exposure(view):
-            async with self._render_lock:
-                if self.view_instance is not view:
-                    return
-                try:
-                    if not await self._authorize_explicit_consumer_turn(view):
-                        return
-                finally:
-                    self._end_explicit_turn(view)
-                # cancel_async() may have arrived while this waited for the
-                # lock: the callback must not start then either (#2969).
-                cancelled = getattr(view, "_async_cancelled", None)
-                cancelled_now = cancelled is not None and task_name in cancelled
-                if cancelled_now and cancelled is not None:
-                    cancelled.discard(task_name)
-            if cancelled_now:
-                logger.debug("Async task %s was cancelled, skipping execution", task_name)
-                await self._settle_cancelled_async(view, event_name)
+        # The callback starts only under current authority. Under the render
+        # lock: the check stashes, then pops, the view's authorized request,
+        # which a lock-holding turn may be relying on.
+        async with self._render_lock:
+            if self.view_instance is not view:
                 return
+            try:
+                if not await self._authorize_explicit_consumer_turn(view):
+                    return
+            finally:
+                self._end_explicit_turn(view)
+            # cancel_async() may have arrived while this waited for the
+            # lock: the callback must not start then either (#2969).
+            cancelled = getattr(view, "_async_cancelled", None)
+            cancelled_now = cancelled is not None and task_name in cancelled
+            if cancelled_now and cancelled is not None:
+                cancelled.discard(task_name)
+        if cancelled_now:
+            logger.debug("Async task %s was cancelled, skipping execution", task_name)
+            await self._settle_cancelled_async(view, event_name)
+            return
 
         result = None
         error = None
@@ -1590,7 +1564,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     if self.view_instance is not view:
                         return
                     # Re-render and send patches (mirrors the server_push path)
-                    rendered = await self._render_background(view, "async")
+                    rendered = await self._render_background(view)
                     if rendered is None:
                         return
                     html, patches = rendered.html, rendered.patches
@@ -1726,7 +1700,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         :meth:`_run_async_work` and :meth:`_settle_cancelled_async`. Arms
         recovery so ``_recovery_version`` tracks this frame (#1817).
         """
-        rendered = await self._render_background(view, "async")
+        rendered = await self._render_background(view)
         if rendered is None:
             return
         html, patches = rendered.html, rendered.patches
@@ -2070,7 +2044,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         render and ``embedded_update`` are the runtime's child path. A child no
         longer on the page is dropped without an error frame.
         """
-        from ._exposure import uses_legacy_exposure
         from .runtime import _still_owned
 
         root = self.view_instance
@@ -2080,9 +2053,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 "Released activity event for an embedded view no longer on the page dropped"
             )
             return
-        if not uses_legacy_exposure(root) and not await self._authorize_released_explicit_event(
-            root
-        ):
+        if not await self._authorize_released_explicit_event(root):
             return  # root authority revoked: denied and closed 4403, as for a root event
         try:
             await runtime._dispatch_released_child_event(target_view, event_name, params, event_ref)
@@ -2130,23 +2101,16 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         return True
 
     async def _authorize_explicit_consumer_turn(self, view: Any) -> bool:
-        """Fresh authority for a server-originated turn on a nonlegacy root.
+        """Fresh authority for a server-originated turn on a root.
 
         Tick, server_push, db_notify and NOTIFY-drained background work carry
         no inbound event request. Like the runtime's background turns (ADR-038
         D-l), each is authorized against a freshly loaded session before the
         application hook runs; :meth:`_render_background` then commits declared
         state before the frame. A revoked turn gets the foreground denial.
-        Legacy views pass through unchanged (their ``reauth_on_event`` runs on
-        the turn chain). The caller pops the stashed
-        request with :meth:`_end_explicit_turn` when the turn ends.
+        The caller pops the stashed request with :meth:`_end_explicit_turn`
+        when the turn ends.
         """
-        from ._exposure import uses_legacy_exposure
-
-        if uses_legacy_exposure(view):
-            # ``reauth_on_event`` for legacy roots runs on the turn chain's
-            # ``reauth`` built-in, before this turn's body (ADR-044 D7).
-            return True
         runtime = getattr(self, "_runtime", None)
         try:
             if runtime is None:
@@ -2174,41 +2138,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         )
         await self.close(code=4403)
         await self._release_revoked_view(revoked)
-
-    async def _reauth_legacy_server_turn(self, view: Any, *, locked: bool = True) -> bool:
-        """``reauth_on_event`` re-check for a server-originated turn on a legacy view.
-
-        The turn chain's ``reauth`` built-in (ADR-044 D7) calls this for every
-        ``push`` / ``async`` turn on this socket (tick, server_push /
-        push_to_view, db_notify, presence, client push, async starts and
-        results). It runs the SAME fresh-principal check as the event path
-        (``WSConsumerTransport.recheck_event_auth``).
-
-        Gated like the event path (setting on AND the view sets
-        ``login_required`` / ``permission_required``), so default views pay
-        nothing. A pass is remembered for ``reauth_server_turn_interval``
-        seconds (default 5) so a ticking view does not read the session store
-        every tick; the first turn after a longer gap always re-checks. On
-        failure the transport has already sent navigate-to-login and closed
-        4403 (fail closed on any exception); the view is dropped and released
-        (under the render lock: now if ``locked``, else once it is free) and
-        the turn does not run.
-        """
-        if not (
-            djust_config.get("reauth_on_event")
-            and (
-                getattr(view, "login_required", None) or getattr(view, "permission_required", None)
-            )
-        ):
-            return True
-        from .runtime import WSConsumerTransport
-
-        runtime = getattr(self, "_runtime", None)
-        transport = getattr(runtime, "transport", None) or WSConsumerTransport(self)
-        if await reauth_live_turn(self, transport, view, server=True):
-            return True
-        await self._drop_revoked_view(view, locked=locked)
-        return False
 
     @staticmethod
     async def _release_revoked_view(view: Any) -> None:
@@ -2299,11 +2228,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         """
         import time
 
-        from ._exposure import uses_legacy_exposure
-
         # ADR-038: events queued on a hidden activity are validated when they
-        # are dispatched. For an explicit view that includes fresh
-        # authorization, which this drain (run from db_notify, outside any
+        # are dispatched. That includes fresh authorization, which this drain (run from db_notify, outside any
         # authorized runtime turn) must apply itself.
         root = self.view_instance
         if target_view is not root:
@@ -2311,9 +2237,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # through the runtime's child path under the root's authority.
             await self._dispatch_released_child_event(target_view, event_name, params, event_ref)
             return
-        if not uses_legacy_exposure(target_view):
-            if not await self._authorize_released_explicit_event(target_view):
-                return
+        if not await self._authorize_released_explicit_event(target_view):
+            return
 
         # --- security / validation (shared with handle_event) -----------
         handler = await _validate_event_security(
@@ -2397,25 +2322,20 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             else:
                 view._changed_keys = _compute_changed_keys(pre_assigns, post_assigns)
 
-        # The released event was authorized at entry; a nonlegacy root's
-        # declared state is committed before its frame (ADR-038 E3).
+        # The released event was authorized at entry; the root's declared
+        # state is committed before its frame (ADR-038 E3).
         snapshot_fields: Dict[str, Any] = {}
         runtime = getattr(self, "_runtime", None)
-        if not uses_legacy_exposure(view):
-            try:
-                committed = runtime is not None and await runtime.commit_explicit_turn(
-                    view, source="event"
-                )
-                if committed and runtime is not None:
-                    snapshot_fields = await runtime._explicit_event_snapshot(view)
-            finally:
-                self._end_explicit_turn(view)
-            if not committed:
-                return
-        else:
-            from .runtime import store_turn_session_writes
-
-            await store_turn_session_writes(view)  # #4168
+        try:
+            committed = runtime is not None and await runtime.commit_explicit_turn(
+                view, source="event"
+            )
+            if committed and runtime is not None:
+                snapshot_fields = await runtime._explicit_event_snapshot(view)
+        finally:
+            self._end_explicit_turn(view)
+        if not committed:
+            return
 
         if skip_render:
             # (_skip_render was already consumed by _resolve_skip_render —
@@ -2747,13 +2667,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     pass  # Expected when cancelling a running tick task during disconnect
                 consumer._tick_task = None
 
-        # Tear each mounted view down (#3244): an explicit root is disposed with
-        # its whole subtree, including async work; a legacy root has its uploads
-        # cleaned up, its wait_for_event waiters closed (ADR-002 Phase 1b,
-        # #3236: cancelled so @background tasks awaiting one unblock with
-        # CancelledError, and later waits refused, since its background work
-        # keeps running), and its embedded children unregistered, their own
-        # waiters closed too. Either way its Rust live handles are dropped.
+        # Tear each mounted view down (#3244): each root is disposed with its
+        # whole subtree, including async work, and its Rust live handles are
+        # dropped.
         for view in mounted_views:
             # The view's ``disconnected()`` hook (#3007), before its release;
             # a cancellation during the hook still releases the view.
@@ -2793,7 +2709,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         catch-all below also receives failures from the verbs that bypass
         ``dispatch_message`` (``request_html``, ``live_redirect_mount``,
         ``mount_batch``, uploads, presence, ...), and
-        ``handle_exception`` is value-free there for a nonlegacy owner.
+        ``handle_exception`` is value-free there unless the owner allows details.
         """
         logger.debug(
             "[WebSocket] receive called: text_data=%s, bytes_data=%s",
@@ -3348,19 +3264,20 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         except Exception as exc:  # noqa: BLE001 — isolate per-view failures
             # ADR-038: the failed view may never have become view_instance, so
             # its owner is the class the batch entry names, resolved by the
-            # shared allowlist-first resolver. An unresolvable class, or any
-            # nonlegacy owner, keeps both the log and failed[] value-free.
+            # shared allowlist-first resolver. An unresolvable class, or an
+            # owner that does not allow details, keeps both the log and
+            # failed[] value-free.
             from .security.mount import resolve_view_class
 
             resolution = resolve_view_class(view_path)
             from ._exposure_diagnostics import diagnostics_policy_allows
 
-            legacy = (
+            details_allowed = (
                 bool(resolution)
                 and diagnostics_policy_allows(resolution.view_class)
                 and diagnostics_policy_allows(self.view_instance)
             )
-            if legacy:
+            if details_allowed:
                 logger.exception(
                     "mount_batch: _mount_one raised for view %s",
                     sanitize_for_log(view_path),
@@ -3370,10 +3287,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             from django.conf import settings as _settings
 
             # Fix #12 — do not leak exception text in production. In
-            # DEBUG mode a legacy owner still gets a truncated string to help
-            # diagnose template / auth errors; a nonlegacy owner never does.
+            # DEBUG mode an owner that allows details gets a truncated string
+            # to help diagnose template / auth errors; any other owner never does.
             safe_err = "mount failed"
-            if legacy and getattr(_settings, "DEBUG", False):
+            if details_allowed and getattr(_settings, "DEBUG", False):
                 safe_err = str(exc)[:200]
             return False, failed, safe_err, None, []
         finally:
@@ -3741,8 +3658,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
     def _upload_owner(self) -> Optional[Dict[str, str]]:
         """The owner an upload registered here is bound to: the explicit mount
-        binding's principal and view (#4175). None for a legacy view (its key
-        is the session alone)."""
+        binding's principal and view (#4175). None when the connection has no
+        mount binding (its key is the session alone)."""
         from .uploads.resumable import upload_owner
 
         runtime = getattr(self, "_runtime", None)
@@ -4374,7 +4291,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             except Exception as e:
                 # Catch-all for unexpected errors. The re-render runs the
                 # view's own get_context_data, so its exception can carry
-                # view values: value-free for a nonlegacy view (ADR-038).
+                # view values: value-free unless details are allowed (ADR-038).
                 from ._exposure_diagnostics import log_failure_for
 
                 log_failure_for(
@@ -5143,32 +5060,19 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         """Give the sticky re-check the user the new mount will run as (#3212).
 
         ``_build_live_redirect_request`` takes the connect-time
-        ``scope["user"]``. An explicit mount whose session has vanished runs
-        as anonymous under a replacement session instead
+        ``scope["user"]``. A mount whose session has vanished runs as
+        anonymous under a replacement session instead
         (``establish_mount_session``, #3201), so the re-check does the same,
         through the same helper and the runtime's replacement map: the
         redirect's mount then reuses that replacement rather than creating
-        another. A live session keeps its user.
-
-        What decides it is the class that will actually be MOUNTED, chosen the
-        way ``handle_live_redirect_mount`` chooses it (the URL's view, or the
-        client's ``view`` for a back-navigation with a snapshot) and resolved
-        through the mount's own resolver. Not the page being left (#3229 B3),
-        and not the URL alone (#3229 re-review R2). A target that does not
-        resolve is treated as explicit: re-checking as anonymous can only drop
-        sticky children, never keep one the mount would refuse.
+        another. A live session keeps its user. Every view the redirect can
+        mount is explicit, so this does not depend on the target class
+        (``data``, the redirect frame, is not read).
         """
-        from ._exposure import uses_legacy_exposure
         from ._exposure_auth import establish_mount_session
-        from .security.mount import resolve_view_class
 
         runtime = getattr(self, "_runtime", None)
         if request is None or runtime is None:
-            return
-        view_path = self._live_redirect_url_view(data) or data.get("view")
-        resolution = resolve_view_class(view_path) if isinstance(view_path, str) else None
-        target = resolution.view_class if resolution else None
-        if target is not None and uses_legacy_exposure(target):
             return
         presented = getattr(getattr(request, "session", None), "session_key", None)
         replacement = await sync_to_async(establish_mount_session)(
@@ -5209,7 +5113,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         level: str = "error",
         traceback: bool = False,
     ) -> None:
-        """Log a failed application hook, value-free for a nonlegacy owner (ADR-038).
+        """Log a failed application hook, value-free unless details are allowed (ADR-038).
 
         Consumer hooks run outside a runtime turn, so no diagnostic scope is
         open. This opens one, restricts it to the view the hook ran on and to
@@ -5425,7 +5329,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # The presence payload is data the viewer may no longer be entitled
             # to: each delivery is a ``push``/``presence`` turn (ADR-044) for THE
             # VIEW THAT RECEIVES THE FRAME (the page view or a slot's stand-in),
-            # so ``reauth_on_event`` and app middleware gate it.
+            # so app middleware gates it.
             await consumer._deliver_presence_event(consumer.view_instance, event)
 
     @_consumer_turn("push", "presence", locked=False)
@@ -5551,16 +5455,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         from .worker_pool import offload_enabled
 
         if offload_enabled():
-            from ._exposure import uses_legacy_exposure
             from .auth.core import has_async_check_permissions
 
             # An ``async def`` hook must run on the loop, so a turn with one
-            # keeps the stock path, which awaits it there; so does an explicit
-            # root whose ``check_permissions`` is ``async def`` (its fresh
+            # keeps the stock path, which awaits it there; so does a root
+            # whose ``check_permissions`` is ``async def`` (its fresh
             # authorization is awaited on the loop, before the hooks).
             if (
                 view is not None
-                and (uses_legacy_exposure(view) or not has_async_check_permissions(view))
+                and not has_async_check_permissions(view)
                 and not any(_has_async_push_hook(view, event) for event in events)
             ):
                 await self._run_server_push_turn_offloaded(view, events)
@@ -5689,16 +5592,14 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         order; a raising hook is logged and skipped; nothing renders unless
         some hook asked for it.
 
-        Both exposure policies (#4152). A legacy root's ``reauth_on_event``
-        already ran on the turn chain (ADR-044), like the stock turn. An
-        explicit (ADR-038) root is authorized against a fresh session INSIDE
+        The root (#4152, ADR-038) is authorized against a fresh session INSIDE
         the hop, after the connection check and before any hook; a refusal
         runs no hook and gets the stock turn's denial. Its declared state is
         then committed on the loop, after the hop and before the frame: the
         render already ran in the hop, so a commit that fails or is deferred
         withholds the frame and discards the unseen diff baseline (the next
-        update is full HTML), as a withheld stock frame does. An explicit root
-        whose ``check_permissions`` is ``async def`` keeps the stock path.
+        update is full HTML), as a withheld stock frame does. A root whose
+        ``check_permissions`` is ``async def`` keeps the stock path.
         """
         from ._view_hooks import _hook_step
         from .sync_turn import run_sync_step
@@ -5778,35 +5679,31 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         The shared core of the worker pool's push, tick and ``db_notify``
         turns. On the session's thread, in a single ``sync_to_async`` hop:
-        Django's stale DB-connection check; for an explicit (ADR-038) root, a
-        fresh authorization (a refusal runs nothing else); ``body()``, the
+        Django's stale DB-connection check; a fresh authorization of the root
+        (ADR-038; a refusal runs nothing else); ``body()``, the
         turn's own hooks, which returns ``(failures, applied, render)``; then,
         when something applied and asked for a render, the render and diff.
 
-        Returns None when the explicit root was refused (the stock denial has
+        Returns None when the root was refused (the stock denial has
         been sent), else an :class:`_OffloadedTurn`. A cancelled hop drops the
         diff baseline, since its render may have run. The caller holds the
         render lock and finishes with :meth:`_finish_offloaded_render`.
         """
-        from ._exposure import uses_legacy_exposure
-
         runtime = getattr(self, "_runtime", None)
         tenant = getattr(view, "_tenant", None)
-        explicit = not uses_legacy_exposure(view)
 
         def turn() -> Optional[_OffloadedTurn]:
             from django.db import close_old_connections
 
             close_old_connections()
-            if explicit:
-                # One fresh authority for the whole turn (ADR-038 E3-3),
-                # before any hook, as the stock turn does.
-                try:
-                    if runtime is None:
-                        raise PermissionError("no runtime owns this view")
-                    runtime.authorize_explicit_turn_sync(view)
-                except Exception:  # noqa: BLE001 — never stringified
-                    return None
+            # One fresh authority for the whole turn (ADR-038 E3-3),
+            # before any hook, as the stock turn does.
+            try:
+                if runtime is None:
+                    raise PermissionError("no runtime owns this view")
+                runtime.authorize_explicit_turn_sync(view)
+            except Exception:  # noqa: BLE001 — never stringified
+                return None
             failures, applied, render = body()
             rendered: Any = None
             render_error: Optional[BaseException] = None
@@ -5816,7 +5713,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         rendered = render_background_sync(view, runtime) or False
                 except Exception as exc:  # noqa: BLE001 - re-raised on the loop
                     render_error = exc
-            return _OffloadedTurn(failures, applied, render, rendered, render_error, explicit)
+            return _OffloadedTurn(failures, applied, render, rendered, render_error)
 
         try:
             result = await settle_render_operation(sync_to_async(turn)())
@@ -5828,35 +5725,28 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         return result
 
     async def _finish_offloaded_render(
-        self, view: Any, result: "_OffloadedTurn", source: str = "push"
+        self, view: Any, result: "_OffloadedTurn"
     ) -> Optional[BackgroundRender]:
         """The loop-side tail of an offloaded turn that asked for a render.
 
-        An explicit root's declared state is committed before the frame. The
+        The root's declared state is committed before the frame. The
         stock turn commits before it renders, so a render that raised still
         leaves the hooks' state saved: commit before that error surfaces too.
         The render already ran in the hop, so a commit that fails or is
         deferred withholds the frame and discards the unseen diff baseline
         (the next update is full HTML), as a withheld stock frame does.
         Returns the render to send, or None when there is nothing to send.
-        ``source`` names the turn (``"push"``, ``"tick"``, ``"db_notify"``) in
-        a legacy view's session-write log.
         """
         runtime = getattr(self, "_runtime", None)
         rendered: Any = result.rendered
         snapshot_fields: Dict[str, Any] = {}
-        if result.explicit and result.render and self.view_instance is view:
+        if result.render and self.view_instance is view:
             committed = await self._commit_explicit_background_turn(view)
             if committed is None:
                 if rendered:
                     _discard_baseline(view)
                 return None
             snapshot_fields = committed
-        elif not result.explicit and result.render and self.view_instance is view:
-            # A legacy view's hook session writes, before the frame (#4168).
-            from .runtime import store_turn_session_writes
-
-            await store_turn_session_writes(view, source)
         if result.render_error is not None:
             raise result.render_error
         if self.view_instance is not view or rendered is None:
@@ -6220,8 +6110,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         """The locked part of :meth:`_db_notify_to_view` (a ``push``/``db_notify`` turn).
 
         Caller holds ``_render_lock``; this always releases it. With the
-        worker pool on, a sync ``handle_info`` on a view that is legacy or
-        whose ``check_permissions`` is sync takes the one-hop turn
+        worker pool on, a sync ``handle_info`` on a view whose
+        ``check_permissions`` is sync takes the one-hop turn
         (:meth:`_run_db_notify_turn_offloaded`, #4166).
         """
         from .worker_pool import offload_enabled
@@ -6276,7 +6166,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 await self._flush_all_pending()
                 return
 
-            rendered = await self._render_background(view, "db_notify")
+            rendered = await self._render_background(view)
             if rendered is None:
                 return
             html, patches = rendered.html, rendered.patches
@@ -6360,16 +6250,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         ``hook_role`` is ``"tick"`` or ``"info"`` (the view's ``handle_<role>``).
         Called with the pool on. An ``async def`` hook must run on the loop,
-        and an explicit root whose ``check_permissions`` is ``async def`` is
+        and a root whose ``check_permissions`` is ``async def`` is
         authorized on the loop before its hook: both keep the stock path, as
         for the push turn (#4152).
         """
-        from ._exposure import uses_legacy_exposure
         from .auth.core import has_async_check_permissions
 
         if view is None:
             return False
-        if not (uses_legacy_exposure(view) or not has_async_check_permissions(view)):
+        if has_async_check_permissions(view):
             return False
         hook = getattr(view, "handle_" + hook_role, None)
         return not (hook is not None and callable(hook) and is_async_hook(hook))
@@ -6429,7 +6318,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 await self._store_no_frame_session_writes(view, "db_notify")
                 await self._flush_all_pending()
                 return
-            rendered = await self._finish_offloaded_render(view, result, "db_notify")
+            rendered = await self._finish_offloaded_render(view, result)
             if rendered is None:
                 return
             await self._send_broadcast_render(rendered)
@@ -6440,32 +6329,21 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if dispatch_work and self.view_instance is view:
                 await self._dispatch_async_work(event_name=None)
 
-    async def _render_background(
-        self, view: Any, source: str = "push"
-    ) -> Optional[BackgroundRender]:
+    async def _render_background(self, view: Any) -> Optional[BackgroundRender]:
         """Capture one background render under the caller's existing render lock.
 
-        A nonlegacy root's turn was authorized at its start; its declared state
-        is committed here, before the frame, and a failed save withholds the
-        render (ADR-038 E3). ``source`` names the turn in a legacy view's
-        session-write log.
+        The root's turn was authorized at its start; its declared state is
+        committed here, before the frame, and a failed save withholds the
+        render (ADR-038 E3).
         """
         if self.view_instance is not view:
             return None
         runtime = getattr(self, "_runtime", None)
-        from ._exposure import uses_legacy_exposure
-
         snapshot_fields: Dict[str, Any] = {}
-        if not uses_legacy_exposure(view):
-            committed = await self._commit_explicit_background_turn(view)
-            if committed is None:
-                return None
-            snapshot_fields = committed
-        else:
-            # A legacy view's hook session writes, before the frame (#4168).
-            from .runtime import store_turn_session_writes
-
-            await store_turn_session_writes(view, source)
+        committed = await self._commit_explicit_background_turn(view)
+        if committed is None:
+            return None
+        snapshot_fields = committed
         with _tenant_context(getattr(view, "_tenant", None)):
             rendered = await render_background(view, runtime)
         if self.view_instance is not view:
@@ -6604,8 +6482,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         """The locked part of :meth:`_tick_once` (a ``push``/``tick`` turn).
 
         Caller holds ``_render_lock``; this always releases it. With the
-        worker pool on, a sync ``handle_tick`` on a view that is legacy or
-        whose ``check_permissions`` is sync takes the one-hop turn
+        worker pool on, a sync ``handle_tick`` on a view whose
+        ``check_permissions`` is sync takes the one-hop turn
         (:meth:`_run_tick_turn_offloaded`, #4166).
         """
         from .worker_pool import offload_enabled
@@ -6674,7 +6552,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 await self._flush_all_pending()
                 return False
 
-            rendered = await self._render_background(view, "tick")
+            rendered = await self._render_background(view)
             if rendered is None:
                 return False
             await self._send_tick_render(rendered)
@@ -6750,7 +6628,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 await self._store_no_frame_session_writes(view, "tick")  # #4168
                 await self._flush_all_pending()
                 return False
-            rendered = await self._finish_offloaded_render(view, result, "tick")
+            rendered = await self._finish_offloaded_render(view, result)
             if rendered is None:
                 return False
             await self._send_tick_render(rendered)
