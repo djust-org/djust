@@ -1,0 +1,38 @@
+{% extends "djust_workflow/base.html" %}
+{% block title %}Tickets{% endblock %}
+{% block content %}
+<div dj-root>
+    <h1>Tickets</h1>
+
+    {% if params_errors.page or params_errors.status or params_errors.q %}
+    <p class="error" role="alert">That address had a value we could not use, so the defaults are shown.</p>
+    {% endif %}
+
+    <form dj-submit="apply_filter">
+        <input type="search" name="q" value="{{ q }}" placeholder="Search tickets" aria-label="Search tickets">
+        <select name="status" aria-label="Status">
+            <option value="all" {% if status == "all" %}selected{% endif %}>All</option>
+            <option value="open" {% if status == "open" %}selected{% endif %}>Open</option>
+            <option value="closed" {% if status == "closed" %}selected{% endif %}>Closed</option>
+        </select>
+        <button type="submit" dj-loading.disable>Filter</button>
+        <span class="loading muted" dj-loading.show>Loading...</span>
+    </form>
+
+    <p class="muted">{{ total }} ticket(s), page {{ page_number }} of {{ num_pages }}</p>
+    <ul>
+    {% for ticket in tickets %}
+        <li><a href="/workflow/{{ ticket.pk }}/" dj-navigate>{{ ticket.title }}</a>
+            <span class="muted">{{ ticket.status }}, {{ ticket.priority }}</span></li>
+    {% empty %}
+        <li class="muted">No tickets match.</li>
+    {% endfor %}
+    </ul>
+
+    <p>
+        {% if prev_page %}<a href="?status={{ status|urlencode }}&q={{ q|urlencode }}&page={{ prev_page }}" dj-patch>Previous</a>{% endif %}
+        {% if next_page %}<a href="?status={{ status|urlencode }}&q={{ q|urlencode }}&page={{ next_page }}" dj-patch>Next</a>{% endif %}
+    </p>
+    {% if can_add %}<p><a href="/workflow/new/" dj-navigate>New ticket</a></p>{% endif %}
+</div>
+{% endblock %}

@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     "djust_tests",  # Test views
     "djust_docs",  # Documentation views
     "djust_rentals",  # Rental property management app
+    "djust_workflow",  # Incremental Django workflow (#3659)
     "sticky_demo",  # Sticky LiveViews / app-shell demo (#1784)
     # Old app (will be phased out)
     "demo_app",
@@ -158,6 +159,7 @@ LIVEVIEW_ALLOWED_MODULES = [
     "djust_shared.views",
     "djust_rentals.views",
     "djust_tests.views",
+    "djust_workflow.views",
     "sticky_demo.views",
     # djust's own routed LiveViews (the admin extension at /djust-admin-demo/).
     # An explicit list replaces the default that admits them (check V015).

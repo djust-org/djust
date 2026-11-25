@@ -435,6 +435,11 @@ navigation:
         file: guides/tutorial-form-validation.md
         order: 40
         level: intermediate
+      - title: "Adding djust to an existing Django app, step by step"
+        slug: incremental-django-workflow
+        file: guides/incremental-django-workflow.md
+        order: 39
+        level: intermediate
       - title: "Tutorial: Build a search-as-you-type feature"
         slug: tutorial-search-as-you-type
         file: guides/tutorial-search-as-you-type.md
