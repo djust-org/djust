@@ -114,8 +114,16 @@ def _with_render_digest_meta(view: Any, request: Any, page: Any, committed_html:
 
         meta = '<meta name="%s" content="%s">' % (META_NAME, escape(token))
         return text[:head_close] + meta + text[head_close:]
-    except Exception:  # noqa: BLE001 - a missing digest only costs one whole-page answer
-        logger.debug("could not add the render digest to the page", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - a missing digest only costs one whole-page answer
+        from .._exposure_diagnostics import log_failure
+
+        log_failure(
+            logger,
+            exc,
+            "could not add the render digest to the page",
+            level="debug",
+            traceback=True,
+        )
         return page
 
 
