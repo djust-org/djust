@@ -688,6 +688,12 @@ benchmark-turn: ## Complete event turns, explicit exposure with and without the 
 	@DJUST_TURN_BENCH_ROUNDS=$${ROUNDS:-40} PYTHONPATH=. nice -n 10 $(PYTHON) -m pytest \
 		tests/benchmarks/test_explicit_turn_cost_3997.py -q -s -p no:cacheprovider
 
+.PHONY: benchmark-transports
+benchmark-transports: ## Complete turns over WS, SSE and HTTP: 5 workloads, save/nosave, RTT 0/20/100/250 ms (#3657); RELEASE build. ROUNDS=40 JSON=out.json COMPARE=docs/performance/turn-transports-baseline.json
+	@echo "$(GREEN)Running the transport turn benchmark (serial; release build required)...$(NC)"
+	@PYTHONPATH=python nice -n 10 $(PYTHON) scripts/bench_turn_transports.py --rounds $${ROUNDS:-40} \
+		$${JSON:+--json $$JSON} $${COMPARE:+--compare $$COMPARE}
+
 ##@ Database
 
 .PHONY: demo-tests
