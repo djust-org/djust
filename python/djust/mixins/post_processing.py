@@ -19,10 +19,17 @@ _RCDATA_RE = re.compile(
     r"<(title|textarea)(?=[\s/>])[^<>]*>.*?(?:</\1[^<>]*>|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
+
+
 # A tag name ends at whitespace, "/" or ">": ``<body-shell>`` is not ``<body>``.
 # End tags may carry junk before ">" (``</head foo>``), as browsers accept.
 # ``[^<>]*`` (not ``[^>]*``) keeps a tag from spanning into the next one, and
 # keeps the scan linear when many tags have no ">" (PR #3017 review).
+_HEAD_CLOSE_RE = re.compile(r"</head(?=[\s/>])[^<>]*>", re.IGNORECASE)
+_BODY_OPEN_RE = re.compile(r"<body(?=[\s/>])", re.IGNORECASE)
+_BODY_CLOSE_TAG_RE = re.compile(r"</body(?=[\s/>])[^<>]*>", re.IGNORECASE)
+_HTML_CLOSE_TAG_RE = re.compile(r"</html(?=[\s/>])[^<>]*>", re.IGNORECASE)
+
 # The client chunks scripts/build-client.sh builds (CHUNK_SPECS) and
 # static/djust/src/13c-chunk-loader.js loads (#4007). Kept in step by
 # tests/unit/test_client_chunks_4007.py.
@@ -34,15 +41,9 @@ def _static_url(path: str) -> str:
     from django.templatetags.static import static
 
     try:
-        return static(path)
+        return str(static(path))
     except (ValueError, AttributeError):
         return f"/static/{path}"
-
-
-_HEAD_CLOSE_RE = re.compile(r"</head(?=[\s/>])[^<>]*>", re.IGNORECASE)
-_BODY_OPEN_RE = re.compile(r"<body(?=[\s/>])", re.IGNORECASE)
-_BODY_CLOSE_TAG_RE = re.compile(r"</body(?=[\s/>])[^<>]*>", re.IGNORECASE)
-_HTML_CLOSE_TAG_RE = re.compile(r"</html(?=[\s/>])[^<>]*>", re.IGNORECASE)
 
 
 def _mask_document_text(html: str) -> str:

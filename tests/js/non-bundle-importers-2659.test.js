@@ -24,7 +24,11 @@ const STATIC_DIR = path.resolve('./python/djust/static/djust');
 const BUNDLE_OUTPUTS = new Set([
     'client.js',
     'client.min.js',
+    'client-core.js',
+    'client-core.min.js',
     'debug-panel.js',
+    // The on-demand chunks scripts/build-client.sh emits (#4007).
+    ...fs.readdirSync(path.join(STATIC_DIR, 'chunks')).map(name => `chunks/${name}`),
 ]);
 
 // Standalone assets: NOT in the bundle, but each has a real loader.

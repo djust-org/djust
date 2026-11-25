@@ -197,7 +197,7 @@ describe('core bundle: chunks load only when used (#4007)', () => {
 
     it('a chunk that fails to load is reported and init still runs', async () => {
         const { window } = page('<div dj-view="app.V"><div dj-virtual="x"></div></div>', {
-            chunkMap: { 'virtual-list': '/static/djust/chunks/missing.js' },
+            chunkMap: { 'virtual-list': '/nowhere/chunks/missing.js' },
         });
         const errors = [];
         window.console.error = (...a) => errors.push(a.join(' '));
@@ -234,7 +234,7 @@ describe('core bundle: features a patch renders after init (#4007)', () => {
 
     it('a chunk that failed is not requested again on every patch', async () => {
         const { window, loader } = page('<div dj-view="app.V"><div id="tab"></div></div>', {
-            chunkMap: { 'virtual-list': '/static/djust/chunks/missing.js' },
+            chunkMap: { 'virtual-list': '/nowhere/chunks/missing.js' },
         });
         const errors = [];
         window.console.error = (...a) => errors.push(a.join(' '));
@@ -246,7 +246,7 @@ describe('core bundle: features a patch renders after init (#4007)', () => {
         window.djust.reinitAfterDOMUpdate(tab);
         window.djust.reinitAfterDOMUpdate(tab);
         await new Promise((r) => setTimeout(r, 50));
-        expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/missing.js']);
+        expect(chunkRequests(loader)).toEqual(['/nowhere/chunks/missing.js']);
         expect(errors.length).toBe(1);
     });
 });

@@ -348,6 +348,9 @@ const __djScope = window.djust._chunkScope;
                 let chunkIndex = startChunkIndex;
 
                 function sendNextChunk() {
+                    // Settled meanwhile (cancelled, failed, timed out on the
+                    // server, #4118): send nothing more.
+                    if (!activeUploads.has(ref)) return;
                     if (offset >= buffer.byteLength) {
                         // All chunks sent — send complete frame
                         const completeFrame = buildFrame(FRAME_COMPLETE, refBytes);
@@ -697,6 +700,9 @@ const __djScope = window.djust._chunkScope;
      */
     function handleUploadProgress(data) {
         const { ref, progress, status } = data;
+        // The server's reason for an error or a cancel (#4118): an
+        // UploadError refusal's message, a timeout, a cancel by the view.
+        const reason = typeof data.error === 'string' && data.error ? data.error : null;
         const upload = activeUploads.get(ref);
 
         if (upload) attachProgressUI(upload.uploadName, ref, upload.file);
@@ -709,7 +715,7 @@ const __djScope = window.djust._chunkScope;
 
         // Dispatch custom event for app-level handling
         window.dispatchEvent(new CustomEvent('djust:upload:progress', {
-            detail: { ref, progress, status, uploadName: upload ? upload.uploadName : null }
+            detail: { ref, progress, status, error: reason, uploadName: upload ? upload.uploadName : null }
         }));
 
         if (status === 'complete') {
@@ -721,9 +727,10 @@ const __djScope = window.djust._chunkScope;
                 deleteResumableRecord(upload.fileHint);
             }
             activeUploads.delete(ref);
-        } else if (status === 'error') {
+        } else if (status === 'error' || status === 'cancelled') {
             if (upload && upload.reject) {
-                upload.reject(new Error('Upload failed on server'));
+                const fallback = status === 'error' ? 'Upload failed on server' : 'Upload cancelled';
+                upload.reject(new Error(reason || fallback));
             }
             if (upload && upload.fileHint) {
                 deleteResumableRecord(upload.fileHint);
@@ -998,6 +1005,15 @@ const __djScope = window.djust._chunkScope;
             }
         }
     }
+
+    // An upload_progress decided inside a turn (the view's cancel_upload(),
+    // #4118) arrives as a push event at the turn's end.
+    window.addEventListener('djust:push_event', (event) => {
+        const detail = event.detail || {};
+        if (detail.event === 'djust:upload_progress' && detail.payload && detail.payload.ref) {
+            handleUploadProgress(detail.payload);
+        }
+    });
 
     window.djust.uploads = {
         setConfigs: setUploadConfigs,
