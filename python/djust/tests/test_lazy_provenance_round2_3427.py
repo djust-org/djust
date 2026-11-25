@@ -5,12 +5,13 @@ import re
 import pytest
 from django.contrib.sessions.backends.db import SessionStore
 
+from djust.decorators import state
 from djust._rust import RustLiveView, authored_lazy_elements, template_needs_provenance
 from djust.tests.test_lazy_provenance_http_3252 import Child, Page, TAG, get_ids, post
 
 
 class Hidden(Child):
-    exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Child, which it subclasses
+    exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Child, which it subclasses
     mounts = 0
 
 
@@ -41,7 +42,7 @@ def test_source_inert_containers_never_carry_authority(inert, payload):
 @pytest.mark.parametrize("inert,payload", REVIVALS[:5])
 def test_http_cannot_mount_revived_hidden_container(inert, payload):
     class RevivalPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = "<div dj-root>" + TAG + inert % HIDDEN + "</div>"
 
         def mount(self, request, **kwargs):
@@ -123,7 +124,7 @@ def test_addresses_stable_across_pods_and_unrelated_edits(tmp_path, settings):
         )
 
     class PortablePage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = '{% extends "base.html" %}{% block body %}{{ block.super }}{% endblock %}'
 
     def select(root):
@@ -160,7 +161,7 @@ def test_addresses_stable_across_pods_and_unrelated_edits(tmp_path, settings):
 @pytest.mark.django_db
 def test_unregistered_lazy_markup_has_debug_diagnostic(caplog):
     class InertPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = "<div dj-root><!--" + TAG + "--></div>"
 
     session = SessionStore()
@@ -215,8 +216,10 @@ def test_documented_nonregistrations_emit_debug_log(tmp_path, settings, caplog, 
     }
 
     class UnregisteredPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = "<div dj-root>" + sources[kind] + "</div>"
+        names = state(default_factory=list)
+        no = state(False)
 
         def mount(self, request, **kwargs):
             self.names = ["lazy.html"]

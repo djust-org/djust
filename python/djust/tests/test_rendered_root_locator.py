@@ -27,6 +27,7 @@ import asyncio
 import pytest
 
 from djust import LiveView
+from djust.decorators import state
 from djust.http_streaming import ChunkEmitter
 from djust.mixins.template import TemplateMixin
 
@@ -105,7 +106,12 @@ def test_shell_splice_reads_template_syntax_as_text():
         cls = type(
             "ShellIfText",
             (LiveView,),
-            {"exposure_policy": "legacy", "template_name": "child_1746.html", "mount": mount},
+            {
+                "exposure_policy": "explicit",
+                "template_name": "child_1746.html",
+                "snippet": state(""),
+                "mount": mount,
+            },
         )
         view = cls()
         view.mount(None)

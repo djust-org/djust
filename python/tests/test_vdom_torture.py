@@ -9,7 +9,7 @@ Documents any issues found during testing.
 
 import json
 import pytest
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
@@ -64,7 +64,7 @@ def count_patch_types(patches):
 
 
 class DeepNestingView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <div class="l1"><div class="l2"><div class="l3"><div class="l4">
     <div class="l5"><div class="l6"><div class="l7"><div class="l8">
@@ -73,8 +73,7 @@ class DeepNestingView(LiveView):
     </div></div></div></div></div></div></div></div></div></div>
 </div>"""
 
-    def mount(self, request):
-        self.text = "initial"
+    text = state("initial")
 
     @event_handler()
     def update(self, **kwargs):
@@ -100,13 +99,12 @@ def test_torture_deep_nesting():
 
 
 class LargeListView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <ul>{% for item in items %}<li>{{ item }}</li>{% endfor %}</ul>
 </div>"""
 
-    def mount(self, request):
-        self.items = [f"Item {i}" for i in range(50)]
+    items = state(default_factory=lambda: [f"Item {i}" for i in range(50)])
 
     @event_handler()
     def append(self, **kwargs):
@@ -157,7 +155,7 @@ def test_torture_large_list_change_middle():
 
 
 class ConditionalView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     {% if show_detail %}
         <div class="detail">
@@ -174,10 +172,9 @@ class ConditionalView(LiveView):
     {% endif %}
 </div>"""
 
-    def mount(self, request):
-        self.show_detail = False
-        self.title = "Title"
-        self.description = "Description"
+    show_detail = state(False)
+    title = state("Title")
+    description = state("Description")
 
     @event_handler()
     def toggle(self, **kwargs):
@@ -230,7 +227,7 @@ def test_torture_conditional_toggle_twice():
 
 
 class MultiChangeView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <header class="{{ header_class }}">{{ title }}</header>
     <main>
@@ -240,13 +237,12 @@ class MultiChangeView(LiveView):
     <footer>{{ footer }}</footer>
 </div>"""
 
-    def mount(self, request):
-        self.header_class = "default"
-        self.title = "Title"
-        self.paragraph = "Content"
-        self.badge_class = "info"
-        self.badge_text = "Status"
-        self.footer = "Footer"
+    header_class = state("default")
+    title = state("Title")
+    paragraph = state("Content")
+    badge_class = state("info")
+    badge_text = state("Status")
+    footer = state("Footer")
 
     @event_handler()
     def change_everything(self, **kwargs):
@@ -275,7 +271,7 @@ def test_torture_multiple_changes():
 
 
 class ReplaceStressView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <div class="sidebar">Sidebar</div>
     <div data-djust-replace id="content">
@@ -289,11 +285,12 @@ class ReplaceStressView(LiveView):
     <div class="footer">Footer</div>
 </div>"""
 
-    def mount(self, request):
-        self.messages = [
+    messages = state(
+        default_factory=lambda: [
             {"author": "Alice", "text": "Hello"},
             {"author": "Bob", "text": "Hi there"},
         ]
+    )
 
     @event_handler()
     def switch_conversation(self, **kwargs):
@@ -327,7 +324,7 @@ def test_torture_replace_with_siblings():
 
 
 class FormValidationView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <form>
         {% for field in fields %}
@@ -343,14 +340,15 @@ class FormValidationView(LiveView):
     </form>
 </div>"""
 
-    def mount(self, request):
-        self.fields = [
+    fields = state(
+        default_factory=lambda: [
             {"label": "Name", "type": "text", "error": "Required"},
             {"label": "Email", "type": "email", "error": "Invalid format"},
             {"label": "Phone", "type": "tel", "error": "Too short"},
             {"label": "Address", "type": "text", "error": "Required"},
             {"label": "City", "type": "text", "error": "Required"},
         ]
+    )
 
     @event_handler()
     def clear_errors(self, **kwargs):
@@ -377,13 +375,12 @@ def test_torture_form_clear_5_errors():
 
 
 class CounterView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <span id="count">{{ count }}</span>
 </div>"""
 
-    def mount(self, request):
-        self.count = 0
+    count = state(0)
 
     @event_handler()
     def increment(self, **kwargs):
@@ -421,7 +418,7 @@ def test_torture_rapid_counter():
 
 
 class EmptyStateView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     {% if items %}
         <ul>{% for item in items %}<li>{{ item }}</li>{% endfor %}</ul>
@@ -433,8 +430,7 @@ class EmptyStateView(LiveView):
     {% endif %}
 </div>"""
 
-    def mount(self, request):
-        self.items = []
+    items = state(default_factory=lambda: [])
 
     @event_handler()
     def add_items(self, **kwargs):
@@ -491,13 +487,12 @@ def test_torture_content_to_empty():
 
 
 class UnicodeView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <p>{{ text }}</p>
 </div>"""
 
-    def mount(self, request):
-        self.text = "Hello World"
+    text = state("Hello World")
 
     @event_handler()
     def set_unicode(self, **kwargs):
@@ -518,15 +513,14 @@ def test_torture_unicode_and_special_chars():
 
 
 class NoChangeView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <p>{{ text }}</p>
     <span class="badge">{{ badge }}</span>
 </div>"""
 
-    def mount(self, request):
-        self.text = "stable"
-        self.badge = "unchanged"
+    text = state("stable")
+    badge = state("unchanged")
 
     @event_handler()
     def noop(self, **kwargs):
@@ -554,7 +548,7 @@ def test_torture_no_change_produces_no_patches():
 
 
 class TableView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <table>
         <thead><tr><th>Name</th><th>Score</th></tr></thead>
@@ -566,11 +560,12 @@ class TableView(LiveView):
     </table>
 </div>"""
 
-    def mount(self, request):
-        self.rows = [
+    rows = state(
+        default_factory=lambda: [
             {"name": "Alice", "score": 90},
             {"name": "Bob", "score": 85},
         ]
+    )
 
     @event_handler()
     def add_row(self, **kwargs):

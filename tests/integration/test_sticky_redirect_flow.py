@@ -30,7 +30,11 @@ import pytest
 from django.test import RequestFactory
 
 from djust.live_view import LiveView
+from djust.testing import with_live_session
 from djust.websocket import LiveViewConsumer
+
+
+pytestmark = pytest.mark.django_db
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +43,7 @@ from djust.websocket import LiveViewConsumer
 
 
 class _AudioPlayerSticky(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "audio-player"
     template = '<div><button dj-click="play">Play {{ current_track }}</button></div>'
@@ -52,7 +56,7 @@ class _AudioPlayerSticky(LiveView):
 
 
 class _DashboardView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -69,7 +73,7 @@ class _DashboardView(LiveView):
 
 
 class _SettingsWithSlotView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root><h1>Settings</h1><div dj-sticky-slot="audio-player"></div></div>'
 
     def mount(self, request, **kwargs):
@@ -80,7 +84,7 @@ class _SettingsWithSlotView(LiveView):
 
 
 class _SettingsNoSlotView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>Settings (no slot)</h1></div>"
 
     def mount(self, request, **kwargs):
@@ -144,6 +148,16 @@ class _FakeConsumer(LiveViewConsumer):
         return None
 
 
+def _follow(request, previous):
+    """Make ``request`` the next request of the same visitor, in the same saved session.
+
+    An explicit sticky child is carried only for the session and user that mounted it.
+    """
+    request.session = previous.request.session
+    request.user = previous.request.user
+    return request
+
+
 def _mount_parent(consumer: _FakeConsumer, view_path: str) -> None:
     """Run the minimal subset of ``handle_mount`` that gives us a live
     parent view without requiring the full Rust/VDOM pipeline.
@@ -157,10 +171,7 @@ def _mount_parent(consumer: _FakeConsumer, view_path: str) -> None:
     view_cls = import_string(view_path)
     parent = view_cls()
     rf = RequestFactory()
-    request = rf.get("/")
-    from django.contrib.auth.models import AnonymousUser
-
-    request.user = AnonymousUser()
+    request = with_live_session(rf.get("/"))
     parent.request = request
     parent.mount(request)
     # Render the template so {% live_render %} runs and registers children.
@@ -193,9 +204,7 @@ async def test_end_to_end_dashboard_to_settings_sticky_audio_player():
     # Stage sticky children — this is the core of Phase B.
     rf = RequestFactory()
     new_request = rf.get("/settings/")
-    from django.contrib.auth.models import AnonymousUser
-
-    new_request.user = AnonymousUser()
+    _follow(new_request, consumer.view_instance)
     survivors = dashboard._preserve_sticky_children(new_request)
     assert "audio-player" in survivors
     assert survivors["audio-player"] is audio
@@ -244,12 +253,11 @@ async def test_rapid_navigate_a_b_a_sticky_instance_identity():
     audio = dashboard_a._child_views["audio-player"]
 
     rf = RequestFactory()
-    from django.contrib.auth.models import AnonymousUser
 
     def _redirect(to_path: str, dest_cls) -> LiveView:
         parent = consumer.view_instance
         req = rf.get(to_path)
-        req.user = AnonymousUser()
+        _follow(req, parent)
         survivors = parent._preserve_sticky_children(req)
         # Build the destination parent.
         new_parent = dest_cls()
@@ -307,10 +315,7 @@ async def test_live_redirect_to_non_live_session_full_reload_unmounts_sticky():
     )
 
     rf = RequestFactory()
-    from django.contrib.auth.models import AnonymousUser
-
-    req = rf.get("/other/")
-    req.user = AnonymousUser()
+    req = _follow(rf.get("/other/"), consumer.view_instance)
     survivors = dashboard._preserve_sticky_children(req)
     assert "audio-player" in survivors  # passes auth, stageable
 
@@ -363,9 +368,7 @@ async def test_dashboard_to_dashboard_auto_reattach_emits_slot_via_tag():
     # Stage stickies for a Dashboard → Dashboard return-trip.
     rf = RequestFactory()
     new_request = rf.get("/")
-    from django.contrib.auth.models import AnonymousUser
-
-    new_request.user = AnonymousUser()
+    _follow(new_request, consumer.view_instance)
     survivors = dashboard_a._preserve_sticky_children(new_request)
     assert survivors.get("audio-player") is audio
 
@@ -432,9 +435,7 @@ async def test_dashboard_to_dashboard_via_full_handle_mount_pipeline():
 
     rf = RequestFactory()
     new_request = rf.get("/")
-    from django.contrib.auth.models import AnonymousUser
-
-    new_request.user = AnonymousUser()
+    _follow(new_request, consumer.view_instance)
     survivors = dashboard_a._preserve_sticky_children(new_request)
     consumer._sticky_preserved = dict(survivors)
     consumer._sticky_auto_reattached = set()

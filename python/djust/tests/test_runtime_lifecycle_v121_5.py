@@ -6,8 +6,9 @@
   the ``component_id`` route instead of leaking into the next view event.
 * #2969 — ``AsyncWorkMixin.cancel_async_all()`` exists, sticky unmount uses
   it, and the runtime path honours ``cancel_async`` for a running task.
-* #2919 — a reused sticky child warns when the tag's kwargs change (they are
-  mount-time only in 1.2).
+* #2919 — (the legacy "kwargs are mount-time only" warning went with the legacy
+  policy; an explicit sticky child remounts on a changed input or takes it
+  through ``sticky_update_inputs``, see ``test_sticky_update_hook_2919``).
 * #2961 — SQL capture sees queries from sync event handlers.
 """
 
@@ -15,18 +16,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
 import pytest
-from asgiref.sync import sync_to_async
 from django.db import connection
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
 
 from djust import LiveView
 from djust.components.descriptors.base import LiveComponent, TypedState
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from djust.mixins.async_work import AsyncWorkMixin
 from djust.runtime import ViewRuntime
 
@@ -77,13 +76,14 @@ class MockTransport:
         yield
 
 
-def _mounted(cls: type):
+async def _mounted(cls: type):
+    """The view mounted through the real ``dispatch_mount`` on a saved session."""
+    from djust.tests._live_session import amount_on_runtime
+
     view = cls()
-    view.mount(None)
     transport = MockTransport()
     runtime = ViewRuntime(transport)
-    runtime.view_instance = view
-    view.render_with_diff()  # mount baseline
+    await amount_on_runtime(runtime, view)
     return view, runtime, transport
 
 
@@ -108,18 +108,10 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
 async def _connect_and_mount(view_path: str, url: str = "/v121-5/"):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
-    from django.contrib.sessions.backends.db import SessionStore
-
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
-    def _create_session():
-        s = SessionStore()
-        s.create()
-        return s.session_key
-
-    session_key = await sync_to_async(_create_session)()
-    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    communicator.scope["session"] = _ScopeSession(session_key)
+    communicator = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from()  # connect frame
@@ -152,11 +144,11 @@ def fake_pg_listener(monkeypatch):
 
 
 class ListenInMountView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p>{{ seen }}</p></div>"
+    seen = state("none")
 
     def mount(self, request, **kwargs):
-        self.seen = "none"
         self.listen("orders_2962")
 
     def handle_info(self, message):
@@ -164,11 +156,9 @@ class ListenInMountView(LiveView):
 
 
 class ListenLaterView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p>{{ seen }}</p></div>"
-
-    def mount(self, request, **kwargs):
-        self.seen = "none"
+    seen = state("none")
 
     @event_handler()
     def subscribe(self, **kwargs):
@@ -262,23 +252,21 @@ class Quiet(LiveComponent):
 
 
 class QuietPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>{{ title }}</h1>{{ quiet }}</div>"
     quiet = Quiet()
-
-    def mount(self, request: Any, **kwargs: Any) -> None:
-        self.title = "X"
+    title = state("X")
 
     @event_handler()
     def rename(self, value: str = "", **kwargs: Any) -> None:
         self.title = value
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestSkipRenderOnTheComponentRoute:
     @pytest.mark.asyncio
     async def test_component_skip_render_answers_noop_and_is_consumed(self):
-        view, runtime, transport = _mounted(QuietPage)
+        view, runtime, transport = await _mounted(QuietPage)
         await runtime.dispatch_event(
             {
                 "type": "event",
@@ -300,7 +288,7 @@ class TestSkipRenderOnTheComponentRoute:
 
     @pytest.mark.asyncio
     async def test_forced_full_html_still_wins(self):
-        view, runtime, transport = _mounted(QuietPage)
+        view, runtime, transport = await _mounted(QuietPage)
         view._force_full_html = True
         await runtime.dispatch_event(
             {
@@ -347,7 +335,7 @@ class TestCancelAsyncAll:
 
     def test_sticky_unmount_cancels(self):
         class StickyChild(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             sticky = True
             sticky_id = "c"
             template = "<div>x</div>"
@@ -361,11 +349,9 @@ class TestCancelAsyncAll:
 
 
 class SlowView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p>{{ result }}</p></div>"
-
-    def mount(self, request: Any, **kwargs: Any) -> None:
-        self.result = "idle"
+    result = state("idle")
 
     @event_handler()
     def go(self, **kwargs: Any) -> None:
@@ -384,27 +370,26 @@ class SlowView(LiveView):
         self.result = "stopped"
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestRuntimeHonoursCancel:
     @pytest.mark.asyncio
     async def test_cancelled_running_task_skips_its_result_but_settles_loading(self):
         """The result is dropped, but the event announced background work
-        (``async_pending``), so one ``source="async"`` frame naming the event
-        still ends its loading state — the WS twin's #2963 settle."""
-        view, runtime, transport = _mounted(SlowView)
+        (``async_pending``), so one ``async_complete`` frame still ends its
+        loading state — the WS twin's #2963 settle."""
+        view, runtime, transport = await _mounted(SlowView)
         view._gate = asyncio.Event()
         await runtime.dispatch_event({"type": "event", "event": "go", "params": {}, "ref": 1})
         await asyncio.sleep(0)
-        assert "export" in view._async_running
         await runtime.dispatch_event({"type": "event", "event": "stop", "params": {}, "ref": 2})
         view._gate.set()
         for _ in range(5):
             await asyncio.sleep(0.01)
-        async_frames = [f for f in transport.sent if f.get("source") == "async"]
-        assert len(async_frames) == 1, async_frames
-        assert async_frames[0].get("event_name") == "go"
+        # An explicit view settles the event's announced batch with one
+        # ``async_complete`` frame; the cancelled result renders nothing.
+        assert not [f for f in transport.sent if f.get("source") == "async"], transport.sent
+        assert len([f for f in transport.sent if f["type"] == "async_complete"]) == 1
         assert view.result == "done"  # the callback itself cannot be interrupted
-        assert "export" not in view._async_running
         assert "export" not in view._async_cancelled
 
     @pytest.mark.asyncio
@@ -412,7 +397,7 @@ class TestRuntimeHonoursCancel:
         """A task cancelled while running whose callback then raises never
         reaches the post-callback cancel check. The mark must not outlive it
         and silently skip the next task started under the same name."""
-        view, runtime, transport = _mounted(SlowView)
+        view, runtime, transport = await _mounted(SlowView)
         view._gate = asyncio.Event()
         view._fail = True
         await runtime.dispatch_event({"type": "event", "event": "go", "params": {}, "ref": 1})
@@ -421,7 +406,6 @@ class TestRuntimeHonoursCancel:
         view._gate.set()
         for _ in range(5):
             await asyncio.sleep(0.01)
-        assert "export" not in view._async_running
         assert "export" not in view._async_cancelled
         view._fail = False
         before = len([f for f in transport.sent if f.get("source") == "async"])
@@ -433,7 +417,7 @@ class TestRuntimeHonoursCancel:
 
     @pytest.mark.asyncio
     async def test_uncancelled_task_still_renders(self):
-        view, runtime, transport = _mounted(SlowView)
+        view, runtime, transport = await _mounted(SlowView)
         view._gate = asyncio.Event()
         view._gate.set()
         await runtime.dispatch_event({"type": "event", "event": "go", "params": {}, "ref": 1})
@@ -441,70 +425,6 @@ class TestRuntimeHonoursCancel:
             await asyncio.sleep(0.01)
         async_frames = [f for f in transport.sent if f.get("source") == "async"]
         assert async_frames and "done" in str(async_frames[-1])
-        assert "export" not in view._async_running
-
-
-# ------------------------------------------------------------------ #
-# #2919 — sticky reuse warns when kwargs change
-# ------------------------------------------------------------------ #
-
-
-class KwChild(LiveView):
-    exposure_policy = "legacy"
-    sticky = True
-    sticky_id = "kwchild"
-    template = "<div>child {{ n }}</div>"
-
-    def mount(self, request, n=0, **kwargs):
-        self.n = n
-
-    def get_context_data(self, **kwargs):
-        return {"n": self.n}
-
-
-class KwParent(LiveView):
-    exposure_policy = "legacy"
-    template = (
-        "{% load live_tags %}"
-        '<div dj-root dj-view="' + _MOD + '.KwParent">'
-        "<h1>{{ n }}</h1>"
-        '{% live_render "' + _MOD + '.KwChild" sticky=True n=n %}'
-        "</div>"
-    )
-
-    def mount(self, request, **kwargs):
-        self.n = 1
-
-    def get_context_data(self, **kwargs):
-        return {"view": self, "n": self.n}
-
-
-@pytest.mark.django_db
-class TestStickyKwargsWarning:
-    def _render(self, view):
-        return view.render_with_diff()[0]
-
-    def test_changed_kwarg_warns_once_and_unchanged_is_silent(self, caplog):
-        with override_settings(DJUST_LIVE_RENDER_ALLOWED_MODULES=[_MOD]):
-            request = RequestFactory().get("/")
-            view = KwParent()
-            view.request = request
-            view.mount(request)
-            html = self._render(view)
-            assert "child 1" in html
-            with caplog.at_level(logging.WARNING, logger="djust"):
-                self._render(view)  # same kwargs: silent
-                assert not [r for r in caplog.records if "mount-time only" in r.getMessage()]
-                view.n = 2
-                html = self._render(view)
-                html = self._render(view)  # same changed value: no second warning
-                view.n = 3
-                self._render(view)  # the same kwarg changed again: still one warning
-        warnings = [r for r in caplog.records if "mount-time only" in r.getMessage()]
-        assert len(warnings) == 1, [r.getMessage() for r in warnings]
-        assert "'n'" in warnings[0].getMessage()
-        # Behaviour unchanged in 1.2.1: the child keeps its mount-time value.
-        assert "child 1" in html
 
 
 # ------------------------------------------------------------------ #

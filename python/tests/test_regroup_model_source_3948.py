@@ -40,16 +40,21 @@ RAISES = "RAISES"
 
 
 def _lv(src: str, **state) -> str:
-    """The real LiveView entry, with the values held as PUBLIC STATE set in ``mount``."""
+    """The real LiveView entry, the values supplied from ``get_context_data``."""
 
-    def mount(self, request, **kwargs):
-        for name, value in state.items():
-            setattr(self, name, value)
+    def get_context_data(self, **kwargs):
+        ctx = LiveView.get_context_data(self, **kwargs)
+        ctx.update(state)
+        return ctx
 
     view = type(
         "RegroupView",
         (LiveView,),
-        {"exposure_policy": "legacy", "template": f"<div dj-root>{src}</div>", "mount": mount},
+        {
+            "exposure_policy": "explicit",
+            "template": f"<div dj-root>{src}</div>",
+            "get_context_data": get_context_data,
+        },
     )
     client = LiveViewTestClient(view)
     client.mount()

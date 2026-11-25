@@ -39,7 +39,8 @@ from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
 
-from djust import LiveView
+from djust import LiveView, state
+from djust.testing import with_live_session
 from djust.mixins.context import _context_processors_cache, _resolved_processors_cache
 from djust.utils import clear_template_dirs_cache
 
@@ -127,24 +128,27 @@ class _Service:
     """A plain object that is not JSON-serializable: real view state."""
 
 
-def _view_class(name: str, mount=None):
+def _view_class(name: str, mount=None, **attrs):
     def _mount(self, request, **kwargs):
-        self.count = 3
         if mount is not None:
             mount(self, request)
 
     return type(
         name,
         (LiveView,),
-        {"exposure_policy": "legacy", "template_name": "child_3061.html", "mount": _mount},
+        {
+            "exposure_policy": "explicit",
+            "template_name": "child_3061.html",
+            "count": state(3),
+            "mount": _mount,
+            **attrs,
+        },
     )
 
 
 def _get(view_cls, user=None, message=None):
     request = RequestFactory().get("/page-3061/")
-    request.user = user if user is not None else AnonymousUser()
-    request.session = SessionStore()
-    request.session.create()
+    with_live_session(request, user if user is not None else AnonymousUser())
     request._messages = FallbackStorage(request)
     if message:
         django_messages.info(request, message)
@@ -188,7 +192,8 @@ class TestFullTemplateContextProcessors3061:
             self.service = _Service()
 
         _get(_view_class("V3061Svc", mount=mount))
-        hits = [m for m in _non_serializable(warnings_seen) if "_Service" in m]
+        # An explicit view says so once, by name, when it cannot save an attribute.
+        hits = [m for m in warnings_seen if "_Service" in m and "cannot be saved" in m]
         assert hits, f"a non-serializable view attribute must still warn: {warnings_seen!r}"
         leaks = [
             m for m in _non_serializable(warnings_seen) if any(t in m for t in _LEAK_TYPE_NAMES)
@@ -198,10 +203,10 @@ class TestFullTemplateContextProcessors3061:
     def test_view_owned_messages_stays_state(self, template_dir):
         # View context wins over the messages processor, so ``messages`` is
         # the view's own value (not request-scoped) and renders as state.
-        def mount(self, request):
-            self.messages = ["from-view"]
-
-        html = _get(_view_class("V3061Own", mount=mount), message="from-processor")
+        html = _get(
+            _view_class("V3061Own", messages=state(default_factory=lambda: ["from-view"])),
+            message="from-processor",
+        )
         assert "<li>root:from-view</li>" in html, html
         assert "<li>shell:from-view</li>" in html, html
         assert "from-processor" not in html

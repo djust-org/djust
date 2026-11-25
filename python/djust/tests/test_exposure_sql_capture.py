@@ -3,8 +3,8 @@
 ``observability/sql.py`` records every query a WebSocket event turn runs,
 including its raw parameters, and the DEBUG-only, localhost-only
 ``/_djust/observability/sql_queries/`` endpoint serves them. Parameters are
-often derived from view state. For a nonlegacy owner they are now redacted;
-the SQL text, tags and timing stay. Legacy views are unchanged.
+often derived from view state. For an owner they are redacted;
+the SQL text, tags and timing stay (the captured statement is the control).
 
 Driven through a real WebSocket mount and event; the assertion reads the
 endpoint's response body under DEBUG. The handler is async and queries on the
@@ -35,7 +35,7 @@ CALLS = []
 
 
 class SqlView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>sql</div>"
 
     @event_handler()
@@ -61,12 +61,10 @@ def _endpoint_body():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_sql_capture_params_through_ws_event(monkeypatch, policy):
+async def test_sql_capture_params_through_ws_event(monkeypatch):
     CALLS.clear()
     sql_capture._clear_queries()
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(SqlView, "exposure_policy", policy)
     monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     with override_settings(
         LIVEVIEW_ALLOWED_MODULES=["djust.tests"], DEBUG=True, DJUST_TENANTS=None, DJUST_CONFIG={}
@@ -90,11 +88,8 @@ async def test_sql_capture_params_through_ws_event(monkeypatch, policy):
     assert CALLS, "the handler never ran; the test would be vacuous"
     entries = [e for e in json.loads(body)["entries"] if "adr038_probe" in e["sql"]]
     assert len(entries) == 1, body
-    if policy == "legacy":
-        assert entries[0]["params"] == [SENTINEL]
-    else:
-        assert SENTINEL not in body
-        assert entries[0]["params"] == ["[redacted]"]
+    assert SENTINEL not in body
+    assert entries[0]["params"] == ["[redacted]"]
 
 
 class _Owner:
@@ -103,12 +98,11 @@ class _Owner:
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("where", ["legacy", "explicit"])
-def test_sql_capture_redacts_under_restricted_diagnostic_scope(where):
+def test_sql_capture_redacts_under_restricted_diagnostic_scope():
     """With no owner passed to the capture, the active diagnostic scope decides."""
     sql_capture._clear_queries()
     with diagnostic_scope():
-        restrict_diagnostics(_Owner(where))
+        restrict_diagnostics(_Owner("explicit"))
         with sql_capture.capture_for_event(session_id="s", handler_name="h"):
             with connection.cursor() as cursor:
                 cursor.execute("SELECT %s AS adr038_scope_probe", [SENTINEL])
@@ -116,19 +110,18 @@ def test_sql_capture_redacts_under_restricted_diagnostic_scope(where):
         body = _endpoint_body()
     entries = [e for e in json.loads(body)["entries"] if "adr038_scope_probe" in e["sql"]]
     assert len(entries) == 1, body
-    assert (SENTINEL in body) == (where == "legacy")
+    assert SENTINEL not in body
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_sql_capture_redacts_for_nonlegacy_owner_outside_any_scope(policy):
+def test_sql_capture_redacts_for_an_owner_outside_any_scope():
     """The owner passed to the capture decides even with no diagnostic scope."""
     sql_capture._clear_queries()
-    with sql_capture.capture_for_event(session_id="s", owner=_Owner(policy)):
+    with sql_capture.capture_for_event(session_id="s", owner=_Owner("explicit")):
         with connection.cursor() as cursor:
             cursor.execute("SELECT %s AS adr038_owner_probe", [SENTINEL])
     with override_settings(DEBUG=True):
         body = _endpoint_body()
     entries = [e for e in json.loads(body)["entries"] if "adr038_owner_probe" in e["sql"]]
     assert len(entries) == 1, body
-    assert entries[0]["params"] == ([SENTINEL] if policy == "legacy" else ["[redacted]"])
+    assert entries[0]["params"] == ["[redacted]"]

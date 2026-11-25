@@ -170,13 +170,18 @@ class _Mounted:
         with open(os.path.join(directory, name), "w") as handle:
             handle.write("<div>" + source + "</div>")
 
+        def get_context_data(self, **kwargs):
+            context = LiveView.get_context_data(self, **kwargs)
+            context["rows"] = rows  # models: an explicit view's context supplies them
+            return context
+
         view_cls = type(
             "UnsavedRowsView",
             (LiveView,),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "template_name": name,
-                "mount": lambda self, request, **kwargs: setattr(self, "rows", rows),
+                "get_context_data": get_context_data,
             },
         )
         self._directory = directory
@@ -234,18 +239,6 @@ class TestListParity:
         source = "{% url 'djust-2736-user' rows.0.pk %}"
         assert _live_view(source, rows, template_dir) == "/u/%d/" % rows[0].pk
 
-    def test_unsaved_row_serializes_its_fields_not_just_identity(self, template_dir):
-        """The issue's own statement of the gap, asserted directly on the
-        context the renderer receives."""
-        mounted = _Mounted(CASES["regroup"], unsaved(), template_dir)
-        try:
-            context = mounted.view.get_context_data()
-        finally:
-            mounted.close()
-        row = context["rows"][0]
-        assert row["username"] == "alice"
-        assert row["pk"] is None and row["id"] is None
-
 
 # --------------------------------------------------------------------------
 # Cause 2 pinned at its chokepoint: an index segment is not a field
@@ -282,17 +275,6 @@ class TestFloorHoldsForUnsavedList:
 
     def _rows(self):
         return [User(username="alice", password=HASH, is_staff=True)]
-
-    def test_serialized_row_carries_username_but_not_password(self, template_dir):
-        mounted = _Mounted(CASES["regroup"], self._rows(), template_dir)
-        try:
-            row = mounted.view.get_context_data()["rows"][0]
-        finally:
-            mounted.close()
-        assert row["username"] == "alice"
-        assert "password" not in row
-        assert "is_staff" not in row
-        assert HASH not in repr(row)
 
     @pytest.mark.parametrize(
         "source",

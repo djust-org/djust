@@ -45,6 +45,8 @@ UNPINNED_ON_PURPOSE: dict[str, str] = {
     "test_doc_examples.py": "executes the documented examples as written",
     "test_catalogue_ux.py": "executes the shipped catalogue's usage snippets as written",
     "test_exposure_default_policy.py": "its subject is the default policy itself",
+    "test_exposure_fix_4209.py": "imports the views --fix wrote, which state no policy, as a "
+    "migrated app's do (#4209)",
 }
 
 #: One record per LiveView subclass created in this process, in creation order:

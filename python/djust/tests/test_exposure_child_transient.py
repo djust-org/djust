@@ -1,11 +1,10 @@
-"""Lazy, non-sticky and mixed-policy explicit children (ADR-038 E3-5, D-m).
+"""Lazy and non-sticky explicit children (ADR-038 E3-5, D-m).
 
 * A non-sticky explicit child is supported as transient: it renders and handles
   events under the reuse-identity check, and nothing about it is persisted.
 * ``lazy=True`` on an explicit child renders a placeholder, and the fill mounts
   the child as a transient one with the same checks as a direct mount, against
   the session as stored when the fill runs (#4154).
-* Explicit server persistence under a legacy parent stays refused.
 """
 
 import json
@@ -52,11 +51,6 @@ class StickyPersisted(TransientChild):
     sticky = True
     sticky_id = "persisted"
     count = state(1, persist="server")
-
-
-class LegacyChild(LiveView):
-    exposure_policy = "legacy"
-    template = "<div>Legacy child</div>"
 
 
 class TransientParent(LiveView):
@@ -349,13 +343,6 @@ class RaisingLazyChild(TransientChild):
         raise type(self).raises
 
 
-class LegacyRaisingLazyChild(LegacyChild):
-    raises = None
-
-    def mount(self, request, **kwargs):
-        raise type(self).raises
-
-
 @pytest.mark.parametrize(
     "raised,refusal",
     [
@@ -397,22 +384,6 @@ def test_a_lazy_explicit_mount_that_raises_shows_no_application_detail(
     else:
         assert body == f'<dj-error aria-live="polite">Lazy child {view_id} failed.</dj-error>'
     assert parent._get_all_child_views() == {}
-
-
-def test_a_lazy_legacy_mount_that_raises_keeps_its_failure_message(rf, monkeypatch):
-    """Legacy control: the legacy fill's envelope is unchanged."""
-    from django.http import Http404
-
-    monkeypatch.setattr(LegacyRaisingLazyChild, "raises", Http404("x"))
-    parent = _LegacyLiveView()
-    render(
-        parent,
-        make_request(rf, SessionStore()),
-        f'{{% live_render "{MODULE}.LegacyRaisingLazyChild" lazy=True %}}',
-    )
-    view_id, status, body = _fill(parent)
-    assert status == "error"
-    assert body == f'<dj-error aria-live="polite">Lazy child {view_id} failed: Http404</dj-error>'
 
 
 class InputsRewritingLazyChild(TransientChild):
@@ -470,32 +441,8 @@ def test_reload_request_session_refuses_a_session_that_is_gone(rf, gone):
         reload_request_session(request)
 
 
-class _LegacyLiveView(LiveView):
-    """A bare LiveView under the legacy policy, whatever the framework default is."""
-
-    exposure_policy = "legacy"
-
-
-def test_lazy_legacy_child_keeps_its_placeholder(rf):
-    """Legacy control: the lazy placeholder path is unchanged."""
-    parent = _LegacyLiveView()
-    request = make_request(rf, SessionStore())
-    html = render(parent, request, f'{{% live_render "{MODULE}.LegacyChild" lazy=True %}}')
-    assert "<dj-lazy-slot" in html
-    assert len(parent._lazy_thunks) == 1
-
-
-def test_explicit_server_persistence_under_legacy_parent_is_refused(rf):
-    parent = _LegacyLiveView()
-    request = make_request(rf, SessionStore())
-    with pytest.raises(ExposureError):
-        render(parent, request, f'{{% live_render "{MODULE}.StickyPersisted" sticky=True %}}')
-    assert parent._get_all_child_views() == {}
-    assert request.session.session_key is None
-
-
 def test_explicit_server_persistence_under_explicit_parent_is_stored(rf):
-    """Control for the mixed refusal: the same child persists under explicit ancestry."""
+    """A sticky child that declares ``persist="server"`` persists under explicit ancestry."""
     parent = ExplicitParent()
     request = make_request(rf, SessionStore())
     html = render(parent, request, f'{{% live_render "{MODULE}.StickyPersisted" sticky=True %}}')
@@ -514,14 +461,6 @@ class RawViewProbe(TransientChild):
         self.raw_attr = "RAW_VIEW_ATTR_SENTINEL"
 
 
-class LegacyRawViewProbe(LiveView):
-    exposure_policy = "legacy"
-    template = "<div>{{ view.raw_attr }}</div>"
-
-    def mount(self, request, **kwargs):
-        self.raw_attr = "RAW_VIEW_ATTR_SENTINEL"
-
-
 def test_transient_explicit_child_template_gets_no_raw_view(rf):
     """ADR-038 D2: the raw instance is not a default template value in explicit mode."""
     parent = ExplicitParent()
@@ -530,11 +469,3 @@ def test_transient_explicit_child_template_gets_no_raw_view(rf):
     assert "Count=1" in html
     assert "RAW_VIEW_ATTR_SENTINEL" not in html
     assert "TRANSIENT_SECRET_SENTINEL" not in html
-
-
-def test_legacy_non_sticky_child_template_still_gets_view(rf):
-    """Legacy control: the Phase A non-sticky render keeps ``view`` in context."""
-    parent = LiveView()
-    request = make_request(rf, SessionStore())
-    html = render(parent, request, f'{{% live_render "{MODULE}.LegacyRawViewProbe" %}}')
-    assert "RAW_VIEW_ATTR_SENTINEL" in html

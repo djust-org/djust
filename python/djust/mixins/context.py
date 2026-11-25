@@ -591,6 +591,10 @@ class ContextMixin:
             return self._get_explicit_context_data()
         from ..sync_turn import run_sync_step
 
+        # Rebuilt every render, never state (#3801): an explicit view's context
+        # method does not reset it, so a name that stopped holding a QuerySet
+        # would keep its evaluated rows (and answer the next value from them).
+        self.__dict__["_all_method_rows"] = {}
         return run_sync_step(self, "render", self.get_context_data)
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:

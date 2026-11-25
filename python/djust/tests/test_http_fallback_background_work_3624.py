@@ -20,7 +20,7 @@ import sys
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 
 from djust import LiveView
 from djust.decorators import background, event_handler, permission_required, rate_limit
@@ -35,7 +35,7 @@ LOG: list = []
 
 
 class BackgroundView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0"><p>{{ status }}</p><p>{{ data }}</p></div>'
 
     def mount(self, request, **kwargs):
@@ -195,13 +195,20 @@ class TestHandlerWork:
         view, _, body = _post(BackgroundView, "kick_off")
         assert view.status == "done", body
 
-    def test_a_failure_goes_to_handle_async_result_not_to_a_500(self, caplog):
-        with caplog.at_level(logging.ERROR, logger="djust.mixins.request"):
-            view, response, body = _post(BackgroundView, "kick_off_failing")
+    @pytest.mark.parametrize("debug", [False, True])
+    def test_a_failure_goes_to_handle_async_result_not_to_a_500(self, caplog, debug):
+        with override_settings(DEBUG=debug):
+            with caplog.at_level(logging.ERROR, logger="djust.mixins.request"):
+                view, response, body = _post(BackgroundView, "kick_off_failing")
         assert response.status_code == 200, body
         assert view.status == "failed"
         assert LOG == [("result", "boom", None, "ValueError")]
-        assert any("start_async task boom" in r.getMessage() for r in caplog.records)
+        if debug:
+            # The positive control: the failure was logged, with its detail.
+            assert any("start_async task boom" in r.getMessage() for r in caplog.records)
+        else:
+            assert "Protected view operation failed" in caplog.text
+            assert "start_async task boom" not in caplog.text
 
     def test_a_cancelled_task_does_not_run(self):
         view, _, body = _post(BackgroundView, "kick_off_then_cancel")
@@ -260,12 +267,12 @@ class TestWorkMountQueued:
 
 
 class BgChild(BackgroundView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div><p id="c">{{ status }}</p></div>'
 
 
 class BgPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + __name__ + '.BgPage">'
@@ -575,7 +582,7 @@ class PokeChild(BgChild):
 
 
 class PokePage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + __name__ + '.PokePage">'

@@ -6,6 +6,7 @@ from asgiref.sync import async_to_sync
 import pytest
 
 from djust import LiveView
+from djust.decorators import state
 from djust.components._interactive import DropdownMenu
 
 
@@ -13,15 +14,14 @@ observations = []
 
 
 class ObserverPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ menu }}{{ quiet }}<p>{{ last }}</p></div>"
     menu = DropdownMenu(
         label="Observed", items=[{"label": "Edit", "value": "edit"}], visibility="client"
     )
     quiet = DropdownMenu(label="Local", items=[], visibility="client")
 
-    def mount(self, request, **kwargs):
-        self.last = "initial"
+    last = state("initial")
 
     @menu.on.toggled
     def on_visibility(self, component: DropdownMenu, open: bool) -> None:
@@ -150,12 +150,13 @@ async def test_native_ws_observation_uses_normal_noop_or_render_path(changes_sta
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
     from djust.websocket import LiveViewConsumer
+    from djust.testing import with_live_session
     import re
 
     cls = RenderingObserverPage if changes_state else ObserverPage
     slug = __name__ + "." + cls.__name__
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        socket = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         assert (await socket.connect())[0]
         await socket.receive_json_from()  # the connect frame
         try:

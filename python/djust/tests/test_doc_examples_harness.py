@@ -153,7 +153,7 @@ def test_marker_lines_find_markers_by_text(tmp_path):
 def test_two_examples_with_one_class_name_load_as_distinct_modules():
     code = (
         "from djust import LiveView\n\n"
-        'class ProjectView(LiveView):\n    exposure_policy = "legacy"\n'
+        'class ProjectView(LiveView):\n    exposure_policy = "explicit"\n'
     )
     first = H.Example("a-view", "s", None, "x.md", 1, code, "<div dj-root></div>", (code,))
     second = H.Example("b-view", "s", None, "y.md", 1, code, "<div dj-root>2</div>", (code,))

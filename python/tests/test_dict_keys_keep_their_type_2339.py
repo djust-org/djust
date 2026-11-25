@@ -110,17 +110,26 @@ class TestThePremiseThatBlockedThisFix:
 
     @staticmethod
     def _render_view(template: str, **state) -> str:
-        from django.test import RequestFactory
-
         from djust import LiveView
+        from djust.testing import LiveViewTestClient
 
-        view = type("_V", (LiveView,), {"exposure_policy": "legacy", "template": template})()
-        request = RequestFactory().get("/")
-        view.mount(request)
-        for k, v in state.items():
-            setattr(view, k, v)
-        view.request = request
-        return view.render()
+        def get_context_data(self, **kwargs):
+            ctx = LiveView.get_context_data(self, **kwargs)
+            ctx.update(state)
+            return ctx
+
+        view_class = type(
+            "_V",
+            (LiveView,),
+            {
+                "exposure_policy": "explicit",
+                "template": template,
+                "get_context_data": get_context_data,
+            },
+        )
+        client = LiveViewTestClient(view_class)
+        client.mount()
+        return client.render()
 
     def test_the_render_path_has_no_json_hop_so_keys_arrive_untouched(self) -> None:
         """The load-bearing measurement.

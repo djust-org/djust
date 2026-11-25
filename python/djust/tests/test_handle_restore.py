@@ -4,8 +4,8 @@ Reported downstream (djust 1.3.0rc11): the HTTP page-POST fallback rebuilt a
 view from its saved session state and never let it read again what the session
 did not hold. 2.0 removed the legacy session restore, so the hook runs only
 when an explicit view's declared state is restored
-(``test_handle_restore_explicit_3989``); a legacy view is mounted afresh on
-every fallback POST and the hook is not called.
+(``test_handle_restore_explicit_3989``); a view that declares no state is
+mounted afresh on every fallback POST and the hook is not called.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ def _read(cursor):
 
 
 class ListView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="tests.ListView">{{ cursor }} {{ shown }}</div>'
     restores = 0
 
@@ -77,13 +77,13 @@ def _post(view_class, initial, event):
 
 
 @pytest.mark.django_db
-def test_not_called_on_a_legacy_fallback_post_nothing_is_restored():
+def test_not_called_on_a_fallback_post_when_nothing_is_declared_so_nothing_is_restored():
     ListView.restores = 0
     initial = _get(ListView)
     _post(ListView, initial, "next_page")
     view = _post(ListView, initial, "show")
     assert ListView.restores == 0
-    assert view.cursor == 0  # mounted afresh: nothing was kept
+    assert view.cursor == 0  # mounted afresh: nothing declared, nothing kept
 
 
 @pytest.mark.django_db

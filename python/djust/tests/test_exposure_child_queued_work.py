@@ -40,36 +40,6 @@ def staged(monkeypatch, settings):
     ]
 
 
-class LegacyQueuedChild(LiveView):
-    exposure_policy = "legacy"
-    sticky = True
-    sticky_id = "legacy"
-    template = "<div>Legacy={{ count }}</div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 1
-
-        def work():
-            self.count = 7
-
-        self.start_async(work, name="mount-job")
-
-    @event_handler()
-    def poke(self):
-        pass
-
-    def get_context_data(self, **kwargs):
-        return super().get_context_data(count=self.count, **kwargs)
-
-
-class LegacyQueuedParent(LiveView):
-    exposure_policy = "legacy"
-    template = (
-        "<div dj-root>{% load live_tags %}{% live_render "
-        f'"{__name__}.LegacyQueuedChild" sticky=True %}}</div>'
-    )
-
-
 def observe_completion(monkeypatch, transport):
     completed = asyncio.Event()
     original = transport.send
@@ -196,24 +166,6 @@ async def test_parent_turn_queued_child_work_runs_under_child_owner(monkeypatch)
     assert not transport.errors
     stored = await sync_to_async(SessionStore(request.session.session_key).load)()
     assert stored[child_state_key(request.path, ("menu",))]["state"]["values"]["count"] == 8
-
-
-async def test_legacy_child_mount_queue_keeps_its_existing_behavior():
-    """Legacy control: the pre-E3-3 behavior (work waits for a routed event)."""
-    runtime, transport, _ = await mount(view_class=LegacyQueuedParent)
-    child = runtime.view_instance._get_child_view("legacy")
-    assert child is not None and "mount-job" in child._async_tasks
-    await asyncio.sleep(0.05)
-    assert "mount-job" in child._async_tasks
-    assert not any(f.get("source") == "async" for f in transport.sent)
-    await runtime.dispatch_event(
-        {"type": "event", "event": "poke", "params": {"view_id": "legacy"}}
-    )
-    await asyncio.wait_for(asyncio.gather(*tuple(child._async_task_handles)), 3)
-    assert child.count == 7
-    assert any(
-        f.get("type") == "embedded_update" and f.get("source") == "async" for f in transport.sent
-    )
 
 
 async def test_consumer_turn_queued_child_work_runs_under_child_owner(monkeypatch):

@@ -35,7 +35,7 @@ from django.test import RequestFactory, override_settings
 
 from djust import LiveView
 from djust.config import config as djust_config
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from djust.sync_turn import _active_step
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
@@ -166,7 +166,7 @@ from djust.components.mixins.data_table import DataTableMixin  # noqa: E402
 
 
 class TableView(DataTableMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>table</span></div>"
     table_columns = [{"key": "id", "label": "Id"}, {"key": "name", "label": "Name"}]
     table_server_mode = True
@@ -239,7 +239,7 @@ from djust.wizard import WizardMixin  # noqa: E402
 
 
 class DraftView(DraftModeMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>draft</span></div>"
 
     def mount(self, request, **kwargs):
@@ -262,7 +262,7 @@ class _WizardStep(forms.Form):
 
 
 class WizardView(WizardMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     wizard_steps = [{"name": "only", "title": "Only", "form_class": _WizardStep}]
     template = "<div dj-root><span>wizard</span></div>"
 
@@ -291,7 +291,7 @@ class AuditForm(forms.Form):
 
 
 class FormPage(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = AuditForm
     template = (
         "{% load live_tags %}<div dj-root>"
@@ -301,11 +301,6 @@ class FormPage(FormMixin, LiveView):
 
     def mount(self, request, **kwargs):
         super().mount(request, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["view"] = self
-        return context
 
 
 def _form_watch(mp, key, method):
@@ -440,7 +435,7 @@ from djust.presence import PresenceMixin  # noqa: E402
 
 
 class PresencePage(PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     presence_key = "audit-room"
     template = "<div dj-root><span>presence</span></div>"
 
@@ -509,12 +504,10 @@ class Badge(Component):
 
 
 class ComponentPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ counter }}{{ badge }}</div>"
-
-    def mount(self, request, **kwargs):
-        self.counter = Counter(component_id="counter")
-        self.badge = Badge()
+    counter = Counter(component_id="counter")
+    badge = state(default_factory=Badge)
 
     def handle_component_event(self, component_id, event, data):
         pass
@@ -524,10 +517,24 @@ class ComponentPage(LiveView):
         self.update_component("counter", n=3)
 
 
+class ComponentBuilder(LiveView):
+    """An explicit view mounts a component built in its own ``mount()``.
+
+    A class-level declaration is mounted once, from the class body, so only a
+    component built during the step runs its ``mount`` inside it.
+    """
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>built</div>"
+
+    def mount(self, request, **kwargs):
+        Counter(component_id="built")
+
+
 @scenario("LiveComponent.mount")
 def _component_mount(mp):
     watch(mp, Counter, "mount", "LiveComponent.mount")
-    get(ComponentPage)
+    get(ComponentBuilder)
 
 
 @scenario("LiveComponent.update")
@@ -580,7 +587,7 @@ class AuditTabs(DescriptorComponent):
 
 
 class TabsPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ nav }}</div>"
     nav = AuditTabs()
 
@@ -600,7 +607,7 @@ def _component_handle_event(mp):
 
 
 class RenderOnlyPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>{{ note }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -622,9 +629,10 @@ def _render_only_context(mp):
 
 
 class StickyInner(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "audit-dock"
+    sticky_update_inputs = ("label",)
     template = "<div><span>dock</span></div>"
 
     def mount(self, request, **kwargs):
@@ -635,17 +643,13 @@ class StickyInner(LiveView):
 
 
 class StickyHost(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}<div dj-root>"
         "{% live_render '" + MOD + ".StickyInner' sticky=True label=label %}</div>"
     )
 
-    def mount(self, request, **kwargs):
-        self.label = "a"
-
-    def get_context_data(self, **kwargs):
-        return {"view": self, "label": self.label}
+    label = state("a")
 
     @event_handler()
     def relabel(self, **kwargs):
@@ -887,17 +891,12 @@ class ChoiceForm(forms.Form):
 
 
 class ChoicePage(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = ChoiceForm
     template = "{% load live_tags %}<div dj-root>{% live_field view 'group' %}</div>"
 
     def mount(self, request, **kwargs):
         super().mount(request, **kwargs)
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["view"] = self
-        return context
 
 
 def test_a_row_read_by_a_template_time_form_field_runs_inside_the_render_step(recording):

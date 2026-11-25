@@ -1,10 +1,10 @@
 """Runtime boundary diagnostics through actual WS and SSE HTTP transports.
 
 Contract (ADR-038 D-a, revised 2026-09-22): in production (``DEBUG=False``) a
-nonlegacy owner's failure is value-free in the log, the WS error frame, the SSE
+owner's failure is value-free in the log, the WS error frame, the SSE
 response and the traceback ring. Under ``DEBUG=True`` every owner's failure
 reads like Django's DEBUG output — detailed WS error frame, SSE technical 500,
-logged exception and traceback-ring entry — exactly as a legacy owner's does.
+logged exception and traceback-ring entry.
 """
 
 import json
@@ -16,7 +16,7 @@ from channels.testing import WebsocketCommunicator
 from django.test import override_settings
 from django.urls import path
 
-from djust import LiveView, event_handler
+from djust import LiveView
 from djust.observability import tracebacks
 from djust.runtime import WSConsumerTransport
 from djust.sse import DjustSSEMessageView, _sse_sessions
@@ -34,35 +34,13 @@ urlpatterns = [
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("debug", [False, True])
-@pytest.mark.parametrize("transient", [False, True], ids=["steady", "transient"])
-@pytest.mark.parametrize(
-    "initial,final",
-    [
-        ("explicit", "explicit"),
-        ("explicit", "legacy"),
-        ("legacy", "explicit"),
-        ("legacy", "legacy"),
-    ],
-)
-async def test_outer_ws_event_failure(monkeypatch, caplog, debug, initial, final, transient):
+async def test_outer_ws_event_failure(monkeypatch, caplog, debug):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(EventFailureView, "exposure_policy", initial)
     monkeypatch.setattr(tracebacks, "_buffer", deque(maxlen=50))
     called = []
 
-    if transient:
-        original = EventFailureView.explode
-
-        @event_handler()
-        def switch(self, stage: str):
-            original(self, stage)
-            self.exposure_policy = "explicit"
-
-        monkeypatch.setattr(EventFailureView, "explode", switch)
-
     def fail(self, view, event_name, duration_ms):
         called.append(event_name)
-        view.exposure_policy = final
         raise ValueError("OUTER_TRANSPORT_SENTINEL")
 
     monkeypatch.setattr(WSConsumerTransport, "on_handler_timing", fail)
@@ -91,8 +69,8 @@ async def test_outer_ws_event_failure(monkeypatch, caplog, debug, initial, final
             failure = await socket.receive_json_from()
             assert called == ["explode"]
             assert failure["type"] == "error", failure
-            # Details are allowed for a legacy owner, and for every owner under DEBUG.
-            allowed = (initial == final == "legacy" and not transient) or debug
+            # Details are allowed for every owner under DEBUG (the positive control).
+            allowed = debug
             observed = (
                 "OUTER_TRANSPORT_SENTINEL" in caplog.text,
                 "OUTER_TRANSPORT_SENTINEL" in json.dumps(failure),
@@ -115,17 +93,7 @@ async def test_outer_ws_event_failure(monkeypatch, caplog, debug, initial, final
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("debug", [False, True])
-@pytest.mark.parametrize("transient", [False, True], ids=["steady", "transient"])
-@pytest.mark.parametrize(
-    "initial,final",
-    [
-        ("explicit", "explicit"),
-        ("explicit", "legacy"),
-        ("legacy", "explicit"),
-        ("legacy", "legacy"),
-    ],
-)
-async def test_outer_sse_http_failure(monkeypatch, caplog, debug, initial, final, transient):
+async def test_outer_sse_http_failure(monkeypatch, caplog, debug):
     from django.conf import settings
     from django.test import AsyncClient
 
@@ -133,22 +101,10 @@ async def test_outer_sse_http_failure(monkeypatch, caplog, debug, initial, final
     from djust.tests.test_exposure_sse_navigation import drain, start
 
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(FirstPage, "exposure_policy", initial)
     called = []
-
-    if transient:
-        original = FirstPage.change
-
-        @event_handler()
-        def switch(self):
-            original(self)
-            self.exposure_policy = "explicit"
-
-        monkeypatch.setattr(FirstPage, "change", switch)
 
     def fail(self, view, event_name, duration_ms):
         called.append(event_name)
-        view.exposure_policy = final
         raise ValueError("OUTER_SSE_SENTINEL")
 
     monkeypatch.setattr(SSESessionTransport, "on_handler_timing", fail)
@@ -172,8 +128,8 @@ async def test_outer_sse_http_failure(monkeypatch, caplog, debug, initial, final
                 content_type="application/json",
             )
             assert called == ["change"], (response.content[:300], drain(session))
-            # Details are allowed for a legacy owner, and for every owner under DEBUG.
-            allowed = (initial == final == "legacy" and not transient) or debug
+            # Details are allowed for every owner under DEBUG (the positive control).
+            allowed = debug
             frames = drain(session)
             observed = (
                 "OUTER_SSE_SENTINEL" in caplog.text,
@@ -216,7 +172,7 @@ async def test_protected_delivery_failure_closes_without_exposing_errors(
     frames, closed = [], []
 
     async def dispatch(data):
-        runtime.view_instance.exposure_policy = "legacy"
+        runtime.view_instance.exposure_policy = "explicit"
         raise UnprintableFailure()
 
     async def send(frame):

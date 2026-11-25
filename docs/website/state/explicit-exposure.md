@@ -448,7 +448,11 @@ not moved yet):
 1. Run `python manage.py djust_exposure_inventory --view myapp.views.MyView`.
    It lists the names the 1.x policy exports and where each one goes, and
    suggests declarations. It never prints values and never instantiates the
-   view.
+   view. With `--fix` it makes the mechanical changes itself (deletes the
+   policy line, supplies the names the template reads from
+   `get_context_data()`, annotates handler parameters as `Any`, renames
+   `data-*` event arguments to `dj-value-*`) and lists what needs a person;
+   `--dry-run` shows the diff first.
 2. Declare the fields you meant to keep with `state()`, choosing `persist` and
    `client` for each one deliberately. A declared field renders without
    anything else.

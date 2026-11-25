@@ -3,10 +3,10 @@ Tests for the private (_-prefixed) attribute capture helpers.
 
 2.0 stopped keeping a legacy view's private attributes in the session (the
 page-POST fallback runs ``mount()`` again, which rebuilds them); the tests of
-that save and of the reconnect restore were removed with it. The helpers
-``_snapshot_user_private_attrs`` / ``_get_private_state`` /
-``_restore_private_state`` still back the legacy ``lazy=True`` child on the
-page-POST fallback (``_lazy_containers.py``) and go with that path.
+that save and of the reconnect restore were removed with it. The cases of the
+legacy ``_get_private_state`` / ``_restore_private_state`` helpers are removed
+too: they refuse on an explicit view, and the framework's own use of them
+(the legacy ``lazy=True`` child) goes with that path.
 
 Fixes: #627, #611
 """
@@ -29,7 +29,7 @@ from djust.decorators import event_handler
 class PrivateAttrView(LiveView):
     """View that sets private attrs in mount() and handlers."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>{{ visible }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -51,7 +51,7 @@ class PrivateAttrView(LiveView):
 class NonSerializablePrivateView(LiveView):
     """View with private attrs that cannot be JSON-serialized."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>{{ status }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -127,69 +127,6 @@ class TestFrameworkAttrs:
         assert "_framework_attrs" not in view._user_private_keys
         assert "_user_private_keys" not in view._user_private_keys
 
-    @pytest.mark.django_db
-    def test_meta_attrs_excluded_from_get_private_state(self):
-        """_framework_attrs and _user_private_keys must not appear in
-        serialized private state."""
-        view, _, _ = _setup_view(PrivateAttrView)
-        private = view._get_private_state()
-        assert "_framework_attrs" not in private
-        assert "_user_private_keys" not in private
-
-
-# ---------------------------------------------------------------------------
-# Tests: _get_private_state / _restore_private_state
-# ---------------------------------------------------------------------------
-
-
-class TestPrivateStateHelpers:
-    """Unit tests for _get_private_state() and _restore_private_state()."""
-
-    @pytest.mark.django_db
-    def test_get_private_state_returns_user_attrs(self):
-        view, _, _ = _setup_view(PrivateAttrView)
-        private = view._get_private_state()
-        assert "_api_token" in private
-        assert private["_api_token"] == "secret-token-123"
-        assert "_retry_count" in private
-        assert private["_retry_count"] == 0
-
-    @pytest.mark.django_db
-    def test_get_private_state_excludes_framework_attrs(self):
-        view, _, _ = _setup_view(PrivateAttrView)
-        private = view._get_private_state()
-        # Framework internals must NOT appear
-        assert "_rust_view" not in private
-        assert "_session_id" not in private
-        assert "_components" not in private
-        assert "_framework_attrs" not in private
-
-    @pytest.mark.django_db
-    def test_get_private_state_skips_non_serializable(self):
-        view, _, _ = _setup_view(NonSerializablePrivateView)
-        private = view._get_private_state()
-        # Lock is not serializable — should be skipped
-        assert "_lock" not in private
-        # Dict IS serializable
-        assert "_config" in private
-        assert private["_config"] == {"retries": 3}
-
-    def test_restore_private_state(self):
-        view = PrivateAttrView()
-        state = {"_api_token": "restored", "_retry_count": 5}
-        view._restore_private_state(state)
-        assert view._api_token == "restored"
-        assert view._retry_count == 5
-
-    def test_restore_ignores_framework_attrs(self):
-        """_restore_private_state should not overwrite framework attrs."""
-        view = PrivateAttrView()
-        original_components = view._components
-        # Try to overwrite a framework attr — it should be ignored because
-        # _components IS in _framework_attrs
-        view._restore_private_state({"_components": {"evil": True}})
-        assert view._components is original_components
-
 
 # ---------------------------------------------------------------------------
 # Tests: the page-POST fallback rebuilds private attributes with mount()
@@ -227,7 +164,13 @@ class TestHTTPPrivateAttrsRebuiltByMount:
         assert fresh_view.visible == "working"
         assert not [k for k in post_request.session.keys() if k.endswith("__private")]
 
-    def test_restore_of_an_empty_private_state_is_harmless(self):
-        fresh_view = PrivateAttrView()
-        fresh_view._restore_private_state({})
-        assert fresh_view._get_private_state() == {}
+
+@pytest.mark.django_db
+class TestANonSerializablePrivateAttributeIsSkipped:
+    def test_the_lock_is_skipped_and_the_config_kept(self):
+        from djust.testing import persisted_state
+
+        view, _, _ = _setup_view(NonSerializablePrivateView)
+        saved = persisted_state(view).automatic_private
+        assert "_lock" not in saved
+        assert saved["_config"] == {"retries": 3}

@@ -1,19 +1,27 @@
-"""#3236: a replaced or disconnected legacy view's ``wait_for_event`` waiters are closed.
+"""#3236 / #4198: a replaced or disconnected explicit view's ``wait_for_event`` waiters are closed.
 
-When navigation replaces a view — ``live_redirect`` on the WebSocket,
-``_replace_view`` on SSE — an explicit view is disposed through
-``dispose_child_subtree`` (which cancels its waiters), but a legacy view only
-had its uploads (and, on SSE, its children) cleaned up. Its waiters were never
-cancelled. Nothing strong holds a waiter's future except the view, so the
-view, the future and the background task blocked on it became an unreachable
-cycle: the garbage collector destroyed the task while it was still pending
-("Task was destroyed but it is pending!"), closing its coroutine with
-``GeneratorExit``, so its ``except CancelledError`` cleanup never ran.
+When navigation replaces a view (``live_redirect`` on the WebSocket,
+``_replace_view`` on SSE) its ``wait_for_event`` waiters are cancelled, so the
+background task blocked on them runs its own ``except CancelledError``
+cleanup instead of being destroyed pending at garbage-collection time. The
+view is also closed to later waiters (#3242 review M2): its background work
+keeps running, and a ``wait_for_event`` it starts after the navigation, or
+after a disconnect, fails at once instead of registering a waiter nothing
+cancels.
 
-Navigation now cancels them, so the task's own cleanup runs. It also closes the
-view to later waiters (#3242 review M2): the view's background work keeps
-running, and a ``wait_for_event`` it starts after the navigation, or after a
-disconnect, fails at once instead of registering a waiter nothing cancels.
+The legacy-view cases of ``test_legacy_navigation_waiters_3236.py`` are
+converted to an explicit root view here (#4198). An explicit view disposes its
+own background tasks, so a late waiter is refused two ways: the work that would
+make it is cancelled with the view, and a ``wait_for_event`` made on the
+discarded view anyway fails at once. The ``cancel_async_on_disconnect``
+opt-in cases went with that file (covered by ``test_view_tracked_tasks.py``
+and ``test_exposure_sse_close_3221.py``).
+
+These tests pin the dispose semantics (the view's tasks are cancelled and its
+waiters are gone), not ``_close_waiters`` itself: they still pass with
+``_close_waiters`` disabled, because an explicit view's own task disposal
+cancels the work first. ``_close_waiters`` serves legacy views only and goes
+with them (#4199).
 
 Both transports are driven through their real entry points: a
 ``WebsocketCommunicator`` against ``LiveViewConsumer``, and the SSE stream and
@@ -54,9 +62,9 @@ GATES: dict = {}
 
 
 class TourPage(LiveView):
-    """A legacy view whose background work waits for the user's next click."""
+    """An explicit view whose background work waits for the user's next click."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>tour</span></div>"
 
     def mount(self, request, **kwargs):
@@ -104,21 +112,14 @@ class TourPage(LiveView):
         pass
 
 
-class CancelsOnClosePage(TourPage):
-    """A tour whose work only serves the open page (#3234 opt-in)."""
-
-    cancel_async_on_disconnect = True
-
-
 class OtherPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>other</span></div>"
 
 
 urlpatterns = [path("tour/", TourPage.as_view()), path("other/", OtherPage.as_view())]
 
 TOUR = __name__ + ".TourPage"
-CANCELS = __name__ + ".CancelsOnClosePage"
 OTHER = __name__ + ".OtherPage"
 
 
@@ -165,16 +166,16 @@ async def _assert_collectable(ref, what):
     raise AssertionError(what + " is still alive; referrers: " + ", ".join(holders))
 
 
-async def _assert_late_wait_refused(view_ref, tag):
-    """Open the gate: the task's ``wait_for_event`` must fail at once and
-    leave no waiter registered on the discarded view."""
-    view = view_ref()
-    assert view is not None
+async def _assert_late_wait_refused(view, tag):
+    """The replaced view's work is cancelled with it (an explicit view disposes
+    its own tasks), so it never reaches a late wait; a ``wait_for_event`` made
+    on the discarded view anyway fails at once and leaves no waiter behind."""
     GATES[tag].set()
-    await _until(lambda: ("late-refused", tag) in EVENTS, "the late wait to be refused")
+    await _until(lambda: ("work-cancelled", tag) in EVENTS, "the late work to be cancelled")
     assert ("answered", tag) not in EVENTS
+    with pytest.raises(asyncio.CancelledError):
+        await view.wait_for_event("next_step")
     assert view._waiters == {}
-    del view
 
 
 # --------------------------------------------------------------------------- #
@@ -197,7 +198,11 @@ async def _ws_mounted_tour(event, view=TOUR):
 
     from djust.websocket import LiveViewConsumer
 
+    from djust.tests.test_exposure_runtime import make_request
+
+    request = await sync_to_async(make_request)()
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    communicator.scope.update(session=request.session, user=request.user, tenant=None)
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from()  # connect ack
@@ -217,14 +222,14 @@ async def _ws_redirect_away(communicator):
     await _ws_mounted(communicator)
 
 
-async def test_websocket_live_redirect_cancels_the_legacy_views_waiter():
+async def test_websocket_live_redirect_cancels_the_views_waiter():
     communicator, view_ref, tag = await _ws_mounted_tour("start_tour")
     try:
         await _until(lambda: ("waiting", tag) in EVENTS, "the tour to start waiting")
         await _ws_redirect_away(communicator)
         await _until(lambda: ("cleanup", tag) in EVENTS, "the replaced view's waiter cleanup")
         _assert_cleaned_up(view_ref, tag)
-        await _assert_collectable(view_ref, "the replaced legacy view")
+        await _assert_collectable(view_ref, "the replaced explicit view")
     finally:
         await communicator.disconnect()
 
@@ -233,8 +238,9 @@ async def test_websocket_a_waiter_started_after_live_redirect_is_refused():
     communicator, view_ref, tag = await _ws_mounted_tour("start_late_tour")
     try:
         await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+        view = view_ref()
         await _ws_redirect_away(communicator)
-        await _assert_late_wait_refused(view_ref, tag)
+        await _assert_late_wait_refused(view, tag)
     finally:
         await communicator.disconnect()
 
@@ -242,27 +248,9 @@ async def test_websocket_a_waiter_started_after_live_redirect_is_refused():
 async def test_websocket_a_waiter_started_after_disconnect_is_refused():
     communicator, view_ref, tag = await _ws_mounted_tour("start_late_tour")
     await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+    view = view_ref()
     await communicator.disconnect()
-    await _assert_late_wait_refused(view_ref, tag)
-
-
-async def test_websocket_disconnect_cancels_the_work_of_a_view_that_opts_in():
-    communicator, view_ref, tag = await _ws_mounted_tour("start_late_tour", CANCELS)
-    await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
-    await communicator.disconnect()
-    await _until(lambda: ("work-cancelled", tag) in EVENTS, "the work to be cancelled")
-
-
-async def test_websocket_live_redirect_does_not_cancel_the_work_of_a_view_that_opts_in():
-    """The opt-in is for a closed socket; navigation keeps #3234's behaviour."""
-    communicator, view_ref, tag = await _ws_mounted_tour("start_late_tour", CANCELS)
-    try:
-        await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
-        await _ws_redirect_away(communicator)
-        await _assert_late_wait_refused(view_ref, tag)
-        assert ("work-cancelled", tag) not in EVENTS
-    finally:
-        await communicator.disconnect()
+    await _assert_late_wait_refused(view, tag)
 
 
 # --------------------------------------------------------------------------- #
@@ -314,7 +302,7 @@ async def _sse_mounted_tour(event, view=TOUR):
     return session, key, stream, view_ref, tag
 
 
-async def test_sse_navigation_cancels_the_legacy_views_waiter(caplog):
+async def test_sse_navigation_cancels_the_views_waiter(caplog):
     session, key, stream, view_ref, tag = await _sse_mounted_tour("start_tour")
     try:
         await _until(lambda: ("waiting", tag) in EVENTS, "the tour to start waiting")
@@ -326,7 +314,7 @@ async def test_sse_navigation_cancels_the_legacy_views_waiter(caplog):
 
         await _until(lambda: ("cleanup", tag) in EVENTS, "the replaced view's waiter cleanup")
         _assert_cleaned_up(view_ref, tag)
-        await _assert_collectable(view_ref, "the replaced legacy view")
+        await _assert_collectable(view_ref, "the replaced explicit view")
         assert session.active is True
     finally:
         await stream.aclose()
@@ -336,9 +324,10 @@ async def test_sse_a_waiter_started_after_navigation_is_refused():
     session, key, stream, view_ref, tag = await _sse_mounted_tour("start_late_tour")
     try:
         await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+        view = view_ref()
         await _post(session, key, {"type": "live_redirect_mount", "url": "/other/", "params": {}})
         assert type(session.view_instance) is OtherPage
-        await _assert_late_wait_refused(view_ref, tag)
+        await _assert_late_wait_refused(view, tag)
     finally:
         await stream.aclose()
 
@@ -346,13 +335,7 @@ async def test_sse_a_waiter_started_after_navigation_is_refused():
 async def test_sse_a_waiter_started_after_close_is_refused():
     session, key, stream, view_ref, tag = await _sse_mounted_tour("start_late_tour")
     await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
+    view = view_ref()
     await stream.aclose()  # the client went away
     await _until(lambda: session.view_instance is None, "the session to drop its view")
-    await _assert_late_wait_refused(view_ref, tag)
-
-
-async def test_sse_close_cancels_the_work_of_a_view_that_opts_in():
-    session, key, stream, view_ref, tag = await _sse_mounted_tour("start_late_tour", CANCELS)
-    await _until(lambda: ("working", tag) in EVENTS, "the late task to start")
-    await stream.aclose()  # the client went away
-    await _until(lambda: ("work-cancelled", tag) in EVENTS, "the work to be cancelled")
+    await _assert_late_wait_refused(view, tag)

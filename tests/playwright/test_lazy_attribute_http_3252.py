@@ -29,7 +29,7 @@ ROOT_URLCONF = "lazyfixture.urls"
 INSTALLED_APPS = ["django.contrib.auth", "django.contrib.contenttypes", "django.contrib.sessions", "django.contrib.staticfiles", "djust", "djust.components", "lazyfixture"]
 MIDDLEWARE = ["django.contrib.sessions.middleware.SessionMiddleware", "django.contrib.auth.middleware.AuthenticationMiddleware", "django.middleware.csrf.CsrfViewMiddleware"]
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
-SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
+SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 STATIC_URL = "/static/"
 LIVEVIEW_CONFIG = {"hot_reload_auto_enable": False}
 DJUST_LIVE_RENDER_ALLOWED_MODULES = ["lazyfixture.views"]
@@ -41,21 +41,19 @@ from .views import Page
 urlpatterns = [path("", Page.as_view())]
 """,
     "lazyfixture/views.py": """
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 class Child(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div><span class="count">{{ count }}</span><button dj-click="inc">Increment</button></div>'
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = state(0, persist="server")
     @event_handler
     def inc(self, **kwargs):
         self.count += 1
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<!DOCTYPE html><html><head></head><body><main dj-root><div id="one" dj-view="lazyfixture.views.Child" dj-lazy="click">Load first</div><div id="two" class="{{ extra }}" dj-view="lazyfixture.views.Child" dj-lazy="click">Load second</div></main></body></html>'
-    def mount(self, request, **kwargs):
-        self.extra = "unrelated-dynamic-class"
+    extra = state("unrelated-dynamic-class")
 """,
     "lazyfixture/asgi.py": """
 import os

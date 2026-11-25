@@ -33,12 +33,17 @@ NBSP = " "
 
 
 class _NumView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-id="0">{{ n }}</div>'
     _value = 1234.5
 
-    def mount(self, request, **kwargs):
-        self.n = type(self)._value
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        # The cases below plant ``n`` / ``d`` on the instance; supply them as render-only context.
+        context["n"] = self.__dict__.get("n", type(self)._value)
+        if "d" in self.__dict__:
+            context["d"] = self.__dict__["d"]
+        return context
 
 
 def _render(value=1234.5, template=None):

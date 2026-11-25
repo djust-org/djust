@@ -392,12 +392,13 @@ def _render_held_as_liveview_state(src, context):
     from djust.testing import LiveViewTestClient
 
     class Held(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root>" + src + "</div>"
 
-        def mount(self, request, **kwargs):
-            for name, value in context.items():
-                setattr(self, name, value)
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx.update(context)
+            return ctx
 
     client = LiveViewTestClient(Held)
     client.mount()

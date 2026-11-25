@@ -18,7 +18,7 @@ CALLS = []
 
 
 class ObjectView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
     def get_object(self):
@@ -26,19 +26,20 @@ class ObjectView(LiveView):
         raise ValueError("OBJECT_LOOKUP_SENTINEL")
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+@pytest.mark.parametrize("debug", [False, True])
 def test_object_permission_failure_log_is_value_free_for_explicit_views(
-    monkeypatch, rf, caplog, policy
+    monkeypatch, rf, caplog, settings, debug
 ):
     CALLS.clear()
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(ObjectView, "exposure_policy", policy)
+    settings.DEBUG = debug
     view = ObjectView()
     with caplog.at_level(logging.DEBUG):
         with pytest.raises(PermissionDenied):
             enforce_object_permission(view, rf.get("/o/"))
     assert CALLS, "get_object never ran; the test would be vacuous"
-    if policy == "legacy":
+    if debug:
+        # The positive control: the lookup failed and was logged with its detail.
         assert "OBJECT_LOOKUP_SENTINEL" in caplog.text
     else:
         assert "OBJECT_LOOKUP_SENTINEL" not in caplog.text

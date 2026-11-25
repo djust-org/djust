@@ -402,17 +402,15 @@ def test_malformed_inline_arguments_rejected_even_without_required_inputs(positi
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("route", ["root", "child", "component", "deferred"])
 async def test_routed_strict_invocations_and_malformed_args(monkeypatch, route):
     from djust.tests.test_runtime_child_routing_1892 import (
-        _make_sticky_parent,
-        _make_runtime_with_view,
+        _mounted_sticky_parent,
         _ClickComponent,
     )
 
-    parent, child = _make_sticky_parent()
-    runtime, transport = _make_runtime_with_view(parent)
+    parent, child, runtime, transport = await _mounted_sticky_parent()
     component = _ClickComponent("strict-component")
     parent._components["strict-component"] = component
     owner = child if route == "child" else component if route == "component" else parent
@@ -429,7 +427,7 @@ async def test_routed_strict_invocations_and_malformed_args(monkeypatch, route):
     monkeypatch.setattr(type(owner), "strict_choose", choose, raising=False)
     monkeypatch.setattr(type(owner), "strict_noop", noop, raising=False)
     routing = (
-        {"view_id": "child-1"}
+        {"view_id": "child"}
         if route == "child"
         else {"component_id": "strict-component"}
         if route == "component"

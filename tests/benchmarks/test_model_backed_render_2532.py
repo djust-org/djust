@@ -96,7 +96,7 @@ from django.db import connection, models
 from django.test import override_settings
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from tests.benchmarks.model_backed_profile_2532 import (
     PROFILE_ROWS,
     Crossings,
@@ -319,8 +319,10 @@ def _make_view(variant: str) -> str:
     select = variant != "list_fk_nosel"
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = _template(variant, cls_name)
+        label = state("v0")
+        highlight_id = state(0)
 
         def mount(self, request: Any, **kwargs: Any) -> None:
             LAST_VIEW[:] = [self]
@@ -332,15 +334,15 @@ def _make_view(variant: str) -> str:
             rows = list(qs)
             self._orm_list_s = time.perf_counter() - t0
             if presenter:
-                self.page = Page(rows)
+                self._page = Page(rows)
             else:
-                self.rows = rows
+                self._rows_list = rows
             self.label = "v0"
             self.highlight_id = 0
             self._highlight_index = -1
 
         def _rows(self) -> List[Post]:
-            return self.page.rows if presenter else self.rows
+            return self._page.rows if presenter else self._rows_list
 
         def _sync_state_to_rust(self, *args: Any, **kwargs: Any) -> None:
             t0 = time.perf_counter()
@@ -352,7 +354,12 @@ def _make_view(variant: str) -> str:
         def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
             t0 = time.perf_counter()
             try:
-                return super().get_context_data(**kwargs)
+                context = super().get_context_data(**kwargs)
+                if presenter:
+                    context["page"] = self._page
+                else:
+                    context["rows"] = self._rows_list
+                return context
             finally:
                 GCD_SECS.append(time.perf_counter() - t0)
 
@@ -378,9 +385,9 @@ def _make_view(variant: str) -> str:
             row.save(update_fields=["views"])
             # New container identity so change detection sees the change.
             if presenter:
-                self.page = Page([*self.page.rows])
+                self._page = Page([*self._page.rows])
             else:
-                self.rows = [*self.rows]
+                self._rows_list = [*self._rows_list]
 
     _V.__name__ = cls_name
     _V.__qualname__ = cls_name
@@ -482,11 +489,18 @@ async def _drive(variant: str) -> List[PhaseRow]:
     :class:`PhaseRow` per phase (mount first)."""
     from channels.testing import WebsocketCommunicator
 
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
     cls_name = VIEW_CLASS[variant]
     rows: List[PhaseRow] = []
-    comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    comm = with_live_session(
+        WebsocketCommunicator(
+            LiveViewConsumer.as_asgi(),
+            "/ws/",
+            headers=[(b"host", b"testserver"), (b"origin", b"http://testserver")],
+        )
+    )
     connected, _ = await comm.connect()
     assert connected
     await comm.receive_json_from()

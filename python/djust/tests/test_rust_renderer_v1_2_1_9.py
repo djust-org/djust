@@ -97,13 +97,11 @@ class TestVerbatimInExtendedBlock2890:
             "Verbatim2890",
             (LiveView,),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "template_name": "child_2890.html",
                 "__module__": __name__,
-                "mount": lambda self, request, **kw: (
-                    setattr(self, "flag", True),
-                    setattr(self, "n", 1),
-                ),
+                "flag": state(True),
+                "n": state(1),
             },
         )
 

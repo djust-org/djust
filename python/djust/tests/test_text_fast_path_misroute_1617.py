@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import pytest
 
+from djust.decorators import state
 from djust.live_view import LiveView
 from djust.testing import LiveViewTestClient
 
@@ -96,7 +97,7 @@ class TestIssue1617MisrouteRepro:
         rockets-node path."""
 
         class ChipPlusReactionsView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = (
                 "<div dj-root>"
                 '<span class="chip">{{ online_count }} online</span>'
@@ -106,11 +107,10 @@ class TestIssue1617MisrouteRepro:
                 "</div>"
             )
 
-            def mount(self, request, **kwargs):
-                self.online_count = 1
-                self.rockets = 1
-                self.hearts = 3
-                self.thumbs = 5
+            online_count = state(1)
+            rockets = state(1)
+            hearts = state(3)
+            thumbs = state(5)
 
         client = LiveViewTestClient(ChipPlusReactionsView).mount()
         client.render_with_patches()  # baseline
@@ -154,7 +154,7 @@ class TestIssue1617MisrouteRepro:
         a misrouted bare-value patch to an unrelated sibling."""
 
         class AdjacentView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = (
                 "<div dj-root>"
                 '<span class="ab">{{ a }}{{ b }}</span>'
@@ -162,10 +162,9 @@ class TestIssue1617MisrouteRepro:
                 "</div>"
             )
 
-            def mount(self, request, **kwargs):
-                self.a = 1
-                self.b = 2
-                self.other = 9
+            a = state(1)
+            b = state(2)
+            other = state(9)
 
         client = LiveViewTestClient(AdjacentView).mount()
         client.render_with_patches()
@@ -200,14 +199,13 @@ class TestIssue1617MisrouteRepro:
         the position-aware fix must not regress it."""
 
         class PureView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = (
                 '<div dj-root><span class="x">{{ x }}</span><span class="y">{{ y }}</span></div>'
             )
 
-            def mount(self, request, **kwargs):
-                self.x = 1
-                self.y = 2
+            x = state(1)
+            y = state(2)
 
         client = LiveViewTestClient(PureView).mount()
         client.render_with_patches()

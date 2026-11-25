@@ -298,14 +298,6 @@ PostOnlyView = _view(
     "PostOnlyView",
     decorators=[method_decorator(user_passes_test(lambda u: u.is_superuser), name="post")],
 )
-# On a legacy view a post()-only refusal of an event answers "Permission denied"
-# and keeps the view mounted; an explicit view applies the same rule while
-# authorizing the turn, and a refused authorization ends the view.
-LegacyPostOnlyView = _view(
-    "LegacyPostOnlyView",
-    decorators=[method_decorator(user_passes_test(lambda u: u.is_superuser), name="post")],
-    exposure_policy="legacy",  # legacy subject: event refusal keeps the view mounted
-)
 
 
 async def _async_is_staff(user):
@@ -512,7 +504,12 @@ async def _sse_mount(user, view_name, event=None):
         {"type": "mount", "view": f"{_MOD}.{view_name}", "url": "/x/", "params": {}}
     )
     if event is not None and session.runtime.view_instance is not None:
-        await session.runtime.dispatch_event({"event": event, "params": {}})
+        # A client event is dispatched with the POST's request in hand.
+        session._event_request = request
+        try:
+            await session.runtime.dispatch_event({"event": event, "params": {}})
+        finally:
+            session._event_request = None
     messages = []
     while not session.queue.empty():
         messages.append(session.queue.get_nowait())
@@ -711,11 +708,15 @@ class TestPostOnlyDecorator:
 
     @pytest.mark.parametrize("user_cls", [_AnonUser, _MemberUser, _StaffUser])
     async def test_event_is_refused(self, user_cls):
-        outputs = await _ws(user_cls, "LegacyPostOnlyView", event="touch")
+        outputs = await _ws(user_cls, "PostOnlyView", event="touch")
         assert _mounted(outputs)
         assert RAN == [], "a post()-gated handler ran for %s" % user_cls.__name__
+        # An explicit view applies the post() rule while authorizing the turn,
+        # and a refused authorization ends the view.
         assert any(
-            f.get("type") == "error" and "Permission denied" in json.dumps(f)
+            f.get("type") == "error"
+            and f.get("code") == "permission_denied"
+            and "Event authorization failed" in json.dumps(f)
             for f in _frames(outputs)
         ), outputs
 
@@ -723,13 +724,18 @@ class TestPostOnlyDecorator:
         await _ws(_SuperUser, "PostOnlyView", event="touch")
         assert RAN == ["PostOnlyView"]
 
-    async def test_sse_event_is_refused_and_runs_for_the_permitted_user(self):
-        mounted, messages = await _sse_mount(_MemberUser(), "LegacyPostOnlyView", event="touch")
-        assert mounted is True
+    async def test_sse_event_is_refused(self):
+        mounted, messages = await _sse_mount(_MemberUser(), "PostOnlyView", event="touch")
+        assert mounted is False  # the refused authorization ended the view
         assert RAN == []
-        assert "Permission denied" in repr(messages)
-        mounted, _ = await _sse_mount(_SuperUser(), "LegacyPostOnlyView", event="touch")
-        assert RAN == ["LegacyPostOnlyView"]
+        assert "Event authorization failed" in repr(messages)
+
+    async def test_sse_event_runs_for_the_permitted_user(self):
+        # The control: the same harness runs the handler for a superuser, so the
+        # refusal above is the post() rule and not a missing request.
+        mounted, messages = await _sse_mount(_SuperUser(), "PostOnlyView", event="touch")
+        assert mounted is True
+        assert RAN == ["PostOnlyView"], messages
 
 
 @pytest.mark.django_db(transaction=True)

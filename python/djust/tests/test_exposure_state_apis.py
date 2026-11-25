@@ -102,21 +102,24 @@ def test_raw_restore_is_rejected_before_reading_payload_or_assigning(view, metho
     assert view.__dict__ == before
 
 
-class _LegacyLiveView(LiveView):
-    """A bare LiveView under the legacy policy, whatever the framework default is."""
+class _BareLiveView(LiveView):
+    """A bare LiveView: nothing declared."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
 
-def test_legacy_direct_api_behavior_remains_available():
-    legacy = object.__new__(_LegacyLiveView)
-    legacy.public_value = [1]
-    legacy._private_value = "private"
-    legacy._user_private_keys = {"_private_value"}
-    assert legacy.get_state() == {"public_value": [1]}
-    assert legacy._get_private_state() == {"_private_value": "private"}
-    legacy._restore_private_state({"_private_value": "restored"})
-    assert legacy._private_value == "restored"
+def test_a_bare_view_exports_nothing_through_the_direct_apis():
+    bare = object.__new__(_BareLiveView)
+    bare.public_value = [1]
+    bare._private_value = "private"
+    bare._user_private_keys = {"_private_value"}
+    # Only a ``client=True`` field is exported; the legacy walk is gone.
+    assert bare.get_state() == {}
+    with pytest.raises(ExposureError):
+        bare._get_private_state()
+    with pytest.raises(ExposureError):
+        bare._restore_private_state({"_private_value": "restored"})
+    assert bare._private_value == "private"
 
 
 def test_audio_private_restore_rejects_before_filtering_payload():

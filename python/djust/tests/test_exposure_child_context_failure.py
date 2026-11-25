@@ -3,7 +3,7 @@
 The sticky helper (``_render_sticky_child_html``) already raises a value-free
 ``ExposureError`` when an explicit child's ``get_context_data`` fails. Its
 non-sticky twin in ``live_render`` logged the exception with its traceback and
-rendered the child with an empty context instead — for any policy.
+rendered the child with an empty context instead.
 """
 
 import logging
@@ -21,12 +21,12 @@ CALLS = []
 
 
 class ChildParent(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
 
 class ContextFailChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     count = state(1)
     template = "<div>{{ count }}</div>"
 
@@ -36,8 +36,7 @@ class ContextFailChild(LiveView):
 
 
 @pytest.fixture(autouse=True)
-def staged(monkeypatch, settings, db):
-    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+def staged(settings, db):
     settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = [__name__]
 
 
@@ -59,18 +58,12 @@ def _render(rf):
     )
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_nonsticky_child_context_failure(monkeypatch, rf, caplog, policy):
+@pytest.mark.parametrize("debug", [False, True])
+def test_nonsticky_child_context_failure(settings, rf, caplog, debug):
     CALLS.clear()
-    monkeypatch.setattr(ContextFailChild, "exposure_policy", policy)
+    settings.DEBUG = debug
     with caplog.at_level(logging.DEBUG):
-        if policy == "legacy":
-            html = _render(rf)
-            # Unchanged legacy behaviour: logged, then rendered with no context.
-            assert "CHILD_CONTEXT_SENTINEL" in caplog.text
-            assert "<div>" in html
-        else:
-            with pytest.raises(ExposureError, match="Explicit child rendering context unavailable"):
-                _render(rf)
-            assert "CHILD_CONTEXT_SENTINEL" not in caplog.text
+        with pytest.raises(ExposureError, match="Explicit child rendering context unavailable"):
+            _render(rf)
+        assert "CHILD_CONTEXT_SENTINEL" not in caplog.text
     assert CALLS, "the child's get_context_data never ran; the test would be vacuous"

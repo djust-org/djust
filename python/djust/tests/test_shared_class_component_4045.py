@@ -8,7 +8,6 @@ handler write shows in every other user's render and in every later mount.
 * Explicit views refuse the declaration when the class is created, and again on
   the mount path (a component assigned to the class afterwards, a policy changed
   since). The gate-off sibling below proves the refused shape really leaks.
-* Legacy views keep running and get the ``djust.V026`` system check.
 * Each form the error message recommends is isolated per session.
 
 Sessions here are real ``WebsocketCommunicator`` connections with different
@@ -30,7 +29,6 @@ from django.test import override_settings
 from djust import LiveView, event_handler
 from djust import _exposure_providers
 from djust._exposure import ExposureConfigurationError
-from djust.checks.components import check_shared_class_level_components
 from djust.components.components.badge import Badge
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import state
@@ -131,23 +129,6 @@ class DescriptorView(LiveView):
 
     def get_context_data(self, **kwargs: Any) -> dict:
         return super().get_context_data(n=self.n, **kwargs)
-
-
-class LegacySharedView(LiveView):
-    """Legacy is not refused (V026 reports it)."""
-
-    exposure_policy = "legacy"
-    template = TEMPLATE
-    n = 0
-    badge = Badge("initial")
-
-    @event_handler()
-    def who(self, who: str = "", **kwargs: Any) -> None:
-        self.badge.label = who
-
-    @event_handler()
-    def bump(self, **kwargs: Any) -> None:
-        self.n += 1
 
 
 class LateView(LiveView):
@@ -253,13 +234,6 @@ def test_plain_component_inherited_from_a_mixin_is_refused():
             template = TEMPLATE
 
 
-def test_inherited_from_a_legacy_view_base_is_refused():
-    with pytest.raises(ExposureConfigurationError, match="'badge'"):
-
-        class Child(LegacySharedView):
-            exposure_policy = "explicit"
-
-
 def test_a_subclass_that_redefines_the_name_is_not_refused():
     class Redefined(BadgeMixin, LiveView):
         exposure_policy = "explicit"
@@ -269,10 +243,8 @@ def test_a_subclass_that_redefines_the_name_is_not_refused():
     assert _exposure_providers.class_level_plain_components(Redefined) == []
 
 
-def test_live_component_and_legacy_declarations_are_not_refused():
+def test_a_live_component_declaration_is_not_refused():
     assert _exposure_providers.class_level_plain_component_error(DescriptorView) is None
-    assert _exposure_providers.class_level_plain_component_error(LegacySharedView) is None
-    assert _exposure_providers.class_level_plain_components(LegacySharedView) == ["badge"]
 
 
 # ------------------------------------------------------------------ #
@@ -289,18 +261,6 @@ async def test_component_assigned_to_the_class_later_is_refused_at_mount(ws_sett
         assert frame["type"] == "error", frame
         assert "'badge'" in json.dumps(frame)
         assert "LATE_VALUE_SENTINEL" not in json.dumps(frame)
-    finally:
-        await socket.disconnect()
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_policy_changed_to_explicit_later_is_refused_at_mount(ws_settings, monkeypatch):
-    monkeypatch.setattr(LegacySharedView, "exposure_policy", "explicit")
-    socket, frame, _ = await _open("LegacySharedView")
-    try:
-        assert frame["type"] == "error", frame
-        assert "'badge'" in json.dumps(frame)
     finally:
         await socket.disconnect()
 
@@ -342,15 +302,6 @@ async def test_gate_off_the_refused_shape_leaks_across_sessions(ws_settings, mon
     assert SECRET in seen["b"], "another session renders A's write"
     assert SECRET in seen["c"], "a later mount renders A's write"
     assert GateOffView.__dict__["badge"].label == SECRET
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-async def test_legacy_class_body_component_still_runs_and_leaks(ws_settings, monkeypatch):
-    """Legacy is not refused at runtime; the shared object renders for B and C (V026)."""
-    monkeypatch.setattr(LegacySharedView.__dict__["badge"], "label", "initial")
-    seen = await _three_sessions("LegacySharedView", {"event": "who", "who": SECRET})
-    assert SECRET in seen["b"] and SECRET in seen["c"]
 
 
 # ------------------------------------------------------------------ #
@@ -405,39 +356,3 @@ def test_instance_assigned_live_component_message_says_class_body():
     assert "'badge'" in message
     assert "declare it in the class body" in message
     assert "own copy" in message
-
-
-# ------------------------------------------------------------------ #
-# djust.V026 (legacy)
-# ------------------------------------------------------------------ #
-
-
-def _v026() -> list:
-    return [m for m in check_shared_class_level_components(None) if m.id == "djust.V026"]
-
-
-def test_v026_reports_a_legacy_class_body_component_once():
-    hits = [m for m in _v026() if "LegacySharedView" in m.msg]
-    assert len(hits) == 1
-    assert "'badge'" in hits[0].msg
-    assert hits[0].fix_hint and "mount()" in hits[0].fix_hint
-
-
-def test_v026_skips_explicit_views_and_live_components():
-    text = " ".join(m.msg for m in _v026())
-    for name in ("FieldView", "PrivateView", "BuiltView", "DescriptorView", "LateView"):
-        assert name not in text
-
-
-def test_v026_reports_the_mixin_that_declares_it(monkeypatch):
-    class LegacyWithMixin(BadgeMixin, LiveView):
-        exposure_policy = "legacy"
-        template = TEMPLATE
-
-    owners = [m.msg for m in _v026() if "BadgeMixin" in m.msg]
-    assert len(owners) == 1
-
-
-def test_v026_can_be_suppressed(settings):
-    settings.DJUST_CONFIG = {"suppress_checks": ["V026"]}
-    assert _v026() == []

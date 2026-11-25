@@ -118,10 +118,6 @@ class Gates(LiveView):
         self.ran += 1
 
 
-class LegacyGates(Gates):
-    exposure_policy = "legacy"
-
-
 class PostMethodGated(LiveView):
     """Public page whose own ``post()`` carries ``@method_decorator(login_required)``."""
 
@@ -470,16 +466,13 @@ async def test_the_same_child_as_a_root_is_refused_behind_the_session_only_stack
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("view", ["Gates", "LegacyGates"])
 @pytest.mark.parametrize("stack, granted", [("session-only", False), ("auth(djust)", True)])
-async def test_a_permission_gated_handler_follows_the_stack(
-    django_user_model, view, stack, granted
-):
+async def test_a_permission_gated_handler_follows_the_stack(django_user_model, stack, granted):
     """A superuser's session behind a stack that authenticated nobody does not
-    satisfy ``@permission_required``, on an explicit view as on a legacy one."""
+    satisfy ``@permission_required``."""
     browser = await _logged_in(django_user_model)
     async with _StackSocket(stack, _session_cookie(browser)) as ws:
-        mounted = await ws.answer(_mount_frame(MODULE + "." + view, "/gates/"), *_MOUNT_ANSWERS)
+        mounted = await ws.answer(_mount_frame(MODULE + ".Gates", "/gates/"), *_MOUNT_ANSWERS)
         assert mounted.get("type") == "mount", mounted
         answered = await ws.answer(_event("guarded"), *_EVENT_ANSWERS)
     if granted:

@@ -198,6 +198,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
         ),
         (LT, 'custom_placeholder = lazy_config["placeholder"]'),
         (LT, "inner = str(conditional_escape(custom_placeholder))"),
+        unreached="legacy child wrapper, removed by #4199",
     ),
     (CH, "HeatmapNode.render"): S(
         1,

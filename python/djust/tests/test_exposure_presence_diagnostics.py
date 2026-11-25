@@ -18,7 +18,7 @@ CALLS = []
 
 
 class PresenceHookView(PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     presence_key = "exposure-presence-room"
 
@@ -32,11 +32,13 @@ class PresenceHookView(PresenceMixin, LiveView):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_presence_hook_failures_are_value_free_for_explicit_views(monkeypatch, rf, caplog, policy):
+@pytest.mark.parametrize("debug", [False, True])
+def test_presence_hook_failures_are_value_free_for_explicit_views(
+    monkeypatch, rf, caplog, settings, debug
+):
     CALLS.clear()
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(PresenceHookView, "exposure_policy", policy)
+    settings.DEBUG = debug
     view = PresenceHookView()
     view._websocket_session_id = "exposure-presence-session"
     view.request = rf.get("/")
@@ -45,7 +47,8 @@ def test_presence_hook_failures_are_value_free_for_explicit_views(monkeypatch, r
         view.track_presence()
         view.untrack_presence()
     assert CALLS == ["join", "leave"], "a presence hook never ran; the test would be vacuous"
-    if policy == "legacy":
+    if debug:
+        # The positive control: the hooks ran and were logged with their detail.
         assert "Error in handle_presence_join: PRESENCE_JOIN_SENTINEL" in caplog.text
         assert "Error in handle_presence_leave: PRESENCE_LEAVE_SENTINEL" in caplog.text
     else:

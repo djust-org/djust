@@ -252,12 +252,8 @@ def test_a_marked_safe_row_value_never_leaves_an_attribute_natively(args: str) -
 
 def _event_view(rows_factory):
     """A real LiveView whose ``swap`` handler replaces the rows (the event the reviewer sent)."""
-    from djust import LiveView
+    from djust import LiveView, state
     from djust.decorators import event_handler
-
-    def mount(self, request, **kwargs):
-        self.rows = rows_factory()
-        self.cols = COLS
 
     @event_handler
     def swap(self, **kwargs):
@@ -271,9 +267,10 @@ def _event_view(rows_factory):
         "TableView",
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template": "<div dj-root>" + SRC + "</div>",
-            "mount": mount,
+            "rows": state(default_factory=rows_factory),
+            "cols": state(default_factory=lambda: COLS),
             "swap": swap,
             "bump": bump,
         },

@@ -41,23 +41,23 @@ if not settings.configured:
 
 from djust import Component, LiveView  # noqa: E402
 from djust.components.components.rating import Rating  # noqa: E402
-from djust.decorators import event_handler  # noqa: E402
+from djust.decorators import event_handler, state  # noqa: E402
 from djust.serialization import (  # noqa: E402
     STATE_COMPONENT_TAG,
     StateRoundtripJSONEncoder,
     decode_state_roundtrip,
     normalize_django_value,
 )
+from djust.testing import rendered_state  # noqa: E402
 
 _ALLOWED = "djust.tests.test_component_state_persistence_adr033"
 
 
 class RatingView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">{{ rating }}</div>'
 
-    def mount(self, request: Any, **kwargs: Any) -> None:
-        self.rating = Rating(value=4, max_stars=5)
+    rating = state(default_factory=lambda: Rating(value=4, max_stars=5))
 
     @event_handler()
     def set_rating(self, value: Any, **kwargs: Any) -> None:
@@ -201,10 +201,11 @@ class TestSnapshotPaths:
         assert isinstance(fresh.rating, Rating)
         assert _full_stars(fresh.render_with_diff()[0]) == 5
 
-    def test_get_state_accepts_a_component(self):
+    def test_rendered_state_accepts_a_component(self):
         view = RatingView()
         view.mount(None)
-        assert view.get_state()["rating"] is view.rating
+        view.render_with_diff()
+        assert "rating-star" in rendered_state(view)["rating"]
 
 
 class _ScopeSession:

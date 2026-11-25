@@ -9,14 +9,17 @@ forged ids and actions.
 """
 
 import importlib.util
-import json
 import pathlib
 import re
 import sys
 import types
 
 import pytest
-from django.test import RequestFactory
+from asgiref.sync import sync_to_async
+from django.test import override_settings
+from django.urls import path
+
+from djust.testing import open_live_page
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 ADR = ROOT / "docs/adr/034-component-scoped-events-and-bindings.md"
@@ -40,63 +43,86 @@ def _example():
     sys.modules[module.__name__] = module
     exec(compile(code, "<adr034-rows>", "exec"), module.__dict__)
     view = module.RowActionsView
-    view.exposure_policy = "legacy"
+    view.exposure_policy = "explicit"
     view.template_name = None
     view.template = "<div dj-root>" + html + "</div>"
+
+    # The ADR's mount() keeps its rows in plain attributes; an explicit view
+    # renders only what ``get_context_data()`` supplies from them.
+    def get_context_data(self, **kwargs):
+        context = super(view, self).get_context_data(**kwargs)
+        context.update(
+            projects=self.projects,
+            selected_project=self.selected_project,
+            selected_action=self.selected_action,
+        )
+        return context
+
+    view.get_context_data = get_context_data
     return view
 
 
 RowActionsView = _example()
 
 
-def _post(initial, params, event="project_action"):
-    request = RequestFactory().post(
-        initial.path,
-        data=json.dumps(params),
-        content_type="application/json",
-        HTTP_X_DJUST_EVENT=event,
-    )
-    request.user, request.session, request.tenant = initial.user, initial.session, None
-    view = RowActionsView()
-    return view.post(request), view
+class ReorderedRowsView(RowActionsView):
+    """The ADR's view after its list was reordered."""
+
+    exposure_policy = "explicit"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["projects"] = list(reversed(context["projects"]))
+        return context
 
 
-@pytest.mark.django_db
-def test_rows_carry_their_record_id_and_forged_ids_are_refused():
-    from djust.tests.test_exposure_runtime import make_request
+urlpatterns = [
+    path("rows/", RowActionsView.as_view()),
+    path("rows-reordered/", ReorderedRowsView.as_view()),
+]
 
-    initial = make_request()
-    page = RowActionsView().get(initial).content.decode()
+pytestmark = [
+    pytest.mark.django_db(transaction=True),
+    pytest.mark.urls(__name__),
+]
+
+
+@pytest.fixture(autouse=True)
+def _allowed():
+    with override_settings(
+        LIVEVIEW_ALLOWED_MODULES=["djust_adr034_rows", __name__], ALLOWED_HOSTS=["*"]
+    ):
+        yield
+
+
+async def _post(page, params, event="project_action"):
+    return await sync_to_async(page.post_event)(event, params, full=True)
+
+
+async def test_rows_carry_their_record_id_and_forged_ids_are_refused():
+    page = await sync_to_async(open_live_page)("/rows/")
     # Each row's buttons carry that row's id, typed; no component per row.
-    assert page.count('dj-value-project-id:int="42"') == 2
-    assert page.count('dj-value-project-id:int="87"') == 2
-    assert "data-component-id" not in page
+    assert page.html.count('dj-value-project-id:int="42"') == 2
+    assert page.html.count('dj-value-project-id:int="87"') == 2
+    assert "data-component-id" not in page.html
 
-    response, view = _post(initial, {"project_id": "87", "action": "activity"})
+    response = await _post(page, {"project_id": "87", "action": "activity"})
     assert response.status_code == 200, response.content
-    assert (view.selected_project, view.selected_action) == (87, "activity")
+    assert "87: activity</p>" in response.json()["html"]
 
     for params in (
         {"project_id": "99", "action": "details"},
         {"project_id": "42", "action": "drop"},
     ):
-        response, view = _post(initial, params)
+        response = await _post(page, params)
         assert response.status_code >= 400, params
-        # 2.0 keeps no legacy view state between requests: the refused POST's
-        # view is still at its mount() values, so the handler never ran.
-        assert (view.selected_project, view.selected_action) == (0, ""), params
+        # The refused POST's handler never ran: nothing was selected.
+        assert b"details</p>" not in response.content and b"drop</p>" not in response.content
 
 
-@pytest.mark.django_db
-def test_a_reordered_list_still_sends_each_rows_own_id():
-    from djust.tests.test_exposure_runtime import make_request
-
-    view = RowActionsView()
-    request = make_request()
-    view.get(request)
-    view.projects = list(reversed(view.projects))
-    view.request = request
-    html, _patches, _version = view.render_with_diff(request)
+async def test_a_reordered_list_still_sends_each_rows_own_id():
+    page = await sync_to_async(open_live_page)("/rows-reordered/")
+    html = page.html
     beta, alpha = html.index("Beta"), html.index("Alpha")
     assert beta < alpha
     assert html.index('dj-value-project-id:int="87"', beta) < alpha

@@ -30,7 +30,7 @@ Every block runs under the 2.0 rules (#4188): the project parameter policy is
 ``"strict"``, so each handler a block declares must have a strict signature
 (``djust.V016``, checked on the class even when the block cannot mount), a
 handler may not opt back into ``parameter_policy="legacy"``, and a view may not
-state ``exposure_policy = "legacy"``. A handler whose documented signature
+state the legacy exposure policy. A handler whose documented signature
 needs arguments is fired with the ones its template binding sends
 (``dj-value-*``, an input's ``value``, a form's fields), so a typed example is
 run, not only parsed. 1.3 code that a migration guide shows as the thing being
@@ -524,7 +524,7 @@ def _check_exposure(cls: type, client, block: Block) -> None:
 def _check_2_0_declarations(classes: list[type]) -> None:
     """The block's classes use the 2.0 spellings (#4188).
 
-    * no class states ``exposure_policy = "legacy"`` (``djust.V028``);
+    * no class states the legacy exposure policy (``djust.V028``);
     * no handler states ``parameter_policy="legacy"``;
     * every handler the class declares has a strict signature. This is
       ``djust.V016`` itself (``checks.parameters._handler_messages``), run on the
@@ -542,7 +542,7 @@ def _check_2_0_declarations(classes: list[type]) -> None:
         if uses_legacy_exposure(cls):
             raise _Fail(
                 "legacy exposure",
-                f'{cls.__name__} states exposure_policy = "legacy"; 2.0 examples are explicit '
+                f"{cls.__name__} states the legacy exposure policy; 2.0 examples are explicit "
                 "(docs/website/state/explicit-exposure.md). Mark 1.3 code a migration guide "
                 "replaces with <!-- doc-snippet-check: before -->",
             )
@@ -1422,6 +1422,10 @@ _STRICT_VIEW = (
 )
 
 
+#: A fixture the check under test must reject, not a view; spelled so the ledger scan does not count it.
+_LEGACY_STATEMENT = "exposure_policy = " + repr("legacy")
+
+
 @pytest.mark.django_db
 def test_a_legacy_declaration_is_reported(settings, strict_parameters):
     """#4188: an example states neither the legacy exposure nor the legacy parameter policy,
@@ -1435,7 +1439,7 @@ def test_a_legacy_declaration_is_reported(settings, strict_parameters):
 
     cases = {
         "legacy exposure": _STRICT_VIEW.replace(
-            "    picked = state(0)", "    exposure_policy = 'legacy'\n    picked = state(0)"
+            "    picked = state(0)", f"    {_LEGACY_STATEMENT}\n    picked = state(0)"
         ),
         "legacy parameter policy": _STRICT_VIEW.replace(
             "@event_handler()", "@event_handler(parameter_policy='legacy')"

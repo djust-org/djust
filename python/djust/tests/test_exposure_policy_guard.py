@@ -2,7 +2,7 @@
 
 ``exposure_policy="explicit"`` is an enabled policy. The guard still refuses
 every configuration that would silently widen exposure or fall back to legacy
-exports: an unknown policy and exposure grants on a legacy view. None of these checks may
+exports: an unknown policy. None of these checks may
 evaluate a property or a state factory. Configuration errors are
 ``ExposureConfigurationError`` (an ``ImproperlyConfigured``), whose messages
 are framework-authored and carry no view values.
@@ -12,7 +12,6 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 
 from djust import LiveView
-from djust._exposure import ExposureConfigurationError
 from djust.decorators import state
 
 
@@ -46,26 +45,6 @@ def test_unknown_policy_is_not_treated_as_legacy(policy):
         LiveView(exposure_policy=policy)
 
 
-def test_legacy_policy_preserves_current_context_behavior():
-    view = LiveView(exposure_policy="legacy")
-    view.title = "Visible"
-    assert view.get_context_data()["title"] == "Visible"
-    assert "exposure_policy" not in view.get_context_data()
-    assert "exposure_policy" not in view.get_state()
-
-
-@pytest.mark.parametrize(
-    "options", [{"persist": "server"}, {"client": True}, {"persist": "client", "client": True}]
-)
-def test_legacy_views_cannot_silently_ignore_exposure_grants(options):
-    class View(LiveView):
-        exposure_policy = "legacy"
-        value = state(0, **options)
-
-    with pytest.raises(ExposureConfigurationError, match="cannot honor"):
-        View()
-
-
 @pytest.mark.parametrize(
     "options", [{"persist": "server"}, {"client": True}, {"persist": "client", "client": True}]
 )
@@ -81,17 +60,15 @@ def test_guard_does_not_evaluate_properties_or_factories():
     def fail():
         raise AssertionError("configuration check must not evaluate state")
 
-    for policy in ("legacy", "explicit"):
+    class View(LiveView):
+        exposure_policy = "explicit"
+        value = state(default_factory=fail)
 
-        class View(LiveView):
-            exposure_policy = policy
-            value = state(default_factory=fail)
+        @property
+        def service(self):
+            return fail()
 
-            @property
-            def service(self):
-                return fail()
-
-        View()
+    View()
 
 
 def test_http_view_renders_under_the_explicit_policy(rf, settings, db):

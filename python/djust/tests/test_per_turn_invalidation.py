@@ -677,7 +677,7 @@ def nonce_processor(request):
 
 
 class ScopedComponentPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>{{ nonce }}</h1>{{ nav }}</div>"
     nav = Tabs()
 
@@ -912,7 +912,7 @@ class LateInsert(LiveView):
     """``get_context_data`` puts a live object into the list after the snapshot:
     whether the list is plain data is decided when it is synced, not before."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p>{{ current.label }}</p><b>{{ n }}</b></div>"
 
     def mount(self, request, **kwargs):

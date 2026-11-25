@@ -46,7 +46,7 @@ def _clear():
 
 
 class TwoSteps(WizardMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ current_step.name }}</div>"
     wizard_steps = [
         {"name": "who", "title": "Who", "form_class": NameForm},
@@ -103,7 +103,7 @@ RECORDS = {
 class FollowUp(WizardMixin, LiveView):
     """Steps chosen per record, loaded in the view's own mount() after super().mount()."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ current_step.name }}</div>"
     wizard_steps = []
 

@@ -238,11 +238,11 @@ class TestModuleReload:
             from djust import LiveView
 
             class Alpha(LiveView):
-                exposure_policy = "legacy"
+                exposure_policy = "explicit"
                 template = "<div>a</div>"
 
             class Beta(LiveView):
-                exposure_policy = "legacy"
+                exposure_policy = "explicit"
                 template = "<div>b</div>"
 
             class NotAView:
@@ -287,7 +287,7 @@ class TestModuleReload:
             from djust import LiveView
 
             class Gamma(LiveView):
-                exposure_policy = "legacy"
+                exposure_policy = "explicit"
                 template = "<div>g</div>"
         """
         module_name = "hvr_fixture_case12"

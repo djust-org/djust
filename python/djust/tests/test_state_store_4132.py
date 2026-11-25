@@ -1100,74 +1100,6 @@ def test_switching_saving_off_removes_the_tabs_state_from_the_store_too(settings
 
 
 # ---------------------------------------------------------------------------
-# The other road into the session: a lazy legacy child over the fallback
-# ---------------------------------------------------------------------------
-
-LAZY = '<div dj-view="' + MODULE + '.LazyChild" dj-lazy></div>'
-
-
-class LazyChild(LiveView):
-    exposure_policy = "legacy"
-    template = '<div><span class="n">{{ count }}</span><i>{{ note }}</i></div>'
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self.note = "STORE_LAZY"
-
-    @event_handler
-    def inc(self, **kwargs):
-        self.count += 1
-
-
-class LazyPage(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><section>" + LAZY + "</section></div>"
-
-
-urlpatterns += [path("lazy/", LazyPage.as_view())]
-
-
-def _lazy_flow(client: Any = None) -> List[int]:
-    import re
-
-    from django.conf import settings
-    from django.test import Client
-
-    client = client or Client(enforce_csrf_checks=True)
-    page = client.get("/lazy/").content.decode()
-    (view_id,) = re.findall(r'data-djust-lazy-id="([^"]+)"', page)
-    counts = []
-    for name in ("djust_lazy_mount", "inc", "inc"):
-        response = client.post(
-            "/lazy/",
-            json.dumps({"view_id": view_id}),
-            content_type="application/json",
-            HTTP_X_DJUST_EVENT=name,
-            HTTP_X_CSRFTOKEN=client.cookies[settings.CSRF_COOKIE_NAME].value,
-        )
-        assert response.status_code == 200, response.content
-        found = re.search(r'class="n"[^>]*>(\d+)</span>', json.loads(response.content)["html"])
-        counts.append(int(found.group(1)))
-    return counts
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("store", STORES)
-def test_a_lazy_legacy_childs_state_is_not_written_in_the_clear_with_a_store(store, settings):
-    """Its state takes its own road into the session and does not go through
-    the store, so with a store named it is not saved at all."""
-    settings.DJUST_STATE_STORE = store
-    assert _lazy_flow() == [0, 1, 1]  # each request mounts the child again
-    assert "STORE_LAZY" not in _all_sessions_text()
-
-
-@pytest.mark.django_db
-def test_control_a_lazy_legacy_child_is_saved_in_the_session_without_a_store(settings):
-    assert _lazy_flow() == [0, 1, 2]
-    assert "STORE_LAZY" in _all_sessions_text()
-
-
-# ---------------------------------------------------------------------------
 # Review round 2 (#4132)
 # ---------------------------------------------------------------------------
 
@@ -1452,35 +1384,6 @@ def test_plaintext_saved_before_the_store_is_purged_on_first_contact(
     text = json.dumps(_entries(key))
     assert not [marker for marker in MARKERS if marker in text], text
     assert all("values" not in entry for entry in _entries(key).values())
-
-
-@pytest.mark.django_db
-def test_a_lazy_childs_plaintext_is_removed_on_first_contact_and_a_warning_names_it(
-    settings, caplog
-):
-    from django.test import Client
-
-    client = Client(enforce_csrf_checks=True)
-    assert _lazy_flow(client) == [0, 1, 2]
-    assert "STORE_LAZY" in _all_sessions_text()
-    settings.DJUST_STATE_STORE = EXTERNAL
-    with caplog.at_level(logging.WARNING, logger="djust.automatic_state"):
-        assert _lazy_flow(client) == [0, 1, 1]
-    assert "STORE_LAZY" not in _all_sessions_text()
-    named = [r for r in caplog.records if "LazyChild" in r.getMessage()]
-    assert len(named) == 1 and "DJUST_STATE_STORE" in named[0].getMessage()
-
-
-@pytest.mark.django_db
-def test_djust_clear_all_removes_a_lazy_childs_entry_and_plain_clear_keeps_it(capsys):
-    from djust.cli import cmd_clear
-
-    assert _lazy_flow() == [0, 1, 2]
-    cmd_clear(argparse.Namespace(all=False, force=True))  # expired only
-    assert "STORE_LAZY" in _all_sessions_text()
-    cmd_clear(argparse.Namespace(all=True, force=True))
-    capsys.readouterr()
-    assert "STORE_LAZY" not in _all_sessions_text()
 
 
 @pytest.mark.asyncio

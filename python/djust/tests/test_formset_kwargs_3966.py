@@ -220,8 +220,8 @@ def test_the_mixins_remove_row_event_keeps_the_instance():
 
 
 def test_a_view_without_get_formset_kwargs_behaves_as_before():
-    class Legacy(FormSetHelpersMixin, LiveView):
-        exposure_policy = "legacy"
+    class Plain(FormSetHelpersMixin, LiveView):
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
         formset_classes = {"rows": formset_factory(forms.Form, extra=1)}
 
@@ -229,7 +229,7 @@ def test_a_view_without_get_formset_kwargs_behaves_as_before():
             super().mount(request, **kwargs)
             self._formset_data = {}
 
-    client = LiveViewTestClient(Legacy)
+    client = LiveViewTestClient(Plain)
     client.mount()
     assert FormSetHelpersMixin().get_formset_kwargs("rows") == {}
     client.send_event("add_row", formset="rows")

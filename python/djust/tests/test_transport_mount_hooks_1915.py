@@ -214,16 +214,19 @@ def test_sse_next_mount_version_returns_raw_rust_version():
 
 
 @pytest.mark.asyncio
-async def test_ws_on_mount_render_ready_emits_sticky_hold(monkeypatch):
+async def test_ws_on_mount_render_ready_emits_sticky_hold_for_a_child_the_tag_reattached(
+    monkeypatch,
+):
+    """An explicit survivor is kept only when the ``{% live_render %}`` tag re-attached it
+    (its expected class, inputs and request identity passed); the hook then reports it."""
     consumer = _FakeConsumer()
     transport = WSConsumerTransport(consumer)
     view = _FakeView()
 
-    child = SimpleNamespace(exposure_policy="legacy")
+    child = SimpleNamespace(exposure_policy="explicit")
     consumer._sticky_preserved = {"slot-a": child}
+    consumer._sticky_auto_reattached = {"slot-a"}
 
-    # Make the rendered HTML "contain" the surviving slot id. The hook imports
-    # ``_find_sticky_slot_ids`` from ``.websocket`` locally, so patch it there.
     import djust.websocket as ws_mod
 
     monkeypatch.setattr(ws_mod, "_find_sticky_slot_ids", lambda html: {"slot-a"})
@@ -232,12 +235,34 @@ async def test_ws_on_mount_render_ready_emits_sticky_hold(monkeypatch):
     html_out = await transport.on_mount_render_ready(view, html_in)
 
     assert html_out == html_in, "on_mount_render_ready returns html unchanged on WS"
-    # Survivor re-registered onto the new parent.
-    assert view._register_calls == [("slot-a", child)]
+    # The tag already registered it: the hook does not register it again.
+    assert view._register_calls == []
     # sticky_hold frame emitted BEFORE the mount frame, with the survivor list.
     assert consumer.send_json_calls == [{"type": "sticky_hold", "views": ["slot-a"]}]
-    # consumer._sticky_preserved updated to the authoritative survivor set.
     assert consumer._sticky_preserved == {"slot-a": child}
+
+
+@pytest.mark.asyncio
+async def test_ws_on_mount_render_ready_drops_an_explicit_child_slot_markup_alone_cannot_reattach(
+    monkeypatch,
+):
+    """Bare slot markup cannot authorize an explicit child's reattachment: it is discarded."""
+    consumer = _FakeConsumer()
+    transport = WSConsumerTransport(consumer)
+    view = _FakeView()
+
+    child = SimpleNamespace(exposure_policy="explicit")
+    consumer._sticky_preserved = {"slot-a": child}
+
+    import djust.websocket as ws_mod
+
+    monkeypatch.setattr(ws_mod, "_find_sticky_slot_ids", lambda html: {"slot-a"})
+
+    await transport.on_mount_render_ready(view, '<div dj-sticky-slot="slot-a"></div>')
+
+    assert view._register_calls == []
+    assert consumer.send_json_calls == [{"type": "sticky_hold", "views": []}]
+    assert consumer._sticky_preserved == {}
 
 
 @pytest.mark.asyncio

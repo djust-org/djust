@@ -42,7 +42,7 @@ MOD = "djust.tests.test_sse_push_groups_3885."
 
 
 class GroupPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><b>{{ n }}</b></div>"
 
     def mount(self, request, **kwargs):
@@ -78,7 +78,7 @@ class LoginPage(GroupPage):
 
 
 class NotifyPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><b>{{ n }}</b></div>"
     # Class-level: ``listen()`` needs PostgreSQL, the group join does not.
     _listen_channels = {"orders_3885"}
@@ -877,8 +877,10 @@ async def test_a_release_while_the_channel_is_created_starts_no_reader(members):
 
 async def test_a_push_published_while_mount_runs_is_delivered_after_the_mount_over_sse():
     layer = get_channel_layer()
+    GATE.clear()
     task, sid = await _start_get("BlockingPage", "/blocking/")
     await wait_until(lambda: layer.groups.get(_group_of("BlockingPage")), what="the group join")
+    await wait_until(lambda: BLOCKED, what="mount() to start")
     await apush_to_view(MOD + "BlockingPage", handler="handle_set", payload={"n": 5})
     view = BLOCKED[-1]
     await wait_until(
@@ -918,9 +920,12 @@ async def test_a_push_published_while_mount_runs_is_delivered_over_a_websocket()
 
 async def test_a_push_for_a_mount_that_is_then_refused_is_discarded():
     layer = get_channel_layer()
+    GATE.clear()
     task, sid = await _start_get("BlockingDeniedPage", "/blockingdenied/")
     group = _group_of("BlockingDeniedPage")
     await wait_until(lambda: layer.groups.get(group), what="admission")
+    # The group join can land before mount() runs: wait for the view itself.
+    await wait_until(lambda: BLOCKED, what="mount() to start")
     await apush_to_view(MOD + "BlockingDeniedPage", handler="handle_set", payload={"n": 5})
     view = BLOCKED[-1]
     runtime = view._sse_session.runtime
@@ -954,10 +959,13 @@ async def test_a_db_notify_waits_for_a_held_lock_and_then_runs(monkeypatch):
     try:
         assert await view.server_push("handle_bump") is True  # queued behind the lock
         await _notify("orders_3885", {"id": 1})
+        # An explicit view's NOTIFY runs after the queued push's drain, which is
+        # the one waiter on the lock: the turn order is the contract here.
         await wait_until(
-            lambda: len([w for w in (lock._waiters or ()) if not w.cancelled()]) >= 2,
-            what="the drain and the NOTIFY to wait for the lock",
+            lambda: len([w for w in (lock._waiters or ()) if not w.cancelled()]) >= 1,
+            what="the drain to wait for the lock",
         )
+        await asyncio.sleep(0.2)
         assert view.seen == []
     finally:
         lock.release()

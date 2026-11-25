@@ -50,21 +50,6 @@ class OrmView(LiveView):
         self.count += 1
 
 
-class LegacyOrmView(LiveView):
-    """Legacy control: the same model is an ordinary public attribute."""
-
-    exposure_policy = "legacy"
-    template = TEMPLATE
-
-    def mount(self, request, **kwargs):
-        self.count = 1
-        self.member = User.objects.get(username=RENDERED)
-
-    @event_handler()
-    def increment(self):
-        self.count += 1
-
-
 SETTINGS = {
     "LIVEVIEW_ALLOWED_MODULES": [__name__],
     "DEBUG": True,
@@ -203,21 +188,3 @@ async def test_explicit_orm_render_reaches_html_but_not_storage_frames_or_debug(
     debug_update = await sync_to_async(live.get_debug_update)()
     for payload in (projection, debug_info, debug_update):
         assert_clean(json.dumps(payload, default=str))
-
-
-async def test_legacy_orm_render_control(staged):
-    """The legacy path renders the same row; its behavior is unchanged."""
-    await sync_to_async(make_user)()
-    request = await sync_to_async(make_request)()
-    with override_settings(**SETTINGS):
-        response = await sync_to_async(LegacyOrmView.as_view())(request)
-        assert response.status_code == 200
-        assert f"<p>{RENDERED}</p>" in response.content.decode()
-        frames = await websocket_session(request.session.session_key, "LegacyOrmView")
-    connect, mount, event = frames
-    assert mount["type"] == "mount", mount
-    assert f">{RENDERED}</p>" in mount["html"]
-    assert event["type"] == "patch", event
-    # Legacy debug output still reflects the undeclared model attribute.
-    assert "member" in event["_debug"]["state_sizes"]
-    assert "state_snapshot_signed" not in mount

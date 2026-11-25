@@ -3,8 +3,7 @@
 Every framework provider declares a ``ProviderContract`` that is folded into
 the view's ``ExposureContract`` schema digest, and writes its keys through the
 explicit render context, which refuses an application kwarg or write that would
-replace a provider value (or be replaced by one). Legacy views keep their
-current behaviour, which each explicit case pins as a control.
+replace a provider value (or be replaced by one).
 
 Only the staged construction gate is bypassed. Runtime cases use the real
 ``ViewRuntime`` with DB sessions.
@@ -228,7 +227,7 @@ def _page(*, component=False, act=False):
             return None
 
         namespace["save_item"] = action(save_item)
-    page = type("Page", (LiveView,), {"exposure_policy": "legacy", **namespace})
+    page = type("Page", (LiveView,), {"exposure_policy": "explicit", **namespace})
     page.__qualname__ = "Page"
     return page
 
@@ -363,22 +362,16 @@ async def test_provider_change_invalidates_the_stored_envelope(staged, monkeypat
 
 
 @pytest.mark.parametrize("mixin", sorted(MIXIN_VIEWS))
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_mixin_provider_key_as_application_kwarg(staged, monkeypatch, mixin, policy):
+def test_mixin_provider_key_as_application_kwarg(staged, monkeypatch, mixin):
     view_class, key = MIXIN_VIEWS[mixin]
-    view = _instance(view_class, policy, monkeypatch)
-    if policy == "legacy":
-        # Control: the provider silently replaces the application's value.
-        context = view.get_context_data(**{key: "APP_SENTINEL"})
-        assert key in context and context[key] != "APP_SENTINEL"
-    else:
-        with pytest.raises(ExposureError, match="collision"):
-            view.get_context_data(**{key: "APP_SENTINEL"})
+    view = _instance(view_class, "explicit", monkeypatch)
+    assert key in view.get_context_data()  # the control: the provider supplies the key
+    with pytest.raises(ExposureError, match="collision"):
+        view.get_context_data(**{key: "APP_SENTINEL"})
 
 
 @pytest.mark.parametrize("mixin", sorted(MIXIN_VIEWS))
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_mixin_provider_key_written_after_super(staged, monkeypatch, mixin, policy):
+def test_mixin_provider_key_written_after_super(staged, monkeypatch, mixin):
     view_class, key = MIXIN_VIEWS[mixin]
 
     class Writer(view_class):
@@ -390,13 +383,9 @@ def test_mixin_provider_key_written_after_super(staged, monkeypatch, mixin, poli
             context[key] = "APP_SENTINEL"
             return context
 
-    view = _instance(Writer, policy, monkeypatch)
-    if policy == "legacy":
-        # Control: the application's write silently replaces the provider.
-        assert view.get_context_data()[key] == "APP_SENTINEL"
-    else:
-        with pytest.raises(ExposureError, match="collision"):
-            view.get_context_data()
+    view = _instance(Writer, "explicit", monkeypatch)
+    with pytest.raises(ExposureError, match="collision"):
+        view.get_context_data()
 
 
 @pytest.mark.parametrize("mixin", sorted(MIXIN_VIEWS))
@@ -416,9 +405,8 @@ def test_explicit_provider_keys_are_reserved_from_context_processors(
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("key", ["csrf_token", "DATE_FORMAT"])
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
 @pytest.mark.usefixtures("close_provider_worker_connections")
-async def test_rust_render_keys_are_framework_providers(staged, monkeypatch, key, policy):
+async def test_rust_render_keys_are_framework_providers(staged, monkeypatch, key):
     class Supplier(RustRenderView):
         count = state(0, persist="server")
         navigation = state("NAV", persist="client", client=True)
@@ -429,19 +417,13 @@ async def test_rust_render_keys_are_framework_providers(staged, monkeypatch, key
             context[key] = "APP_SENTINEL"
             return context
 
-    monkeypatch.setattr(Supplier, "exposure_policy", policy)
     monkeypatch.setitem(globals(), "Supplier", Supplier)
     request = await sync_to_async(make_request)()
     runtime, transport = await _mount(request, Supplier)
     frames = json.dumps(transport.sent)
-    if policy == "legacy":
-        # Control: the framework defers to the application's value.
-        assert not transport.errors, transport.errors
-        assert "APP_SENTINEL" in frames
-    else:
-        assert "APP_SENTINEL" not in frames
-        assert not any(frame.get("type") == "mount" for frame in transport.sent)
-        assert any(frame.get("type") == "error" for frame in transport.sent)
+    assert "APP_SENTINEL" not in frames
+    assert not any(frame.get("type") == "mount" for frame in transport.sent)
+    assert any(frame.get("type") == "error" for frame in transport.sent)
 
 
 def _stored(request):
@@ -573,9 +555,8 @@ def other_tenant_processor(request):
     return {"tenant": TenantInfo("beta", name="PROCESSOR_SENTINEL")}
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_tenant_processor_repeating_the_provider_object(staged, monkeypatch, rf, policy):
-    view = _instance(TenantView, policy, monkeypatch)
+def test_tenant_processor_repeating_the_provider_object(staged, monkeypatch, rf):
+    view = _instance(TenantView, "explicit", monkeypatch)
     context = view.get_context_data()
     request = rf.get("/")
     request.tenant = view._tenant
@@ -583,8 +564,7 @@ def test_tenant_processor_repeating_the_provider_object(staged, monkeypatch, rf,
     view._get_resolved_processors = lambda paths: [identical_tenant_processor]
     result = view._apply_context_processors(context, request)
     assert result["tenant"] is view._tenant
-    if policy == "explicit":
-        assert "tenant" not in view._context_processor_keys
+    assert "tenant" not in view._context_processor_keys
 
 
 @pytest.mark.parametrize(
@@ -596,19 +576,17 @@ def test_tenant_processor_repeating_the_provider_object(staged, monkeypatch, rf,
     ],
     ids=["equal-copy", "other", "none"],
 )
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_tenant_processor_supplying_another_value(staged, monkeypatch, rf, policy, supplied):
-    view = _instance(TenantView, policy, monkeypatch)
+def test_tenant_processor_supplying_another_value(staged, monkeypatch, rf, supplied):
+    view = _instance(TenantView, "explicit", monkeypatch)
     context = view.get_context_data()
     value = supplied(view)
     assert value is not view._tenant
     view._get_context_processors = lambda: []
     view._get_resolved_processors = lambda paths: [lambda request: {"tenant": value}]
     equal = isinstance(value, type(view._tenant)) and value == view._tenant
-    if policy == "legacy" or equal:
-        # Legacy control: the view's value wins silently. An equal value (the
-        # stock tenant processor re-resolving the same tenant) is accepted
-        # under explicit too, and the provider's own object is kept.
+    if equal:
+        # An equal value (the stock tenant processor re-resolving the same
+        # tenant) is accepted, and the provider's own object is kept.
         result = view._apply_context_processors(context, rf.get("/"))
         assert result["tenant"] is view._tenant
     else:
@@ -619,9 +597,8 @@ def test_tenant_processor_supplying_another_value(staged, monkeypatch, rf, polic
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("processor", ["identical", "other"])
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
 @pytest.mark.usefixtures("close_provider_worker_connections")
-async def test_tenant_view_with_a_tenant_context_processor(staged, monkeypatch, processor, policy):
+async def test_tenant_view_with_a_tenant_context_processor(staged, monkeypatch, processor):
     from django.conf import settings
 
     templates = [dict(t) for t in settings.TEMPLATES]
@@ -632,13 +609,12 @@ async def test_tenant_view_with_a_tenant_context_processor(staged, monkeypatch, 
             f"{__name__}.{processor}_tenant_processor",
         ]
         template["OPTIONS"] = options
-    monkeypatch.setattr(TenantView, "exposure_policy", policy)
     request = await sync_to_async(make_request)()
     with override_settings(TEMPLATES=templates):
         runtime, transport = await _mount(request, TenantView)
     frames = json.dumps(transport.sent)
     assert "PROCESSOR_SENTINEL" not in frames
-    if policy == "explicit" and processor == "other":
+    if processor == "other":
         assert not any(frame.get("type") == "mount" for frame in transport.sent)
         assert any(frame.get("type") == "error" for frame in transport.sent)
     else:

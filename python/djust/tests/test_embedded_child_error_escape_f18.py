@@ -10,22 +10,25 @@ The old shape was::
         ...
         return f"<!-- Error rendering embedded child: {e} -->"
 
-This was (a) NOT DEBUG-gated — raw ``str(e)`` leaked into the production page
-(CWE-209), and (b) NOT escaped — an attacker-influenced exception message
+This was (a) NOT DEBUG-gated: raw ``str(e)`` leaked into the production page
+(CWE-209), and (b) NOT escaped: an attacker-influenced exception message
 containing ``-->`` (e.g. ``int("--><img src=x onerror=alert(1)>")`` →
 ``ValueError: invalid literal for int() with base 10: '--><img ...>'``) broke
 out of the HTML comment into live DOM (CWE-79 DOM XSS).
 
-The fix escapes AND DEBUG-gates the detail (mirroring ``simple_live_view``'s
-``render_template`` DEBUG gate + central ``create_safe_error_response``
-discipline): ``escape()`` turns ``-->`` into ``--&gt;`` and any ``<script>`` /
-``<img`` into inert entities in BOTH modes, and production emits no detail at all.
+An explicit child never builds that string: its failed render raises a
+value-free ``ExposureError`` that the caller turns into the protected failure,
+so no exception text reaches the subtree HTML, in ``DEBUG`` or not.
 """
 
 from __future__ import annotations
 
+import traceback
+
+import pytest
 from django.test import override_settings
 
+from djust._exposure import ExposureError
 from djust.websocket import LiveViewConsumer
 
 # An attacker-influenced exception message that, unescaped, would break out of
@@ -40,7 +43,7 @@ class _RaisingChildView:
     an attacker-influenced message. ``_render_embedded_child`` calls
     ``get_context_data()`` first, so raising there exercises the except path."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def get_context_data(self):  # noqa: D401 - test stub
         raise ValueError(_RAISING_MESSAGE)
@@ -49,72 +52,40 @@ class _RaisingChildView:
         return "<div>unused</div>"
 
 
-def _render_error_html():
+def _render_error():
     """Drive the real ``_render_embedded_child`` except path on a bare consumer.
 
-    The method only uses ``child_view`` — a no-arg ``LiveViewConsumer()`` is
+    The method only uses ``child_view``: a no-arg ``LiveViewConsumer()`` is
     sufficient to call it (same construction pattern as
-    ``tests/unit/test_arm_recovery_helper_1645.py``)."""
+    ``tests/unit/test_arm_recovery_helper_1645.py``). Returns what it raised."""
     consumer = LiveViewConsumer()
-    return consumer._render_embedded_child(_RaisingChildView())
+    with pytest.raises(ExposureError) as raised:
+        consumer._render_embedded_child(_RaisingChildView())
+    return raised.value
 
 
+@pytest.mark.parametrize("debug", [True, False], ids=["debug", "prod"])
 class TestEmbeddedChildErrorEscapeF18:
-    """Finding #18: embedded-child render errors must be escaped + DEBUG-gated."""
+    """Finding #18: an embedded child's render failure carries no exception text."""
 
-    @override_settings(DEBUG=True)
-    def test_debug_no_comment_breakout(self):
-        html = _render_error_html()
-        # Only the legitimate comment terminator may appear — no breakout.
-        assert html.count("-->") == 1, html
-        # The injected tags must be neutralised (escaped to entities).
-        assert "<img" not in html, html
-        assert "<script" not in html, html
+    def test_the_failure_is_value_free(self, debug):
+        with override_settings(DEBUG=debug):
+            error = _render_error()
+        assert str(error) == "Explicit child rendering unavailable"
+        # The ValueError is suppressed, not just hidden from ``str``: a log
+        # formatter or error tracker walking the chain sees none of it.
+        assert error.__suppress_context__ and error.__cause__ is None
+        # The control: the payload really was raised, so its absence below is the point.
+        assert _ATTACK_PAYLOAD in str(error.__context__)
+        text = "".join(traceback.format_exception(error))
+        for leaked in ("onerror", "invalid literal", "<img", "<script", "-->"):
+            assert leaked not in text, (leaked, text)
 
-    @override_settings(DEBUG=True)
-    def test_debug_payload_is_escaped_not_omitted(self):
-        # In DEBUG we keep the (now-escaped) detail for developer triage: the
-        # dangerous characters survive only as HTML entities.
-        html = _render_error_html()
-        assert "&lt;img" in html, html
-        assert "&gt;" in html, html
-
-    @override_settings(DEBUG=False)
-    def test_prod_no_comment_breakout(self):
-        html = _render_error_html()
-        assert html.count("-->") == 1, html
-        assert "<img" not in html, html
-        assert "<script" not in html, html
-
-    @override_settings(DEBUG=False)
-    def test_prod_leaks_no_exception_detail(self):
-        # Production must disclose NONE of the exception detail (CWE-209) — not
-        # the payload, not the "invalid literal" message text, escaped or not.
-        html = _render_error_html()
-        assert "onerror" not in html, html
-        assert "invalid literal" not in html, html
-        assert "img" not in html, html
-        assert "script" not in html, html
-
-    def test_returns_html_comment_shape(self):
-        # The contract is still "return an HTML comment" so the client subtree
-        # update remains well-formed in both modes.
-        for debug in (True, False):
-            with override_settings(DEBUG=debug):
-                html = _render_error_html()
-                assert html.startswith("<!--"), (debug, html)
-                assert html.rstrip().endswith("-->"), (debug, html)
-
-    def test_gate_off_sentinel_breakout_is_neutralised(self):
-        """GATE-OFF (#1468): this sentinel encodes exactly what the fix prevents.
-
-        It asserts the breakout substring (``-->`` followed by a live ``<img``)
-        is absent from the returned HTML in BOTH modes. Reverting the fix to the
-        raw ``f"<!-- Error rendering embedded child: {e} -->"`` makes the raw
-        payload re-appear, so ``"--><img"`` becomes a substring of the output
-        and this assertion FAILS — proving the test exercises the change."""
-        breakout = "--><img"
-        for debug in (True, False):
-            with override_settings(DEBUG=debug):
-                html = _render_error_html()
-                assert breakout not in html, (debug, html)
+    def test_nothing_is_returned_to_be_placed_in_the_page(self, debug):
+        """The method raises instead of returning an HTML comment, so there is no
+        subtree string for the page to carry (the old breakout was in that string)."""
+        consumer = LiveViewConsumer()
+        with override_settings(DEBUG=debug):
+            with pytest.raises(ExposureError):
+                result = consumer._render_embedded_child(_RaisingChildView())
+                pytest.fail(f"a failed render returned {result!r}")

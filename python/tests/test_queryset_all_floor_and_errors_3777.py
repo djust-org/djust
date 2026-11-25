@@ -40,7 +40,6 @@ from djust import _rust
 from python.tests.test_queryset_all_traversal_3777 import (
     _backend_render,
     _django_render,
-    _legacy_liveview_render,
     _liveview_render,
 )
 
@@ -316,51 +315,42 @@ class TestARaisingAllIsNotSilent3777:
         else:
             assert groups["all"] == []
 
-    def test_the_jit_handler_logs_it(self, world_users, monkeypatch, caplog) -> None:
-        """Through the real LiveView render: the failure is logged, and the page is NOT
-        silently rendered as 'this user has no groups' by the traversal."""
-
-        def boom(self):
-            raise OperationalError("statement timeout")
-
-        from django.test import override_settings
-
-        monkeypatch.setattr(User.groups.related_manager_cls, "get_queryset", boom)
-        source = "{% for u in users %}{{ u.username }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]{% endfor %}"
-        # The kill-switch (``state_models_as_handles: False``) keeps the 1.x path: the render
-        # completes and only the log reports the failure.
-        with (
-            caplog.at_level(logging.DEBUG),
-            override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": False}),
-        ):
-            # The JIT handler is the legacy policy's (#4069).
-            _legacy_liveview_render(source, {"users": User.objects.order_by("pk")})
-        # djust 2.0 does not fall back to another serializer (#3546): the failure is reported
-        # as "JIT auto-serialization failed" at WARNING, with the database error chained.
-        logged = [r for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("JIT auto-serialization failed" in r.getMessage() for r in logged), [
-            (r.name, r.levelname, r.getMessage()) for r in caplog.records
-        ]
-
-    def test_with_the_overlay_the_database_error_raises_as_in_django(
+    def test_the_jit_failure_raises_out_of_the_render_and_is_logged(
         self, world_users, monkeypatch, caplog
     ) -> None:
-        """Default since 2.0 (#3936, accepted in train/2.0-ai): the JIT still logs the failure,
-        and the rows it could not serialize keep their render-time handle, whose live walk raises
-        the database error out of the render -- what Django's own render does. Never a silent
-        'this user has no groups'."""
+        """Through the real LiveView render: the database error raises out of the render as in
+        Django's own (never a silent 'this user has no groups'), and the framework logs the refusal
+        as a value-free WARNING. The error text shows only under ``log_exception_detail``."""
+        from django.test import override_settings
 
         def boom(self):
             raise OperationalError("statement timeout")
 
         monkeypatch.setattr(User.groups.related_manager_cls, "get_queryset", boom)
         source = "{% for u in users %}{{ u.username }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]{% endfor %}"
+
+        def render():
+            with pytest.raises(OperationalError, match="statement timeout"):
+                _liveview_render(source, {"users": User.objects.order_by("pk")})
+
+        with caplog.at_level(logging.DEBUG):
+            render()
+        logged = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("Protected view operation failed" in r.getMessage() for r in logged), [
+            (r.name, r.levelname, r.getMessage()) for r in caplog.records
+        ]
+        assert not any("statement timeout" in r.getMessage() for r in logged)
+        caplog.clear()
         with (
             caplog.at_level(logging.DEBUG),
-            pytest.raises(OperationalError, match="statement timeout"),
+            override_settings(LIVEVIEW_CONFIG={"log_exception_detail": True}),
         ):
-            _legacy_liveview_render(source, {"users": User.objects.order_by("pk")})
-        assert any("JIT auto-serialization failed" in r.getMessage() for r in caplog.records)
+            render()
+        assert any(
+            "JIT auto-serialization failed" in r.getMessage()
+            or "statement timeout" in r.getMessage()
+            for r in caplog.records
+        ), [(r.name, r.levelname, r.getMessage()) for r in caplog.records]
 
 
 @pytest.fixture

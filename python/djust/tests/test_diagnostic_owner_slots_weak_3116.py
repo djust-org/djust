@@ -25,15 +25,21 @@ from djust._exposure_diagnostics import (
 )
 
 
-class _LegacyView:
-    """A legacy owner: its presence never restricts diagnostics."""
+class _View:
+    """An explicit owner: under ``DEBUG`` its presence does not restrict diagnostics."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+
+
+@pytest.fixture(autouse=True)
+def _debug(settings):
+    """Details are allowed to an explicit owner only while ``DEBUG`` is on."""
+    settings.DEBUG = True
 
 
 class _Consumer:
     def __init__(self) -> None:
-        self.view_instance = _LegacyView()
+        self.view_instance = _View()
 
     @owned_diagnostic_scope
     async def receive(self, started: asyncio.Event, release: asyncio.Event, log: list) -> None:
@@ -72,7 +78,7 @@ def test_a_dead_owner_restricts_diagnostics():
         pass
 
     holder = Holder()
-    holder.view_instance = _LegacyView()
+    holder.view_instance = _View()
     with diagnostic_scope():
         watch_diagnostic_owner(holder, "view_instance")
         assert diagnostics_allowed() is True
@@ -103,7 +109,7 @@ def test_an_owner_without_weakref_support_is_kept_strongly():
         __slots__ = ("view_instance",)
 
     owner = Slotted()
-    owner.view_instance = _LegacyView()
+    owner.view_instance = _View()
     with diagnostic_scope():
         watch_diagnostic_owner(owner, "view_instance")
         assert diagnostics_allowed() is True

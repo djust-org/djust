@@ -38,7 +38,7 @@ from django.db import OperationalError, connection, models
 from django.test.utils import CaptureQueriesContext
 
 from djust.decorators import event_handler
-from djust import _rust
+from djust import _rust, state
 from djust.live_view import LiveView
 from djust.mixins.context import _holds_db_value
 from djust.mixins.jit import _paths_for_variable, _serializer_function_name
@@ -155,25 +155,30 @@ class TestAQuerySetReachedThroughAContainer3788:
         holder: dict = {}
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
-            def mount(self, request, **kwargs):
-                self.d = {"users": _users()}
-                holder["view"] = self
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["d"] = {"users": _users()}
+                holder["supplied"] = ctx["d"]["users"]
+                return ctx
 
         _V.template = "<div dj-root>{% for x in d.users %}" + _groups_of("x") + "{% endfor %}</div>"
         client = LiveViewTestClient(_V)
         client.mount()
         client.render()
-        assert isinstance(holder["view"].d["users"], models.QuerySet)
+        assert isinstance(holder["supplied"], models.QuerySet)
 
     def test_an_event_rerender_keeps_the_rows(self, world) -> None:
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
-            def mount(self, request, **kwargs):
-                self.d = {"users": _users()}
-                self.n = 0
+            n = state(0)
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["d"] = {"users": _users()}
+                return ctx
 
             @event_handler
             def bump(self, **kwargs):
@@ -196,16 +201,18 @@ class TestAQuerySetReachedThroughAContainer3788:
         a top-level name: the hash never reaches the context that is sent."""
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
-            def mount(self, request, **kwargs):
-                self.d = {"users": _users()}
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["d"] = {"users": _users()}
+                return ctx
 
         _V.template = "<div dj-root>{% for x in d.users %}[{{ x.password }}]{% endfor %}</div>"
         client = LiveViewTestClient(_V)
         client.mount()
         assert re.search(r"\[\]\[\]\[\]", client.render())
-        shipped = client.view_instance.get_context_data()["d"]["users"]
+        shipped = client.rendered_state()["d"]["users"]
         assert shipped and all("password" not in row for row in shipped)
         assert "pbkdf2" not in repr(shipped)
 
@@ -263,10 +270,12 @@ class TestThePathLookupForAContainer3788:
         from djust.websocket import _compute_changed_keys, _snapshot_assigns
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
-            def mount(self, request, **kwargs):
-                self.d = {"users": _users()}
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["d"] = {"users": _users()}
+                return ctx
 
         _V.template = "<div dj-root>{% for x in d.users %}" + _groups_of("x") + "{% endfor %}</div>"
         client = LiveViewTestClient(_V)
@@ -274,7 +283,7 @@ class TestThePathLookupForAContainer3788:
         view = client.view_instance
         before = _snapshot_assigns(view)
         client.render()
-        view.get_context_data()
+        client.render()
         assert _compute_changed_keys(before, _snapshot_assigns(view)) == set()
         assert view._nested_template_source  # the memo really was written
 
@@ -904,23 +913,27 @@ class TestTheWholeMark3788:
 # The entries that are not a template call: HTTP GET and WebSocket mount
 # ===========================================================================
 class NestedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = """<div dj-view="test_queryset_all_followups_3788.NestedView">
     {% for x in d.users %}<p>{{ x.username }}[{% for g in x.groups.all %}{{ g.name }},{% endfor %}]</p>{% endfor %}</div>"""
 
-    def mount(self, request, **kwargs):
-        self.d = {"users": User.objects.all().order_by("pk")}
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["d"] = {"users": User.objects.all().order_by("pk")}
+        return ctx
 
 
 class CountView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = """<div dj-view="test_queryset_all_followups_3788.CountView">
     {% for u in users %}<p>{{ u.username }}:{{ u.groups.all.count }}/{{ u.groups.all.first.name }}</p>{% endfor %}</div>"""
 
-    def mount(self, request, **kwargs):
-        self.users = User.objects.all().order_by("pk")
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["users"] = User.objects.all().order_by("pk")
+        return ctx
 
 
 def _paragraphs(html: str) -> list[str]:
@@ -953,12 +966,12 @@ def _seed() -> None:
     ids=["nested", "count"],
 )
 def test_http_get_renders_the_rows(transactional_db, view, expected) -> None:
-    from django.contrib.sessions.middleware import SessionMiddleware
     from django.test import RequestFactory
 
+    from djust.testing import with_live_session
+
     _seed()
-    request = RequestFactory().get("/x/")
-    SessionMiddleware(lambda request: None).process_request(request)
+    request = with_live_session(RequestFactory().get("/x/"))
     response = view.as_view()(request)
     assert response.status_code == 200
     got = _paragraphs(response.content.decode())
@@ -977,6 +990,7 @@ async def test_websocket_mount_renders_the_rows(transactional_db, view_name, exp
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
 
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
     @database_sync_to_async
@@ -986,7 +1000,7 @@ async def test_websocket_mount_renders_the_rows(transactional_db, view_name, exp
 
     want = await seed()
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        communicator = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             connected, _ = await communicator.connect()
             assert connected

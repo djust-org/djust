@@ -26,7 +26,7 @@ from asgiref.sync import sync_to_async
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory
 
-from djust import LiveView, _automatic_state, event_handler
+from djust import _automatic_state, event_handler
 from djust.tests import _per_turn_harness as harness
 from djust.tests.test_automatic_state_4107 import (
     _Base,
@@ -293,51 +293,6 @@ urlpatterns = [_path(f"auto-{view.__name__}/", view.as_view()) for view in VIEWS
 
 
 # ---------------------------------------------------------------------------
-# The legacy exposure policy: no automatic save, but the same turn paths walk ``__dict__``
-# ---------------------------------------------------------------------------
-
-
-class LegacyOdd(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><pre>{{ count }}</pre></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self.note = LONE
-        vars(self)[1] = "one"
-
-    @event_handler()
-    def inc(self, **kwargs):
-        self.count += 1
-        self.note = LONE
-        vars(self)[3.5] = "three"
-
-
-@pytest.mark.django_db
-def test_a_legacy_view_with_odd_state_is_served_over_the_fallback():
-    first = _request("GET", None)
-    assert LegacyOdd().get(first).status_code == 200
-    key = first.session.session_key
-    for _ in range(2):
-        answer = LegacyOdd().post(_request("POST", key, "inc"))
-        assert answer.status_code == 200, answer.content
-
-
-@pytest.mark.asyncio
-@pytest.mark.django_db(transaction=True)
-async def test_a_legacy_view_with_odd_state_is_served_over_the_websocket():
-    key = await harness.new_session_key_async()
-    with harness.ws_settings(MODULE):
-        comm, _mount = await harness.mount_view(LegacyOdd, key)
-        try:
-            for _ in range(2):
-                frame = await harness.event(comm, "inc")
-                assert frame["type"] != "error", frame
-        finally:
-            await comm.disconnect()
-
-
-# ---------------------------------------------------------------------------
 # Every walk over a view's ``__dict__`` skips a key that is not a string: one test per site
 # ---------------------------------------------------------------------------
 
@@ -352,13 +307,6 @@ def _explicit_view() -> Any:
     view = _odd(Plain())
     view.count = 1
     view._cursor = 2
-    return view
-
-
-def _legacy_view() -> Any:
-    view = _odd(LegacyOdd())
-    view.count = 1
-    view.note = "fine"
     return view
 
 
@@ -405,11 +353,6 @@ def test_site_live_view_snapshot_user_private_attrs():
     assert all(type(key) is str for key in view._user_private_keys)
 
 
-def test_site_live_view_get_state_legacy():
-    state = _legacy_view().get_state()
-    assert state["count"] == 1 and all(type(key) is str for key in state)
-
-
 def test_site_component_mixin_assign_component_ids():
     from djust.components.base import Component
 
@@ -422,11 +365,3 @@ def test_site_component_mixin_assign_component_ids():
     view._assign_component_ids()
     assert view.badge._auto_id == "badge"
     assert getattr(vars(view)[7], "_auto_id", None) is None
-
-
-@pytest.mark.django_db
-def test_site_context_mixin_get_context_data_legacy():
-    view = _legacy_view()
-    view.request = RequestFactory().get("/")
-    context = view.get_context_data()
-    assert context["count"] == 1 and all(type(key) is str for key in context)

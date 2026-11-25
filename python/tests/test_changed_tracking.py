@@ -5,7 +5,7 @@ from functools import lru_cache
 from unittest.mock import Mock
 from django.test import RequestFactory
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.mixins.rust_bridge import _collect_sub_ids
 from djust.websocket import _snapshot_assigns, _compute_changed_keys
 
@@ -30,21 +30,19 @@ def _mock_rust_view() -> Mock:
 class CounterView(LiveView):
     """Simple view to test changed/unchanged attribute tracking."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ count }}</div>"
 
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = state(0)
 
 
 class CachedDemoView(LiveView):
     """View using @lru_cache for expensive computed data."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ demos }} {{ count }}</div>"
 
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = state(0)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -61,13 +59,12 @@ def _get_cached_demos():
 class MultiAttrView(LiveView):
     """View with multiple attributes for selective change testing."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ a }} {{ b }} {{ c }}</div>"
 
-    def mount(self, request, **kwargs):
-        self.a = "alpha"
-        self.b = [1, 2, 3]
-        self.c = {"key": "value"}
+    a = state("alpha")
+    b = state(default_factory=lambda: [1, 2, 3])
+    c = state(default_factory=lambda: {"key": "value"})
 
 
 # ---------------------------------------------------------------------------
@@ -145,21 +142,21 @@ class TestSnapshotAssigns:
     def test_includes_all_public_attrs(self):
         """All non-underscore instance attributes are included."""
         view = CounterView()
-        view.count = 42
+        view.extra = 42
         snapshot = _snapshot_assigns(view)
-        assert "count" in snapshot
-        assert snapshot["count"] == 42
+        assert "extra" in snapshot
+        assert snapshot["extra"] == 42
 
     def test_user_private_attrs_included(self):
         """User-defined ``_``-prefixed attrs are included (#1281).
         Framework ``_``-prefixed attrs set at __init__ are excluded."""
         view = CounterView()
-        view.count = 1
+        view.extra = 1
         view._private = "secret"
         snapshot = _snapshot_assigns(view)
         assert "_private" in snapshot, "#1281: user private attrs must be in snapshot"
         assert "_changed_keys" not in snapshot
-        assert "count" in snapshot
+        assert "extra" in snapshot
 
     def test_immutable_types_not_deepcopied(self):
         """Immutable types should be stored directly (same id)."""
@@ -316,7 +313,17 @@ class TestSyncStateChangeTracking:
 
     def test_new_key_always_sent(self, mock_request):
         """Keys not in prev_refs are always sent."""
-        view = CounterView()
+
+        class NewKeyView(CounterView):
+            exposure_policy = "explicit"
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                if hasattr(self, "_new_attr"):
+                    ctx["new_attr"] = self._new_attr
+                return ctx
+
+        view = NewKeyView()
         view.mount(mock_request)
 
         mock_rust = _mock_rust_view()
@@ -325,8 +332,8 @@ class TestSyncStateChangeTracking:
         # First sync
         view._sync_state_to_rust()
 
-        # Add a new attribute after first render
-        view.new_attr = "hello"
+        # Supply a new context key after first render
+        view._new_attr = "hello"
         view._changed_keys = {"new_attr"}
 
         view._sync_state_to_rust()
@@ -480,11 +487,10 @@ class TestCollectSubIds:
 class DerivedContextView(LiveView):
     """View that exposes a sub-object of a mutated dict as a derived context var."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ person_data.first_name }}</div>"
 
-    def mount(self, request, **kwargs):
-        self.wizard_step_data = {}
+    wizard_step_data = state(default_factory=lambda: {})
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -496,11 +502,10 @@ class DerivedContextView(LiveView):
 class DerivedListView(LiveView):
     """View that exposes a list element sub-object as a derived context var."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ first_item.name }}</div>"
 
-    def mount(self, request, **kwargs):
-        self.items = [{"name": "original"}]
+    items = state(default_factory=lambda: [{"name": "original"}])
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -583,7 +588,7 @@ class TestDerivedContextSubObjectSync:
         changed value from self.__dict__, not from full_context."""
 
         class PrivateParentView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root>{{ claimant.first_name }}</div>"
 
             def mount(self, request, **kwargs):
@@ -655,11 +660,10 @@ class TestDerivedImmutableSync:
         """int counter computed from a list length must sync when list changes."""
 
         class TodoStatsView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root>{{ total_count }} / {{ completed_count }}</div>"
 
-            def mount(self, request, **kwargs):
-                self.todos = []
+            todos = state(default_factory=lambda: [])
 
             def get_context_data(self, **kwargs):
                 context = super().get_context_data(**kwargs)
@@ -700,11 +704,10 @@ class TestDerivedImmutableSync:
         """str derived value must sync when its text changes."""
 
         class StatusView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root>{{ label }}</div>"
 
-            def mount(self, request, **kwargs):
-                self.ready = False
+            ready = state(False)
 
             def get_context_data(self, **kwargs):
                 context = super().get_context_data(**kwargs)
@@ -731,11 +734,10 @@ class TestDerivedImmutableSync:
         resent to Rust (would trigger spurious node re-renders)."""
 
         class FixedView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root>{{ n }}</div>"
 
-            def mount(self, request, **kwargs):
-                self.other = 0
+            other = state(0)
 
             def get_context_data(self, **kwargs):
                 context = super().get_context_data(**kwargs)

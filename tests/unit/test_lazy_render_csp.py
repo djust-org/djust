@@ -32,7 +32,7 @@ from djust import LiveView
 
 
 class _CspLazyChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>nonce-aware lazy child</div>"
 
     def mount(self, request, **kwargs):
@@ -40,7 +40,7 @@ class _CspLazyChild(LiveView):
 
 
 class _CspLazyParentView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "{% load live_tags %}<div dj-root></div>"
 
     def mount(self, request, **kwargs):

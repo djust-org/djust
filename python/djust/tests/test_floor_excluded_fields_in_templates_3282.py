@@ -28,13 +28,13 @@ from djust import LiveView
 
 
 class Nav(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "floor/page.html"
     login_required = False
 
 
 class Inline(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = '''<div dj-root>
 {% if request.user.is_staff %}admin{% endif %}

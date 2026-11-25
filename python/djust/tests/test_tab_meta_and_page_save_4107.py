@@ -115,14 +115,6 @@ class Plain(LiveView):
         return super().get_context_data(count=self.count, **kwargs)
 
 
-class Legacy(LiveView):
-    exposure_policy = "legacy"
-    template = SHELL % "<div dj-root><p>Count: {{ count }}</p></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 3
-
-
 class Streamed(Plain):
     streaming_render = True
 
@@ -151,7 +143,6 @@ class SessionGoesStreamed(SessionGoes):
 urlpatterns = [
     path("p/plain/", Plain.as_view()),
     path("p/streamed/", Streamed.as_view()),
-    path("p/legacy/", Legacy.as_view()),
     path("p/goes/", SessionGoes.as_view()),
     path("p/goes-streamed/", SessionGoesStreamed.as_view()),
     path("p/goes-written/", SessionGoesAfterAWrite.as_view()),
@@ -208,13 +199,6 @@ def test_a_fresh_client_with_no_session_row_gets_the_page_and_its_state_is_saved
     # guide says what that means for caches and consent).
     assert settings.SESSION_COOKIE_NAME in response.cookies
     assert "Cookie" in response.headers.get("Vary", "")
-
-
-@pytest.mark.django_db(transaction=True)
-def test_a_legacy_view_saves_nothing_of_its_state():
-    response = Client().get("/p/legacy/")
-    assert response.status_code == 200 and "Count: 3" in _body(response)
-    assert _saved() == []
 
 
 @pytest.mark.asyncio

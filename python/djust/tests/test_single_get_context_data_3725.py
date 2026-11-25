@@ -14,7 +14,7 @@ The render path now takes the context the request path already computed
 What is pinned here, each by running the real thing:
 
 * the call count per transport (Django test client GET; ``WebsocketCommunicator``
-  mount; SSE mount), for legacy and explicit views, with and without ``super()``,
+  mount; SSE mount), for explicit views, with and without ``super()``,
   inline template and ``{% extends %}`` page shell;
 * that the HTML carries the value computed by THE one call (``stamp``), not a
   second pass's;
@@ -57,7 +57,7 @@ INSTANCES: list = []
 
 
 class _Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
 
     @event_handler()
@@ -122,7 +122,7 @@ def _name(policy: str, use_super: bool, shell: bool) -> str:
 
 
 VIEWS: dict = {}
-for _policy in ("legacy", "explicit"):
+for _policy in ("explicit",):
     for _super in (True, False):
         for _shell in (False, True):
             _n = _name(_policy, _super, _shell)
@@ -138,11 +138,9 @@ class _Plain(LiveView):
     """A view with NO override, for the unchanged-baseline check."""
 
     login_required = False
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '._Plain">{{ n }}</div>'
-
-    def mount(self, request, **kwargs):
-        self.n = 1
+    n = state(1)
 
 
 urlpatterns.append(path("plain/", _Plain.as_view()))
@@ -169,10 +167,7 @@ def _make_empty(name: str, policy: str):
     return cls
 
 
-EMPTY = {
-    name: _make_empty(name, policy)
-    for name, policy in (("E_legacy", "legacy"), ("E_explicit", "explicit"))
-}
+EMPTY = {name: _make_empty(name, policy) for name, policy in (("E_explicit", "explicit"),)}
 urlpatterns.extend(path(n.lower() + "/", v.as_view()) for n, v in EMPTY.items())
 
 
@@ -187,7 +182,7 @@ class _ModelShell(LiveView):
     """
 
     login_required = False
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "t3725/model_page.html"
 
     def mount(self, request, **kwargs):

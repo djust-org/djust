@@ -29,6 +29,8 @@ import pytest
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
+from djust.decorators import state
+from djust.testing import with_live_session
 from djust.mixins import template as template_mod
 from djust.mixins.template import TemplateMixin
 from djust.tests._growth import assert_scales_linearly
@@ -47,11 +49,7 @@ def _strip_dj_id(html: str) -> str:
 
 
 def _get(view_cls) -> str:
-    from django.contrib.sessions.backends.db import SessionStore
-
-    request = RequestFactory().get("/x/")
-    request.session = SessionStore()
-    request.session.create()
+    request = with_live_session(RequestFactory().get("/x/"))
     response = view_cls.as_view()(request)
     if hasattr(response, "render"):
         response.render()
@@ -63,9 +61,11 @@ def _view(name: str, template: str):
         name,
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template": template,
             "__module__": __name__,
+            "n": state(0),
+            "q": state(""),
             "mount": lambda self, request, **kwargs: setattr(self, "n", 1),
         },
     )
@@ -204,8 +204,9 @@ def _extends_view(name: str):
         name,
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template_name": "child_2892.html",
+            "items": state(default_factory=list),
             "mount": lambda self, request, **kwargs: setattr(self, "items", ["a", "b"]),
             "get_context_data": lambda self, **kwargs: {"items": self.items},
         },
@@ -545,7 +546,7 @@ def test_v012_flags_sticky_child_with_dj_view_on_section():
         "StickySectionChild2892",
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "__module__": "djust.tests.test_root_detection_2892_2981",
             "sticky": True,
             "sticky_id": "s2892",

@@ -331,7 +331,7 @@ def _make_live_view_class(template_name="allowlist_view.html", extra=None):
     }
     if extra:
         body.update(extra)
-    return type("AllowlistLiveView", (LiveView,), {"exposure_policy": "legacy", **body})
+    return type("AllowlistLiveView", (LiveView,), {"exposure_policy": "explicit", **body})
 
 
 @pytest.mark.django_db
@@ -358,18 +358,6 @@ class TestRealRenderPipelinePopulatesAllowlist:
             assert v.search == "hello"
             assert v.is_admin is False
             assert v.account_id == 1
-
-    def test_dj_model_fields_is_framework_state_not_persisted(self):
-        """``_dj_model_fields`` is a framework slot (assigned before the
-        _framework_attrs snapshot), so it must NOT be captured as user-private
-        state — it is derived from the template each render, never persisted."""
-        with _SingleTemplateHarness("allowlist_view.html", _TEMPLATE):
-            cls = _make_live_view_class()
-            v = cls()
-            v.mount(None)
-            v._snapshot_user_private_attrs()
-            assert "_dj_model_fields" not in v._user_private_keys
-            assert "_dj_model_fields" not in v._get_private_state()
 
 
 @pytest.mark.django_db

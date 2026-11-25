@@ -15,15 +15,15 @@ recovery render reached a client or a log with its message:
 * ``ViewRuntime._instantiate_view``, which reports a constructor failure.
 
 Every destination is checked with one sentinel: the response or stream bytes
-or WebSocket frames, the log, and the observability traceback ring. Each
-nonlegacy case has a legacy control that pins today's behaviour and proves the
-failing path actually ran.
+or WebSocket frames, the log, and the observability traceback ring. The
+``DEBUG=True`` case is the positive control: it proves the failing path
+actually ran and carried the value.
 
 Contract (ADR-038 D-a, revised 2026-09-22): every test runs under both
-``DEBUG`` modes. With ``DEBUG=False`` a nonlegacy view's failure is value-free
+``DEBUG`` modes. With ``DEBUG=False`` a view's failure is value-free
 at every destination. With ``DEBUG=True`` every view's failure reads like
 Django's DEBUG output — the technical 500 page, the detailed error frame, the
-logged exception and the traceback-ring entry — exactly as a legacy view's does.
+logged exception and the traceback-ring entry.
 """
 
 import asyncio
@@ -51,7 +51,7 @@ from ._ws_frames import drain_extra, receive_type, types_of
 
 SENTINEL = "E1_ENTRY_SCOPE_SENTINEL"
 NONLEGACY = ["explicit", None, "invalid"]
-POLICIES = ["legacy", *NONLEGACY]
+POLICIES = NONLEGACY
 STATIC_LOG = "Protected view operation failed"
 
 
@@ -71,7 +71,7 @@ def entry_hook(view, request, **kwargs):
 
 
 class EntryView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     fail_at = None
     template = '<div dj-root><span>{{ label }}</span><button dj-click="bump">b</button></div>'
     on_mount = [entry_hook]
@@ -213,20 +213,12 @@ def test_http_get_failure(monkeypatch, caplog, signals, debug, policy, fail_at):
     response = Client(raise_request_exception=False).get(f"/entry/{POLICIES.index(policy)}/")
     body = response.content.decode()
     observed = _observe(caplog, body)
-    if policy == "legacy":
-        # Unchanged: Django's own view callable.
-        assert not hasattr(HTTP_VIEWS["legacy"].as_view(), "__wrapped__")
     if debug:
         # Every policy: Django's DEBUG technical 500 page and its log, which
-        # carry the value (legacy unchanged; nonlegacy per D-a, revised).
+        # carry the value (per D-a, revised).
         assert response.status_code == 500
         assert "Traceback" in body
         assert observed == (True, True, False)
-        assert len(signals) == 1 and SENTINEL in str(signals[0])
-    elif policy == "legacy":
-        # Unchanged production legacy: Django's plain 500, value in the log.
-        _assert_generic_500(response, body)
-        assert observed == (False, True, False)
         assert len(signals) == 1 and SENTINEL in str(signals[0])
     else:
         assert observed == (False, False, False)
@@ -253,10 +245,6 @@ async def test_streaming_http_get_failure(monkeypatch, caplog, signals, debug, p
         assert "Traceback" in body
         assert observed == (True, True, False)
         assert len(signals) == 1 and SENTINEL in str(signals[0])
-    elif policy == "legacy":
-        _assert_generic_500(response, body)
-        assert observed == (False, True, False)
-        assert len(signals) == 1 and SENTINEL in str(signals[0])
     else:
         assert observed == (False, False, False)
         _assert_generic_500(response, body)
@@ -270,8 +258,8 @@ def test_http_get_status_exceptions(monkeypatch, caplog, signals, debug, policy)
     """Django's status mapping survives: 400 stays 400, 404 stays 404.
 
     Under DEBUG Django answers a ``SuspiciousOperation`` with its technical
-    page (status 400, frames and locals), for every policy. In production a
-    nonlegacy owner gets a plain 400 and a value-free log.
+    page (status 400, frames and locals), for every policy. In production an
+    owner gets a plain 400 and a value-free log.
     ``Http404`` keeps Django's 404 handling for every policy.
     """
     url = f"/entry/{POLICIES.index(policy)}/"
@@ -283,11 +271,6 @@ def test_http_get_status_exceptions(monkeypatch, caplog, signals, debug, policy)
     if debug:
         assert SENTINEL in body
         assert "Traceback" in body
-        assert STATIC_LOG not in caplog.text
-    elif policy == "legacy":
-        # Unchanged production legacy: Django's plain 400.
-        assert SENTINEL not in body
-        assert "Traceback" not in body
         assert STATIC_LOG not in caplog.text
     else:
         assert (SENTINEL in body, SENTINEL in caplog.text) == (False, False)
@@ -343,8 +326,6 @@ async def test_sse_stream_get_failure(monkeypatch, caplog, signals, debug, polic
         if debug:
             # Every policy: the detailed DEBUG error frame on the stream.
             assert observed == (True, True, True)
-        elif policy == "legacy":
-            assert observed == (False, True, True)
         else:
             assert observed == (False, False, False)
             assert STATIC_LOG in caplog.text
@@ -355,9 +336,6 @@ async def test_sse_stream_get_failure(monkeypatch, caplog, signals, debug, polic
         assert response.status_code == 500
         assert "Traceback" in body
         assert observed == (True, True, False)
-    elif policy == "legacy":
-        _assert_generic_500(response, body)
-        assert observed == (False, True, False)
     else:
         assert observed == (False, False, False)
         _assert_generic_500(response, body)
@@ -411,8 +389,6 @@ async def test_sse_navigation_failure(monkeypatch, caplog, signals, debug, polic
         if debug:
             # Every policy: the detailed DEBUG error frame.
             assert observed == (True, True, True)
-        elif policy == "legacy":
-            assert observed == (False, True, True)
         else:
             assert observed == (False, False, False)
             assert STATIC_LOG in caplog.text
@@ -422,9 +398,6 @@ async def test_sse_navigation_failure(monkeypatch, caplog, signals, debug, polic
         assert response.status_code == 500
         assert "Traceback" in body
         assert observed == (True, True, False)
-    elif policy == "legacy":
-        _assert_generic_500(response, body)
-        assert observed == (False, True, False)
     else:
         assert observed == (False, False, False)
         _assert_generic_500(response, body)
@@ -464,7 +437,7 @@ async def _mount(socket):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+@pytest.mark.parametrize("policy", ["explicit"])
 async def test_ws_request_html_failure(monkeypatch, caplog, debug, policy):
     # A None or invalid policy fails closed at mount (no server-state adapter),
     # so only explicit reaches a mounted view that can be recovered.
@@ -483,9 +456,6 @@ async def test_ws_request_html_failure(monkeypatch, caplog, debug, policy):
         if debug:
             # Every policy: the detailed DEBUG error frame, log and ring.
             assert observed == (True, True, True)
-        elif policy == "legacy":
-            # Unchanged production legacy: generic frame, value in log and ring.
-            assert observed == (False, True, True)
         else:
             assert observed == (False, False, False)
             assert STATIC_LOG in caplog.text
@@ -503,7 +473,7 @@ async def test_ws_live_redirect_mount_failure(monkeypatch, caplog, debug, policy
     _set(monkeypatch, EntryView, policy, None)
     socket = await _connect()
     try:
-        if policy in ("legacy", "explicit"):
+        if policy == "explicit":
             # Navigate away from a mounted page. A None or invalid policy fails
             # closed at mount, so those redirect-mount on a fresh connection.
             await _mount(socket)
@@ -518,9 +488,6 @@ async def test_ws_live_redirect_mount_failure(monkeypatch, caplog, debug, policy
         if debug:
             # Every policy: the detailed DEBUG error frame, log and ring.
             assert observed == (True, True, True)
-        elif policy == "legacy":
-            # Unchanged production legacy: generic frame, value in log and ring.
-            assert observed == (False, True, True)
         else:
             assert observed == (False, False, False)
             assert STATIC_LOG in caplog.text
@@ -546,7 +513,7 @@ async def test_ws_mount_batch_constructor_failure(monkeypatch, caplog, debug, po
         assert types_of(frames) == ["mount_batch"], frames
         assert [entry["target_id"] for entry in frames[0]["failed"]] == ["t1"]
         observed = _observe(caplog, json.dumps(frames))
-        if policy == "legacy" or debug:
+        if debug:
             # failed[] reads the frame's "message" key, so only the log and
             # the ring carried the value; under DEBUG, for every policy.
             assert observed == (False, True, True)

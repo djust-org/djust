@@ -10,7 +10,7 @@ from djust.components._interactive import DropdownMenu
 
 
 class MenuPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ menu }}{{ other }}<p>{{ result }}</p></div>"
     menu = DropdownMenu(
         label="Project",
@@ -24,6 +24,9 @@ class MenuPage(LiveView):
     def mount(self, request, **kwargs):
         self.result = "initial"
         self.calls = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "result": self.result}
 
     @menu.on.selected
     async def project_selected(self, component: DropdownMenu, value: str) -> None:
@@ -61,11 +64,16 @@ def test_concrete_identity_registry_and_isolation():
     assert first.menu is not first.other and first.menu is not second.menu
     assert first.menu is not MenuPage.menu
     assert first._components[first.menu.component_id] is first.menu
-    assert len({first.menu.component_id, first.other.component_id, second.menu.component_id}) == 3
+    # An explicit view's component ids are named by the view and the key, not
+    # by the instance: two views of one class agree, two components do not.
+    assert first.menu.component_id != first.other.component_id
+    assert first.menu.component_id == second.menu.component_id
     assert first.menu.key == "menu"
     first.menu.open = True
     assert not first.other.open and not second.menu.open
-    assert "_component_bindings" not in first._get_private_state()
+    from djust.testing import persisted_state
+
+    assert "_component_bindings" not in persisted_state(first).names
 
 
 def test_selection_awaits_matching_callback_and_sibling_mutation():
@@ -90,7 +98,7 @@ def test_invalid_selection_never_changes_state_or_emits(value):
 
 def test_unobserved_menu_still_works_and_unbound_declaration_cannot_mutate():
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = DropdownMenu(label="Menu", items=[{"label": "Edit", "value": "edit"}])
 
     view = Page()
@@ -115,7 +123,7 @@ def test_config_is_copied_and_output_html_is_escaped():
     items = [{"label": '<img src=x onerror="oops">', "value": 'x" onclick="oops'}]
 
     class Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = DropdownMenu(label="<script>bad</script>", items=items)
 
     items[0]["value"] = "changed"
@@ -125,7 +133,7 @@ def test_config_is_copied_and_output_html_is_escaped():
     assert "<script>" not in html and "<img " not in html
     assert 'onclick="oops' not in html
     assert 'dj-value-value="x&quot; onclick=&quot;oops"' in html
-    assert f'data-component-id="{view.menu.component_id}"' in html
+    assert f'data-component-id="{view.menu.component_id}' in html
 
 
 @pytest.mark.django_db
@@ -231,7 +239,7 @@ async def test_real_websocket_two_menus_and_unknown_target():
 
 def test_callback_exception_does_not_rollback_component_or_run_twice():
     class Broken(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = DropdownMenu(label="Menu", items=[{"label": "Edit", "value": "edit"}])
 
         @menu.on.selected
@@ -249,7 +257,7 @@ def test_callback_exception_does_not_rollback_component_or_run_twice():
 
 def test_server_toggle_observation_is_actual_post_change_value():
     class Observed(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         menu = DropdownMenu(label="Menu", items=[])
 
         @menu.on.toggled

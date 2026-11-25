@@ -37,14 +37,14 @@ def _legacy_lines(path: str) -> list[str]:
     return [line for line in text.splitlines() if LEGACY.search(line)]
 
 
+def _scanned_files() -> list[str]:
+    return [
+        p.relative_to(ROOT).as_posix() for top in TEST_ROOTS for p in (ROOT / top).rglob("*.py")
+    ]
+
+
 def _tree_files_stating_legacy() -> set[str]:
-    found = set()
-    for top in TEST_ROOTS:
-        for path in (ROOT / top).rglob("*.py"):
-            rel = path.relative_to(ROOT).as_posix()
-            if rel not in SELF and _legacy_lines(rel):
-                found.add(rel)
-    return found
+    return {rel for rel in _scanned_files() if rel not in SELF and _legacy_lines(rel)}
 
 
 def test_the_scan_finds_what_it_claims_to_find():
@@ -57,9 +57,16 @@ def test_the_scan_finds_what_it_claims_to_find():
     assert REASON.search('exposure_policy = "legacy"  # gap #4149: why')
     assert not REASON.search('exposure_policy = "legacy"  # why')
     # The scan reaches every test root (a root it missed would read as clean).
-    found = _tree_files_stating_legacy()
+    scanned = _scanned_files()
     for top in TEST_ROOTS:
-        assert any(path.startswith(top + "/") for path in found), top
+        assert any(path.startswith(top + "/") for path in scanned), top
+    # ... and reaches a known file in each (a root that scanned nothing under it would pass above).
+    for known in (
+        "python/djust/tests/test_log_exposure_pin.py",
+        "python/tests/test_presence.py",
+        "tests/unit/test_legacy_exposure_ledger.py",
+    ):
+        assert known in scanned, known
 
 
 def test_every_file_stating_legacy_is_in_the_ledger_and_no_more():

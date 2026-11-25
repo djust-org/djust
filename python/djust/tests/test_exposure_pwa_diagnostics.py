@@ -8,7 +8,6 @@ directly: the sync runs in the mixin, outside any runtime turn.
 
 import logging
 
-import pytest
 
 from djust.pwa.mixins import SyncMixin
 from djust.pwa.storage import OfflineAction
@@ -17,20 +16,18 @@ CALLS = []
 
 
 class NoteSyncView(SyncMixin):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def sync_create_note(self, data):
         CALLS.append(True)
         raise ValueError("PWA_SYNC_SENTINEL " + data["body"])
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_offline_sync_handler_failure_is_value_free_for_explicit_views(caplog, policy):
+def test_offline_sync_handler_failure_is_value_free_for_explicit_views(caplog):
     CALLS.clear()
     from types import SimpleNamespace
 
     view = NoteSyncView()
-    view.exposure_policy = policy
     recorded = []
     view.sync_queue = SimpleNamespace(
         mark_failed=lambda action_id, error: recorded.append(error),
@@ -43,14 +40,10 @@ def test_offline_sync_handler_failure_is_value_free_for_explicit_views(caplog, p
         processed, failed = view._sync_create_actions([action])
     assert (processed, failed) == (0, 1)
     assert CALLS, "the sync handler never ran; the test would be vacuous"
-    # The failure branch stores an error in the sync queue (E1-2): legacy keeps
-    # str(exc); nonlegacy views store only the exception class name.
+    # The failure branch stores an error in the sync queue (E1-2): a view
+    # stores only the exception class name.
     assert len(recorded) == 1
-    if policy == "legacy":
-        assert "OFFLINE_DATA_SENTINEL" in recorded[0]
-        assert "OFFLINE_DATA_SENTINEL" in caplog.text
-    else:
-        assert recorded == ["ValueError"]
-        assert "OFFLINE_DATA_SENTINEL" not in caplog.text
-        assert "PWA_SYNC_SENTINEL" not in caplog.text
-        assert "Protected view operation failed" in caplog.text
+    assert recorded == ["ValueError"]
+    assert "OFFLINE_DATA_SENTINEL" not in caplog.text
+    assert "PWA_SYNC_SENTINEL" not in caplog.text
+    assert "Protected view operation failed" in caplog.text

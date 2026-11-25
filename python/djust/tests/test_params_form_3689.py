@@ -415,7 +415,7 @@ class TestTheDocumentedExample:
         block = doc.split("Example::", 1)[1].split("Invalid input goes to", 1)[0]
         namespace = {"forms": forms, "LiveView": LiveView}
         exec(textwrap.dedent(block), namespace)  # noqa: S102 - the documented snippet itself
-        namespace["ListView"].exposure_policy = "legacy"
+        namespace["ListView"].exposure_policy = "explicit"
 
         view = namespace["ListView"]()
         run_handle_params_sync(view, {"page": "abc"}, "/list/?page=abc")
@@ -436,7 +436,7 @@ class TestTheDocumentedExample:
         ]
         namespace: dict = {}
         exec(snippet, namespace)  # noqa: S102 - the documented snippet itself
-        namespace["ListView"].exposure_policy = "legacy"
+        namespace["ListView"].exposure_policy = "explicit"
 
         view = namespace["ListView"]()
         view.mount(None)

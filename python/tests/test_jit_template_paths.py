@@ -21,6 +21,7 @@ from django.contrib.auth.models import User
 
 from djust import LiveView
 from djust._rust import extract_template_variables
+from djust.testing import LiveViewTestClient
 from djust.utils import clear_template_dirs_cache
 
 TABS = (
@@ -73,20 +74,23 @@ def test_a_raw_body_that_does_not_parse_alone_contributes_nothing():
 
 
 class TabsView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="tests.TabsView">' + TABS + "</div>"
 
-    def mount(self, request, **kwargs):
-        self.rows = list(User.objects.filter(username__startswith="n33-").order_by("username"))
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["rows"] = User.objects.filter(username__startswith="n33-").order_by("username")
+        return ctx
 
 
 @pytest.mark.django_db
 def test_a_model_list_read_only_in_a_tab_is_serialized_by_its_paths():
     User.objects.create(username="n33-ada", first_name="Ada", email="ada@example.com")
-    view = TabsView()
-    view.mount(None)
+    client = LiveViewTestClient(TabsView)
+    client.mount()
+    client.render()
 
-    rows = view.get_context_data()["rows"]
+    rows = client.rendered_state()["rows"]
 
     assert [row["username"] for row in rows] == ["n33-ada"]
     assert "email" not in rows[0]
@@ -116,19 +120,23 @@ def partial_dir(tmp_path, settings):
 
 
 class InlineView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="tests.InlineView">{% include "jit_paths/_rows.html" %}</div>'
 
-    def mount(self, request, **kwargs):
-        self.rows = list(User.objects.filter(username__startswith="n33-").order_by("username"))
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["rows"] = User.objects.filter(username__startswith="n33-").order_by("username")
+        return ctx
 
 
 class FileView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "jit_paths/page.html"
 
-    def mount(self, request, **kwargs):
-        self.rows = list(User.objects.filter(username__startswith="n33-").order_by("username"))
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["rows"] = User.objects.filter(username__startswith="n33-").order_by("username")
+        return ctx
 
 
 def test_inline_template_includes_are_inlined_for_extraction(partial_dir):
@@ -148,11 +156,11 @@ def test_file_template_without_extends_includes_are_inlined(partial_dir):
 @pytest.mark.parametrize("view_class", [InlineView, FileView])
 def test_a_model_list_read_only_in_an_include_is_serialized_by_its_paths(partial_dir, view_class):
     User.objects.create(username="n33-ada", first_name="Ada", email="ada@example.com")
-    view = view_class()
-    view.mount(None)
-    view.get_template()
+    client = LiveViewTestClient(view_class)
+    client.mount()
+    client.render()
 
-    rows = view.get_context_data()["rows"]
+    rows = client.rendered_state()["rows"]
 
     assert [row["username"] for row in rows] == ["n33-ada"]
     assert "email" not in rows[0]
@@ -186,7 +194,7 @@ class Card:
 
 
 class CardsView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="tests.CardsView">'
         "{% for card in cards %}<h2>{{ card.title }} {{ card.get_badge }}</h2>"
@@ -254,14 +262,14 @@ def test_serialize_for_template_models_go_through_the_jit():
     User.objects.create(username="n33-ada", email="ada@example.com")
 
     class UsersView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = (
             '<div dj-root dj-view="tests.UsersView">'
             "{% for u in people %}{{ u.username }}{% endfor %}</div>"
         )
 
     class UserListView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = (
             '<div dj-root dj-view="tests.UserListView">'
             "{% for u in members %}{{ u.username }}{% endfor %}</div>"
@@ -290,7 +298,7 @@ def test_serialized_cards_render_like_the_objects():
 
 
 class WholeAndFieldView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="tests.WholeAndFieldView">'
         "{% for card in cards %}{{ card }}|{{ card.title }};{% endfor %}"
@@ -338,7 +346,7 @@ def panel_dir(partial_dir):
 
 def _view(template, name):
     return type(
-        name, (LiveView,), {"exposure_policy": "legacy", "template": template.replace("@@", name)}
+        name, (LiveView,), {"exposure_policy": "explicit", "template": template.replace("@@", name)}
     )
 
 

@@ -47,7 +47,7 @@ def test_debug_panel_does_not_break_out_of_script(settings):
     settings.DEBUG = True
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = None
         comment = PAYLOAD  # user-controlled public attribute
 
@@ -73,7 +73,7 @@ def test_inject_client_script_escapes_debug_info(settings):
     settings.DEBUG = True
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = None
         note = PAYLOAD
 

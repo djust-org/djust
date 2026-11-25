@@ -14,6 +14,15 @@ from djust import LiveView
 from djust._removed_settings import MIGRATION_GUIDE_URL, REMOVED_VIEW_ATTRIBUTES
 
 
+@pytest.fixture(autouse=True)
+def _log_the_refusal_detail():
+    """A refusal reaches a client as a generic error; its cause is in the server log."""
+    from django.test import override_settings
+
+    with override_settings(LIVEVIEW_CONFIG={"log_exception_detail": True}):
+        yield
+
+
 def _assert_pointed(message: str) -> None:
     assert "_restore_snapshot" in message
     assert "removed in djust 2.0" in message
@@ -30,7 +39,7 @@ def test_an_override_is_refused_at_class_creation():
     with pytest.raises(ImproperlyConfigured) as refused:
 
         class OverridingView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
 
             def _restore_snapshot(self, state):
@@ -48,13 +57,13 @@ def test_a_mixin_override_is_refused_where_it_meets_liveview():
     with pytest.raises(ImproperlyConfigured, match="_restore_snapshot"):
 
         class MixedView(RestoreMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
 
 
 def test_a_subclass_of_a_plain_view_that_overrides_it_is_refused():
     class Base(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
 
     with pytest.raises(ImproperlyConfigured, match="Child"):
@@ -65,7 +74,7 @@ def test_a_subclass_of_a_plain_view_that_overrides_it_is_refused():
 
 def test_the_base_class_has_no_such_method_and_a_plain_view_is_accepted():
     class Plain(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
 
     assert Plain() is not None
@@ -81,7 +90,7 @@ def test_the_base_class_has_no_such_method_and_a_plain_view_is_accepted():
 class InstanceOverrideView(LiveView):
     """Sets it on the instance, in ``mount()``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>instance</div>"
 
     def mount(self, request, **kwargs):
@@ -91,7 +100,7 @@ class InstanceOverrideView(LiveView):
 class LateOverrideView(LiveView):
     """Plain when created; a test assigns the method afterwards."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>late</div>"
 
 
@@ -101,7 +110,7 @@ class _SkipsSuper:
 
 
 class HiddenOverrideView(_SkipsSuper, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>hidden</div>"
 
     def _restore_snapshot(self, state):
@@ -109,7 +118,7 @@ class HiddenOverrideView(_SkipsSuper, LiveView):
 
 
 class PlainRestorelessView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>plain</div>"
 
 
@@ -136,11 +145,12 @@ def _http_request(rf):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", SHAPES, indirect=True)
-def test_the_http_get_refuses_each_shape(shape, rf):
-    with pytest.raises(ImproperlyConfigured) as refused:
-        shape.as_view()(_http_request(rf))
-    assert shape.__name__ in str(refused.value)
-    _assert_pointed(str(refused.value))
+def test_the_http_get_refuses_each_shape(shape, rf, caplog):
+    # An explicit view's HTTP failure is the project's 500 page; the cause is logged.
+    response = shape.as_view()(_http_request(rf))
+    assert response.status_code == 500
+    assert shape.__name__ in caplog.text
+    _assert_pointed(caplog.text)
 
 
 @pytest.mark.django_db

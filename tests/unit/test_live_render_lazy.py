@@ -24,6 +24,8 @@ from __future__ import annotations
 import asyncio
 from typing import List, Tuple
 
+from djust import state
+
 import pytest
 from django.template import Context, Template, TemplateSyntaxError
 from django.test import override_settings
@@ -38,8 +40,9 @@ from djust import LiveView
 
 
 class _LazyChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div><p>Lazy {{ value }}</p></div>"
+    value = state("default")
 
     def mount(self, request, **kwargs):
         self.value = kwargs.get("value", "default")
@@ -48,7 +51,7 @@ class _LazyChild(LiveView):
 class _LazyChildSticky(LiveView):
     """Sticky-enabled child used to exercise the sticky+lazy collision."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "lazy-sticky"
     template = "<div>sticky+lazy collision target</div>"
@@ -58,7 +61,7 @@ class _LazyChildSticky(LiveView):
 
 
 class _LazyChildThatRaises(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>never rendered</div>"
 
     def mount(self, request, **kwargs):
@@ -70,7 +73,7 @@ class _LazyChildThatSleeps(LiveView):
     `data-status="timeout"`. Sync sleep so sync_to_async can be
     cancelled."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>too late</div>"
 
     def mount(self, request, **kwargs):
@@ -80,7 +83,7 @@ class _LazyChildThatSleeps(LiveView):
 
 
 class _LazyParentView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "{% load live_tags %}<div dj-root></div>"
 
     def mount(self, request, **kwargs):
@@ -239,7 +242,7 @@ class TestLazyPlaceholder:
         mount_calls = {"n": 0}
 
         class _MountSpy(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div>spy</div>"
 
             def mount(self, request, **kwargs):

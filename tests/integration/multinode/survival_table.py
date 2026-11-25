@@ -167,11 +167,6 @@ STATE_ROWS = (
         "Nothing: the step and the answers are saved.",
     ),
     Row(
-        "legacy",
-        "An attribute of a view still on the 1.x exposure policy",
-        "Migrate the view to explicit exposure: a legacy view's state is not saved.",
-    ),
-    Row(
         "component",
         "`LiveComponent` state",
         "Nothing: its state is saved with the view's.",
@@ -331,10 +326,6 @@ STATE_CELLS: Dict[Tuple[str, str], Entry] = {
     ("wizard", HTTP): Cell("kept: the step and the answers", _T + "wizard_step"),
     ("wizard", WS): Cell("restored: the step and the answers", _T + "wizard_step"),
     ("wizard", RESTART): NA("same mount path as the reconnect to another process"),
-    ("legacy", SAME): Cell("kept", _T + "legacy_view"),
-    ("legacy", HTTP): Cell("lost: every request runs `mount()`", _T + "legacy_view"),
-    ("legacy", WS): Cell("lost: `mount()` value", _T + "legacy_view"),
-    ("legacy", RESTART): NA("same mount path as the reconnect to another process"),
     ("component", SAME): Cell("kept", _T + "components"),
     ("component", HTTP): Cell(
         "kept: the event reaches the component and its state carries", _T + "components"

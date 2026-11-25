@@ -6,12 +6,13 @@ import re
 import pytest
 from django.contrib.sessions.backends.db import SessionStore
 
+from djust.decorators import state
 from djust._rust import RustLiveView, authored_lazy_elements
 from djust.tests.test_lazy_provenance_http_3252 import Child, Page, TAG, get_ids, post
 
 
 class Hidden(Child):
-    exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Child, which it subclasses
+    exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Child, which it subclasses
     mounts = 0
 
 
@@ -44,7 +45,7 @@ def test_rendered_branch_cannot_revive_hidden(source, payload, payload_enabled):
 @pytest.mark.parametrize("source,payload", CONTROL_FLOW)
 def test_http_rendered_branch_refuses_hidden_mount(source, payload):
     class RevivalPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = "<div dj-root>" + TAG + source.replace("%s", HIDDEN) + "</div>"
 
         def mount(self, request, **kwargs):
@@ -81,8 +82,9 @@ def test_inline_child_and_base_include_sites_have_isolated_state(tmp_path, setti
     )
 
     class InlinePage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = "{% extends 'base.html' %}{% block body %}" + include + "{% endblock %}"
+        xs = state(default_factory=list)
 
         def mount(self, request, **kwargs):
             self.xs = [1, 2]

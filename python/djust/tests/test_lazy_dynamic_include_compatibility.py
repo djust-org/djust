@@ -7,6 +7,7 @@ import pytest
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
+from djust.decorators import state
 from djust.tests.test_lazy_provenance_http_3252 import Page, TAG, get_ids, post, request
 
 pytestmark = [
@@ -43,11 +44,10 @@ def test_direct_lazy_survives_unrelated_dynamic_include(tmp_path, partial):
     (tmp_path / "plain.html").write_text("<p>plain</p>", encoding="utf-8")
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with(TAG + "{% include selected %}", partial)
 
-        def mount(self, request, **kwargs):
-            self.selected = "plain.html"
+        selected = state("plain.html")
 
     with override_settings(TEMPLATES=configured_templates(tmp_path)):
         browser_session = session()
@@ -62,11 +62,10 @@ def test_direct_dynamic_include_registers_lazy_from_rendered_selection(tmp_path,
     (tmp_path / "lazy.html").write_text(TAG, encoding="utf-8")
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with("{% include selected %}", partial)
 
-        def mount(self, request, **kwargs):
-            self.selected = "lazy.html"
+        selected = state("lazy.html")
 
     with override_settings(TEMPLATES=configured_templates(tmp_path)):
         browser_session = session()
@@ -90,14 +89,13 @@ def test_stateful_direct_selector_is_not_reevaluated_for_lazy_registration(tmp_p
     chooser = Chooser()
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with("{% include chooser.selected %}", partial=True)
 
-        def mount(self, request, **kwargs):
-            self.chooser = chooser
-
         def get_context_data(self, **kwargs):
-            return {"chooser": self.chooser}
+            context = super().get_context_data(**kwargs)
+            context["chooser"] = chooser
+            return context
 
     with override_settings(TEMPLATES=configured_templates(tmp_path)):
         browser_session = session()
@@ -111,11 +109,10 @@ def test_nested_include_binding_preserves_registration(tmp_path):
     (tmp_path / "selector.html").write_text("{% include target %}", encoding="utf-8")
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with('{% include "selector.html" with target=selected only %}', True)
 
-        def mount(self, request, **kwargs):
-            self.selected = "lazy.html"
+        selected = state("lazy.html")
 
     with override_settings(TEMPLATES=configured_templates(tmp_path)):
         browser_session = session()
@@ -137,11 +134,10 @@ def test_direct_lazy_registration_does_not_authorize_unplanned_dynamic_child(tmp
     (tmp_path / "lazy.html").write_text(TAG, encoding="utf-8")
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with(TAG + include, partial=True)
 
-        def mount(self, request, **kwargs):
-            self.names = ["lazy.html"]
+        names = state(default_factory=lambda: ["lazy.html"])
 
     with override_settings(TEMPLATES=configured_templates(tmp_path)):
         browser_session = session()
@@ -158,7 +154,7 @@ def test_direct_lazy_registration_does_not_authorize_overdeep_included_child(tmp
         (tmp_path / f"level{index}.html").write_text(content, encoding="utf-8")
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with(TAG + '{% include "level0.html" %}', partial=True)
 
     with override_settings(TEMPLATES=configured_templates(tmp_path)):
@@ -184,12 +180,11 @@ def test_dynamic_global_selector_remains_available_inside_unrelated_scope(
     (tmp_path / "lazy.html").write_text(TAG, encoding="utf-8")
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with(include, partial=True)
 
-        def mount(self, request, **kwargs):
-            self.selected = "lazy.html"
-            self.items = [1, 2]
+        selected = state("lazy.html")
+        items = state(default_factory=lambda: [1, 2])
 
     with override_settings(TEMPLATES=configured_templates(tmp_path)):
         browser_session = session()
@@ -211,11 +206,10 @@ def test_scoped_dynamic_bindings_do_not_authorize_nested_children(tmp_path, incl
     (tmp_path / "selector.html").write_text("{% include target %}", encoding="utf-8")
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with(TAG + include, partial=True)
 
-        def mount(self, request, **kwargs):
-            self.items = ["lazy.html"]
+        items = state(default_factory=lambda: ["lazy.html"])
 
     with override_settings(TEMPLATES=configured_templates(tmp_path)):
         browser_session = session()
@@ -231,7 +225,7 @@ def test_firstof_shadowing_in_loop_does_not_authorize_dynamic_child(tmp_path):
     (tmp_path / "lazy.html").write_text(TAG, encoding="utf-8")
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with(
             TAG
             + "{% for item in items %}"
@@ -240,9 +234,8 @@ def test_firstof_shadowing_in_loop_does_not_authorize_dynamic_child(tmp_path):
             partial=True,
         )
 
-        def mount(self, request, **kwargs):
-            self.selected = "plain.html"
-            self.items = ["lazy.html"]
+        selected = state("plain.html")
+        items = state(default_factory=lambda: ["lazy.html"])
 
     with override_settings(TEMPLATES=configured_templates(tmp_path)):
         browser_session = session()
@@ -261,7 +254,7 @@ def test_block_super_cannot_authorize_with_scoped_dynamic_child(tmp_path):
     )
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = (
             '{% extends "base.html" %}{% block content %}'
             '{% with t="lazy.html" %}{{ block.super }}{% endwith %}{% endblock %}'
@@ -311,7 +304,7 @@ def test_live_python_effect_before_dynamic_selector_does_not_register(tmp_path, 
     trigger = Trigger()
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with(effect + "{% include chooser.selected %}", partial=True)
 
         def get_context_data(self, **kwargs):
@@ -340,7 +333,7 @@ def test_pure_builtin_filter_before_dynamic_selector_remains_available(tmp_path)
     chooser = Chooser()
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with("{{ label|upper }}{% include chooser.selected %}", partial=True)
 
         def get_context_data(self, **kwargs):
@@ -375,7 +368,7 @@ def test_custom_filter_effect_before_dynamic_selector_does_not_register(tmp_path
         return value
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with("{{ label|test_lazy_effect }}{% include chooser.selected %}", True)
 
         def get_context_data(self, **kwargs):
@@ -408,7 +401,7 @@ def test_python_effect_before_plain_string_selector_still_registers(tmp_path):
     trigger = Trigger()
 
     class LazyPage(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         template = root_with("{{ trigger.fire }}{% include selected %}", True)
 
         def get_context_data(self, **kwargs):

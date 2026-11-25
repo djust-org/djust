@@ -19,7 +19,7 @@ from django.utils.safestring import mark_safe
 
 from djust import LiveView
 from djust.components.descriptors.base import LiveComponent, TypedState
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from djust.state_backends import get_backend, set_backend
 from djust.state_backends.base import describe_snapshot
 from djust.state_backends.memory import InMemoryStateBackend
@@ -54,11 +54,9 @@ class Diagram(LiveView):
     """No handlers of its own; ``toggle`` stands in for a page shell's handler
     (an account menu), which an event can still reach."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _root("Diagram", _BODY)
-
-    def mount(self, request, **kwargs):
-        self.open = False
+    open = state(False)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -93,9 +91,10 @@ class RecordedStaticDiagram(StaticDiagram):
 class StaticDiagramWithBadge(StaticDiagram):
     template = _root("StaticDiagramWithBadge", '<p id="b">badge-{{ badge }}</p>' + _BODY)
 
+    badge = state("none")
+
     def mount(self, request, **kwargs):
         super().mount(request, **kwargs)
-        self.badge = "none"
         self.start_async(self._load_badge)
 
     def _load_badge(self):
@@ -103,11 +102,9 @@ class StaticDiagramWithBadge(StaticDiagram):
 
 
 class SmallPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _root("SmallPage", "<p>{{ n }}</p>")
-
-    def mount(self, request, **kwargs):
-        self.n = 0
+    n = state(0)
 
     @event_handler()
     def bump(self, **kwargs):
@@ -424,20 +421,15 @@ class TestTheWebSocket:
 
 
 class Dock(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "dock"
     template = "<div>{% for n in items %}<span>{{ n }}</span>{% endfor %}</div>"
-
-    def mount(self, request, **kwargs):
-        self.items = ["a", "b"]
+    items = state(default_factory=lambda: ["a", "b"])
 
     @event_handler()
     def drop(self, **kwargs):
         self.items = self.items[1:]
-
-    def get_context_data(self, **kwargs):
-        return {"items": self.items, "view": self}
 
 
 class StaticDock(Dock):
@@ -457,19 +449,9 @@ def _host(name, child):
 class StaticHost(StaticDiagram):
     template = _host("StaticHost", "Dock")
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["view"] = self
-        return context
-
 
 class NormalHostOfStaticDock(Diagram):
     template = _host("NormalHostOfStaticDock", "StaticDock")
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["view"] = self
-        return context
 
 
 # --------------------------------------------------------------------------
@@ -488,7 +470,7 @@ class ShapesPage(LiveView):
     an immutable (value equality), a container (structural fingerprint) and any
     other object (identity)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     static_render = True
     template = _root(
         "ShapesPage",
@@ -497,12 +479,15 @@ class ShapesPage(LiveView):
         "<p>{{ box.name }}</p><p>{{ mapping.k }}</p>",
     )
 
-    def mount(self, request, **kwargs):
-        self.open = False
-        self.label = "str-shape"
-        self.rows = ["row-a", "row-b"]
-        self.box = _Box()
-        self.mapping = {"k": "dict-shape"}
+    open = state(False)
+    label = state("str-shape")
+    rows = state(default_factory=lambda: ["row-a", "row-b"])
+    mapping = state(default_factory=lambda: {"k": "dict-shape"})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["box"] = _Box()
+        return context
 
     @event_handler()
     def toggle(self, **kwargs):
@@ -513,14 +498,16 @@ class StaticAssignsPage(LiveView):
     """``static_assigns`` are sent once because the renderer retains them; a
     static view's renderer retains nothing."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     static_render = True
     static_assigns = ["diagram"]
     template = _root("StaticAssignsPage", _BODY)
+    open = state(False)
 
-    def mount(self, request, **kwargs):
-        self.open = False
-        self.diagram = DIAGRAM
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["diagram"] = DIAGRAM
+        return context
 
     @event_handler()
     def toggle(self, **kwargs):
@@ -545,13 +532,10 @@ class StaticTabsPage(LiveView):
     """A page with a bound component whose template is component-opaque: on a
     normal view this is exactly the shape the scoped-patch path takes."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     static_render = True
     template = _root("StaticTabsPage", '<h1>Page</h1>{{ nav }}<div id="d">{{ diagram }}</div>')
     nav = Tabs()
-
-    def mount(self, request, **kwargs):
-        pass
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -593,11 +577,9 @@ class ComputedTitlePage(LiveView):
     """The ``<title>`` reads ``heading``, which ``get_context_data`` computes: it is
     in the render's context, not an attribute of the view."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _titled("ComputedTitlePage")
-
-    def mount(self, request, **kwargs):
-        self.n = 3
+    n = state(3)
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -635,7 +617,7 @@ class TestTheNavigationTitleSurvivesTheRelease:
 class MessagesPage(LiveView):
     """``temporary_assigns`` empties ``messages`` after each render."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     temporary_assigns = {"messages": []}
     template = _root(
         "MessagesPage",
@@ -643,9 +625,8 @@ class MessagesPage(LiveView):
         "<ul>{% for m in messages %}<li>{{ m }}</li>{% endfor %}</ul>",
     )
 
-    def mount(self, request, **kwargs):
-        self.open = False
-        self.messages = ["first-message"]
+    open = state(False)
+    messages = state(default_factory=lambda: ["first-message"])
 
     @event_handler()
     def toggle(self, **kwargs):

@@ -38,7 +38,7 @@ from asgiref.sync import sync_to_async
 from django.db import models
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from djust.serialization import (
     _SENSITIVE_MODEL_METHOD_PREFIXES,
     _SENSITIVE_MODEL_METHODS,
@@ -134,7 +134,7 @@ def _sidecar(obj, name):
 class _ShadowView(LiveView):
     """Module-level so the WS mount can name it by dotted path."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-view="djust.tests.test_property_shadow_parity_2614._ShadowView" dj-id="0">'
         "n={{ n }} label=[{{ m.label }}]"
@@ -142,8 +142,9 @@ class _ShadowView(LiveView):
         + "</div>"
     )
 
+    n = state(0)
+
     def mount(self, request, **kwargs):
-        self.n = 0
         self._m = _instance()
 
     @event_handler()
@@ -412,26 +413,6 @@ def _codegen_serialize(obj, paths):
     return _codegen.compile_serializer(code, "serialize_2685")(obj)
 
 
-class _JitView(LiveView):
-    """PUBLIC ``self.m`` — the shape the issue reproduced on: the context loop
-    in ``mixins/context.py`` JIT-serializes it through codegen."""
-
-    exposure_policy = "legacy"
-    template = (
-        '<div dj-view="djust.tests.test_property_shadow_parity_2614._JitView" dj-id="0">'
-        "n={{ n }} label=[{{ m.label }}] password=[{{ m.password }}]"
-        " get_session_auth_hash=[{{ m.get_session_auth_hash }}]</div>"
-    )
-
-    def mount(self, request, **kwargs):
-        self.n = 0
-        self.m = _jit_instance()
-
-    @event_handler()
-    def bump(self, **kwargs):
-        self.n += 1
-
-
 class TestJitCodegenChannel:
     @pytest.mark.parametrize("name", ["password", "get_session_auth_hash", "_secret"])
     def test_denied_name_is_omitted(self, name):
@@ -450,18 +431,6 @@ class TestJitCodegenChannel:
         out = _codegen_serialize(outer, ["owner.label", "owner.password", "owner._secret"])
         assert out == {"owner": {"label": "visible"}}, out
 
-    def test_context_data_omits_the_field(self):
-        """The symptom from the issue: ``get_context_data()['m']`` carried it."""
-        from django.test import RequestFactory
-
-        view = _JitView()
-        view.request = RequestFactory().get("/jit/")
-        view.mount(view.request)
-        m = view.get_context_data()["m"]
-        assert m["label"] == "visible", m
-        assert "password" not in m and "get_session_auth_hash" not in m, m
-        assert LEAK_JIT not in repr(m), m
-
 
 # ``get_Session_auth_hash`` is excluded from the codegen parity row only because
 # codegen treats every ``get_*`` name as a METHOD and calls it — a ``get_*``
@@ -476,70 +445,6 @@ class TestJitCodegenParity:
         eager = _eager(_instance())
         out = _codegen_serialize(_instance(), [name])
         assert (name in out) == (name in eager), (name, out, eager)
-
-
-@pytest.mark.django_db
-class TestJitRealRenderPaths:
-    def test_http_get_does_not_ship_the_field(self):
-        from django.contrib.sessions.middleware import SessionMiddleware
-        from django.test import RequestFactory
-
-        request = RequestFactory().get("/jit/")
-        SessionMiddleware(lambda r: r).process_request(request)
-        request.session.save()
-        response = _JitView.as_view()(request)
-        html = response.content.decode() if hasattr(response, "content") else str(response)
-        assert "label=[visible]" in html, html
-        assert "password=[]" in html and "get_session_auth_hash=[]" in html, html
-        assert LEAK_JIT not in html, html
-
-    @pytest.mark.asyncio
-    async def test_ws_mount_and_event_do_not_ship_the_field(self):
-        pytest.importorskip("channels")
-        from channels.testing import WebsocketCommunicator
-        from django.contrib.sessions.backends.db import SessionStore
-        from django.test import override_settings
-
-        from djust.websocket import LiveViewConsumer
-
-        def _create_session():
-            s = SessionStore()
-            s.create()
-            return s.session_key
-
-        session_key = await sync_to_async(_create_session)()
-
-        class _ScopeSession:
-            def __init__(self, key):
-                self.session_key = key
-
-        with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-            comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-            comm.scope["session"] = _ScopeSession(session_key)
-            connected, _ = await comm.connect()
-            assert connected
-            await comm.receive_json_from()  # connect frame
-            await comm.send_json_to(
-                {"type": "mount", "view": f"{__name__}._JitView", "url": "/jit/"}
-            )
-            frames = []
-            for _ in range(6):
-                f = await comm.receive_json_from()
-                frames.append(f)
-                if f.get("type") == "mount":
-                    break
-            assert frames[-1].get("type") == "mount", frames
-            await comm.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
-            for _ in range(6):
-                f = await comm.receive_json_from()
-                frames.append(f)
-                if f.get("type") in ("patch", "html_update"):
-                    break
-            await comm.disconnect()
-
-        wire = repr(frames)
-        assert "label=[visible]" in wire, wire
-        assert LEAK_JIT not in wire, wire
 
 
 #: Every path shape the generator can emit: flat, nested object, indexed list,
@@ -751,9 +656,9 @@ def _qs_rows(n=2):
 
 
 class _QsView(LiveView):
-    """A real QuerySet on a public attr — the #2688 shape."""
+    """A real QuerySet handed to the template — the #2688 shape."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-view="djust.tests.test_property_shadow_parity_2614._QsView" dj-id="0">'
         "n={{ n }}"
@@ -761,11 +666,14 @@ class _QsView(LiveView):
         "|{{ u.get_session_auth_hash }}]{% endfor %}</div>"
     )
 
-    def mount(self, request, **kwargs):
+    n = state(0)
+
+    def get_context_data(self, **kwargs):
         from django.contrib.auth.models import User
 
-        self.n = 0
-        self.users = User.objects.all()
+        context = super().get_context_data(**kwargs)
+        context["users"] = User.objects.all()
+        return context
 
     @event_handler()
     def bump(self, **kwargs):

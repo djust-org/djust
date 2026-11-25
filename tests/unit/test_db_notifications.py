@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from django.db.models.signals import post_delete, post_save
 
+from djust import LiveView, state
 from djust.db import (
     DatabaseNotificationNotSupported,
     PostgresNotifyListener,
@@ -565,6 +566,19 @@ class TestConsumerWithoutNotificationMixin:
 # ---------------------------------------------------------------------------
 
 
+class _InfoView(LiveView):
+    """Records the ``handle_info`` messages a ``db_notify`` turn delivers."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ seen }}</div>"
+    seen = state(0)
+    messages = state(default_factory=list)
+
+    def handle_info(self, message):
+        self.messages.append(message)
+        self.seen += 1
+
+
 class TestConsumerDbNotify:
     """Sanity-check the consumer routing: the handler exists, has the right
     signature, and no-ops when no view is mounted.
@@ -587,42 +601,38 @@ class TestConsumerDbNotify:
         # Should return quietly, not raise.
         asyncio.run(consumer.db_notify({"channel": "orders", "payload": {"pk": 1}}))
 
-    def test_handler_calls_handle_info_and_rerenders(self):
+    @pytest.mark.django_db(transaction=True)
+    def test_handler_calls_handle_info_and_rerenders(self, settings):
         """The handler must route ``message`` to ``handle_info`` with the
         documented ``{"type": "db_notify", "channel": ..., "payload": ...}``
         shape, then re-render via the existing broadcast path."""
+        from djust.tests._live_session import amount_on_consumer
         from djust.websocket import LiveViewConsumer
 
-        consumer = LiveViewConsumer.__new__(LiveViewConsumer)
-        view = MagicMock()
-        # A real LiveView declares its policy; a Mock's auto-attribute would
-        # read as an invalid policy and fail closed (ADR-038).
-        view.exposure_policy = "legacy"
-        view.__class__.__name__ = "FakeView"
-        view.handle_info = MagicMock()
-        view._skip_render = False
-        view._sync_state_to_rust = MagicMock()
-        view.render_with_diff = MagicMock(return_value=("<html></html>", '[{"op": "test"}]', 1))
-        consumer.view_instance = view
-        consumer._processing_user_event = False
-        consumer._render_lock = asyncio.Lock()
-        consumer._send_update = AsyncMock()
-        consumer._flush_push_events = AsyncMock()
-        consumer._flush_flash = AsyncMock()
-        consumer._flush_page_metadata = AsyncMock()
-        consumer._send_noop = AsyncMock()
+        settings.LIVEVIEW_ALLOWED_MODULES = [__name__]
 
-        asyncio.run(
-            consumer.db_notify({"channel": "orders", "payload": {"pk": 1, "event": "save"}})
-        )
+        async def run():
+            consumer = LiveViewConsumer()
+            consumer.sent = []
 
-        view.handle_info.assert_called_once_with(
+            async def capture(frame, *args, **kwargs):
+                consumer.sent.append(frame)
+
+            consumer.send_json = capture
+            view = await amount_on_consumer(consumer, f"{__name__}._InfoView")
+            consumer._send_update = AsyncMock()
+            await consumer.db_notify({"channel": "orders", "payload": {"pk": 1, "event": "save"}})
+            return view, consumer
+
+        view, consumer = asyncio.run(run())
+
+        assert view.messages == [
             {
                 "type": "db_notify",
                 "channel": "orders",
                 "payload": {"pk": 1, "event": "save"},
             }
-        )
+        ]
         consumer._send_update.assert_awaited_once()
         kwargs = consumer._send_update.await_args.kwargs
         assert kwargs["source"] == "broadcast"

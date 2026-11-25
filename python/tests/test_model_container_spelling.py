@@ -47,16 +47,21 @@ DJ_ROOT = re.compile(r"<div dj-root[^>]*>(.*?)</div>", re.S)
 
 
 def _lv(src: str, **state) -> str:
-    """The real LiveView entry, with the values held as PUBLIC STATE set in ``mount``."""
+    """The real LiveView entry, the values supplied from ``get_context_data``."""
 
-    def mount(self, request, **kwargs):
-        for name, value in state.items():
-            setattr(self, name, value)
+    def get_context_data(self, **kwargs):
+        ctx = LiveView.get_context_data(self, **kwargs)
+        ctx.update(state)
+        return ctx
 
     view = type(
         "ContainerView",
         (LiveView,),
-        {"exposure_policy": "legacy", "template": f"<div dj-root>{src}</div>", "mount": mount},
+        {
+            "exposure_policy": "explicit",
+            "template": f"<div dj-root>{src}</div>",
+            "get_context_data": get_context_data,
+        },
     )
     client = LiveViewTestClient(view)
     client.mount()
@@ -294,7 +299,7 @@ class TestWhatDoesNotChange:
         out = _lv("{% data_table rows=rows columns=cols %}", rows=rows, cols=cols)
         assert SENT_A in out, out[:400]
 
-    def test_the_state_and_the_serialized_row_are_unchanged(self, world) -> None:
+    def test_the_supplied_rows_and_the_serialized_row_are_unchanged(self, world) -> None:
         """The change is in two filters; the data they read is exactly what it was."""
         row = normalize_django_value(world["a1"])
         assert row["owner_code"] == SENT_A and row["get_note_text"] == SENT_B
@@ -304,24 +309,26 @@ class TestWhatDoesNotChange:
             and row["__model__"] == "Account"
         )
 
-        def mount(self, request, **kwargs):
-            self.rows = [world["a1"], world["a2"]]
+        def get_context_data(self, **kwargs):
+            ctx = LiveView.get_context_data(self, **kwargs)
+            ctx["rows"] = [world["a1"], world["a2"]]
+            return ctx
 
         view = type(
             "StateView",
             (LiveView,),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "template": "<div dj-root>{{ rows|pprint }}</div>",
-                "mount": mount,
+                "get_context_data": get_context_data,
             },
         )
         client = LiveViewTestClient(view)
         client.mount()
         client.render()
-        state = client.view_instance.get_state()
-        assert [r.owner_code for r in state["rows"]] == [SENT_A, SENT_A]
-        assert [r.get_note_text() for r in state["rows"]] == [SENT_B, SENT_B]
+        supplied = client.view_instance.get_context_data()["rows"]
+        assert [r.owner_code for r in supplied] == [SENT_A, SENT_A]
+        assert [r.get_note_text() for r in supplied] == [SENT_B, SENT_B]
 
 
 class TestTheTextIsEscapedLikeAnyOtherString:
@@ -678,16 +685,18 @@ class TestAModelWithAMarkupSafeTextIsAModelToo:
     def test_the_text_is_not_marked_safe_by_being_printed(self, safe_world) -> None:
         """Raw bytes (not through the tests' unescape): the markup in the text is escaped on the page."""
 
-        def mount(self, request, **kwargs):
-            self.rows = [safe_world["a1"]]
+        def get_context_data(self, **kwargs):
+            ctx = LiveView.get_context_data(self, **kwargs)
+            ctx["rows"] = [safe_world["a1"]]
+            return ctx
 
         view = type(
             "RawView",
             (LiveView,),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "template": "<div dj-root>{{ rows }}|{{ rows|pprint }}|{{ rows.0 }}</div>",
-                "mount": mount,
+                "get_context_data": get_context_data,
             },
         )
         client = LiveViewTestClient(view)
@@ -695,17 +704,14 @@ class TestAModelWithAMarkupSafeTextIsAModelToo:
         html = DJ_ROOT.search(client.render()).group(1)
         assert "<b>" not in html and html.count("&lt;b&gt;s1&lt;/b&gt;") == 3, html
 
-    @pytest.mark.parametrize("policy", ["explicit", "legacy"])
     @pytest.mark.parametrize("shape", ["list", "queryset", "model"])
     @pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
-    def test_the_handle_overlay_keeps_liveviews_escaping(
-        self, safe_world, policy, shape, flag
-    ) -> None:
+    def test_the_handle_overlay_keeps_liveviews_escaping(self, safe_world, shape, flag) -> None:
         """#3936 (train/2.0-ai decision): the render-time handle overlay hands the template a floor
         proxy, whose ``str()`` would be the model's ``SafeString``. LiveView keeps its stricter
-        escaping (its serialized dict always printed the text escaped), on both policies with the
+        escaping (its serialized dict always printed the text escaped), with the
         overlay on or off -- not the backend's Django parity (raw ``<b>``). Gate-off below."""
-        _assert_overlay_text_escaped(safe_world, policy, shape, flag)
+        _assert_overlay_text_escaped(safe_world, shape, flag)
 
     def test_gate_off_a_safe_handle_text_prints_raw(self, safe_world, monkeypatch) -> None:
         """Gate-off: with the overlay handles' plain text undone, the markup prints raw."""
@@ -713,21 +719,23 @@ class TestAModelWithAMarkupSafeTextIsAModelToo:
 
         monkeypatch.setattr(serialization, "_overlay_plain_text_handles", lambda value, memo: value)
         with pytest.raises(AssertionError, match="<b>s1</b>"):
-            _assert_overlay_text_escaped(safe_world, "legacy", "list", True)
+            _assert_overlay_text_escaped(safe_world, "list", True)
 
     def test_a_markup_text_stays_inert(self, world) -> None:
         world["a1"].username = "</b><script>alert(1)</script>"
 
-        def mount(self, request, **kwargs):
-            self.rows = [world["a1"]]
+        def get_context_data(self, **kwargs):
+            ctx = LiveView.get_context_data(self, **kwargs)
+            ctx["rows"] = [world["a1"]]
+            return ctx
 
         view = type(
             "RawView2",
             (LiveView,),
             {
-                "exposure_policy": "legacy",
+                "exposure_policy": "explicit",
                 "template": "<div dj-root>{{ rows }}|{{ rows|pprint }}</div>",
-                "mount": mount,
+                "get_context_data": get_context_data,
             },
         )
         client = LiveViewTestClient(view)
@@ -736,7 +744,7 @@ class TestAModelWithAMarkupSafeTextIsAModelToo:
         assert "<script>" not in html and "&lt;script&gt;" in html, html
 
 
-def _assert_overlay_text_escaped(safe_world, policy: str, shape: str, flag: bool) -> None:
+def _assert_overlay_text_escaped(safe_world, shape: str, flag: bool) -> None:
     """Render the markup-safe model through every read the overlay answers; assert it is escaped."""
     from django.test import override_settings
 
@@ -754,20 +762,13 @@ def _assert_overlay_text_escaped(safe_world, policy: str, shape: str, flag: bool
         )
 
     class _V(LiveView):
-        exposure_policy = policy
+        exposure_policy = "explicit"
         template = f"<div dj-root>{source}</div>"
 
-        if policy == "legacy":
-
-            def mount(self, request, **kwargs):
-                self.rows = value()
-
-        else:
-
-            def get_context_data(self, **kwargs):
-                ctx = super().get_context_data(**kwargs)
-                ctx["rows"] = value()
-                return ctx
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx["rows"] = value()
+            return ctx
 
     with override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": flag}):
         client = LiveViewTestClient(_V)
@@ -784,17 +785,17 @@ def _assert_overlay_text_escaped(safe_world, policy: str, shape: str, flag: bool
 # Pinned so the ADR's narrowed wording stays true: "own model escaped, related model as Django".
 
 RELATED_SAFE = {
-    # name: (template, {policy: "raw" | "escaped"})
-    "self": ("{{ u }}", {"explicit": "escaped", "legacy": "escaped"}),
-    "list-self": ("{{ us.0 }}", {"explicit": "escaped", "legacy": "escaped"}),
-    "m2m-first": ("{{ u.groups.first }}", {"explicit": "raw", "legacy": "raw"}),
+    # name: (template, "raw" | "escaped")
+    "self": ("{{ u }}", "escaped"),
+    "list-self": ("{{ us.0 }}", "escaped"),
+    "m2m-first": ("{{ u.groups.first }}", "raw"),
     "rebind-m2m-first": (
         "{% with q=u|default:u %}{{ q.groups.first }}{% endwith %}",
-        {"explicit": "raw", "legacy": "raw"},
+        "raw",
     ),
     "rebind-m2m-loop": (
         "{% with q=u|default:u %}{% for g in q.groups.all %}{{ g }}{% endfor %}{% endwith %}",
-        {"explicit": "raw", "legacy": "escaped"},
+        "raw",
     ),
 }
 
@@ -818,31 +819,22 @@ def related_safe_world(db, scratch_models, monkeypatch):  # noqa: F811
     return RelAccount
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("name", sorted(RELATED_SAFE))
-def test_a_related_models_safe_text_prints_as_django_prints_it(related_safe_world, name, policy):
+def test_a_related_models_safe_text_prints_as_django_prints_it(related_safe_world, name):
     source, expected = RELATED_SAFE[name]
 
     class _V(LiveView):
-        exposure_policy = policy
+        exposure_policy = "explicit"
         template = f"<div dj-root>{source}</div>"
 
-        if policy == "legacy":
-
-            def mount(self, request, **kwargs):
-                self.u = related_safe_world.objects.get(username="r1")
-                self.us = [self.u]
-
-        else:
-
-            def get_context_data(self, **kwargs):
-                ctx = super().get_context_data(**kwargs)
-                u = related_safe_world.objects.get(username="r1")
-                ctx.update({"u": u, "us": [u]})
-                return ctx
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            u = related_safe_world.objects.get(username="r1")
+            ctx.update({"u": u, "us": [u]})
+            return ctx
 
     client = LiveViewTestClient(_V)
     client.mount()
     html = DJ_ROOT.search(client.render()).group(1)
     got = "raw" if re.search(r"<[bs]>", html) else "escaped" if "&lt;" in html else html
-    assert got == expected[policy], (name, policy, html)
+    assert got == expected, (name, html)

@@ -26,6 +26,7 @@ from django.contrib.auth.models import User
 from django.template.library import Library
 
 from djust import LiveView
+from djust.testing import LiveViewTestClient
 from djust import _render_caches
 from djust.mixins import jit
 from djust.mixins.jit import JITMixin, _jit_template_content, _template_hash
@@ -56,11 +57,13 @@ def page_dir(tmp_path, settings):
 
 
 class CachedPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "rc/page.html"
 
-    def mount(self, request, **kwargs):
-        self.people = list(User.objects.filter(username__startswith="n37-").order_by("username"))
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["people"] = User.objects.filter(username__startswith="n37-").order_by("username")
+        return ctx
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +146,10 @@ def test_renders_serialize_the_same_with_the_cache(page_dir, settings):
     rows = {}
     for debug in (True, False, False):
         settings.DEBUG = debug
-        view = CachedPage()
-        view.mount(None)
-        rows.setdefault(debug, []).append(view.get_context_data()["people"])
+        client = LiveViewTestClient(CachedPage)
+        client.mount()
+        client.render()
+        rows.setdefault(debug, []).append(client.rendered_state()["people"])
     assert rows[True][0] == rows[False][0] == rows[False][1]
     assert rows[False][0][0]["username"] == "n37-ada"
     assert "email" not in rows[False][0][0]

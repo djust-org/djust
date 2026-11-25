@@ -27,7 +27,7 @@ def _make_view(name):
         name,
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "__module__": __name__,
             "template_name": "t.html",
             "mount": mount,
@@ -56,7 +56,7 @@ def test_a_second_check_run_does_not_rescan_the_same_class(monkeypatch):
 
     # A ``class`` statement (not ``type()``) so the source location is real.
     class S005CacheOnce(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "t.html"
 
         def mount(self, request, **kwargs):
