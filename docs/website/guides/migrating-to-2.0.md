@@ -506,6 +506,17 @@ object for every event, rebuilt from its saved state as in 1.3.
 
 ### Other things explicit exposure refuses
 
+- **Service-worker caching of page HTML.** 1.3 let the worker cache every
+  (legacy) page; an explicit page is cached only when its view sets
+  `sw_cacheable = True`:
+
+  ```python
+  class Docs(LiveView):
+      sw_cacheable = True  # public page, same HTML for everyone
+  ```
+
+  Set it only on public pages: `manage.py check` (`djust.V037`) reports an
+  opted-in view that reads the user, the session or persisted state.
 - **`page_title` is a framework setting.** It cannot be a `state()` field (the
   class raises `ExposureConfigurationError`, see
   [Behaviour that now raises](#behaviour-that-now-raises)). Keep setting
@@ -1112,4 +1123,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: ea3f41806312 -->
+<!-- generated-doc prose-sha256: 9248b5a29e62 -->

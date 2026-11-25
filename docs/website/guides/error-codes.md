@@ -1002,6 +1002,14 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Set `exposure_policy = "explicit"` on the widget and return what its template reads from `get_context_data()`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V032"]}`.
 
+### V037: `sw_cacheable = True` on a per-visitor page
+
+**Severity**: Warning
+
+**What causes it**: A view opts its page into service-worker caching with `sw_cacheable = True`, but it reads the user, the session or persisted state, so its HTML differs per visitor. Message: '<view> sets sw_cacheable = True, but its code reads request.user; the service worker would keep this page's HTML for anyone who opens the URL in that browser.'
+
+**Fix**: Remove `sw_cacheable = True`, or render the same HTML for every visitor. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V037"]}` if the read cannot change the HTML.
+
 <!-- END GENERATED check-sections:V -->
 
 ---

@@ -6,7 +6,7 @@ cache. The server tells the client and worker three things, none of which
 carries a value derived from view state or from the raw identity:
 
 - **Eligibility (D-b).** Explicit-exposure pages are not written to the VDOM
-  or shell cache. The HTTP response carries ``X-Djust-SW-Cache: no-store``
+  or shell cache unless the view sets ``sw_cacheable = True`` (#4176). The HTTP response carries ``X-Djust-SW-Cache: no-store``
   (read by the worker before it writes the shell) and the mount frame carries
   ``"sw_cache": "no-store"`` (read by the client before ``cacheVdom``).
   Legacy pages get neither, so their caching is unchanged.

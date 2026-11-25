@@ -54,9 +54,9 @@ All options are individually toggleable:
 
 | Option                | Default                                     | Effect                                          |
 | --------------------- | ------------------------------------------- | ----------------------------------------------- |
-| `instantShell`        | `false`                                     | Enable the cached-shell navigation fast path.   |
+| `instantShell`        | `false`                                     | Enable the cached-shell navigation fast path (explicit pages: only with `sw_cacheable = True`).   |
 | `reconnectionBridge`  | `false`                                     | Enable outgoing-message buffering during WS disconnect. |
-| `vdomCache`           | `false`                                     | (v0.6.0) Cache VDOM HTML per URL; serve instantly on popstate before reconciling against the live mount reply. |
+| `vdomCache`           | `false`                                     | (v0.6.0) Cache VDOM HTML per URL; serve instantly on popstate before reconciling against the live mount reply (explicit pages: only with `sw_cacheable = True`). |
 | `stateSnapshot`       | `false`                                     | (v0.6.0) Keep the signed token of a view's `persist="client"` fields on `djust:before-navigate`, and send it back on back-nav so the server can restore them. |
 | `swUrl`               | `/static/djust/service-worker.js`           | Override if you serve the SW from a custom path. |
 | `scope`               | `/`                                         | Override if the SW should only manage a subtree. |
@@ -112,6 +112,24 @@ The SW splits HTML into "shell" (everything outside `<main>`) and "main" (inside
 ---
 
 ## How it works
+
+### Which pages the worker caches (2.0)
+
+An explicit-exposure page (the default since 2.0) is sent with
+`X-Djust-SW-Cache: no-store`, and its mount frame carries
+`"sw_cache": "no-store"`. Neither the shell cache (`instantShell`) nor the
+VDOM cache (`vdomCache`) keeps it. A page whose HTML is the same for everyone
+opts in:
+
+```python
+class Docs(LiveView):
+    sw_cacheable = True  # public page, same HTML for everyone
+```
+
+Every child view on the page must opt in too, because the page's HTML includes
+the children. `manage.py check` (`djust.V037`) reports an opted-in view that
+reads the user, the session or persisted state: the worker would keep that
+HTML for anyone who opens the URL in that browser.
 
 ### Instant shell — navigation flow
 
