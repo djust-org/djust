@@ -2351,18 +2351,14 @@ function reinitAfterDOMUpdate(scope) {
     syncDraftFields();
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
-    // are visible to mountHooks().
+    // are visible to updateHooks().
     if (window.djust.extractColocatedHooks) {
         window.djust.extractColocatedHooks(scope || document);
     }
-    if (window.djust.mountHooks) {
-        // updateHooks scans for [dj-hook] — scope it too
-        const hookRoot = scope || getLiveViewRoot();
-        hookRoot.querySelectorAll('[dj-hook]').forEach(el => {
-            // Delegate to the hook system's per-element logic
-            if (window.djust.mountHooks) window.djust.mountHooks(el);
-        });
-    }
+    // One pass over the document: destroyed() for hooks that left, then
+    // updated() / mounted() in document order. A separate mount sweep here
+    // gave a nested hook inserted by the update mounted() AND updated() in
+    // the same update (#3656).
     updateHooks();
 
     // dj-model: an input this update inserted (or whose dj-model attributes it

@@ -3138,6 +3138,10 @@ class LiveViewSSE {
             document.body.classList.add('dj-connected');
             document.body.classList.remove('dj-disconnected');
 
+            // Hooks that got disconnected() (this stream dropped, or the
+            // WebSocket did before this fallback opened) get reconnected().
+            notifyHooksReconnected();
+
             // Track reconnections for form recovery
             if (this._hasConnectedBefore) {
                 if (window.djust) window.djust._isReconnect = true;
@@ -3211,6 +3215,9 @@ class LiveViewSSE {
                 document.body.classList.add('dj-disconnected');
                 document.body.classList.remove('dj-connected');
             }
+            // The stream dropped (EventSource retries by itself) or closed:
+            // hooks get disconnected() once, as over WebSocket (#3656).
+            notifyHooksDisconnected();
         };
     }
 
@@ -7732,18 +7739,14 @@ function reinitAfterDOMUpdate(scope) {
     syncDraftFields();
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
-    // are visible to mountHooks().
+    // are visible to updateHooks().
     if (window.djust.extractColocatedHooks) {
         window.djust.extractColocatedHooks(scope || document);
     }
-    if (window.djust.mountHooks) {
-        // updateHooks scans for [dj-hook] — scope it too
-        const hookRoot = scope || getLiveViewRoot();
-        hookRoot.querySelectorAll('[dj-hook]').forEach(el => {
-            // Delegate to the hook system's per-element logic
-            if (window.djust.mountHooks) window.djust.mountHooks(el);
-        });
-    }
+    // One pass over the document: destroyed() for hooks that left, then
+    // updated() / mounted() in document order. A separate mount sweep here
+    // gave a nested hook inserted by the update mounted() AND updated() in
+    // the same update (#3656).
     updateHooks();
 
     // dj-model: an input this update inserted (or whose dj-model attributes it
@@ -15084,168 +15087,188 @@ function _deferMissingHookSweep() {
     return true;
 }
 
+// The lifecycle contract (#3656), documented in docs/website/guides/hooks.md
+// ("The lifecycle contract"); tests/js/hook-lifecycle-contract-3656.test.js has
+// one test per rule.
+//
+//   - An instance belongs to one element node for its whole life. A patch that
+//     keeps the node (attributes, text, a keyed move) keeps the instance; a
+//     node that is replaced, removed or loses/changes its dj-hook gets
+//     destroyed(), and a replacement node a fresh instance with mounted().
+//   - mounted() and destroyed() run exactly once per instance. A hook mounted
+//     by an update gets no updated() for that update.
+//   - After an update: first destroyed() for every hook that left, then
+//     mounted() / updated() in document order (parents before children).
+//   - disconnected() / reconnected() pair per instance: one disconnected() per
+//     lost connection (not one per failed retry), and reconnected() only after
+//     it. A hook mounted while offline gets disconnected() after mounted().
+//   - Every callback is isolated: a throw or a rejected promise is logged and
+//     the patch, the other hooks and the rest of the update go on.
+
+// True between a lost connection and the next open one. `var` with no
+// initializer, as _activeHooks above: an earlier module may run first.
+var _hooksOffline; // eslint-disable-line no-var
+
+function _callHook(entry, name) {
+    // `name` is one of the fixed lifecycle names, never page input.
+    // eslint-disable-next-line security/detect-object-injection
+    const fn = entry.instance[name];
+    if (typeof fn === 'function') {
+        _safeCallHook(fn.bind(entry.instance), `${entry.hookName}.${name}()`);
+    }
+}
+
+/** `root` itself (when it carries dj-hook) and its dj-hook descendants, in document order. */
+function _hookElements(root) {
+    const els = Array.from(root.querySelectorAll('[dj-hook]'));
+    if (root.nodeType === 1 && root.hasAttribute('dj-hook')) els.unshift(root);
+    return els;
+}
+
+function _mountHookEl(el, hooks, deferMissing) {
+    const hookName = el.getAttribute('dj-hook');
+    // eslint-disable-next-line security/detect-object-injection
+    const hookDef = hooks[hookName];
+    if (!hookDef || (typeof hookDef !== 'object' && typeof hookDef !== 'function')) {
+        if (!hookDef && deferMissing && _deferMissingHookSweep()) return;
+        console.warn(`[dj-hook] No hook registered for "${hookName}"`);
+        return;
+    }
+    const entry = { hookName, instance: _createHookInstance(hookDef, el), el };
+    _activeHooks.set(_getHookElId(el), entry);
+    _callHook(entry, 'mounted');
+    if (_hooksOffline) {
+        entry.offline = true;
+        _callHook(entry, 'disconnected');
+    }
+}
+
+/** Visit the dj-hook elements under `root`; a throw for one does not stop the others. */
+function _eachHookEl(root, visit) {
+    _hookElements(root).forEach((el) => {
+        try {
+            visit(el);
+        } catch (e) {
+            console.error('[dj-hook] Error in %s:', el.getAttribute('dj-hook'), e);
+        }
+    });
+}
+
+function _destroyHookEntry(elId, entry) {
+    // Deleted first: destroyed() runs once even if it re-enters updateHooks().
+    _activeHooks.delete(elId);
+    _callHook(entry, 'destroyed');
+}
+
+/**
+ * destroyed() for every hook whose element left the document, and for every
+ * hook under `root` whose element dropped or changed its dj-hook.
+ */
+function _destroyDetachedHooks(root) {
+    _ensureHooksInit();
+    root = root || document;
+    for (const [elId, entry] of _activeHooks) {
+        const el = entry.el;
+        if (!el.isConnected || (root.contains(el) && el.getAttribute('dj-hook') !== entry.hookName)) {
+            _destroyHookEntry(elId, entry);
+        }
+    }
+}
+
+/**
+ * Mount the hooks under `root` that are not mounted yet. Called on init.
+ * After a DOM update use updateHooks(), which also updates and destroys.
+ */
 function mountHooks(root, options) {
     _ensureHooksInit();
     const deferMissing = Boolean(options && options.deferMissing);
-    root = root || document;
     const hooks = _getHookDefs();
-    const elements = root.querySelectorAll('[dj-hook]');
-
-    elements.forEach(el => {
-        const hookName = el.getAttribute('dj-hook');
-        const elId = _getHookElId(el);
-
-        // Skip if already mounted
-        if (_activeHooks.has(elId)) {
-            return;
-        }
-
-        // eslint-disable-next-line security/detect-object-injection
-        const hookDef = hooks[hookName];
-        if (!hookDef) {
-            if (deferMissing && _deferMissingHookSweep()) return;
-            console.warn(`[dj-hook] No hook registered for "${hookName}"`);
-            return;
-        }
-
-        const instance = _createHookInstance(hookDef, el);
-        _activeHooks.set(elId, { hookName, instance, el });
-
-        // Call mounted() (async-tolerant — see _safeCallHook)
-        if (typeof instance.mounted === 'function') {
-            _safeCallHook(instance.mounted.bind(instance), `${hookName}.mounted()`);
-        }
+    _eachHookEl(root || document, (el) => {
+        if (!_activeHooks.has(_getHookElId(el))) _mountHookEl(el, hooks, deferMissing);
     });
 }
 
 /**
  * Notify active hooks that a DOM update is about to happen.
- * Call this BEFORE applying patches.
+ * Called BEFORE the first DOM change of an update (12-vdom-patch.js), for the
+ * hooks whose element is inside the updated root.
  */
 function beforeUpdateHooks(root) {
     _ensureHooksInit();
     root = root || document;
     for (const [, entry] of _activeHooks) {
-        // Only call if element is still in the DOM
-        if (root.contains(entry.el) && typeof entry.instance.beforeUpdate === 'function') {
-            _safeCallHook(
-                entry.instance.beforeUpdate.bind(entry.instance),
-                `${entry.hookName}.beforeUpdate()`,
-            );
-        }
+        if (root.contains(entry.el)) _callHook(entry, 'beforeUpdate');
     }
 }
 
+function _updateHookEntry(entry) {
+    const instance = entry.instance;
+    if (typeof instance.updated !== 'function') return;
+    if (typeof instance.shouldUpdate === 'function') {
+        try {
+            // Only an explicit synchronous false suppresses the callback.
+            // Exceptions and async predicates fail open so an update is
+            // never silently lost; observe rejected promises as well.
+            const decision = instance.shouldUpdate();
+            if (decision === false) return;
+            if (decision && typeof decision.then === 'function') {
+                Promise.resolve(decision).catch((e) =>
+                    console.error('[dj-hook] Error in %s:', `${entry.hookName}.shouldUpdate()`, e),
+                );
+            }
+        } catch (e) {
+            console.error('[dj-hook] Error in %s:', `${entry.hookName}.shouldUpdate()`, e);
+        }
+    }
+    _callHook(entry, 'updated');
+}
+
 /**
- * Called after a DOM patch to update/mount/destroy hooks as needed.
+ * Called after a DOM update: destroy the hooks that left, then update the
+ * hooks that stayed and mount the new ones, in document order.
  */
 function updateHooks(root) {
     _ensureHooksInit();
     root = root || document;
     const hooks = _getHookDefs();
-
-    // 1. Find all currently hooked elements in the DOM
-    const currentElements = new Set();
-    root.querySelectorAll('[dj-hook]').forEach(el => {
+    _destroyDetachedHooks(root);
+    _eachHookEl(root, (el) => {
         const elId = _getHookElId(el);
-        currentElements.add(elId);
-
-        const hookName = el.getAttribute('dj-hook');
-        let existing = _activeHooks.get(elId);
-        if (existing && (existing.el !== el || existing.hookName !== hookName)) {
-            // A replacement node or changed hook definition needs a fresh
-            // instance; dispose resources belonging to the old one first.
-            if (typeof existing.instance.destroyed === 'function') {
-                _safeCallHook(existing.instance.destroyed.bind(existing.instance),
-                    `${existing.hookName}.destroyed()`);
-            }
-            _activeHooks.delete(elId);
-            existing = null;
+        const entry = _activeHooks.get(elId);
+        if (entry && entry.el === el) {
+            _updateHookEntry(entry);
+            return;
         }
-
-        if (existing) {
-            // Element still exists — call updated() if requested.
-            let update = true;
-            if (typeof existing.instance.updated === 'function' &&
-                typeof existing.instance.shouldUpdate === 'function') {
-                try {
-                    // Only an explicit synchronous false suppresses the callback.
-                    // Exceptions and async predicates fail open so an update is
-                    // never silently lost; observe rejected promises as well.
-                    const decision = existing.instance.shouldUpdate();
-                    if (decision === false) update = false;
-                    if (decision && typeof decision.then === 'function') {
-                        Promise.resolve(decision).catch((e) =>
-                            console.error('[dj-hook] Error in %s:', `${hookName}.shouldUpdate()`, e),
-                        );
-                    }
-                } catch (e) {
-                    console.error('[dj-hook] Error in %s:', `${hookName}.shouldUpdate()`, e);
-                }
-            }
-            if (update && typeof existing.instance.updated === 'function') {
-                _safeCallHook(
-                    existing.instance.updated.bind(existing.instance),
-                    `${hookName}.updated()`,
-                );
-            }
-        } else {
-            // New element — mount it
-            // eslint-disable-next-line security/detect-object-injection
-            const hookDef = hooks[hookName];
-            if (!hookDef) {
-                console.warn(`[dj-hook] No hook registered for "${hookName}"`);
-                return;
-            }
-            const instance = _createHookInstance(hookDef, el);
-            _activeHooks.set(elId, { hookName, instance, el });
-            if (typeof instance.mounted === 'function') {
-                _safeCallHook(instance.mounted.bind(instance), `${hookName}.mounted()`);
-            }
-        }
+        // Another node carrying this node's hook id (a copied expando): the
+        // instance belongs to that node, so this one gets a fresh instance.
+        if (entry) _destroyHookEntry(elId, entry);
+        _mountHookEl(el, hooks, false);
     });
-
-    // 2. Destroy hooks whose elements were removed
-    for (const [elId, entry] of _activeHooks) {
-        if (!currentElements.has(elId)) {
-            if (typeof entry.instance.destroyed === 'function') {
-                _safeCallHook(
-                    entry.instance.destroyed.bind(entry.instance),
-                    `${entry.hookName}.destroyed()`,
-                );
-            }
-            _activeHooks.delete(elId);
-        }
-    }
 }
 
 /**
- * Notify all hooks of WebSocket disconnect.
+ * Notify hooks that the live connection (WebSocket or SSE) dropped. Once per
+ * lost connection: the failed retries that follow call this again and are
+ * ignored until notifyHooksReconnected().
  */
 function notifyHooksDisconnected() {
     _ensureHooksInit();
+    _hooksOffline = true;
     for (const [, entry] of _activeHooks) {
-        if (typeof entry.instance.disconnected === 'function') {
-            _safeCallHook(
-                entry.instance.disconnected.bind(entry.instance),
-                `${entry.hookName}.disconnected()`,
-            );
-        }
+        if (entry.offline) continue;
+        entry.offline = true;
+        _callHook(entry, 'disconnected');
     }
 }
 
-/**
- * Notify all hooks of WebSocket reconnect.
- */
+/** Notify the hooks that got disconnected() that a connection is open again. */
 function notifyHooksReconnected() {
     _ensureHooksInit();
+    _hooksOffline = false;
     for (const [, entry] of _activeHooks) {
-        if (typeof entry.instance.reconnected === 'function') {
-            _safeCallHook(
-                entry.instance.reconnected.bind(entry.instance),
-                `${entry.hookName}.reconnected()`,
-            );
-        }
+        if (!entry.offline) continue;
+        entry.offline = false;
+        _callHook(entry, 'reconnected');
     }
 }
 
@@ -15273,15 +15296,7 @@ function dispatchPushEventToHooks(eventName, payload) {
  */
 function destroyAllHooks() {
     _ensureHooksInit();
-    for (const [, entry] of _activeHooks) {
-        if (typeof entry.instance.destroyed === 'function') {
-            _safeCallHook(
-                entry.instance.destroyed.bind(entry.instance),
-                `${entry.hookName}.destroyed()`,
-            );
-        }
-    }
-    _activeHooks.clear();
+    for (const [elId, entry] of _activeHooks) _destroyHookEntry(elId, entry);
 }
 
 /**
@@ -18466,6 +18481,9 @@ function _finalizeRemoval(el) {
     if (el.parentNode) {
         el.parentNode.removeChild(el);
     }
+    // A hook on or inside the element is destroyed now, not at the next
+    // update (#3656): no update follows the end of an exit transition.
+    if (typeof _destroyDetachedHooks === 'function') _destroyDetachedHooks();
 }
 
 // #4108: end every exit still playing under `root` now. A whole-page answer
