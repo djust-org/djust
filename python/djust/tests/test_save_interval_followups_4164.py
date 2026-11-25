@@ -260,3 +260,40 @@ async def test_an_over_limit_turns_session_write_is_bounded_by_the_save_deadline
             assert rt.state_unsaved
         finally:
             await comm.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# #4160: a full-page redirect sent through a push event
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "event, stored",
+    [("checkout", 100), ("leave", 10), ("leave_unsaved", 0)],
+    ids=["save=True", "save_state()", "neither"],
+)
+async def test_a_handler_that_sends_the_page_away_is_saved_before_its_reply_when_it_says_so(
+    runtimes, event, stored
+):
+    """There is no server-side full-redirect call, so a handler that sends
+    the browser to another page by pushing its own event is not seen as
+    navigation. The documented means (``save=True``, ``self.save_state()``)
+    store its state before the reply that carries the push, so the next page
+    loads it; without either the turn is deferred like any other."""
+    from djust.tests._ws_frames import has_type, receive_until
+
+    with _settings(DJUST_STATE_SAVE_INTERVAL=60):
+        key = await sync_to_async(sf.page_get)(Counter)
+        comm, _ = await harness.mount_view(Counter, key)
+        try:
+            frames = await harness.event_frames(comm, event)
+            at_reply = await _stored(key)
+            # The push that sends the page away follows the reply: by the time
+            # the browser acts on it, the state must be stored.
+            pushed = await receive_until(comm, has_type("push_event"), what="the push")
+            at_push = await _stored(key)
+        finally:
+            await comm.disconnect()
+    assert frames[-1]["type"] in ("patch", "html_update"), frames
+    assert pushed[-1]["event"] == "go", pushed
+    assert (at_reply, at_push) == (stored, stored)

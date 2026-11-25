@@ -66,6 +66,29 @@ class CheckoutView(LiveView):
             self.save_state()          # only this turn
 ```
 
+## A handler that sends the browser to another page itself
+
+`live_redirect()` and URL changes are seen as navigation and saved before the
+reply. There is no server-side call for a full-page redirect, so a handler that
+sends the browser away by pushing its own event (which client code turns into
+`window.location = ...`) looks like any other turn: with an interval set it
+may be deferred, and the next page can load before the state is stored. Mark
+such a handler `save=True`, or call `self.save_state()` on the turn that
+leaves; the state is then in storage before the reply, and the push follows
+the reply:
+
+```python
+class CheckoutView(LiveView):
+    @event_handler(save=True)
+    def finish(self):
+        self.status = "paid"
+        self.push_event("navigate", {"url": "/thanks/"})
+```
+
+`test_a_handler_that_sends_the_page_away_is_saved_before_its_reply_when_it_says_so`
+in `python/djust/tests/test_save_interval_followups_4164.py` pins both, and the
+deferred turn without either.
+
 ## One view
 
 A view's `state_save_interval` overrides the project's setting for that view;
@@ -112,8 +135,11 @@ store answers.
 ## Another connection for the same tab
 
 With an interval set, every socket mount of a tab (whether it restores saved
-state or starts from `mount()`) and every HTTP fallback request for it
-records a new holder token for the tab in the session. A socket's save is
+state or starts from `mount()`) and every HTTP fallback request for it that
+changes the tab's state records a new holder token for the tab in the
+session. A fallback request that changes nothing (a client falling back to
+HTTP may send one first) renders the stored state and records nothing, so the
+socket's later flush still lands. A socket's save is
 refused only when ANOTHER, unexpired token is recorded: a connection that
 holds older changes for that tab (a socket whose client has gone away
 unnoticed) cannot write over the newer holder's, even when the tab's saved
