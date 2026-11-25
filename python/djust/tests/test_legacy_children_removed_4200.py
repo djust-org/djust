@@ -72,4 +72,6 @@ async def test_released_explicit_view_refuses_new_waiters():
 
     assert view._djust_child_disposed is True
     with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(view.wait_for_event("x"), timeout=1)
+        await asyncio.wait_for(
+            view.wait_for_event("x"), timeout=10
+        )  # a refusal is immediate; the bound only stops a hang

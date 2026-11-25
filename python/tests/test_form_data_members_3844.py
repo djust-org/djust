@@ -459,23 +459,24 @@ class TestOverTheRealSocket:
     @staticmethod
     def _events(count: int):
         return [
-            {"event": "validate_field", "params": {"field": "f%d" % i, "value": [""] * 15_000}}
+            # 1,000 members: under the strict contract's 1,024 to a collection (#4205).
+            {"event": "validate_field", "params": {"field": "f%d" % i, "value": [""] * 1_000}}
             for i in range(count)
         ]
 
     def test_the_default_limits_stop_the_flood_at_the_member_limit(self, native):
         with livecfg():
-            answers = drive(self._events(30))
+            answers = drive(self._events(120))
         stored = reference_members(WsContact.last.form_data)
         assert 0 < stored <= DEFAULT_MAX_FORM_MEMBERS, stored
-        assert stored > DEFAULT_MAX_FORM_MEMBERS - 2 * 15_001  # six fit; the rest were refused
+        assert stored > DEFAULT_MAX_FORM_MEMBERS - 2 * 1_001  # 99 fit; the rest were refused
         assert "more values than the server accepts (100000)" in WsContact.last.form_errors[0]
         assert all(frame[-1]["type"] != "error" for frame in answers[1:])  # refusals, not crashes
 
     def test_without_the_member_limit_the_same_flood_is_stored_whole(self, native):
         with livecfg(max_form_members=0):
-            drive(self._events(30))
-        assert reference_members(WsContact.last.form_data) > 4 * DEFAULT_MAX_FORM_MEMBERS
+            drive(self._events(120))
+        assert reference_members(WsContact.last.form_data) > DEFAULT_MAX_FORM_MEMBERS
 
 
 class TestTheLimitHoldsOnEveryPath:
