@@ -191,7 +191,17 @@ _ENCODE_VIEW_STATE = (
     "state_after=..., vdom_patches=...).encode(scrub=scrub_fields(...))"
 )
 
+_REACT = (
+    "the React integration was removed (#4006): it rendered a placeholder <div> that only a "
+    "demo Counter ever hydrated. Mount a client-side widget with a JavaScript hook instead: put "
+    'dj-hook="Name" on an ordinary element and register the hook in window.djust.hooks '
+    "(https://docs.djust.org/guides/hooks/)"
+)
+
 REMOVED_NAMES: dict[tuple[str, str], str] = {
+    ("djust", "ReactMixin"): _REACT,
+    ("djust", "react_components"): _REACT,
+    ("djust", "register_react_component"): _REACT,
     ("djust", "time_travel"): _TIME_TRAVEL,
     ("djust.bug_capture", "encode_view_state"): _ENCODE_VIEW_STATE,
     ("djust", "PersistentLiveView"): _PERSISTENT_LIVE_VIEW,

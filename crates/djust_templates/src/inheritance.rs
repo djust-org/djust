@@ -335,11 +335,6 @@ fn node_references_block_super(node: &Node) -> bool {
         Node::BlockCustomTag { args, children, .. } => {
             any_expr(args.iter().map(String::as_str)) || nodes_reference_block_super(children)
         }
-        Node::ReactComponent {
-            props, children, ..
-        } => {
-            any_expr(props.iter().map(|(_, v)| v.as_str())) || nodes_reference_block_super(children)
-        }
         // `{% blocktranslate with s=block.super %}` — the operands are in
         // `args`, and the BODY is raw source that can name it in a placeholder.
         Node::RawBlockCustomTag { args, body, .. } => {
@@ -1417,11 +1412,6 @@ fn node_to_template_string(node: &Node, state: &mut FlattenPartials) -> String {
         Node::CsrfToken => "{% csrf_token %}".to_string(),
         Node::DjustAudio => "{% djust_audio %}".to_string(),
         Node::Static(operand) => format!("{{% static {operand} %}}"),
-        Node::ReactComponent { .. } => {
-            // React components should be preserved as-is if possible
-            // For now, skip them as they're handled separately
-            String::new()
-        }
         Node::CustomTag { name, args } => {
             // Reconstruct custom tag: {% tagname arg1 arg2 %}
             let mut result = format!("{{% {name}");

@@ -20,13 +20,10 @@ pub enum Token {
     /// silently deleted the comment from the body, so Django never saw it and
     /// rendered a mangled msgid instead of raising.
     Comment(String),
-    JsxComponent {
-        // <Button prop="value">children</Button>
-        name: String,
-        props: Vec<(String, String)>,
-        children: Vec<Token>,
-        self_closing: bool,
-    },
+    /// `<Name ...>` whose name starts with an uppercase letter and is not an
+    /// uppercase spelling of a standard HTML/SVG element (#4006). djust 2.0
+    /// removed React/JSX component tags; the parser refuses it by name.
+    CapitalizedTag(String),
 }
 
 /// A char cursor over the template source that also knows the BYTE offset of
@@ -107,155 +104,175 @@ impl<'a> Cursor<'a> {
     }
 }
 
-fn parse_jsx_component(chars: &mut Cursor<'_>) -> Result<Token> {
-    let mut name = String::new();
-    let mut props = Vec::new();
+/// Standard HTML and SVG element names (lowercase). A capitalized spelling of
+/// one of these (`<DIV>`, `<BR>`) is HTML, not a component tag (#4006).
+const STANDARD_ELEMENTS: &[&str] = &[
+    "a",
+    "abbr",
+    "acronym",
+    "address",
+    "area",
+    "article",
+    "aside",
+    "audio",
+    "b",
+    "base",
+    "bdi",
+    "bdo",
+    "big",
+    "blockquote",
+    "body",
+    "br",
+    "button",
+    "canvas",
+    "caption",
+    "center",
+    "cite",
+    "code",
+    "col",
+    "colgroup",
+    "data",
+    "datalist",
+    "dd",
+    "del",
+    "details",
+    "dfn",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "embed",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "font",
+    "footer",
+    "form",
+    "frame",
+    "frameset",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "header",
+    "hgroup",
+    "hr",
+    "html",
+    "i",
+    "iframe",
+    "img",
+    "input",
+    "ins",
+    "kbd",
+    "label",
+    "legend",
+    "li",
+    "link",
+    "main",
+    "map",
+    "mark",
+    "marquee",
+    "menu",
+    "meta",
+    "meter",
+    "nav",
+    "noframes",
+    "noscript",
+    "object",
+    "ol",
+    "optgroup",
+    "option",
+    "output",
+    "p",
+    "param",
+    "picture",
+    "pre",
+    "progress",
+    "q",
+    "rp",
+    "rt",
+    "ruby",
+    "s",
+    "samp",
+    "script",
+    "search",
+    "section",
+    "select",
+    "slot",
+    "small",
+    "source",
+    "span",
+    "strike",
+    "strong",
+    "style",
+    "sub",
+    "summary",
+    "sup",
+    "table",
+    "tbody",
+    "td",
+    "template",
+    "textarea",
+    "tfoot",
+    "th",
+    "thead",
+    "time",
+    "title",
+    "tr",
+    "track",
+    "tt",
+    "u",
+    "ul",
+    "var",
+    "video",
+    "wbr", // SVG
+    "svg",
+    "g",
+    "path",
+    "circle",
+    "ellipse",
+    "line",
+    "polygon",
+    "polyline",
+    "rect",
+    "text",
+    "tspan",
+    "defs",
+    "use",
+    "symbol",
+    "marker",
+    "mask",
+    "pattern",
+    "clippath",
+    "lineargradient",
+    "radialgradient",
+    "stop",
+    "image",
+    "foreignobject",
+    "switch",
+    "view",
+    "filter",
+    "desc",
+    "textpath",
+    "animate",
+    "animatetransform",
+    "animatemotion",
+    "set",
+    "mpath",
+    "metadata",
+];
 
-    // Parse component name
-    while let Some(ch) = chars.peek() {
-        if ch.is_alphanumeric() || ch == '_' {
-            name.push(ch);
-            chars.next();
-        } else {
-            break;
-        }
-    }
-
-    // Skip whitespace
-    while chars.peek() == Some(' ') || chars.peek() == Some('\n') || chars.peek() == Some('\t') {
-        chars.next();
-    }
-
-    // Parse props
-    while let Some(ch) = chars.peek() {
-        if ch == '/' || ch == '>' {
-            break;
-        }
-
-        if ch.is_alphabetic() {
-            let mut prop_name = String::new();
-            let mut prop_value = String::new();
-
-            // Parse prop name
-            while let Some(ch) = chars.peek() {
-                if ch == '=' || ch.is_whitespace() {
-                    break;
-                }
-                prop_name.push(ch);
-                chars.next();
-            }
-
-            // Skip whitespace and =
-            while chars.peek() == Some(' ') || chars.peek() == Some('=') {
-                chars.next();
-            }
-
-            // Parse prop value
-            if chars.peek() == Some('"') || chars.peek() == Some('\'') {
-                let quote = chars.next().unwrap();
-                while let Some(ch) = chars.next() {
-                    if ch == quote {
-                        break;
-                    }
-                    prop_value.push(ch);
-                }
-            } else if chars.peek() == Some('{') {
-                // Handle {expression} props
-                chars.next(); // consume {
-                let mut depth = 1;
-                while let Some(ch) = chars.next() {
-                    if ch == '{' {
-                        depth += 1;
-                    } else if ch == '}' {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    prop_value.push(ch);
-                }
-            }
-
-            if !prop_name.is_empty() {
-                props.push((prop_name, prop_value));
-            }
-
-            // Skip whitespace
-            while chars.peek() == Some(' ')
-                || chars.peek() == Some('\n')
-                || chars.peek() == Some('\t')
-            {
-                chars.next();
-            }
-        } else {
-            chars.next();
-        }
-    }
-
-    // Check if self-closing
-    if chars.peek() == Some('/') {
-        chars.next(); // consume /
-        chars.next(); // consume >
-        return Ok(Token::JsxComponent {
-            name,
-            props,
-            children: vec![],
-            self_closing: true,
-        });
-    }
-
-    // Consume >
-    chars.next();
-
-    // Parse children (simplified - just text for now)
-    let mut children = vec![];
-    let mut child_text = String::new();
-
-    while let Some(ch) = chars.next() {
-        if ch == '<' && chars.peek() == Some('/') {
-            // Potential closing tag - verify it matches our component name
-            // Save position by peeking ahead
-            let mut tag_name = String::new();
-            let mut temp_chars = chars.clone();
-            temp_chars.next(); // consume / in temp iterator
-
-            while let Some(ch) = temp_chars.peek() {
-                if ch == '>' || ch.is_whitespace() {
-                    break;
-                }
-                tag_name.push(ch);
-                temp_chars.next();
-            }
-
-            if tag_name == name {
-                // This is our closing tag
-                chars.next(); // consume /
-                if !child_text.is_empty() {
-                    children.push(Token::Text(child_text.trim().to_string()));
-                }
-                // Skip to >
-                while chars.peek() != Some('>') {
-                    if chars.next().is_none() {
-                        break;
-                    }
-                }
-                chars.next(); // consume >
-                break;
-            } else {
-                // This is a closing tag for nested HTML, add it as-is
-                child_text.push(ch); // add the '<'
-            }
-        } else {
-            child_text.push(ch);
-        }
-    }
-
-    Ok(Token::JsxComponent {
-        name,
-        props,
-        children,
-        self_closing: false,
-    })
+/// True for an all-uppercase spelling of a standard element (`DIV`, `BR`).
+/// `Button`-style PascalCase names are component tags even when a lowercase
+/// element of that name exists.
+fn is_uppercase_html_element(name: &str) -> bool {
+    !name.chars().any(|c| c.is_ascii_lowercase())
+        && STANDARD_ELEMENTS.contains(&name.to_ascii_lowercase().as_str())
 }
 
 /// Split tag content into arguments, respecting quoted strings.
@@ -402,23 +419,32 @@ pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
             continue;
         }
         if ch == '<' {
-            // Check if this is a JSX component (starts with uppercase)
+            // `<Name` with an uppercase first letter is a refused component tag (#4006).
             if let Some(next_ch) = chars.peek() {
-                if next_ch.is_uppercase() {
-                    // JSX component detected
-                    flush_text!(tok_start);
-                    match parse_jsx_component(&mut chars) {
-                        Ok(token) => {
-                            let end = chars.pos();
-                            out.push(token, tok_start, end);
-                        }
-                        Err(_) => {
-                            // Fallback to text if parsing fails
-                            text_start = tok_start;
-                            current.push(ch);
+                if next_ch.is_ascii_uppercase() {
+                    let mut look = chars.clone();
+                    let mut name = String::new();
+                    while let Some(c) = look.peek() {
+                        if c.is_ascii_alphanumeric() || c == '_' {
+                            name.push(c);
+                            look.next();
+                        } else {
+                            break;
                         }
                     }
-                    continue;
+                    if matches!(look.peek(), Some(c) if c.is_whitespace() || c == '/' || c == '>')
+                        && !is_uppercase_html_element(&name)
+                    {
+                        flush_text!(tok_start);
+                        chars = look;
+                        while let Some(c) = chars.next() {
+                            if c == '>' {
+                                break;
+                            }
+                        }
+                        out.push(Token::CapitalizedTag(name), tok_start, chars.pos());
+                        continue;
+                    }
                 }
             }
             current.push(ch);
@@ -733,44 +759,21 @@ mod tests {
     }
 
     #[test]
-    fn test_tokenize_jsx_self_closing() {
-        let tokens = tokenize("Hello <Button label=\"Click me\" />").unwrap();
-        assert_eq!(tokens.len(), 2);
-        assert_eq!(tokens[0], Token::Text("Hello ".to_string()));
-        if let Token::JsxComponent {
-            name,
-            props,
-            self_closing,
-            ..
-        } = &tokens[1]
-        {
-            assert_eq!(name, "Button");
-            assert_eq!(props.len(), 1);
-            assert_eq!(props[0].0, "label");
-            assert_eq!(props[0].1, "Click me");
-            assert!(self_closing);
-        } else {
-            panic!("Expected JsxComponent token");
-        }
+    fn capitalized_tag_is_one_token() {
+        let tokens = tokenize("<Button label=\"x\" />").unwrap();
+        assert_eq!(tokens, vec![Token::CapitalizedTag("Button".to_string())]);
     }
 
     #[test]
-    fn test_tokenize_jsx_with_children() {
-        let tokens = tokenize("<Button>Click me</Button>").unwrap();
-        assert_eq!(tokens.len(), 1);
-        if let Token::JsxComponent {
-            name,
-            children,
-            self_closing,
-            ..
-        } = &tokens[0]
-        {
-            assert_eq!(name, "Button");
-            assert!(!self_closing);
-            assert_eq!(children.len(), 1);
-        } else {
-            panic!("Expected JsxComponent token");
-        }
+    fn uppercase_after_lt_without_tag_shape_is_text() {
+        let tokens = tokenize("a<B)").unwrap();
+        assert_eq!(tokens, vec![Token::Text("a<B)".to_string())]);
+    }
+
+    #[test]
+    fn uppercase_html_element_names_stay_text() {
+        let tokens = tokenize("<DIV>x<BR></DIV>").unwrap();
+        assert_eq!(tokens, vec![Token::Text("<DIV>x<BR></DIV>".to_string())]);
     }
 
     #[test]
@@ -886,7 +889,7 @@ mod tests {
                             "{slice:?}"
                         )
                     }
-                    Token::JsxComponent { .. } => {}
+                    Token::CapitalizedTag(_) => {}
                 }
             }
         }

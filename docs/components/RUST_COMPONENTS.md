@@ -34,8 +34,11 @@ djust 2.0 removed three Rust component APIs that were broken or never
 reachable:
 
 - **JSX-style template tags** such as `<RustButton id="b" label="Go" />`. The
-  template engine now refuses any `<Rust…>` tag with a template error. Render a
-  `djust.components.ui` component, or a component template tag, instead.
+  template engine now refuses any capitalized component tag (`<Rust…>`,
+  `<Button>`, `<Counter />`; djust.react is gone too, #4006) with a template
+  error. An uppercase spelling of an HTML element (`<DIV>`) is still HTML.
+  Render a `djust.components.ui` component, or a component template tag,
+  instead.
 - **`djust.rust_components`**, the Python wrapper module. Its `Button`
   constructor did not match the compiled class and raised `TypeError`. Use
   `djust.components.ui.Button`.

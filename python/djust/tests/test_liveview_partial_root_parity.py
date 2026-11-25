@@ -1048,7 +1048,7 @@ def test_http_dynamic_include_transitions_between_fragment_and_partial_root(tmp_
         assert not mounted[-1]._rust_view.authenticated_partial_root()
 
 
-def test_react_hydration_and_lazy_child_survive_partial_root_page_and_patch(tmp_path):
+def test_lazy_child_survives_partial_root_page_and_patch(tmp_path):
     """The browser can mount and patch a partial root with postprocessed children."""
     import shutil
     import subprocess
@@ -1057,7 +1057,6 @@ def test_react_hydration_and_lazy_child_survive_partial_root_page_and_patch(tmp_
     from django.contrib.auth.models import AnonymousUser
     from django.contrib.sessions.backends.db import SessionStore
     from django.test import RequestFactory
-    from djust.react import react_components
 
     node = shutil.which("node")
     repo = Path(__file__).resolve().parents[3]
@@ -1074,7 +1073,6 @@ def test_react_hydration_and_lazy_child_survive_partial_root_page_and_patch(tmp_
         "page.html",
         "<!doctype html><html><body>"
         "{% partialdef page %}<main dj-root><strong>{{ value }}</strong>"
-        '<Greeting who="friend" />'
         f'<div dj-view="{__name__}.HydrationLazyChild" dj-lazy></div>'
         "</main>{% endpartialdef %}{% partial page %}</body></html>",
     )
@@ -1089,7 +1087,6 @@ def test_react_hydration_and_lazy_child_survive_partial_root_page_and_patch(tmp_
     request = RequestFactory().get("/")
     request.user = AnonymousUser()
     request.session = SessionStore()
-    react_components.register("Greeting")(lambda props, children: "<span>HELLO_REACT</span>")
     try:
         with override_settings(
             TEMPLATES=templates_for(tmp_path),
@@ -1098,7 +1095,6 @@ def test_react_hydration_and_lazy_child_survive_partial_root_page_and_patch(tmp_
             response = HydrationPartialView.as_view()(request)
             assert response.status_code == 200
             page = response.content.decode()
-            assert "HELLO_REACT" in page
             assert 'data-djust-lazy-id="lazy_' in page
             view = HydrationPartialView()
             view.mount(request)
@@ -1126,7 +1122,6 @@ def test_react_hydration_and_lazy_child_survive_partial_root_page_and_patch(tmp_
         )
         assert result.returncode == 0, result.stderr
     finally:
-        react_components._components.pop("Greeting", None)
         globals().pop("HydrationLazyChild", None)
 
 

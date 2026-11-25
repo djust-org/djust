@@ -758,6 +758,7 @@ Every replacement works on 1.3.x, so make the change there.
 | The observability endpoints `reset_view_state/` and `eval_handler/`, `djust.observability.dry_run` (`DryRunContext`, `DryRunViolation`), and the MCP tools `eval_handler` and `reset_view_state` | Nothing replaces them. They worked only on views that state `exposure_policy = "legacy"` (every other view got `409`), so they leave with the legacy policy. Drive a handler through the live page, or through `LiveViewTestClient.send_event()` in a test. The read-only endpoints (`view_assigns/`, `last_traceback/`, `log/`, `handler_timings/`, `turn_timings/`, `sql_queries/`) and their MCP tools stay. |
 | System check `djust.V011` (sticky child and parent snapshot opt-in) | Remove it from `SILENCED_SYSTEM_CHECKS`; nothing reports it. `djust.C304` now warns about a `client=True` field with a credential-like name. |
 | `NonPersistableStateError`, and the `strict=` argument of `LiveView._capture_snapshot_state()` | Nothing. A client field has to be JSON, and a model or `Decimal` is refused when the token is built. |
+| `djust.react` (`ReactMixin`, `react_components`, `register_react_component`) and capitalized `<Button />`-style component tags in templates | A JavaScript hook: `dj-hook="Name"` on an ordinary element, the hook in `window.djust.hooks` ([hooks guide](hooks.md)). Importing the names raises `ImportError`; a capitalized tag that is not an uppercase HTML element name is a template error ([#4006](https://github.com/djust-org/djust/issues/4006)). |
 
 <!-- END GENERATED removed-table:python -->
 
@@ -1089,6 +1090,11 @@ of looking for a replacement.
   still sets either is refused when the class is created.
 - **The `reset_view_state` and `eval_handler` debug endpoints** and their MCP
   tools. They worked only on views that state `exposure_policy = "legacy"`.
+- **React component tags (`djust.react`, `ReactMixin`).** The integration
+  rendered a placeholder that only a demo Counter hydrated. A capitalized tag
+  such as `<Button />` is now a template error (an uppercase spelling of an
+  ordinary HTML element, `<DIV>`, is still HTML; write tags in lowercase
+  anyway). Mount a widget with a [JavaScript hook](hooks.md) instead.
 
 ## 6. Finish
 
@@ -1106,4 +1112,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 68d58f21ec6d -->
+<!-- generated-doc prose-sha256: ea3f41806312 -->

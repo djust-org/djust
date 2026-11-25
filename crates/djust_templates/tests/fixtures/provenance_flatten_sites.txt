@@ -135,11 +135,6 @@ std::sync::Arc::from(resolved_nodes.as_slice())
 "Recursive named partials selected by dynamic includes are unsupported for LiveViews".to_string(),
 output.identify(&format!("include:{}", name));
 Ok((String::new()).into())
-output.push_str(&format!("<div data-react-component=\"{name}\""));
-ctx_value.to_string()
-ctx_value.to_string()
-format!(
-output.push_str(&filters::html_escape_attr(&format!(
 .map(|v| v.to_string())
 Ok((format!(
 .into())
@@ -301,8 +296,6 @@ Some("fr".to_string())
 let nodes = vec![Node::Text("Hello".to_string())];
 let nodes = vec![Node::Variable("name".to_string(), vec![], false)];
 context.set("name".to_string(), Value::String("World".to_string()));
-"name".to_string(),
-Value::String("it's \"q\" <b> a\\b\n".to_string()),
 context.set("show".to_string(), Value::Bool(true));
 "items".to_string(),
 Value::String("a".to_string()),
