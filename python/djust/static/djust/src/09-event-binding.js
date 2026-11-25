@@ -2384,7 +2384,7 @@ function reinitAfterDOMUpdate(scope) {
     // #4007: a chunked feature (dj-virtual, CursorOverlay, tutorial bubble)
     // this update rendered for the first time loads its chunk now; the
     // chunk's ready handler runs its init once it has loaded.
-    if (typeof _djustLoadChunksFor === 'function') _djustLoadChunksFor(reinitScope);
+    _djustLoadChunksFor(reinitScope);
     if (window.djust.initVirtualLists) window.djust.initVirtualLists(reinitScope);
     if (window.djust.refreshVirtualList) {
         reinitScope.querySelectorAll('[dj-virtual]').forEach((el) => {
