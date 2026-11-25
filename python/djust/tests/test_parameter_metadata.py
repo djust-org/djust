@@ -119,7 +119,18 @@ def test_disposed_children_are_not_advertised():
     assert len(manifest(root)["owners"]) == 1
 
 
-def test_wrapper_method_precedence_hides_descriptor_handler():
+@pytest.fixture
+def legacy_project():
+    """The page's own handlers (``update_model``) inherit a legacy project policy."""
+    from djust.config import config
+
+    previous = config.get("event_parameter_policy", "strict")
+    config.set("event_parameter_policy", "legacy")
+    yield
+    config.set("event_parameter_policy", previous)
+
+
+def test_wrapper_method_precedence_hides_descriptor_handler(legacy_project):
     class Menu(LiveComponent):
         class State(TypedState):
             selected: int = 0
@@ -161,7 +172,7 @@ def test_new_manifest_limits_do_not_reject_legacy_only_mounts():
         manifest(root)
 
 
-def test_bound_instance_shadowing_including_none_matches_dispatch():
+def test_bound_instance_shadowing_including_none_matches_dispatch(legacy_project):
     class Menu(LiveComponent):
         class State(TypedState):
             selected: int = 0

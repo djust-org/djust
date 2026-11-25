@@ -627,6 +627,12 @@ class LiveView(
     # A mixin that sets it must come BEFORE ``LiveView`` in the bases.
     params_form_fallback: str = "initial"
 
+    # Service-worker caching of this page's HTML (#4176). True lets the opt-in service
+    # worker keep the page in its VDOM and shell caches: only for a page that renders the
+    # same HTML for every visitor (djust.V037 reports one that reads the user, the session
+    # or persisted state). Read from the class; ``self.sw_cacheable = True`` does nothing.
+    sw_cacheable: bool = False
+
     # Per-view query budget (#3686, #3701). ``None`` (the default) leaves the
     # view on the smoke test's class-wide ``max_queries`` and measures nothing
     # at run time. An int caps mount + first render combined; a dict caps the

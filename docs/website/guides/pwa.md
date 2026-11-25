@@ -218,6 +218,10 @@ elements always visible, online or not.)
 
 ## Service Worker Configuration
 
+An explicit-exposure page is not written to the worker's shell or VDOM cache
+unless its view sets `sw_cacheable = True`; see
+[Which pages the worker caches](service-worker.md#which-pages-the-worker-caches-20).
+
 There are two settings surfaces, and which one applies depends on the consumer:
 
 - **`DJUST_CONFIG` flat `PWA_*` keys** (below) are read by `PWAMixin.get_pwa_config()`,

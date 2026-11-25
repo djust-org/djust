@@ -404,7 +404,7 @@ class TestScopedPath:
         completed = []
         view, runtime, transport = await _mounted(OpaquePage)
 
-        @event_handler()
+        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
         def select(component, **kwargs):
             if frame_type != "noop":
                 component.state.active = "billing"

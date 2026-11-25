@@ -27,7 +27,12 @@ from djust.decorators import cache, event_handler, rate_limit, state
 from djust.tests import http_fallback_matrix as matrix
 from djust.tests.http_fallback_matrix import PAGE, answer_kind, meta_digest, post_event
 
-pytestmark = [pytest.mark.django_db(transaction=True)]
+pytestmark = [
+    pytest.mark.django_db(transaction=True),
+    # These tests compare answers across page loads; the strict default adds a
+    # per-view contract snapshot to each (#4189).
+    pytest.mark.usefixtures("legacy_project_policy"),
+]
 
 #: Today a view's saved state is shared by every tab of a session on a route,
 #: so one tab's event makes the other tab's digest stale. When saved state

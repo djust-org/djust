@@ -14,6 +14,9 @@ from djust.tests.test_background_html_fallback import BackgroundView
 from djust.websocket import LiveViewConsumer
 
 
+pytestmark = [pytest.mark.usefixtures("legacy_project_policy")]
+
+
 class LegacyBackgroundView(BackgroundView):
     """``test_background_html_fallback.BackgroundView`` runs as explicit since
     #4082; these tests install views on hand-built consumers and runtimes with

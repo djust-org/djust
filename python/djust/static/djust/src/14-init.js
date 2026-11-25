@@ -159,9 +159,6 @@ function djustInit() {
         if (globalThis.djustDebug) console.log('[LiveView] Deferring WebSocket connection until lazy elements are needed');
     }
 
-    // Initialize React counters (if any)
-    initReactCounters();
-
     // Bind initial events
     bindLiveViewEvents();
 

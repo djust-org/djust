@@ -836,7 +836,7 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
 /// * a nested `Node::For` — composes the dj-if loop path from the outer index.
 /// * a `{{ forloop.* }}` variable reference (defensive — see module docs).
 /// * `Node::CustomTag` / `Node::BlockCustomTag` / `Node::AssignTag` /
-///   `Node::Include` / `Node::ReactComponent` /
+///   `Node::Include` /
 ///   `Node::UnsupportedTag` — opaque Python/component-backed output we cannot
 ///   prove is position-independent, so treat as non-cacheable
 ///   (conservative = correct).
@@ -873,7 +873,6 @@ fn node_is_position_dependent(node: &Node) -> bool {
         | Node::LocalTime { .. }
         | Node::AssignTag { .. }
         | Node::Include { .. }
-        | Node::ReactComponent { .. }
         | Node::UnsupportedTag { .. } => true,
         // `{{ forloop.* }}` reference (defensive).
         Node::Variable(name, _filters, _in_attr) => {

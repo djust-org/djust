@@ -2412,7 +2412,7 @@ function clearOptimisticState(eventName) {
  *
  * Call this after any operation that replaces or morphs DOM content
  * (html_update, html_recovery, TurboNav, embedded view update, etc.)
- * instead of manually calling initReactCounters +
+ * instead of manually calling
  * bindLiveViewEvents + updateHooks + bindModelElements individually.
  */
 // WeakSet to track elements that have already been scrolled into view.
@@ -2421,7 +2421,6 @@ function clearOptimisticState(eventName) {
 const _scrolledElements = new WeakSet();
 
 function reinitAfterDOMUpdate(scope) {
-    initReactCounters();
     bindLiveViewEvents(scope);
     // A clear_draft() from an event handler arrives in a patch (#2971).
     applyDraftClearFlag();

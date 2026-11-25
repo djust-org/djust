@@ -178,8 +178,9 @@ class LiveViewConfig:
         # ``event_security`` was removed in 2.0 (#4101): only @event_handler
         # methods are client events, on every transport. "open" / "warn" fail
         # startup (``djust._removed_settings``); "strict" is accepted and ignored.
-        # ADR-036: opt-in predictable signature binding and bounded conversion.
-        "event_parameter_policy": "legacy",
+        # ADR-036: strict event parameters, the default since 2.0 (#4189). "legacy" is
+        # deprecated and removed before 2.0.0 (#4199).
+        "event_parameter_policy": "strict",
         # LiveView transport mode
         "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
         # WebSocket per-message compression advisory flag (v0.6.0).

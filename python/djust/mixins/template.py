@@ -791,8 +791,6 @@ class TemplateMixin:
 
         def _record_dj_model_fields_from_rust(self, rust_view: Any) -> None: ...
 
-        def _hydrate_react_components(self, html: str) -> str: ...
-
         def _reset_temporary_assigns(self) -> None: ...
 
         def _extract_handler_metadata(self) -> Dict[str, Dict[str, Any]]: ...
@@ -1104,9 +1102,6 @@ class TemplateMixin:
         # AST (Text-node literals only) — immune to rendered-output poisoning;
         # see ModelBindingMixin._record_dj_model_fields_from_rust.
         self._record_dj_model_fields_from_rust(self._rust_view)
-
-        # Post-process to hydrate React components
-        html = self._hydrate_react_components(html)
 
         # Inject handler metadata for client-side decorators
         html = self._inject_handler_metadata(html, request=request)
@@ -2087,11 +2082,11 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
                 self._prepared_authenticated_page_root = self._rust_view.prepared_page_has_root()
                 if root_range is not None:
                     start, end = (page.char_offset(offset) for offset in root_range)
-                    root = self._hydrate_react_components(page[start:end])
+                    root = page[start:end]
                     root = self._strip_comments_and_whitespace(root)
                     rendered_page = page[:start] + root + page[end:]
                 else:
-                    rendered_page = self._hydrate_react_components(page)
+                    rendered_page = page
                     from .._rust import root_element_span
 
                     ordinary_span = root_element_span(rendered_page)
@@ -2119,7 +2114,6 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             # (Text-node literals) — reflects exactly the developer-exposed
             # static bindings; immune to rendered-output poisoning.
             self._record_dj_model_fields_from_rust(self._rust_view)
-            liveview_html = self._hydrate_react_components(liveview_html)
 
             # #1737: normalize the rendered dj-root so the initial-GET output
             # is structurally identical to the first WS frame. The WS path

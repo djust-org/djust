@@ -32,6 +32,18 @@ from djust.validation import (
 # ============================================================================
 
 
+@pytest.fixture(autouse=True)
+def _legacy_parameter_policy():
+    """This module tests the legacy parameter path; strict became the default in #4189.
+    Removed with the legacy path (#4198/#4205)."""
+    from djust.config import config
+
+    previous = config.get("event_parameter_policy", "strict")
+    config.set("event_parameter_policy", "legacy")
+    yield
+    config.set("event_parameter_policy", previous)
+
+
 class TestPrototypePollutionBlocked:
     """Verify safe_setattr blocks prototype pollution and dunder attribute attacks."""
 

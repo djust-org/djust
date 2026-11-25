@@ -80,7 +80,7 @@ describe('no test imports a static/djust JS file that is not shipped (#2659)', (
         expect(fs.existsSync(path.join(STATIC_DIR, 'js', 'pwa.js'))).toBe(false);
         // react-client.js: no loader, no test importer, no docs, and the
         // React hydration it duplicated is server-side
-        // (mixins/post_processing.py::_hydrate_react_components).
+        // (removed with djust.react, #4006).
         expect(fs.existsSync(path.join(STATIC_DIR, 'react-client.js'))).toBe(false);
         // security.js: the one allowlist row that admitted to having no
         // loader (#2679). `djustSecurity` was `undefined` in every browser

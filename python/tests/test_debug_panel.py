@@ -36,7 +36,7 @@ class TestGetDebugInfo:
             template_name = "test.html"
             count = 0
 
-            @event_handler
+            @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
             def increment(self, amount: int = 1):
                 """Increment the counter"""
                 self.count += amount
@@ -89,7 +89,7 @@ class TestGetDebugInfo:
             template_name = "test.html"
 
             @debounce(wait=0.5)
-            @event_handler
+            @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
             def search(self, query: str = ""):
                 """Search for items"""
                 pass
@@ -527,7 +527,7 @@ class TestDebugPanelMetadata:
             exposure_policy = "legacy"
             template_string = "<div>Test</div>"
 
-            @event_handler
+            @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
             def search(self, query: str = "", limit: int = 10, **kwargs):
                 """Search with query and limit"""
                 pass

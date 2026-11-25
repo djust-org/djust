@@ -151,7 +151,7 @@ async def test_background_batch_acknowledges_only_after_all_child_tasks(monkeypa
 @pytest.mark.parametrize("shape", ["sync", "async", "returned-coroutine"])
 @pytest.mark.parametrize("strict", [False, True])
 async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(
-    monkeypatch, shape, strict
+    monkeypatch, shape, strict, legacy_project_policy
 ):
     calls = []
     root_calls = []

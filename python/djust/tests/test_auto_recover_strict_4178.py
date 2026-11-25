@@ -151,7 +151,7 @@ class ProjectStrict(_Base):
 class LegacyRecovery(_Base):
     """The 1.x spelling, unchanged under the legacy policy."""
 
-    @event_handler()
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def restore(self, _form_values=None, _data_attrs=None, **kwargs):
         CALLS.append(("legacy", _form_values, _data_attrs, kwargs))
         self._apply(_form_values or {}, _data_attrs or {})
@@ -533,7 +533,10 @@ def _check(handler_source: str, **liveview_config: Any) -> list:
     sys.modules[name] = module
     try:
         exec(compile(_VIEW % handler_source, "<4178>", "exec"), module.__dict__)  # noqa: S102
-        with override_settings(LIVEVIEW_CONFIG=liveview_config):
+        # The "under legacy" cases state the project policy; strict is the default (#4189).
+        with override_settings(
+            LIVEVIEW_CONFIG={"event_parameter_policy": "legacy", **liveview_config}
+        ):
             messages = check_event_parameter_contracts(None)
     finally:
         del sys.modules[name]
@@ -589,7 +592,10 @@ def _check_module(source: str, monkeypatch, **liveview_config: Any) -> list:
     sys.modules[name] = module
     try:
         exec(compile(source, "<4178>", "exec"), module.__dict__)  # noqa: S102
-        with override_settings(LIVEVIEW_CONFIG=liveview_config):
+        # The "under legacy" cases state the project policy; strict is the default (#4189).
+        with override_settings(
+            LIVEVIEW_CONFIG={"event_parameter_policy": "legacy", **liveview_config}
+        ):
             messages = check_event_parameter_contracts(None)
     finally:
         del sys.modules[name]

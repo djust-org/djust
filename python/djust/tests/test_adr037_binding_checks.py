@@ -25,13 +25,19 @@ from djust import LiveView
 from djust._template_bindings import django_engine
 from djust.checks.bindings import (
     OwnerReport,
-    _messages,
+    _messages as _all_messages,
     check_event_bindings,
     coverage,
     scan_owner,
     summary_line,
 )
 from djust.components.base import LiveComponent
+
+
+def _messages(reports):
+    """T019-T022 only: T028 (a legacy handler strict would refuse) has its own tests."""
+    return [m for m in _all_messages(reports) if m.id != "djust.T028"]
+
 
 MODULE = "binding_check_fixture"
 
@@ -621,7 +627,14 @@ def test_managed_objects_and_authorized_querysets_are_not_flagged(discovery):
         # LIVEVIEW_ALLOWED_MODULES (V005), and EditUser declares no login (S005).
         # EditUser states exposure_policy = "legacy" (#4038's pin), which V028
         # (#4066) reports; that is placement too, not a persistence finding.
-        assert set(flagged) <= {"djust.V005", "djust.S005", "djust.V002", "djust.V028"}, (
+        # UserList's legacy handler gets T028 (#4190): a 2.0 upgrade finding.
+        assert set(flagged) <= {
+            "djust.V005",
+            "djust.S005",
+            "djust.V002",
+            "djust.V028",
+            "djust.T028",
+        }, (
             owner,
             flagged,
         )
@@ -677,10 +690,13 @@ def test_djust_check_json_discovers_owners_and_reports_bindings(discovery, monke
         "djust.T020",
         "djust.T021",
         "djust.T022",
+        "djust.T028",
     }
     template = next(t for t in data["coverage"]["templates"] if t["owner"] == "%s.Legacy" % MODULE)
     assert template["counts"]["checked"] > 0
-    entry = next(c for c in data["checks"] if "delete() requires" in c["message"])
+    entry = next(
+        c for c in data["checks"] if "delete() requires" in c["message"] and c["id"] == "djust.T020"
+    )
     assert entry["owner"] == "%s.Legacy" % MODULE
     assert entry["binding"] == 'dj-click="delete"'
     assert entry["expected"] == ["item_id"] and entry["supplied"] == []

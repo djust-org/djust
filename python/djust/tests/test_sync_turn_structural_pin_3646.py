@@ -989,7 +989,6 @@ HOOKS: Dict[str, str] = {
         "the view's own selection and reuse checks in the thread of the check that asked; it "
         "reads view state (its docstring says not to query) and no thread hand-off names it"
     ),
-    "ReactMixin.get_react_components": "unwrapped:not-threaded:no framework code calls it (render_react_component is an app helper), so it runs wherever the app calls it; the step is whatever that is",
     # ---- the data table ----
     "DataTableMixin.handle_cell_edit": (
         "inside:event@components/mixins/data_table.py::DataTableMixin.on_table_cell_edit"

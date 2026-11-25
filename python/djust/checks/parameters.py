@@ -1,11 +1,11 @@
-"""djust event parameter contract checks, ``djust.V016``, ``V018`` and ``V031`` (ADR-036).
+"""djust event parameter contract checks, ``djust.V016``, ``V018``, ``V031`` and ``V033`` (ADR-036).
 
 A strict-policy handler's declaration problems surface at startup instead of
 on the first event. Each check calls the runtime's own resolvers
 (``get_handler_parameter_policy`` and ``get_strict_handler_contract``) on the
 same bound shape dispatch uses, so the check and the runtime share one cached
-contract and cannot disagree. Legacy-policy handlers are never reported:
-legacy is the default and its behavior is unchanged. The project-level policy
+contract and cannot disagree. A legacy-policy handler is compiled as strict only
+to report, as ``djust.V033``, what the strict policy would refuse. The project-level policy
 value is ``djust.C022`` in ``configuration.py``. V016 also covers ADR-034
 output-subscription callbacks, whose payload is bound by the same strict
 contract with the source component as trusted framework context. Handlers
@@ -27,6 +27,7 @@ from typing import Any, Callable, Optional
 
 from django.core.checks import CheckMessage, register
 
+from djust._framework_code import is_djust_module
 from djust.checks.utils import (
     DjustError,
     DjustWarning,
@@ -69,6 +70,30 @@ def _explicit_param_names(function: Any) -> Optional[list[str]]:
     return list(names) if names is not None and list(names) != derived else None
 
 
+def _v033(label: str, function: Any, exc: Exception, inherited: bool) -> CheckMessage:
+    """The one constructor of ``djust.V033`` (#4190): a legacy handler strict would refuse."""
+    from djust._removed_settings import MIGRATION_GUIDE_URL
+
+    file_path, line_number = _location(function)
+    where = (
+        "LIVEVIEW_CONFIG['event_parameter_policy']" if inherited else "parameter_policy='legacy'"
+    )
+    return DjustWarning(
+        "%s: runs under the legacy parameter policy, and strict dispatch, the only policy in "
+        "djust 2.0.0, would refuse every call to it: %s" % (label, exc),
+        hint=(
+            "Annotate every parameter with str, int, float, bool, Decimal, UUID, date, "
+            "Optional[T], list[T], dict[str, T] or Any, and rename a parameter that starts with "
+            "'_' or is named view_id or component_id. Then delete %s. See %s"
+            % (where, MIGRATION_GUIDE_URL)
+        ),
+        id="djust.V033",
+        fix_hint="Make the signature of `%s` valid under the strict policy." % label,
+        file_path=file_path,
+        line_number=line_number,
+    )
+
+
 def _handler_messages(
     cls: type,
     name: str,
@@ -103,6 +128,15 @@ def _handler_messages(
     try:
         policy = get_handler_parameter_policy(function)
         if policy != "strict":
+            if (
+                first_report
+                and not _is_check_suppressed("djust.V033")
+                and not is_djust_module(getattr(cls, "__module__", "") or "")
+            ):
+                try:
+                    get_strict_handler_contract(_bound(member, function, cls))
+                except ContractError as exc:
+                    messages.append(_v033(label, function, exc, own_policy is None))
             return messages
         handler = _bound(member, function, cls)
         contract = get_strict_handler_contract(handler)

@@ -262,7 +262,7 @@ def test_a_page_get_normalizes_a_model_property_inside_the_wrapper(user):
     assert all(in_scope for _, in_scope in user_reads), user_reads
 
 
-def test_a_background_render_enters_the_wrapper_once(user):
+def test_a_background_render_enters_the_wrapper_once(user, legacy_project_policy):
     """A background render (an async result, a push outside the push hop) syncs the
     state and renders as one ``"render"`` step: one wrapper entry, every query in it."""
     from types import SimpleNamespace

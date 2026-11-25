@@ -222,7 +222,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_exposure_providers.py",
         "python/djust/tests/test_exposure_pwa_diagnostics.py",
         "python/djust/tests/test_exposure_pwa_sync_sinks.py",
-        "python/djust/tests/test_exposure_react_props.py",
         "python/djust/tests/test_exposure_render_cache.py",
         "python/djust/tests/test_exposure_root_async_diagnostics.py",
         "python/djust/tests/test_exposure_runtime_log_diagnostics.py",

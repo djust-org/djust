@@ -537,7 +537,7 @@ class ExplicitRecheckView(ModelFormMixin, LiveView):
         RECHECKS.append("permission")
         return True
 
-    @event_handler()
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def touch(self, change="", other=None, **kwargs):
         """Declared read-only (so it reuses), and changes the record as asked: the NEXT
         read-only event must see the change and check the record in full."""

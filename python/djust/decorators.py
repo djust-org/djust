@@ -209,7 +209,7 @@ def event_handler(
         coerce_types: Whether to coerce string params to expected types (default: True)
         parameter_policy: Override the server parameter policy with "strict" or
             "legacy"; None inherits LIVEVIEW_CONFIG['event_parameter_policy']
-            (default "legacy"). Strict binds the Python signature exactly: see
+            (default "strict"). Strict binds the Python signature exactly: see
             "Typed event parameters" in docs/website/core-concepts/events.md.
         expose_api: Expose this handler as an HTTP API endpoint at
             ``POST /djust/api/<view_slug>/<handler_name>/`` with OpenAPI 3.1 schema.
@@ -630,7 +630,7 @@ def server_function(
         coerce_types: Coerce string params to the method's typed signature.
             Default True.
         parameter_policy: Server parameter policy override ("strict" or "legacy").
-            None inherits the project's event_parameter_policy, default "legacy".
+            None inherits the project's event_parameter_policy, default "strict".
 
     Usage::
 

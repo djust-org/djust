@@ -116,7 +116,7 @@ class _LegacyPushView(_StrictPushView):
 @pytest.mark.django_db
 @pytest.mark.asyncio
 @pytest.mark.parametrize("view", ["_StrictHotView", "_LegacyHotView"])
-async def test_hotreload_patch_carries_the_contract_snapshot(view):
+async def test_hotreload_patch_carries_the_contract_snapshot(view, legacy_project_policy):
     from channels.layers import get_channel_layer
     from django.test import override_settings
 
@@ -172,7 +172,7 @@ async def test_hotreload_with_undiscoverable_contracts_reloads_the_page(monkeypa
 @pytest.mark.django_db
 @pytest.mark.asyncio
 @pytest.mark.parametrize("view", ["_StrictPushView", "_LegacyPushView"])
-async def test_push_state_frame_carries_the_contract_snapshot(view):
+async def test_push_state_frame_carries_the_contract_snapshot(view, legacy_project_policy):
     from django.test import override_settings
 
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):

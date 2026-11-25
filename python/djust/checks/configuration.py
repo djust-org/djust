@@ -615,7 +615,7 @@ def _check_event_parameter_policy(errors: list[CheckMessage]) -> None:
 
     Dispatch resolves every handler without its own ``parameter_policy`` through
     the same resolver this check calls, and rejects the event when the value is
-    invalid. Legacy is the default, so an absent key never reports anything.
+    invalid. Strict is the default, so an absent key never reports anything.
     """
     from djust._parameter_contract import ContractError
     from djust.config import config
@@ -633,7 +633,7 @@ def _check_event_parameter_policy(errors: list[CheckMessage]) -> None:
                 hint=(
                     "Every event handler that does not declare its own parameter_policy "
                     "inherits this value, so each of their events is rejected until it "
-                    "is fixed. Remove the key to keep the 'legacy' default."
+                    "is fixed. Remove the key to use the 'strict' default."
                 ),
                 id="djust.C022",
                 fix_hint="Set `LIVEVIEW_CONFIG['event_parameter_policy']` to `'legacy'` or `'strict'`.",
