@@ -30,7 +30,7 @@ def test_a_pinned_view_passes_and_is_recorded():
     before = len(guard._created)
 
     class Pinned(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
     class Child(Pinned):
         pass
@@ -43,7 +43,7 @@ def test_a_pinned_view_passes_and_is_recorded():
 
 def test_an_unpinned_view_is_an_offender_until_a_policy_is_assigned():
     before = len(guard._created)
-    unpinned = type("Unpinned", (LiveView,), {"exposure_policy": "legacy"})
+    unpinned = type("Unpinned", (LiveView,), {"exposure_policy": "explicit"})
     del unpinned.exposure_policy
     assert guard.relies_on_default(unpinned)
     assert [name.rsplit(".", 1)[-1] for name in guard._offenders(guard._created[before:])] == [
@@ -70,7 +70,7 @@ def test_the_fixture_fails_a_test_that_defines_an_unpinned_view(pytester):
 
         def test_pinned():
             class V(LiveView):
-                exposure_policy = "legacy"
+                exposure_policy = "explicit"
                 template = "<div dj-root></div>"
         """
     )
@@ -131,7 +131,7 @@ def test_a_view_pinned_after_creation_is_judged_by_its_final_policy_even_once_dr
 
     start = len(guard._created)
     late = type("PinnedAfterCreation", (LiveView,), {})
-    late.exposure_policy = "legacy"
+    late.exposure_policy = "explicit"
     del late
     gc.collect()
     assert guard._offenders(guard._created[start:]) == []
@@ -142,6 +142,6 @@ def test_a_view_that_stated_its_policy_at_creation_is_not_kept_alive():
     held = len(guard._held_until_judged)
 
     class StatedAtCreation(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
     assert len(guard._held_until_judged) == held

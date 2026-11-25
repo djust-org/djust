@@ -6,22 +6,33 @@ import pytest
 from django.template import Context, Template
 from django.test import override_settings
 
+from djust import LiveView
 from djust.audio import AudioMixin, Sound, SoundBank
-from djust.mixins.push_events import PushEventMixin
 
 
-class ContextBase:
-    exposure_policy = "legacy"
+class ContextBase(LiveView):
+    """A view whose context carries ``audio_banks``, which the mixin must withhold."""
 
-    def __init__(self, **kwargs):
-        pass
+    exposure_policy = "explicit"
+    template = "<div dj-root>{% load live_tags %}{% djust_audio %}</div>"
 
     def get_context_data(self, **kwargs):
-        return {"audio_banks": self.audio_banks}
+        context = super().get_context_data(**kwargs)
+        context["audio_banks"] = self.audio_banks
+        return context
 
 
-class View(AudioMixin, PushEventMixin, ContextBase):
+class View(AudioMixin, ContextBase):
     audio_banks = {"test": SoundBank({"eat": Sound("sound/eat.wav", volume=0.4)})}
+
+
+class TickView(AudioMixin, LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>tick</div>"
+    audio_banks = View.audio_banks
+
+    def handle_tick(self):
+        self.play_sound("test", "eat")
 
 
 def mounted():
@@ -106,20 +117,19 @@ def test_manifest_and_controls_are_escaped_without_executable_inline_script():
     assert 'dj-update="ignore"' in html
 
 
-def test_private_audio_epoch_and_cursors_never_restore():
-    from djust import LiveView
+def test_private_audio_epoch_and_cursors_never_persist():
+    from djust.testing import persisted_state
 
     class RealView(AudioMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
     view = RealView()
     view._audio_cursor = 42
-    view._user_private_keys = {"_audio_scope", "_audio_cursor"}
-    assert not view._get_private_state()
-    original = view._audio_scope
-    view._restore_private_state({"_audio_scope": "stale", "_audio_cursor": 1})
-    assert view._audio_scope == original
-    assert view._audio_cursor == 42
+    view._kept_cursor = 7  # the control: an application private attribute is saved
+    view._user_private_keys = {"_audio_scope", "_audio_cursor", "_kept_cursor"}
+    saved = persisted_state(view)
+    assert saved.automatic_private == {"_kept_cursor": 7}
+    assert "_audio_scope" not in saved.names and "_audio_cursor" not in saved.names
 
 
 def test_connected_mount_cues_are_discarded_before_first_render():
@@ -133,28 +143,23 @@ def test_connected_mount_cues_are_discarded_before_first_render():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_tick_with_audio_only_flushes_without_rendering():
-    from djust import LiveView
     from djust.websocket import LiveViewConsumer
-
-    class TickView(AudioMixin, LiveView):
-        exposure_policy = "legacy"
-        audio_banks = View.audio_banks
-
-        def handle_tick(self):
-            self.play_sound("test", "eat")
+    from djust.tests._live_session import amount_on_consumer
 
     consumer = LiveViewConsumer()
-    view = TickView()
-    view._audio_ready = True
-    consumer.view_instance = view
     sent = []
 
-    async def capture(payload):
+    async def capture(payload, *args, **kwargs):
         sent.append(payload)
 
     consumer.send_json = capture
-    assert await consumer._tick_once() is False
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        view = await amount_on_consumer(consumer, f"{__name__}.TickView")
+        view._audio_ready = True
+        sent.clear()
+        assert await consumer._tick_once() is False
     assert len(sent) == 1
     assert sent[0]["event"] == "djust:audio"
 
@@ -245,16 +250,17 @@ def test_an_invalid_bank_swapped_in_is_still_rejected():
 
 
 def test_the_manifest_cache_is_never_persisted():
-    from djust import LiveView
+    from djust.testing import persisted_state
 
     class RealView(AudioMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         audio_banks = View.audio_banks
 
     view = RealView()
     view.get_context_data()
     assert hasattr(view, "_audio_manifest_cache")
-    assert "_audio_manifest_cache" not in (view._get_private_state() or {})
+    view._user_private_keys = {"_audio_manifest_cache"}
+    assert "_audio_manifest_cache" not in persisted_state(view).names
 
 
 @override_settings(STATIC_URL="/static/")

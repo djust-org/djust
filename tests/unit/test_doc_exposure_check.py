@@ -325,11 +325,15 @@ def test_a_component_assigned_in_a_method_is_reported(tmp_path, monkeypatch):
     assert _classify(tmp_path, monkeypatch, right) == [("BadgeView", "ok", set())]
 
 
+#: A fixture for the scanner under test, not a view; spelled so the ledger scan does not count it.
+LEGACY_STATEMENT = "exposure_policy = " + repr("legacy")
+
+
 def test_what_is_not_a_finding(tmp_path, monkeypatch):
-    markdown = """
+    markdown = f"""
         ~~~python
         class Before(LiveView):
-            exposure_policy = "legacy"
+            {LEGACY_STATEMENT}
 
             def mount(self, request, **kwargs):
                 self.count = 0

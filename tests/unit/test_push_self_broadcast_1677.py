@@ -17,25 +17,34 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from djust import LiveView, state
 from djust.push import origin_channel, push_to_view
 
 
-def _make_consumer(channel_name="session.A.channel"):
+class PushedView(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0)
+
+
+@pytest.fixture(autouse=True)
+def _allow_this_module(settings):
+    """The consumer mounts this module's view by dotted path."""
+    settings.LIVEVIEW_ALLOWED_MODULES = [__name__]
+
+
+async def _make_consumer(channel_name="session.A.channel"):
+    """A consumer that really mounted ``PushedView``, with its render and sends pinned."""
+    from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer()
     consumer.channel_name = channel_name
-    consumer.view_instance = MagicMock()
-    # A real LiveView declares its policy; a Mock's auto-attribute would
-    # read as an invalid policy and fail closed (ADR-038).
-    consumer.view_instance.exposure_policy = "legacy"
-    consumer.view_instance._skip_render = False
-    consumer.view_instance._sync_state_to_rust = MagicMock()
-    consumer.view_instance.render_with_diff = MagicMock(
-        return_value=("<div>ok</div>", '[{"op":"replace"}]', 2)
-    )
     consumer.use_binary = False
     consumer.send = AsyncMock()
+    view = await amount_on_consumer(consumer, f"{__name__}.PushedView")
+    view._sync_state_to_rust = MagicMock()
+    view.render_with_diff = MagicMock(return_value=("<div>ok</div>", '[{"op":"replace"}]', 2))
     consumer._send_update = AsyncMock()
     return consumer
 
@@ -74,9 +83,10 @@ def test_push_to_view_sender_channel_none_outside_handler(mock_get_layer):
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_server_push_skips_own_self_broadcast():
     """sender_channel == channel_name → skipped (no re-render/send)."""
-    consumer = _make_consumer("session.A.channel")
+    consumer = await _make_consumer("session.A.channel")
     event = {"state": {"count": 5}, "sender_channel": "session.A.channel"}
 
     await consumer.server_push(event)
@@ -86,9 +96,10 @@ async def test_server_push_skips_own_self_broadcast():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_server_push_applies_other_sessions_broadcast():
     """A broadcast from ANOTHER session is applied (not skipped)."""
-    consumer = _make_consumer("session.A.channel")
+    consumer = await _make_consumer("session.A.channel")
     event = {"state": {"count": 7}, "sender_channel": "session.B.channel"}
 
     await consumer.server_push(event)
@@ -97,9 +108,10 @@ async def test_server_push_applies_other_sessions_broadcast():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_server_push_applies_external_push_no_sender():
     """An external push (Celery/cross-view; sender_channel None) is applied."""
-    consumer = _make_consumer("session.A.channel")
+    consumer = await _make_consumer("session.A.channel")
     event = {"state": {"count": 9}, "sender_channel": None}
 
     await consumer.server_push(event)

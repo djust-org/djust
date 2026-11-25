@@ -263,38 +263,6 @@ def test_init_comment_no_longer_cites_the_fixed_admin_bug_as_a_blocker():
     assert namespace["TEMPLATES"][0]["BACKEND"] == ("djust.template.backend.DjustTemplateBackend")
 
 
-# --- #2984 ----------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("enabled, jit_called", [(True, True), (False, False)])
-def test_jit_serialization_setting_is_honoured(enabled, jit_called):
-    from django.contrib.auth.models import User
-
-    from djust.config import config
-    from djust.live_view import LiveView
-
-    class ModelView(LiveView):
-        exposure_policy = "legacy"
-        template = "<div>{{ profile.username }}</div>"
-
-    view = ModelView()
-    view.profile = User(username="alice", pk=1)
-    old = config.get("jit_serialization")
-    config.set("jit_serialization", enabled)
-    try:
-        with (
-            patch.object(view, "_get_template_content", return_value=view.template) as gtc,
-        ):
-            ctx = view.get_context_data()
-    finally:
-        config.set("jit_serialization", old)
-    assert gtc.called is jit_called
-    assert ctx["profile"]["username"] == "alice"
-    if not enabled:
-        assert view._jit_serialized_keys == set()
-
-
 # --- #3006 ----------------------------------------------------------------------
 
 _ADVISORY = {

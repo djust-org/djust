@@ -2,16 +2,17 @@
 Tests for LiveView state serialization validation.
 
 Verifies that _is_serializable() correctly identifies safe vs unsafe values,
-and that get_state() raises TypeError in DEBUG mode or logs in production.
+and that an explicit view's get_state() returns only its ``client=True`` fields.
 """
 
 import io
-import logging
 import socket
 import threading
 
 import pytest
 
+from djust import state
+from djust._exposure import ExposureError
 from djust.live_view import LiveView
 
 
@@ -121,90 +122,56 @@ class TestIsSerializable:
 # ---------------------------------------------------------------------------
 
 
-class _LegacyLiveView(LiveView):
-    """A bare LiveView under the legacy policy, whatever the framework default is."""
+class _ClientView(LiveView):
+    """A bare explicit LiveView whose client-visible fields are the ones under test."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0, client=True)
+    name = state("", client=True)
+    items = state(default_factory=list, client=True)
+    hidden = state("server only")
+    payload = state(None, client=True)
+    good = state("", client=True)
+    bad = state(None, client=True)
 
 
 class TestGetState:
-    """Test the get_state method on LiveView instances."""
+    """``get_state()`` hands the client only the declared ``client=True`` fields."""
 
     def _make_view(self, **attrs):
-        """Create a LiveView instance with given public attributes."""
-        view = _LegacyLiveView()
+        view = _ClientView()
         for k, v in attrs.items():
             setattr(view, k, v)
         return view
 
-    def test_serializable_state_returned(self, settings):
-        settings.DEBUG = True
+    def test_serializable_state_returned(self):
         view = self._make_view(count=5, name="test", items=[1, 2, 3])
         state = view.get_state()
         assert state["count"] == 5
         assert state["name"] == "test"
         assert state["items"] == [1, 2, 3]
 
-    def test_private_attributes_skipped(self, settings):
-        settings.DEBUG = True
-        view = self._make_view(count=1)
+    def test_only_client_fields_are_returned(self):
+        view = self._make_view(count=1, hidden="secret")
         view._internal = "secret"
-        state = view.get_state()
-        assert "_internal" not in state
-        assert "count" in state
-
-    def test_callable_attributes_skipped(self, settings):
-        settings.DEBUG = True
-        view = self._make_view(count=1)
+        view.undeclared = "secret"
         view.my_func = lambda: None
         state = view.get_state()
-        assert "my_func" not in state
+        assert state["count"] == 1
+        for name in ("hidden", "_internal", "undeclared", "my_func"):
+            assert name not in state, name
 
-    def test_non_serializable_raises_in_debug(self, settings):
-        settings.DEBUG = True
-        view = self._make_view(s3=FakeS3Client())
-        with pytest.raises(TypeError, match="Non-serializable value"):
+    @pytest.mark.parametrize(
+        "make",
+        [FakeS3Client, PaymentService, DatabaseConnection, ApiSession],
+    )
+    def test_a_non_serializable_client_field_is_refused_not_skipped(self, make):
+        view = self._make_view(count=1, payload=make())
+        with pytest.raises(ExposureError, match="Explicit state projection unavailable") as caught:
             view.get_state()
+        assert make.__name__ not in str(caught.value)
 
-    def test_non_serializable_raises_with_class_name(self, settings):
-        settings.DEBUG = True
-        view = self._make_view(payment=PaymentService())
-        with pytest.raises(TypeError, match="LiveView.payment"):
-            view.get_state()
-
-    def test_non_serializable_raises_with_type_name(self, settings):
-        settings.DEBUG = True
-        view = self._make_view(payment=PaymentService())
-        with pytest.raises(TypeError, match="PaymentService"):
-            view.get_state()
-
-    def test_non_serializable_raises_with_docs_link(self, settings):
-        settings.DEBUG = True
-        view = self._make_view(conn=DatabaseConnection())
-        with pytest.raises(TypeError, match="docs/guides/services.md"):
-            view.get_state()
-
-    def test_non_serializable_logs_in_production(self, settings, caplog):
-        settings.DEBUG = False
-        view = self._make_view(count=1, s3=FakeS3Client())
-        with caplog.at_level(logging.ERROR, logger="djust.live_view"):
-            state = view.get_state()
-        # Should not raise, should skip the bad attribute
-        assert "s3" not in state
-        assert "count" in state
-        # Should have logged an error
-        assert any("Non-serializable value" in r.message for r in caplog.records)
-
-    def test_mixed_state_debug_raises_on_first_bad(self, settings):
-        settings.DEBUG = True
+    def test_one_bad_field_refuses_the_whole_projection(self):
         view = self._make_view(good="ok", bad=FakeS3Client())
-        with pytest.raises(TypeError):
+        with pytest.raises(ExposureError):
             view.get_state()
-
-    def test_mixed_state_production_skips_bad(self, settings, caplog):
-        settings.DEBUG = False
-        view = self._make_view(good="ok", bad=ApiSession())
-        with caplog.at_level(logging.ERROR, logger="djust.live_view"):
-            state = view.get_state()
-        assert state["good"] == "ok"
-        assert "bad" not in state

@@ -61,6 +61,7 @@ from django.core.exceptions import PermissionDenied
 from django.template import Context, Template, TemplateSyntaxError
 from django.test import override_settings
 
+from djust import state
 from djust.live_view import LiveView
 
 
@@ -145,8 +146,9 @@ def _elements_with_attr(html: str, attr: str) -> List[Tuple[str, Dict[str, str]]
 class _ChildLiveView(LiveView):
     """Embedded child — simple counter exposed to the template."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div><button dj-click="bump">Bump {{ count }}</button></div>'
+    count = state(0)
 
     def mount(self, request, **kwargs):  # noqa: D401 — LiveView contract
         self.count = kwargs.get("initial", 0)
@@ -158,8 +160,10 @@ class _ChildLiveView(LiveView):
 class _ChildWithKwargs(LiveView):
     """Child that surfaces mount kwargs on the instance for inspection."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>{{ foo }}/{{ bar }}</div>"
+    foo = state(None)
+    bar = state(None)
 
     def mount(self, request, **kwargs):
         self.foo = kwargs.get("foo")
@@ -169,7 +173,7 @@ class _ChildWithKwargs(LiveView):
 class _ChildWithClickHandler(LiveView):
     """Child that carries multiple event-attribute-bearing elements."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<section>"
         '<button dj-click="inc">inc</button>'
@@ -194,7 +198,7 @@ class _ChildWithTrickyAttrs(LiveView):
     first ``>`` inside the quoted value and stamp the wrong place.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<div>"
         '<input value="a>b" dj-click="x"/>'
@@ -225,7 +229,7 @@ class _ChildWithKeyboardEventAttrs(LiveView):
     dotted AND bare.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<div>"
         '<input dj-keydown.enter="submit_search"/>'
@@ -256,7 +260,7 @@ class _NotALiveView:
 class _ParentView(LiveView):
     """Parent whose template embeds a ``{% live_render %}`` child."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -265,14 +269,13 @@ class _ParentView(LiveView):
         "</div>"
     )
 
-    def mount(self, request, **kwargs):
-        self.title = "Parent"
+    title = state("Parent")
 
 
 class _GrandparentView(LiveView):
     """Parent whose child itself embeds another live_render — nested test."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -287,7 +290,7 @@ class _GrandparentView(LiveView):
 class _MidChildView(LiveView):
     """Child that embeds a grandchild."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<section>"
@@ -306,7 +309,7 @@ class _MidChildView(LiveView):
 class _AdminOnlyChildView(LiveView):
     """Child guarded by permission_required — must trip the auth gate."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     permission_required = "auth.admin"
     template = '<div><button dj-click="secret">x</button></div>'
 
@@ -320,7 +323,7 @@ class _AdminOnlyChildView(LiveView):
 class _LoginOnlyChildView(LiveView):
     """Child guarded by login_required — returns redirect URL when anonymous."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = True
     template = '<div><button dj-click="private">x</button></div>'
 
@@ -342,14 +345,23 @@ def _render_tag(source: str, context: dict | None = None) -> str:
     return Template(full).render(Context(context or {}))
 
 
-def _make_parent(rf, parent_cls=_ParentView):
-    """Instantiate a parent view with a lightweight request for tests that need it."""
-    request = rf.get("/")
-    # Tests run without AuthenticationMiddleware — attach an anonymous user
-    # so that check_view_auth's user lookup doesn't blow up on getattr.
-    from django.contrib.auth.models import AnonymousUser
+def _make_parent(rf, parent_cls=_ParentView, *, saved_session=False):
+    """Instantiate a parent view with a lightweight request for tests that need it.
 
-    request.user = AnonymousUser()
+    ``saved_session=True`` gives the request an anonymous user logged into a saved session
+    (``@pytest.mark.django_db``): what an explicit child's reuse identity binds to.
+    """
+    request = rf.get("/")
+    if saved_session:
+        from djust.testing import with_live_session
+
+        request = with_live_session(request)
+    else:
+        # Tests run without AuthenticationMiddleware — attach an anonymous user
+        # so that check_view_auth's user lookup doesn't blow up on getattr.
+        from django.contrib.auth.models import AnonymousUser
+
+        request.user = AnonymousUser()
     parent = parent_cls()
     parent.request = request
     mount = getattr(parent, "mount", None)
@@ -1025,7 +1037,7 @@ class TestAllowlist:
 class _StickyChildView(LiveView):
     """Sticky child used for the auto-detect tests (#1032)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "audio-player"
     template = '<div><button dj-click="play">play</button></div>'
@@ -1039,7 +1051,7 @@ class _StickyChildView(LiveView):
 
 
 class _StickyParentView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -1092,18 +1104,32 @@ class TestStickyAutoDetect:
         assert "dj-sticky-slot" not in out
         assert parent._ws_consumer._sticky_auto_reattached == set()
 
+    @pytest.mark.django_db
     def test_preserved_for_our_id_emits_placeholder(self, rf):
         """Survivor for the same sticky_id → tag emits the slot placeholder,
         re-registers the survivor on the new parent, adds id to the
         auto-reattached set, and does NOT instantiate a fresh child."""
-        # Build the survivor as if it had been preserved from a prior view.
-        survivor = _StickyChildView()
-        survivor.request = rf.get("/old")
-        survivor.mount_call_count = 1
-        survivor.is_playing = True
+        # Build the survivor the way a navigation does: mounted under a previous
+        # parent, then carried to the new request.
+        old_parent = _make_parent(rf, _StickyParentView, saved_session=True)
+        with override_settings(
+            DJUST_LIVE_RENDER_ALLOWED_MODULES=["tests.unit.test_live_render_tag"]
+        ):
+            _render_tag(
+                '{% live_render "tests.unit.test_live_render_tag._StickyChildView" sticky=True %}',
+                {"view": old_parent, "request": old_parent.request},
+            )
+        # The navigation stays inside one live session.
+        new_request = rf.get("/new")
+        new_request.session = old_parent.request.session
+        new_request.user = old_parent.request.user
+        survivors = old_parent._preserve_sticky_children(new_request)
+        survivor = survivors["audio-player"]
+        assert survivor.mount_call_count == 1
 
         parent = _make_parent(rf, _StickyParentView)
-        parent._ws_consumer = _FakeConsumer(preserved={"audio-player": survivor})
+        parent.request = new_request
+        parent._ws_consumer = _FakeConsumer(preserved=survivors)
 
         with override_settings(
             DJUST_LIVE_RENDER_ALLOWED_MODULES=["tests.unit.test_live_render_tag"]

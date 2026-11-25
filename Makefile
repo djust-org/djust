@@ -684,7 +684,7 @@ benchmark-model: ## Model-backed render benchmark — the five-bucket boundary p
 		--benchmark-only -p no:cacheprovider
 
 .PHONY: benchmark-turn
-benchmark-turn: ## Complete event turns, explicit vs legacy exposure, 3 shapes (#3997); needs a RELEASE build. ROUNDS=40
+benchmark-turn: ## Complete event turns, explicit exposure with and without the save, 3 shapes (#3997); needs a RELEASE build. ROUNDS=40
 	@echo "$(GREEN)Running the explicit-exposure turn benchmark (serial; release build required)...$(NC)"
 	@DJUST_TURN_BENCH_ROUNDS=$${ROUNDS:-40} PYTHONPATH=. nice -n 10 $(PYTHON) -m pytest \
 		tests/benchmarks/test_explicit_turn_cost_3997.py -q -s -p no:cacheprovider

@@ -580,25 +580,6 @@ def test_wizard_step(db_cluster, survival):
     )
 
 
-def test_legacy_view(db_cluster, survival):
-    browser = Browser(db_cluster)
-    socket_a, _ = _open(browser, "A", "/legacy/", V + "LegacyCounterView")
-    socket_a.event("increment")
-    probe = probe_from(socket_a.event("increment"))
-    survival.observe("state", "legacy", "same", _kept(probe["count"], 2))
-    socket_a.close()
-    socket_b = browser.socket("B")
-    probe = probe_from(socket_b.mount(V + "LegacyCounterView", "/legacy/", reconnect_from=socket_a))
-    survival.observe(
-        "state", "legacy", "ws", "lost: `mount()` value" if probe["count"] == 0 else "?"
-    )
-    socket_b.close()
-    counts = [_post(browser, node, "/legacy/", "increment")[1]["count"] for node in ("A", "B")]
-    survival.observe(
-        "state", "legacy", "http", "lost: every request runs `mount()`" if counts == [1, 1] else "?"
-    )
-
-
 def test_components(db_cluster, survival):
     browser = Browser(db_cluster)
     socket_a, probe = _open(browser, "A", "/component/", V + "ComponentView")

@@ -1,4 +1,4 @@
-"""ADR-038 E6-1: measured cost of ``exposure_policy="explicit"`` vs ``"legacy"``.
+"""ADR-038 E6-1: measured cost of ``exposure_policy="explicit"``.
 
 Measurement only. There are deliberately NO pass/fail latency thresholds here:
 ADR-038 E6 asks for evidence before activation, not a new SLA, and the
@@ -6,12 +6,10 @@ conftest docstring (#2156) records how local latency thresholds flake. Each
 test asserts only that the path it measures actually ran (correct frame type,
 rendered value present), so a number cannot come from a short-circuit.
 
-The same view logic is measured under both policies:
-
-* ``LegacyCostView`` keeps state in plain attributes and relies on legacy
-  automatic context, snapshots and ``liveview_<path>`` session persistence.
-* ``ExplicitCostView`` declares the same fields with ``state(persist="server")``
-  and supplies render context explicitly from ``get_context_data``.
+``ExplicitCostView`` declares its fields with ``state(persist="server")`` and
+supplies render context explicitly from ``get_context_data``. (Until the legacy
+exposure arm was removed, a ``LegacyCostView`` ran the same logic as the
+baseline; the numbers recorded for it stay in the notes below.)
 
 Explicit mode is still behind the constructor guard; the ``staged`` fixture
 bypasses it the same way the ``python/djust/tests/test_exposure_*`` suites do.
@@ -21,7 +19,7 @@ Segments (group names):
   exposure_ws_mount    connect + mount + disconnect via the real consumer.
   exposure_ws_event    one event -> handler -> re-render -> reply frame.
   exposure_render_cache  renderer setup + first render on a repeated mount:
-                       legacy warm cache hit, legacy cold miss, explicit.
+                       explicit.
   exposure_server_state  ``ServerStateSession`` save / load of a 50-row payload.
 
 Run: ``make benchmark-python`` or
@@ -71,20 +69,6 @@ def make_items(n: int = 50) -> List[Dict[str, Any]]:
     ]
 
 
-class LegacyCostView(LiveView):
-    exposure_policy = "legacy"
-    template = TEMPLATE.format(view=f"{__name__}.LegacyCostView")
-
-    def mount(self, request, **kwargs):
-        self.title = "Inventory"
-        self.count = 0
-        self.items = make_items()
-
-    @event_handler()
-    def increment(self, **kwargs):
-        self.count += 1
-
-
 class ExplicitCostView(LiveView):
     exposure_policy = "explicit"
     template = TEMPLATE.format(view=f"{__name__}.ExplicitCostView")
@@ -105,9 +89,6 @@ class ExplicitCostView(LiveView):
     @event_handler()
     def increment(self, **kwargs):
         self.count += 1
-
-
-VIEWS = {"legacy": LegacyCostView, "explicit": ExplicitCostView}
 
 
 @pytest.fixture
@@ -142,16 +123,15 @@ def _new_session():
 
 @pytest.mark.django_db
 @pytest.mark.benchmark(group="exposure_http")
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_http_get(benchmark, staged, policy):
+def test_http_get(benchmark, staged):
     """Full GET through the Django view: mount, context, render, persistence.
 
-    The same session is reused across rounds (a page reload), so legacy pays
-    its ``liveview_<path>`` session write and explicit its envelope write.
+    The same session is reused across rounds (a page reload), so each round
+    pays the explicit envelope write.
     """
     from django.contrib.sessions.backends.db import SessionStore
 
-    view = VIEWS[policy].as_view()
+    view = ExplicitCostView.as_view()
     key = _new_session().session_key
 
     def _get():
@@ -174,8 +154,8 @@ def _ws_settings() -> Iterator[None]:
     The demo settings configure a header tenant resolver, and a WS-synthesized
     request carries no tenant, so explicit request binding would (correctly)
     refuse it. The default token bucket (100/s, burst 20) would throttle a
-    benchmark loop, which measures the limiter, not the policy. Both policies
-    run under the same settings.
+    benchmark loop, which measures the limiter, not the policy. Every measurement
+    runs under the same settings.
 
     The explicit policy's storage deadline is lifted to its 10 s cap for the
     same reason (#3791). An explicit turn withholds its reply until its save
@@ -211,7 +191,7 @@ def _ws_settings() -> Iterator[None]:
         djust_config.reset()  # reload the unmodified project settings
 
 
-async def _connect(session_key: str, policy: str):
+async def _connect(session_key: str):
     from channels.testing import WebsocketCommunicator
     from django.contrib.auth.models import AnonymousUser
     from django.contrib.sessions.backends.db import SessionStore
@@ -224,9 +204,7 @@ async def _connect(session_key: str, policy: str):
     connected, _ = await comm.connect()
     assert connected
     await comm.receive_json_from()  # connect ack
-    await comm.send_json_to(
-        {"type": "mount", "view": f"{__name__}.{VIEWS[policy].__name__}", "url": PATH}
-    )
+    await comm.send_json_to({"type": "mount", "view": f"{__name__}.ExplicitCostView", "url": PATH})
     frame = await comm.receive_json_from()
     assert frame["type"] == "mount", frame
     return comm, frame
@@ -234,19 +212,17 @@ async def _connect(session_key: str, policy: str):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.benchmark(group="exposure_ws_mount")
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_ws_mount(benchmark, staged, policy):
+def test_ws_mount(benchmark, staged):
     """Connect + mount + disconnect on the same session (a reconnect/reload).
 
-    Repeating on one session is the case where legacy may reuse its shared
-    render cache and explicit rebuilds its renderer; see the render_cache group
-    for that component in isolation.
+    Repeating on one session is the case where explicit rebuilds its renderer;
+    see the render_cache group for that component in isolation.
     """
     pytest.importorskip("channels")
     key = _new_session().session_key
 
     async def _once() -> Dict[str, Any]:
-        comm, frame = await _connect(key, policy)
+        comm, frame = await _connect(key)
         await comm.disconnect()
         return frame
 
@@ -273,12 +249,11 @@ async def _round(comm) -> Dict[str, Any]:
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.benchmark(group="exposure_ws_event")
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_ws_event(benchmark, staged, policy):
+def test_ws_event(benchmark, staged):
     """One ``increment`` event with re-render, over one open socket.
 
-    Explicit events additionally reload session authentication and save the
-    declared server state; legacy events do what legacy does today.
+    Explicit events reload session authentication and save the declared
+    server state.
     """
     pytest.importorskip("channels")
     key = _new_session().session_key
@@ -291,7 +266,7 @@ def test_ws_event(benchmark, staged, policy):
         return frame
 
     with _ws_settings():
-        comm, _ = loop.run_until_complete(_connect(key, policy))
+        comm, _ = loop.run_until_complete(_connect(key))
         try:
             frame = benchmark(lambda: loop.run_until_complete(_event()))
         finally:
@@ -299,14 +274,13 @@ def test_ws_event(benchmark, staged, policy):
             loop.close()
     assert frame["type"] in {"patch", "html_update"}, frame
     assert "error" not in replies, replies
-    if policy == "explicit":
-        # Prove the explicit event path persisted the declared state each time.
-        from django.contrib.sessions.backends.db import SessionStore
+    # Prove the explicit event path persisted the declared state each time.
+    from django.contrib.sessions.backends.db import SessionStore
 
-        from djust._exposure_sessions import load_server_state
+    from djust._exposure_sessions import load_server_state
 
-        restored = load_server_state(ExplicitCostView(), _request(SessionStore(key)))
-        assert restored is not None and restored["count"] == len(replies)
+    restored = load_server_state(ExplicitCostView(), _request(SessionStore(key)))
+    assert restored is not None and restored["count"] == len(replies)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -353,7 +327,7 @@ def test_a_slow_save_does_not_turn_a_round_into_a_state_error(staged, monkeypatc
     frames: List[Dict[str, Any]] = []
 
     async def _scenario() -> None:
-        comm, _ = await _connect(key, "explicit")
+        comm, _ = await _connect(key)
         try:
             armed[0] = True
             for _ in range(3):
@@ -388,21 +362,19 @@ def memory_backend(monkeypatch):
 
 
 @pytest.mark.benchmark(group="exposure_render_cache")
-@pytest.mark.parametrize("case", ["legacy", "explicit"])
-def test_repeated_mount_renderer(benchmark, staged, memory_backend, rf, case):
+def test_repeated_mount_renderer(benchmark, staged, memory_backend, rf):
     """Renderer setup + first render for a second mount of the same page.
 
-    Neither policy consults the shared backend: each builds its own renderer.
-    (Until 2.0 a legacy view reused the RustLiveView the backend held for its
-    session and path, the "legacy_warm" case; that cache was removed.)
+    The view does not consult the shared backend: each mount builds its own
+    renderer. (Until 2.0 a legacy view reused the RustLiveView the backend held
+    for its session and path; that cache was removed.)
     """
     from types import SimpleNamespace
 
-    policy = "explicit" if case == "explicit" else "legacy"
     context = {"title": "Inventory", "count": 0, "items": make_items()}
 
     def _mount_render():
-        view = VIEWS[policy]()
+        view = ExplicitCostView()
         request = rf.get(PATH)
         request.session = SimpleNamespace(session_key="bench-session")
         view._websocket_session_id = "bench-session"

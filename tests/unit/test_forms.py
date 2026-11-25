@@ -5,8 +5,7 @@ Tests form state management, validation, reset behavior, as_live rendering,
 XSS prevention, and _model_instance support.
 """
 
-import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from django import forms
@@ -27,7 +26,7 @@ class TestForm(forms.Form):
 class TestFormView(FormMixin, LiveView):
     """Test view with FormMixin."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = TestForm
     template = """
     <div dj-root>
@@ -337,7 +336,7 @@ class TestFormWithInitialValues:
             email = forms.EmailField(initial="default@example.com")
 
         class ViewWithInitial(FormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             form_class = FormWithInitial
             template = "<div dj-root>{{ form_data.name }}</div>"
 
@@ -357,7 +356,7 @@ class TestFormWithInitialValues:
             email = forms.EmailField(initial="default@example.com")
 
         class ViewWithInitial(FormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             form_class = FormWithInitial
             template = "<div dj-root>{{ form_data.name }}</div>"
 
@@ -389,7 +388,7 @@ class FullTestForm(forms.Form):
 
 
 class FullTestFormView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = FullTestForm
     template = "<div dj-root>{{ form.as_live }}</div>"
 
@@ -548,7 +547,7 @@ class TestModelInstance:
             body = forms.CharField(widget=forms.Textarea, required=False)
 
         class EditView(FormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             form_class = SimpleEditForm
             template = "<div dj-root>{{ form_data.title }}</div>"
 
@@ -719,37 +718,21 @@ class TestEnsureModelInstance:
             mock_get.assert_not_called()
 
     @pytest.mark.django_db
-    def test_rehydrates_from_db(self, get_request):
-        """Should query DB with stored label and pk."""
+    def test_a_raw_pk_is_never_re_resolved(self, get_request, caplog):
+        """An explicit view never turns a stored ``model_pk`` back into an object with an
+        unscoped ``objects.get``: every restore runs ``mount()``, which establishes the
+        instance through the view's own authorized lookup (the legacy re-hydration is gone)."""
         view = TestFormView()
         view.get(get_request)
         view.model_pk = 42
         view.model_label = "myapp.MyModel"
 
-        mock_instance = MagicMock()
-        mock_model = MagicMock()
-        mock_model.objects.get.return_value = mock_instance
-
-        with patch("django.apps.apps.get_model", return_value=mock_model) as mock_get:
-            view._ensure_model_instance()
-            mock_get.assert_called_once_with("myapp.MyModel")
-            mock_model.objects.get.assert_called_once_with(pk=42)
-            assert view._model_instance is mock_instance
-
-    @pytest.mark.django_db
-    def test_logs_warning_on_failure(self, get_request, caplog):
-        """Should log warning (not silently fail) when re-hydration fails."""
-        view = TestFormView()
-        view.get(get_request)
-        view.model_pk = 999
-        view.model_label = "nonexistent.Model"
-
-        with caplog.at_level(logging.WARNING, logger="djust.forms"):
+        with patch("django.apps.apps.get_model") as mock_get:
             view._ensure_model_instance()
 
+        mock_get.assert_not_called()
         assert view._model_instance is None
-        assert "Failed to re-hydrate model instance" in caplog.text
-        assert "nonexistent.Model" in caplog.text
+        assert "re-hydrate" not in caplog.text
 
 
 class TestModelPkSerialization:
@@ -778,7 +761,7 @@ class TestModelPkSerialization:
                 label = "myapp.Thing"
 
         class PkView(FormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             form_class = TestForm
             template = "<div dj-root></div>"
             _model_instance = None

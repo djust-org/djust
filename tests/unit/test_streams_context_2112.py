@@ -134,22 +134,6 @@ def test_live_streams_win_over_a_stale_streams_attribute():
     assert "mine" not in got["streams"]
 
 
-# Stays legacy (split from the explicit migration): a view attribute named streams reaching the template is the attribute walk (deletion step 7).
-def test_view_without_streams_keeps_its_own_streams_attribute():
-    """An app that never calls stream() is left completely alone."""
-
-    class OwnUse(LiveView):
-        exposure_policy = "legacy"
-        template_name = "unused.html"
-
-        def mount(self, request, **kwargs):
-            self.streams = {"mine": ["user-value"]}
-
-    v = OwnUse()
-    v.mount(None)
-    assert v.get_context_data()["streams"] == {"mine": ["user-value"]}
-
-
 def test_top_level_stream_name_is_NOT_exposed():
     """Only ``streams.<name>`` is the contract — not a bare top-level name.
 

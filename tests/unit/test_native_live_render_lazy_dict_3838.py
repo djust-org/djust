@@ -43,7 +43,7 @@ SRC = "{% live_render '" + CHILD + "' lazy=cfg %}"
 
 
 class _Child(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>child</div>"
 
     def mount(self, request, **kwargs):
@@ -51,7 +51,7 @@ class _Child(LiveView):
 
 
 class _Parent(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
     def mount(self, request, **kwargs):
@@ -144,18 +144,20 @@ class TestDictLazyReachesTheNativeHandler:
         assert "&lt;img" in native
 
     def test_a_view_attribute_dict_renders_through_the_native_view_path(self, rf):
-        """The path a root LiveView takes: a ``mount()``-set dict, ``render_full_template`` (the
+        """The path a root LiveView takes: a ``get_context_data()``-supplied dict, ``render_full_template`` (the
         native engine), the safe marker surviving the state round trip."""
 
         placeholders = {"safe": mark_safe("<i>wait</i>"), "plain": "<i>wait</i>"}
 
         class _CfgParent(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root>" + SRC + "</div>"
             kind = "safe"
 
-            def mount(self, request, **kwargs):
-                self.cfg = {"placeholder": placeholders[self.kind], "trigger": "visible"}
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["cfg"] = {"placeholder": placeholders[self.kind], "trigger": "visible"}
+                return ctx
 
         def rendered(kind: str) -> str:
             request = rf.get("/")
