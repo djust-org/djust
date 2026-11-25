@@ -355,6 +355,8 @@ class Cluster:
         node_env: Optional[Dict[str, Dict[str, str]]] = None,
         store: Optional[str] = None,
         save_interval: float = 0,
+        server: str = "uvicorn",
+        lifespan: bool = False,
     ) -> None:
         self.node_env = node_env or {}
         self.dir = _short_tempdir("mnc")
@@ -368,6 +370,10 @@ class Cluster:
             "store": store,
             # DJUST_STATE_SAVE_INTERVAL of every node (0: save every turn).
             "save_interval": save_interval,
+            # The ASGI server of every node (uvicorn, daphne, hypercorn), and
+            # whether the application answers lifespan (djust.lifespan).
+            "server": server,
+            "lifespan": lifespan,
         }
         os.makedirs(self.config["cache_dir"])
         self.names = [chr(ord("A") + i) for i in range(n)]
