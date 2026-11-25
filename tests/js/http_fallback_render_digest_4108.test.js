@@ -592,7 +592,9 @@ describe('elements moved or replaced without changing the layout', () => {
             const page = await loadPage(
                 html.replace('<head></head>', `<head><meta name="djust-render-digest" content="d0.${shape}"></head>`),
                 '/',
-                {hooks: {Sorter: {updated() { reorder(this.el.ownerDocument); }}}},
+                // updateOn: the patch below changes another list, and since #4001
+                // only a hook that asks for every render hears of it.
+                {hooks: {Sorter: {updateOn: 'render', updated() { reorder(this.el.ownerDocument); }}}},
             );
             try {
                 if (!hooked) arrange(page, () => reorder(page.win.document));

@@ -27,6 +27,9 @@
 
 (function initInfiniteScrollModule() {
     const STATE = new WeakMap();
+    // The containers in STATE, countable (#4001): a patch on a page that
+    // tracks none skips the rescan.
+    const TRACKED = new Set();
     const DEFAULT_THRESHOLD = 0.1;
 
     function parseFloatAttr(el, name, fallback) {
@@ -127,6 +130,7 @@
         });
 
         STATE.set(container, state);
+        TRACKED.add(container);
         observeSentinels(state);
     }
 
@@ -182,10 +186,12 @@
         if (!state) return;
         if (state.observer) state.observer.disconnect();
         STATE.delete(container);
+        TRACKED.delete(container);
     }
 
     window.djust = window.djust || {};
     window.djust.initInfiniteScroll = initInfiniteScroll;
+    window.djust._infiniteScrollTracked = () => TRACKED.size;
     window.djust.resetViewport = resetViewport;
     window.djust.teardownInfiniteScroll = teardownInfiniteScroll;
 })();

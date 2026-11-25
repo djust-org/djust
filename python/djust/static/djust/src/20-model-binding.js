@@ -238,9 +238,15 @@ function bindModelElements(root, changes) {
     _bindModelIn(root || document);
 }
 
-/** Bind `el` itself when it carries a dj-model attribute it is not bound by. */
+/**
+ * Bind `el` itself when it carries a dj-model attribute it is not bound by:
+ * any element for the spellings a selector names, and for dj-model.debounce-N
+ * only the elements the full scan considers (_MODEL_NUMBERED_CANDIDATES).
+ */
 function _bindModelCandidate(el) {
     if (_modelUnchanged(el)) return;
+    if (!_MODEL_EXACT.some(sel => el.matches(sel)) &&
+        !_MODEL_NUMBERED_CANDIDATES.some(sel => el.matches(sel))) return;
     const names = el.getAttributeNames();
     for (let i = 0; i < names.length; i++) {
         // eslint-disable-next-line security/detect-object-injection

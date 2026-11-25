@@ -5,7 +5,7 @@ Drives a real LiveView over WebSocket in headless Chromium and records every
 hook callback in ``window.__log``:
 
 * a keyed reorder keeps each hook instance and its ``this.el`` (no
-  destroyed/mounted, one updated each);
+  destroyed/mounted; updated() at most once, for the moved items, #4001);
 * an element the server re-renders with another tag gets destroyed() on the old
   instance before mounted() on the new one;
 * a hook nested in an inserted hook element gets mounted() only, parent first;
@@ -280,9 +280,12 @@ def main() -> int:
                     ],
                     f"keyed reorder: no destroyed()/mounted() ({log})",
                 )
+                # #4001: updated() only for an item the patch moved (an item
+                # left in place is unchanged), and never twice.
                 check(
-                    all(log.count(f"it-{i}.updated") == 1 for i in (1, 2, 3)),
-                    "keyed reorder: one updated() per item",
+                    all(log.count(f"it-{i}.updated") <= 1 for i in (1, 2, 3))
+                    and any(f"it-{i}.updated" in log for i in (1, 2, 3)),
+                    f"keyed reorder: at most one updated() per item, for the moved ones ({log})",
                 )
 
                 # replacement by another tag
@@ -314,9 +317,13 @@ def main() -> int:
                     page.evaluate("() => document.getElementById('boom').title") == "1",
                     "throwing hook: the patch still landed on its own element",
                 )
+                # #4001: the bump changes #count and #boom only, so the other
+                # hooks get beforeUpdate() but no updated().
                 check(
-                    "cv.updated" in log and "it-1.updated" in log,
-                    f"throwing hook: the other hooks still got updated() ({log})",
+                    "cv.beforeUpdate" in log
+                    and "cv.updated" not in log
+                    and "it-1.updated" not in log,
+                    f"throwing hook: the other hooks still ran, and untouched ones got no updated() ({log})",
                 )
                 check(
                     any("Boom.beforeUpdate()" in e for e in errors)

@@ -238,15 +238,19 @@ describe('#3656 rule 3: beforeUpdate() runs once per update, before any DOM chan
     });
 });
 
-describe('#3656 rule 4: updated() runs after the DOM change, for every hook still in the document', () => {
-    it('sees the new DOM and the rebound dj-* bindings; hooks outside the change are updated too', async () => {
+describe('#3656 rule 4: updated() runs after the DOM change, for the hooks the patch changed', () => {
+    it('sees the new DOM; a hook outside the change gets none unless it asks for every render (#4001)', async () => {
         const seen = [];
         const env = await setup(
-            '<div id="c" dj-id="c" dj-hook="C" title="old"></div><div id="o" dj-hook="C"></div>',
-            { C: { updated() { seen.push([this.el.id, this.el.getAttribute('title')]); } } },
+            '<div id="c" dj-id="c" dj-hook="C" title="old"></div><div id="o" dj-hook="C"></div>'
+                + '<div id="r" dj-hook="R"></div>',
+            {
+                C: { updated() { seen.push([this.el.id, this.el.getAttribute('title')]); } },
+                R: { updateOn: 'render', updated() { seen.push([this.el.id, 'render']); } },
+            },
         );
         await env.ws.handleMessage(patchFrame([{ type: 'SetAttr', path: [0], d: 'c', key: 'title', value: 'new' }]));
-        expect(seen).toEqual([['c', 'new'], ['o', null]]);
+        expect(seen).toEqual([['c', 'new'], ['r', 'render']]);
     });
 });
 
@@ -459,7 +463,8 @@ describe('#3656 rule 9: a throwing hook breaks neither the patch nor the other h
             '<div id="bad" dj-id="bad" dj-hook="Bad"></div><div id="good" dj-hook="R"></div>',
             (log) => ({
                 Bad: { beforeUpdate() { throw new Error('boom-before'); }, updated() { throw new Error('boom-updated'); } },
-                R: recorder(log),
+                // Every render: the patch below changes only #bad (#4001).
+                R: recorder(log, { updateOn: 'render' }),
             }),
         );
         await env.ws.handleMessage(patchFrame([{ type: 'SetAttr', path: [0], d: 'bad', key: 'title', value: 'set' }]));

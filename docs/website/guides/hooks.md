@@ -84,7 +84,8 @@ window.djust.hooks = Object.assign(window.djust.hooks || {}, {
 | Callback | When Called |
 |----------|------------|
 | `mounted()` | Element first appears in the DOM. Initialize libraries, bind listeners. |
-| `updated()` | After a server re-render patches the DOM. Sync libraries with new data. |
+| `updated()` | After a server re-render that changed the hook's element or anything inside it (after a full morph: every render). Sync libraries with new data. |
+| `updateOn: 'render'` | Optional property on the hook definition: get `updated()` after every render, as before #4001. |
 | `shouldUpdate()` | Optional synchronous predicate before `updated()`; returning `false` skips that callback only. |
 | `beforeUpdate()` | Before an incremental patch batch or full HTML morph, once per update within the updated root (including scoped child updates). Save state that would be lost (scroll position, selection). |
 | `destroyed()` | Element removed from the DOM, replaced, or its `dj-hook` removed or renamed. Clean up libraries, observers, timers. |
@@ -93,8 +94,12 @@ window.djust.hooks = Object.assign(window.djust.hooks || {}, {
 
 The exact rules for when each one runs are in [The lifecycle contract](#the-lifecycle-contract) below.
 
-Hooks normally receive `updated()` after every update, including unrelated
-changes. For an expensive widget, `shouldUpdate()` can compare its relevant
+After an incremental patch a hook receives `updated()` only when the patch
+changed its element (an attribute) or something inside it (text, attributes,
+children inserted, removed or moved); a patch elsewhere on the page does not
+reach it (#4001). A full morph still updates every hook. A widget that reads
+state from outside its element sets `updateOn: 'render'` on its definition to
+get `updated()` after every render. For an expensive widget, `shouldUpdate()` can compare its relevant
 inputs and return `false` when no work is needed. Compare raw attribute values
 before reading `this.values` if parsing large JSON payloads is costly. This
 opt-in does not suppress `beforeUpdate()`, removal cleanup, or connection
@@ -135,9 +140,14 @@ page's `mounted()`, with no `beforeUpdate()`.
    whole view, or the container of a scoped update). Hooks outside that region
    get none.
 4. **`updated()` runs after the update has been applied** and djust has bound
-   the `dj-*` attributes it inserted, for every hook whose element is still in
-   the document, including hooks outside the updated region: it means "a render
-   happened", not "your element changed". Use `shouldUpdate()` to skip it.
+   the `dj-*` attributes it inserted. After an incremental patch batch it runs
+   for every hook whose element or subtree the batch changed (an attribute of
+   the element, or text, attributes or children anywhere inside it), and for
+   every hook whose definition sets `updateOn: 'render'`; a hook the batch did
+   not touch gets none, though it got `beforeUpdate()` (#4001). After a full
+   HTML morph, and on the first patch after a child or sticky view's update or
+   a reconnect, it runs for every hook whose element is still in the document,
+   including hooks outside the updated region. Use `shouldUpdate()` to skip it.
 5. **`destroyed()` runs exactly once per instance**, when its element leaves the
    document, is replaced, or loses or renames its `dj-hook`, at the end of the
    update that did it. An element leaving with a [`dj-remove`](declarative-ux-attrs)

@@ -477,6 +477,32 @@ function _childByDjId(node, host, id) {
     return Array.from(host.children).find((c) => c.getAttribute('dj-id') === id) || null;
 }
 
+// The containers of other views inside a view: their dj-ids are numbered by
+// that view's own renders, so the same id can name an unrelated element there.
+const _NESTED_VIEW_SELECTOR = '[dj-view], [data-djust-embedded], [dj-sticky-root]';
+
+/**
+ * The element with dj-id `id` that belongs to the view rooted at `scope`: the
+ * first in document order with no other view's container between it and
+ * `scope` (a `{% live_render %}` child or a sticky view numbers its ids
+ * independently). Null when there is none.
+ */
+function _ownDjIdElement(scope, id) {
+    if (!scope) return null;
+    const sel = `[dj-id="${CSS.escape(id)}"]`;
+    const owned = (el) => {
+        for (let a = el; a && a !== scope; a = a.parentElement) {
+            if (a.matches(_NESTED_VIEW_SELECTOR)) return false;
+        }
+        return true;
+    };
+    // The first match is the usual answer, and querySelector stops there.
+    const first = scope.querySelector(sel);
+    if (!first || owned(first)) return first;
+    for (const el of scope.querySelectorAll(sel)) if (owned(el)) return el;
+    return null;
+}
+
 /**
  * The text node a `SetText` names by its parent's dj-id and its index among
  * the parent's significant children (#4001), or null, and `path` resolves it.
@@ -485,8 +511,10 @@ function _childByDjId(node, host, id) {
  */
 function _textNodeByParent(patch, rootEl) {
     if (patch.d || typeof patch.parent_d !== 'string' || !Number.isInteger(patch.index)) return null;
-    const parent = (rootEl || document).querySelector(`[dj-id="${CSS.escape(patch.parent_d)}"]`);
-    if (!parent) return null;
+    const parent = _ownDjIdElement(rootEl || getLiveViewRoot(), patch.parent_d);
+    // Inside a [dj-virtual] list dj-ids are positional and rows are detached
+    // (#2113): leave such a node to the path, which carries that guard.
+    if (!parent || parent.closest('[dj-virtual]')) return null;
     const preserveWhitespace = isWhitespacePreserving(parent);
     let remaining = patch.index;
     for (let c = childHost(parent).firstChild; c; c = c.nextSibling) {
@@ -3407,6 +3435,11 @@ function _applyPatchesInner(patches, rootEl, changes = null) {
         ? new MutationObserver(() => {}) : null;
     if (observer) {
         observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    } else if (patches && patches.length) {
+        // A batch nobody records (a child or sticky view's patches, a cached
+        // answer): nothing tells the next scoped rescan what it inserted, so
+        // the next reinitAfterDOMUpdate scans the page instead (#4001).
+        window.djust._fullRescanPending = true;
     }
     try {
         if (!patches || patches.length === 0) return true;
@@ -3431,6 +3464,10 @@ function _applyPatchesInner(patches, rootEl, changes = null) {
  * - `removed`: nodes taken out and not put back.
  * - `attrs`: Map of element to the Set of attribute names that changed.
  * - `text`: how many text-only changes (character data, text nodes added).
+ * - `touched`: Set of the connected elements a record targeted (the element
+ *   whose attribute changed, the parent whose children changed, the parent of
+ *   changed character data). A hook's subtree changed iff one of these is the
+ *   hook element or inside it.
  * - `scoped: true`: the record is complete, so a rescan may use it instead of
  *   walking the page. A caller without it scans the page as before.
  */
@@ -3438,8 +3475,11 @@ function _summarizeMutations(records, out) {
     const added = new Set();
     const removed = [];
     const attrs = new Map();
+    const touched = new Set();
     let text = 0;
     for (const r of records) {
+        const target = r.type === 'characterData' ? r.target.parentNode : r.target;
+        if (target && target.nodeType === 1 && target.isConnected) touched.add(target);
         if (r.type === 'childList') {
             r.addedNodes.forEach((n) => { if (n.nodeType === 1) added.add(n); else text++; });
             r.removedNodes.forEach((n) => removed.push(n));
@@ -3461,6 +3501,7 @@ function _summarizeMutations(records, out) {
     out.removed = removed.filter((n) => !n.isConnected);
     out.attrs = attrs;
     out.text = text;
+    out.touched = touched;
     out.scoped = true;
     return out;
 }

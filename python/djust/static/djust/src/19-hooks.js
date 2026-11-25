@@ -389,10 +389,40 @@ function _updateHookEntry(entry) {
 }
 
 /**
+ * The dj-hook elements a patch's change record (#4001) concerns, in document
+ * order: the ones it inserted or whose attributes it changed (new or renamed
+ * hooks), the mounted ones whose element or subtree it changed (an element in
+ * `touched` is the hook element or inside it), and the mounted ones whose
+ * definition asks for every render (`updateOn: 'render'`). Cost follows the
+ * change and the number of mounted hooks, not the page.
+ */
+function _changedHookElements(changes) {
+    const els = new Set(_changedMatches(changes, '[dj-hook]'));
+    changes.touched.forEach((node) => {
+        for (let el = node; el && el.nodeType === 1; el = el.parentNode) {
+            const entry = el._djustHookId && _activeHooks.get(el._djustHookId);
+            if (entry && entry.el === el) els.add(el);
+        }
+    });
+    for (const [, entry] of _activeHooks) {
+        if (entry.instance.updateOn === 'render' && entry.el.isConnected) els.add(entry.el);
+    }
+    return Array.from(els).sort((a, b) =>
+        (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+}
+
+/**
  * Called after a DOM update: destroy the hooks that left, then update the
  * hooks that stayed and mount the new ones, in document order.
+ *
+ * `changes` (#4001): the change record of an incremental patch. Then only the
+ * hooks it concerns are visited (see _changedHookElements): a hook whose
+ * element and subtree the patch left alone gets no updated(). Disposal still
+ * checks every mounted hook (detached, or its dj-hook renamed). Without a
+ * record (mount, morph, navigation, child or sticky updates) every hook under
+ * `root` is visited and updated, as before.
  */
-function updateHooks(root) {
+function updateHooks(root, changes) {
     _ensureHooksInit();
     root = root || document;
     const hooks = _getHookDefs();
@@ -400,7 +430,7 @@ function updateHooks(root) {
     if (outermost) _hooksMountedInPass = new Set();
     try {
         _destroyDetachedHooks(root);
-        _eachHookEl(root, (el) => {
+        const visit = (el) => {
             const elId = _getHookElId(el);
             const entry = _activeHooks.get(elId);
             if (entry && entry.el === el) {
@@ -411,6 +441,18 @@ function updateHooks(root) {
             // instance belongs to that node, so this one gets a fresh instance.
             if (entry) _destroyHookEntry(elId, entry);
             _mountHookEl(el, hooks, false);
+        };
+        if (!changes) {
+            _eachHookEl(root, visit);
+            return;
+        }
+        _changedHookElements(changes).forEach((el) => {
+            if (!el.isConnected) return;
+            try {
+                visit(el);
+            } catch (e) {
+                console.error('[dj-hook] Error in %s:', el.getAttribute('dj-hook'), e);
+            }
         });
     } finally {
         if (outermost) _hooksMountedInPass = null;
