@@ -48,26 +48,18 @@ def people(db):
     return staff
 
 
-def _view(source: str, policy: str, factory, mutate):
+def _view(source: str, factory, mutate):
     class _V(LiveView):
-        exposure_policy = policy
+        exposure_policy = "explicit"
         template = f"<div dj-root>{source}<button dj-click='poke'>x</button></div>"
 
-        if policy == "legacy":
+        def mount(self, request, **kwargs):
+            self.tick = 0
 
-            def mount(self, request, **kwargs):
-                for name, value in factory().items():
-                    setattr(self, name, value)
-
-        else:
-
-            def mount(self, request, **kwargs):
-                self.tick = 0
-
-            def get_context_data(self, **kwargs):
-                ctx = super().get_context_data(**kwargs)
-                ctx.update(factory())
-                return ctx
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx.update(factory())
+            return ctx
 
         @event_handler
         def poke(self, **kwargs):
@@ -95,30 +87,26 @@ def _users():
 
 def _add_group(view):
     User.objects.get(username="u0").groups.add(Group.objects.get(name="staff"))
-    if hasattr(view, "users"):  # legacy holds the QuerySet: re-evaluate it
-        view.users = User.objects.order_by("pk")
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("loop_cache", [True, False], ids=["lc-on", "lc-off"])
-def test_row_relation_walk_follows_a_relation_change(people, policy, loop_cache):
+def test_row_relation_walk_follows_a_relation_change(people, loop_cache):
     """B2: ``{{ u.groups.count }}`` in a loop row, ``render_with_diff`` after the change."""
     source = "{% for u in users %}<li>{{ u.username }}:{{ u.groups.count }}</li>{% endfor %}"
     cfg = {"loop_render_cache_enabled": loop_cache}
-    first, again, after = _diff_renders(_view(source, policy, _users, _add_group), cfg)
+    first, again, after = _diff_renders(_view(source, _users, _add_group), cfg)
     assert first == again == "<li>u0:0</li><li>u1:0</li>", first
     assert after == "<li>u0:1</li><li>u1:0</li>", after
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_nested_relation_loop_follows_a_db_change(people, policy):
+def test_nested_relation_loop_follows_a_db_change(people):
     """The same staleness on main: a loop over a row's relation (``u.groups.all``)."""
     source = (
         "{% for u in users %}<li>{% for g in u.groups.all %}{{ g.name }},{% endfor %}</li>"
         "{% endfor %}"
     )
     cfg = {"loop_render_cache_enabled": True}
-    first, _again, after = _diff_renders(_view(source, policy, _users, _add_group), cfg)
+    first, _again, after = _diff_renders(_view(source, _users, _add_group), cfg)
     assert first == "<li></li><li></li>", first
     assert after == "<li>staff,</li><li></li>", after
 
@@ -135,13 +123,12 @@ def _change_email(view):
         rows[0].email = "u0@new.example"
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("flag", [True, False], ids=["handles-on", "handles-off"])
-def test_state_model_loop_follows_a_field_change(people, policy, flag):
+def test_state_model_loop_follows_a_field_change(people, flag):
     """B3: a loop over a state model list reads ``x.email`` (not in ``str(model)``)."""
     source = "{% for x in us %}<li>{{ x.email }}</li>{% endfor %}"
     cfg = dict(FLAG_ON if flag else FLAG_OFF, loop_render_cache_enabled=True)
-    first, again, after = _diff_renders(_view(source, policy, _held_users, _change_email), cfg)
+    first, again, after = _diff_renders(_view(source, _held_users, _change_email), cfg)
     assert first == again == "<li>u0@old.example</li><li>u1@old.example</li>", first
     assert after == "<li>u0@new.example</li><li>u1@old.example</li>", after
 
@@ -150,8 +137,7 @@ def _perm_user():
     return {"u": User.objects.get(username="u0")}
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_loop_over_a_relation_follows_a_field_change(people, policy):
+def test_loop_over_a_relation_follows_a_field_change(people):
     """The review's main-branch shape: rows a relation walk returns are live handles hashed by
     ``str(permission)``, so ``{{ p.codename }}`` (not in ``__str__``) replayed stale."""
     from django.contrib.auth.models import Permission
@@ -165,13 +151,12 @@ def test_loop_over_a_relation_follows_a_field_change(people, policy):
 
     source = "{% for p in u.user_permissions.all %}<li>{{ p.codename }}</li>{% endfor %}"
     cfg = {"loop_render_cache_enabled": True}
-    first, again, after = _diff_renders(_view(source, policy, _perm_user, rename), cfg)
+    first, again, after = _diff_renders(_view(source, _perm_user, rename), cfg)
     assert first == again == f"<li>{old}</li>", first
     assert after == "<li>renamed_codename</li>", after
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_custom_filter_over_a_handle_follows_a_field_change(world, policy):
+def test_custom_filter_over_a_handle_follows_a_field_change(world):
     """B3, the half no attribute read sees: a custom filter handed the loop row's HANDLE reads a
     field through Python. Only the binding check (a live opaque handle in the item's bindings)
     keeps that item out of the cache."""
@@ -191,7 +176,7 @@ def test_custom_filter_over_a_handle_follows_a_field_change(world, policy):
 
     source = "{% load cc3949 %}{% for r in us %}<li>{{ r|cc3949_filter }}</li>{% endfor %}"
     cfg = dict(FLAG_ON, loop_render_cache_enabled=True)
-    first, again, after = _diff_renders(_view(source, policy, rows, rename), cfg)
+    first, again, after = _diff_renders(_view(source, rows, rename), cfg)
     assert first == again and SENT_C in first and HASH_MARK not in first, first
     items = re.findall(r"<li>(.*?)</li>", after, re.S)
     assert "CHANGED-FIRST" in items[0] and SENT_C in items[1], after

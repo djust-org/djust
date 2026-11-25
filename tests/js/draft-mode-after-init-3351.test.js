@@ -34,7 +34,7 @@ async function boot(bodyHtml, saved = {}) {
     const { window } = dom;
     window.console = { log: () => {}, error: () => {}, warn: () => {}, debug: () => {}, info: () => {} };
     for (const [key, data] of Object.entries(saved)) {
-        window.localStorage.setItem(`djust_draft_${key}`, JSON.stringify({ data, timestamp: 1 }));
+        window.localStorage.setItem(`djust_draft_${key}`, JSON.stringify({ data, timestamp: 1, format: 2 }));
     }
 
     const queued = new Map();
@@ -318,7 +318,7 @@ describe('draft mode: the mount morph does not undo the restore (#3351)', () => 
         const w = dom.window;
         w.DJUST_USE_WEBSOCKET = false;
         w.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
-        w.localStorage.setItem('djust_draft_k', JSON.stringify({ data: saved, timestamp: 1 }));
+        w.localStorage.setItem('djust_draft_k', JSON.stringify({ data: saved, timestamp: 1, format: 2 }));
         w.eval(clientCode);
         w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
         await initialized(w);
@@ -366,7 +366,7 @@ describe('draft mode: a mount of another container leaves the page alone (#3351)
         const w = dom.window;
         w.DJUST_USE_WEBSOCKET = false;
         w.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
-        w.localStorage.setItem('djust_draft_k', JSON.stringify({ data: { title: 'olddraft' }, timestamp: 1 }));
+        w.localStorage.setItem('djust_draft_k', JSON.stringify({ data: { title: 'olddraft' }, timestamp: 1, format: 2 }));
         w.eval(clientCode);
         w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
         await initialized(w);
@@ -425,7 +425,7 @@ describe('draft mode: a slot restores its draft on its first mount only (#3351)'
         const w = dom.window;
         w.DJUST_USE_WEBSOCKET = false;
         w.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
-        w.localStorage.setItem('djust_draft_slotk', JSON.stringify({ data: { sf: 'olddraft' }, timestamp: 1 }));
+        w.localStorage.setItem('djust_draft_slotk', JSON.stringify({ data: { sf: 'olddraft' }, timestamp: 1, format: 2 }));
         w.eval(clientCode);
         w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
         await initialized(w);
@@ -476,7 +476,7 @@ describe('draft mode: a removed slot that comes back mounts as new (#3351)', () 
         try {
             w.DJUST_USE_WEBSOCKET = false;
             w.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
-            w.localStorage.setItem('djust_draft_slotk', JSON.stringify({ data: { sf: 'olddraft' }, timestamp: 1 }));
+            w.localStorage.setItem('djust_draft_slotk', JSON.stringify({ data: { sf: 'olddraft' }, timestamp: 1, format: 2 }));
             w.eval(clientCode);
             w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
             await initialized(w);
@@ -598,7 +598,7 @@ describe('draft mode: a draft keeps the fields the page no longer holds (#3351)'
     it('never merges an unsafe key from storage into the draft', async () => {
         const env = await boot(FORM('k', text('a')));
         env.window.localStorage.setItem(
-            'djust_draft_k', '{"data":{"__proto__":{"polluted":true},"old":"x"},"timestamp":1}');
+            'djust_draft_k', '{"data":{"__proto__":{"polluted":true},"old":"x"},"timestamp":1,"format":2}');
         env.type(env.document.querySelector('[name="a"]'), 'v');
         env.flush();
         const stored = env.stored('k');

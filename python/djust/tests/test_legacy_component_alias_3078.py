@@ -5,7 +5,7 @@
 alias must resolve it only against the view class's declared descriptors of
 that component type (ADR-034's server-owned routing rule): never another
 component type, never an arbitrary view attribute. It follows the project's
-parameter policy; under strict, ``component_id`` is a framework-supplied
+parameter contract: ``component_id`` is a framework-supplied
 argument (#4185, ``test_framework_classes_explicit_4185.py``).
 """
 
@@ -13,7 +13,6 @@ import pytest
 
 from djust import LiveView
 from djust.components.descriptors import Dropdown, Modal
-from djust.config import config
 
 READS: list = []
 
@@ -86,7 +85,7 @@ def test_a_subclass_that_replaces_the_declaration_is_not_resolved():
     assert view.menu == "not a component"
 
 
-def test_alias_follows_the_project_policy_and_declares_component_id():
+def test_alias_declares_component_id():
     from djust.validation import declared_framework_arguments
 
     metadata = MixedPage.toggle_dropdown._djust_decorators["event_handler"]
@@ -94,24 +93,18 @@ def test_alias_follows_the_project_policy_and_declares_component_id():
     assert declared_framework_arguments(MixedPage.toggle_dropdown) == {"component_id"}
 
 
-@pytest.mark.parametrize("policy", ["legacy", "strict"])
-def test_alias_validates_under_either_project_policy(policy):
+def test_alias_validates_under_strict():
     """The binding every transport applies before the alias runs (the socket
     and SSE runtime, and the HTTP fallback: ``validate_handler_params``)."""
     from djust.validation import validate_handler_params, validated_call_arguments
 
-    previous = config.get("event_parameter_policy", "legacy")
-    config.set("event_parameter_policy", policy)
-    try:
-        view = MixedPage()
-        for target in ("dialog", "menu"):
-            result = validate_handler_params(
-                view.toggle_dropdown, {"component_id": target}, "toggle_dropdown"
-            )
-            assert result["valid"], result
-            args, kwargs = validated_call_arguments(result)
-            view.toggle_dropdown(*args, **kwargs)
-    finally:
-        config.set("event_parameter_policy", previous)
+    view = MixedPage()
+    for target in ("dialog", "menu"):
+        result = validate_handler_params(
+            view.toggle_dropdown, {"component_id": target}, "toggle_dropdown"
+        )
+        assert result["valid"], result
+        args, kwargs = validated_call_arguments(result)
+        view.toggle_dropdown(*args, **kwargs)
     assert view.dialog.is_open is False
     assert view.menu.is_open is True

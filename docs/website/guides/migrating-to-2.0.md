@@ -29,30 +29,15 @@ the old behaviour.
 > explicit) and strict event parameters are the default
 > ([#4189](https://github.com/djust-org/djust/issues/4189)). The removals in
 > [section 3](#3-replace-removed-names-and-settings) have landed.
-> `exposure_policy = "legacy"` and `parameter_policy="legacy"` are still
-> accepted and warn; they become errors in 2.0.0
-> ([#4199](https://github.com/djust-org/djust/issues/4199)).
+> `exposure_policy = "legacy"` and `parameter_policy="legacy"` are refused
+> (2.0.0rc6, [#4199](https://github.com/djust-org/djust/issues/4199)): each
+> raises `ImproperlyConfigured` naming the replacement.
 
-If you are already on a pre-release with views you have not migrated, state
-`exposure_policy = "legacy"` on them (once, on a base class they inherit from)
-and migrate them one at a time. Without it an unmigrated view renders the
-names nothing supplies as empty, with no error. Stating `"legacy"` raises a
-`DeprecationWarning` when the class is defined, which fails the import of every
-module that states it when your tests run with warnings as errors. Allow just
-that warning until the views are migrated. With pytest:
-
-```toml
-# pyproject.toml
-[tool.pytest.ini_options]
-filterwarnings = [
-    "error",
-    'ignore:exposure_policy = "legacy" \(stated on:DeprecationWarning',
-]
-```
-
-With `python -W` or `PYTHONWARNINGS` the message part is matched literally
-from its start: `-W 'ignore:exposure_policy = "legacy":DeprecationWarning'`,
-placed after `-W error`.
+If you are already on a pre-release with views you have not migrated, the
+class statement of each one that states `exposure_policy = "legacy"` now fails.
+Run `djust_exposure_inventory --fix` (step 1 of
+[section 1](#1-move-each-view-to-explicit-exposure)): the command reads and
+rewrites such modules, and is the only code allowed to import them.
 
 ## Before you start
 
@@ -73,7 +58,7 @@ placed after `-W error`.
 3. Run `python manage.py check` and keep it free of errors while you work
    through the sections below. On a 2.0 pre-release it also lists every change
    this guide describes ([which check reports what](#which-checks-report-what));
-   the upgrade checks (`djust.V028`, `djust.V033` and the rest) and
+   the upgrade checks (`djust.V033`, `djust.T027` and the rest) and
    `djust_exposure_inventory --fix` exist only there, so run them in a scratch
    environment (`pip install --pre djust`) and make the changes on 1.3.x.
 4. Save the HTML of each page as it renders now, logged in as a test user. You
@@ -139,14 +124,24 @@ the current directory), or touches markup that Python code builds. It reports
 `--json` prints the report as JSON. It imports your views, so a module that
 does not import cannot be fixed.
 
+On 2.0 a class that states `exposure_policy = "legacy"`,
+`parameter_policy="legacy"` or `cancel_async_on_disconnect = True` is refused
+when it is created. The command imports your views under its own permit, so
+it can still read and rewrite them; nothing else can, and constructing such a
+view is refused inside the command too. A module that is imported while
+Django starts (a URLconf, an `AppConfig.ready()`, a `models.py`, or an
+`admin.py` that admin autodiscovery imports) is refused before the command
+runs: delete its line by hand, then run the command. Do the steps in this
+order: first delete the removed `LIVEVIEW_CONFIG` / `DJUST_CONFIG` keys
+(`event_parameter_policy`, `reauth_on_event`, `reauth_server_turn_interval`),
+which are refused at startup, then run `--fix`.
+
 ### Which checks report what
 
 | Check | It reports | Fixed in |
 | --- | --- | --- |
-| `djust.V028` | a class states `exposure_policy = "legacy"` | [section 1](#step-4-delete-the-policy-line) |
+| `ImproperlyConfigured` at class creation | a class states `exposure_policy = "legacy"` | [section 1](#step-4-delete-the-policy-line) |
 | `djust.T027` | a name the template reads that nothing supplies, or an `X_count` 1.x generated | [section 1](#step-2-supply-the-template) |
-| `djust.V026` | a legacy view declares a plain component in its class body | [section 1](#other-things-explicit-exposure-refuses) |
-| `djust.V032` | an admin page lists a widget view that states `"legacy"` | [section 1](#other-things-explicit-exposure-refuses) |
 | `djust.V016` | a strict handler declaration that dispatch refuses | [section 2](#2-make-event-handlers-strict) |
 | `djust.V033` | a legacy handler whose signature strict would refuse | [section 2](#2-make-event-handlers-strict) |
 | `djust.T020` | an event binding's arguments missing, unexpected or supplied twice | [section 2](#2-make-event-handlers-strict) |
@@ -154,10 +149,10 @@ does not import cannot be fixed.
 | `djust.T029` | Python code that emits a `data-*` event argument | [section 2](#strict-is-the-default) |
 | `djust.V034` | a handler that declares or reads `_target` | [section 2](#strict-is-the-default) |
 | `djust.V031` | a `dj-auto-recover` handler on the 1.3 names | [section 2](#recovery-handlers-dj-auto-recover) |
-| `djust.V036` | `parameter_policy="legacy"` or `cancel_async_on_disconnect` | [section 4](#4-capabilities-with-a-new-20-spelling) |
+| `ImproperlyConfigured` when the class or decorator is created | `parameter_policy="legacy"` or `cancel_async_on_disconnect` | [section 4](#4-capabilities-with-a-new-20-spelling) |
 | `djust.V035` | `_on_sticky_update` on an explicit sticky child | [section 4](#sticky-children) |
 | `djust.V037` | `sw_cacheable = True` on a page that differs per visitor | [section 4](#service-worker-caching) |
-| `djust.C045` | `event_parameter_policy`, `reauth_on_event` or `reauth_server_turn_interval` is set | [section 2](#strict-is-the-default) and [section 4](#4-capabilities-with-a-new-20-spelling) |
+| `ImproperlyConfigured` at startup | `event_parameter_policy`, `reauth_on_event` or `reauth_server_turn_interval` is set | [section 2](#strict-is-the-default) and [section 4](#4-capabilities-with-a-new-20-spelling) |
 
 ## 1. Move each view to explicit exposure
 
@@ -179,12 +174,12 @@ Do this for one view at a time:
 | 1.3 | 2.0 | Reported by | `--fix` |
 | --- | --- | --- | --- |
 | A public attribute on `self` renders | A `state()` field, or a name returned from `get_context_data()` | `djust.T027` | Partly: it supplies the name from `get_context_data()`; `state()` is your choice |
-| `exposure_policy = "legacy"` | Delete the line | `djust.V028` (a class creation error in 2.0.0) | Yes. It keeps the line on a base class while a view that inherits it needs a person |
+| `exposure_policy = "legacy"` | Delete the line | `ImproperlyConfigured` when the class is created | Yes. It keeps the line on a base class while a view that inherits it needs a person |
 | A generated `{{ items_count }}` | `{{ items\|length }}` | `djust.T027` | No: reported |
 | `_private` attributes kept between fallback requests | Rebuilt in `mount()`; `state(persist="server")` for what must survive | — | No |
 | `enable_state_snapshot`, `PersistentLiveView` | `state(..., persist=...)` on each field | A class creation error, or `ImportError` | No |
-| A plain component in the class body, or `self.x = Badge()` in `mount()` | A class-body `LiveComponent`, or `state(default_factory=...)` | `djust.V026` | No |
-| A legacy widget on an admin page | Migrate the widget like any view | `djust.V032` | Partly: the widget view is fixed like any view |
+| A plain component in the class body, or `self.x = Badge()` in `mount()` | A class-body `LiveComponent`, or `state(default_factory=...)` | `ImproperlyConfigured` when the class is created | No |
+| A legacy widget on an admin page | Migrate the widget like any view | `ImproperlyConfigured` when the widget class is created | Partly: the widget view is fixed like any view |
 | `{{ page_title }}` read from `self.page_title` | Supply it from `get_context_data()` | — | No |
 
 Interactive components, `{% live_render %}` children, `dj-lazy`, activity
@@ -286,30 +281,26 @@ class CartView(LiveView):
 it prints:
 
 ```text
-ADR-038 exposure inventory (legacy destinations; values redacted)
+Names a djust 1.3 view exposes implicitly (values redacted)
 
-shop.views.CartView  [policy: legacy; reconnect: fresh mount]
-  coupon  str  instance  -> template_context, client_state, snapshot (conditional: session_state)
+shop.views.CartView  [policy: legacy]
+  coupon  str  instance  -> template_context, client_state
       suggest: coupon: str = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  items  list  instance  -> template_context, client_state, snapshot (conditional: session_state)
+  items  list  instance  -> template_context, client_state
       suggest: items: list = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  page  int  instance  -> template_context, client_state, snapshot (conditional: session_state)
+  page  int  instance  -> template_context, client_state
       suggest: page: int = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  _audit_note  str  private  -> - (conditional: private_session)
+  _audit_note  str  private  -> -
       suggest: explicit mode never persists underscore attributes, and this view does not restore them on a reconnect today; leave it instance-only
 ```
 
 Read it this way:
 
-- **The arrow list** is where the name goes today. Those are the places it
-  stops going once the view is explicit. `session_state` and
-  `private_session` are always conditional on 2.0: a legacy view's state
-  reaches the session only when it renders as a `lazy=True` child and an event
-  reaches it over the HTTP fallback.
-- **`reconnect: fresh mount`** means the view runs `mount()` again when the
-  socket reconnects, so nothing needs a persistence grant to behave as it does
-  now. On 2.0 every view reads `fresh mount`, because nothing restores a
-  legacy view's state on a reconnect any more. The 1.3.x command reads
+- **The arrow list** is where 1.3 sent the name. Those are the places it
+  stops going once the view is explicit.
+- **No persistence grant is suggested**, because on 2.0 a view runs
+  `mount()` again when the socket reconnects and nothing restores undeclared
+  state. The 1.3.x command reads
   `reconnect: restored (enable_state_snapshot)` for a view that sets
   `enable_state_snapshot = True` or subclasses `PersistentLiveView`, and
   suggests `state(persist="server")` for its names: run it there first if you
@@ -630,15 +621,11 @@ object for every event, rebuilt from its saved state as in 1.3.
   renders it, or build it in `get_context_data()`.
   Do not give a component field `persist=`.
 - **A plain component in the class body** (`rating = Rating(...)`), for the
-  reason above. On a legacy view it is not refused, but `manage.py check`
-  warns about it (`djust.V026`), because a legacy view renders it to every
-  user.
+  reason above: it is refused when the class is created.
 - **Actors** (`use_actors = True`). See [What does not survive](#5-what-does-not-survive).
 - **A legacy widget on an admin page.** The admin change list and change
-  form are explicit, and an explicit page cannot embed a view that states
-  `"legacy"`: a `change_list_widgets` / `change_form_widgets` view that
-  still does makes the page fail (`djust.V032` names it). Migrate the
-  widget first.
+  form are explicit, and a widget class that states `"legacy"` is refused
+  when it is created, like any view. Migrate the widget first.
 - **Undeclared names in a `TtydTerminalView` subclass.** The terminal base
   class is explicit. Its own names (`ttyd_url`, `rows`, `cols`,
   `theme_json`) come from `super().get_context_data()`; a subclass whose
@@ -660,7 +647,7 @@ For each handler:
    before anything else: a strict handler ignores `data-*`.
 3. Remove defaults that only existed to survive a missing argument.
 4. Remove `**kwargs`, unless the handler really takes an open set of fields.
-5. Run `python manage.py check`. Strict is the default since 2.0 ([#4189](https://github.com/djust-org/djust/issues/4189)): `djust.V016` reports what dispatch refuses. A handler you have not converted yet can keep `@event_handler(parameter_policy="legacy")` until you get to it (2.0.0 removes that spelling).
+5. Run `python manage.py check`. Strict is the default since 2.0 ([#4189](https://github.com/djust-org/djust/issues/4189)): `djust.V016` reports what dispatch refuses. `@event_handler(parameter_policy="legacy")` is refused when the decorator applies (#4199), so convert every handler before you install 2.0.
 
 ### At a glance
 
@@ -670,8 +657,8 @@ For each handler:
 | A `data-item-id="3"` argument | `dj-value-item-id="3"` | `djust.T020`, `djust.T028` (templates), `djust.T029` (Python) | Yes in a template when the handler declares it; No for markup that Python builds |
 | A `_target` parameter, or `kwargs.get("_target")` | A declared `field: str = ""` | `djust.V034` (and `djust.V016` for a declared `_target`) | No: reported |
 | Blank text becomes `0` for `count: int` | `count: Optional[int] = None`, and handle `None` | — (rejected at dispatch) | No |
-| `parameter_policy="legacy"` on a handler | Delete it | `djust.V036` | No: reported |
-| `LIVEVIEW_CONFIG["event_parameter_policy"]` | Delete the key | `djust.C045` (a startup error in 2.0.0) | No |
+| `parameter_policy="legacy"` on a handler | Delete it | `ImproperlyConfigured` when the decorator applies | No |
+| `LIVEVIEW_CONFIG["event_parameter_policy"]` | Delete the key | `ImproperlyConfigured` at startup | No |
 | A `**kwargs` that absorbs what the browser sends | The declared parameters | — | No |
 | A `dj-auto-recover` handler that reads `_form_values` / `_data_attrs` | `form_values: dict[str, Any]`, `data_attrs: dict[str, str]` (2.0 only) | `djust.V031` | No |
 
@@ -773,8 +760,8 @@ The accepted annotations are `str`, `int`, `float`, `bool`, `Decimal`, `UUID`,
 
 There is no setting to choose the policy. Strict has been the default since
 2.0 ([#4189](https://github.com/djust-org/djust/issues/4189)), and
-`LIVEVIEW_CONFIG["event_parameter_policy"]` is reported by `djust.C045` and
-refused at startup in 2.0.0: delete the key.
+`LIVEVIEW_CONFIG["event_parameter_policy"]` is refused at startup: delete the
+key.
 
 A handler whose named parameters are all annotated keeps working under the
 strict default when it also has `**kwargs`: the catch-all takes whatever else
@@ -783,8 +770,8 @@ parameter fails the page (`djust.V016` reports it), with or without
 `**kwargs`. The catch-all also keeps the handler from being checked; remove it
 handler by handler afterwards.
 
-`@event_handler(parameter_policy="legacy")` keeps one handler on the old
-behaviour until you get to it; 2.0.0 removes it (`djust.V036`).
+`@event_handler(parameter_policy="legacy")` is refused when the decorator
+applies; there is no per-handler way back.
 `manage.py check` reports what strict dispatch would refuse: `djust.V016` for a
 parameter without a usable annotation or with a reserved name, and
 `djust.T020` for a template binding that sends something its handler does not
@@ -915,6 +902,12 @@ Every replacement works on 1.3.x, so make the change there.
 | System check `djust.V011` (sticky child and parent snapshot opt-in) | Remove it from `SILENCED_SYSTEM_CHECKS`; nothing reports it. `djust.C304` now warns about a `client=True` field with a credential-like name. |
 | `NonPersistableStateError`, and the `strict=` argument of `LiveView._capture_snapshot_state()` | Nothing. A client field has to be JSON, and a model or `Decimal` is refused when the token is built. |
 | `djust.react` (`ReactMixin`, `react_components`, `register_react_component`) and capitalized `<Button />`-style component tags in templates | A JavaScript hook: `dj-hook="Name"` on an ordinary element, the hook in `window.djust.hooks` ([hooks guide](hooks.md)). Importing the names raises `ImportError`; a capitalized tag is a template error unless it is an HTML element, and HTML reads element names in any case: `<DIV>`, `<TextArea>` and `<tItLe>` are elements, while a self-closing non-void element (`<Button label="x" />`, `<Header />`) and a name HTML does not have (`<Widget>`) are component tags ([#4006](https://github.com/djust-org/djust/issues/4006)). |
+| `exposure_policy = "legacy"` | Supply the names the template reads from `get_context_data()`, declare the state a later event or a reconnect needs with `state()`, then delete the line; `python manage.py djust_exposure_inventory --fix` does the mechanical part. Refused with `ImproperlyConfigured` when the class is created and on construction. `exposure_policy = "explicit"` is accepted and does nothing; any other value is refused. System check `djust.V028` is retired. |
+| `@event_handler(parameter_policy="legacy")` and `@server_function(parameter_policy="legacy")` | Annotate the handler's parameters (`Any` accepts a value unchecked), send `dj-value-*` from the template instead of `data-*`, and delete the argument. Refused with `ImproperlyConfigured` when the decorator applies. `parameter_policy="strict"` is accepted and does nothing. System check `djust.V036` is retired. |
+| `cancel_async_on_disconnect = True` on a view | Delete the attribute: a view's background work is always cancelled when its connection closes. Work that must finish says so with `start_async(fn, survive_disconnect=True)` or `@background(survive_disconnect=True)`. Refused with `ImproperlyConfigured` when the class is created and on the mount path; `False` is accepted. |
+| the `djust startproject` command | `djust new <name>` (or `uvx djust@latest init` beside an existing `manage.py`); `djust startapp` stays ([#4207](https://github.com/djust-org/djust/issues/4207)) |
+| the back-compat re-exports in `djust.theming.manager` (`COOKIE_NAMESPACE_RE`, `DEFAULT_CONFIG`, `_validate_cookie_namespace`), `djust.theming.presets` (`ColorScale`, `SurfaceTreatment`, `ThemeTokens`, `BLUE_THEME`, `GREEN_THEME`, `ORANGE_THEME`, `PURPLE_THEME`, `ROSE_THEME`, `SHADCN_THEME`, `NATURAL20_THEME`, `CATPPUCCIN_THEME`, `ROSE_PINE_THEME`, `TOKYO_NIGHT_THEME`, `NORD_THEME`, `SYNTHWAVE_THEME`, `CYBERPUNK_THEME`, `OUTRUN_THEME`, `FOREST_THEME`, `AMBER_THEME`, `SLATE_THEME`, `NEBULA_THEME`, `DJUST_THEME`, `DRACULA_THEME`, `GRUVBOX_THEME`, `SOLARIZED_THEME`, `HIGH_CONTRAST_THEME`, `MONO_THEME`, `EMBER_THEME`, `AURORA_THEME`, `INK_THEME`, `SOLARPUNK_THEME`, `BAUHAUS_THEME`, `CYBERDECK_THEME`, `PAPER_THEME`, `NEON_NOIR_THEME`, `OCEAN_THEME`, `STRIPE_THEME`, `LINEAR_THEME`, `NOTION_THEME`, `VERCEL_THEME`, `GITHUB_THEME`, `ART_DECO_THEME`, `HANDCRAFT_THEME`, `TERMINAL_THEME`, `MAGAZINE_THEME`, `DOCS_THEME`, `SWISS_THEME`, `CANDY_THEME`, `RETRO_COMPUTING_THEME`, `MEDICAL_THEME`, `LEGAL_THEME`, `MIDNIGHT_THEME`, `SUNRISE_THEME`, `FOREST_FLOOR_THEME`, `DASHBOARD_THEME`, `ONE_DARK_THEME`, `MONOKAI_THEME`, `AYU_THEME`, `KANAGAWA_THEME`, `EVERFOREST_THEME`, `POIMANDRES_THEME`, `TAILWIND_THEME`, `SUPABASE_THEME`, `RAYCAST_THEME`, `ADAPTIVE_THEME`, `SAKURA_THEME`, `OBSIDIAN_THEME`, `DUNE_THEME`, `MISSION_CONTROL_THEME`, `ART_NOUVEAU_THEME`), `djust.theming.theme_packs` (`AnimationStyle`, `IconStyle`, `IllustrationStyle`, `InteractionStyle`, `PatternStyle`, `PATTERN_GLASS`) | import the types from `djust.theming` and the rest from the module that defines it (`djust.theming._config`, `_constants`, `_builtin_presets`) ([#4207](https://github.com/djust-org/djust/issues/4207)) |
+| `LiveViewConsumer.handle_event`, `LiveViewConsumer.handle_url_change`, `LiveViewConsumer.handle_mount` (now the private `_mount_page`) and `PushEventMixin._flush_pending_push_events` | events and URL changes reach a view through the runtime (`_dispatch_runtime_owned`); call `flush_push_events` instead of `_flush_pending_push_events`. A `LiveViewConsumer` subclass overriding one of these is not called ([#4207](https://github.com/djust-org/djust/issues/4207)) |
 
 <!-- END GENERATED removed-table:python -->
 
@@ -1038,6 +1031,8 @@ To open or close from your own handler, set the state:
 | `view_state_in_session` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key. A view's state is saved in the server-side session by default. To save nothing, as `view_state_in_session = False` did, set `DJUST_AUTOMATIC_STATE = False` in settings (the whole project) or `automatic_state = False` on a view ([Switching saving off](state-survival.md#switching-saving-off)). System check `djust.C027`, which validated the old key, is retired. |
 | `event_security` set to `"open"` or `"warn"` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Put `@event_handler` on every method a template binds (`dj-click`, `dj-submit`, ...), then delete the key. Only decorated methods are client events, on every transport (WebSocket, SSE, the page-POST fallback, components and the test client); startup refuses the two modes (any case) with this hint and any other value except `"strict"` as unknown (#4101). `"strict"` is accepted and does nothing. |
 | `time_travel_enabled` and `time_travel_max_events` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the keys; djust refuses them with `ImproperlyConfigured` at startup. Time-travel debugging was removed (#4184). System checks `djust.C501`, `djust.C502` and `djust.V014` are retired. `bug_capture_default_scrub` stays: the State tab's Share button applies it. |
+| `event_parameter_policy` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the key; djust refuses it with `ImproperlyConfigured` at startup. Strict event parameters are the only policy: `manage.py check` reports each handler parameter strict refuses as `djust.V016`. System check `djust.C045` is retired. |
+| `reauth_on_event` and `reauth_server_turn_interval` in `LIVEVIEW_CONFIG` or `DJUST_CONFIG` | Delete the keys; djust refuses them with `ImproperlyConfigured` at startup. Every event and server turn is re-authorized against a freshly loaded session, with no interval, so there is nothing to switch on. |
 
 <!-- END GENERATED removed-table:settings -->
 
@@ -1053,6 +1048,8 @@ To open or close from your own handler, set the state:
 | `block["super"]` and `dict(block)` inside a custom tag that receives `block` | `context["block"].super()` |
 | System checks `djust.C018` and `djust.T015` | Remove them from `SILENCED_SYSTEM_CHECKS`; nothing reports them. |
 | The `djust_components/table.html` override point and the filters `table_cell`, `table_href`, `table_has_href`, `table_width`, `table_width_attrs` | Read the row in your own template. `{% data_table %}` is drawn by the native handler on both engines; the row-click script is `/static/djust_components/data-table-row-click.js` (serve it from `/static/` or load it yourself). |
+| `window.djust.extractTypedParams` and `data-*` attributes as event arguments | `dj-value-*` attributes (`dj-value-item-id:int="4"`); the browser sends only what the handler's signature declares ([#4205](https://github.com/djust-org/djust/issues/4205)) |
+| `{% static 'djust_theming/css/base.css' %}`, a one-line `@import` of `scaffold.css` | `{% static 'djust_theming/css/scaffold.css' %}` ([#4207](https://github.com/djust-org/djust/issues/4207)) |
 
 <!-- END GENERATED removed-table:templates -->
 
@@ -1120,8 +1117,8 @@ state the old value.
   the view set `cancel_async_on_disconnect = True`. An explicit view's work,
   and the tasks it starts with `self.create_task()`, are cancelled when the
   view is disposed: when the connection closes and when the user navigates to
-  another view. `cancel_async_on_disconnect` changes nothing on an explicit
-  view. Work that must finish (a payment, an import) states
+  another view. `cancel_async_on_disconnect = True` is refused when the class
+  is created; delete it. Work that must finish (a payment, an import) states
   `survive_disconnect=True`: `self.start_async(self._import)` becomes
   `self.start_async(self._import, survive_disconnect=True)`, and `@background`
   becomes `@background(survive_disconnect=True)`. It then runs to completion
@@ -1216,8 +1213,8 @@ class FeedView(LiveView):
         self.offset += self._page_size
 ```
 
-A test that called `_get_private_state()` to check what a view keeps now raises on an
-explicit view. Use `LiveViewTestClient.persisted_state()` (or `djust.testing.persisted_state(view)`)
+A test that called `_get_private_state()` to check what a view keeps fails: the method is gone.
+Use `LiveViewTestClient.persisted_state()` (or `djust.testing.persisted_state(view)`)
 instead: it returns what the view would save, split by destination, and
 `"name" not in persisted_state(view).names` asserts that a value a page only reads is saved nowhere
 ([Asserting what is saved](../testing/index.md#asserting-what-is-saved)).
@@ -1232,17 +1229,17 @@ the rows that need it.
 | --- | --- | --- | --- |
 | A sticky child keeps state through `_on_sticky_update` | `sticky_update_inputs = ("section",)` (2.0 only) | `djust.V035` | No |
 | Background work ran to completion after a disconnect | `start_async(fn, survive_disconnect=True)` or `@background(survive_disconnect=True)` (2.0 only) | — | No |
-| `cancel_async_on_disconnect = True` | Delete it: an explicit view's work is always cancelled | `djust.V036` | No |
+| `cancel_async_on_disconnect = True` | Delete it: an explicit view's work is always cancelled | `ImproperlyConfigured` when the class is created | No |
 | The service worker cached every page | `sw_cacheable = True` on public pages (2.0 only) | `djust.V037` | No |
 | Exception detail in production logs and error trackers | `LIVEVIEW_CONFIG = {"log_exception_detail": True}` (2.0 only) | — | No |
-| `reauth_on_event`, `reauth_server_turn_interval` | Delete them: every turn is re-authorized | `djust.C045` | No |
+| `reauth_on_event`, `reauth_server_turn_interval` | Delete them: every turn is re-authorized | `ImproperlyConfigured` at startup | No |
 | A `dj-auto-recover` handler on `_form_values` | `form_values` and `data_attrs` parameters (2.0 only) | `djust.V031` | No ([section 2](#recovery-handlers-dj-auto-recover)) |
 
 ### Sticky children
 
 As a sticky child, an explicit view is remounted whenever a
 `{% live_render %}` input changes, so djust never calls `_on_sticky_update`
-(it ran only for legacy children; `djust.V035` reports it). Name the inputs
+(it ran only on djust 1.3; `djust.V035` reports it). Name the inputs
 the hook takes, or delete the hook and read the inputs in `mount()`.
 
 <!-- doc-snippet-check: before -->
@@ -1293,8 +1290,8 @@ rules are in [Sticky LiveViews](sticky-liveviews.md#changed-kwargs-the-on_sticky
 An explicit view's `start_async()` and `@background` work, and the tasks it
 starts with `self.create_task()`, are cancelled when the view is disposed:
 when the connection closes and when the user navigates to another view.
-`cancel_async_on_disconnect` changes nothing on an explicit view; delete it
-(`djust.V036`). Work that must finish (a payment, an import) says so:
+`cancel_async_on_disconnect = True` is refused when the class is created;
+delete it. Work that must finish (a payment, an import) says so:
 
 <!-- doc-snippet-check: before -->
 ```python
@@ -1460,8 +1457,8 @@ never in production settings. The helpers are described in the
 1. `python manage.py djust_exposure_inventory` shows `[policy: explicit]` for
    every view.
 2. `python -W error::DeprecationWarning manage.py test` passes.
-3. `python manage.py check` reports none of `djust.V028`, `djust.V033`,
-   `djust.T028`, `djust.V034`, `djust.V035`, `djust.V036`, `djust.C045`,
+3. `python manage.py check` reports none of `djust.V033`,
+   `djust.T028`, `djust.V034`, `djust.V035`,
    `djust.T029`, `djust.T027`, `djust.V016` and `djust.T020`.
 4. No view sets `enable_state_snapshot`, `use_actors` or subclasses
    `PersistentLiveView`.
@@ -1474,4 +1471,4 @@ never in production settings. The helpers are described in the
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: c5bc5aa469c1 -->
+<!-- generated-doc prose-sha256: 0b65a2bf3a3b -->

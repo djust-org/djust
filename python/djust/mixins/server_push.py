@@ -23,8 +23,8 @@ with its own ``asyncio`` task has no use for a broadcast: it wants to say
             self.step = step
 
 The push runs the same turn on a WebSocket and on an SSE session: the turn
-chain (so ``LIVEVIEW_CONFIG["sync_turn_wrapper"]`` and ``reauth_on_event``
-apply), the connection's render lock, deferral while a turn is in progress,
+chain (so ``LIVEVIEW_CONFIG["sync_turn_wrapper"]`` applies), authorization
+against the stored session, the connection's render lock, deferral while a turn is in progress,
 one render and one frame. See ``docs/website/advanced/server-push.md``.
 """
 

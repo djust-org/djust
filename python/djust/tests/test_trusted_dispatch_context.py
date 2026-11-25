@@ -52,10 +52,6 @@ class DispatchView(LiveView):
         CALLS.append(("rpc", value))
         return value
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def legacy(self, value=None, **kwargs):
-        CALLS.append(("legacy", value, dict(kwargs)))
-
 
 @pytest.fixture(autouse=True)
 def _clear_calls():
@@ -306,59 +302,6 @@ async def test_real_sse():
                 assert "forged" not in json.dumps(frames)
         finally:
             _sse_sessions.pop(sid, None)
-
-
-@pytest.mark.asyncio
-@pytest.mark.django_db(transaction=True)
-async def test_shared_runtime_route_reads_the_cache_id_before_any_handler_sees_it():
-    """#4155: the WebSocket/SSE route takes ``_cacheRequestId`` out of the params
-    (``ViewRuntime`` dispatch, ``params.pop``) to echo it on an update, so no
-    handler there receives it. Strict validation drops it as well, but only for a
-    strict handler: a legacy one with ``**kwargs`` is kept from it by the route
-    alone. (The HTTP fallback and the test client hand it to a legacy handler,
-    pinned below as before.)"""
-    from djust.runtime import ViewRuntime
-    from djust.tests._live_session import amount_on_runtime
-    from djust.tests.test_runtime_child_routing_1892 import MockTransport
-
-    view = DispatchView()
-    transport = MockTransport()
-    runtime = ViewRuntime(transport)
-    await amount_on_runtime(runtime, view)
-    await runtime.dispatch_event(
-        {"type": "event", "event": "legacy", "params": dict(METADATA["cache"])}
-    )
-    assert CALLS == [("legacy", "1", {})], transport.sent
-
-
-# --- legacy handlers keep their keyword mapping ------------------------------
-
-
-@pytest.mark.django_db
-def test_legacy_handler_still_receives_framework_keys_as_before():
-    from djust.testing import LiveViewTestClient
-
-    client = LiveViewTestClient(DispatchView).mount()
-    client.send_event("legacy", value="1", _cacheRequestId="c1", component="c")
-    assert CALLS == [("legacy", "1", {"_cacheRequestId": "c1", "component": "c"})]
-
-
-@pytest.mark.django_db
-def test_legacy_http_flat_body_still_drops_underscore_keys():
-    from django.test import RequestFactory
-    from djust.tests.test_exposure_runtime import make_request
-
-    initial = make_request()
-    DispatchView().get(initial)
-    request = RequestFactory().post(
-        initial.path,
-        data=json.dumps({"value": "1", "_forged": "x", "_cacheRequestId": "c1"}),
-        content_type="application/json",
-        HTTP_X_DJUST_EVENT="legacy",
-    )
-    request.user, request.session, request.tenant = initial.user, initial.session, None
-    assert DispatchView().post(request).status_code == 200
-    assert CALLS == [("legacy", "1", {"_cacheRequestId": "c1"})]
 
 
 # --- ADR-034 output callbacks: the source is trusted context ----------------

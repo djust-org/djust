@@ -20,7 +20,8 @@ from djust.theming.a11y_exemptions import (
 )
 from djust.theming.accessibility import AccessibilityValidator
 from djust.theming.checks import check_preset_contrast
-from djust.theming.presets import THEME_PRESETS, ColorScale
+from djust.theming.presets import THEME_PRESETS
+from djust.theming import ColorScale
 
 pytestmark = pytest.mark.theming
 
@@ -59,7 +60,7 @@ class TestAlertTint:
     def test_a_tint_is_a_derived_surface_not_a_css_token(self):
         from dataclasses import fields
 
-        from djust.theming.presets import ThemeTokens
+        from djust.theming import ThemeTokens
 
         names = {f.name for f in fields(ThemeTokens)}
         assert not {n for n in names if n.endswith("_tint")}
@@ -73,7 +74,7 @@ class TestAlertTint:
     @pytest.mark.parametrize("mode", MODES)
     def test_it_is_the_worse_of_the_page_and_a_card(self, name, mode):
         """An alert sits on either; the matrix must hold for both placements."""
-        from djust.theming.presets import ColorScale as C
+        from djust.theming import ColorScale as C
 
         tokens = getattr(THEME_PRESETS[name], mode)
         for status in ("success", "warning", "destructive"):

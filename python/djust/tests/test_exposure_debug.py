@@ -9,9 +9,10 @@ import json
 import pytest
 
 from djust import LiveView
+from djust._exposure import explicit_debug_projection
 from djust.decorators import state
 from djust.observability.registry import register_view, unregister_view
-from djust.observability.views import _lenient_assigns, view_assigns
+from djust.observability.views import view_assigns
 
 
 class DebugView(LiveView):
@@ -66,7 +67,7 @@ def test_debug_codec_failure_does_not_fall_back_to_repr_or_raw_attrs(view, caplo
             raise AssertionError("repr must not run")
 
     view.client_value = Secret()
-    result = _lenient_assigns(view)
+    result = explicit_debug_projection(view)
     assert result == {"_djust_projection_error": "State unavailable"}
     assert "SENTINEL" not in caplog.text
 
@@ -79,7 +80,7 @@ def test_client_default_failure_is_not_logged_with_secret_exception_text(caplog)
         exposure_policy = "explicit"
         visible = state(default_factory=fail, client=True)
 
-    assert _lenient_assigns(object.__new__(Broken)) == {
+    assert explicit_debug_projection(object.__new__(Broken)) == {
         "_djust_projection_error": "State unavailable"
     }
     assert "SECRET_FACTORY_SENTINEL" not in caplog.text
@@ -88,7 +89,7 @@ def test_client_default_failure_is_not_logged_with_secret_exception_text(caplog)
 @pytest.mark.parametrize("policy", ["explict", None, True])
 def test_unknown_policy_never_selects_legacy_debug_reflection(view, policy):
     view.exposure_policy = policy
-    assert _lenient_assigns(view) == {"_djust_projection_error": "State unavailable"}
+    assert explicit_debug_projection(view) == {"_djust_projection_error": "State unavailable"}
 
 
 def test_mount_and_event_debug_metadata_do_not_walk_attributes(view):

@@ -3,7 +3,7 @@
 An HTTP load carries the title and meta tags in the rendered document, so
 anything queued during ``mount()`` never needed sending and nothing on the
 mount path drained the queue. A ``live_redirect`` mount has no document
-render: ``handle_live_redirect_mount`` called ``handle_mount`` and returned,
+render: ``handle_live_redirect_mount`` called ``_mount_page`` and returned,
 so a view setting ``self.page_title`` in ``mount()`` left the browser tab
 naming the page the reader had navigated away from.
 
@@ -52,11 +52,11 @@ async def test_a_title_queued_during_mount_reaches_the_client():
     consumer, sent = _consumer_with_queued_view()
 
     async def _fake_handle_mount(data, **kwargs):
-        # The real handle_mount builds and attaches the new view; stand in for
+        # The real _mount_page builds and attaches the new view; stand in for
         # the part that matters here, a mounted view with a queued command.
         consumer.view_instance = _QueueingView()
 
-    with patch.object(consumer, "handle_mount", new=AsyncMock(side_effect=_fake_handle_mount)):
+    with patch.object(consumer, "_mount_page", new=AsyncMock(side_effect=_fake_handle_mount)):
         await consumer.handle_live_redirect_mount(
             {"view": TARGET, "url": "/redirect-target/", "params": {}}
         )
@@ -77,7 +77,7 @@ async def test_the_queue_is_not_delivered_twice():
     async def _fake_handle_mount(data, **kwargs):
         consumer.view_instance = _QueueingView()
 
-    with patch.object(consumer, "handle_mount", new=AsyncMock(side_effect=_fake_handle_mount)):
+    with patch.object(consumer, "_mount_page", new=AsyncMock(side_effect=_fake_handle_mount)):
         await consumer.handle_live_redirect_mount(
             {"view": TARGET, "url": "/redirect-target/", "params": {}}
         )
@@ -99,7 +99,7 @@ async def test_a_view_that_queued_nothing_sends_nothing():
     async def _fake_handle_mount(data, **kwargs):
         consumer.view_instance = _Quiet()
 
-    with patch.object(consumer, "handle_mount", new=AsyncMock(side_effect=_fake_handle_mount)):
+    with patch.object(consumer, "_mount_page", new=AsyncMock(side_effect=_fake_handle_mount)):
         await consumer.handle_live_redirect_mount(
             {"view": TARGET, "url": "/redirect-target/", "params": {}}
         )

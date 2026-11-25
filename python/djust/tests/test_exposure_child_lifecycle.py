@@ -518,7 +518,7 @@ async def test_websocket_redirect_cleans_only_discarded_owned_subtrees(outcome):
         if outcome == "survives":
             consumer.view_instance._register_child("child", child)
 
-    consumer.handle_mount = mount
+    consumer._mount_page = mount
     data = {"url": "/page/", "view": "test.Page"}
     if outcome == "mount_error":
         with pytest.raises(RuntimeError, match="new mount failed"):

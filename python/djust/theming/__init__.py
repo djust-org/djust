@@ -34,18 +34,16 @@ from .tailwind import (
     generate_tailwindv4_theme_block_cached,
     export_preset_as_tailwind_colors,
 )
-from .presets import (
+from .presets import THEME_PRESETS, ThemePreset
+from ._builtin_presets import (
     BLUE_THEME,
     DEFAULT_THEME,
     GREEN_THEME,
     ORANGE_THEME,
     PURPLE_THEME,
     ROSE_THEME,
-    THEME_PRESETS,
-    ColorScale,
-    ThemePreset,
-    ThemeTokens,
 )
+from ._types import ColorScale, ThemeTokens
 
 # The theming domain model. Defined in `_types` (a private module holding
 # public types) and never re-exported, so `from djust.theming import

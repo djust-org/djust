@@ -1,7 +1,7 @@
 """``permission_required`` "any of" (``AnyOf``) and the check_permissions() 403.
 
 Covers every place djust reads ``permission_required``: the view check (mount,
-HTTP GET, ``reauth_on_event`` through ``check_view_auth_lightweight``), the
+HTTP GET, the sticky re-check through ``check_view_auth_lightweight``), the
 ``@permission_required`` handler check, the dispatch-level mixin, the client
 route map, and ``djust_audit`` (inventory, ``--dump-permissions`` and
 ``--permissions``).
@@ -105,8 +105,8 @@ class TestViewAnyOf:
         with pytest.raises(PermissionDenied):
             check_view_auth(_MixedView(), _request(["runs.approve"]))
 
-    def test_lightweight_recheck_used_by_reauth_on_event(self):
-        """reauth_on_event re-checks through check_view_auth_lightweight."""
+    def test_lightweight_recheck(self):
+        """``check_view_auth_lightweight`` (the sticky re-check) honours ``AnyOf``."""
         assert check_view_auth_lightweight(_AnyView(), _request(["chat.chat_general"])) is True
         assert check_view_auth_lightweight(_AnyView(), _request(["other.perm"])) is False
 

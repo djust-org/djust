@@ -38,7 +38,7 @@ async def _consumer_with_view(view_class):
     """A ``LiveViewConsumer`` that mounted ``view_class``, its sends captured.
 
     Lifted from ``test_ws_mount_flip_parity_1911.py::_consumer_with_view``; the
-    view is mounted through the real ``handle_mount`` (whose render establishes
+    view is mounted through the real ``_mount_page`` (whose render establishes
     the diff baseline, so these tests exercise patches) because an explicit
     view's tick is authorized by the runtime that mounted it. The tick loop the
     mount starts is stopped: the tests drive ``_tick_once`` themselves.

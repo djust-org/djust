@@ -397,22 +397,15 @@ def djust_client_config(context: Context) -> Any:
     return _client_config_html(request)
 
 
-def _nonlegacy_rendering_view() -> Any:
-    """ADR-038 E2-2: the explicit view whose template is rendering, or None.
+def _rendering_view() -> Any:
+    """ADR-038 E2-2: the view whose template is rendering, or None.
 
     An explicit render context never carries the raw ``view`` (it is a
     reserved name), so tags that need the view resolve it from the thread-local
-    that every render path registers (:func:`active_parent_view`). Only a
-    nonlegacy view is returned: legacy renders keep resolving ``view`` from
-    their context exactly as before, and the view is never written back into
-    the context.
+    that every render path registers (:func:`active_parent_view`). The view is
+    never written back into the context.
     """
-    from .._exposure import uses_legacy_exposure
-
-    active = get_active_parent_view()
-    if active is None or uses_legacy_exposure(active):
-        return None
-    return active
+    return get_active_parent_view()
 
 
 def _form_view(view: Any, attr: str) -> Any:
@@ -1096,7 +1089,7 @@ class ColocatedHookNode(Node):
         view = _context_view(context)
         if view is None:
             # ADR-038 E2-2: an explicit context has no raw view.
-            view = _nonlegacy_rendering_view()
+            view = _rendering_view()
         if view is None:
             return self.name
         try:
@@ -1663,7 +1656,6 @@ def _authorize_reused_child(
     """
     from django.core.exceptions import PermissionDenied
 
-    from .._exposure import uses_legacy_exposure
     from .._exposure_child_identity import child_can_reuse
     from ..auth.core import check_view_auth, enforce_object_permission
 
@@ -1707,9 +1699,7 @@ def _authorize_reused_child(
         ):
             deny()
             raise PermissionDenied("Embedded view identity changed during authorization.")
-    elif not uses_legacy_exposure(child) and not child_can_reuse(
-        child, type(child), parent, request, slot, mount_inputs
-    ):
+    elif not child_can_reuse(child, type(child), parent, request, slot, mount_inputs):
         deny()
         raise PermissionDenied("Embedded view identity changed during authorization.")
 
@@ -1724,18 +1714,10 @@ def _match_sticky_child(
     *,
     preserved: bool = False,
 ) -> bool:
-    """Keep legacy reuse; remount explicit children whose mount identity changed."""
-    from .._exposure import uses_legacy_exposure
+    """Remount a child whose mount identity changed."""
     from .._exposure_child_identity import child_can_reuse
 
-    legacy_target = uses_legacy_exposure(child_cls)
-    if (
-        legacy_target
-        and uses_legacy_exposure(child)
-        and getattr(child, "_explicit_child_reuse_identity", None) is None
-    ):
-        return True
-    if not legacy_target and child_can_reuse(child, child_cls, parent, request, slot, mount_inputs):
+    if child_can_reuse(child, child_cls, parent, request, slot, mount_inputs):
         return True
 
     # Remove every server-owned reference BEFORE mounting a replacement. In
@@ -1757,11 +1739,8 @@ def _discard_sticky_child(parent: Any, view_id: str, child: Any) -> None:
     """Drop a registered sticky child that may no longer be rendered.
 
     The shared sticky-child teardown (``discard_sticky_child``, #3250 review
-    L2): the child is detached from ``parent``; an explicit child is disposed;
-    a legacy child has its waiters and nested children released, then its
-    ``_on_sticky_unmount`` (cancels background work) and
-    ``_cleanup_on_unregister`` hooks run. Never raises — a failing hook must
-    not mask the refusal that follows.
+    L2): the child is detached from ``parent`` and disposed. Never raises — a
+    failing hook must not mask the refusal that follows.
     """
     from .._child_lifecycle import discard_sticky_child
 
@@ -1800,12 +1779,11 @@ def _authorize_carried_descendants(child: Any, request: Any) -> list[tuple[Any, 
     descendant is checked as a fresh mount would check it, against the
     destination request, and its reuse identity for the new route and ancestry
     is compiled. Nothing is recorded here: returns ``(descendant, identity)``
-    pairs for the caller to commit. Raises on any refusal, and for a legacy
-    descendant (its ancestry identity cannot move between pages).
+    pairs for the caller to commit. Raises on any refusal.
     """
     import json
 
-    from .._exposure import ExposureError, uses_legacy_exposure
+    from .._exposure import ExposureError
     from .._exposure_child_identity import child_reuse_identity
     from ..auth.core import check_view_auth, enforce_object_permission
 
@@ -1826,7 +1804,6 @@ def _authorize_carried_descendants(child: Any, request: Any) -> list[tuple[Any, 
             if (
                 getattr(descendant, "_parent_view", None) is not current
                 or getattr(descendant, "_view_id", None) != slot
-                or uses_legacy_exposure(descendant)
             ):
                 raise ExposureError("Carried child tree cannot move")
             descendant.request = request
@@ -1988,16 +1965,13 @@ def _hand_updatable_inputs_after_restore(child: Any, kwargs: Dict[str, Any]) -> 
     return True
 
 
-def _warn_if_sticky_kwargs_changed(
-    child: Any, kwargs: Dict[str, Any], view_path: str, *, preserved: bool = False
-) -> None:
+def _warn_if_sticky_kwargs_changed(child: Any, kwargs: Dict[str, Any], view_path: str) -> None:
     """Warn when a sticky child that has no update hook is given different kwargs.
 
     A sticky child keeps its live instance across parent renders and
     navigations, so the tag's kwargs reach ``mount()`` only once. A child that
     overrides ``_on_sticky_update`` takes the later values through it (#2919);
-    for any other child, and for one preserved across a navigation (which is
-    not rendered again), say so once per distinct set of changed kwarg names
+    for any other child, say so once per distinct set of changed kwarg names
     rather than silently rendering stale state.
     """
     recorded = getattr(child, _STICKY_MOUNT_KWARGS_ATTR, None)
@@ -2022,17 +1996,11 @@ def _warn_if_sticky_kwargs_changed(
     logger.warning(
         "{%% live_render %%} %s sticky=True: kwargs %s changed since the child was "
         "mounted, but a sticky child keeps its live instance, so its kwargs are "
-        "mount-time only and the new values are ignored. %s — see the sticky "
-        "LiveViews guide.",
+        "mount-time only and the new values are ignored. Define "
+        "_on_sticky_update(self, changed) on the child to take the new values, "
+        "or push changing data to it — see the sticky LiveViews guide.",
         view_path,
         ", ".join(repr(k) for k in changed),
-        (
-            "A child preserved across a navigation keeps its DOM and is not "
-            "given new kwargs; push changing data to it"
-            if preserved
-            else "Define _on_sticky_update(self, changed) on the child to take "
-            "the new values, or push changing data to it"
-        ),
     )
 
 
@@ -2056,26 +2024,17 @@ def _render_sticky_child_html(
     """
     from django.template.loader import get_template
 
-    from .._exposure import ExposureError, uses_legacy_exposure
+    from .._exposure import ExposureError
 
-    legacy_child = uses_legacy_exposure(child)
     child_context: Dict[str, Any] = {}
     get_ctx = getattr(child, "get_context_data", None)
     if callable(get_ctx):
         try:
             child_context = dict(get_ctx())
-        except Exception:  # noqa: BLE001 — fall back to empty context on error
-            if not legacy_child:
-                raise ExposureError("Explicit child rendering context unavailable") from None
-            logger.exception(
-                "live_render: child %s.get_context_data raised; rendering with empty context",
-                type(child).__name__,
-            )
-            child_context = {}
+        except Exception:  # noqa: BLE001 — no exception detail reaches the page
+            raise ExposureError("Explicit child rendering context unavailable") from None
     child_context.setdefault("request", request)
-    if legacy_child:
-        child_context.setdefault("view", child)
-    elif "view" in child_context:
+    if "view" in child_context:
         raise ExposureError("Explicit child context contains a reserved framework name")
 
     inline = getattr(child, "template", None)
@@ -2487,7 +2446,6 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         PermissionDenied: If the child's auth check raised PermissionDenied
             (authenticated user without required permissions).
     """
-    from django.template.loader import get_template
 
     from ..auth.core import check_view_auth
     from ..live_view import LiveView  # Lazy import to avoid cycle
@@ -2546,17 +2504,13 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             "exist at mount-frame time, lazy defers slot rendering. "
             "Pick one." % view_path
         )
-    from .._exposure import uses_legacy_exposure as _legacy_policy
-
-    explicit_target = not _legacy_policy(child_cls)
-    if explicit_target:
-        # Django marks a template string literal safe (``SafeString``); an
-        # explicit child's inputs are JSON identities, which take exact ``str``.
-        kwargs = {
-            k: (str.__str__(v) if isinstance(v, str) and type(v) is not str else v)
-            for k, v in kwargs.items()
-        }
-    if explicit_target and not sticky_kwarg:
+    # Django marks a template string literal safe (``SafeString``); a
+    # child's inputs are JSON identities, which take exact ``str``.
+    kwargs = {
+        k: (str.__str__(v) if isinstance(v, str) and type(v) is not str else v)
+        for k, v in kwargs.items()
+    }
+    if not sticky_kwarg:
         from .._exposure import ExposureContract
 
         # ADR-038 D-m: a non-sticky explicit child is transient. It has no
@@ -2608,8 +2562,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         seen.add(sticky_id_value)
         # Pin the sticky_id as the view_id for register/dispatch.
         preferred_view_id = sticky_id_value
-        if explicit_target:
-            identity_kwargs = _sticky_identity_inputs(child_cls, view_path, kwargs)
+        identity_kwargs = _sticky_identity_inputs(child_cls, view_path, kwargs)
 
         # ADR-014: auto-detect a preserved sticky carried over from the
         # previous view via ``LiveViewConsumer._sticky_preserved``. When
@@ -2626,7 +2579,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         # #4149: an explicit child that does not match this route and parent
         # may still be carried here; nothing is recorded until it is authorized.
         carried_identity = None
-        if survivor is not None and explicit_target:
+        if survivor is not None:
             from .._exposure_child_identity import carried_reuse_identity, child_can_reuse
 
             if not child_can_reuse(
@@ -2725,25 +2678,22 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 # the survivor's handlers will read.
                 survivor.request = request
                 tag_inputs = {k: v for k, v in kwargs.items() if k != "lazy"}
-                if not _legacy_policy(type(survivor)):
-                    # #4181: a carried explicit child takes its changed
-                    # updatable inputs through its hook, and is re-rendered to
-                    # the browser right after the mount frame.
-                    if _apply_sticky_input_changes(survivor, tag_inputs, view_path):
-                        carried = survivor
-                        _recheck_object_after_update(
-                            carried,
-                            request,
-                            view_path,
-                            lambda: _drop_preserved_child(parent, sticky_id_value, carried),
-                        )
-                        # On the page view, which the runtime drains after the
-                        # mount frame, wherever the child is nested.
-                        _root_view(parent).__dict__.setdefault("_djust_sticky_refresh", []).append(
-                            carried
-                        )
-                else:
-                    _warn_if_sticky_kwargs_changed(survivor, tag_inputs, view_path, preserved=True)
+                # #4181: a carried child takes its changed updatable inputs
+                # through its hook, and is re-rendered to the browser right
+                # after the mount frame.
+                if _apply_sticky_input_changes(survivor, tag_inputs, view_path):
+                    carried = survivor
+                    _recheck_object_after_update(
+                        carried,
+                        request,
+                        view_path,
+                        lambda: _drop_preserved_child(parent, sticky_id_value, carried),
+                    )
+                    # On the page view, which the runtime drains after the
+                    # mount frame, wherever the child is nested.
+                    _root_view(parent).__dict__.setdefault("_djust_sticky_refresh", []).append(
+                        carried
+                    )
                 # ``consumer`` is guaranteed non-None here: ``survivor`` was
                 # read from ``preserved_map``, which is only set when
                 # ``consumer`` is truthy (see the ``... if consumer else None``
@@ -2844,18 +2794,15 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         view_id = parent._assign_view_id(
             preferred_view_id, lambda: _lazy_child_identity(view_path, kwargs)
         )
-        lazy_identity = None
-        lazy_inputs: Dict[str, Any] = {}
-        if explicit_target:
-            # #4154: a lazy explicit child is a transient one (ADR-038 D-m)
-            # mounted later. Its identity -- the parent, the slot, the inputs,
-            # and the session, user and tenant of THIS render -- is compiled
-            # now, before the placeholder; the fill must match it.
-            from .._exposure import clone_json_state
-            from .._exposure_child_identity import child_reuse_identity
+        # #4154: a lazy child is a transient one (ADR-038 D-m) mounted later.
+        # Its identity -- the parent, the slot, the inputs, and the session,
+        # user and tenant of THIS render -- is compiled now, before the
+        # placeholder; the fill must match it.
+        from .._exposure import clone_json_state
+        from .._exposure_child_identity import child_reuse_identity
 
-            lazy_inputs = clone_json_state(kwargs)
-            lazy_identity = child_reuse_identity(child_cls, parent, request, view_id, lazy_inputs)
+        lazy_inputs: Dict[str, Any] = clone_json_state(kwargs)
+        lazy_identity = child_reuse_identity(child_cls, parent, request, view_id, lazy_inputs)
         # Reserve the id by registering a placeholder NOW so a sibling
         # eager `_register_child` collision is detectable (the actual
         # child is created at thunk-fire time, but registry slot is
@@ -2886,104 +2833,16 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             from asgiref.sync import sync_to_async
 
             def _render_eager() -> str:
-                # Eager mount + render path — same as the non-lazy
-                # branch below. Returns the stamped child HTML.
-                from ..sync_turn import run_sync_step
-
-                if lazy_identity is not None:
-                    return _fill_lazy_explicit_child(
-                        child_cls,
-                        parent,
-                        request,
-                        view_id,
-                        lazy_inputs,
-                        captured_kwargs,
-                        lazy_identity,
-                        view_path,
-                    )
-                child = child_cls()
-                mark_embedded(child)
-                child.request = request
-                auth_redirect = check_view_auth(child, request)
-                if auth_redirect is not None:
-                    raise PermissionError("child %r denied access (auth gate)" % view_path)
-                mount_fn = getattr(child, "mount", None)
-                if callable(mount_fn):
-                    # This runs on its own worker thread (``sync_to_async`` below), outside
-                    # the parent's render hop, so the child's hooks enter their own
-                    # ``sync_turn_wrapper`` steps (#3646).
-                    run_sync_step(child, "mount", mount_fn, request, **captured_kwargs)
-                from .._params_form import _refuse_removed_configuration
-
-                _refuse_removed_configuration(child)
-                # Object-permission check (ADR-017) for the lazy embedded child
-                # — same as the eager path (finding #12). No-op unless the child
-                # overrides get_object; fail-closed otherwise.
-                from ..auth.core import enforce_object_permission
-
-                try:
-                    enforce_object_permission(child, request)
-                except PermissionDenied:
-                    raise PermissionError("child %r denied access (object permission)" % view_path)
-                # Don't re-register the child by view_id — _assign_view_id
-                # already incremented the counter; calling _register_child
-                # here is what locks the slot. The lazy-fill DOM ends up
-                # under [data-djust-embedded="<view_id>"] so events route
-                # correctly.
-                parent._register_child(view_id, child)
-                child_context: Dict[str, Any] = {}
-                get_ctx_fn = getattr(child, "get_context_data", None)
-                if callable(get_ctx_fn):
-                    try:
-                        child_context = dict(run_sync_step(child, "render", get_ctx_fn))
-                    except Exception:  # noqa: BLE001
-                        # Aliased so the names stay local to this closure: the
-                        # enclosing live_render imports them only after the
-                        # lazy branch has returned.
-                        from .._exposure import ExposureError as _ExposureError
-                        from .._exposure import uses_legacy_exposure as _uses_legacy
-
-                        if not _uses_legacy(child):
-                            # ADR-038: as in _render_sticky_child_html.
-                            raise _ExposureError(
-                                "Explicit child rendering context unavailable"
-                            ) from None
-                        logger.exception(
-                            "live_render lazy: child %s.get_context_data raised; "
-                            "rendering with empty context",
-                            child_cls.__name__,
-                        )
-                        child_context = {}
-                child_context.setdefault("request", request)
-                child_context.setdefault("view", child)
-                inline_template = getattr(child, "template", None)
-                if inline_template:
-                    with include_guard_scope():
-                        rendered_inner = Template(inline_template).render(Context(child_context))
-                else:
-                    template_name = getattr(child, "template_name", None)
-                    if not template_name:
-                        raise RuntimeError(
-                            "child %r has neither ``template`` nor "
-                            "``template_name`` set" % view_path
-                        )
-                    with include_guard_scope():
-                        rendered_inner = get_template(template_name).render(child_context, request)
-                # Record the child's dj-model auto-allowlist from its own
-                # TEMPLATE SOURCE so child update_model events (gated on the
-                # child's _dj_model_fields) accept its dj-model inputs — this
-                # render bypasses render_with_diff (#3 Stage-11 review, #1646
-                # parallel-path).
-                _record_child_dj_model_allowlist(child)
-                rendered_stamped = _stamp_view_id(rendered_inner, view_id)
-                # Wrap in a [dj-view] container so events route via
-                # data-djust-embedded just like the eager path.
-                return (
-                    '<div dj-view data-djust-embedded="'
-                    + escaped_id
-                    + '">'
-                    + rendered_stamped
-                    + "</div>"
+                # The explicit mount + render sequence of the eager path.
+                return _fill_lazy_explicit_child(
+                    child_cls,
+                    parent,
+                    request,
+                    view_id,
+                    lazy_inputs,
+                    captured_kwargs,
+                    lazy_identity,
+                    view_path,
                 )
 
             try:
@@ -3003,8 +2862,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     + "s.</dj-error>"
                 )
             except PermissionError as exc:
-                if lazy_identity is not None and not isinstance(exc, _LazyFillRefused):
-                    # An explicit child's envelope carries no application text:
+                if not isinstance(exc, _LazyFillRefused):
+                    # A child's envelope carries no application text:
                     # only the fill's own refusal is shown as one (#4154).
                     status, body = "error", _lazy_failure_body(escaped_id)
                 else:
@@ -3024,17 +2883,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     traceback=True,
                 )
                 status = "error"
-                if lazy_identity is not None:
-                    # Explicit child: no exception type either (#4154 review).
-                    body = _lazy_failure_body(escaped_id)
-                else:
-                    body = (
-                        '<dj-error aria-live="polite">Lazy child '
-                        + escaped_id
-                        + " failed: "
-                        + escape(type(exc).__name__)
-                        + "</dj-error>"
-                    )
+                # No exception type either (#4154 review).
+                body = _lazy_failure_body(escaped_id)
 
             # Build the fill envelope. Browsers parse <template> inertly;
             # the inline <script> activator runs at parse time and
@@ -3200,7 +3050,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     # ``view_id`` keeps its in-memory instance across parent renders only
     # while its reuse identity still matches; otherwise the old instance is
     # disposed and the slot is mounted fresh under the same id.
-    if explicit_target and not sticky_kwarg and preferred_view_id is not None:
+    if not sticky_kwarg and preferred_view_id is not None:
         get_child = getattr(parent, "_get_child_view", None)
         existing_child = get_child(preferred_view_id) if callable(get_child) else None
         if existing_child is not None and _match_sticky_child(
@@ -3243,49 +3093,40 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             "satisfy (login redirect: %s)" % (view_path, auth_redirect)
         )
 
-    # 4b. An explicit child's declared state is restored after its mount()
-    #     (below); a legacy child always mounts fresh.
-    from .._exposure import ExposureError, uses_legacy_exposure
+    # 4b. A child's declared state is restored after its mount() (below).
+    from .._exposure import ExposureError
 
-    explicit_child = not uses_legacy_exposure(child)
     explicit_adapter = None
-    # The slot an explicit child's identity is bound to: its sticky id, or for
-    # a transient (non-sticky) explicit child (ADR-038 D-m) the view_id it is
-    # about to be registered under.
-    explicit_slot: Optional[str] = None
     from ..mixins.sticky import _child_identity as child_identity
 
-    if explicit_child:
-        # Over HTTP the id is named for the child, as for a legacy child, so a
-        # page POST finds the child its GET rendered (#4173). Over a socket the
-        # counter assigns it and the callable never runs.
-        explicit_slot = (
-            sticky_id_value
-            if sticky_kwarg
-            else parent._assign_view_id(
-                preferred_view_id, lambda: child_identity(view_path, kwargs)
-            )
+    # The slot the child's identity is bound to: its sticky id, or for a
+    # transient (non-sticky) child (ADR-038 D-m) the view_id it is about to be
+    # registered under. Over HTTP the id is named for the child, so a page POST
+    # finds the child its GET rendered (#4173). Over a socket the counter
+    # assigns it and the callable never runs.
+    explicit_slot: str
+    if sticky_kwarg:
+        assert sticky_id_value is not None  # passed the non-empty guard above
+        explicit_slot = sticky_id_value
+    else:
+        explicit_slot = parent._assign_view_id(
+            preferred_view_id, lambda: child_identity(view_path, kwargs)
         )
-    if explicit_child:
-        from .._exposure import clone_json_state
-        from .._exposure_children import child_state_adapter, record_child_mount_inputs
+    from .._exposure import clone_json_state
+    from .._exposure_child_identity import child_reuse_identity
+    from .._exposure_children import child_state_adapter, record_child_mount_inputs
 
-        assert explicit_slot is not None
-        # Compile the trusted ownership scope before mount can mutate inputs.
-        # Legacy mixed-policy children remain on their existing path; an
-        # explicit child cannot infer an explicit contract from legacy ancestry.
-        # #4181: a sticky child's updatable inputs are not part of its identity.
-        explicit_mount_inputs = clone_json_state(identity_kwargs)
-        record_child_mount_inputs(child, explicit_mount_inputs)
-        if sticky_kwarg:
-            explicit_adapter = child_state_adapter(
-                child, parent, request, explicit_slot, explicit_mount_inputs, create=True
-            )
-        from .._exposure_child_identity import child_reuse_identity
-
-        explicit_identity = child_reuse_identity(
-            type(child), parent, request, explicit_slot, explicit_mount_inputs
+    # Compile the trusted ownership scope before mount can mutate inputs.
+    # #4181: a sticky child's updatable inputs are not part of its identity.
+    explicit_mount_inputs = clone_json_state(identity_kwargs)
+    record_child_mount_inputs(child, explicit_mount_inputs)
+    if sticky_kwarg:
+        explicit_adapter = child_state_adapter(
+            child, parent, request, explicit_slot, explicit_mount_inputs, create=True
         )
+    explicit_identity = child_reuse_identity(
+        type(child), parent, request, explicit_slot, explicit_mount_inputs
+    )
 
     mount = getattr(child, "mount", None)
     if callable(mount):
@@ -3299,19 +3140,17 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     if sticky_kwarg:
         _record_sticky_mount_kwargs(child, kwargs)
 
-    if explicit_child:
-        assert explicit_slot is not None
-        if not explicit_identity.matches(
-            child_reuse_identity(type(child), parent, request, explicit_slot, explicit_mount_inputs)
-        ):
-            raise ExposureError("Child reuse identity changed during mount")
-        child._explicit_child_reuse_identity = explicit_identity
-        if sticky_kwarg:
-            # What a live_redirect may carry it by (#4149); covered by the
-            # mount-time check above, which compares a superset of its fields.
-            child._explicit_child_carry_identity = child_reuse_identity(
-                type(child), parent, request, explicit_slot, explicit_mount_inputs, carry=True
-            )
+    if not explicit_identity.matches(
+        child_reuse_identity(type(child), parent, request, explicit_slot, explicit_mount_inputs)
+    ):
+        raise ExposureError("Child reuse identity changed during mount")
+    child._explicit_child_reuse_identity = explicit_identity
+    if sticky_kwarg:
+        # What a live_redirect may carry it by (#4149); covered by the
+        # mount-time check above, which compares a superset of its fields.
+        child._explicit_child_carry_identity = child_reuse_identity(
+            type(child), parent, request, explicit_slot, explicit_mount_inputs, carry=True
+        )
 
     # Whether this child's declared state was put back on top of its mount() (#3989).
     explicit_child_restored = False
@@ -3330,7 +3169,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             explicit_values = explicit_adapter.load()
         except ExposureError:
             # Bad schema/identity/expiry is a cache miss, not a partial restore.
-            # Configuration/storage failures propagate, with no legacy fallback.
+            # Configuration/storage failures propagate.
             explicit_values = None
         if explicit_values is not None:
             from .._component_state import apply_declared_state
@@ -3372,25 +3211,19 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         if sticky_kwarg and _hand_updatable_inputs_after_restore(child, kwargs):
             _recheck_object_after_update(child, request, view_path, lambda: None)
 
-    if explicit_child:
-        assert explicit_slot is not None
-        if not explicit_identity.matches(
-            child_reuse_identity(type(child), parent, request, explicit_slot, explicit_mount_inputs)
-        ):
-            raise ExposureError("Child reuse identity changed during authorization")
+    if not explicit_identity.matches(
+        child_reuse_identity(type(child), parent, request, explicit_slot, explicit_mount_inputs)
+    ):
+        raise ExposureError("Child reuse identity changed during authorization")
 
-    # 5. Assign the view_id and register on the parent. _register_child
-    #    wires parent/view_id back-references on the child. An explicit child
-    #    registers under exactly the slot its identity was compiled for.
-    view_id = (
-        explicit_slot
-        if explicit_slot is not None
-        else parent._assign_view_id(preferred_view_id, lambda: child_identity(view_path, kwargs))
-    )
+    # 5. Register on the parent. _register_child wires parent/view_id
+    #    back-references on the child. The child registers under exactly the
+    #    slot its identity was compiled for.
+    view_id = explicit_slot
     parent._register_child(view_id, child)
 
     if explicit_adapter is not None:
-        # Initial child state is server-only even when legacy browser snapshot
+        # Initial child state is server-only even when browser snapshot
         # persistence is disabled. Current object authorization has passed.
         explicit_adapter.save(explicit_adapter.contract.project_view(child, "server"))
         child._explicit_child_mount_binding = explicit_adapter.binding
@@ -3413,55 +3246,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         assert sticky_id_value is not None
         return _render_sticky_child_html(child, view_id, sticky_id_value, request, view_path)
 
-    if explicit_child:
-        # ADR-038 D-m: a transient explicit child renders through the same
-        # reconciled, no-raw-view helper as a sticky one, with a plain wrapper.
-        return _render_sticky_child_html(child, view_id, None, request, view_path)
-
-    # Non-sticky branch (the Phase A contract) — unchanged. Build the child's
-    # context, render its template, stamp the view_id, and wrap in a plain
-    # ``[dj-view]`` container carrying ``data-djust-embedded`` (the client's DOM
-    # walker reads ``dataset.djustEmbedded`` to surface ``view_id`` on events).
-    child_context: Dict[str, Any] = {}
-    get_ctx = getattr(child, "get_context_data", None)
-    if callable(get_ctx):
-        try:
-            child_context = dict(get_ctx())
-        except Exception:  # noqa: BLE001 — fall back to empty context on error
-            # Legacy children only: an explicit child returned above through
-            # _render_sticky_child_html, which never falls back (ADR-038).
-            logger.exception(
-                "live_render: child %s.get_context_data raised; rendering with empty context",
-                child_cls.__name__,
-            )
-            child_context = {}
-    child_context.setdefault("request", request)
-    child_context.setdefault("view", child)
-
-    inline = getattr(child, "template", None)
-    if inline:
-        with include_guard_scope():
-            rendered_inner = Template(inline).render(Context(child_context))
-    else:
-        template_name = getattr(child, "template_name", None)
-        if not template_name:
-            raise TemplateSyntaxError(
-                "{%% live_render %%} child %r has neither ``template`` nor "
-                "``template_name`` set" % view_path
-            )
-        with include_guard_scope():
-            rendered_inner = get_template(template_name).render(child_context, request)
-
-    # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
-    # so child update_model events (gated on the child's _dj_model_fields)
-    # accept its dj-model inputs — this render bypasses render_with_diff
-    # (#3 Stage-11 review, #1646 parallel-path).
-    _record_child_dj_model_allowlist(child)
-    rendered_stamped = _stamp_view_id(rendered_inner, view_id)
-    escaped_id = escape(view_id)
-    return mark_safe(
-        '<div dj-view data-djust-embedded="' + escaped_id + '">' + rendered_stamped + "</div>"
-    )
+    # ADR-038 D-m: a transient child renders through the same reconciled,
+    # no-raw-view helper as a sticky one, with a plain wrapper.
+    return _render_sticky_child_html(child, view_id, None, request, view_path)
 
 
 #: ``{% djust_markdown %}`` written with no operand (a source that resolves to ``None`` is not:

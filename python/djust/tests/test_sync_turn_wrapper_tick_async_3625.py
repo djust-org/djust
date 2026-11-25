@@ -345,7 +345,7 @@ def test_http_result_sync_callable_returning_awaitable_is_completed(probe, monke
 
 
 async def _consumer_with_view():
-    """A consumer that mounted ProbeView through ``handle_mount`` (whose render
+    """A consumer that mounted ProbeView through ``_mount_page`` (whose render
     is the diff baseline): an explicit view's background work is authorized by
     the runtime that mounted it."""
     from djust.tests._live_session import amount_on_consumer
@@ -754,22 +754,12 @@ EXPECTED_HOOK_REFERENCES = {
         "handle_tick",
     ): "run_sync_step",
     ("_view_hooks.py", "call_tick", "handle_tick"): "sync_step",
-    # Runtime: the result turns of a start_async task, success and error arms,
-    # and the explicit-exposure twin.
-    ("runtime.py", "ViewRuntime._execute_async_task_body.complete", "handle_async_result"): (
-        "call_async_result"
-    ),
-    ("runtime.py", "ViewRuntime._execute_async_task_body.complete_error", "handle_async_result"): (
-        "call_async_result"
-    ),
+    # Runtime: the result turns of a start_async task.
     ("runtime.py", "ViewRuntime._execute_explicit_async_task.complete", "handle_async_result"): (
         "call_async_result"
     ),
-    # Embedded / sticky children: explicit and legacy owners.
+    # Embedded / sticky children.
     ("_child_async.py", "_execute_body.complete", "handle_async_result"): "call_async_result",
-    ("_child_async.py", "dispatch_legacy_child_work.run_body.complete", "handle_async_result"): (
-        "call_async_result"
-    ),
     # HTTP fallback: synchronous result hooks enter the async step.
     (
         "mixins/request.py",

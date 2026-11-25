@@ -44,31 +44,23 @@ def _body(html: str) -> str:
     return html_lib.unescape(match.group(1))
 
 
-def _view(source: str, factory, policy: str = "explicit"):
+def _view(source: str, factory):
     class _V(LiveView):
-        exposure_policy = policy
+        exposure_policy = "explicit"
 
-        if policy == "legacy":
-
-            def mount(self, request, **kwargs):
-                for name, value in factory().items():
-                    setattr(self, name, value)
-
-        else:
-
-            def get_context_data(self, **kwargs):
-                ctx = super().get_context_data(**kwargs)
-                ctx.update(factory())
-                return ctx
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx.update(factory())
+            return ctx
 
     _V.template = f"<div dj-root>{source}</div>"
     return _V
 
 
-def _render(source: str, factory, policy: str = "explicit", flag: bool = True) -> str:
+def _render(source: str, factory, flag: bool = True) -> str:
     config = FLAG_ON if flag else FLAG_OFF
     with override_settings(LIVEVIEW_CONFIG=config):
-        client = LiveViewTestClient(_view(source, factory, policy))
+        client = LiveViewTestClient(_view(source, factory))
         client.mount()
         return _body(client.render())
 
@@ -105,12 +97,11 @@ SHAPES = [
 ]
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("source", SHAPES)
-def test_filtered_rebinding_reads_reverse_relation(people, source, policy):
+def test_filtered_rebinding_reads_reverse_relation(people, source):
     expected = DjangoTemplate(source).render(DjangoContext(_ctx()))
     assert expected
-    assert _render(source, _ctx, policy) == expected
+    assert _render(source, _ctx) == expected
 
 
 def test_flag_off_is_unchanged_and_the_flag_is_live(people):
@@ -235,8 +226,7 @@ def test_title_reads_reverse_relation_flag_on(people):
         assert render_template(src, {"u": _title_value(u)}) == ""
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_tag_arguments_stay_floored_json(people, policy, monkeypatch):
+def test_tag_arguments_stay_floored_json(people, monkeypatch):
     """A native tag ARGUMENT stays the floored dict text with the flag on: ``data_table`` reads
     dict rows, and renders the same bytes as with the flag off.
 
@@ -251,9 +241,9 @@ def test_tag_arguments_stay_floored_json(people, policy, monkeypatch):
         return {"us": list(User.objects.order_by("pk")), "cols": cols}
 
     src = "{% data_table rows=us columns=cols %}"
-    on = _render(src, ctx, policy)
+    on = _render(src, ctx)
     assert "u0" in on and "u1" in on and HASH_MARK not in on, on
-    assert on == _render(src, ctx, policy, flag=False)
+    assert on == _render(src, ctx, flag=False)
 
     real = serialization._smp_serialize
 
@@ -263,8 +253,8 @@ def test_tag_arguments_stay_floored_json(people, policy, monkeypatch):
         return row
 
     monkeypatch.setattr(serialization, "_smp_serialize", without_username)
-    assert "u0" not in _render(src, ctx, policy)
-    assert "u0" in _render(src, ctx, policy, flag=False)
+    assert "u0" not in _render(src, ctx)
+    assert "u0" in _render(src, ctx, flag=False)
 
 
 def test_change_detection_unchanged(people):
@@ -275,7 +265,7 @@ def test_change_detection_unchanged(people):
     from djust.decorators import event_handler
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = (
             "<div dj-root>{{ u.username }}|"
             "{% with q=u|default:u %}{{ q.username }}{% endwith %}|"
@@ -284,13 +274,16 @@ def test_change_detection_unchanged(people):
         )
 
         def mount(self, request, **kwargs):
-            self.u = User.objects.get(username="u0")
-            self.us = [User.objects.get(username="u0")]
+            self._u = User.objects.get(username="u0")
+            self._us = [User.objects.get(username="u0")]
+
+        def get_context_data(self, **kwargs):
+            return super().get_context_data(u=self._u, us=self._us, **kwargs)
 
         @event_handler
         def swap(self, **kwargs):
-            self.u = User.objects.get(username="u1")
-            self.us[0].email = "swapped@example.com"
+            self._u = User.objects.get(username="u1")
+            self._us[0].email = "swapped@example.com"
 
     def text(html: str) -> str:
         return _body(
@@ -320,13 +313,12 @@ RUST_ENTRIES = {
 
 
 @pytest.mark.parametrize("entry", list(RUST_ENTRIES))
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_every_render_entry_binds_the_overlay(world, policy, entry):
-    """A custom filter is handed the floor proxy (not the dict) on every entry, both policies:
-    a shape legacy's JIT does not answer by itself, so each entry's binding is what shows."""
+def test_every_render_entry_binds_the_overlay(world, entry):
+    """A custom filter is handed the floor proxy (not the dict) on every entry, so each
+    entry's binding is what shows."""
     source = "{% load cc3949 %}{{ m|cc3949_filter }}"
     with override_settings(LIVEVIEW_CONFIG=FLAG_ON):
-        client = LiveViewTestClient(_view(source, lambda: {"m": world["a1"]}, policy))
+        client = LiveViewTestClient(_view(source, lambda: {"m": world["a1"]}))
         client.mount()
         client.render()
         view = client.view_instance

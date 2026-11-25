@@ -11,14 +11,14 @@
  *  - dj-disable-with re-enabling a button that was disabled before the submit.
  */
 import { describe, expect, it } from 'vitest';
-import { legacy, param, setup, strict, submit, toggle } from './_form_events_harness.js';
+import { anyArgs, param, setup, strict, submit, toggle } from './_form_events_harness.js';
 
 const handlers = {
     open: strict(param('form', 'Any', 'var_keyword', false)),
-    toggle: legacy(),
+    toggle: anyArgs(),
     toggle_bool: strict(param('value', 'bool'), param('field', 'str')),
     toggle_list: strict(param('value', 'list[str]'), param('field', 'str')),
-    advance: legacy(),
+    advance: anyArgs(),
 };
 
 describe.each(['http', 'ws'])('reserved submitter names (%s transport)', transport => {

@@ -14,10 +14,9 @@ from django.test import override_settings
 from django.urls import path
 
 from djust import LiveView
-from djust.config import config
 from djust.decorators import event_handler, state
 from djust.testing import open_live_page
-from djust.validation import get_project_parameter_policy
+from djust._parameter_metadata import expand_parameter_manifest
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -51,15 +50,10 @@ def _routes():
     CALLS.clear()
 
 
-def test_the_project_default_is_strict():
-    assert config.get("event_parameter_policy") == "strict"
-    assert get_project_parameter_policy() == "strict"
-
-
 async def test_an_unpinned_handler_is_strict_over_the_websocket():
     page = await sync_to_async(open_live_page)("/t4189/")
     async with await page.connect() as socket:
-        owners = socket.mount["parameter_contracts"]["owners"]
+        owners = expand_parameter_manifest(socket.mount["parameter_contracts"])
         assert owners[0]["handlers"]["flip"]["policy"] == "strict"
         refused = await socket.send_event("flip", {"on": "maybe"})
         assert refused["type"] == "error", refused

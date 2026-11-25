@@ -223,12 +223,23 @@ describe('LiveViewSSE', () => {
             );
         });
 
+        // An event in flight: its ref, as the server echoes it (#4309).
+        function sendTracked(eventName) {
+            sse.enabled = true;
+            sse.viewMounted = true;
+            sse.sseBaseUrl = '/djust/sse/test-id/';
+            global.fetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ ok: true }) });
+            sse.sendEvent(eventName, {});
+            return JSON.parse(global.fetch.mock.calls[0][1].body).ref;
+        }
+
         it('calls handleServerResponse on patch message', async () => {
-            sse.lastEventName = 'increment';
+            const ref = sendTracked('increment');
             await sse.handleMessage({
                 type: 'patch',
                 patches: [],
                 version: 2,
+                ref,
             });
             expect(global.handleServerResponse).toHaveBeenCalledWith(
                 expect.objectContaining({ type: 'patch' }),
@@ -236,6 +247,20 @@ describe('LiveViewSSE', () => {
                 null,
                 sse
             );
+            expect(sse.lastEventName).toBeNull();
+        });
+
+        it('a reply without a ref is applied but settles no request (#4309)', async () => {
+            const ref = sendTracked('search');
+            await sse.handleMessage({ type: 'noop' });
+            await sse.handleMessage({ type: 'patch', patches: [], version: 2 });
+            expect(global.globalLoadingManager.stopLoading).not.toHaveBeenCalled();
+            expect(global.handleServerResponse).toHaveBeenCalledWith(
+                expect.objectContaining({ type: 'patch' }), undefined, undefined, sse
+            );
+            expect(sse.lastEventName).toBe('search');
+            await sse.handleMessage({ type: 'noop', ref });
+            expect(global.globalLoadingManager.stopLoading).toHaveBeenCalledWith('search', null);
             expect(sse.lastEventName).toBeNull();
         });
 
@@ -249,8 +274,8 @@ describe('LiveViewSSE', () => {
         });
 
         it('clears loading state on noop without async_pending', async () => {
-            sse.lastEventName = 'search';
-            await sse.handleMessage({ type: 'noop' });
+            const ref = sendTracked('search');
+            await sse.handleMessage({ type: 'noop', ref });
             expect(global.globalLoadingManager.stopLoading).toHaveBeenCalledWith('search', null);
             expect(sse.lastEventName).toBeNull();
         });

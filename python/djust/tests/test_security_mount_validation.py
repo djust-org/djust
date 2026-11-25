@@ -1,6 +1,6 @@
 """Security regression tests for #1819 — unvalidated mount/redirect URL.
 
-``LiveViewConsumer.handle_mount`` (and the sticky-child ``live_redirect``
+``LiveViewConsumer._mount_page`` (and the sticky-child ``live_redirect``
 request rebuild) take the page URL straight from the attacker-controlled
 WebSocket frame (``data.get("url", "/")``) and feed it into
 ``RequestFactory.get(...)``, ``resolve(...)``, query-string concatenation, and
@@ -200,7 +200,7 @@ class TestValidatedUrlIsSafeForRequestFactory:
 class TestBothCallSitesValidate:
     def test_both_request_factory_sites_use_validate_mount_url(self):
         """#1646: the fix is one shared helper applied at EVERY mount request-build
-        site. Post-#1919 (THE MOUNT FLIP) the bespoke ``handle_mount`` body — which
+        site. Post-#1919 (THE MOUNT FLIP) the bespoke ``_mount_page`` body — which
         held one of websocket.py's two validated sites — was deleted; the WS mount
         request is now built by ``ViewRuntime.dispatch_mount`` / ``_build_request``,
         which validate via ``validate_mount_url``. websocket.py keeps ONE validated
@@ -220,10 +220,10 @@ class TestBothCallSitesValidate:
             "_validate_mount_url — parallel-path drift (#1819/#1646)."
         )
         # websocket.py: exactly ONE validated site post-flip (the live_redirect
-        # request rebuild). The handle_mount site moved to the runtime.
+        # request rebuild). The _mount_page site moved to the runtime.
         assert ws_src.count('_validate_mount_url(data.get("url"') == 1, (
             "Expected exactly 1 validated mount-url site in websocket.py post-#1919 "
-            "(live_redirect request rebuild); the handle_mount site moved to the "
+            "(live_redirect request rebuild); the _mount_page site moved to the "
             "runtime. Found a different count."
         )
         # runtime.py: the mount path validates the client url via validate_mount_url

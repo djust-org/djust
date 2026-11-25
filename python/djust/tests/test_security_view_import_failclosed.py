@@ -2,7 +2,7 @@
 __import__ of a not-yet-loaded module (unauthenticated arbitrary module import).
 
 GHSA — unauthenticated arbitrary module import via the live WebSocket/SSE mount
-path. Before the fix, `handle_mount` (and the SSE/url_change `dispatch_mount`
+path. Before the fix, `_mount_page` (and the SSE/url_change `dispatch_mount`
 path) called `__import__(client_module_path)` — executing the module's top-level
 code — before the LiveView-subclass check / auth, and the allowlist gate was
 fail-open (`if allowed_modules:`, skipped when LIVEVIEW_ALLOWED_MODULES unset).

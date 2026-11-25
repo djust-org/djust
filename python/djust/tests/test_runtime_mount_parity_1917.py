@@ -1,11 +1,11 @@
 """Runtime-path MOUNT parity gate (#1917, ADR-022 Iter 3 Phase 3.3a).
 
 THE KEY GATE for Phase 3.3a: prove that ``ViewRuntime.dispatch_mount`` — now a
-functional SUPERSET of the WS bespoke ``handle_mount`` after the 5 mount hooks
+functional SUPERSET of the WS bespoke ``_mount_page`` after the 5 mount hooks
 (#1916) are wired (#1917) — produces WS-EQUIVALENT mount behavior, driven over a
 REAL ``WSConsumerTransport`` wrapping a genuinely-connected ``LiveViewConsumer``.
 
-Routing stays bespoke (``RUNTIME_OWNED_VERBS`` UNCHANGED, ``handle_mount``
+Routing stays bespoke (``RUNTIME_OWNED_VERBS`` UNCHANGED, ``_mount_page``
 UNTOUCHED). 3.3a does NOT flip the routing — it only makes ``dispatch_mount`` a
 clean superset. To exercise that superset over the real WS transport WITHOUT
 adding ``mount`` to ``RUNTIME_OWNED_VERBS``, the temp mechanism here is a
@@ -360,7 +360,7 @@ def test_mount_in_runtime_owned_verbs_post_flip():
 
 
 def test_handle_mount_is_a_thin_shim_post_flip():
-    """Post-#1919: ``handle_mount`` is a THIN SHIM that delegates to
+    """Post-#1919: ``_mount_page`` is a THIN SHIM that delegates to
     ``ViewRuntime.dispatch_mount`` (mirroring ``handle_url_change`` /
     ``handle_event``) — it no longer carries the ~870-line bespoke mount body.
     The shim nulls the runtime view (Finding A), dispatches, then reads back the
@@ -369,14 +369,14 @@ def test_handle_mount_is_a_thin_shim_post_flip():
 
     from djust.websocket import LiveViewConsumer
 
-    src = inspect.getsource(LiveViewConsumer.handle_mount)
+    src = inspect.getsource(LiveViewConsumer._mount_page)
     assert "dispatch_mount" in src, (
-        "handle_mount must delegate to dispatch_mount after the 3.3b flip (#1919)"
+        "_mount_page must delegate to dispatch_mount after the 3.3b flip (#1919)"
     )
     # The bespoke inline version stamp is GONE — the wire version is now stamped by
     # the runtime's next_mount_version hook (Finding C), not inline here.
     assert "self._next_version()" not in src, (
-        "handle_mount must NOT stamp the version inline post-flip — that moved into "
+        "_mount_page must NOT stamp the version inline post-flip — that moved into "
         "the next_mount_version transport hook (#1915, Finding C)"
     )
     # Finding A (null before dispatch) + Finding B (read back after).

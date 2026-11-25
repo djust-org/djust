@@ -740,7 +740,6 @@ class RustBridgeMixin:
             context: Dict[str, Any],
             template_content: str,
             keys: Optional[Iterable[str]] = None,
-            add_counts: bool = True,
             into: Optional[Set[str]] = None,
         ) -> Set[str]: ...
 
@@ -831,64 +830,26 @@ class RustBridgeMixin:
     def _initialize_rust_view(self, request: Any = None) -> None:
         """Initialize the Rust LiveView backend"""
 
-        from .._exposure import ExposureError, uses_legacy_exposure
+        from .._exposure import ExposureError
 
-        if not uses_legacy_exposure(self):
-            try:
-                policy = getattr(self, "exposure_policy", None)
-            except Exception:
-                raise ExposureError("Invalid render exposure policy") from None
-            if type(policy) is not str or policy != "explicit":
-                raise ExposureError("Invalid render exposure policy")
-            # A Rust view contains render context and a mutable VDOM baseline,
-            # not the declared server-persistence projection. Keep it owned by
-            # this instance; reconnect rebuilds it from authorized context and
-            # the separately restored declared state.
-            if self._rust_view is None or not getattr(self, "_rust_view_explicit", False):
-                _ensure_custom_filters_bridged()
-                explicit_template_source = self.get_template()
-                if getattr(self, "_authenticated_partial_root", False):
-                    explicit_template_source = (
-                        self._authenticated_template_source or explicit_template_source
-                    )
-                self._rust_view = RustLiveView(explicit_template_source, get_template_dirs())
-                if getattr(self, "_authenticated_partial_root", False):
-                    self._rust_view.set_authenticated_partial_root(True)
-                    self._rust_view.set_authenticated_view_path(
-                        f"{getattr(type(self), '__module__', '<unknown>')}.{type(self).__name__}"
-                    )
-                    self._rust_view.set_template_origin(
-                        getattr(self, "_authenticated_partial_root_origin", None)
-                    )
-                self._apply_loop_render_cache_flag()
-                self._rust_view_explicit = True
-            return
-
-        self._rust_view_explicit = False
-        logger.debug("[LiveView] _initialize_rust_view() called, _rust_view=%s", self._rust_view)
-
-        # Bootstrap project-defined ``@register.filter`` callables into the
-        # Rust filter registry the first time any LiveView is initialized
-        # (#1121). Subsequent calls are cheap — a process-level guard
-        # short-circuits, and re-bootstrapping is idempotent for late-
-        # loaded apps. Failure is non-fatal: filters still work in
-        # Python-rendered paths.
-        _ensure_custom_filters_bridged()
-
-        if self._rust_view is None:
-            # 2.0: a legacy view's Rust view is owned by this instance, as an
-            # explicit view's is. The shared state-backend copy keyed by the
-            # session and page (the "legacy render cache") was removed: it let
-            # a reconnect skip get_template() and reuse the previous
-            # connection's render state and VDOM baseline.
-            template_source = self.get_template()
-            logger.debug("[LiveView] Template length: %d chars", len(template_source))
-            logger.debug("[LiveView] Template preview: %s...", template_source[:200])
-
-            template_dirs = get_template_dirs()
+        try:
+            policy = getattr(self, "exposure_policy", None)
+        except Exception:
+            raise ExposureError("Invalid render exposure policy") from None
+        if type(policy) is not str or policy != "explicit":
+            raise ExposureError("Invalid render exposure policy")
+        # A Rust view contains render context and a mutable VDOM baseline,
+        # not the declared server-persistence projection. Keep it owned by
+        # this instance; reconnect rebuilds it from authorized context and
+        # the separately restored declared state.
+        if self._rust_view is None or not getattr(self, "_rust_view_explicit", False):
+            _ensure_custom_filters_bridged()
+            explicit_template_source = self.get_template()
             if getattr(self, "_authenticated_partial_root", False):
-                template_source = self._authenticated_template_source or template_source
-            self._rust_view = RustLiveView(template_source, template_dirs)
+                explicit_template_source = (
+                    self._authenticated_template_source or explicit_template_source
+                )
+            self._rust_view = RustLiveView(explicit_template_source, get_template_dirs())
             if getattr(self, "_authenticated_partial_root", False):
                 self._rust_view.set_authenticated_partial_root(True)
                 self._rust_view.set_authenticated_view_path(
@@ -897,8 +858,8 @@ class RustBridgeMixin:
                 self._rust_view.set_template_origin(
                     getattr(self, "_authenticated_partial_root_origin", None)
                 )
-            # Apply the per-item loop render cache flag (#1967, default OFF).
             self._apply_loop_render_cache_flag()
+            self._rust_view_explicit = True
 
     def set_changed_keys(self, keys: Union[str, Iterable[str], None] = None) -> None:
         """Mark one or more public attrs as changed, forcing a re-render.
@@ -1186,7 +1147,6 @@ class RustBridgeMixin:
                         context,
                         template_content,
                         keys={key},
-                        add_counts=False,
                         into=self._jit_serialized_keys,
                     )
                 except Exception as exc:  # noqa: BLE001 - the normalize pass serializes it
@@ -1308,12 +1268,14 @@ class RustBridgeMixin:
             from .jit import rows_need_live_walk
 
             # #3936: the raw model values behind state keys, for the render-time
-            # handle overlay (flag ``state_models_as_handles``). Legacy captured
-            # them before its JIT (context.py); an explicit context still holds
-            # them here, before the normalize loop below. Empty with the flag off.
-            _overlay_raw: Dict[str, Any] = dict(self.__dict__.pop("_state_model_raw", None) or {})
-            if type(full_context) is ExplicitRenderContext:
-                _overlay_raw.update(_state_model_values(full_context))
+            # handle overlay (flag ``state_models_as_handles``). An explicit context
+            # still holds them here, before the normalize loop below. Empty with the
+            # flag off.
+            _overlay_raw: Dict[str, Any] = (
+                _state_model_values(full_context)
+                if type(full_context) is ExplicitRenderContext
+                else {}
+            )
 
             _raw_models_for_sidecar = {}
             _explicit_jit_keys: Dict[str, Any] = {}

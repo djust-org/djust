@@ -1009,21 +1009,8 @@ pub fn block_handler_exists(name: &str) -> Option<String> {
 /// Call a registered Python block handler with args, content, and context.
 ///
 /// The handler's `render(args, content, context)` method is called and the
-/// returned string is inserted into the rendered output.
-///
-/// Back-compat shim around [`call_block_handler_with_py_sidecar`] —
-/// equivalent to passing `None` for the raw Python sidecar.
-pub fn call_block_handler(
-    name: &str,
-    args: &[TagArg],
-    content: &str,
-    context: &HashMap<String, djust_core::Value>,
-) -> Result<String, DjangoRustError> {
-    call_block_handler_with_py_sidecar(name, args, content, context, None, true)
-}
-
-/// Variant of [`call_block_handler`] that additionally injects raw
-/// Python objects from the [`Context::raw_py_objects`] sidecar into
+/// returned string is inserted into the rendered output. Raw Python
+/// objects from the [`Context::raw_py_objects`] sidecar are injected into
 /// the handler's ``context`` dict.
 ///
 /// Mirrors [`call_handler_with_py_sidecar`] (extended in PR #1166)
@@ -2080,19 +2067,8 @@ pub fn assign_handler_resolve_positions(name: &str) -> Option<HashSet<usize>> {
 /// render context. Error strings bubble up through
 /// [`crate::renderer`] as `DjangoRustError::TemplateError`.
 ///
-/// Back-compat shim around [`call_assign_handler_with_py_sidecar`] —
-/// equivalent to passing `None` for the raw Python sidecar.
-pub fn call_assign_handler(
-    name: &str,
-    args: &[TagArg],
-    context: &HashMap<String, djust_core::Value>,
-) -> Result<HashMap<String, djust_core::Value>, DjangoRustError> {
-    call_assign_handler_with_py_sidecar(name, args, context, None)
-}
-
-/// Variant of [`call_assign_handler`] that additionally injects raw
-/// Python objects from the [`Context::raw_py_objects`] sidecar into
-/// the handler's ``context`` dict.
+/// Raw Python objects from the [`Context::raw_py_objects`] sidecar are
+/// injected into the handler's ``context`` dict.
 ///
 /// Mirrors [`call_handler_with_py_sidecar`] (extended in PR #1166)
 /// for `Node::CustomTag`. Assign handlers needing access to

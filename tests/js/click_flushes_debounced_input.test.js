@@ -13,13 +13,14 @@
 
 import { describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { withContracts, contractFields } from './_open_contracts.js';
 import { readFileSync } from 'fs';
 import { setTimeout as nativeSleep } from 'node:timers/promises';
 
 const clientCode = readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 
 function setup(bodyHtml, beforeClient = '') {
-    const dom = new JSDOM(`<!DOCTYPE html><html><body>${bodyHtml}</body></html>`, {
+    const dom = new JSDOM(`<!DOCTYPE html><html><body>${withContracts(bodyHtml)}</body></html>`, {
         runScripts: 'dangerously',
         url: 'http://localhost/',
     });
@@ -34,7 +35,7 @@ function setup(bodyHtml, beforeClient = '') {
             var body = {};
             try { body = JSON.parse((opts && opts.body) || "{}"); } catch (e) {}
             window._calls.push({ name: name, body: body });
-            return { ok: true, json: async function() { return { patches: [], version: window._calls.length }; } };
+            return { ok: true, json: async function() { return Object.assign({ patches: [], version: window._calls.length }, ${JSON.stringify(contractFields(bodyHtml))}); } };
         };
         ${beforeClient}
     `);

@@ -70,7 +70,6 @@ async function flushServerUpdates(transport) {
         } else {
             await handleServerResponse(frame, null, null, transport);
         }
-        completeLegacyAsyncBatches(transport, frame);
     }
 }
 
@@ -87,25 +86,15 @@ function registerEventRequest(transport, eventName, triggerElement) {
     return { ref, promise };
 }
 
+/** Every async_pending carries its batch token (#4309); false when none is held. */
 function rememberAsyncBatch(transport, data, eventName, trigger) {
-    if (data.async_pending && data.async_batch == null && eventName) {
-        _pendingAsyncBatches.set(Symbol('legacy'), {transport, eventName, trigger, legacy: true});
-        return;
-    }
-    if (data.async_pending && typeof data.async_batch === 'string' &&
+    if (typeof data.async_batch === 'string' &&
         data.async_batch.length > 0 && data.async_batch.length <= 128 &&
         !_pendingAsyncBatches.has(data.async_batch)) {
         _pendingAsyncBatches.set(data.async_batch, { transport, eventName, trigger });
+        return true;
     }
-}
-
-function completeLegacyAsyncBatches(transport, data) {
-    if (data.source !== 'async' || data.async_pending || !data.event_name) return;
-    for (const [token, batch] of _pendingAsyncBatches) {
-        if (batch.legacy && batch.transport === transport && batch.eventName === data.event_name) {
-            completeAsyncBatch(transport, token);
-        }
-    }
+    return false;
 }
 
 /** Completion is a separate control message, not a foreground acknowledgement. */
@@ -116,28 +105,23 @@ function completeAsyncBatch(transport, token) {
     if (batch.eventName) globalLoadingManager.stopLoading(batch.eventName, batch.trigger);
 }
 
-/** Consume only an owned acknowledgement; unknown refs never use last-event state. */
+/**
+ * Consume only an owned acknowledgement, matched by its ref. Every server frame
+ * answering an event carries one (#4309): a frame without it (or with a ref
+ * already settled) settles nothing here and is still applied by the caller.
+ */
 function acknowledgeEventRequest(transport, data) {
     if (['async', 'tick', 'broadcast'].includes(data.source)) return null;
-    let ref = data.ref;
-    if (ref == null) {
-        // Compatibility with old no-ref servers is unambiguous only with one
-        // outstanding request. Never guess between overlapping requests.
-        const owned = [..._pendingEventOwners].filter(([, owner]) => owner === transport);
-        if (owned.length > 1) return null;
-        if (owned.length === 1) ref = owned[0][0];
-        else {
-            const legacy = { eventName: transport.lastEventName, trigger: transport.lastTriggerElement };
-            rememberAsyncBatch(transport, data, legacy.eventName, legacy.trigger);
-            transport.lastEventName = null;
-            transport.lastTriggerElement = null;
-            return legacy;
-        }
-    }
+    const ref = data.ref;
+    if (ref == null) return null;
     if (!_pendingEventRefs.has(ref) || _pendingEventOwners.get(ref) !== transport) return null;
     const eventName = _pendingEventNames.get(ref);
     const trigger = _pendingTriggerEls.get(ref);
-    rememberAsyncBatch(transport, data, eventName, trigger);
+    // No completion can arrive for a batch the client does not hold: the
+    // acknowledgement then ends the loading state rather than leave it stuck.
+    if (data.async_pending && !rememberAsyncBatch(transport, data, eventName, trigger)) {
+        data.async_pending = false;
+    }
     const resolve = _pendingEventResolvers.get(ref);
     _pendingEventRefs.delete(ref);
     _pendingEventNames.delete(ref);

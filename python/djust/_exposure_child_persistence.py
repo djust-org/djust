@@ -101,8 +101,7 @@ def _capture_children(root: Any, request: Any) -> list[tuple[ChildStateSession, 
         return captured
     except Exception:  # noqa: BLE001 — provider/default errors may contain secrets
         if failing is not None:
-            # #4185: name the embedded view (an admin widget that states the
-            # legacy policy fails here), never the underlying error.
+            # #4185: name the embedded view, never the underlying error.
             kind = type(failing)
             raise _ChildCaptureError(
                 "Child state persistence unavailable for the embedded view %s.%s"

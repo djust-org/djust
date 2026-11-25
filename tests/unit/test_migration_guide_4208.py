@@ -28,14 +28,11 @@ GUIDE = REPO_ROOT / "docs/website/guides/migrating-to-2.0.md"
 TEXT = GUIDE.read_text(encoding="utf-8")
 
 CHECK_IDS = {
-    "V028",
     "V033",
     "T028",
     "V034",
     "V035",
-    "V036",
     "V037",
-    "C045",
     "T029",
     "T027",
     "V016",

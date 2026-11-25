@@ -7,8 +7,13 @@ that lists handlers resolve names through ``declared_handlers``.
 Only declarations are inspected. No template context, defaults, properties,
 mounts or event handlers are evaluated. This manifest is advisory client input,
 never an authorization decision or a replacement for server validation.
+
+The manifest is wire version 2 (#4307): distinct contracts and handler tables
+are listed once, and each owner row names its table. Its caps are the
+``MAX_*`` constants below.
 """
 
+import hashlib
 import inspect
 import json
 import operator
@@ -21,7 +26,6 @@ from ._parameter_contract import ContractError
 from .decorators import is_event_handler, is_push_only, is_server_function
 from .validation import (
     get_handler_coercion,
-    get_handler_parameter_policy,
     get_strict_handler_contract,
 )
 
@@ -340,20 +344,17 @@ def _event_methods(owner: Any) -> dict[str, Any]:
 def handler_metadata(method: Any) -> dict[str, Any]:
     """The decorator metadata a bound handler publishes to the client.
 
-    A strict handler's parameters come from its compiled contract (no server
-    default values, and a copy, never the shared decorator dictionaries); a
-    legacy handler's are the decorator's own.
+    The parameters come from the handler's compiled contract (no server
+    default values, and a copy, never the shared decorator dictionaries).
     """
     decorators = method._djust_decorators
-    if get_handler_parameter_policy(method) != "strict":
-        return decorators
     metadata = dict(decorators)
     key = "event_handler" if "event_handler" in metadata else "server_function"
     if key in metadata:
         parameters = list(get_strict_handler_contract(method).metadata())
         item = dict(metadata[key])
+        item.pop("parameter_policy", None)
         item.update(
-            parameter_policy="strict",
             params=parameters,
             param_names=[p["name"] for p in parameters],
             required=[p["name"] for p in parameters if p["required"]],
@@ -381,15 +382,11 @@ def published_handlers(view: Any) -> dict[str, Any]:
 def _handlers(owner: Any) -> dict[str, Any]:
     result = {}
     for name, method in _event_methods(owner).items():
-        policy = get_handler_parameter_policy(method)
-        if policy == "legacy":
-            result[name] = {"policy": "legacy"}
-        else:
-            result[name] = {
-                "policy": "strict",
-                "coerce_types": get_handler_coercion(method),
-                "parameters": list(get_strict_handler_contract(method).metadata()),
-            }
+        result[name] = {
+            "policy": "strict",
+            "coerce_types": get_handler_coercion(method),
+            "parameters": list(get_strict_handler_contract(method).metadata()),
+        }
     return result
 
 
@@ -400,6 +397,12 @@ def parameter_contract_manifest(root: Any) -> dict[str, Any] | None:
     registered embedded children use (view_id, None). Nested component routing
     is not implied: the current child dispatcher resolves handlers on the child.
     Rebuild on each call; no owner or mutable manifest is globally retained.
+    Returns ``None`` when the tree declares no handlers at all.
+
+    The result is wire version 2 (#4307): each distinct contract and handler
+    table is listed once and each owner row names its table, so the manifest
+    grows with the distinct declarations, not with the rows of a collection.
+    See ``_encode_manifest`` for the layout and the caps.
     """
     owners = []
     total_handlers = 0
@@ -425,10 +428,8 @@ def parameter_contract_manifest(root: Any) -> dict[str, Any] | None:
         if _instance_dict(child).get("_djust_child_disposed", False):
             continue
         add(child, key, None)
-    if not any(h["policy"] == "strict" for o in owners for h in o["handlers"].values()):
+    if total_handlers == 0:
         return None
-    if len(owners) > 1024 or total_handlers > 10000:
-        raise ContractError("Public parameter contract manifest exceeds the declaration limit.")
     if any(
         value is not None and (type(value) is not str or not value)
         for owner in owners
@@ -442,7 +443,115 @@ def parameter_contract_manifest(root: Any) -> dict[str, Any] | None:
         for owner in owners[1:]
     ):
         raise ContractError("Ambiguous registered parameter contract owner.")
-    manifest = {"version": 1, "owners": owners}
-    if len(json.dumps(manifest, separators=(",", ":")).encode("utf-8")) > 65536:
+    return _encode_manifest(owners)
+
+
+# Bounds on one encoded manifest (#4307). Module constants so tests can lower
+# them; each one raises ``ContractError`` with a redacted message.
+MAX_CONTRACTS = 1024  # distinct contract records
+MAX_HANDLER_TABLES = 1024  # distinct handler tables
+MAX_HANDLERS = 10000  # entries summed over the distinct tables
+MAX_DECLARATION_BYTES = 65536  # json of [contracts, handlers]
+MAX_OWNERS = 10000  # owner rows
+MAX_MANIFEST_BYTES = 1 << 20  # the whole encoded manifest
+
+
+def _canonical(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _owner_order(owner: dict[str, Any]) -> tuple[bool, str, bool, str]:
+    view_id, component_id = owner["view_id"], owner["component_id"]
+    return (view_id is not None, view_id or "", component_id is not None, component_id or "")
+
+
+def _encode_manifest(owners: list[dict[str, Any]]) -> dict[str, Any]:
+    """Encode collected owners as wire version 2.
+
+    ``{"version": 2, "digest", "contracts", "handlers", "owners"}``:
+    ``contracts`` lists each distinct ``{"coerce_types", "parameters"}`` record
+    once; ``handlers`` lists each distinct ``{name: contract index}`` table
+    once; ``owners`` holds one ``[view_id, component_id, table index]`` row per
+    owner, root first. ``digest`` is a blake2b-64 hex of the canonical body: a
+    public content hash that lets a transport name a manifest the client
+    already holds, never a security token.
+    """
+    if len(owners) > MAX_OWNERS:
+        raise ContractError("Public parameter contract manifest exceeds the owner limit.")
+    contracts: list[dict[str, Any]] = []
+    contract_index: dict[str, int] = {}
+    tables: list[dict[str, int]] = []
+    table_index: dict[str, int] = {}
+    rows: list[list[Any]] = []
+    entries = 0
+    for owner in sorted(owners, key=_owner_order):
+        table = {}
+        for name, record in sorted(owner["handlers"].items()):
+            wire = {"coerce_types": record["coerce_types"], "parameters": record["parameters"]}
+            key = _canonical(wire)
+            index = contract_index.get(key)
+            if index is None:
+                if len(contracts) >= MAX_CONTRACTS:
+                    raise ContractError(
+                        "Public parameter contract manifest exceeds the contract limit."
+                    )
+                index = contract_index[key] = len(contracts)
+                contracts.append(wire)
+            table[name] = index
+        key = _canonical(table)
+        index = table_index.get(key)
+        if index is None:
+            if len(tables) >= MAX_HANDLER_TABLES:
+                raise ContractError("Public parameter contract manifest exceeds the table limit.")
+            entries += len(table)
+            if entries > MAX_HANDLERS:
+                raise ContractError("Public parameter contract manifest exceeds the handler limit.")
+            index = table_index[key] = len(tables)
+            tables.append(table)
+        rows.append([owner["view_id"], owner["component_id"], index])
+    if len(_canonical([contracts, tables]).encode("utf-8")) > MAX_DECLARATION_BYTES:
         raise ContractError("Public parameter contract metadata limit exceeded.")
-    return manifest
+    body = {"version": 2, "contracts": contracts, "handlers": tables, "owners": rows}
+    blob = _canonical(body).encode("utf-8")
+    if len(blob) > MAX_MANIFEST_BYTES:
+        raise ContractError("Public parameter contract manifest exceeds the size limit.")
+    return {**body, "digest": hashlib.blake2b(blob, digest_size=8).hexdigest()}
+
+
+def expand_parameter_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """The owners of a v2 manifest in the v1 per-owner shape, for tests only.
+
+    ``[{"view_id", "component_id", "handlers": {name: {"policy": "strict",
+    "coerce_types", "parameters"}}}]`` in the manifest's row order. Never use
+    it on a production path: the wire stays deduplicated.
+    """
+    contracts = manifest["contracts"]
+    tables = manifest["handlers"]
+    return [
+        {
+            "view_id": view_id,
+            "component_id": component_id,
+            "handlers": {
+                name: {"policy": "strict", **contracts[index]}
+                for name, index in tables[table].items()
+            },
+        }
+        for view_id, component_id, table in manifest["owners"]
+    ]
+
+
+def elide_sent_manifest(holder: Any, frame: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """(frame to send, digest to record after a successful send) (#4307).
+
+    A frame whose manifest has the digest ``holder`` last sent goes out with
+    the digest string in its place (a shallow copy; the caller's dict is not
+    touched). Any other manifest goes out in full, and its digest is returned
+    for the caller to record once the bytes have been sent.
+    """
+    manifest = frame.get("parameter_contracts")
+    if type(manifest) is not dict or not isinstance(manifest.get("digest"), str):
+        return frame, None
+    digest = manifest["digest"]
+    if getattr(holder, "_parameter_contract_sent", None) == digest:
+        return {**frame, "parameter_contracts": digest}, None
+    return frame, digest

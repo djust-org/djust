@@ -26,11 +26,11 @@ test:
    block with no template (a fragment showing one handler) runs on a stub
    template, as a view does.
 
-Every block runs under the 2.0 rules (#4188): the project parameter policy is
-``"strict"``, so each handler a block declares must have a strict signature
-(``djust.V016``, checked on the class even when the block cannot mount), a
-handler may not opt back into ``parameter_policy="legacy"``, and a view may not
-state the legacy exposure policy. A handler whose documented signature
+Every block runs under the 2.0 rules (#4188): strict is the only parameter
+policy, so each handler a block declares must have a strict signature
+(``djust.V016``, checked on the class even when the block cannot mount); a
+block that states ``parameter_policy="legacy"`` or the legacy exposure policy
+fails to execute, since 2.0 refuses both (#4199). A handler whose documented signature
 needs arguments is fired with the ones its template binding sends
 (``dj-value-*``, an input's ``value``, a form's fields), so a typed example is
 run, not only parsed. 1.3 code that a migration guide shows as the thing being
@@ -68,7 +68,6 @@ import sys
 import textwrap
 import traceback
 import types
-import warnings
 from dataclasses import dataclass, field
 
 import pytest
@@ -524,39 +523,25 @@ def _check_exposure(cls: type, client, block: Block) -> None:
 def _check_2_0_declarations(classes: list[type]) -> None:
     """The block's classes use the 2.0 spellings (#4188).
 
-    * no class states the legacy exposure policy (``djust.V028``);
-    * no handler states ``parameter_policy="legacy"``;
+    The legacy exposure and parameter policies need no check here: 2.0 refuses
+    them when the class or handler is created, so such a block fails to execute
+    (#4199).
+
     * every handler the class declares has a strict signature. This is
       ``djust.V016`` itself (``checks.parameters._handler_messages``), run on the
-      class under the strict project policy the test sets, so it covers handlers
+      class, so it covers handlers
       the block cannot fire and blocks that cannot mount (a model it does not
       define). Handlers the class inherits from djust are checked too, and
       djust's own pass.
     """
-    from djust._exposure import uses_legacy_exposure
     from djust._parameter_metadata import component_stop, declared_handlers, view_stop
     from djust.checks.parameters import _handler_messages
     from djust.live_view import LiveView
 
     for cls in classes:
-        if uses_legacy_exposure(cls):
-            raise _Fail(
-                "legacy exposure",
-                f"{cls.__name__} states the legacy exposure policy; 2.0 examples are explicit "
-                "(docs/website/state/explicit-exposure.md). Mark 1.3 code a migration guide "
-                "replaces with <!-- doc-snippet-check: before -->",
-            )
         stop = view_stop if issubclass(cls, LiveView) else component_stop
         for name, member, function, _owner in declared_handlers(cls, stop, server_functions=True):
-            decorators = getattr(function, "_djust_decorators", {})
-            metadata = decorators.get("event_handler", decorators.get("server_function", {}))
-            if metadata.get("parameter_policy") == "legacy":
-                raise _Fail(
-                    "legacy parameter policy",
-                    f'{cls.__name__}.{name} states parameter_policy="legacy"; 2.0 examples '
-                    "are strict (core-concepts/events.md#typed-event-parameters-strict-policy)",
-                )
-            for message in _handler_messages(cls, name, member, function, True, True):
+            for message in _handler_messages(cls, name, member, function, True):
                 if message.id == "djust.V016":
                     raise _Fail("handler is not strict", message.msg[:400])
 
@@ -1346,7 +1331,7 @@ def _synthetic(code: str) -> Block:
     [(_UNDECORATED_VIEW, "    def bump"), (_UNDECORATED_COMPONENT, "    def flip")],
     ids=["view", "component"],
 )
-def test_a_binding_without_the_decorator_is_reported(code, decorated, settings, strict_parameters):
+def test_a_binding_without_the_decorator_is_reported(code, decorated, settings):
     """The consumer refuses an undecorated method, so a guide whose template binds one
     is broken for the reader; the test client calls methods by name and would not
     notice. Pinned for both runners, with the decorated control passing."""
@@ -1381,7 +1366,7 @@ _SUPPLY_NAME = (
 
 
 @pytest.mark.django_db
-def test_a_template_name_the_view_does_not_supply_is_reported(settings, strict_parameters):
+def test_a_template_name_the_view_does_not_supply_is_reported(settings):
     """#4048: under explicit exposure ``self.name`` alone renders ``{{ name }}`` empty.
 
     Nothing raises, so before this check such a guide block passed. The control
@@ -1422,14 +1407,15 @@ _STRICT_VIEW = (
 )
 
 
-#: A fixture the check under test must reject, not a view; spelled so the ledger scan does not count it.
+#: A statement 2.0 refuses, not a view; built so no literal statement appears here.
 _LEGACY_STATEMENT = "exposure_policy = " + repr("legacy")
 
 
 @pytest.mark.django_db
-def test_a_legacy_declaration_is_reported(settings, strict_parameters):
-    """#4188: an example states neither the legacy exposure nor the legacy parameter policy,
-    and every handler it declares has a strict signature, fired or not."""
+def test_a_legacy_declaration_is_reported(settings):
+    """#4188: every handler an example declares has a strict signature, fired or not.
+    An example that states the legacy exposure or parameter policy fails to execute:
+    2.0 refuses both when the class or handler is created (#4199)."""
     control = _synthetic(_STRICT_VIEW)
     settings.LIVEVIEW_ALLOWED_MODULES = [control.module_name]
     outcome = run_block(control)
@@ -1437,27 +1423,31 @@ def test_a_legacy_declaration_is_reported(settings, strict_parameters):
     # The required argument came from the binding's dj-value-item-id, not a default.
     assert "Picker.pick: fired with ['item_id']" in outcome.notes, outcome.notes
 
-    cases = {
+    refused = {
         "legacy exposure": _STRICT_VIEW.replace(
             "    picked = state(0)", f"    {_LEGACY_STATEMENT}\n    picked = state(0)"
         ),
         "legacy parameter policy": _STRICT_VIEW.replace(
             "@event_handler()", "@event_handler(parameter_policy='legacy')"
         ),
-        "handler is not strict": _STRICT_VIEW.replace("item_id: int", "item_id"),
     }
-    for category, code in cases.items():
-        assert code != _STRICT_VIEW, category
+    for case, code in refused.items():
+        assert code != _STRICT_VIEW, case
         block = _synthetic(code)
         settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            outcome = run_block(block)
-        assert (outcome.status, outcome.category) == ("fail", category), outcome
+        outcome = run_block(block)
+        assert (outcome.status, outcome.category) == ("fail", "exec raised"), (case, outcome)
+        assert "was removed in djust 2.0" in outcome.detail, (case, outcome)
+
+    code = _STRICT_VIEW.replace("item_id: int", "item_id")
+    block = _synthetic(code)
+    settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
+    outcome = run_block(block)
+    assert (outcome.status, outcome.category) == ("fail", "handler is not strict"), outcome
 
 
 @pytest.mark.django_db
-def test_an_unfired_handler_is_still_held_to_a_strict_signature(settings, strict_parameters):
+def test_an_unfired_handler_is_still_held_to_a_strict_signature(settings):
     """A handler whose arguments no binding supplies is not fired, but its signature is checked."""
     unbound = _STRICT_VIEW.replace(' dj-value-item-id="7"', "")
     assert "dj-value" in _STRICT_VIEW and "dj-value" not in unbound
@@ -1786,22 +1776,9 @@ def _reader_templates(templates: list[dict]) -> list[dict]:
     return readers
 
 
-@pytest.fixture
-def strict_parameters():
-    """The strict project parameter policy, 2.0's (#4188, #4189)."""
-    from djust.config import config
-
-    old = config.get("event_parameter_policy", "legacy")
-    config.set("event_parameter_policy", "strict")
-    try:
-        yield
-    finally:
-        config.set("event_parameter_policy", old)
-
-
 @pytest.mark.django_db
 @pytest.mark.parametrize("block", [_param(b) for b in _BLOCKS])
-def test_doc_snippet_executes(block: Block, settings, no_network, strict_parameters):
+def test_doc_snippet_executes(block: Block, settings, no_network):
     """The block executes, mounts, renders and handles events as documented."""
     settings.LIVEVIEW_ALLOWED_MODULES = [block.module_name]
     settings.TEMPLATES = _reader_templates(settings.TEMPLATES)

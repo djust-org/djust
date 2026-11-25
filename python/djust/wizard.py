@@ -813,12 +813,11 @@ class WizardMixin:
 
         ``as_live_field()`` generates ``dj-change="validate_field"`` and
         ``name="<name>"``. The name arrives as ``field`` because
-        ``buildFormEventParams`` (``09-event-binding.js:525``) hardcodes that
+        the client's form-event binder (``09-event-binding.js``) hardcodes that
         key and resolves it via ``getFieldName`` — ``data-field`` if present,
         then the element's ``name`` (the branch that fires here, since the
         adapters emit ``name`` and not ``data-field``, #2145) — NOT because
-        data-* attributes are mapped to parameters generally, which is
-        ``extractTypedParams`` on the click/poll paths (#2137). The
+        data-* attributes are mapped to parameters (they never are). The
         ``field_name`` parameter is accepted for backwards compatibility.
 
         The field is then cleaned the way ``FormMixin.validate_field`` cleans

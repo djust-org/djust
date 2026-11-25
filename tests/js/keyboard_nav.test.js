@@ -18,6 +18,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { openContracts } from './_open_contracts.js';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
@@ -29,6 +30,7 @@ function createDom(bodyHtml = '') {
   <div dj-view="test.views.TestView" dj-root>
     ${bodyHtml}
   </div>
+  ${openContracts(bodyHtml, 'test.views.TestView')}
 </body>
 </html>`, { runScripts: 'dangerously', url: 'http://localhost/' });
 
@@ -835,7 +837,7 @@ describe('keyboard-nav — roving keeps working after an earlier preventDefault'
 describe('keyboard-nav — data-dj-close is a marker, not an event argument', () => {
     it('a click on a marked control sends its own arguments and no `close`', () => {
         const dom = createDom(`<button id="c" data-dj-close dj-click="tour" dj-value-value="skip">Skip</button>`);
-        const params = dom.window.djust.extractTypedParams(dom.window.document.getElementById('c'));
+        const params = dom.window.djust._strictBinding(dom.window.document.getElementById('c'), 'tour', {}, []);
         expect(Object.keys(params)).toEqual(['value']);
         expect(params.value).toBe('skip');
     });

@@ -466,7 +466,7 @@ def theme_framework_overrides(context: Context, nonce: str | None = None) -> str
     Usage:
         <link rel="stylesheet" href="bootstrap4.css">
         {% theme_framework_overrides %}
-        <link rel="stylesheet" href="base.css">
+        <link rel="stylesheet" href="app.css">
 
     The ``<style>`` carries ``nonce="..."`` like ``{% theme_head %}`` does.
     """

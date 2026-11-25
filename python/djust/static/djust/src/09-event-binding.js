@@ -513,20 +513,7 @@ function _installScopedDelegation() {
                         const strictParams = _strictBinding(entry.element, entry.parsed.name,
                             generated, entry.parsed.args, entry.element);
                         if (strictParams === false) return;
-                        if (strictParams) {
-                            handleEvent(entry.parsed.name, strictParams);
-                            return;
-                        }
-
-                        const params = extractTypedParams(entry.element);
-                        addEventContext(params, entry.element);
-                        Object.assign(params, generated);
-
-                        if (entry.parsed.args.length > 0) {
-                            params._args = entry.parsed.args;
-                        }
-
-                        handleEvent(entry.parsed.name, params);
+                        handleEvent(entry.parsed.name, strictParams);
                     });
                 }, evtType === 'scroll' || evtType === 'resize' ? { passive: true } : false);
             })(prefix, target, evtType);
@@ -716,25 +703,9 @@ function getFieldName(element) {
 }
 
 /**
- * Build standard form event params with component context.
- * Used by change, input, blur, focus event handlers.
- * @param {HTMLElement} element - Form element that triggered the event
- * @param {any} value - Current value of the field
- * @returns {Object} - Params object with value, field, and optional component_id
- */
-function buildFormEventParams(element, value) {
-    const fieldName = getFieldName(element);
-    const params = { value, field: fieldName };
-    // Merge dj-value-* attributes from the triggering element
-    Object.assign(params, collectDjValues(element));
-    addEventContext(params, element);
-    return params;
-}
-
-/**
  * ADR-036 strict collection for a form-field binding (change, input, blur,
  * focus): generated `value` and `field`, dj-value-* from the field itself.
- * Returns strict params, null for a legacy binding, or false when rejected.
+ * Returns the params, or false when rejected.
  */
 function _strictFormBinding(handlerString, field, value) {
     const parsed = parseEventHandler(handlerString || '');
@@ -873,14 +844,9 @@ async function _handleDjClick(element, e) {
         optimisticUpdateId = window.djust.optimistic.applyOptimisticUpdate(element, parsed.name);
     }
 
-    // Extract all data-* attributes with type coercion support
-    const params = strictParams || extractTypedParams(element);
-
-    // Add positional arguments from handler syntax if present
-    // e.g., dj-click="set_period('month')" -> params._args = ['month']
-    if (!strictParams && parsed.args.length > 0) {
-        params._args = parsed.args;
-    }
+    // dj-value-* arguments and positional ones (dj-click="set_period('month')"
+    // -> params._args = ['month']), collected by the strict binder above.
+    const params = strictParams;
 
     addEventContext(params, element);
 
@@ -939,7 +905,7 @@ function _handleDjCopy(element, e) {
         const copyEvent = element.getAttribute('dj-copy-event');
         if (copyEvent) {
             const strict = _strictBinding(element, copyEvent, { text: textToCopy }, [], null, true);
-            if (strict !== false) handleEvent(copyEvent, markSlotOf(strict || { text: textToCopy }, element));
+            if (strict !== false) handleEvent(copyEvent, markSlotOf(strict, element));
         }
     });
 }
@@ -984,7 +950,7 @@ function _changeValue(field) {
 // as protocol: `event` / `params` switch the HTTP fallback's flat body to its
 // {event, params} envelope (a button named `event` re-routed the call),
 // `component_id` / `view_id` address a component or embedded view,
-// `csrfmiddlewaretoken` is the form's own token field; `_`-names (_target) fail
+// `csrfmiddlewaretoken` is the form's own token field; `_`-names (the 1.x target key) fail
 // the identifier rule, and the prototype keys are UNSAFE_KEYS.
 const _SUBMITTER_NAME = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 const _SUBMITTER_RESERVED = ['event', 'params', 'component_id', 'view_id', 'csrfmiddlewaretoken', ...UNSAFE_KEYS];
@@ -1029,11 +995,9 @@ function _submitParams(form, submitter) {
 async function _handleDjSubmit(element, e) {
     e.preventDefault();
 
-    // ADR-036: form fields are generated values; a strict handler receives
-    // only the fields it declares (all of them with **form_data), no _target.
-    // The pressed button is one of them (#3958): _target does not exist under
-    // strict (Q2), and a legacy handler's closed signature would reject a new
-    // field, so legacy keeps _target alone.
+    // ADR-036: form fields are generated values; a handler receives only the
+    // fields it declares (all of them with **form_data), no 1.x target key. The
+    // pressed button is one of them (#3958).
     const strictParams = _strictBinding(element, element.getAttribute('dj-submit'),
         _submitParams(element, e.submitter), []);
     if (strictParams === false) return;
@@ -1075,20 +1039,9 @@ async function _handleDjSubmit(element, e) {
     // so it always resolves regardless of error.
     _setFormPending(element, true);
 
-    let params;
-    if (strictParams) {
-        params = strictParams;
-    } else {
-        params = _submitParams(element, null);
-
-        // Merge dj-value-* attributes from the form element
-        Object.assign(params, collectDjValues(element));
-    }
+    const params = strictParams;
 
     addEventContext(params, element);
-
-    // _target: include submitter name if available (legacy only, ADR-036 Q2)
-    if (!strictParams) params._target = (e.submitter && (e.submitter.name || e.submitter.id)) || null;
 
     // Pass target element for optimistic updates (Phase 3)
     params._targetElement = element;
@@ -1123,16 +1076,8 @@ async function _handleDjChange(element, e) {
     const parsedChange = parseEventHandler(changeHandler);
 
     const value = changeValue;
-    const params = strictParams || buildFormEventParams(e.target, value);
-
-    // Add positional arguments from handler syntax if present
-    // e.g., dj-change="toggle_todo(3)" -> params._args = [3]
-    if (!strictParams && parsedChange.args.length > 0) {
-        params._args = parsedChange.args;
-    }
-
-    // _target: include triggering field's name (or id, or null); legacy only
-    if (!strictParams) params._target = e.target.name || e.target.id || null;
+    // Positional arguments (dj-change="toggle_todo(3)" -> _args) are in params.
+    const params = strictParams;
 
     // Add target element for loading state (consistent with other handlers)
     params._targetElement = e.target;
@@ -1170,13 +1115,7 @@ async function _handleDjInput(element, e) {
     const inputHandler = element.getAttribute('dj-input');
     const parsedInput = parseEventHandler(inputHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
-    if (!strictParams && parsedInput.args.length > 0) {
-        params._args = parsedInput.args;
-    }
-
-    // _target: include triggering field's name (or id, or null); legacy only
-    if (!strictParams) params._target = e.target.name || e.target.id || null;
+    const params = strictParams;
 
     markSlotOf(params, element);
     await handleEvent(parsedInput.name, params);
@@ -1203,10 +1142,7 @@ async function _handleDjBlur(element, e) {
     const blurHandler = element.getAttribute('dj-blur');
     const parsedBlur = parseEventHandler(blurHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
-    if (!strictParams && parsedBlur.args.length > 0) {
-        params._args = parsedBlur.args;
-    }
+    const params = strictParams;
     markSlotOf(params, element);
     await handleEvent(parsedBlur.name, params);
 }
@@ -1232,10 +1168,7 @@ async function _handleDjFocus(element, e) {
     const focusHandler = element.getAttribute('dj-focus');
     const parsedFocus = parseEventHandler(focusHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
-    if (!strictParams && parsedFocus.args.length > 0) {
-        params._args = parsedFocus.args;
-    }
+    const params = strictParams;
     markSlotOf(params, element);
     await handleEvent(parsedFocus.name, params);
 }
@@ -1294,13 +1227,10 @@ async function _handleDjPaste(element, e) {
         }
     }
 
-    const params = strictPaste || payload;
-    if (!strictPaste) {
-        if (parsedPaste.args.length > 0) params._args = parsedPaste.args;
-        // Owner context, like every other binding: a paste inside a component or
-        // an embedded child reaches that owner, not the root view.
-        addEventContext(params, element);
-    }
+    // Collected above (a clipboard exists here); the element's owner context
+    // is attached by the binder, so a paste inside a component or an embedded
+    // child reaches that owner.
+    const params = strictPaste;
 
     // Suppress the default paste only when the element opts in
     // with dj-paste-suppress. Otherwise let the browser also
@@ -1406,10 +1336,7 @@ async function _handleDjKeyboard(element, e, eventType, attrName) {
         return; // User cancelled
     }
 
-    const params = strictParams || keyGenerated;
-
-    // Merge dj-value-* attributes from the element
-    if (!strictParams) Object.assign(params, collectDjValues(element));
+    const params = strictParams;
 
     addEventContext(params, e.target);
 
@@ -1661,7 +1588,7 @@ async function _flushNativeObservation(element, record) {
     record.dirty = false;
     record.sending = true;
     ++record.sequence;
-    const params = Object.assign(strictParams || generated, {_targetElement: element, _skipLoading: true});
+    const params = Object.assign(strictParams, {_targetElement: element, _skipLoading: true});
     addEventContext(params, element);
     try {
         await handleEvent(record.handler, params);
@@ -1792,20 +1719,19 @@ function bindLiveViewEvents(scope) {
                 return;
             }
             if (document.hidden) return;
-            // Strict: routing context lets the owner that resolved the contract receive it.
-            const strictParams = _strictBinding(element, parsed.name, {}, [], element);
-            if (strictParams === false) return;
-            if (strictParams) {
-                handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
-                return;
+            // A poll inside an embedded child view (`{% live_render %}`) is that
+            // child's and carries its view_id. A component owns its poll only
+            // when its contract lists the handler; otherwise the poll reaches
+            // the host view, with no component_id.
+            let hostPoll = false;
+            if (!getEmbeddedViewId(element) && getComponentId(element)) {
+                try { hostPoll = !_resolveParameterContract(element, parsed.name).contract; } catch { hostPoll = false; }
             }
-            // A poll inside an embedded child view (`{% live_render %}`) is
-            // that child's: it carries the child's view_id, as the strict
-            // path above does. A component's poll still reaches its host.
-            const params = Object.assign(extractTypedParams(element), { _skipLoading: true });
-            const embeddedViewId = getEmbeddedViewId(element);
-            if (embeddedViewId) params.view_id = embeddedViewId;
-            handleEvent(parsed.name, markSlotOf(params, element));
+            const strictParams = hostPoll
+                ? _strictBinding(element, parsed.name, {}, [], null, true)
+                : _strictBinding(element, parsed.name, {}, [], element);
+            if (strictParams === false) return;
+            handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
         };
 
         const intervalId = setInterval(firePoll, interval);
@@ -1865,7 +1791,7 @@ function bindLiveViewEvents(scope) {
             // dj-confirm support
             if (!checkDjConfirm(element)) return;
 
-            const params = strictParams || extractTypedParams(element);
+            const params = strictParams;
             addEventContext(params, element);
 
             await handleEvent(handlerName, params);
@@ -1950,9 +1876,8 @@ function bindLiveViewEvents(scope) {
                 const shortcutGenerated = {key: e.key, code: e.code, shortcut: binding.comboString};
                 const strictParams = _strictBinding(element, binding.handler, shortcutGenerated, []);
                 if (strictParams === false) return;
-                const params = strictParams || extractTypedParams(element);
+                const params = strictParams;
                 addEventContext(params, element);
-                if (!strictParams) Object.assign(params, shortcutGenerated);
 
                 await handleEvent(binding.handler, params);
                 return; // Fire first match only
@@ -2005,10 +1930,7 @@ function bindLiveViewEvents(scope) {
                 const strictParams = _strictBinding(element, parsed.name, {}, parsed.args);
                 if (strictParams === false) return;
                 if (!checkDjConfirm(element)) return;
-                const params = strictParams || extractTypedParams(element);
-                if (!strictParams && parsed.args.length > 0) {
-                    params._args = parsed.args;
-                }
+                const params = strictParams;
                 addEventContext(params, element);
                 await handleEvent(parsed.name, params);
             };
@@ -2043,10 +1965,10 @@ function bindLiveViewEvents(scope) {
             const handlerName = el.getAttribute('dj-mounted');
             if (!handlerName) return;
 
-            // Collect dj-value-* and data-* params from the mounted element
+            // Collect dj-value-* params from the mounted element
             const strictParams = _strictBinding(el, handlerName, {}, []);
             if (strictParams === false) return;
-            const params = strictParams || extractTypedParams(el);
+            const params = strictParams;
             addEventContext(params, el);
 
             handleEvent(handlerName, params);
@@ -2505,7 +2427,6 @@ function reinitAfterDOMUpdate(scope) {
  * #4178: `form_values` and `data_attrs` are generated values (ADR-036 Q1). A
  * strict handler receives the ones it declares, plus the container's
  * dj-value-* arguments, validated by its contract like any event argument.
- * A legacy handler keeps the 1.x `_form_values` / `_data_attrs` envelope.
  */
 function _processAutoRecover() {
     if (!window.djust._isReconnect) return;
@@ -2538,13 +2459,8 @@ function _processAutoRecover() {
         const strictParams = _strictBinding(container, handlerName,
             {form_values: formValues, data_attrs: dataAttrs}, [], null, true);
         if (strictParams === false) return;
-        const params = strictParams || {
-            _form_values: formValues,
-            _data_attrs: dataAttrs
-        };
-
-        markSlotOf(params, container);
-        handleEvent(handlerName, params);
+        markSlotOf(strictParams, container);
+        handleEvent(handlerName, strictParams);
     });
 }
 
@@ -2684,28 +2600,10 @@ function _processFormRecovery() {
         // Skip if DOM value matches server default (avoid unnecessary server work)
         if (domValue === serverDefault) continue;
 
-        // A strict handler gets the same payload a live dj-change would send.
+        // The same payload a live dj-change would send.
         const strictParams = _strictFormBinding(handlerString, field, domValue);
         if (strictParams === false) continue;
-        if (strictParams) {
-            pendingEvents.push({ handlerName: handlerName, params: markSlotOf(strictParams, field) });
-            continue;
-        }
-
-        // Build event params matching dj-change param structure
-        const value = domValue;
-        const fieldName = field.name || field.id || null;
-        const params = { value: value, field: fieldName };
-
-        // Add positional arguments from handler syntax if present
-        if (parsed.args.length > 0) {
-            params._args = parsed.args;
-        }
-
-        // _target: include triggering field's name
-        params._target = fieldName;
-
-        pendingEvents.push({ handlerName: handlerName, params: markSlotOf(params, field) });
+        pendingEvents.push({ handlerName: handlerName, params: markSlotOf(strictParams, field) });
     }
 
     // Fire events sequentially to avoid server race conditions

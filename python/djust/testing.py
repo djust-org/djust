@@ -425,8 +425,7 @@ def persisted_state(view: "LiveView") -> PersistedState:
     returned only from ``get_context_data()`` is in none, because it is computed again for
     every render.
 
-    The view must use the explicit policy (the default); a legacy view persists
-    ``get_state()`` and raises ``TypeError``. Over its limit the automatic state raises
+    Over its limit the automatic state raises
     ``StateLimitExceeded``, as a save would (but an over-limit ``persist="server"``
     projection raises ``ExposureError``, where a real save drops the component records and
     saves without them); with ``automatic_state = False`` (or
@@ -435,12 +434,8 @@ def persisted_state(view: "LiveView") -> PersistedState:
     calls it first hides them from a later real save in the same process.
     """
     from . import _automatic_state
-    from ._exposure import explicit_state_projection, uses_legacy_exposure
+    from ._exposure import explicit_state_projection
 
-    if uses_legacy_exposure(view):
-        raise TypeError(
-            "persisted_state() describes explicit exposure; a legacy view persists get_state()"
-        )
     server = explicit_state_projection(view, "server")
     snapshot = explicit_state_projection(view, "snapshot")
     client = explicit_state_projection(view, "client")

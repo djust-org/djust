@@ -22,8 +22,6 @@ finds there.
 * **One restore** (:func:`restore_component_state`) and **one lookup**
   (:func:`resolve_component_target`) for every transport.
 
-Legacy-exposure views keep random ids and no record: nothing here changes them.
-
 **Tabs, pages and ids.** The record is per session and route; ids are minted
 per tab. So an id's validity must depend only on what the tab that minted it
 can see: a row's id is its key and that key's *generation*, and a generation
@@ -161,12 +159,6 @@ def _declarations(view_class: type) -> dict[str, Any]:
     return found
 
 
-def _explicit(view: Any) -> bool:
-    from ._exposure import uses_legacy_exposure
-
-    return not uses_legacy_exposure(view)
-
-
 def record_specs(view_class: type) -> dict[str, str]:
     """``{attribute: record kind}`` for every interactive declaration whose
     state is saved (``persist="server"``, the default). Read by the exposure
@@ -190,14 +182,11 @@ def record_specs(view_class: type) -> dict[str, str]:
 
 
 def derive_identity(view: Any, component: Any, name: str, key: str | None, born: int) -> None:
-    """Give ``component`` its id from its declaration, on an explicit view.
+    """Give ``component`` its id from its declaration.
 
     ``cmp_`` and 32 hex digits, as before, from the view class, the attribute
-    name, and for a member its key and lifetime. A legacy view keeps the
-    random id the component was constructed with.
+    name, and for a member its key and lifetime.
     """
-    if not _explicit(view):
-        return
     owner = type(view)
     payload = json.dumps(
         ["%s.%s" % (owner.__module__, owner.__qualname__), name, key, born],
@@ -242,7 +231,7 @@ def _tagged(component: Any) -> bool:
 
 def wire_id(component: Any) -> str:
     """The id a page carries for ``component``: its derived id plus the tag
-    for this view's binding and tab. A legacy view's component: its id."""
+    for this view's binding and tab. A component without a derived id: its id."""
     if not _tagged(component):
         return str(component.component_id)
     return "%s.%s" % (

@@ -1,8 +1,8 @@
 """Structural pin: every exception-carrying log call in the WebSocket consumer
 and the view runtime is classified (ADR-038 E1).
 
-``handle_exception`` refuses to stringify an exception for a nonlegacy owner,
-because undeclared state can occur in its message and traceback. A raw
+``handle_exception`` refuses to stringify an exception for an owner that does
+not allow diagnostics, because undeclared state can occur in its message and traceback. A raw
 ``logger`` call does not consult that policy — a runtime turn's diagnostic
 scope does not change that — so each one in ``websocket.py`` and
 ``runtime.py`` that carries exception data — the exception in its arguments,
@@ -10,7 +10,7 @@ scope does not change that — so each one in ``websocket.py`` and
 
 - ``HELPER``: a raw call that is itself the policy gate (none today: the
   consumer helper now delegates to ``_exposure_diagnostics.log_failure``);
-- ``LEGACY_GATED``: reachable only for a legacy owner, by a guard that was read;
+- ``GATED``: reachable only where diagnostics are allowed, by a guard that was read;
 - ``FRAMEWORK_ONLY``: the logged exception cannot derive from application values;
 - ``KNOWN_OPEN``: application code, not yet fixed. This list may only shrink.
 
@@ -18,7 +18,7 @@ A new site fails this test until it is classified. The usual fix is to log
 through ``_exposure_diagnostics.log_failure(logger, exc, msg, *args, level=...,
 traceback=...)`` inside a runtime turn, or the consumer's
 ``self._log_view_hook_failure(view, exc, ...)`` outside one; both keep the
-legacy message, level and traceback unchanged. Sites are keyed by enclosing function and
+message, level and traceback unchanged where details are allowed. Sites are keyed by enclosing function and
 the first 48 characters of the message literal, so line drift does not matter.
 The per-site evidence is in docs/adr/notes/038-exposure-sink-inventory.md.
 
@@ -38,17 +38,14 @@ PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 
 HELPER: dict = {}
 
-LEGACY_GATED = {
-    ("render_embedded_child_html", "Failed to render embedded child %s: %s"): (
-        "a nonlegacy child raises a value-free ExposureError from None first"
-    ),
+GATED = {
     ("_mount_one", "mount_batch: _mount_one raised for view %s"): (
-        "legacy branch only; the owner is the resolved class, fail-closed if unresolvable"
+        "inside `if details_allowed`: diagnostics_policy_allows for the resolved class and "
+        "the page view, fail-closed if unresolvable"
     ),
 }
 
 FRAMEWORK_ONLY = {
-    ("_find_sticky_slot_ids", "sticky-slot parse failed; returning empty set"): "slot markup parse",
     ("_clear_live_handles", "%s failed during teardown"): (
         "teardown step names; confirm no application hook runs there"
     ),
@@ -65,7 +62,8 @@ FRAMEWORK_ONLY = {
     ("_hotreload_view", "Template not found for hot reload: %s"): "dev-only, file-derived",
     ("_hotreload_view", "Failed to parse patches JSON: %s"): "dev-only, file-derived",
     ("handle_live_redirect_mount", "sticky children staging failed; proceeding witho"): (
-        "outer catch of the staging block; hooks inside it are legacy-gated"
+        "outer catch of the staging block; the auth predicates and presence hooks inside it "
+        "catch their own failures (fail closed, logged under the view's policy)"
     ),
     ("_leave_view_groups", "Error leaving db_notify group for %s: %s"): (
         "channel-layer group_discard; the channel name is an identifier, not state"
@@ -75,7 +73,7 @@ FRAMEWORK_ONLY = {
 KNOWN_OPEN = {}
 
 
-RUNTIME_LEGACY_GATED = {
+RUNTIME_GATED = {
     ("_flush_deferred_activity_events", "dj_activity: runtime deferred-event flush raised"): (
         "inside `if diagnostics_allowed()` after restricting to both owners"
     ),
@@ -84,15 +82,6 @@ RUNTIME_LEGACY_GATED = {
     ),
     ("_notify_waiters_safely", "<Name>"): (
         "inside `if diagnostics_allowed()` after restricting to both owners"
-    ),
-    ("_execute_async_task_body", "Runtime: error in start_async callback '%s' on %"): (
-        "inside `if legacy_diagnostics and uses_legacy_exposure(view)`"
-    ),
-    ("_execute_async_task_body", "Runtime: error in handle_async_result for task '"): (
-        "inside `if legacy_diagnostics and uses_legacy_exposure(view)`"
-    ),
-    ("_settle_cancelled_async", "Runtime: error settling cancelled async task for"): (
-        "inside `if uses_legacy_exposure(view)`"
     ),
 }
 
@@ -120,23 +109,8 @@ RUNTIME_KNOWN_OPEN = {}
 # carrying log call there fails the test until it is classified.
 MIXIN_TABLES = {
     "live_view.py": ({}, {}),
-    "_child_lifecycle.py": (
-        {
-            ("discard_sticky_child", "sticky child %s raised"): (
-                "after `if not uses_legacy_exposure(child)` disposes and returns"
-            ),
-        },
-    ),
-    "mixins/sticky.py": (
-        {
-            ("_on_sticky_unmount", "sticky _on_sticky_unmount: cancel_async_all() fa"): (
-                "inside `if uses_legacy_exposure(self)`"
-            ),
-            ("_unregister_child", "child view %s _cleanup_on_unregister raised"): (
-                "nonlegacy children go to dispose_child_subtree and return first"
-            ),
-        },
-    ),
+    "_child_lifecycle.py": ({}, {}),
+    "mixins/sticky.py": ({}, {}),
     "mixins/activity.py": (
         {
             (
@@ -166,17 +140,7 @@ MIXIN_TABLES = {
         },
     ),
     "mixins/context.py": (
-        {
-            ("get_context_data", "Descriptor resolution failed for %s: %s"): (
-                "get_context_data returns _get_explicit_context_data for a nonlegacy view before this"
-            ),
-            ("get_context_data", "JIT auto-serialization failed: %s"): (
-                "get_context_data returns _get_explicit_context_data for a nonlegacy view before this"
-            ),
-            ("_apply_context_processors", "Failed to apply context processor %s: %s"): (
-                "the explicit branch runs processors without this catch and returns first"
-            ),
-        },
+        {},
         {
             ("_get_resolved_processors", "Failed to import context processor %s: %s"): (
                 "processor import path from settings"
@@ -184,27 +148,20 @@ MIXIN_TABLES = {
         },
     ),
     "mixins/jit.py": (
+        {},
         {
+            # Reached by explicit renders since #4069; the exception comes from
+            # Django's template loader or a file read, never from view state.
             ("_get_template_content", "Could not load template for JIT: %s"): (
-                "JIT serialization is reached only from get_context_data's legacy continuation"
+                "template loader / template file read; the message carries a template path"
             ),
             ("replacer", "Failed to read included template %s: %s"): (
-                "JIT serialization is reached only from get_context_data's legacy continuation"
+                "included template file read; the message carries a template path"
             ),
         },
     ),
     "templatetags/live_tags.py": (
-        {
-            ("_render_eager", "live_render lazy: child %s.get_context_data rais"): (
-                "an explicit child raises a value-free ExposureError first"
-            ),
-            ("_render_sticky_child_html", "live_render: child %s.get_context_data raised; r"): (
-                "an explicit child raises a value-free ExposureError first"
-            ),
-            ("live_render", "live_render: child %s.get_context_data raised; r"): (
-                "an explicit child raises a value-free ExposureError first"
-            ),
-        },
+        {},
         {
             ("_resolve_css_class", "config.get_framework_class lookup failed: %s"): (
                 "framework config lookup"
@@ -371,15 +328,16 @@ MIXIN_TABLES = {
         },
     ),
     "state_backends/redis.py": (
+        {},
         {
             ("get", "Failed to deserialize from Redis %s: %s"): (
-                "legacy view-cache (de)serialization; explicit initialization bypasses the backend"
+                "RustLiveView msgpack (de)serialization; no framework path stores a view "
+                "in the backend (explicit initialization bypasses it)"
             ),
             ("set", "Failed to serialize to Redis %s: %s"): (
-                "legacy view-cache (de)serialization; explicit initialization bypasses the backend"
+                "RustLiveView msgpack (de)serialization; no framework path stores a view "
+                "in the backend (explicit initialization bypasses it)"
             ),
-        },
-        {
             ("__init__", "Failed to connect to Redis: %s"): (
                 "Redis connection, compression and stats"
             ),
@@ -430,12 +388,12 @@ MIXIN_TABLES = {
         {},
     ),
     "state_backends/memory.py": (
+        {},
         {
             ("get", "InMemoryStateBackend.get: serialize/deserialize "): (
-                "legacy view cache; explicit initialization bypasses the backend"
+                "RustLiveView msgpack (de)serialization; no framework path stores a view "
+                "in the backend (explicit initialization bypasses it)"
             ),
-        },
-        {
             ("health_check", "InMemory health check failed: %s"): ("backend health check"),
         },
     ),
@@ -466,14 +424,7 @@ MIXIN_TABLES = {
             ): ("filter bridging (#3208)"),
         },
     ),
-    "forms.py": (
-        {},
-        {
-            ("_ensure_model_instance", "Failed to re-hydrate model instance (label=%s, p"): (
-                "re-hydration names a model label and pk, not state"
-            ),
-        },
-    ),
+    "forms.py": ({}, {}),
     "hot_view_replacement.py": (
         {},
         {
@@ -966,8 +917,8 @@ MIXIN_TABLES = {
     "mixins/request.py": (
         {
             ("_post_turn_body", "<Name>"): (
-                "legacy or DEBUG only (D-a revised): in production a nonlegacy view "
-                "returns the generic response first"
+                "reached only when diagnostics_policy_allows(self) (DEBUG, D-a revised): "
+                "otherwise the view returns the generic response first"
             ),
         },
         {
@@ -1024,15 +975,7 @@ MIXIN_TABLES = {
             ),
         },
     ),
-    "_turn_ports.py": (
-        {},
-        {
-            ("reauth_live_turn", "reauth_on_event re-check raised %s on view %s; d"): (
-                "value-free: the exception type and view class only (the reauth "
-                "re-check fails closed)"
-            ),
-        },
-    ),
+    "_turn_ports.py": ({}, {}),
     "multiloop.py": (
         {},
         {
@@ -1045,8 +988,8 @@ MIXIN_TABLES = {
 }
 
 PINNED = {
-    "websocket.py": (HELPER, LEGACY_GATED, FRAMEWORK_ONLY, KNOWN_OPEN),
-    "runtime.py": (RUNTIME_LEGACY_GATED, RUNTIME_FRAMEWORK_ONLY, RUNTIME_KNOWN_OPEN),
+    "websocket.py": (HELPER, GATED, FRAMEWORK_ONLY, KNOWN_OPEN),
+    "runtime.py": (RUNTIME_GATED, RUNTIME_FRAMEWORK_ONLY, RUNTIME_KNOWN_OPEN),
     **MIXIN_TABLES,
 }
 

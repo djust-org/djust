@@ -713,7 +713,6 @@ LAZY_SOURCE_FILES.insert(path.to_owned(), (modified, metadata.len(), source.clon
 for list in children.into_iter().flatten() {
 format!("{values:?}")
 keys.insert(operand.to_owned());
-let identity = current.unwrap_or(source).to_owned();
 source.to_owned(),
 let identity = current_name.unwrap_or(source).to_owned();
 source.to_owned(),

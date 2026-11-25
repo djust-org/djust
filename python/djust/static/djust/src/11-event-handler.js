@@ -94,6 +94,16 @@ function _noteRenderDigest(data, sent) {
     }
 }
 
+// A strict (or invalid) page scope asks for an explicit contract clear when
+// the rendered tree no longer has one; a valid scope names the digest it holds,
+// so an unchanged manifest is answered with the digest alone (#4307).
+function _parameterContractHeader() {
+    const t = _localEventTransport, p = t.primaryViewPath;
+    const d = t._parameterContractHeld?.get(p)?.digest;
+    return d ? {'X-Djust-Parameter-Contracts': d}
+        : (t._parameterContracts?.get(p) != null ? {'X-Djust-Parameter-Contracts': '1'} : {});
+}
+
 // Every answer of this transport enters here, an event's and a resync's: the
 // same client-owned-flag strip as the WebSocket and SSE transports (#2829; the
 // HTTP fallback dispatches straight into handleServerResponse, so it needs its
@@ -121,8 +131,7 @@ async function _httpFallbackResync() {
                 'X-Djust-Resync': '1',
                 // The tab whose saved state the page is to be rendered from (#4106).
                 'X-Djust-Tab': djustTabId(),
-                ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
-                    ? {'X-Djust-Parameter-Contracts': '1'} : {})
+                ..._parameterContractHeader()
             },
             body: '{}'
         });
@@ -158,6 +167,7 @@ function _installPageParameterContracts() {
     _localEventTransport.primaryViewPath = path || null;
     _localEventTransport._parameterContracts = new Map();
     _localEventTransport._parameterContractApplied = new Map();
+    _localEventTransport._parameterContractHeld = new Map();
     if (!path) return;
     const block = document.querySelector('script[data-djust-parameter-contracts]');
     let manifest = null;
@@ -205,32 +215,31 @@ function _mirrorPageParameterContracts(manifest, viewPath) {
 // Resolve the public contract a native binding would dispatch under. The mount
 // is the element's nearest non-embedded dj-view root (normally the page root).
 // The owner address matches server routing: an embedded child's view_id wins
-// over a component inside it. Returns {policy: 'legacy'|'strict'|'unknown'}.
-// 'unknown' covers a mount this transport holds no record for (never delivered
-// a contract: an unmounted, lazy or bare root) and an owner or handler a known
-// mount does not list; neither can be strict, since strict contracts are always
-// delivered and every strict handler is listed. Binders keep legacy collection
-// and the server stays authoritative. A mount whose strict snapshot is invalid
-// or missing (recorded as invalid on receipt) throws: callers fail closed
-// rather than guess (ADR-036 Q1). `pageOwner` is for a binding the client sends
-// without owner context (dj-auto-recover): the server routes it to the page's
-// view wherever the element sits, so its contract is the page view's.
+// over a component inside it. `contract` is the listed handler contract, or
+// null for a mount this transport holds no record for (never delivered a
+// contract: an unmounted, lazy or bare root), a mount whose tree declares no
+// handlers, and an owner or handler a known mount does not list. Binders then
+// collect a handler that declares nothing and the server stays authoritative.
+// A mount whose snapshot is invalid or missing (recorded as invalid on
+// receipt) throws: callers fail closed rather than guess (ADR-036 Q1).
+// `pageOwner` is for a binding the client sends without owner context
+// (dj-auto-recover): the server routes it to the page's view wherever the
+// element sits, so its contract is the page view's.
 function _resolveParameterContract(element, eventName, pageOwner = false) {
     const transport = _eventContractTransport();
     const container = (element && element.closest &&
         element.closest('[dj-view]:not([data-djust-embedded])')) || findPageViewContainer();
     const path = container ? container.getAttribute('dj-view') : null;
     const mounts = transport._parameterContracts;
-    if (!path || !mounts || !mounts.has(path)) return {policy: 'unknown', transport};
+    if (!path || !mounts || !mounts.has(path)) return {contract: null, transport};
     const owners = mounts.get(path);
-    if (owners === null) return {policy: 'legacy', transport};
+    if (owners === null) return {contract: null, transport};
     if (owners === false) throw new Error('Invalid public parameter contracts');
     const viewId = (!pageOwner && element && getEmbeddedViewId(element)) || null;
     const componentId = (viewId || pageOwner) ? null : ((element && getComponentId(element)) || null);
     const handlers = owners.get(JSON.stringify([viewId, componentId]));
-    if (!handlers || !handlers.has(eventName)) return {policy: 'unknown', transport};
-    const contract = handlers.get(eventName);
-    return {policy: contract.policy, contract, transport, viewId, componentId};
+    if (!handlers || !handlers.has(eventName)) return {contract: null, transport};
+    return {contract: handlers.get(eventName), transport, viewId, componentId};
 }
 
 // Declared types each wire hint may produce (ADR-036 D3); a conflicting
@@ -239,20 +248,19 @@ const _WIRE_HINT_TYPES = {int: 'int float Decimal', integer: 'int float Decimal'
     float: 'float', number: 'float', bool: 'bool', boolean: 'bool', array: 'list', list: 'list'};
 
 // ADR-036 binder entry point, called before any lock, confirmation,
-// disable-with, optimistic or loading effect. Returns null for a legacy or
-// unlisted binding (the caller keeps its unchanged legacy params). For a strict
-// handler it returns the application payload, with routing context from
-// `contextElement` when given: dj-value-* arguments (strict literals) plus only
-// the generated values the handler declares, or all of them for a ** catch-all
-// (Q1); _target is never generated (Q2). A rejected binding is reported
+// disable-with, optimistic or loading effect. Returns the application payload,
+// with routing context from `contextElement` when given: dj-value-* arguments
+// (strict literals) plus only the generated values the handler declares, or
+// all of them for a ** catch-all (Q1); the 1.x target key is never generated (Q2). A
+// handler the mount does not list declares nothing: only its dj-value-*
+// arguments and positional arguments are sent. A rejected binding is reported
 // value-free (N1) and returns false: the caller must stop. `pageOwner`: see
 // _resolveParameterContract.
 function _strictBinding(element, eventName, generated = {}, positional = [], contextElement = null,
     pageOwner = false) {
     try {
         const resolved = _resolveParameterContract(element, eventName, pageOwner);
-        if (resolved.policy !== 'strict') return null;
-        const parameters = resolved.contract.parameters;
+        const parameters = resolved.contract ? resolved.contract.parameters : [];
         const named = new Map();
         let open = null;
         for (const p of parameters) {
@@ -585,10 +593,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 'X-CSRFToken': csrfToken,
                 'X-Djust-Event': eventName,
                 'X-Djust-Tab': djustTabId(),
-                // A strict (or invalid) page scope asks for an explicit
-                // contract clear when the rendered tree no longer has one.
-                ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
-                    ? {'X-Djust-Parameter-Contracts': '1'} : {}),
+                ..._parameterContractHeader(),
                 ...(sentDigest ? {'X-Djust-Render-Digest': sentDigest} : {})
             },
             body: JSON.stringify(paramsToSend)

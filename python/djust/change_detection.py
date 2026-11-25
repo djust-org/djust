@@ -428,7 +428,6 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         # ADR-038 E2-1: the keys registered providers rendered this pass.
         "_explicit_context_provider_keys",
         "_djust_child_disposed",
-        "_djust_waiters_closed",
         "_async_task_handles",
         "_tracked_tasks",
         "_async_tasks",
@@ -533,14 +532,7 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         "_nested_template_source",
         # The raw rows a QuerySet-method read is answered from (#3801).
         "_all_method_rows",
-        # The raw state-model values a legacy ``get_context_data`` captures for the
-        # #3936 handle overlay; the next sync pops them (train/2.0-ah review S1 run).
-        "_state_model_raw",
         "_context_processor_keys",
-        # What the last legacy render built from attributes / as render-only
-        # (``mixins/context.py`` ``legacy_unsaved_keys``).
-        "_djust_state_context_keys",
-        "_djust_render_only_keys",
         "_cached_csrf_token",
         "_djust_id_counter",  # Render-cycle ID allocation is not reactive state.
         "_sync_done_this_cycle",

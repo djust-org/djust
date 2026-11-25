@@ -92,7 +92,7 @@ async def _make_consumer():
     ``server_push`` directly.
 
     Mirrors ``tests/unit/test_server_push.py::_make_consumer``. The view is
-    mounted through the real ``handle_mount`` (an explicit view's push turn is
+    mounted through the real ``_mount_page`` (an explicit view's push turn is
     authorized by the runtime that mounted it); only the render is mocked
     after that, since server_push re-renders after applying state.
     """

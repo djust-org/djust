@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from djust.theming._registry_accessor import ThemeRegistry
-    from djust.theming.presets import ThemeTokens
+    from djust.theming import ThemeTokens
 
 
 class Command(BaseCommand):
@@ -676,7 +676,7 @@ class Command(BaseCommand):
         from django.conf import settings as django_settings
 
         from djust.theming.manager import get_theme_config
-        from djust.theming.presets import ThemeTokens
+        from djust.theming import ThemeTokens
 
         registry = get_registry()
         validate_all = options.get("validate_all", False)

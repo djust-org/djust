@@ -11,7 +11,7 @@ swapping the transport must not change observable behavior for the message
 types it owns (``mount`` / ``event`` / ``url_change``).
 
 Currently the WebSocket path migrates only ``handle_url_change`` to the
-runtime in this PR; ``handle_event`` and ``handle_mount`` remain on their
+runtime in this PR; ``handle_event`` and ``_mount_page`` remain on their
 existing WS-specific code paths. Even with that scope cut the symmetry test
 still drives both endpoints for ``url_change`` end-to-end and for the other
 verbs at the runtime level.
@@ -196,7 +196,7 @@ class TestUrlChangeSymmetry:
 
 # ------------------------------------------------------------------ #
 # Sequence symmetry: drive the same multi-step input through both runtimes
-# at the runtime level (since handle_event / handle_mount don't migrate to
+# at the runtime level (since handle_event / _mount_page don't migrate to
 # the runtime on the WS side in this PR; this test asserts the runtime
 # itself is transport-blind for the dispatchers it owns).
 # ------------------------------------------------------------------ #

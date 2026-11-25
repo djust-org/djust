@@ -74,7 +74,7 @@ function _installCloseListenerOnce(el) {
             // contract (#4225).
             const strict = globalThis.djust._strictBinding(el, eventName, {}, [], null, true);
             if (strict === false) return;
-            _handleEvent(eventName, Object.assign(strict || {}, { _targetElement: el }));
+            _handleEvent(eventName, Object.assign(strict, { _targetElement: el }));
         }
     });
 }

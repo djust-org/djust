@@ -314,16 +314,12 @@ class OnboardingView(TenantMixin, LiveView):
 
 ## View state and tenants
 
-Saved view state is keyed by tenant. A view that uses `TenantMixin` keeps its
-state in two places, and both are scoped by `TenantMixin.get_state_key_prefix()`
-(`tenant:<id>`, the id percent-encoded):
-
-- **The Django session**, under `liveview_tenant:<id>:<path>`: the state of a
-  legacy `lazy=True` child on the page-POST fallback. (2.0 removed the other
-  saved state of a legacy view: the Rust view the framework stored per session
-  and page in the state backend, and the public, private and component state
-  the page-POST fallback restored. Nothing is saved for those to leak across
-  tenants.)
+Saved view state is keyed by tenant: a view that uses `TenantMixin` scopes its
+saved state with `TenantMixin.get_state_key_prefix()` (`tenant:<id>`, the id
+percent-encoded). 2.0 saves nothing of a legacy view between requests (the
+Rust view, the public, private and component state, and the lazy-child session
+entry are gone), so the scope applies to the state a view declares with
+`state(persist=...)` and to the state store.
 
 A session that reaches two tenants on the same URL (a cookie shared across
 `*.example.com`, a header or session resolver, or `set_tenant()`) therefore

@@ -692,43 +692,23 @@ class TestSyncFormData:
         assert view.form_data["first_name"] == "NewName"
 
 
-class TestEnsureModelInstance:
-    """Test _ensure_model_instance() re-hydration logic."""
-
-    @pytest.mark.django_db
-    def test_early_return_when_model_instance_exists(self, get_request):
-        """Should not query DB if _model_instance is already set."""
-        view = TestFormView()
-        view.get(get_request)
-        view._model_instance = object()  # non-None sentinel
-
-        with patch("django.apps.apps.get_model") as mock_get:
-            view._ensure_model_instance()
-            mock_get.assert_not_called()
-
-    @pytest.mark.django_db
-    def test_early_return_when_no_model_pk(self, get_request):
-        """Should not query DB if model_pk is None or unset."""
-        view = TestFormView()
-        view.get(get_request)
-        assert view.model_pk is None
-
-        with patch("django.apps.apps.get_model") as mock_get:
-            view._ensure_model_instance()
-            mock_get.assert_not_called()
+class TestModelPkIsNeverReResolved:
+    """A stored ``model_pk`` is never turned back into an object (#4203)."""
 
     @pytest.mark.django_db
     def test_a_raw_pk_is_never_re_resolved(self, get_request, caplog):
-        """An explicit view never turns a stored ``model_pk`` back into an object with an
-        unscoped ``objects.get``: every restore runs ``mount()``, which establishes the
-        instance through the view's own authorized lookup (the legacy re-hydration is gone)."""
+        """Every restore runs ``mount()``, which establishes the instance through
+        the view's own authorized lookup; reading ``form_instance`` never runs an
+        unscoped ``objects.get`` on a stored ``model_pk``."""
         view = TestFormView()
         view.get(get_request)
         view.model_pk = 42
         view.model_label = "myapp.MyModel"
+        view._model_instance = None
+        view._form_instance = None
 
         with patch("django.apps.apps.get_model") as mock_get:
-            view._ensure_model_instance()
+            view.form_instance
 
         mock_get.assert_not_called()
         assert view._model_instance is None

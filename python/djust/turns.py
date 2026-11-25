@@ -8,9 +8,8 @@ render. Every turn, on every transport (WebSocket, SSE, HTTP, the auto-exposed
 API), runs this chain::
 
     error_boundary            (built-in, always)
-      reauth                  (built-in; active when reauth_on_event is on)
-        LIVEVIEW_MIDDLEWARE[0] ... [n]
-          the turn (check_view_auth, on_mount, permissions, view code, render)
+      LIVEVIEW_MIDDLEWARE[0] ... [n]
+        the turn (check_view_auth, on_mount, permissions, view code, render)
 
 ``LIVEVIEW_MIDDLEWARE`` lists dotted paths to ``async def mw(turn, next)``
 callables, Django-middleware shaped: return ``await next(turn)`` to run the
@@ -57,14 +56,6 @@ __all__ = [
 TURN_KINDS = frozenset({"mount", "reconnect", "event", "params", "push", "async", "render"})
 #: Every value ``Turn.transport`` takes.
 TURN_TRANSPORTS = frozenset({"ws", "sse", "http", "api"})
-
-#: Turns a client asked for over a live connection (re-checked every turn).
-_CLIENT_LIVE_KINDS = frozenset({"event", "params", "render"})
-#: Turns the server originated (re-checked at most every interval).
-_SERVER_KINDS = frozenset({"push", "async"})
-
-#: Transports that keep a connection open (HTTP / API authenticate every request).
-_LIVE_TRANSPORTS = frozenset({"ws", "sse"})
 
 _EMPTY: Mapping[str, Any] = {}
 
@@ -267,7 +258,7 @@ async def error_boundary(turn: Turn, next: Callable[[Turn], Awaitable[Any]]) -> 
 
     The port (the transport adapter) answers a socket client turn with the
     value-free error envelope, logs a server turn's error value-free, or
-    re-raises (HTTP, and legacy views while diagnostics are allowed).
+    re-raises (HTTP, and while diagnostics are allowed).
     """
     from django.core.exceptions import PermissionDenied
 
@@ -282,36 +273,7 @@ async def error_boundary(turn: Turn, next: Callable[[Turn], Awaitable[Any]]) -> 
         return None
 
 
-async def reauth(turn: Turn, next: Callable[[Turn], Awaitable[Any]]) -> Any:
-    """``reauth_on_event``: re-check the principal of a live connection.
-
-    Client turns re-check every turn; server turns at most every
-    ``reauth_server_turn_interval`` seconds per connection. Mounts and HTTP
-    turns authenticate fresh anyway. Only legacy-exposure views that set
-    ``login_required`` / ``permission_required`` are re-checked (explicit
-    views carry their own always-on authority, ADR-038). On a failed check the
-    transport has already answered (navigate to login / ``permission_denied``)
-    and closed the connection.
-    """
-    kind = turn.kind
-    view = turn.view
-    if (
-        view is not None
-        and (kind in _CLIENT_LIVE_KINDS or kind in _SERVER_KINDS)
-        and turn.transport in _LIVE_TRANSPORTS
-        and turn._port is not None
-        and (getattr(view, "login_required", None) or getattr(view, "permission_required", None))
-    ):
-        from ._exposure import uses_legacy_exposure
-        from .config import config as djust_config
-
-        if djust_config.get("reauth_on_event") and uses_legacy_exposure(view):
-            if not await turn._port.turn_reauth(turn, server=kind in _SERVER_KINDS):
-                return Refusal("login", sent=True)
-    return await next(turn)
-
-
-_BUILTINS: Tuple[TurnMiddleware, ...] = (error_boundary, reauth)
+_BUILTINS: Tuple[TurnMiddleware, ...] = (error_boundary,)
 
 
 # --------------------------------------------------------------------------- #

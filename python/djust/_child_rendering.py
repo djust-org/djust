@@ -14,7 +14,7 @@ from inspect import signature
 from secrets import token_hex
 from typing import Any, ParamSpec, Protocol, TypeVar
 
-from ._exposure import ExposureError, uses_legacy_exposure
+from ._exposure import ExposureError
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
@@ -150,11 +150,7 @@ class _Render:
         if self.whole_page:
             self.owner._explicit_child_rendered_full = True
         for slot, child in list(registry.items()):
-            if (
-                slot not in keep
-                and not uses_legacy_exposure(child)
-                and type(getattr(child, "_explicit_child_schema", None)) is str
-            ):
+            if slot not in keep and type(getattr(child, "_explicit_child_schema", None)) is str:
                 dispose_child_subtree(child)
 
 
@@ -165,8 +161,6 @@ def record_rendered_child(child: Any) -> None:
     """Record a currently registered server-rendered child, not a markup-only ID."""
     active = _active.get()
     if active is None or getattr(child, "_parent_view", None) is not active.owner:
-        return
-    if uses_legacy_exposure(child):
         return
     slot = getattr(child, "_view_id", None)
     registry = getattr(active.owner, "_child_views", None)
@@ -202,11 +196,7 @@ def prepare_owned_child_diff(view: Any) -> tuple[str, str | None, int]:
 def record_direct_child_result(child: Any, html: Any) -> None:
     """Retain the exact direct result, never a later string copy or slot lookup."""
     active = _active.get()
-    if (
-        active is None
-        or getattr(child, "_parent_view", None) is not active.owner
-        or uses_legacy_exposure(child)
-    ):
+    if active is None or getattr(child, "_parent_view", None) is not active.owner:
         return
     if not isinstance(html, str):
         raise ExposureError("Invalid direct child render result")
@@ -220,7 +210,7 @@ def consume_direct_child_result(parent: Any, html: str) -> tuple[str, int] | Non
         return None
     entry = active.direct_results.pop(id(html), None)
     if entry is None:
-        return None  # A legacy child does not acquire an explicit binding.
+        return None  # An unrecorded result acquires no binding.
     original, child = entry
     registry = getattr(parent, "_child_views", None)
     slot = getattr(child, "_view_id", None)
@@ -258,7 +248,7 @@ def reconcile_child_render(
                 return render(*args, **kwargs)  # retain the callable's normal argument error
             view = args[0] if args else kwargs[owner_parameter]
             previous = _active.get()
-            if uses_legacy_exposure(view) or (previous is not None and previous.owner is view):
+            if previous is not None and previous.owner is view:
                 return render(*args, **kwargs)
             current = _Render(view, whole_page, owner_wrapper)
             token = _active.set(current)

@@ -979,23 +979,21 @@ def check_sticky_child_own_dj_view(app_configs: Any, **kwargs: Any) -> list[Chec
     return errors
 
 
-def _explicit_exposure_classes() -> dict[tuple[str, str], bool]:
-    """``(realpath, class name) -> explicit`` for every imported LiveView class.
+def _imported_liveview_keys() -> set[tuple[str, str]]:
+    """``(realpath, class name)`` for every imported LiveView class.
 
     V006/V008 warn that a value assigned in ``mount()`` cannot be serialized.
-    Under ``exposure_policy = "explicit"`` a plain attribute is never
-    serialized (template context, session, ``get_state()`` and snapshots read
-    only declared state), so the warning only applies to a legacy view (#4032).
-    The checks are AST-based; this maps their ``ClassDef`` back to the imported
-    class, whose resolved policy includes an inherited or defaulted one. Two
-    classes sharing a name in one file count as explicit only if both are.
+    A LiveView never serializes a plain attribute (template context, session,
+    ``get_state()`` and snapshots read only declared state; every view is
+    explicit since #4199), so the warning applies only to classes that are not
+    LiveViews (#4032). The checks are AST-based; this maps their ``ClassDef``
+    back to the imported class.
     """
     try:
-        from djust._exposure import uses_legacy_exposure
         from djust.live_view import LiveView
     except Exception:  # noqa: BLE001 — djust not importable/configured: nothing is known
-        return {}
-    explicit: dict[tuple[str, str], bool] = {}
+        return set()
+    keys: set[tuple[str, str]] = set()
     for cls in _walk_subclasses(LiveView):
         try:
             source = inspect.getsourcefile(cls)
@@ -1003,9 +1001,8 @@ def _explicit_exposure_classes() -> dict[tuple[str, str], bool]:
             continue
         if not source:
             continue
-        key = (os.path.realpath(source), cls.__name__)
-        explicit[key] = explicit.get(key, True) and not uses_legacy_exposure(cls)
-    return explicit
+        keys.add((os.path.realpath(source), cls.__name__))
+    return keys
 
 
 def _states_explicit_exposure(node: ast.ClassDef) -> bool:
@@ -1027,16 +1024,12 @@ def _states_explicit_exposure(node: ast.ClassDef) -> bool:
 
 
 def _serializes_plain_attributes(
-    node: ast.ClassDef, filepath: str, explicit: dict[tuple[str, str], bool]
+    node: ast.ClassDef, filepath: str, liveviews: set[tuple[str, str]]
 ) -> bool:
-    """False for a class V006/V008 must skip: an explicit-exposure view.
-
-    The imported class's resolved policy decides; a class that is not imported
-    (or not a LiveView) is skipped only when its own body states explicit.
-    """
-    known = explicit.get((os.path.realpath(filepath), node.name))
-    if known is not None:
-        return not known
+    """False for a class V006/V008 must skip: an imported LiveView, or a class
+    that is not imported but states ``exposure_policy = "explicit"``."""
+    if (os.path.realpath(filepath), node.name) in liveviews:
+        return False
     return not _states_explicit_exposure(node)
 
 
@@ -1050,7 +1043,7 @@ def _check_service_instances_in_mount(errors: list[CheckMessage]) -> None:
     app_dirs = _root._get_project_app_dirs()  # type: ignore[attr-defined]  # _root.* is dynamic re-export (patch-by-path; #1822 split)
     if not app_dirs:
         return
-    explicit = _explicit_exposure_classes()
+    liveviews = _imported_liveview_keys()
 
     for filepath in _iter_python_files(app_dirs):
         tree, source_lines = _parse_python_file(filepath)
@@ -1062,7 +1055,7 @@ def _check_service_instances_in_mount(errors: list[CheckMessage]) -> None:
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            if not _serializes_plain_attributes(node, filepath, explicit):
+            if not _serializes_plain_attributes(node, filepath, liveviews):
                 continue
 
             # Find mount() methods inside class definitions
@@ -1230,7 +1223,7 @@ def _check_non_primitive_assignments_in_mount(errors: list[CheckMessage]) -> Non
         "read_text",
     }
 
-    explicit = _explicit_exposure_classes()
+    liveviews = _imported_liveview_keys()
     for filepath in _iter_python_files(app_dirs):
         tree, source_lines = _parse_python_file(filepath)
         if tree is None:
@@ -1245,7 +1238,7 @@ def _check_non_primitive_assignments_in_mount(errors: list[CheckMessage]) -> Non
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            if not _serializes_plain_attributes(node, filepath, explicit):
+            if not _serializes_plain_attributes(node, filepath, liveviews):
                 continue
 
             # Find mount() methods inside class definitions
@@ -1894,67 +1887,6 @@ def check_get_http_status_overrides(app_configs: Any, **kwargs: Any) -> list[Che
 
 
 @register("djust")
-def check_shared_class_level_components(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """V026 (Warning): a plain component in a legacy view's class body (#4045).
-
-    A plain ``Component`` has no descriptor, so ``self.<name>`` is the one class
-    attribute every session of the worker shares, and a legacy view renders it
-    automatically: one user's handler write (``self.badge.label = email``)
-    shows in every other user's next render. An explicit view refuses the same
-    shape when the class is created; a legacy view keeps running, so this
-    reports it. Reported once per class body that declares it.
-    """
-    messages: list[CheckMessage] = []
-    if _is_check_suppressed("djust.V026"):
-        return messages
-    try:
-        from djust._exposure import uses_legacy_exposure
-        from djust._exposure_providers import class_level_plain_components
-        from djust.live_view import LiveView
-    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
-        return messages
-
-    owners: dict[tuple[type, str], None] = {}
-    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
-    for cls in candidates:
-        if cls.__dict__.get("abstract") or not uses_legacy_exposure(cls):
-            continue
-        for name in class_level_plain_components(cls):
-            owner = next(c for c in cls.__mro__ if name in vars(c))
-            if not _is_framework_internal_class(owner):
-                owners[(owner, name)] = None
-
-    for owner, name in sorted(owners, key=lambda o: (o[0].__module__, o[0].__qualname__, o[1])):
-        label = "%s.%s" % (owner.__module__, owner.__qualname__)
-        kind = type(vars(owner)[name]).__name__
-        owner_file = ""
-        try:
-            owner_file = inspect.getfile(owner)
-        except (OSError, TypeError):
-            pass  # Source introspection may fail for built-in or C-extension classes
-        messages.append(
-            DjustWarning(
-                "%s declares the plain component %r in its class body. It is one object "
-                "shared by every session of the worker, and a legacy view renders it: a "
-                "handler's write to it shows in every other user's page." % (label, name),
-                hint=(
-                    "Create it per view: assign self._%s = %s(...) in mount() and return it "
-                    "from get_context_data(), or build it in get_context_data(). A component "
-                    "that is never written can stay. Suppress with "
-                    "DJUST_CONFIG = {'suppress_checks': ['V026']}." % (name, kind)
-                ),
-                id="djust.V026",
-                fix_hint=(
-                    "Move `%s = %s(...)` out of the class body of `%s` and create it per view "
-                    "in `mount()` or `get_context_data()`." % (name, kind, owner.__qualname__)
-                ),
-                file_path=owner_file,
-            )
-        )
-    return messages
-
-
-@register("djust")
 def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """V027 (Warning): a declared ``state()`` field named ``user`` or ``perms`` (#4050).
 
@@ -1963,16 +1895,13 @@ def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[
     replaces ``request.user`` (and ``perms = state(...)`` the permission proxy)
     in every template the view renders, including base templates that test it
     for authorization. Legal, but almost never meant. A field declared with
-    ``render=False`` is not reported, and neither is a legacy view: its
-    attribute walk shadowed these names the same way in 1.x, and the legacy
-    policy is deprecated rather than extended. The names are
+    ``render=False`` is not reported. The names are
     ``djust._exposure_unsupplied.AUTHORIZATION_CONTEXT_NAMES``.
     """
     messages: list[CheckMessage] = []
     if _is_check_suppressed("djust.V027"):
         return messages
     try:
-        from djust._exposure import uses_legacy_exposure
         from djust._exposure_unsupplied import AUTHORIZATION_CONTEXT_NAMES
         from djust.live_view import LiveView
         from djust.mixins.context import rendered_state_names
@@ -1982,7 +1911,7 @@ def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[
     candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
     seen: set[tuple[type, str]] = set()
     for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
-        if _is_framework_internal_class(cls) or uses_legacy_exposure(cls):
+        if _is_framework_internal_class(cls):
             continue
         try:
             names = AUTHORIZATION_CONTEXT_NAMES.intersection(rendered_state_names(cls))
@@ -2020,148 +1949,6 @@ def check_declared_authorization_names(app_configs: Any, **kwargs: Any) -> list[
                     file_path=path,
                 )
             )
-    return messages
-
-
-@register("djust")
-def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """V028 (Warning): an application class states ``exposure_policy = "legacy"`` (#4047).
-
-    Explicit exposure is the default since djust 2.0, and ``"legacy"`` is to be
-    removed before 2.0.0. Stating it already raises a ``DeprecationWarning`` when
-    the class is created, but a warning raised at import time is easy to miss
-    (most test runners and servers hide it); a system check is listed on every
-    ``manage.py check`` and ``runserver`` start. This reports the class whose body
-    states the policy, once, wherever the views that use it inherit it from, the
-    same owner the deprecation warning names. djust's own classes (a shipped view
-    pinned to ``"legacy"``, and djust's test modules) are not reported: that
-    statement is not the application's to change.
-    """
-    messages: list[CheckMessage] = []
-    if _is_check_suppressed("djust.V028"):
-        return messages
-    try:
-        from djust._exposure_unsupplied import MIGRATION_GUIDE_URL
-        from djust.live_view import LiveView
-    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
-        return messages
-
-    owners: dict[type, list[type]] = {}
-    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
-    for cls in candidates:
-        # The class whose body states the policy the view runs under: the same
-        # lookup attribute access does, so a policy stated on a mixin is found too.
-        owner = next((c for c in cls.__mro__ if "exposure_policy" in vars(c)), None)
-        if owner is None:
-            continue
-        policy = vars(owner)["exposure_policy"]
-        if type(policy) is not str or policy != "legacy":
-            continue
-        module = getattr(owner, "__module__", "") or ""
-        if module == "djust" or module.startswith("djust."):
-            continue
-        owners.setdefault(owner, []).append(cls)
-
-    for owner in sorted(owners, key=lambda c: (c.__module__, c.__qualname__)):
-        label = "%s.%s" % (owner.__module__, owner.__qualname__)
-        users = sorted(
-            "%s.%s" % (c.__module__, c.__qualname__) for c in owners[owner] if c is not owner
-        )
-        inherited = ""
-        if users:
-            shown = ", ".join(users[:3]) + (", ..." if len(users) > 3 else "")
-            inherited = " %d view(s) inherit it: %s." % (len(users), shown)
-        owner_file = ""
-        owner_line = None
-        try:
-            owner_file = inspect.getfile(owner)
-            owner_line = inspect.getsourcelines(owner)[1]
-        except (OSError, TypeError):
-            pass  # Source introspection may fail for dynamically created classes
-        messages.append(
-            DjustWarning(
-                '%s states exposure_policy = "legacy", which is deprecated and is removed '
-                "before djust 2.0.0: every public attribute of the view reaches the "
-                "template and the browser.%s" % (label, inherited),
-                hint=(
-                    "Move the view to explicit exposure, the default: declare persisted "
-                    "fields with state(), return template names from get_context_data(), "
-                    "then delete the exposure_policy line. `python manage.py "
-                    "djust_exposure_inventory --fix` deletes the line and supplies what the "
-                    "template reads from get_context_data(); without --fix it lists what each "
-                    "view exposes today. See %s. "
-                    "Suppress with DJUST_CONFIG = {'suppress_checks': ['V028']}."
-                    % MIGRATION_GUIDE_URL
-                ),
-                id="djust.V028",
-                fix_hint=(
-                    'Migrate `%s` to explicit exposure and delete `exposure_policy = "legacy"`.'
-                    % owner.__qualname__
-                ),
-                file_path=owner_file,
-                line_number=owner_line,
-            )
-        )
-    return messages
-
-
-@register("djust")
-def check_admin_legacy_widgets(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """V032 (Error): an admin widget slot lists a class that states legacy exposure (#4185).
-
-    The djust admin change list and change form use explicit exposure, and an
-    explicit page cannot embed a legacy view: rendering the page fails (an
-    HTTP 500), on every GET of that admin page. V028 already reports the
-    widget class as deprecated; this says the admin page is broken now. Reads
-    the ``change_list_widgets`` / ``change_form_widgets`` class attributes of
-    every ``DjustModelAdmin`` subclass; a widget list built per request by an
-    overridden ``get_change_*_widgets()`` is not seen.
-    """
-    messages: list[CheckMessage] = []
-    if _is_check_suppressed("djust.V032"):
-        return messages
-    try:
-        from djust.admin_ext.options import DjustModelAdmin
-    except Exception:  # noqa: BLE001 — admin extension not importable: nothing to check
-        return messages
-
-    for admin in sorted(
-        _walk_subclasses(DjustModelAdmin), key=lambda c: (c.__module__, c.__qualname__)
-    ):
-        admin_label = "%s.%s" % (admin.__module__, admin.__qualname__)
-        for slot, page in (
-            ("change_list_widgets", "change list"),
-            ("change_form_widgets", "change form"),
-        ):
-            widgets = getattr(admin, slot, None)
-            if not isinstance(widgets, (list, tuple)):
-                continue
-            for widget in widgets:
-                if not isinstance(widget, type):
-                    continue
-                policy = inspect.getattr_static(widget, "exposure_policy", None)
-                if type(policy) is not str or policy != "legacy":
-                    continue
-                widget_label = "%s.%s" % (widget.__module__, widget.__qualname__)
-                messages.append(
-                    DjustError(
-                        '%s.%s lists %s, which states exposure_policy = "legacy". The djust '
-                        "admin %s uses explicit exposure and cannot embed a legacy view, so "
-                        "that admin page fails to render (HTTP 500)."
-                        % (admin_label, slot, widget_label, page),
-                        hint=(
-                            'Set exposure_policy = "explicit" on %s (or delete the line: '
-                            "explicit is the default) and return what its template reads "
-                            "from get_context_data(). See docs/website/guides/admin-widgets.md."
-                            % widget_label
-                        ),
-                        id="djust.V032",
-                        fix_hint=(
-                            'Replace `exposure_policy = "legacy"` with '
-                            '`exposure_policy = "explicit"` on `%s`.' % widget.__qualname__
-                        ),
-                    )
-                )
     return messages
 
 
@@ -2356,15 +2143,14 @@ def check_undeclared_handler_state(app_configs: Any, **kwargs: Any) -> list[Chec
     ``temporary_assigns`` (reset every render by design), djust's own
     attributes (``reserved_state_names()``, any name a djust class in the MRO
     defines, what ``LiveView()`` sets), descriptors other than ``state()``
-    (a property, ``@computed``), a ``state()`` field with ``persist``, and
-    legacy views. Builds one bare ``LiveView()`` to list djust's instance
+    (a property, ``@computed``) and a ``state()`` field with ``persist``. Builds one bare ``LiveView()`` to list djust's instance
     attributes; no application view is constructed.
     """
     messages: list[CheckMessage] = []
     if _is_check_suppressed("djust.V029"):
         return messages
     try:
-        from djust._exposure import reserved_state_names, uses_legacy_exposure
+        from djust._exposure import reserved_state_names
         from djust._state import StateProperty
         from djust.decorators import is_action, is_event_handler
         from djust.live_view import LiveView
@@ -2377,12 +2163,6 @@ def check_undeclared_handler_state(app_configs: Any, **kwargs: Any) -> list[Chec
     seen: set[tuple[type, str]] = set()
     for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
         if _is_framework_internal_class(cls):
-            continue
-        try:
-            if uses_legacy_exposure(cls):
-                continue
-        except Exception:  # noqa: BLE001 — a class this cannot read is skipped
-            logger.debug("V029: could not read the exposure policy of a view class")
             continue
         own = set(framework) | _temporary_assign_keys(cls)
         user_classes = []

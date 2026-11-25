@@ -498,6 +498,9 @@ class SSESession:
         # Set once shutdown() queued the close sentinel: the stream reads
         # nothing after it, so later pushes are dropped (#3232).
         self._closed_sentinel_queued = False
+        # The digest of the parameter-contract manifest last queued in full; a
+        # reconnect is a new session, so it starts again with a full one (#4307).
+        self._parameter_contract_sent: Optional[str] = None
         # The closing stream waits ``_SESSION_LINGER_S`` for event POSTs still
         # in flight; a client that knows it has none (djust.testing's LiveSSE,
         # whose every POST was answered) skips the wait for this session only.
@@ -566,10 +569,10 @@ class SSESession:
         self._owner_session_key: Optional[str] = None
 
         # The live event-POST request, stamped by the /message/ endpoint
-        # just before dispatch so the per-event auth re-check
-        # (SSESessionTransport.recheck_event_auth, #1777) validates against the
-        # CURRENT POSTer's request.user — not the stale mount request. None until
-        # the first event POST (the re-check falls back to ``_request`` defensively).
+        # just before dispatch so the event's authorization
+        # (SSESessionTransport.explicit_event_request, ADR-038) validates against
+        # the CURRENT POSTer's request.user — not the stale mount request. None
+        # until the first event POST, and consumed by each event.
         self._event_request: Optional[Any] = None
 
         # The mount-time request (the original stream-GET's request), stamped by
@@ -976,9 +979,23 @@ class SSESession:
             except RuntimeError:
                 here = None
             if here is not loop:
+                # Sent in full and not recorded: a later on-loop push could be
+                # enqueued ahead of this one. The next on-loop manifest goes out
+                # in full too (#4307).
+                if isinstance(msg, dict) and "parameter_contracts" in msg:
+                    self._parameter_contract_sent = None
                 loop.call_soon_threadsafe(self.queue.put_nowait, msg)
                 return
+        sent = None
+        if msg is not None:
+            # On the session's loop the elision and the enqueue are one step:
+            # a manifest equal to the last one queued goes out as its digest.
+            from ._parameter_metadata import elide_sent_manifest
+
+            msg, sent = elide_sent_manifest(self, msg)
         self.queue.put_nowait(msg)
+        if sent is not None:
+            self._parameter_contract_sent = sent
 
     def shutdown(self) -> None:
         """Signal the SSE stream generator to close the connection.
@@ -1715,8 +1732,8 @@ class DjustSSEMessageView(View):
         # which pushes structured error envelopes onto the SSE queue.
         #
         # Stamp the LIVE POST request so an ``event`` frame routed through
-        # dispatch_message → dispatch_event re-validates per-event auth against the
-        # current POSTer (SSESessionTransport.recheck_event_auth, #1777); owner
+        # dispatch_message → dispatch_event is authorized against the current
+        # POSTer (SSESessionTransport.explicit_event_request, ADR-038); owner
         # binding above already ran, so this is the session owner's request.
         from ._exposure_diagnostics import (
             diagnostic_scope,

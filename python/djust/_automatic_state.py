@@ -31,8 +31,6 @@ The rules, in one place (``docs/adr/notes/038-amendment-automatic-server-state.m
   running; a name that is now a method or property is skipped.
 * **Binding**: the session, user, tenant and route, and the declared
   envelope's lifetime.
-
-A view on the deprecated ``exposure_policy = "legacy"`` takes no part.
 """
 
 from __future__ import annotations
@@ -56,7 +54,6 @@ from ._exposure import (
     StateLimits,
     _class_facts,
     reserved_state_names,
-    uses_legacy_exposure,
 )
 
 logger = logging.getLogger("djust.automatic_state")
@@ -501,7 +498,7 @@ def _forget(view: Any, request: Any) -> None:
     """Saving is off for this view: the state saved for this tab before that
     (with its changed/deleted record) is removed from the session, so it is
     neither read nor left at rest. One write, and only when there is one."""
-    if uses_legacy_exposure(view) or view.__dict__.get("_djust_auto_forgot"):
+    if view.__dict__.get("_djust_auto_forgot"):
         return
     view.__dict__["_djust_auto_forgot"] = True  # once per view object
     try:
@@ -521,7 +518,7 @@ def _forget(view: Any, request: Any) -> None:
 
 def _not_saved(view: Any) -> bool:
     """The one gate every entry point of this module asks first."""
-    return uses_legacy_exposure(view) or not saving_enabled(view)
+    return not saving_enabled(view)
 
 
 def limits_for(view: Any) -> Tuple[int, int]:
@@ -2533,14 +2530,16 @@ SAVED_STATE_PREFIXES = (_KEY_PREFIX, "_djust_explicit_")
 
 
 def _is_lazy_child_key(key: Any) -> bool:
-    """A lazy legacy child's saved state (``_lazy_containers``):
-    ``liveview_<path>__lazy__<view id>``. It carries no expiry of its own."""
+    """A lazy child's saved state, ``liveview_<path>__lazy__<view id>``: written by
+    djust 1.3 / 2.0 pre-releases; nothing writes them now. It carries no expiry
+    of its own, so ``djust clear --all`` is what removes one."""
     return isinstance(key, str) and key.startswith("liveview_") and "__lazy__" in key
 
 
 def saved_state_keys(session: Any, *, lazy: bool = True) -> list:
     """The keys of one session that hold saved view state. ``lazy=False``
-    leaves out a lazy legacy child's entries."""
+    leaves out the lazy-child entries written by djust 1.3 / 2.0 pre-releases
+    (nothing writes them now)."""
     return sorted(
         key
         for key in session.keys()

@@ -474,25 +474,15 @@ function applyEmbeddedUpdate(data, transport) {
 async function handleEmbeddedResponse(data, transport) {
     // Capture ownership before morphing: the response may remove its trigger.
     const tracked = data.ref != null && _pendingEventOwners.get(data.ref) === transport;
-    const eventName = tracked ? _pendingEventNames.get(data.ref) : transport.lastEventName;
-    const trigger = tracked ? _pendingTriggerEls.get(data.ref) : transport.lastTriggerElement;
-    const owner = trigger && trigger.closest('[data-djust-embedded]');
-    const ownerId = owner && owner.getAttribute('data-djust-embedded');
     const applied = applyEmbeddedUpdate(data, transport);
     // A legitimate reply may arrive after its owner was removed. Settle its
     // own request rather than leaking the promise, but reject malformed frames.
     if (!applied && (!tracked || typeof data.view_id !== 'string' || !data.view_id ||
         typeof data.html !== 'string')) return false;
-    if (data.source === 'async') {
-        completeLegacyAsyncBatches(transport, data);
-        return true;
-    }
-    // No-ref SSE replies must match the pending element's scope. A reply for
-    // another child must not consume the most recently sent event's state.
-    if (!tracked && (ownerId !== data.view_id ||
-        (data.event_name && data.event_name !== eventName))) {
-        return true;
-    }
+    // Background results, released activity events (whose request the queueing
+    // noop settled) and the HTTP fallback (settled by its own request) answer
+    // no pending request by ref here (#4309).
+    if (!tracked || data.source === 'async') return true;
     const event = acknowledgeEventRequest(transport, data);
     if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
     if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {
@@ -1584,6 +1574,7 @@ class LiveViewWebSocket {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
+        this._parameterContractHeld = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
@@ -1879,13 +1870,18 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
+                    // Jitter never reorders frames: a frame is released no
+                    // earlier than the one before it, as a socket delivers
+                    // them (a digest frame follows its full manifest, #4307).
+                    const now = Date.now();
+                    this._simReleaseAt = Math.max(now + actual, this._simReleaseAt || 0);
                     // ``handleMessage`` is the queue-wrapper (#1098); its
                     // returned promise is the chain-tail with an internal
                     // ``.catch`` that already logs and swallows. The
                     // returned promise never rejects, so we just ignore it.
                     setTimeout(() => {
                         this.handleMessage(data, socket);
-                    }, actual);
+                    }, this._simReleaseAt - now);
                 } else {
                     this.handleMessage(data, socket);
                 }
@@ -2361,7 +2357,6 @@ class LiveViewWebSocket {
                 // Determine event name and trigger for loading state
                 const event = acknowledgeEventRequest(this, data);
                 await handleServerResponse(data, event?.eventName, event?.trigger, this);
-                completeLegacyAsyncBatches(this, data);
 
                 // After processing the event response, flush buffered
                 // patches only when ALL pending events have resolved.
@@ -2554,13 +2549,20 @@ class LiveViewWebSocket {
                 // Server is dropping events due to rate limiting — show brief warning, do NOT retry
                 // codeql[js/log-injection] -- data.message is a server-controlled rate limit message
                 console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
-                this._showRateLimitWarning();
-                // Stop loading state if applicable
-                if (this.lastEventName) {
+                if (data.ref != null) {
+                    // The dropped event's own request (#4309): settle it, end
+                    // its loading state, and apply what it held back.
+                    if (_pendingEventOwners.get(data.ref) === this) {
+                        cancelEventRequests(this, data.ref);
+                        if (!hasPendingEventRequests(this)) await flushServerUpdates(this);
+                    }
+                } else if (this.lastEventName) {
+                    // Stop loading state if applicable
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                this._showRateLimitWarning();
                 break;
 
             case 'hvr-applied':
@@ -3208,6 +3210,7 @@ class LiveViewSSE {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
+        this._parameterContractHeld = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         cancelEventRequests(this);
@@ -3369,7 +3372,6 @@ class LiveViewSSE {
             case 'html_update': {
                 const event = acknowledgeEventRequest(this, data);
                 await handleServerResponse(data, event?.eventName, event?.trigger, this);
-                completeLegacyAsyncBatches(this, data);
                 break;
             }
 
@@ -3739,7 +3741,6 @@ async function flushServerUpdates(transport) {
         } else {
             await handleServerResponse(frame, null, null, transport);
         }
-        completeLegacyAsyncBatches(transport, frame);
     }
 }
 
@@ -3756,25 +3757,15 @@ function registerEventRequest(transport, eventName, triggerElement) {
     return { ref, promise };
 }
 
+/** Every async_pending carries its batch token (#4309); false when none is held. */
 function rememberAsyncBatch(transport, data, eventName, trigger) {
-    if (data.async_pending && data.async_batch == null && eventName) {
-        _pendingAsyncBatches.set(Symbol('legacy'), {transport, eventName, trigger, legacy: true});
-        return;
-    }
-    if (data.async_pending && typeof data.async_batch === 'string' &&
+    if (typeof data.async_batch === 'string' &&
         data.async_batch.length > 0 && data.async_batch.length <= 128 &&
         !_pendingAsyncBatches.has(data.async_batch)) {
         _pendingAsyncBatches.set(data.async_batch, { transport, eventName, trigger });
+        return true;
     }
-}
-
-function completeLegacyAsyncBatches(transport, data) {
-    if (data.source !== 'async' || data.async_pending || !data.event_name) return;
-    for (const [token, batch] of _pendingAsyncBatches) {
-        if (batch.legacy && batch.transport === transport && batch.eventName === data.event_name) {
-            completeAsyncBatch(transport, token);
-        }
-    }
+    return false;
 }
 
 /** Completion is a separate control message, not a foreground acknowledgement. */
@@ -3785,28 +3776,23 @@ function completeAsyncBatch(transport, token) {
     if (batch.eventName) globalLoadingManager.stopLoading(batch.eventName, batch.trigger);
 }
 
-/** Consume only an owned acknowledgement; unknown refs never use last-event state. */
+/**
+ * Consume only an owned acknowledgement, matched by its ref. Every server frame
+ * answering an event carries one (#4309): a frame without it (or with a ref
+ * already settled) settles nothing here and is still applied by the caller.
+ */
 function acknowledgeEventRequest(transport, data) {
     if (['async', 'tick', 'broadcast'].includes(data.source)) return null;
-    let ref = data.ref;
-    if (ref == null) {
-        // Compatibility with old no-ref servers is unambiguous only with one
-        // outstanding request. Never guess between overlapping requests.
-        const owned = [..._pendingEventOwners].filter(([, owner]) => owner === transport);
-        if (owned.length > 1) return null;
-        if (owned.length === 1) ref = owned[0][0];
-        else {
-            const legacy = { eventName: transport.lastEventName, trigger: transport.lastTriggerElement };
-            rememberAsyncBatch(transport, data, legacy.eventName, legacy.trigger);
-            transport.lastEventName = null;
-            transport.lastTriggerElement = null;
-            return legacy;
-        }
-    }
+    const ref = data.ref;
+    if (ref == null) return null;
     if (!_pendingEventRefs.has(ref) || _pendingEventOwners.get(ref) !== transport) return null;
     const eventName = _pendingEventNames.get(ref);
     const trigger = _pendingTriggerEls.get(ref);
-    rememberAsyncBatch(transport, data, eventName, trigger);
+    // No completion can arrive for a batch the client does not hold: the
+    // acknowledgement then ends the loading state rather than leave it stuck.
+    if (data.async_pending && !rememberAsyncBatch(transport, data, eventName, trigger)) {
+        data.async_pending = false;
+    }
     const resolve = _pendingEventResolvers.get(ref);
     _pendingEventRefs.delete(ref);
     _pendingEventNames.delete(ref);
@@ -4376,29 +4362,10 @@ window.djust.flushHandlerRateLimit = flushHandlerRateLimit;
 
 // DraftManager for localStorage-based draft saving
 
-// Drafts saved before #3978 flattened a radio group to the LAST radio's value
-// (checked or not) and a checkbox group to one box's boolean, so those entries
-// do not say what was chosen. A draft without this format number drops them on
-// load; its other fields still restore.
+// Drafts saved before #3978 flattened a radio group to the LAST radio's value and a
+// checkbox group to one box's boolean, so they do not say what was chosen. A draft
+// without this format number is discarded on load (#4207).
 const DRAFT_FORMAT = 2;
-
-function _withoutLegacyGroups(data) {
-    if (!data || typeof data !== 'object') return data;
-    const kept = {};
-    const boxes = new Map();
-    const radios = new Set();
-    document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(f => {
-        if (!f.name) return;
-        if (f.type === 'radio') radios.add(f.name);
-        else boxes.set(f.name, (boxes.get(f.name) || 0) + 1);
-    });
-    Object.keys(data).forEach(name => {
-        if (UNSAFE_KEYS.includes(name) || radios.has(name) || boxes.get(name) > 1) return;
-        // eslint-disable-next-line security/detect-object-injection
-        kept[name] = data[name];
-    });
-    return kept;
-}
 
 class DraftManager {
     constructor() {
@@ -4452,7 +4419,10 @@ class DraftManager {
                 djLog(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
-            if (draftData.format !== DRAFT_FORMAT) return _withoutLegacyGroups(draftData.data);
+            if (draftData.format !== DRAFT_FORMAT) {
+                localStorage.removeItem(`djust_draft_${draftKey}`);
+                return null;
+            }
             return draftData.data;
         } catch (error) {
             console.error(`[DraftMode] Failed to load draft ${draftKey}:`, error);
@@ -5020,146 +4990,6 @@ window.djust = window.djust || {};
 window.djust.parseEventHandler = parseEventHandler;
 
 /**
- * Extract parameters from element data-* attributes with optional type coercion.
- *
- * Supports typed attributes via suffix notation:
- *   data-sender-id:int="42"     -> { sender_id: 42 }
- *   data-enabled:bool="true"    -> { enabled: true }
- *   data-price:float="19.99"    -> { price: 19.99 }
- *   data-tags:json='["a","b"]'  -> { tags: ["a", "b"] }
- *   data-items:list="a,b,c"     -> { items: ["a", "b", "c"] }
- *   data-name="John"            -> { name: "John" } (default: string)
- *
- * @param {HTMLElement} element - Element to extract params from
- * @returns {Object} - Parameters with coerced types
- */
-function extractTypedParams(element) {
-    const params = Object.create(null); // null prototype prevents prototype-pollution
-
-    for (const attr of element.attributes) {
-        if (!attr.name.startsWith('data-')) continue;
-
-        // Skip djust internal attributes
-        if (attr.name.startsWith('data-liveview') ||
-            attr.name.startsWith('data-live-') ||
-            attr.name.startsWith('data-djust') ||
-            attr.name === 'dj-id' ||
-            attr.name === 'data-loading' ||
-            // Marks a dialog's explicit close control (51-keyboard-nav); a
-            // marker, not an argument: it must not reach the handler as `close`.
-            attr.name === 'data-dj-close' ||
-            attr.name === 'data-component-id') {
-            continue;
-        }
-
-        // Parse attribute name: data-sender-id:int -> key="sender_id", type="int"
-        const nameWithoutPrefix = attr.name.slice(5); // Remove "data-"
-        const colonIndex = nameWithoutPrefix.lastIndexOf(':');
-        let rawKey, typeHint;
-
-        if (colonIndex !== -1) {
-            rawKey = nameWithoutPrefix.slice(0, colonIndex);
-            typeHint = nameWithoutPrefix.slice(colonIndex + 1);
-        } else {
-            rawKey = nameWithoutPrefix;
-            typeHint = null;
-        }
-
-        // Convert kebab-case to snake_case, then strip dj_ namespace prefix
-        // so data-dj-preset="x" becomes {preset: "x"}, not {dj_preset: "x"}
-        let key = rawKey.replace(/-/g, '_');
-        if (key.startsWith('dj_')) {
-            key = key.slice(3);
-        }
-
-        // Prevent prototype pollution attacks
-        if (UNSAFE_KEYS.includes(key)) {
-            continue;
-        }
-        let value = attr.value;
-
-        // Apply type coercion based on suffix
-        if (typeHint) {
-            // Sanitize attribute name for logging (truncate, alphanumeric only)
-            const safeAttrName = String(attr.name).slice(0, 50).replace(/[^a-z0-9-:]/gi, '_');
-
-            switch (typeHint) {
-                case 'int':
-                case 'integer': {
-                    if (value === '') {
-                        value = 0;
-                    } else {
-                        const parsed = parseInt(value, 10);
-                        if (isNaN(parsed)) {
-                            console.warn(`[LiveView] Invalid int value for ${safeAttrName}: "${value}", using null`);
-                            value = null;  // Let server-side validation handle invalid input
-                        } else {
-                            value = parsed;
-                        }
-                    }
-                    break;
-                }
-
-                case 'float':
-                case 'number': {
-                    if (value === '') {
-                        value = 0.0;
-                    } else {
-                        const parsed = parseFloat(value);
-                        if (isNaN(parsed)) {
-                            console.warn(`[LiveView] Invalid float value for ${safeAttrName}: "${value}", using null`);
-                            value = null;  // Let server-side validation handle invalid input
-                        } else {
-                            value = parsed;
-                        }
-                    }
-                    break;
-                }
-
-                case 'bool':
-                case 'boolean':
-                    value = ['true', '1', 'yes', 'on', 'checked'].includes(value.toLowerCase());
-                    break;
-
-                case 'json':
-                case 'object':
-                case 'array':
-                    try {
-                        value = JSON.parse(value);
-                    } catch {
-                        console.warn(`[LiveView] Failed to parse JSON for ${safeAttrName}: "${value}"`);
-                        // Keep as string if JSON parse fails - server will validate
-                    }
-                    break;
-
-                case 'list':
-                    // Comma-separated list
-                    value = value ? value.split(',').map(v => v.trim()).filter(v => v) : [];
-                    break;
-
-                // Unknown type hint - keep as string
-                default:
-                    console.warn(`[LiveView] Unknown type hint "${typeHint}" for ${safeAttrName}, keeping as string`);
-                    break;
-            }
-        }
-
-        // eslint-disable-next-line security/detect-object-injection
-        params[key] = value;
-    }
-
-    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*,
-    // matching Phoenix's phx-value-* semantics.
-    const djValues = collectDjValues(element);
-    for (const [k, v] of Object.entries(djValues)) {
-        // eslint-disable-next-line security/detect-object-injection
-        params[k] = v;
-    }
-
-    return params;
-}
-
-/**
  * Collect dj-value-* attributes from an element and return as a params object.
  *
  * dj-value-* is the standard way to pass static context alongside events
@@ -5203,7 +5033,7 @@ function collectDjValues(element) {
 
         let value = attr.value;
 
-        // Apply type coercion (same logic as extractTypedParams)
+        // Apply type coercion
         if (typeHint) {
             switch (typeHint) {
                 case 'int':
@@ -5250,55 +5080,95 @@ function collectDjValues(element) {
 }
 
 // A mount owns its manifest. Never merge contracts by handler name, or retain
-// a previous mount's contracts when a legacy server omits this field.
+// a previous mount's contracts when a response omits this field. Wire v2
+// (#4307): distinct contracts and handler tables are listed once, and each
+// owner row names its table; owners share the (read-only) table Maps.
 function _installParameterContracts(transport, manifest, viewPath, resetPrimary = true, receiptOrder = 0) {
     if (!transport._parameterContracts || (resetPrimary && viewPath === transport.primaryViewPath)) {
         transport._parameterContracts = new Map();
         transport._parameterContractApplied = new Map();
+        transport._parameterContractHeld = new Map();
     }
     if (resetPrimary) transport._parameterContractApplied.set(viewPath, receiptOrder);
     transport._parameterContracts.set(viewPath, null);
+    (transport._parameterContractHeld ??= new Map()).delete(viewPath);
     if (manifest === undefined || manifest === null) return;
     const reject = () => { throw new Error('Invalid public parameter contracts'); };
-    // Keep invalid metadata distinguishable from an intentional legacy mount.
+    // Keep invalid metadata distinguishable from a tree with no handlers.
     transport._parameterContracts.set(viewPath, false);
     if (typeof viewPath !== 'string' || !viewPath) reject();
-    if (manifest.version !== 1 || !Array.isArray(manifest.owners) || manifest.owners.length > 1024 || JSON.stringify(manifest).length > 65536) reject();
-    const owners = new Map();
+    const n = Number.isInteger, ok = id => id === null || (typeof id === 'string' && id.length > 0);
+    if (manifest.version !== 2 || typeof manifest.digest !== 'string' || !Array.isArray(manifest.contracts) ||
+        !Array.isArray(manifest.handlers) || !Array.isArray(manifest.owners) || manifest.contracts.length > 1024 ||
+        manifest.handlers.length > 1024 || manifest.owners.length > 10000 ||
+        JSON.stringify([manifest.contracts, manifest.handlers]).length > 65536) reject();
+    const contracts = manifest.contracts.map(contract => {
+        if (!contract || typeof contract.coerce_types !== 'boolean' || !Array.isArray(contract.parameters) || contract.parameters.length > 1024) reject();
+        const seen = new Set();
+        const parameters = contract.parameters.map(parameter => {
+            if (!parameter || typeof parameter.name !== 'string' || seen.has(parameter.name) || typeof parameter.type !== 'string' ||
+                !['positional_only', 'positional_or_keyword', 'keyword_only', 'var_positional', 'var_keyword'].includes(parameter.kind) ||
+                typeof parameter.required !== 'boolean' || typeof parameter.reduced_checking !== 'boolean') reject();
+            seen.add(parameter.name);
+            return Object.freeze({name: parameter.name, type: parameter.type, kind: parameter.kind,
+                required: parameter.required, reduced_checking: parameter.reduced_checking});
+        });
+        return Object.freeze({coerce_types: contract.coerce_types, parameters: Object.freeze(parameters)});
+    });
     let count = 0;
-    for (const owner of manifest.owners) {
-        if (!owner || ![owner.view_id, owner.component_id].every(id => id === null || (typeof id === 'string' && id.length > 0))) reject();
-        const key = JSON.stringify([owner.view_id, owner.component_id]);
-        if (owners.has(key) || !owner.handlers || typeof owner.handlers !== 'object' || Array.isArray(owner.handlers)) reject();
+    const tables = manifest.handlers.map(table => {
+        if (!table || typeof table !== 'object' || Array.isArray(table)) reject();
         const handlers = new Map();
-        for (const [name, contract] of Object.entries(owner.handlers)) {
+        for (const [name, index] of Object.entries(table)) {
+            // An integer index into the frozen contracts array; any index out of range is undefined and rejected.
+            const contract = n(index) ? contracts[index] : undefined; // eslint-disable-line security/detect-object-injection
             if (++count > 10000 || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name) || !contract) reject();
-            if (contract.policy === 'legacy') {
-                handlers.set(name, Object.freeze({policy: 'legacy'}));
-            } else if (contract.policy === 'strict') {
-                if (typeof contract.coerce_types !== 'boolean' || !Array.isArray(contract.parameters) || contract.parameters.length > 1024) reject();
-                const seen = new Set();
-                const parameters = contract.parameters.map(parameter => {
-                    if (!parameter || typeof parameter.name !== 'string' || seen.has(parameter.name) || typeof parameter.type !== 'string' ||
-                        !['positional_only', 'positional_or_keyword', 'keyword_only', 'var_positional', 'var_keyword'].includes(parameter.kind) ||
-                        typeof parameter.required !== 'boolean' || typeof parameter.reduced_checking !== 'boolean') reject();
-                    seen.add(parameter.name);
-                    return Object.freeze({name: parameter.name, type: parameter.type, kind: parameter.kind,
-                        required: parameter.required, reduced_checking: parameter.reduced_checking});
-                });
-                handlers.set(name, Object.freeze({policy: 'strict', coerce_types: contract.coerce_types, parameters: Object.freeze(parameters)}));
-            } else reject();
+            handlers.set(name, contract);
         }
-        owners.set(key, handlers);
+        return handlers;
+    });
+    const owners = new Map();
+    for (const row of manifest.owners) {
+        if (!Array.isArray(row) || row.length !== 3 || !ok(row[0]) || !ok(row[1]) || !n(row[2]) || !tables[row[2]]) reject();
+        const key = JSON.stringify([row[0], row[1]]);
+        if (owners.has(key)) reject();
+        owners.set(key, tables[row[2]]);
     }
     if (!owners.has('[null,null]')) reject();
     transport._parameterContracts.set(viewPath, owners);
+    transport._parameterContractHeld.set(viewPath, manifest);
+    _cacheParameterManifest(transport, manifest);
+}
+
+// Content-addressed: a frame may name a manifest this transport already
+// received (#4307). The server elides only against the last digest it sent.
+function _cacheParameterManifest(transport, manifest) {
+    if (!manifest || typeof manifest.digest !== 'string') return;
+    const cache = transport._parameterManifests ??= new Map();
+    cache.delete(manifest.digest);
+    cache.set(manifest.digest, manifest);
+    if (cache.size > 4) cache.delete(cache.keys().next().value);
 }
 
 // Receipt order is client-owned, not a wire field or the VDOM version (child
 // replies have no parent VDOM version). Weak keys cannot retain consumed frames.
 function _recordParameterContractFrame(transport, data) {
     if (!data || typeof data !== 'object') return;
+    // An unchanged manifest arrives as its digest (#4307). Resolve it here, at
+    // receipt and before any buffering: frames are FIFO, so the full manifest
+    // for a digest is always received first. The server elides against the
+    // last manifest it sent at top level, which is kept outside the cache (a
+    // mount_batch's nested manifests cannot evict it); an HTTP answer names
+    // the scope's installed one. A miss installs as invalid and fails closed.
+    const m = data.parameter_contracts;
+    if (typeof m === 'string') {
+        const held = transport._parameterContractHeld?.get(data.parameter_contract_view);
+        data.parameter_contracts = transport._parameterManifest?.digest === m ? transport._parameterManifest
+            : held?.digest === m ? held : transport._parameterManifests?.get(m) || false;
+    } else if (m && typeof m.digest === 'string') {
+        transport._parameterManifest = m;
+        _cacheParameterManifest(transport, m);
+    }
     transport._parameterContractFrames ??= new WeakMap();
     transport._parameterContractSequence = (transport._parameterContractSequence || 0) + 1;
     transport._parameterContractFrames.set(data, transport._parameterContractSequence);
@@ -5317,6 +5187,7 @@ function _invalidateRenderParameterContracts(transport, data) {
     const mounts = transport?._parameterContracts;
     if (mounts?.has(path) && (mounts.get(path) !== null || Object.hasOwn(data, 'parameter_contracts'))) {
         mounts.set(path, false);
+        transport._parameterContractHeld?.delete(path);
         const order = transport._parameterContractFrames?.get(data);
         if (order !== undefined) transport._parameterContractApplied.set(path,
             Math.max(order, transport._parameterContractApplied.get(path) || 0));
@@ -5324,7 +5195,7 @@ function _invalidateRenderParameterContracts(transport, data) {
 }
 
 // Called after DOM application (including empty patches), before dj-mounted
-// or other bindings can run. Omission is safe only for a known legacy scope.
+// or other bindings can run. Omission is safe only for a scope whose tree declares no handlers.
 function _refreshRenderParameterContracts(transport, data) {
     const supplied = Object.hasOwn(data, 'parameter_contracts');
     if (!transport) {
@@ -5374,7 +5245,7 @@ function _lookupParameterContract(transport, viewPath, viewId, componentId, even
     return handlers.get(eventName);
 }
 
-// ADR-036 staged collector. Deliberately not called by legacy binders. The
+// ADR-036 staged collector. The
 // owner-scoped binder must supply only documented generated application values;
 // routing context is attached afterwards, never collected from markup here.
 // `accept(key, hint)` lets the binder veto a dj-value-* argument (contract checks);
@@ -5497,7 +5368,6 @@ function _collectStrictEventParams(element, generated = {}, positional = [], acc
 
 // Export for global access
 window.djust = window.djust || {};
-window.djust.extractTypedParams = extractTypedParams;
 window.djust.collectDjValues = collectDjValues;
 /**
  * Check if element has dj-confirm and show confirmation dialog.
@@ -6014,20 +5884,7 @@ function _installScopedDelegation() {
                         const strictParams = _strictBinding(entry.element, entry.parsed.name,
                             generated, entry.parsed.args, entry.element);
                         if (strictParams === false) return;
-                        if (strictParams) {
-                            handleEvent(entry.parsed.name, strictParams);
-                            return;
-                        }
-
-                        const params = extractTypedParams(entry.element);
-                        addEventContext(params, entry.element);
-                        Object.assign(params, generated);
-
-                        if (entry.parsed.args.length > 0) {
-                            params._args = entry.parsed.args;
-                        }
-
-                        handleEvent(entry.parsed.name, params);
+                        handleEvent(entry.parsed.name, strictParams);
                     });
                 }, evtType === 'scroll' || evtType === 'resize' ? { passive: true } : false);
             })(prefix, target, evtType);
@@ -6217,25 +6074,9 @@ function getFieldName(element) {
 }
 
 /**
- * Build standard form event params with component context.
- * Used by change, input, blur, focus event handlers.
- * @param {HTMLElement} element - Form element that triggered the event
- * @param {any} value - Current value of the field
- * @returns {Object} - Params object with value, field, and optional component_id
- */
-function buildFormEventParams(element, value) {
-    const fieldName = getFieldName(element);
-    const params = { value, field: fieldName };
-    // Merge dj-value-* attributes from the triggering element
-    Object.assign(params, collectDjValues(element));
-    addEventContext(params, element);
-    return params;
-}
-
-/**
  * ADR-036 strict collection for a form-field binding (change, input, blur,
  * focus): generated `value` and `field`, dj-value-* from the field itself.
- * Returns strict params, null for a legacy binding, or false when rejected.
+ * Returns the params, or false when rejected.
  */
 function _strictFormBinding(handlerString, field, value) {
     const parsed = parseEventHandler(handlerString || '');
@@ -6374,14 +6215,9 @@ async function _handleDjClick(element, e) {
         optimisticUpdateId = window.djust.optimistic.applyOptimisticUpdate(element, parsed.name);
     }
 
-    // Extract all data-* attributes with type coercion support
-    const params = strictParams || extractTypedParams(element);
-
-    // Add positional arguments from handler syntax if present
-    // e.g., dj-click="set_period('month')" -> params._args = ['month']
-    if (!strictParams && parsed.args.length > 0) {
-        params._args = parsed.args;
-    }
+    // dj-value-* arguments and positional ones (dj-click="set_period('month')"
+    // -> params._args = ['month']), collected by the strict binder above.
+    const params = strictParams;
 
     addEventContext(params, element);
 
@@ -6440,7 +6276,7 @@ function _handleDjCopy(element, e) {
         const copyEvent = element.getAttribute('dj-copy-event');
         if (copyEvent) {
             const strict = _strictBinding(element, copyEvent, { text: textToCopy }, [], null, true);
-            if (strict !== false) handleEvent(copyEvent, markSlotOf(strict || { text: textToCopy }, element));
+            if (strict !== false) handleEvent(copyEvent, markSlotOf(strict, element));
         }
     });
 }
@@ -6485,7 +6321,7 @@ function _changeValue(field) {
 // as protocol: `event` / `params` switch the HTTP fallback's flat body to its
 // {event, params} envelope (a button named `event` re-routed the call),
 // `component_id` / `view_id` address a component or embedded view,
-// `csrfmiddlewaretoken` is the form's own token field; `_`-names (_target) fail
+// `csrfmiddlewaretoken` is the form's own token field; `_`-names (the 1.x target key) fail
 // the identifier rule, and the prototype keys are UNSAFE_KEYS.
 const _SUBMITTER_NAME = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 const _SUBMITTER_RESERVED = ['event', 'params', 'component_id', 'view_id', 'csrfmiddlewaretoken', ...UNSAFE_KEYS];
@@ -6530,11 +6366,9 @@ function _submitParams(form, submitter) {
 async function _handleDjSubmit(element, e) {
     e.preventDefault();
 
-    // ADR-036: form fields are generated values; a strict handler receives
-    // only the fields it declares (all of them with **form_data), no _target.
-    // The pressed button is one of them (#3958): _target does not exist under
-    // strict (Q2), and a legacy handler's closed signature would reject a new
-    // field, so legacy keeps _target alone.
+    // ADR-036: form fields are generated values; a handler receives only the
+    // fields it declares (all of them with **form_data), no 1.x target key. The
+    // pressed button is one of them (#3958).
     const strictParams = _strictBinding(element, element.getAttribute('dj-submit'),
         _submitParams(element, e.submitter), []);
     if (strictParams === false) return;
@@ -6576,20 +6410,9 @@ async function _handleDjSubmit(element, e) {
     // so it always resolves regardless of error.
     _setFormPending(element, true);
 
-    let params;
-    if (strictParams) {
-        params = strictParams;
-    } else {
-        params = _submitParams(element, null);
-
-        // Merge dj-value-* attributes from the form element
-        Object.assign(params, collectDjValues(element));
-    }
+    const params = strictParams;
 
     addEventContext(params, element);
-
-    // _target: include submitter name if available (legacy only, ADR-036 Q2)
-    if (!strictParams) params._target = (e.submitter && (e.submitter.name || e.submitter.id)) || null;
 
     // Pass target element for optimistic updates (Phase 3)
     params._targetElement = element;
@@ -6624,16 +6447,8 @@ async function _handleDjChange(element, e) {
     const parsedChange = parseEventHandler(changeHandler);
 
     const value = changeValue;
-    const params = strictParams || buildFormEventParams(e.target, value);
-
-    // Add positional arguments from handler syntax if present
-    // e.g., dj-change="toggle_todo(3)" -> params._args = [3]
-    if (!strictParams && parsedChange.args.length > 0) {
-        params._args = parsedChange.args;
-    }
-
-    // _target: include triggering field's name (or id, or null); legacy only
-    if (!strictParams) params._target = e.target.name || e.target.id || null;
+    // Positional arguments (dj-change="toggle_todo(3)" -> _args) are in params.
+    const params = strictParams;
 
     // Add target element for loading state (consistent with other handlers)
     params._targetElement = e.target;
@@ -6671,13 +6486,7 @@ async function _handleDjInput(element, e) {
     const inputHandler = element.getAttribute('dj-input');
     const parsedInput = parseEventHandler(inputHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
-    if (!strictParams && parsedInput.args.length > 0) {
-        params._args = parsedInput.args;
-    }
-
-    // _target: include triggering field's name (or id, or null); legacy only
-    if (!strictParams) params._target = e.target.name || e.target.id || null;
+    const params = strictParams;
 
     markSlotOf(params, element);
     await handleEvent(parsedInput.name, params);
@@ -6704,10 +6513,7 @@ async function _handleDjBlur(element, e) {
     const blurHandler = element.getAttribute('dj-blur');
     const parsedBlur = parseEventHandler(blurHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
-    if (!strictParams && parsedBlur.args.length > 0) {
-        params._args = parsedBlur.args;
-    }
+    const params = strictParams;
     markSlotOf(params, element);
     await handleEvent(parsedBlur.name, params);
 }
@@ -6733,10 +6539,7 @@ async function _handleDjFocus(element, e) {
     const focusHandler = element.getAttribute('dj-focus');
     const parsedFocus = parseEventHandler(focusHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
-    if (!strictParams && parsedFocus.args.length > 0) {
-        params._args = parsedFocus.args;
-    }
+    const params = strictParams;
     markSlotOf(params, element);
     await handleEvent(parsedFocus.name, params);
 }
@@ -6795,13 +6598,10 @@ async function _handleDjPaste(element, e) {
         }
     }
 
-    const params = strictPaste || payload;
-    if (!strictPaste) {
-        if (parsedPaste.args.length > 0) params._args = parsedPaste.args;
-        // Owner context, like every other binding: a paste inside a component or
-        // an embedded child reaches that owner, not the root view.
-        addEventContext(params, element);
-    }
+    // Collected above (a clipboard exists here); the element's owner context
+    // is attached by the binder, so a paste inside a component or an embedded
+    // child reaches that owner.
+    const params = strictPaste;
 
     // Suppress the default paste only when the element opts in
     // with dj-paste-suppress. Otherwise let the browser also
@@ -6907,10 +6707,7 @@ async function _handleDjKeyboard(element, e, eventType, attrName) {
         return; // User cancelled
     }
 
-    const params = strictParams || keyGenerated;
-
-    // Merge dj-value-* attributes from the element
-    if (!strictParams) Object.assign(params, collectDjValues(element));
+    const params = strictParams;
 
     addEventContext(params, e.target);
 
@@ -7162,7 +6959,7 @@ async function _flushNativeObservation(element, record) {
     record.dirty = false;
     record.sending = true;
     ++record.sequence;
-    const params = Object.assign(strictParams || generated, {_targetElement: element, _skipLoading: true});
+    const params = Object.assign(strictParams, {_targetElement: element, _skipLoading: true});
     addEventContext(params, element);
     try {
         await handleEvent(record.handler, params);
@@ -7293,20 +7090,19 @@ function bindLiveViewEvents(scope) {
                 return;
             }
             if (document.hidden) return;
-            // Strict: routing context lets the owner that resolved the contract receive it.
-            const strictParams = _strictBinding(element, parsed.name, {}, [], element);
-            if (strictParams === false) return;
-            if (strictParams) {
-                handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
-                return;
+            // A poll inside an embedded child view (`{% live_render %}`) is that
+            // child's and carries its view_id. A component owns its poll only
+            // when its contract lists the handler; otherwise the poll reaches
+            // the host view, with no component_id.
+            let hostPoll = false;
+            if (!getEmbeddedViewId(element) && getComponentId(element)) {
+                try { hostPoll = !_resolveParameterContract(element, parsed.name).contract; } catch { hostPoll = false; }
             }
-            // A poll inside an embedded child view (`{% live_render %}`) is
-            // that child's: it carries the child's view_id, as the strict
-            // path above does. A component's poll still reaches its host.
-            const params = Object.assign(extractTypedParams(element), { _skipLoading: true });
-            const embeddedViewId = getEmbeddedViewId(element);
-            if (embeddedViewId) params.view_id = embeddedViewId;
-            handleEvent(parsed.name, markSlotOf(params, element));
+            const strictParams = hostPoll
+                ? _strictBinding(element, parsed.name, {}, [], null, true)
+                : _strictBinding(element, parsed.name, {}, [], element);
+            if (strictParams === false) return;
+            handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
         };
 
         const intervalId = setInterval(firePoll, interval);
@@ -7366,7 +7162,7 @@ function bindLiveViewEvents(scope) {
             // dj-confirm support
             if (!checkDjConfirm(element)) return;
 
-            const params = strictParams || extractTypedParams(element);
+            const params = strictParams;
             addEventContext(params, element);
 
             await handleEvent(handlerName, params);
@@ -7451,9 +7247,8 @@ function bindLiveViewEvents(scope) {
                 const shortcutGenerated = {key: e.key, code: e.code, shortcut: binding.comboString};
                 const strictParams = _strictBinding(element, binding.handler, shortcutGenerated, []);
                 if (strictParams === false) return;
-                const params = strictParams || extractTypedParams(element);
+                const params = strictParams;
                 addEventContext(params, element);
-                if (!strictParams) Object.assign(params, shortcutGenerated);
 
                 await handleEvent(binding.handler, params);
                 return; // Fire first match only
@@ -7506,10 +7301,7 @@ function bindLiveViewEvents(scope) {
                 const strictParams = _strictBinding(element, parsed.name, {}, parsed.args);
                 if (strictParams === false) return;
                 if (!checkDjConfirm(element)) return;
-                const params = strictParams || extractTypedParams(element);
-                if (!strictParams && parsed.args.length > 0) {
-                    params._args = parsed.args;
-                }
+                const params = strictParams;
                 addEventContext(params, element);
                 await handleEvent(parsed.name, params);
             };
@@ -7544,10 +7336,10 @@ function bindLiveViewEvents(scope) {
             const handlerName = el.getAttribute('dj-mounted');
             if (!handlerName) return;
 
-            // Collect dj-value-* and data-* params from the mounted element
+            // Collect dj-value-* params from the mounted element
             const strictParams = _strictBinding(el, handlerName, {}, []);
             if (strictParams === false) return;
-            const params = strictParams || extractTypedParams(el);
+            const params = strictParams;
             addEventContext(params, el);
 
             handleEvent(handlerName, params);
@@ -8006,7 +7798,6 @@ function reinitAfterDOMUpdate(scope) {
  * #4178: `form_values` and `data_attrs` are generated values (ADR-036 Q1). A
  * strict handler receives the ones it declares, plus the container's
  * dj-value-* arguments, validated by its contract like any event argument.
- * A legacy handler keeps the 1.x `_form_values` / `_data_attrs` envelope.
  */
 function _processAutoRecover() {
     if (!window.djust._isReconnect) return;
@@ -8039,13 +7830,8 @@ function _processAutoRecover() {
         const strictParams = _strictBinding(container, handlerName,
             {form_values: formValues, data_attrs: dataAttrs}, [], null, true);
         if (strictParams === false) return;
-        const params = strictParams || {
-            _form_values: formValues,
-            _data_attrs: dataAttrs
-        };
-
-        markSlotOf(params, container);
-        handleEvent(handlerName, params);
+        markSlotOf(strictParams, container);
+        handleEvent(handlerName, strictParams);
     });
 }
 
@@ -8185,28 +7971,10 @@ function _processFormRecovery() {
         // Skip if DOM value matches server default (avoid unnecessary server work)
         if (domValue === serverDefault) continue;
 
-        // A strict handler gets the same payload a live dj-change would send.
+        // The same payload a live dj-change would send.
         const strictParams = _strictFormBinding(handlerString, field, domValue);
         if (strictParams === false) continue;
-        if (strictParams) {
-            pendingEvents.push({ handlerName: handlerName, params: markSlotOf(strictParams, field) });
-            continue;
-        }
-
-        // Build event params matching dj-change param structure
-        const value = domValue;
-        const fieldName = field.name || field.id || null;
-        const params = { value: value, field: fieldName };
-
-        // Add positional arguments from handler syntax if present
-        if (parsed.args.length > 0) {
-            params._args = parsed.args;
-        }
-
-        // _target: include triggering field's name
-        params._target = fieldName;
-
-        pendingEvents.push({ handlerName: handlerName, params: markSlotOf(params, field) });
+        pendingEvents.push({ handlerName: handlerName, params: markSlotOf(strictParams, field) });
     }
 
     // Fire events sequentially to avoid server race conditions
@@ -8603,6 +8371,16 @@ function _noteRenderDigest(data, sent) {
     }
 }
 
+// A strict (or invalid) page scope asks for an explicit contract clear when
+// the rendered tree no longer has one; a valid scope names the digest it holds,
+// so an unchanged manifest is answered with the digest alone (#4307).
+function _parameterContractHeader() {
+    const t = _localEventTransport, p = t.primaryViewPath;
+    const d = t._parameterContractHeld?.get(p)?.digest;
+    return d ? {'X-Djust-Parameter-Contracts': d}
+        : (t._parameterContracts?.get(p) != null ? {'X-Djust-Parameter-Contracts': '1'} : {});
+}
+
 // Every answer of this transport enters here, an event's and a resync's: the
 // same client-owned-flag strip as the WebSocket and SSE transports (#2829; the
 // HTTP fallback dispatches straight into handleServerResponse, so it needs its
@@ -8630,8 +8408,7 @@ async function _httpFallbackResync() {
                 'X-Djust-Resync': '1',
                 // The tab whose saved state the page is to be rendered from (#4106).
                 'X-Djust-Tab': djustTabId(),
-                ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
-                    ? {'X-Djust-Parameter-Contracts': '1'} : {})
+                ..._parameterContractHeader()
             },
             body: '{}'
         });
@@ -8667,6 +8444,7 @@ function _installPageParameterContracts() {
     _localEventTransport.primaryViewPath = path || null;
     _localEventTransport._parameterContracts = new Map();
     _localEventTransport._parameterContractApplied = new Map();
+    _localEventTransport._parameterContractHeld = new Map();
     if (!path) return;
     const block = document.querySelector('script[data-djust-parameter-contracts]');
     let manifest = null;
@@ -8714,32 +8492,31 @@ function _mirrorPageParameterContracts(manifest, viewPath) {
 // Resolve the public contract a native binding would dispatch under. The mount
 // is the element's nearest non-embedded dj-view root (normally the page root).
 // The owner address matches server routing: an embedded child's view_id wins
-// over a component inside it. Returns {policy: 'legacy'|'strict'|'unknown'}.
-// 'unknown' covers a mount this transport holds no record for (never delivered
-// a contract: an unmounted, lazy or bare root) and an owner or handler a known
-// mount does not list; neither can be strict, since strict contracts are always
-// delivered and every strict handler is listed. Binders keep legacy collection
-// and the server stays authoritative. A mount whose strict snapshot is invalid
-// or missing (recorded as invalid on receipt) throws: callers fail closed
-// rather than guess (ADR-036 Q1). `pageOwner` is for a binding the client sends
-// without owner context (dj-auto-recover): the server routes it to the page's
-// view wherever the element sits, so its contract is the page view's.
+// over a component inside it. `contract` is the listed handler contract, or
+// null for a mount this transport holds no record for (never delivered a
+// contract: an unmounted, lazy or bare root), a mount whose tree declares no
+// handlers, and an owner or handler a known mount does not list. Binders then
+// collect a handler that declares nothing and the server stays authoritative.
+// A mount whose snapshot is invalid or missing (recorded as invalid on
+// receipt) throws: callers fail closed rather than guess (ADR-036 Q1).
+// `pageOwner` is for a binding the client sends without owner context
+// (dj-auto-recover): the server routes it to the page's view wherever the
+// element sits, so its contract is the page view's.
 function _resolveParameterContract(element, eventName, pageOwner = false) {
     const transport = _eventContractTransport();
     const container = (element && element.closest &&
         element.closest('[dj-view]:not([data-djust-embedded])')) || findPageViewContainer();
     const path = container ? container.getAttribute('dj-view') : null;
     const mounts = transport._parameterContracts;
-    if (!path || !mounts || !mounts.has(path)) return {policy: 'unknown', transport};
+    if (!path || !mounts || !mounts.has(path)) return {contract: null, transport};
     const owners = mounts.get(path);
-    if (owners === null) return {policy: 'legacy', transport};
+    if (owners === null) return {contract: null, transport};
     if (owners === false) throw new Error('Invalid public parameter contracts');
     const viewId = (!pageOwner && element && getEmbeddedViewId(element)) || null;
     const componentId = (viewId || pageOwner) ? null : ((element && getComponentId(element)) || null);
     const handlers = owners.get(JSON.stringify([viewId, componentId]));
-    if (!handlers || !handlers.has(eventName)) return {policy: 'unknown', transport};
-    const contract = handlers.get(eventName);
-    return {policy: contract.policy, contract, transport, viewId, componentId};
+    if (!handlers || !handlers.has(eventName)) return {contract: null, transport};
+    return {contract: handlers.get(eventName), transport, viewId, componentId};
 }
 
 // Declared types each wire hint may produce (ADR-036 D3); a conflicting
@@ -8748,20 +8525,19 @@ const _WIRE_HINT_TYPES = {int: 'int float Decimal', integer: 'int float Decimal'
     float: 'float', number: 'float', bool: 'bool', boolean: 'bool', array: 'list', list: 'list'};
 
 // ADR-036 binder entry point, called before any lock, confirmation,
-// disable-with, optimistic or loading effect. Returns null for a legacy or
-// unlisted binding (the caller keeps its unchanged legacy params). For a strict
-// handler it returns the application payload, with routing context from
-// `contextElement` when given: dj-value-* arguments (strict literals) plus only
-// the generated values the handler declares, or all of them for a ** catch-all
-// (Q1); _target is never generated (Q2). A rejected binding is reported
+// disable-with, optimistic or loading effect. Returns the application payload,
+// with routing context from `contextElement` when given: dj-value-* arguments
+// (strict literals) plus only the generated values the handler declares, or
+// all of them for a ** catch-all (Q1); the 1.x target key is never generated (Q2). A
+// handler the mount does not list declares nothing: only its dj-value-*
+// arguments and positional arguments are sent. A rejected binding is reported
 // value-free (N1) and returns false: the caller must stop. `pageOwner`: see
 // _resolveParameterContract.
 function _strictBinding(element, eventName, generated = {}, positional = [], contextElement = null,
     pageOwner = false) {
     try {
         const resolved = _resolveParameterContract(element, eventName, pageOwner);
-        if (resolved.policy !== 'strict') return null;
-        const parameters = resolved.contract.parameters;
+        const parameters = resolved.contract ? resolved.contract.parameters : [];
         const named = new Map();
         let open = null;
         for (const p of parameters) {
@@ -9094,10 +8870,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 'X-CSRFToken': csrfToken,
                 'X-Djust-Event': eventName,
                 'X-Djust-Tab': djustTabId(),
-                // A strict (or invalid) page scope asks for an explicit
-                // contract clear when the rendered tree no longer has one.
-                ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
-                    ? {'X-Djust-Parameter-Contracts': '1'} : {}),
+                ..._parameterContractHeader(),
                 ...(sentDigest ? {'X-Djust-Render-Digest': sentDigest} : {})
             },
             body: JSON.stringify(paramsToSend)
@@ -17271,18 +17044,8 @@ window.djust.bindModelElements = bindModelElements;
         const event = args.event;
         if (!event) return;
         const params = Object.assign({}, args.value || {});
-        // ADR-036 Q2: _target is a legacy-only generated key. The explicit
-        // push value is the application payload either way. The push carries
-        // no owner context, so the server runs it on the page's view: its
-        // contract decides (pageOwner, #4225).
-        let strictPush = false;
-        try {
-            strictPush = !!originEl &&
-                window.djust._resolveParameterContract(originEl, event, true).policy === 'strict';
-        } catch (_) {
-            strictPush = false;  // the server validates; an invalid scope rejects there
-        }
-        if (args.target && !strictPush) params._target = args.target;
+        // The explicit push value is the application payload; the server
+        // validates it against the handler's contract.
         if (args.page_loading && window.djust.pageLoading && window.djust.pageLoading.start) {
             try { window.djust.pageLoading.start(); } catch (_) {}
         }
@@ -19035,7 +18798,7 @@ window.djust.bindModelElements = bindModelElements;
                 const strictParams = window.djust._strictBinding(container, eventName, { edge }, [],
                     null, true);
                 if (strictParams !== false) {
-                    const sent = strictParams || { edge };
+                    const sent = strictParams;
                     if (typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(sent, container);
                     window.djust.handleEvent(eventName, sent);
                 }
@@ -20094,7 +19857,7 @@ function _installCloseListenerOnce(el) {
             // contract (#4225).
             const strict = globalThis.djust._strictBinding(el, eventName, {}, [], null, true);
             if (strict === false) return;
-            _handleEvent(eventName, Object.assign(strict || {}, { _targetElement: el }));
+            _handleEvent(eventName, Object.assign(strict, { _targetElement: el }));
         }
     });
 }
@@ -20514,7 +20277,7 @@ function _installDjMutationFor(el) {
         if (globalThis.djust && typeof globalThis.djust.handleEvent === 'function') {
             const strict = globalThis.djust._strictBinding(el, handlerName, payload, [], null, true);
             if (strict === false) return;
-            const sent = strict || payload;
+            const sent = strict;
             if (typeof globalThis.djust._markSlotOf === 'function') globalThis.djust._markSlotOf(sent, el);
             globalThis.djust.handleEvent(handlerName, sent);
         }

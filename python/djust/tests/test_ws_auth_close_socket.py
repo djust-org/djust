@@ -1,7 +1,7 @@
 """Reproducer + regression for the WebSocket auth bypass (threat model T1/T2).
 
 See ``docs/audits/websocket-auth-2026-06.md``. On a ``login_required`` WS mount
-for an anonymous client, ``handle_mount`` sent a ``{"type":"navigate"}`` frame
+for an anonymous client, ``_mount_page`` sent a ``{"type":"navigate"}`` frame
 but did NOT close the socket (the ``PermissionDenied`` branch did). The socket
 stayed open with ``view_instance`` set but ``mount()`` never run, and
 ``handle_event`` never re-checks auth — so a raw client that ignores the

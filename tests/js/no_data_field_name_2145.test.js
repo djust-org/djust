@@ -25,6 +25,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { withContracts } from './_open_contracts.js';
 import { readFileSync } from 'fs';
 import { setTimeout as nativeSleep } from 'node:timers/promises';
 
@@ -32,7 +33,7 @@ const clientCode = readFileSync('./python/djust/static/djust/client.js', 'utf-8'
 
 function createTestEnv(bodyHtml) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body>${bodyHtml}</body></html>`,
+        `<!DOCTYPE html><html><body>${withContracts(bodyHtml)}</body></html>`,
         { runScripts: 'dangerously', url: 'http://localhost/' }
     );
 
@@ -56,7 +57,7 @@ function createTestEnv(bodyHtml) {
             var body = {};
             try { body = JSON.parse((opts && opts.body) || "{}"); } catch(e) {}
             window._testFetchCalls.push({ eventName: eventName, body: body });
-            return { ok: true, json: async function() { return { patches: [], version: window._mockVersion }; } };
+            return { ok: true, json: async function() { return { patches: [], version: window._mockVersion, ...(() => { const s = document.querySelector('script[data-djust-parameter-contracts]'); if (!s) return {}; const m = JSON.parse(s.textContent); return {parameter_contracts: m.contracts, parameter_contract_view: m.view}; })() }; } };
         };
     `);
 
@@ -118,11 +119,9 @@ describe('#2145 data-field_name is unreadable on the form-event path', () => {
         expect(call.body.field).toBe('email');
     });
 
-    it('the same attribute DOES reach the handler under dj-click', async () => {
-        // The contrast that explains why the attribute looked load-bearing:
-        // `extractTypedParams` collects every data-* on the click path. This is
-        // the escape hatch a caller can still open by passing a click-family
-        // `dom_event=` or by putting a directive in `widget.attrs`.
+    it('the same attribute does not reach the handler under dj-click either (#4205)', async () => {
+        // The 1.x click path collected every data-*; a strict binding sends only
+        // dj-value-* and the generated values the handler declares.
         const dom = createTestEnv(`
             <div dj-view="app.FormView">
                 <input name="email" id="id_email" dj-click="validate_field"
@@ -136,9 +135,7 @@ describe('#2145 data-field_name is unreadable on the form-event path', () => {
 
         const call = findCall(dom, 'validate_field');
         expect(call).toBeDefined();
-        expect(call.body.field_name).toBe('email');
-        // ...and note what it does NOT carry: the click path has no `value`
-        // and no `field`, so this was never a working substitute.
+        expect(call.body.field_name).toBeUndefined();
         expect(call.body.field).toBeUndefined();
     });
 });

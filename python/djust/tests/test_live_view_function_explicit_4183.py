@@ -38,7 +38,6 @@ from django.utils.functional import SimpleLazyObject
 
 import importlib
 from djust import LiveView, live_view, sse
-from djust._exposure import uses_legacy_exposure
 from djust.decorators import event_handler
 from djust.sse import DjustSSEStreamView, _sse_sessions
 
@@ -127,8 +126,7 @@ def shadows_framework_names(request):
     return locals()
 
 
-#: Spelled through a name: this module defines no legacy view (the ledger in
-#: tests/legacy_exposure_ledger.py lists files that do).
+#: Spelled through a name: this module states no literal legacy policy.
 LEGACY_POLICY = "legacy"
 
 
@@ -261,7 +259,6 @@ def test_the_view_is_explicit_and_states_no_deprecated_policy(fn_urls):
     assert response.status_code == 200
     (view,) = BUILT
     assert type(view).exposure_policy == "explicit"
-    assert not uses_legacy_exposure(view)
 
 
 # --------------------------------------------------------------------------
@@ -549,14 +546,11 @@ def test_a_returned_exposure_policy_is_not_applied(fn_urls):
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
         assert Client().get("/policy/").status_code == 200
-    assert not uses_legacy_exposure(BUILT[-1])
+    assert type(BUILT[-1]).exposure_policy == "explicit"
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("policy", ["legacy", "strict"])
-def test_the_documented_example_answers_its_dj_value_argument(fn_urls, settings, policy):
-    config = getattr(settings, "LIVEVIEW_CONFIG", {})
-    settings.LIVEVIEW_CONFIG = {**config, "event_parameter_policy": policy}
+def test_the_documented_example_answers_its_dj_value_argument(fn_urls):
     browser = Client()
     assert browser.get("/greeting/?name=ann").status_code == 200
     # What the button sends: dj-value-times="3" as the ``times`` argument.

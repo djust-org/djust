@@ -1,4 +1,8 @@
-"""Values-redacted inventory of the names legacy exposure infers (ADR-038 E6-2).
+"""Values-redacted inventory of the names djust 1.3's legacy exposure exported (ADR-038 E6-2).
+
+This is the 2.0 upgrade checker for 1.3 code: the ``djust_exposure_inventory``
+command imports that code under its upgrade permit (#4199) and reads it here.
+2.0 itself has no legacy runtime.
 
 ADR-038 *Compatibility and rollout* requires "a values-redacted inventory of
 inferred names and their destinations before migration". This module builds it
@@ -12,10 +16,9 @@ statically, for use by the ``djust_exposure_inventory`` management command:
   (the approach ``tests/test_log_exposure_pin.py`` uses for log calls);
 - nothing in the output is derived from a value except a builtin type name.
 
-The destinations model the legacy policy as implemented, and
-``tests/test_exposure_inventory_command.py`` checks them against the real
-legacy APIs. It is an inventory to decide declarations from, not an allowlist:
-ADR-038 says not to declare everything legacy happened to find.
+The destinations describe what djust 1.3's legacy policy exported. It is an
+inventory to decide declarations from, not an allowlist: ADR-038 says not to
+declare everything legacy happened to find.
 """
 
 from __future__ import annotations
@@ -25,27 +28,15 @@ import inspect
 import textwrap
 from typing import Any, Iterable, Optional
 
-#: Destination names and what each means under the legacy policy on 2.0.
-#:
-#: 2.0 removed the shared render cache (the Rust view kept in the state
-#: backend), the page's ``liveview_<path>`` session copy and its
-#: ``__private`` copy (#4087). A legacy view's state is written to the session
-#: only when it renders as a ``lazy=True`` child and an event reaches it over
-#: the page-POST fallback (``_lazy_containers.py``); whether a view is used that
-#: way is not visible from its class, so those two destinations are always
-#: reported as conditional.
+#: Destination names and what each meant under djust 1.3's legacy policy.
 DESTINATIONS: dict[str, str] = {
-    "template_context": "legacy get_context_data(): rendered into HTML and the Rust render state",
-    "client_state": "get_state(): client/debug state and API assign diffs",
-    "session_state": "only as a lazy=True child on the page-POST fallback: session key "
-    "liveview_<path>__lazy__<id>, the context copy",
-    "private_session": "only as a lazy=True child on the page-POST fallback: the same "
-    "session entry's private part, _get_private_state()",
+    "template_context": "1.3: rendered into the template from every public attribute",
+    "client_state": "1.3: get_state(), client/debug state and API assign diffs",
 }
 
 _PUBLIC_INSTANCE = ("template_context", "client_state")
 _RENDER_ONLY = ("template_context",)
-# Class-level values legacy context keeps only when JSON-serializable (#694).
+# Class-level values 1.3's legacy context kept only when JSON-serializable (#694).
 _JSON_TYPES = (str, int, float, bool, type(None), list, dict, tuple)
 _LITERAL_TYPES = {
     ast.List: "list",
@@ -233,9 +224,9 @@ def _state_type(descriptor: Any) -> Optional[str]:
 def _suggest(name: str, kind: str, type_name: Optional[str], declared: bool) -> str:
     """A suggested explicit declaration that grants no more than the view has today.
 
-    No persistence grant is suggested (#4023): a legacy view on 2.0 does not
-    restore its state on a reconnect, so ``persist="server"`` would add
-    behaviour and put the value in the session. (On 1.3.x a view that sets
+    No persistence grant is suggested (#4023): 2.0 does not restore undeclared
+    state on a reconnect, so ``persist="server"`` would add behaviour and put
+    the value in the session. (On 1.3.x a view that sets
     ``enable_state_snapshot`` does restore it, and that release's inventory
     suggests the grant; 2.0 refuses to load such a view.) Nothing here is
     inferred from what a template reads.
@@ -289,28 +280,14 @@ def inventory_view(view_class: type) -> dict[str, Any]:
     for name, types in scan.mount_stored.items():
         stored.setdefault(name, set()).update(types)
 
-    # Declared state() fields: legacy reads them into context. As a lazy=True
-    # child on the page-POST fallback a PUBLIC field reaches the session's
-    # context copy, and its backing slot (_state_<name>) the private part only
-    # when its value holds a Django model (#2959, #1994). A ``_``-named field,
-    # or one in ``static_assigns``, never reaches the public context: its slot
-    # is a private attribute there.
-    static_assigns = attrs.get("static_assigns") or ()
-    try:
-        static_skip = set(static_assigns)
-    except TypeError:
-        static_skip = set()
+    # Declared state() fields: 1.3's legacy policy read them into context.
     for name, obj in attrs.items():
         if issubclass(type(obj), StateProperty):
-            slot_private = name.startswith("_") or name in static_skip
             add(
                 name,
                 kind="state",
                 type=scan.annotations.get(name) or _state_type(obj),
                 destinations=list(_RENDER_ONLY),
-                conditional=(
-                    ["private_session"] if slot_private else ["session_state", "private_session"]
-                ),
                 storage_key=f"_state_{name}",
                 declared={"persist": obj.exposure.persist, "client": obj.exposure.client},
                 suggestion=_suggest(name, "state", None, obj.exposure != type(obj.exposure)()),
@@ -326,7 +303,6 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 kind="private",
                 type=type_name,
                 destinations=[],
-                conditional=["private_session"],
                 suggestion=_suggest(name, "private", type_name, False),
             )
         else:
@@ -335,7 +311,6 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 kind="instance",
                 type=type_name,
                 destinations=list(_PUBLIC_INSTANCE),
-                conditional=["session_state"],
                 suggestion=_suggest(name, "instance", type_name, False),
             )
 
@@ -354,7 +329,6 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 kind="property",
                 type=None,
                 destinations=list(_RENDER_ONLY),
-                conditional=["session_state"],
                 suggestion=_suggest(name, "property", None, False),
             )
             continue
@@ -366,18 +340,12 @@ def inventory_view(view_class: type) -> dict[str, Any]:
             kind="class_value",
             type=type(obj).__name__,
             destinations=list(_RENDER_ONLY) if serializable else [],
-            conditional=["session_state"] if serializable else ["template_context"],
             suggestion=_suggest(name, "class_value", None, False),
         )
 
     return {
         "view": f"{view_class.__module__}.{view_class.__qualname__}",
         "policy": policy,
-        # Always False on 2.0: nothing restores a legacy view's state on a
-        # reconnect (``enable_state_snapshot`` was removed). The key and the
-        # ``reconnect:`` note stay so the report reads as it does on 1.3.x,
-        # where the flag exists and this can be True.
-        "persists_today": False,
         "source_unavailable": scan.unavailable,
         "names": sorted(entries.values(), key=lambda e: (e["name"].startswith("_"), e["name"])),
     }
@@ -403,17 +371,15 @@ def discover_views(app_label: Optional[str] = None) -> list[type]:
 
 def format_text(views: list[dict[str, Any]]) -> str:
     """Human-readable report. Contains names, type names and destinations only."""
-    lines = ["ADR-038 exposure inventory (legacy destinations; values redacted)", ""]
+    lines = ["Names a djust 1.3 view exposes implicitly (values redacted)", ""]
     for view in views:
-        lines.append(f"{view['view']}  [policy: {view['policy']}; reconnect: fresh mount]")
+        lines.append(f"{view['view']}  [policy: {view['policy']}]")
         for missing in view["source_unavailable"]:
             lines.append(f"  ! source unavailable for {missing}; assignments not scanned")
         if not view["names"]:
             lines.append("  (no inferred names)")
         for entry in view["names"]:
             destinations = ", ".join(entry["destinations"]) or "-"
-            if entry["conditional"]:
-                destinations += " (conditional: " + ", ".join(entry["conditional"]) + ")"
             lines.append(
                 f"  {entry['name']}  {entry['type'] or '?'}  {entry['kind']}  -> {destinations}"
             )

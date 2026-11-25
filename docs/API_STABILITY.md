@@ -239,40 +239,8 @@ SemVer rules above are unchanged by it.
 
 The one access pattern deprecated during the `1.x` series (dict-style
 `block.super` reads in a bridged tag) was removed in `2.0.0`; see below. One
-value and one tag argument are deprecated on the 2.0 line:
-
-### `exposure_policy = "legacy"` → the default, `"explicit"`
-
-`LiveView.exposure_policy` defaults to `"explicit"` since djust 2.0 (it was
-`"legacy"` in 1.x). This is a changed default, made in a MAJOR release: a view
-that states no policy now gets a template context, session state and browser
-data made only of what it declares. See
-[explicit exposure](website/state/explicit-exposure.md).
-
-`"legacy"` is still accepted when a class states it, so a 1.x view keeps its
-behaviour by adding one line:
-
-<!-- doc-snippet-check: before -->
-```python
-class OldView(LiveView):
-    exposure_policy = "legacy"
-```
-
-Stating it raises a `DeprecationWarning` through `warn_deprecated`, once for
-each class that states it, when the class is defined (or, for a policy assigned
-to the class afterwards, the first time a view of that class is constructed).
-The message names the class, the replacement and the guide. A class shipped in
-djust that states `"legacy"` does not warn. The value is accepted through the
-2.0 pre-releases and removed in `2.0.0`: 2.x has no legacy runtime (see
-[the 2.x direction](#the-14-bridge-and-2x-direction-2026-10-19)).
-
-System check `djust.V028` (Warning) also lists each application class that
-states `"legacy"`, on every `manage.py check` and server start, with the views
-that inherit it and a pointer to `djust_exposure_inventory`; a warning raised
-at import time is easy to miss. djust's own classes are not reported.
-
-This warning and the check are first raised on the 2.0 line. The 1.3.x releases
-raise neither: there `"legacy"` is the default and stating it is not deprecated.
+tag argument is deprecated on the 2.0 line (`exposure_policy = "legacy"`,
+deprecated earlier on the 2.0 line, was removed in `2.0.0`; see below):
 
 ### `{% kanban_board add_col_event=... %}` → nothing (it did nothing)
 
@@ -281,6 +249,18 @@ it. It is deprecated since 2.0 and removed no earlier than `3.0.0`. Passing it
 raises one `DeprecationWarning` through `warn_deprecated` per process; the board
 renders exactly as before. Leave it out, and draw your own "Add column" control
 that sends your view's event (#4134).
+
+
+### Component argument aliases → their current names (#4207)
+
+Each still works, is deprecated since 2.0 and removed no earlier than `3.0.0`.
+Using one raises one `DeprecationWarning` per process through `warn_deprecated`:
+
+- `{% slider %}` and `{% currency_input %}`: `min` / `max` → `min_val` / `max_val`
+- `{% date_picker range=... %}` → `is_range`
+- `{% split_button open=... %}` → `is_open`
+- `{% dj_button variant="danger" %}` → `variant="destructive"`
+- `Dropdown(items=[{...}])` → `DropdownItem` objects; `Tabs(tabs=[{...}])` → `TabItem` objects
 
 ---
 
@@ -896,6 +876,53 @@ window.djust.hooks.Counter = {
 };
 ```
 
+### The legacy exposure and parameter policies → explicit exposure and strict parameters
+
+djust `2.0.0` keeps one exposure policy and one parameter policy (#4199).
+`exposure_policy = "legacy"` (the 1.x attribute walk) raises
+`ImproperlyConfigured` when the class is created, and again on construction for
+a value the class statement did not show.
+`@event_handler(parameter_policy="legacy")` and
+`@server_function(parameter_policy="legacy")` raise when the decorator applies.
+`cancel_async_on_disconnect = True` raises when the class is created, and the
+`LIVEVIEW_CONFIG` / `DJUST_CONFIG` keys `event_parameter_policy`,
+`reauth_on_event` and `reauth_server_turn_interval` raise at startup. Each
+error names the replacement. The system checks `djust.V028`, `djust.V032`,
+`djust.C045` and `djust.V036`, which reported those spellings, are retired;
+their IDs are not reused.
+
+<!-- doc-snippet-check: anti-pattern -->
+```python
+# Before (removed: raises ImproperlyConfigured)
+class Cart(LiveView):
+    exposure_policy = "legacy"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    @event_handler(parameter_policy="legacy")
+    def add(self, item_id):
+        self.count += 1
+```
+
+```python
+# After
+class Cart(LiveView):
+    count = state(0, persist="server")
+
+    @event_handler
+    def add(self, item_id: int):
+        self.count += 1
+```
+
+The template sends `dj-value-item-id` instead of `data-item-id`.
+`exposure_policy = "explicit"` and `parameter_policy="strict"` are accepted and
+do nothing. `python manage.py djust_exposure_inventory --fix` reads 1.3 code
+and makes the mechanical part of the change; it is the only code that may
+import a module stating the removed spellings. A module imported while Django
+starts (a URLconf, an `AppConfig.ready()`) is refused before the command runs,
+so delete its line by hand.
+
 <!-- END GENERATED removed-sections:2.0 -->
 
 ## Template-Syntax Deprecations
@@ -976,4 +1003,4 @@ API is evaluated. Existing per-session ticks and push/presence behavior retain
 their stability commitments. Phases 1–3 are process-local; distributed ownership
 is deferred.
 
-<!-- generated-doc prose-sha256: e43b2709c676 -->
+<!-- generated-doc prose-sha256: 10d92fd3cd47 -->

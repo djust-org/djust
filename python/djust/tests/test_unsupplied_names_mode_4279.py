@@ -8,7 +8,6 @@ it empty. The notice that says so ran under ``DEBUG`` only, which a test run nev
 from __future__ import annotations
 
 import logging
-import warnings
 from typing import Any
 
 import pytest
@@ -47,17 +46,6 @@ class Supplies(LiveView):
 
     def mount(self, request, **kwargs):
         self.other = 1
-
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
-
-    class Legacy(LiveView):
-        exposure_policy = "legacy"  # legacy subject: #4279 error mode stays quiet for a legacy view
-        template = "<div dj-root>[{{ held_name }}]</div>"
-
-        def mount(self, request, **kwargs):
-            self.held_name = "x"
 
 
 TAB_PARTIAL = "{{ panel_name }}"
@@ -142,10 +130,9 @@ def test_error_mode_reports_count_names(settings):
     assert "items_count" in message and "items|length" in message
 
 
-def test_error_mode_is_quiet_for_a_supplying_view_and_a_legacy_view(settings):
+def test_error_mode_is_quiet_for_a_supplying_view(settings):
     settings.DJUST_UNSUPPLIED_NAMES = "error"
     assert "ok" in _render(Supplies)[1]
-    assert "[x]" in _render(Legacy)[1]
 
 
 def test_invalid_mode_falls_back_to_debug_and_logs_once(settings, caplog):

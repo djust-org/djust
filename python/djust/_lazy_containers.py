@@ -3,13 +3,10 @@
 Resolution is possible only through a fresh render's server-owned registry.
 The client sends a keyed address, never a class or a state payload.
 
-Both exposure policies are registered, for same-policy pairs only (a legacy
-page's legacy child, an explicit page's explicit child). An explicit child is
-mounted through the eager ``{% live_render %}`` explicit sequence
-(``_mount_explicit``) and keeps exactly its ``persist="server"`` fields, saved
-under its lazy address by ``save_child_states``. The legacy branches
-(``mount_http_lazy``'s legacy body, ``_lazy_state_saved`` and
-``save_http_lazy``) go with the legacy exposure policy's removal.
+Only explicit children are registered. A child is mounted through the eager
+``{% live_render %}`` explicit sequence (``_mount_explicit``) and keeps exactly
+its ``persist="server"`` fields, saved under its lazy address by
+``save_child_states``.
 """
 
 from __future__ import annotations
@@ -24,7 +21,6 @@ from django.http import Http404
 from django.template import TemplateSyntaxError
 from django.utils.html import escape
 
-from ._exposure import uses_legacy_exposure
 from ._render_provenance import RenderedHTML
 from ._tenant_state import scoped_path, session_view_key, snapshot_tenant_scope
 from .auth._login_required_middleware import mark_embedded
@@ -48,9 +44,7 @@ def _log_unregistered(html: str, registered: int) -> None:
 @dataclass(frozen=True)
 class LazyContainer:
     child_class: type
-    state_key: str  # legacy only: unused for an explicit entry
     child_tenant: str
-    explicit: bool = False
 
 
 def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
@@ -110,8 +104,6 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
                 continue
         try:
             cls = resolve_live_view_class(view_path)
-            if uses_legacy_exposure(cls) != uses_legacy_exposure(parent):
-                continue  # same-policy pairs only
             child = cls()
             mark_embedded(child)
             child.request = request
@@ -142,10 +134,7 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
             },
         )
         view_id = "lazy_" + identity
-        state_key = "liveview_" + path + "__lazy__" + view_id
-        parent.__dict__["_http_lazy_containers"][view_id] = LazyContainer(
-            cls, state_key, child_tenant, explicit=not uses_legacy_exposure(cls)
-        )
+        parent.__dict__["_http_lazy_containers"][view_id] = LazyContainer(cls, child_tenant)
         # Insert reserved routing attributes first: HTML selects the first
         # duplicate, so neither interpolation nor author-provided DOM IDs can
         # shadow this registration's keyed address.
@@ -183,49 +172,11 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
 
 
 def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
-    """Mount a registered child and restore only its bound, server-held state."""
+    """Mount a registered explicit child and restore only its bound, server-held state."""
     entry = getattr(parent, "_http_lazy_containers", {}).get(view_id)
     if entry is None:
         return None
-    if entry.explicit:
-        return _mount_explicit(parent, request, view_id, entry)
-    from .hooks import run_on_mount_hooks
-    from .serialization import decode_state_roundtrip
-    from ._state_restore import restore_public_state
-
-    child = entry.child_class()
-    mark_embedded(child)
-    child.request = request
-    if run_pre_mount_auth(child, request) is not None or run_on_mount_hooks(child, request):
-        raise PermissionDenied("Lazy view refused")
-    from ._view_hooks import call_hook_sync
-
-    call_hook_sync(child.mount, request)
-    from ._params_form import _refuse_removed_configuration
-
-    _refuse_removed_configuration(child)
-    child._snapshot_user_private_attrs()
-    child._djust_slot_target = view_id
-    enforce_object_permission(child, request)
-    # Both the page and child must have a resolved tenant before state can be
-    # retained. Never fall back to an unscoped key for a tenant-scoped child.
-    if (
-        session_view_key(child, request.path) is None
-        or snapshot_tenant_scope(child) != entry.child_tenant
-    ):
-        raise PermissionDenied("Lazy view has no resolved tenant")
-    if _lazy_state_saved(parent, child):
-        saved = request.session.get(entry.state_key, {})
-        restore_public_state(child, decode_state_roundtrip(saved.get("public", {})))
-        child._restore_private_state(decode_state_roundtrip(saved.get("private", {})))
-    elif entry.state_key in request.session:
-        # Saved before the switch was turned off: not read, and not left at rest.
-        del request.session[entry.state_key]
-    if snapshot_tenant_scope(child) != entry.child_tenant:
-        raise PermissionDenied("Lazy view changed tenant")
-    enforce_object_permission(child, request)
-    parent._register_child(view_id, child)
-    return child
+    return _mount_explicit(parent, request, view_id, entry)
 
 
 def _mount_explicit(parent: Any, request: Any, view_id: str, entry: LazyContainer) -> Any:
@@ -289,76 +240,6 @@ def _mount_explicit(parent: Any, request: Any, view_id: str, entry: LazyContaine
         adapter.save(adapter.contract.project_view(child, "server"))
         child._explicit_child_mount_binding = adapter.binding
     return child
-
-
-def _lazy_state_saved(parent: Any, child: Any) -> bool:
-    """Whether a lazy child's state is kept in the session (#4128).
-
-    Its state rests in the page's session, so the page's switch governs: saving
-    must be on for the page that embeds it AND for the child. A child cannot
-    switch saving on under a page that switched it off.
-
-    This state is written to the session as it is, not through the project's
-    state store (``DJUST_STATE_STORE``, #4132). A project that names a store
-    asked for view content to stay out of the plain session, so with one
-    configured a lazy legacy child's state is not saved: each fallback request
-    mounts the child again.
-    """
-    from ._automatic_state import _first_time, _state_store, logger, saving_enabled
-
-    if not (saving_enabled(parent) and saving_enabled(child)):
-        return False
-    if _state_store() is None:
-        return True
-    if _first_time(child, "*", "lazy-store"):
-        owner = type(child)
-        logger.warning(
-            "djust: the state of the lazy child %s.%s is not saved between requests while "
-            "DJUST_STATE_STORE is set: a legacy lazy child's state does not go through the "
-            "state store, and is not written to the session in the clear instead. It "
-            "mounts again on each page-POST fallback request.",
-            owner.__module__,
-            owner.__qualname__,
-        )
-    return False
-
-
-def save_http_lazy(parent: Any, request: Any, view_id: str, child: Any) -> None:
-    """Persist only this child's legacy state under its user/session/tenant binding.
-
-    Legacy only: an explicit child's ``persist="server"`` fields are saved by
-    ``save_child_states`` with the rest of the explicit tree (#4174).
-    """
-    entry = getattr(parent, "_http_lazy_containers", {}).get(view_id)
-    if entry is None or entry.explicit:
-        return
-    if not _lazy_state_saved(parent, child):
-        request.session.pop(entry.state_key, None)
-        return
-    from .components.base import is_component_collection, LiveComponent
-    from .mixins.context import legacy_unsaved_keys
-    from .serialization import normalize_django_value
-    from ._tenant_state import refresh_other_views_state
-
-    import inspect
-    from asgiref.sync import async_to_sync
-
-    gcd = child.get_context_data
-    context = async_to_sync(gcd)() if inspect.iscoroutinefunction(gcd) else gcd()
-    excluded = legacy_unsaved_keys(child, context) | {"streams"}
-    public = {
-        k: v
-        for k, v in context.items()
-        if k not in excluded and not isinstance(v, LiveComponent) and not is_component_collection(v)
-    }
-    request.session[entry.state_key] = normalize_django_value(
-        {
-            "public": public,
-            "private": child._get_private_state(),
-        },
-        state_roundtrip=True,
-    )
-    refresh_other_views_state(request.session, entry.state_key)
 
 
 def finalize_lazy_containers(parent: Any, html: str) -> str:

@@ -32,7 +32,6 @@ Configuration::
 """
 
 import logging
-from contextlib import nullcontext
 from typing import Any, Dict, Optional, TYPE_CHECKING
 from urllib.parse import quote
 
@@ -215,11 +214,8 @@ class TenantMixin:
 
         Called automatically before mount() and event handlers.
         """
-        from .._exposure import uses_legacy_exposure
-
         if self._tenant_resolved:
-            if not uses_legacy_exposure(self):
-                request.tenant = self._tenant
+            request.tenant = self._tenant
             return
 
         self._tenant = self.resolve_tenant(request)
@@ -231,15 +227,13 @@ class TenantMixin:
             from django.http import Http404
 
             raise Http404("Tenant not found")
-        if not uses_legacy_exposure(self):
-            request.tenant = self._tenant
+        request.tenant = self._tenant
 
     def _explicit_tenant_context(self) -> Any:
         """Scope explicit HTTP auth/render queries without leaking to the next request."""
-        from .._exposure import uses_legacy_exposure
         from .middleware import tenant_context
 
-        return nullcontext() if uses_legacy_exposure(self) else tenant_context(self._tenant)
+        return tenant_context(self._tenant)
 
     def _is_tenant_required(self) -> bool:
         """Check if tenant is required for this view."""
@@ -270,19 +264,6 @@ class TenantMixin:
 
         provide_context(self, context, "djust.tenants", context_name, self._tenant)
         return context
-
-    def _djust_render_only_context_keys(self) -> frozenset:
-        """The tenant key renders but is never saved state.
-
-        A legacy session save drops these keys. Without this the saved
-        ``tenant`` value was restored through the ``tenant`` property setter,
-        so the first HTTP fallback POST or snapshot reconnect after a save
-        replaced ``self.tenant`` with its serialized form.
-        """
-        parent = getattr(super(), "_djust_render_only_context_keys", None)
-        keys = set(parent()) if callable(parent) else set()
-        keys.add(_tenant_context_name(type(self)))
-        return frozenset(keys)
 
     def get_presence_key(self) -> str:
         """

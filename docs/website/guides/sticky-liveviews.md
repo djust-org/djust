@@ -400,7 +400,7 @@ replaces it) or contain fallback content for the pre-JS render.
 
 If the destination layout does NOT contain
 `<div dj-sticky-slot="audio-player">`, the server's post-render slot
-scan in `handle_mount` drops the sticky from its survivor list. The
+scan in `_mount_page` drops the sticky from its survivor list. The
 client's `reattachStickyAfterMount` also defends against drift: any
 stashed subtree with no matching slot fires
 `djust:sticky-unmounted` with `reason='no-slot'` and is dropped.

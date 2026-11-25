@@ -1,4 +1,4 @@
-"""Settings djust 2.0 removed, and the startup check that names their replacements.
+"""Settings, attributes and arguments djust 2.0 removed, and the refusals that name their replacements.
 
 A removed setting that is still set would otherwise be ignored without a word:
 a flat ``DJUST_STATE_BACKEND = "redis://..."`` would quietly fall back to the
@@ -7,11 +7,20 @@ quietly stop opting out. ``DjustConfig.ready()`` calls
 :func:`reject_removed_settings`, which raises ``ImproperlyConfigured`` instead.
 It runs at startup rather than as a system check because ASGI servers do not
 run system checks.
+
+Removed settings are refused at startup; removed view attributes and attribute
+values (``exposure_policy = "legacy"``) when the class is created and again on
+construction and the mount path; removed handler argument values
+(``parameter_policy="legacy"``) when the decorator applies (#4199). Only
+``djust_exposure_inventory`` may create 1.3 classes, under
+:func:`upgrade_inspection`, so it can read and rewrite them.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Iterator, Optional
 
 #: What a developer uses instead of time-travel debugging (#4184).
 TIME_TRAVEL_REPLACEMENT = (
@@ -64,6 +73,16 @@ REMOVED_CONFIG_KEYS: dict[str, str] = {
     # #4184: time-travel debugging was removed, with its buffer size.
     "time_travel_enabled": "time-travel debugging was removed; " + TIME_TRAVEL_REPLACEMENT,
     "time_travel_max_events": "time-travel debugging was removed; " + TIME_TRAVEL_REPLACEMENT,
+    # #4199: the legacy parameter policy and the legacy-only re-authorization switches.
+    "event_parameter_policy": (
+        "strict event parameters are the only policy; once the key is gone, manage.py check "
+        "reports each handler parameter strict refuses as djust.V016"
+    ),
+    "reauth_on_event": (
+        "every event and server turn is re-authorized against a freshly loaded session, so "
+        "the switch has nothing to turn on"
+    ),
+    "reauth_server_turn_interval": "every server turn is re-authorized, with no interval",
 }
 
 #: Keys that are top-level Django settings, never keys of ``LIVEVIEW_CONFIG`` /
@@ -91,35 +110,6 @@ REMOVED_CONFIG_VALUES: dict[str, tuple[str, frozenset[str], str]] = {
         "with @event_handler, then delete the key",
     ),
 }
-
-
-#: 1.3 settings djust 2.0.0 removes (#4171). Reported by djust.C045 until #4199 moves each
-#: entry into REMOVED_CONFIG_KEYS with the same text and startup refuses it.
-PENDING_CONFIG_KEYS: dict[str, str] = {
-    "event_parameter_policy": (
-        "strict event parameters are the only policy. Annotate every handler parameter "
-        "(manage.py check reports what strict refuses as djust.V016 and djust.V033), then delete the key"
-    ),
-    "reauth_on_event": (
-        "an explicit-exposure view authorizes every event and server turn against a freshly "
-        "loaded session, so the switch does nothing. Delete the key"
-    ),
-    "reauth_server_turn_interval": (
-        "an explicit-exposure view authorizes every server turn, with no interval. Delete the key"
-    ),
-}
-#: View attributes djust 2.0.0 removes; djust.V036 until #4199 moves them to REMOVED_VIEW_ATTRIBUTES.
-PENDING_VIEW_ATTRIBUTES: dict[str, str] = {
-    "cancel_async_on_disconnect": (
-        "an explicit-exposure view's background work is always cancelled when its connection "
-        "closes, so the attribute does nothing. Delete it; work that must finish belongs in a task queue"
-    ),
-}
-#: @event_handler(parameter_policy="legacy"); djust.V036 until #4199 refuses it.
-PENDING_HANDLER_POLICY = (
-    "annotate the handler's parameters (djust.V033 lists what the strict policy would refuse) "
-    'and delete parameter_policy="legacy"'
-)
 
 
 def _removed_value_problem(setting: str, key: str, value: Any) -> Optional[str]:
@@ -179,7 +169,137 @@ REMOVED_VIEW_ATTRIBUTES: dict[str, str] = {
         "debug panel's State tab now has the Share button: list the fields it must "
         "leave out in LIVEVIEW_CONFIG['bug_capture_default_scrub']"
     ),
+    # #4199: an explicit view's background work is always cancelled on disconnect.
+    "cancel_async_on_disconnect": (
+        "a view's background work is always cancelled when its connection closes; delete the "
+        "attribute. Work that must finish says so: start_async(fn, survive_disconnect=True) "
+        "or @background(survive_disconnect=True)"
+    ),
 }
+
+#: View attributes whose values 2.0 removed (#4199). The accepted value does
+#: nothing and is silent (``exposure_policy = "explicit"`` through 2.x); a
+#: removed value names the replacement; any other value is refused as unknown.
+#: Refused when the class is created and again on the mount path.
+REMOVED_VIEW_ATTRIBUTE_VALUES: dict[str, tuple[str, frozenset[str], str]] = {
+    "exposure_policy": (
+        "explicit",
+        frozenset({"legacy"}),
+        "explicit exposure is the only policy. Supply the names the template reads from "
+        "get_context_data(), declare the state a later event or a reconnect needs with "
+        'state() (persist="server" to keep it across requests), then delete the line. '
+        "python manage.py djust_exposure_inventory --fix makes the mechanical part of "
+        "that change and lists what needs a person",
+    ),
+}
+
+#: Handler decorator arguments whose values 2.0 removed (#4199), shaped like
+#: :data:`REMOVED_VIEW_ATTRIBUTE_VALUES`. Refused when the decorator applies.
+REMOVED_HANDLER_ARGUMENT_VALUES: dict[str, tuple[str, frozenset[str], str]] = {
+    "parameter_policy": (
+        "strict",
+        frozenset({"legacy"}),
+        "strict event parameters are the only policy. Annotate the handler's parameters "
+        "(Any accepts a value unchecked; manage.py check reports what strict refuses as "
+        "djust.V016), send dj-value-* from the template instead of data-*, and delete the argument",
+    ),
+}
+
+#: The :data:`REMOVED_VIEW_ATTRIBUTES` that :func:`upgrade_inspection` lets
+#: through at class creation. Only #4199's refusal: the others were refused
+#: before ``djust_exposure_inventory --fix`` (#4209) existed.
+UPGRADE_PERMITTED_VIEW_ATTRIBUTES = frozenset({"cancel_async_on_disconnect"})
+
+_UPGRADE_INSPECTION: ContextVar[bool] = ContextVar("djust_upgrade_inspection", default=False)
+
+
+@contextmanager
+def upgrade_inspection() -> Iterator[None]:
+    """Let ``djust_exposure_inventory`` import 1.3 code that 2.0 refuses (#4199, #4209).
+
+    Inside the block, a class or handler that states one of the removed 1.3 spellings
+    (``exposure_policy = "legacy"``, ``@event_handler(parameter_policy="legacy")``,
+    ``cancel_async_on_disconnect = True``) is created instead of refused, so the command
+    can inventory and rewrite it. The permit only creates classes: constructing or
+    mounting a view that states a removed spelling is refused everywhere, inside the
+    block too. A ``parameter_policy="legacy"`` handler created inside the block still
+    carries that policy until the legacy parameter runtime is deleted (#4205). Only that
+    command enters it; a test pins that.
+    """
+    token = _UPGRADE_INSPECTION.set(True)
+    try:
+        yield
+    finally:
+        _UPGRADE_INSPECTION.reset(token)
+
+
+def upgrade_inspection_active() -> bool:
+    """True inside :func:`upgrade_inspection`."""
+    return _UPGRADE_INSPECTION.get()
+
+
+def _value_label(value: Any) -> str:
+    """``repr`` of a plain ``str``; only the type name of anything else, a ``str``
+    subclass included (its ``__repr__`` is never run)."""
+    if type(value) is str:
+        return repr(value)
+    if isinstance(value, str):
+        return "a value of type %s (a str subclass, which is not accepted)" % type(value).__name__
+    return "a value of type %s" % type(value).__name__
+
+
+def _value_problem(
+    table: dict[str, tuple[str, frozenset[str], str]], label: str, name: str, value: Any
+) -> Optional[str]:
+    accepted, removed, replacement = table[name]
+    if type(value) is str and value == accepted:
+        return None
+    if type(value) is str and value.strip().lower() in removed:
+        return "%s sets %s = %r, which was removed in djust 2.0: %s. See %s" % (
+            label,
+            name,
+            value,
+            replacement,
+            MIGRATION_GUIDE_URL,
+        )
+    return "%s sets %s = %s, an unknown value: %r is the only %s. Delete the line. See %s" % (
+        label,
+        name,
+        _value_label(value),
+        accepted,
+        name,
+        MIGRATION_GUIDE_URL,
+    )
+
+
+def removed_attribute_value_problem(label: str, name: str, value: Any) -> Optional[str]:
+    """The problem with a view stating ``name = value``, or None when it is accepted.
+
+    ``name`` is a key of :data:`REMOVED_VIEW_ATTRIBUTE_VALUES`. Only exactly the
+    accepted string passes; a removed value names the replacement; anything else
+    (another string, ``None``, a descriptor, a non-string) is an unknown value.
+    """
+    return _value_problem(REMOVED_VIEW_ATTRIBUTE_VALUES, label, name, value)
+
+
+_ABSENT = object()
+
+
+def _stated_value(view: Any, name: str) -> Any:
+    """The value ``view`` states for ``name`` without evaluating a descriptor."""
+    if not isinstance(view, type):
+        try:
+            own = vars(view)
+        except TypeError:
+            own = {}
+        if name in own:
+            return own[name]
+        view = type(view)
+    for klass in view.__mro__:
+        found = vars(klass).get(name, _ABSENT)
+        if found is not _ABSENT:
+            return found
+    return _ABSENT
 
 
 #: Where each refusal sends the reader for the replacement.
@@ -227,6 +347,12 @@ _REACT = (
     "(https://docs.djust.org/guides/hooks/)"
 )
 
+_THEMING_REEXPORT = (
+    "it was a back-compat re-export (#4207); import it from djust.theming (or, for a name "
+    "djust.theming does not export, from the module that defines it: djust.theming._config, "
+    "djust.theming._constants or djust.theming._builtin_presets)"
+)
+
 REMOVED_NAMES: dict[tuple[str, str], str] = {
     ("djust", "ReactMixin"): _REACT,
     ("djust", "react_components"): _REACT,
@@ -242,6 +368,85 @@ REMOVED_NAMES: dict[tuple[str, str], str] = {
     ("djust.decorators", "optimistic"): _INERT_OPTIMISTIC,
     ("djust", "client_state"): _INERT_CLIENT_STATE,
     ("djust.decorators", "client_state"): _INERT_CLIENT_STATE,
+    ("djust.theming.manager", "COOKIE_NAMESPACE_RE"): _THEMING_REEXPORT,
+    ("djust.theming.manager", "DEFAULT_CONFIG"): _THEMING_REEXPORT,
+    ("djust.theming.manager", "_validate_cookie_namespace"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "ColorScale"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "SurfaceTreatment"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "ThemeTokens"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "BLUE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "GREEN_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "ORANGE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "PURPLE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "ROSE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "SHADCN_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "NATURAL20_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "CATPPUCCIN_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "ROSE_PINE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "TOKYO_NIGHT_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "NORD_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "SYNTHWAVE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "CYBERPUNK_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "OUTRUN_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "FOREST_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "AMBER_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "SLATE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "NEBULA_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "DJUST_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "DRACULA_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "GRUVBOX_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "SOLARIZED_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "HIGH_CONTRAST_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "MONO_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "EMBER_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "AURORA_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "INK_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "SOLARPUNK_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "BAUHAUS_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "CYBERDECK_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "PAPER_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "NEON_NOIR_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "OCEAN_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "STRIPE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "LINEAR_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "NOTION_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "VERCEL_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "GITHUB_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "ART_DECO_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "HANDCRAFT_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "TERMINAL_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "MAGAZINE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "DOCS_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "SWISS_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "CANDY_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "RETRO_COMPUTING_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "MEDICAL_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "LEGAL_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "MIDNIGHT_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "SUNRISE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "FOREST_FLOOR_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "DASHBOARD_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "ONE_DARK_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "MONOKAI_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "AYU_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "KANAGAWA_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "EVERFOREST_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "POIMANDRES_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "TAILWIND_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "SUPABASE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "RAYCAST_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "ADAPTIVE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "SAKURA_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "OBSIDIAN_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "DUNE_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "MISSION_CONTROL_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.presets", "ART_NOUVEAU_THEME"): _THEMING_REEXPORT,
+    ("djust.theming.theme_packs", "AnimationStyle"): _THEMING_REEXPORT,
+    ("djust.theming.theme_packs", "IconStyle"): _THEMING_REEXPORT,
+    ("djust.theming.theme_packs", "IllustrationStyle"): _THEMING_REEXPORT,
+    ("djust.theming.theme_packs", "InteractionStyle"): _THEMING_REEXPORT,
+    ("djust.theming.theme_packs", "PatternStyle"): _THEMING_REEXPORT,
+    ("djust.theming.theme_packs", "PATTERN_GLASS"): _THEMING_REEXPORT,
 }
 
 
@@ -312,18 +517,35 @@ def removed_instance_attribute(name: str) -> property:
 def reject_removed_view_attributes(view: Any) -> None:
     """Raise ``ImproperlyConfigured`` if a view turns on a removed attribute.
 
-    ``view`` is a view class (at class creation) or a view instance (on the
-    mount path, after ``mount()``).
+    ``view`` is a view class (at class creation) or a view instance (on
+    construction and on the mount path, after ``mount()``). It also refuses a
+    value of :data:`REMOVED_VIEW_ATTRIBUTE_VALUES` other than the accepted one
+    (``exposure_policy = "legacy"``, #4199). Inside :func:`upgrade_inspection`
+    a class is let through for the 1.3 spellings; an instance never is.
     """
-    cls = view if isinstance(view, type) else type(view)
-    for name, replacement in REMOVED_VIEW_ATTRIBUTES.items():
-        if getattr(view, name, False):
-            from django.core.exceptions import ImproperlyConfigured
+    from django.core.exceptions import ImproperlyConfigured
 
+    is_class = isinstance(view, type)
+    permitted = is_class and upgrade_inspection_active()
+    cls = view if is_class else type(view)
+    label = "%s.%s" % (cls.__module__, cls.__qualname__)
+    for name, replacement in REMOVED_VIEW_ATTRIBUTES.items():
+        if permitted and name in UPGRADE_PERMITTED_VIEW_ATTRIBUTES:
+            continue
+        if getattr(view, name, False):
             raise ImproperlyConfigured(
-                "%s.%s sets %s, which was removed in djust 2.0: %s. See %s"
-                % (cls.__module__, cls.__qualname__, name, replacement, MIGRATION_GUIDE_URL)
+                "%s sets %s, which was removed in djust 2.0: %s. See %s"
+                % (label, name, replacement, MIGRATION_GUIDE_URL)
             )
+    if permitted:
+        return
+    for name in REMOVED_VIEW_ATTRIBUTE_VALUES:
+        value = _stated_value(view, name)
+        if value is _ABSENT:
+            continue
+        problem = removed_attribute_value_problem(label, name, value)
+        if problem is not None:
+            raise ImproperlyConfigured(problem)
 
 
 def removed_settings_in_use(settings: Any) -> list[str]:

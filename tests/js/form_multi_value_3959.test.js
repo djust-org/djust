@@ -9,11 +9,10 @@
  *    a `<select multiple>` only the first selected option.
  *
  * Real DOM (innerHTML, whitespace), real `submit` (requestSubmit) and `change`
- * events through the bundled client, over the HTTP fallback, under both the
- * legacy and the strict (ADR-036) policy.
+ * events through the bundled client, over the HTTP fallback, under the strict (ADR-036) policy.
  */
 import { describe, expect, it } from 'vitest';
-import { legacy, param, setup, strict, submit, toggle } from './_form_events_harness.js';
+import { anyArgs, param, setup, strict, submit, toggle } from './_form_events_harness.js';
 
 const TAGS = `
     <form dj-submit="save_open">
@@ -27,10 +26,10 @@ const handlers = {
     save_open: strict(param('form', 'Any', 'var_keyword', false)),
     save_list: strict(param('tags', 'list[str]')),
     save_str: strict(param('tags', 'str')),
-    save_legacy: legacy(),
+    save_legacy: anyArgs(),
     change_open: strict(param('value', 'Any'), param('field', 'str')),
     change_list: strict(param('value', 'list[str]'), param('field', 'str')),
-    change_legacy: legacy(),
+    change_legacy: anyArgs(),
 };
 
 const sentOnly = t => t.sent()[0].params;

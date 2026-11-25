@@ -35,6 +35,7 @@ client-side prerender-morph trigger (a), which is exercised separately in
 
 from __future__ import annotations
 
+from typing import Any
 import inspect
 
 import pytest
@@ -64,8 +65,8 @@ class NotificationsView(LiveView):
 
     notifications = state(default_factory=lambda: [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}])
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def dismiss(self, id="", **kwargs):
+    @event_handler
+    def dismiss(self, id: Any = "", **kwargs: Any):
         try:
             t = int(id)
         except (TypeError, ValueError):

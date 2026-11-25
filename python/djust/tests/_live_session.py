@@ -88,7 +88,7 @@ async def amount_on_consumer(
     session it was bound to at mount ("no runtime owns this view" otherwise).
     This gives the consumer a socket scope with a saved session logged in as
     ``user`` (anonymous when ``None``), the per-connection state ``connect()``
-    creates, and runs the real ``handle_mount``. The mount's frames are
+    creates, and runs the real ``_mount_page``. The mount's frames are
     cleared from ``consumer.sent`` when the test captures sends there, and the
     tick loop a ``tick_interval`` view starts is stopped (``stop_tick``).
     ``view``: mount this instance instead of a new one (only the view lookup
@@ -127,7 +127,7 @@ async def amount_on_consumer(
         from unittest.mock import MagicMock
 
         consumer._get_runtime()._instantiate_view = MagicMock(return_value=view)
-    await consumer.handle_mount(frame)
+    await consumer._mount_page(frame)
     sent = getattr(consumer, "sent", None)
     if consumer.view_instance is None:
         raise AssertionError(f"the consumer did not mount {view_path}: {sent!r}")

@@ -7,7 +7,6 @@ endpoint so the foundation PR is independently verifiable.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
 
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse, JsonResponse
@@ -30,64 +29,6 @@ from djust.observability.timings import get_timing_stats, get_turn_timing_stats
 from djust.observability.tracebacks import get_recent_tracebacks
 
 logger = logging.getLogger(__name__)
-
-
-def _is_jsonable(value: Any) -> bool:
-    """Last-resort serializability check when the view doesn't expose
-    `_is_serializable`. Cheap for small values; we tolerate the cost
-    because observability endpoints aren't hot paths."""
-    import json
-
-    try:
-        json.dumps(value)
-        return True
-    except (TypeError, ValueError):
-        return False
-
-
-def _lenient_assigns(view: Any) -> Dict[str, Any]:
-    """Serialize public attrs one-by-one with per-attr fallback.
-
-    Why not just call `view.get_state()`? In DEBUG mode that raises on
-    the first non-serializable attr, forcing an all-or-nothing choice.
-    A common pattern (`self.request = request` stored during mount)
-    then loses the other 95% of legitimate state to a blanket repr.
-
-    This walker keeps JSON-serializable values as themselves and tags
-    each non-serializable one with `{_repr, _type}` so the agent can
-    see at a glance which attrs fell back and why.
-
-    Uses the view's own `_is_serializable` when available (matches the
-    framework's definition) and falls back to a direct json.dumps probe
-    for anything that doesn't expose it (e.g. test doubles).
-    """
-    from djust._exposure import explicit_debug_projection
-
-    explicit = explicit_debug_projection(view)
-    if explicit is not None:
-        return explicit
-    checker = getattr(view, "_is_serializable", None)
-
-    def _safe_check(val: Any) -> bool:
-        if checker is not None:
-            try:
-                return bool(checker(val))
-            except Exception:  # noqa: BLE001
-                return False
-        return _is_jsonable(val)
-
-    assigns: Dict[str, Any] = {}
-    for key, value in view.__dict__.items():
-        if type(key) is not str or key.startswith("_") or callable(value):  # #4143
-            continue
-        if _safe_check(value):
-            assigns[key] = value
-        else:
-            assigns[key] = {
-                "_repr": repr(value)[:200],
-                "_type": type(value).__name__,
-            }
-    return assigns
 
 
 def _debug_gate() -> HttpResponse:
@@ -195,7 +136,9 @@ def view_assigns(request: HttpRequest) -> HttpResponse:
             status=404,
         )
 
-    assigns = _lenient_assigns(view)
+    from djust._exposure import explicit_debug_projection
+
+    assigns = explicit_debug_projection(view)
 
     return JsonResponse(
         {

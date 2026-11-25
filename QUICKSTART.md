@@ -32,12 +32,6 @@ CHANNEL_LAYERS = {
         'BACKEND': 'channels.layers.InMemoryChannelLayer'
     }
 }
-
-# Strict event parameters: a handler's annotated signature decides what an
-# event may carry. The examples in djust's docs are written for it; it
-# becomes the only behaviour before 2.0.0 final (until then the default is
-# the 1.x policy).
-LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}
 ```
 
 2. Create `myproject/routing.py`:

@@ -29,9 +29,6 @@ from djust.tests.http_fallback_matrix import PAGE, answer_kind, meta_digest, pos
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
-    # These tests compare answers across page loads; the strict default adds a
-    # per-view contract snapshot to each (#4189).
-    pytest.mark.usefixtures("legacy_project_policy"),
 ]
 
 #: Today a view's saved state is shared by every tab of a session on a route,
@@ -1010,11 +1007,53 @@ def test_a_whole_page_answer_is_gzipped_for_a_client_that_accepts_it(renders):
     assert len(response.content) * 3 < len(plain.content)
 
 
-def test_a_small_patch_answer_is_sent_as_it_is(renders):
+def test_a_small_patch_answer_is_sent_as_it_is(renders, rf):
+    """A body under GZipMiddleware's 200 bytes goes out as it is. The counter's
+    patch answer carries its parameter contracts (#4189); a client that names
+    the digest of the manifest it holds gets the digest alone (#4307), so the
+    answer is several hundred bytes smaller than one carrying the whole
+    manifest."""
+    import gzip
+
+    from django.http import JsonResponse
+
+    from djust.mixins.request import _compress_fallback_answer
+
+    client = Client()
+    page = client.get("/m/counter/").content.decode()
+    digest = meta_digest(page)
+    held = json.loads(
+        re.search(r"<script[^>]*data-djust-parameter-contracts>(.*?)</script>", page, re.S).group(1)
+    )["contracts"]["digest"]
+    full = post_event(client, "/m/counter/", "increment", {}, digest)
     client, digest = _open("/m/counter/")
-    response = _post_accepting_gzip(client, "/m/counter/", "increment", digest)
-    assert not response.has_header("Content-Encoding")
-    assert answer_kind(json.loads(response.content)) == "patches"
+    response = post_event(
+        client, "/m/counter/", "increment", {}, digest, HTTP_X_DJUST_PARAMETER_CONTRACTS=held
+    )
+    answer = json.loads(response.content)
+    assert answer_kind(answer) == "patches"
+    assert answer["parameter_contracts"] == held
+    assert answer["parameter_contract_view"]
+    # The same answer without the header carries the whole manifest.
+    assert isinstance(json.loads(full.content)["parameter_contracts"], dict)
+    assert len(response.content) < len(full.content) - 600, (
+        len(response.content),
+        len(full.content),
+    )
+    request = rf.post("/m/counter/", HTTP_ACCEPT_ENCODING="gzip, br")
+    body = JsonResponse(answer)
+    if len(body.content) < 200:
+        assert not _compress_fallback_answer(request, body).has_header("Content-Encoding")
+    else:
+        small = {key: value for key, value in answer.items() if not key.startswith("parameter_")}
+        assert len(JsonResponse(small).content) < 200
+        plain = _compress_fallback_answer(request, JsonResponse(small))
+        assert not plain.has_header("Content-Encoding")
+    # Gate-off: the whole answer, contracts included, is over the bound and is compressed.
+    whole_answer = json.loads(full.content)
+    whole = _compress_fallback_answer(request, JsonResponse(whole_answer))
+    assert whole["Content-Encoding"] == "gzip"
+    assert json.loads(gzip.decompress(whole.content)) == whole_answer
 
 
 def test_compression_can_be_left_to_the_deployment(renders):

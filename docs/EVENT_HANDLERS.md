@@ -18,7 +18,7 @@ This guide explains how to write effective event handlers in djust LiveView appl
 
 ## The Signature Is the Contract
 
-Under the strict policy (`event_parameter_policy = "strict"`, the default since djust 2.0), a handler receives exactly the parameters its signature declares. Declare each argument the binding sends, and nothing else: `**kwargs` is not required, and a handler that does not read it should not take it.
+Under the strict policy (the only policy since djust 2.0), a handler receives exactly the parameters its signature declares. Declare each argument the binding sends, and nothing else: `**kwargs` is not required, and a handler that does not read it should not take it.
 
 ```python
 @event_handler()
@@ -34,7 +34,7 @@ def delete_item(self, item_id: int = 0):
     Item.objects.filter(id=item_id).delete()
 ```
 
-Legacy `dj-input`/`dj-change` bindings also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: declare those names, or take a typed catch-all (`**fields: str`) that the body reads. See [Event arguments (`dj-value-*`)](website/core-concepts/events.md#event-arguments-dj-value) for the full rule.
+A `dj-submit` handler declares the form fields it reads, or takes a typed catch-all (`**fields: str`) that the body reads. See [Event arguments (`dj-value-*`)](website/core-concepts/events.md#event-arguments-dj-value) for the full rule.
 
 ## Parameter Naming Convention
 

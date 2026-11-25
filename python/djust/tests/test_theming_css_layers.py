@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 import pytest
 
-from djust.theming.manager import DEFAULT_CONFIG
+from djust.theming._config import DEFAULT_CONFIG
 
 pytestmark = pytest.mark.theming
 

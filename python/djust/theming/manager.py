@@ -19,15 +19,8 @@ from ._types import ThemePreset
 # Theme config reader lives in the leaf ._config module so registry.py and
 # css_generator.py can read it without importing manager (the edge that closed
 # the presets↔registry↔manager and manager↔theme_css_generator↔css_generator
-# cyclic-import SCCs — CodeQL #2351/#2357-#2362). Re-exported here for
-# back-compat: ``from djust.theming.manager import get_theme_config`` still works.
-from ._config import (  # noqa: F401 — re-exported for back-compat
-    COOKIE_NAMESPACE_RE,
-    DEFAULT_CONFIG,
-    _validate_cookie_namespace,
-    get_theme_config,
-    parse_preset_names,
-)
+# cyclic-import SCCs — CodeQL #2351/#2357-#2362).
+from ._config import get_theme_config, parse_preset_names
 
 
 _log = logging.getLogger(__name__)
@@ -352,9 +345,9 @@ class ThemeManager:
         # ``LIVEVIEW_CONFIG['theme']['cookie_namespace']: '<ns>'``. When set,
         # the four theming cookies become ``<ns>_djust_theme``,
         # ``<ns>_djust_theme_preset``, ``<ns>_djust_theme_pack``,
-        # ``<ns>_djust_theme_layout``. Read-side falls back to the unprefixed
-        # name for one-time migration; write-side (theme.js) writes only the
-        # namespaced name when the prefix is set.
+        # ``<ns>_djust_theme_layout``. With a namespace set, both sides use only
+        # the namespaced name: an unprefixed cookie is another project's and
+        # is ignored (#4207).
         theme = None
         preset = None
         pack = None
@@ -365,20 +358,13 @@ class ThemeManager:
             ns = (self.config.get("cookie_namespace") or "").strip()
             prefix = f"{ns}_" if ns else ""
 
-            # Read namespaced first; fall back to unprefixed (migration window).
-            #
-            # #1169(a) — distinguish "namespaced cookie not set" from
-            # "namespaced cookie set to empty string". An empty string is a
-            # deliberate value (e.g. user cleared a layout); falling through
-            # to the legacy unprefixed cookie in that case re-introduces
-            # cross-project bleed via the same path #1158 closed.
+            # With a namespace, read only the namespaced cookie: an unprefixed
+            # ``djust_theme*`` cookie belongs to another project on the same
+            # host, and honouring it is the cross-project bleed #1158 closed.
+            # An empty namespaced value is deliberate (a user cleared a layout)
+            # and is returned as "" (#1169(a)).
             def _read(name: str, default: str = "") -> str:
-                if prefix:
-                    namespaced = cookies.get(f"{prefix}{name}")
-                    if namespaced is not None:
-                        return str(namespaced)
-                    return str(cookies.get(name, default))
-                return str(cookies.get(name, default))
+                return str(cookies.get(f"{prefix}{name}", default))
 
             # _read returns "" when the cookie is set to empty; preserve that
             # rather than coercing to None via `or None` (which would re-trigger
@@ -641,3 +627,11 @@ class ThemeManager:
             "theme_presets": self.get_available_presets(),
             "dark_mode_enabled": self.config["enable_dark_mode"],
         }
+
+
+def __getattr__(name: str) -> Any:  # PEP 562
+    """Name the replacement for a re-export djust 2.0 removed (#4207)."""
+    from .._removed_settings import refuse_removed_name
+
+    refuse_removed_name(__name__, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -14,6 +14,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.tests.test_ws_send_version_1788 import _receive_until
 from djust import state
+from djust._parameter_metadata import expand_parameter_manifest
 
 _BODY = ["Count: {{ count }}"]
 
@@ -69,19 +70,6 @@ class _StrictHotView(LiveView):
         self.count += 1
 
 
-class _LegacyHotView(_StrictHotView):
-    @property
-    def template(self):
-        return (
-            '<div dj-view="djust.tests.test_producer_parameter_contracts._LegacyHotView" '
-            f'dj-id="0">{_BODY[0]}</div>'
-        )
-
-    @event_handler(parameter_policy="legacy")
-    def bump(self, **kwargs) -> None:
-        self.count += 1
-
-
 class _StrictPushView(LiveView):
     exposure_policy = "explicit"
     step = state(0)
@@ -100,26 +88,13 @@ class _StrictPushView(LiveView):
         self.step = 2
 
 
-class _LegacyPushView(_StrictPushView):
-    template = (
-        '<div dj-view="djust.tests.test_producer_parameter_contracts._LegacyPushView" '
-        'dj-id="0">Step: {{ step }}</div>'
-    )
-
-    @event_handler(parameter_policy="legacy")
-    async def work(self, **kwargs) -> None:
-        self.step = 1
-        await self.push_state()
-        self.step = 2
-
-
 @pytest.mark.django_db
 @pytest.mark.asyncio
-@pytest.mark.parametrize("view", ["_StrictHotView", "_LegacyHotView"])
-async def test_hotreload_patch_carries_the_contract_snapshot(view, legacy_project_policy):
+async def test_hotreload_patch_carries_the_contract_snapshot():
     from channels.layers import get_channel_layer
     from django.test import override_settings
 
+    view = "_StrictHotView"
     _BODY[0] = "Count: {{ count }}"
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=True):
         communicator, mount = await _connect_and_mount(view_suffix=view, url="/hot/")
@@ -130,11 +105,9 @@ async def test_hotreload_patch_carries_the_contract_snapshot(view, legacy_projec
             )
             frame = await _receive_until(communicator, "patch")
             assert frame.get("hotreload") is True, frame
-            if view == "_StrictHotView":
-                assert frame["parameter_contracts"] == mount["parameter_contracts"]
-                assert frame["parameter_contract_view"] == f"{__name__}.{view}"
-            else:
-                assert "parameter_contracts" not in frame
+            # Unchanged since the mount: sent as its digest (#4307).
+            assert frame["parameter_contracts"] == mount["parameter_contracts"]["digest"]
+            assert frame["parameter_contract_view"] == f"{__name__}.{view}"
         finally:
             _BODY[0] = "Count: {{ count }}"
             await communicator.disconnect()
@@ -171,10 +144,10 @@ async def test_hotreload_with_undiscoverable_contracts_reloads_the_page(monkeypa
 
 @pytest.mark.django_db
 @pytest.mark.asyncio
-@pytest.mark.parametrize("view", ["_StrictPushView", "_LegacyPushView"])
-async def test_push_state_frame_carries_the_contract_snapshot(view, legacy_project_policy):
+async def test_push_state_frame_carries_the_contract_snapshot():
     from django.test import override_settings
 
+    view = "_StrictPushView"
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
         communicator, mount = await _connect_and_mount(view_suffix=view, url="/push/")
         try:
@@ -184,11 +157,9 @@ async def test_push_state_frame_carries_the_contract_snapshot(view, legacy_proje
             pushed = await communicator.receive_json_from()
             assert pushed["type"] in ("patch", "html_update"), pushed
             assert "Step: 1" in str(pushed) or pushed.get("patches"), pushed
-            if view == "_StrictPushView":
-                assert pushed["parameter_contracts"] == mount["parameter_contracts"]
-                assert pushed["parameter_contract_view"] == f"{__name__}.{view}"
-            else:
-                assert "parameter_contracts" not in pushed
+            # Unchanged since the mount: sent as its digest (#4307).
+            assert pushed["parameter_contracts"] == mount["parameter_contracts"]["digest"]
+            assert pushed["parameter_contract_view"] == f"{__name__}.{view}"
         finally:
             await communicator.disconnect()
 
@@ -206,12 +177,12 @@ class _StrictPick(LiveComponent):
         COMPONENT_CALLS.append(("strict", item_id))
 
 
-class _LegacyPick(LiveComponent):
-    template = "<span>legacy</span>"
+class _TextPick(LiveComponent):
+    template = "<span>text</span>"
 
-    @event_handler(parameter_policy="legacy")
-    def pick(self, **kwargs) -> None:
-        COMPONENT_CALLS.append(("legacy", kwargs.get("item_id")))
+    @event_handler
+    def pick(self, item_id: str) -> None:
+        COMPONENT_CALLS.append(("text", item_id))
 
 
 class _OwnerLifecycleView(LiveView):
@@ -232,8 +203,8 @@ class _OwnerLifecycleView(LiveView):
 
     @event_handler(parameter_policy="strict")
     def replace(self) -> None:
-        self._components["menu"] = _LegacyPick(component_id="menu")
-        self.owners = "legacy"
+        self._components["menu"] = _TextPick(component_id="menu")
+        self.owners = "text"
 
     @event_handler(parameter_policy="strict")
     def remove(self) -> None:
@@ -242,7 +213,7 @@ class _OwnerLifecycleView(LiveView):
 
 
 def _owner(frame, component_id):
-    owners = frame["parameter_contracts"]["owners"]
+    owners = expand_parameter_manifest(frame["parameter_contracts"])
     return next((o for o in owners if o["component_id"] == component_id), None)
 
 
@@ -273,13 +244,14 @@ async def test_component_creation_replacement_and_removal_follow_the_render():
             assert rejected["type"] == "error"
 
             replaced = await send("replace")
-            assert _owner(replaced, "menu")["handlers"]["pick"] == {"policy": "legacy"}
+            pick = _owner(replaced, "menu")["handlers"]["pick"]
+            assert pick["policy"] == "strict" and pick["parameters"][0]["type"] == "str"
             await send("pick", {"item_id": "7x"}, component="menu")
 
             removed = await send("remove")
             assert _owner(removed, "menu") is None
             gone = await send("pick", {"item_id": "1"}, component="menu")
             assert gone["type"] == "error"
-            assert COMPONENT_CALLS == [("strict", 7), ("legacy", "7x")]
+            assert COMPONENT_CALLS == [("strict", 7), ("text", "7x")]
         finally:
             await communicator.disconnect()

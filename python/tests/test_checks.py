@@ -2678,7 +2678,7 @@ class TestV007Retired:
     """V007 ("event handler missing **kwargs") is retired: a closed signature is
     encouraged, not suspicious. The ID is never emitted and never reused."""
 
-    def test_closed_legacy_signature_is_not_reported(self):
+    def test_closed_signature_is_not_reported(self):
 
         from djust.live_view import LiveView
         from djust.decorators import event_handler
@@ -2687,8 +2687,8 @@ class TestV007Retired:
         def mount(self, request, **kwargs):
             pass
 
-        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-        def handle_click(self, item_id=0):
+        @event_handler
+        def handle_click(self, item_id: int = 0):
             pass
 
         cls = type(

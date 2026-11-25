@@ -95,7 +95,7 @@ def _install_views(rows: int, query: bool) -> None:
     """Define the benchmark view in an importable module (djust mounts by path)."""
     import types
 
-    from djust import LiveView
+    from djust import LiveView, state
     from djust.decorators import event_handler
 
     module = types.ModuleType(VIEW_MODULE)
@@ -120,7 +120,10 @@ def _install_views(rows: int, query: bool) -> None:
         return Session.objects.count()
 
     class BenchView(LiveView):
-        exposure_policy = "legacy"
+        title = state("")
+        count = state(0)
+        menu_open = state(False)
+        rows = state(default_factory=list)
 
         def mount(self, request, **kwargs):
             self.title = "Bench"

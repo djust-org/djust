@@ -13,7 +13,7 @@ from djust.theming.colors import (
     hex_to_hsl,
     hsl_to_hex,
 )
-from djust.theming.presets import ColorScale
+from djust.theming import ColorScale
 
 pytestmark = pytest.mark.theming
 

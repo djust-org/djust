@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'fs';
+import { openContracts, contractFields } from './_open_contracts.js';
 
 const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 const form = `<form id="editor" dj-submit="save">
@@ -15,7 +16,7 @@ const form = `<form id="editor" dj-submit="save">
 </form>`;
 
 async function setup() {
-    const dom = new JSDOM(`<div dj-root dj-view="test.Editor">${form}</div>`, {
+    const dom = new JSDOM(`<div dj-root dj-view="test.Editor">${form}</div>${openContracts(form, 'test.Editor', ['custom_restore'])}`, {
         runScripts: 'dangerously', url: 'http://localhost/',
     });
     const w = dom.window;
@@ -24,7 +25,7 @@ async function setup() {
     w.fetch = async (url, options) => {
         await Promise.resolve();
         events.push(JSON.parse(options.body));
-        return { ok: true, json: async () => ({ patches: [], version: events.length }) };
+        return { ok: true, json: async () => ({ patches: [], version: events.length, ...(() => { const s = document.querySelector('script[data-djust-parameter-contracts]'); if (!s) return {}; const m = JSON.parse(s.textContent); return {parameter_contracts: m.contracts, parameter_contract_view: m.view}; })() }) };
     };
     w.WebSocket = class { constructor() { this.readyState = 0; } send() {} close() {} };
     w.eval(client);
@@ -57,7 +58,7 @@ for (const prerendered of [true, false]) {
                 d.querySelector('#title').focus();
                 w.djust._isReconnect = true;
                 socket.skipMountHtml = prerendered;
-                await socket.handleMessage({ type: 'mount', view: 'test.Editor', html: form, has_ids: true });
+                await socket.handleMessage({ type: 'mount', view: 'test.Editor', html: form, has_ids: true, ...contractFields(form, 'test.Editor') });
                 await settle(w);
                 expect(d.querySelector('#body').value).toBe('Unsaved body');
                 expect(d.querySelector('#category').value).toBe('b');
@@ -101,9 +102,8 @@ for (const prerendered of [true, false]) {
                 await settle(w);
                 expect(root.querySelector('#first input').value).toBe('First draft');
                 expect(root.querySelector('#second input').value).toBe('Second draft');
-                expect(events.filter(event => event._form_values)).toEqual([
-                    expect.objectContaining({ _form_values: { notes: 'Custom draft' } }),
-                ]);
+                // dj-auto-recover sends only its contract (#4205): no serialized form values.
+                expect(events.filter(event => '_form_values' in event || '_data_attrs' in event)).toEqual([]);
                 expect(events.some(event => event.field === 'notes')).toBe(false);
             } finally { dom.window.close(); }
         });
@@ -127,7 +127,7 @@ for (const prerendered of [true, false]) {
             try {
                 w.document.querySelector('#body').value = 'Discarded draft';
                 socket.skipMountHtml = prerendered;
-                await socket.handleMessage({ type: 'mount', view: 'test.Editor', html: form, has_ids: true });
+                await socket.handleMessage({ type: 'mount', view: 'test.Editor', html: form, has_ids: true, ...contractFields(form, 'test.Editor') });
                 await settle(w);
                 expect(w.document.querySelector('#body').value).toBe('');
                 expect(events).toHaveLength(0);

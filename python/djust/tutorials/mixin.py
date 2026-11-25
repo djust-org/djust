@@ -10,7 +10,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Dict, List, Optional
 
-from djust._exposure import ProviderContract, uses_legacy_exposure
+from djust._exposure import ProviderContract
 from djust._exposure_providers import provide_context
 from djust.decorators import background, event_handler
 from djust.js import JS, JSChain
@@ -23,9 +23,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger("djust.tutorials")
 
 #: The names ``TutorialMixin`` renders under explicit exposure (ADR-038 Step R,
-#: PR 0c): the three progress values and the highlight class. These are the
-#: mixin names the legacy attribute walk rendered. ``tutorial_steps`` is not
-#: among them: the walk skipped it too (#694, ``TutorialStep`` is not data).
+#: PR 0c): the three progress values and the highlight class.
+#: ``tutorial_steps`` is not among them (#694, ``TutorialStep`` is not data).
 _TUTORIAL_CONTEXT_NAMES = (
     "tutorial_running",
     "tutorial_current_step",
@@ -95,7 +94,7 @@ class TutorialMixin:
         # WaitersMixin); declared here so the type checker can see the
         # composed surface without a runtime import cycle.
         def push_commands(self, chain: JSChain) -> None: ...
-        async def _flush_pending_push_events(self) -> None: ...
+        async def flush_push_events(self) -> None: ...
         async def wait_for_event(
             self, name: str, *, timeout: Optional[float] = None
         ) -> dict[str, Any]: ...
@@ -180,11 +179,10 @@ class TutorialMixin:
         self._tutorial_total_steps = value
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
-        """Render the tour's progress values for a view with explicit exposure.
+        """Render the tour's progress values.
 
-        A legacy view is untouched: its attribute walk already renders these
-        names. Render-only: nothing here is persisted or sent to the browser
-        as data, and a tour does not survive a reconnect under either policy.
+        Render-only: nothing here is persisted or sent to the browser as data,
+        and a tour does not survive a reconnect.
         """
         # TutorialMixin is mixed into a LiveView at runtime; the MRO supplies
         # get_context_data(). mypy only sees object here.
@@ -193,9 +191,8 @@ class TutorialMixin:
             if hasattr(super(), "get_context_data")
             else {}
         )
-        if not uses_legacy_exposure(self):
-            for name in _TUTORIAL_CONTEXT_NAMES:
-                provide_context(self, context, TUTORIAL_PROVIDER.name, name, getattr(self, name))
+        for name in _TUTORIAL_CONTEXT_NAMES:
+            provide_context(self, context, TUTORIAL_PROVIDER.name, name, getattr(self, name))
         return context
 
     # ------------------------------------------------------------------
@@ -260,7 +257,7 @@ class TutorialMixin:
             # cancelled, or errored). The bubble listens for tour:hide.
             try:
                 self.push_commands(JS.dispatch("tour:hide"))
-                await self._flush_pending_push_events()
+                await self.flush_push_events()
             except Exception as exc:
                 from .._exposure_diagnostics import log_failure_for
 
@@ -358,7 +355,7 @@ class TutorialMixin:
         # highlight + narrate before we block on the wait phase.
         # Without this, push_commands inside a @background task queue
         # up but never reach the client until the entire tour finishes.
-        await self._flush_pending_push_events()
+        await self.flush_push_events()
 
         # 3. Wait phase
         await self._wait_for_step(step)
@@ -372,7 +369,7 @@ class TutorialMixin:
         self.push_commands(cleanup)
 
         # Flush cleanup commands before advancing to the next step
-        await self._flush_pending_push_events()
+        await self.flush_push_events()
 
         self._tutorial_active_target = None
         self._tutorial_active_class = None

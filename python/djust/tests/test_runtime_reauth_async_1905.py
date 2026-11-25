@@ -1,7 +1,7 @@
 """ADR-022 Iter 2 Phase 2.3a — async source reconcile + binary-framing confirm (#1905).
 
 The reauth-on-event sub-fold (``Transport.recheck_event_auth``, the ``reauth``
-built-in) tested a legacy mechanism and is gone (#4198): an explicit view
+built-in) tested a legacy mechanism and is gone (#4198, #4201): a view
 authorizes every turn (``authorize_explicit_turn``), covered by
 ``test_explicit_turn_reauth_4198.py`` and ``test_auth_refusal_codes_3319.py``.
 

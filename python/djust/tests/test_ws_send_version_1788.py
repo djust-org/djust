@@ -487,7 +487,7 @@ def test_every_client_checked_send_path_uses_next_version():
     # Bare send-site invocations (verified at #1817; mount baseline moved at #1919):
     #   (none remain in websocket.py).
     #
-    # #1919 THE MOUNT FLIP: the ``handle_mount`` baseline
+    # #1919 THE MOUNT FLIP: the ``_mount_page`` baseline
     # ``version = self._next_version()`` moved to
     # ``WSConsumerTransport.next_mount_version`` (runtime.py, Finding C) — it calls
     # ``consumer._next_version()`` (still the consumer counter, still the NO-ARM
@@ -518,7 +518,7 @@ def test_every_client_checked_send_path_uses_next_version():
     )
 
     # The mount frame must stamp the consumer counter.
-    # Post-#1919 (THE MOUNT FLIP) the bespoke handle_mount baseline stamp moved to
+    # Post-#1919 (THE MOUNT FLIP) the bespoke _mount_page baseline stamp moved to
     # the ``WSConsumerTransport.next_mount_version`` hook (runtime.py, Finding C),
     # which returns ``self._consumer._next_version()`` — the SAME monotonic counter,
     # NO-ARM (mount has no prior frame to recover to). Pin it at its converged home.

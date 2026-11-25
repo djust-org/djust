@@ -12,6 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
 import { readFileSync, readdirSync } from 'node:fs';
+import { openContracts } from './_open_contracts.js';
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
@@ -25,7 +26,7 @@ const SECRETS = ['hunter2', '1234', 's3cret'];
 
 function page() {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body><div dj-root dj-view="app.Page"><form id="f">${FIELDS}</form></div></body></html>`,
+        `<!DOCTYPE html><html><body><div dj-root dj-view="app.Page"><form id="f">${FIELDS}</form></div>${openContracts(FIELDS, 'app.Page')}</body></html>`,
         { runScripts: 'dangerously', url: 'http://localhost/' });
     const win = dom.window;
     win.eval(`
@@ -37,7 +38,7 @@ function page() {
             var body = {};
             try { body = JSON.parse((opts && opts.body) || "{}"); } catch (e) {}
             window._sent.push({ event: (opts && opts.headers && opts.headers["X-Djust-Event"]) || "", body: body });
-            return { ok: true, json: async function() { return { patches: [], version: 1 }; } };
+            return { ok: true, json: async function() { return { patches: [], version: 1, ...(() => { const s = document.querySelector('script[data-djust-parameter-contracts]'); if (!s) return {}; const m = JSON.parse(s.textContent); return {parameter_contracts: m.contracts, parameter_contract_view: m.view}; })() }; } };
         };
     `);
     win.console.error = () => {};

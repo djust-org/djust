@@ -54,9 +54,7 @@ class _Transport:
 
 
 class _Child(LiveView):
-    exposure_policy = (
-        "legacy"  # gap #4287: explicit needs a bound mount; this drives dispatch_event directly
-    )
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "child"
     template = "<div>x</div>"
@@ -73,9 +71,7 @@ class _Component(LiveComponent):
 
 
 class _Parent(LiveView):
-    exposure_policy = (
-        "legacy"  # gap #4287: explicit needs a bound mount; this drives dispatch_event directly
-    )
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">p</div>'
 
     @event_handler(parameter_policy="strict")
@@ -83,17 +79,29 @@ class _Parent(LiveView):
         pass
 
 
-def _runtime(view):
+class _ParentWithChild(_Parent):
+    """An explicit child is authorized by the mount that rendered it."""
+
+    template = (
+        '<div dj-root dj-id="0">p{% load live_tags %}'
+        '{% live_render "djust.tests.test_missing_params_transports_4287._Child" sticky=True %}</div>'
+    )
+
+
+async def _runtime(view):
+    """``view`` mounted on a hand-built runtime, as a transport mounts it."""
+    from djust.tests._live_session import amount_on_runtime
+
     transport = _Transport()
     runtime = ViewRuntime(transport)
-    runtime.view_instance = view
+    await amount_on_runtime(runtime, view)
+    transport.sent.clear()
+    transport.errors.clear()
     return runtime, transport
 
 
 def _parent():
-    parent = _Parent()
-    parent.mount(None)
-    return parent
+    return _Parent()
 
 
 async def _send(runtime, event, params):
@@ -101,9 +109,9 @@ async def _send(runtime, event, params):
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_main_view_refusal_carries_missing_params():
-    runtime, transport = _runtime(_parent())
+    runtime, transport = await _runtime(_parent())
     await _send(runtime, "pick", {"choice": "a", "zz": "x"})
     assert transport.errors[-1]["validation_details"]["missing_params"] == []
     await _send(runtime, "pick", {})
@@ -111,24 +119,20 @@ async def test_main_view_refusal_carries_missing_params():
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_embedded_child_refusal_carries_missing_params():
-    parent = _parent()
-    child = _Child()
-    child.mount(None)
-    parent._register_child("child-1", child)
-    runtime, transport = _runtime(parent)
-    await _send(runtime, "pick", {"view_id": "child-1"})
+    runtime, transport = await _runtime(_ParentWithChild())
+    await _send(runtime, "pick", {"view_id": "child"})
     assert transport.errors, transport.sent
     assert transport.errors[-1]["validation_details"]["missing_params"] == ["choice"]
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 async def test_component_refusal_carries_missing_params():
     parent = _parent()
+    runtime, transport = await _runtime(parent)
     parent._components["comp-1"] = _Component(component_id="comp-1")
-    runtime, transport = _runtime(parent)
     await _send(runtime, "pick", {"component_id": "comp-1"})
     assert transport.errors, transport.sent
     assert transport.errors[-1]["validation_details"]["missing_params"] == ["choice"]

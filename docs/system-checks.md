@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 138 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 130 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -32,7 +32,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C019 | Config | Error | Unknown DJUST_CONFIG['PRESENCE_BACKEND'] value (the first presence call raises `ImproperlyConfigured`) |
 | C020 | Config | Error | `DJUST_SERVER_STATE_MAX_AGE` is not an integer from 1 to 86400 |
 | C021 | Config | Error | `LIVEVIEW_CONFIG['worker_threads']` is not `None`, `False`, `True`, `"auto"` or an integer >= 0 |
-| C022 | Config | Error | `LIVEVIEW_CONFIG['event_parameter_policy']` is not `'legacy'` or `'strict'` (ADR-036) |
+| C022 | Config | Retired | Retired in 2.0 with the legacy parameter policy (#4205); the key itself is refused at startup (#4199). Never emitted; the ID is not reused |
 | C023 | Config | Warning | A `channels_redis` core `RedisChannelLayer` host keeps redis-py 8's 5 s `socket_timeout`, which drops idle WebSockets (#3199) |
 | C024 | Config | Error | `DJUST_EXPLICIT_STATE_SAVE_TIMEOUT` is not a number of seconds greater than 0 and at most 10 |
 | C025 | Config | Error | `DJUST_WS_PATH` is not a path starting with a single `/` (#3186) |
@@ -55,7 +55,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | C042 | Config | Info | A model's rows may be changed by the database itself (an unmanaged model, a `DB_*` cascade) while `DJUST_REFRESH_ON_ANY_WRITE` is off |
 | C043 | Config | Error | "`DJUST_UNSUPPLIED_NAMES` is not `\"debug\"`, `\"warn\"` or `\"error\"` (#4279)" |
 | C044 | Config | Warning | "`inclusion_tag` in a tag library marked `djust_childless` (#4302)" |
-| C045 | Config | Warning | `event_parameter_policy`, `reauth_on_event` or `reauth_server_turn_interval` is set; djust 2.0.0 removes it |
+| C045 | Config | Retired | Retired in 2.0 when the keys were refused (#4199): `event_parameter_policy`, `reauth_on_event` or `reauth_server_turn_interval` was set. Never emitted; the ID is not reused |
 | C301 | Config | Error | Invalid VDOM cache TTL |
 | C302 | Config | Error | Invalid VDOM cache size |
 | C303 | Config | Info | VDOM cache disabled |
@@ -68,9 +68,9 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V003 | LiveView | Error | mount() has wrong signature |
 | V004 | LiveView | Info | Public method looks like event handler but missing @event_handler |
 | V005 | LiveView | Warning | Module not in LIVEVIEW_ALLOWED_MODULES |
-| V006 | LiveView | Warning | Service instance assigned in mount() of a legacy-exposure view — high-confidence subset of V008 |
+| V006 | LiveView | Warning | Service instance assigned in mount() of a class that is not a LiveView — high-confidence subset of V008 |
 | V007 | LiveView | Retired | Retired in 1.3 (ADR-037): recommended `**kwargs` on every handler. Never emitted; the ID is not reused |
-| V008 | LiveView | Info | Non-primitive type assigned in mount() of a legacy-exposure view — broader, lower-confidence (skips V006 patterns) |
+| V008 | LiveView | Info | Non-primitive type assigned in mount() of a class that is not a LiveView — broader, lower-confidence (skips V006 patterns) |
 | V009 | LiveView | Warning | Invalid on_mount hooks |
 | V010 | LiveView | Error | TutorialMixin after LiveView in the bases |
 | V011 | LiveView | Retired | Retired in 2.0 with `enable_state_snapshot`: a sticky child opted in to state snapshots and its parent did not. Never emitted; the ID is not reused |
@@ -78,7 +78,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V013 | LiveView | Warning | HTTP-only setup()/dispatch()/get()/post() override or URLconf wrapper never runs on a WebSocket mount |
 | V014 | LiveView | Retired | Retired in 2.0 with time-travel debugging (#4184): a time-travel view had PII-looking fields not in `time_travel_excluded_fields`. Never emitted; the ID is not reused |
 | V015 | LiveView | Warning | LIVEVIEW_ALLOWED_MODULES rejects a djust LiveView the URLconf routes (add `"djust"`) |
-| V016 | LiveView | Error | Strict-policy handler declaration that strict dispatch rejects (ADR-036) |
+| V016 | LiveView | Error | Handler declaration that strict dispatch rejects (ADR-036) |
 | V017 | LiveView | Retired | Retired in 2.0 with the actor system: async strict event handler on an actor view. Never emitted; the ID is not reused |
 | V018 | LiveView | Warning | `@event_handler(params=[...])` disagrees with a strict handler's signature |
 | V019 | LiveView | Retired | Retired in 2.0 with the legacy downgrade of `dj-auto-recover` handlers (ADR-036 R1). Never emitted; the ID is not reused |
@@ -88,17 +88,17 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | V023 | LiveView | Error | A `params_form` the request path cannot use: not a form class, or a form whose `__init__` needs arguments beyond `data=`; or a `params_form_fallback` that is not `"initial"` or `"fields"` |
 | V024 | LiveView | Error | A `query_budget` nothing can enforce: an unknown key, a bool or negative number, a handler named in `events` that the view lacks or that is `async def` / `@background` |
 | V025 | LiveView | Warning | A class defines `get_http_status()` while `LIVEVIEW_CONFIG['http_status_of_state']` is configured: the override replaces the project-wide map |
-| V026 | LiveView | Warning | A legacy view declares a plain component in its class body: one object shared by every session, rendered for every user |
+| V026 | LiveView | Retired | Retired in 2.0 with the legacy exposure policy (#4204): a legacy view declared a plain component in its class body. Never emitted; the ID is not reused |
 | V027 | LiveView | Warning | An explicit view declares a `state()` field named `user` or `perms` (without `render=False`): it replaces `request.user` / the permission proxy in every template the view renders |
-| V028 | LiveView | Warning | An application class states `exposure_policy = "legacy"`, which is deprecated and removed before 2.0.0 |
+| V028 | LiveView | Retired | Retired in 2.0 when the legacy exposure policy was refused (#4199): a class stated `exposure_policy = "legacy"`. Never emitted; the ID is not reused |
 | V029 | LiveView | Warning | An explicit view's event handler reads and then changes a `state()` field declared `persist=False`, so the change is not saved between requests |
 | V030 | LiveView | Warning | A view or mixin defines or assigns `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, replacing djust's method of that name |
-| V031 | LiveView | Warning / Error | A `dj-auto-recover` handler takes `_form_values` / `_data_attrs`, or declares `form_values` / `data_attrs` positional-only or under the legacy parameter policy |
-| V032 | LiveView | Error | A `DjustModelAdmin`'s `change_list_widgets` or `change_form_widgets` lists a class that states `exposure_policy = "legacy"`, so that admin page fails to render |
-| V033 | LiveView | Warning | A legacy-policy handler whose signature the strict policy would refuse (2.0 upgrade) |
-| V034 | LiveView | Warning | A handler declares or reads `_target`, which a strict client never sends |
+| V031 | LiveView | Error | A `dj-auto-recover` handler takes `_form_values` / `_data_attrs`, or declares `form_values` / `data_attrs` positional-only |
+| V032 | LiveView | Retired | Retired in 2.0 when the legacy exposure policy was refused (#4199): a `DjustModelAdmin` widget stated `exposure_policy = "legacy"`. Never emitted; the ID is not reused |
+| V033 | LiveView | Retired | Retired in 2.0 with the legacy parameter policy (#4205); strict declaration problems are djust.V016. Never emitted; the ID is not reused |
+| V034 | LiveView | Warning | A handler reads `_target`, which a strict client never sends |
 | V035 | LiveView | Warning | An explicit-exposure view overrides `_on_sticky_update`, which djust never calls on it |
-| V036 | LiveView | Warning | `parameter_policy="legacy"` or `cancel_async_on_disconnect`, which djust 2.0.0 removes |
+| V036 | LiveView | Retired | Retired in 2.0 when the spellings were refused (#4199): `parameter_policy="legacy"` or `cancel_async_on_disconnect`. Never emitted; the ID is not reused |
 | V037 | LiveView | Warning | A view that sets `sw_cacheable = True` reads the user, the session or persisted state |
 | S001 | Security | Error | mark_safe() with f-string (XSS risk) |
 | S002 | Security | Warning | @csrf_exempt without justification comment |
@@ -137,7 +137,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>` or `<head>`: unsupported and ignored, no live view is mounted and the page stays a plain HTTP page (`<body>` is a supported root) |
 | T026 | Templates | Warning | Two loaded template libraries register one tag or filter name |
 | T027 | Templates | Warning | An explicit-exposure view's template reads a name the view holds as an attribute but does not supply (renders blank, no error), or an `X_count` that 1.x generated from a supplied `X` |
-| T028 | Templates | Warning | A template binding a legacy handler accepts that the strict policy would refuse |
+| T028 | Templates | Retired | Retired in 2.0 with the legacy parameter policy (#4205); strict findings are djust.T020 / T021. Never emitted; the ID is not reused |
 | T029 | Templates | Warning | Python code emits a `data-*` event argument (strict handlers receive only `dj-value-*`) |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
@@ -267,13 +267,6 @@ console.log("debug info"); // noqa: Q003
 - **Method**: Settings inspection
 - **What it detects**: `LIVEVIEW_CONFIG['worker_threads']` is set to something other than `None`, `False`, `True`, `"auto"` or an integer >= 0. The setting opts WebSocket sessions into a pinned worker pool (#3074). At runtime an invalid value is logged and treated as off, so every session keeps sharing one thread.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C021"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C021"]`
-- **False positives**: None
-
-### C022 — Invalid `event_parameter_policy`
-- **Severity**: Error
-- **Method**: Settings inspection, through the resolver dispatch uses (`djust.validation.get_project_parameter_policy`)
-- **What it detects**: `LIVEVIEW_CONFIG['event_parameter_policy']` (or the same key in `DJUST_CONFIG`) is set to something other than `'legacy'` or `'strict'`. Every handler without its own `parameter_policy` inherits the value, and dispatch rejects each of their events while it is invalid. An absent key is the `'strict'` default (since djust 2.0, #4189) and never reports.
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C022"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C022"]` (the runtime still rejects the events)
 - **False positives**: None
 
 ### C023 — channels_redis socket timeout at redis-py 8's default
@@ -429,12 +422,11 @@ console.log("debug info"); // noqa: Q003
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C044"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C044"]`
 - **False positives**: An inclusion template that never mounts a child view; suppress the check once you have confirmed that.
 
-### C045 — a setting djust 2.0.0 removes is still set
-- **Severity**: Warning
-- **Method**: Settings read (`LIVEVIEW_CONFIG` and `DJUST_CONFIG`).
-- **What it detects**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` has `event_parameter_policy`, `reauth_on_event` or `reauth_server_turn_interval`. Strict event parameters are the only policy in 2.0.0, and an explicit-exposure view authorizes every event and server turn itself. djust 2.0.0 refuses the keys at startup (#4199); until then they are accepted and this check reports them.
-- **Fix**: delete the key. For `event_parameter_policy`, annotate every handler parameter first (`djust.V016` and `djust.V033` report what strict refuses).
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C045"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C045"]`
+### C045 — Retired
+- **Retired in**: 2.0 (the keys were refused, #4199)
+- **What it did**: warned when `LIVEVIEW_CONFIG` or `DJUST_CONFIG` set `event_parameter_policy`, `reauth_on_event` or `reauth_server_turn_interval`, ahead of their removal
+- **Why it was retired**: djust now refuses each of those keys with `ImproperlyConfigured` at startup, naming the replacement, so a warning has nothing left to report
+- **Migration**: remove `"C045"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### C501 — Retired
 - **Retired in**: 2.0 (time-travel debugging was removed, #4184)
@@ -545,7 +537,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Method**: AST (inspects assignments in `mount()`)
 - **What it detects**: `self.X = SomeService()` pattern — service objects are not JSON-serialisable and cannot survive WebSocket reconnects. Matches class names containing "Service", "Client", "Session", "API", or "Connection" (case-insensitive)
 - **Relationship to V008**: V006 is the high-confidence subset of V008. Both detect non-serialisable state in `mount()`, but V006 fires at **Warning** level for well-known service patterns while V008 fires at **Info** level for everything else. They are deliberately non-overlapping — V008 skips any assignment already caught by V006
-- **Scope**: legacy-exposure views (`exposure_policy = "legacy"`) and classes that are not LiveViews. An explicit-exposure view never serialises a plain attribute (template context, the session, `get_state()` and snapshots read only declared state), so `self.service = PaymentService()` is fine there and V006 skips it. The policy is read from the imported class, so an inherited or default policy counts; a class that is not imported is skipped only when its own body says `exposure_policy = "explicit"` (#4032)
+- **Scope**: classes that are not LiveViews. A LiveView never serialises a plain attribute (template context, the session, `get_state()` and snapshots read only declared state), so `self.service = PaymentService()` is fine there and V006 skips it. An imported LiveView is skipped; a class that is not imported is skipped only when its own body says `exposure_policy = "explicit"` (#4032, #4204)
 - **Suppression**: `# noqa: V006` inline on the assignment
 - **False positives**: Objects whose class name contains "Service", "Client", "Session", "API", or "Connection" but are actually lightweight and serialisable
 
@@ -560,7 +552,7 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Method**: AST (inspects the RHS expression of assignments in `mount()`)
 - **What it detects**: `self.X = some_function()` where the assigned value appears to be non-primitive (not a literal int/str/bool/None/list/dict) and is not already caught by V006
 - **Relationship to V006**: V008 is the broader, lower-confidence counterpart to V006. V006 covers high-confidence service patterns at **Warning** level; V008 catches all remaining non-primitive assignments at **Info** level. V008 explicitly skips assignments matching V006's keyword patterns to avoid duplicate messages
-- **Scope**: the same as V006: explicit-exposure views are skipped, because they never serialise a plain attribute (#4032)
+- **Scope**: the same as V006: classes that are not LiveViews; a LiveView never serialises a plain attribute (#4032, #4204)
 - **Suppression**: `# noqa: V008` inline on the assignment
 - **False positives**: Functions with primitive return-type annotations (e.g. `-> str`, `-> int`) are excluded since PR #398. Other functions returning serialisable types (e.g. dataclasses) may still trigger V008 — suppress with `# noqa: V008`
 
@@ -597,18 +589,16 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Why it was retired**: the time-travel buffer, the Share button that read it and `time_travel_excluded_fields` were removed. A view that still sets `time_travel_enabled` or `time_travel_excluded_fields` is refused with `ImproperlyConfigured` when the class is created
 - **Migration**: remove `"V014"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
-### V016 — Strict-policy handler declaration that strict dispatch rejects
+### V016 — Handler declaration that strict dispatch rejects
 - **Severity**: Error
-- **Method**: Runtime (walks user `LiveView` and `LiveComponent` subclasses; compiles each strict `@event_handler` / `@server_function` contract with the same cached resolver dispatch uses, without constructing a view or running a handler)
-- **What it detects**, for handlers whose resolved `parameter_policy` is `'strict'` (declared on the decorator or inherited from `event_parameter_policy`):
+- **Method**: Runtime (walks user `LiveView` and `LiveComponent` subclasses; compiles each `@event_handler` / `@server_function` contract with the same cached resolver dispatch uses, without constructing a view or running a handler)
+- **What it detects**, for every handler:
   - an annotation that cannot be resolved: a misspelled name, a name imported only under `if TYPE_CHECKING:`, or a name that exists only in another class. Deferred annotations (`from __future__ import annotations`, quoted forward references) resolve against the defining class body first, then the module, as eager evaluation would. Classes defined inside a function body are not reachable by qualified name, so their class-body names cannot be resolved;
   - an unsupported type or shape (`dict` without `[str, T]`, unions other than `Optional[T]`, bare `list`, `Annotated`, `set`, ...). Supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, `dict[str, T]` and explicit `Any`;
   - a named parameter without an annotation (use `Any` for unchecked input; unannotated `*args` / `**kwargs` are an intentional open contract);
   - a keyword-capable parameter named `view_id` or `component_id`, or starting with `_`. Transports strip those routing keys before validation, so the parameter could never receive an application value (ADR-036 D5). Positional-only parameters may use any name;
-  - a handler whose own `parameter_policy` metadata is not `'legacy'` or `'strict'`;
   - an ADR-034 output-subscription callback (staged) whose payload annotation the strict contract does not support. The source `component` is framework-supplied and not checked as a payload parameter.
-- **Reporting**: one message per declaration, under the declaring class when it is itself checked, otherwise under its first user with `(declared as ...)`. Handlers that inherit an invalid project policy are covered by C022 instead.
-- **Legacy handlers**: never reported. Legacy remains the default.
+- **Reporting**: one message per declaration, under the declaring class when it is itself checked, otherwise under its first user with `(declared as ...)`.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V016"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V016"]` (dispatch still rejects the events)
 - **False positives**: None: the check and dispatch share one compiled contract.
 
@@ -666,13 +656,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V025"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V025"]`
 - **False positives**: an override that calls `super().get_http_status()`
 
-### V026 — plain component in a legacy view's class body
-- **Severity**: Warning
-- **Method**: Runtime (class inspection; no view is constructed). Legacy views only (`exposure_policy = "legacy"`); an explicit view with the same declaration is refused when the class is created (`ExposureConfigurationError`).
-- **What it detects**: a plain `Component` instance (`badge = Badge("new")`, any of the `djust.components.components` classes) in the class body of a legacy view or of a mixin or base it inherits, reported once for the class whose body holds it. A plain component has no descriptor, so `self.badge` is that one class attribute in every session of the worker, and a legacy view renders it: a handler that writes to it (`self.badge.label = request.user.email`) changes every other user's next render and every later mount. A `LiveComponent` declaration is not reported; its descriptor gives each view its own copy. djust's own classes are not reported.
-- **Fix**: create the component per view: `self._badge = Badge(...)` in `mount()` and return it from `get_context_data()`, or build it in `get_context_data()` from the view's own state. Both also work after the view moves to explicit exposure.
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V026"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V026"]`
-- **False positives**: a component no handler ever writes to (a fixed label). Sharing it is harmless; suppress, or move it anyway so that a later write cannot leak.
+### V026 — Retired
+- **Retired in**: 2.0 (the legacy exposure policy was refused, #4199, #4204)
+- **What it did**: warned when a legacy-exposure view declared a plain `Component` in its class body, one object shared by every session of the worker that a legacy view rendered for every user
+- **Why it was retired**: every view is explicit, and an explicit view refuses a class-level plain component when the class is created and on mount (#4045)
+- **Migration**: remove `"V026"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### V027 — declared `state()` field named `user` or `perms`
 - **Severity**: Warning
@@ -681,12 +669,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Fix**: rename the field (`selected_user`), or declare it `state(..., render=False)` if no template reads it.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V027"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V027"]`
 
-### V028 — a class states `exposure_policy = "legacy"`
-- **Severity**: Warning
-- **Method**: Runtime (class inspection; no view is constructed).
-- **What it detects**: an application class whose own body states `exposure_policy = "legacy"`, reported once for that class, wherever the views that use it inherit it from (a view, an abstract base or a mixin); the message names up to three of those views. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0. Stating it also raises a `DeprecationWarning` when the class is created, which most test runners and servers hide. djust's own classes (the legacy-pinned shipped views and djust's test modules) are not reported, and a subclass that states `"explicit"` is not either (#4047).
-- **Fix**: move the view to explicit exposure (declare persisted fields with `state()`, return template names from `get_context_data()`) and delete the line. `python manage.py djust_exposure_inventory --fix` deletes the line and supplies what the template reads from `get_context_data()`; without `--fix` it lists what each view exposes today. See the [2.0 migration guide](website/guides/migrating-to-2.0.md).
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V028"]`
+### V028 — Retired
+- **Retired in**: 2.0 (the legacy exposure policy was refused, #4199)
+- **What it did**: warned when an application class stated `exposure_policy = "legacy"`, which was deprecated
+- **Why it was retired**: a class that states `exposure_policy = "legacy"` now raises `ImproperlyConfigured` when it is created, naming the replacement; `python manage.py djust_exposure_inventory --fix` still reads such code
+- **Migration**: remove `"V028"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### V029 — a handler changes a `persist=False` field a later event reads
 - **Severity**: Warning
@@ -703,46 +690,37 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V030"]`
 
 ### V031 — a `dj-auto-recover` handler that cannot receive its values
-- **Severity**: Error when the handler runs under the strict parameter policy, or declares the 2.0 parameters under the legacy policy; Warning when it takes the 1.x names under the legacy policy (it works until the legacy policy is removed)
-- **Method**: Runtime. Only a LiveView handler a `dj-auto-recover` in the view's template can target is checked (the template scan follows `{% include %}` and `{% extends %}`); recovery events reach the page's view, so a LiveComponent handler never is. A handler a literal `dj-auto-recover="name"` names is reported when it declares a `_form_values` / `_data_attrs` parameter, reads either name in its source (`kwargs.get("_form_values")`), declares `form_values` / `data_attrs` positional-only under the strict policy, or declares them under the legacy policy. A computed `dj-auto-recover="{{ handler }}"` cannot be resolved, so for it a handler is reported only when it declares or reads the `_` names. Each handler declaration is reported once, however many views it serves. A `_` parameter on any other handler is `djust.V016`'s reserved name under the strict policy.
-- **What it detects**: a recovery handler written for the 1.x `_form_values` / `_data_attrs` envelope. Under the strict policy the browser sends the values as `form_values` and `data_attrs`, and only to a handler that declares them; the `_` names are never sent and cannot be declared. The reverse also fails: a handler that declares `form_values` / `data_attrs` but runs under the legacy policy is sent only the `_` names, and one that declares them positional-only (before a `/`) cannot be filled by name; either way the event is refused.
-- **Fix**: `def restore(self, form_values: dict[str, Any], data_attrs: dict[str, str])` under the strict policy, the default: remove `parameter_policy="legacy"` from the handler and the `event_parameter_policy` key from `LIVEVIEW_CONFIG`. Declare only the dictionary you use.
+- **Severity**: Error
+- **Method**: Runtime. Only a LiveView handler a `dj-auto-recover` in the view's template can target is checked (the template scan follows `{% include %}` and `{% extends %}`); recovery events reach the page's view, so a LiveComponent handler never is. A handler a literal `dj-auto-recover="name"` names is reported when it declares a `_form_values` / `_data_attrs` parameter, reads either name in its source (`kwargs.get("_form_values")`), or declares `form_values` / `data_attrs` positional-only. A computed `dj-auto-recover="{{ handler }}"` cannot be resolved, so for it a handler is reported only when it declares or reads the `_` names. Each handler declaration is reported once, however many views it serves. A `_` parameter on any other handler is `djust.V016`'s reserved name.
+- **What it detects**: a recovery handler written for the 1.x `_form_values` / `_data_attrs` envelope. The browser sends the values as `form_values` and `data_attrs`, and only to a handler that declares them; the `_` names are never sent and cannot be declared. A handler that declares `form_values` / `data_attrs` positional-only (before a `/`) cannot be filled by name; the event is refused.
+- **Fix**: `def restore(self, form_values: dict[str, Any], data_attrs: dict[str, str])`. Declare only the dictionary you use.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V031"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V031"]`
 
-### V032 — an admin widget states `exposure_policy = "legacy"`
-- **Severity**: Error
-- **Method**: Runtime (class inspection of every `DjustModelAdmin` subclass; no view is constructed).
-- **What it detects**: a `change_list_widgets` or `change_form_widgets` class attribute that lists a widget class whose `exposure_policy` is `"legacy"`. The djust admin change list and change form use explicit exposure (#4185), and an explicit page cannot embed a legacy view: every GET of that admin page fails with an HTTP 500 (`ExposureError: Child state persistence unavailable for the embedded view <widget>`). Reported once per admin class, slot and widget. A widget list built per request by an overridden `get_change_list_widgets()` / `get_change_form_widgets()` is not seen. `djust.V028` reports the same widget class as deprecated.
-- **Fix**: set `exposure_policy = "explicit"` on the widget (or delete the line: explicit is the default) and return what its template reads from `get_context_data()`. See the [admin widgets guide](website/guides/admin-widgets.md).
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V032"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V032"]`
+### V032 — Retired
+- **Retired in**: 2.0 (the legacy exposure policy was refused, #4199)
+- **What it did**: reported a `change_list_widgets` or `change_form_widgets` entry whose class stated `exposure_policy = "legacy"`, which the explicit admin pages could not embed
+- **Why it was retired**: such a widget class can no longer be created: it raises `ImproperlyConfigured` when the class statement runs
+- **Migration**: remove `"V032"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
-### V033 — a legacy-policy handler strict dispatch would refuse
+### V034 — a handler reads `_target`
 - **Severity**: Warning
 - **Method**: Runtime (class inspection; nothing constructed).
-- **What it detects**: a handler that runs under the legacy parameter policy (`parameter_policy="legacy"` or the project's `LIVEVIEW_CONFIG['event_parameter_policy']`) and whose signature does not compile under the strict policy: a parameter without a supported annotation, one that starts with `_`, or one named `view_id` or `component_id`. Strict is the only policy in djust 2.0.0, so every call to the handler would be refused. djust's own handlers are not reported.
-- **Fix**: annotate every parameter with `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, `dict[str, T]` or `Any`, rename a parameter that starts with `_` or is named `view_id` / `component_id`, then delete the legacy pin. See the [migration guide](website/guides/migrating-to-2.0.md).
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V033"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V033"]`
-
-### V034 — a handler uses `_target`
-- **Severity**: Warning
-- **Method**: Runtime (class inspection; nothing constructed).
-- **What it detects**: a handler that declares a `_target` parameter or reads the string `"_target"` from its source (`kwargs.get("_target")`). Only the legacy parameter policy sends `_target`; a strict client sends `field` for `dj-input`, `dj-change`, `dj-blur` and `dj-focus`. A `_target` parameter under the strict policy is a `djust.V016` error and is not repeated here.
+- **What it detects**: a handler that reads the string `"_target"` from its source (`kwargs.get("_target")`). Only the removed 1.x legacy parameter policy sent `_target`; the client sends `field` for `dj-input`, `dj-change`, `dj-blur` and `dj-focus`. A `_target` parameter is a `djust.V016` error and is not repeated here.
 - **Fix**: declare `field: str = ""` instead. A `dj-submit` handler receives the pressed submit button as one of its form fields (its `name=value`).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V034"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V034"]`
 
 ### V035 — an explicit sticky child overrides `_on_sticky_update`
 - **Severity**: Warning
 - **Method**: Runtime (class inspection; nothing constructed).
-- **What it detects**: a `LiveView` that overrides `_on_sticky_update`, is explicit-exposure and does not name `sticky_update_inputs`. As a sticky child it is remounted whenever a `{% live_render %}` input changes, so the hook is never called (it ran only for legacy children). Reported once, under the class that defines the hook.
+- **What it detects**: a `LiveView` that overrides `_on_sticky_update` and does not name `sticky_update_inputs`. As a sticky child it is remounted whenever a `{% live_render %}` input changes, so the hook is never called (it ran only on djust 1.3). Reported once, under the class that defines the hook.
 - **Fix**: name the inputs the hook takes with `sticky_update_inputs = ("title",)` (a change to those reuses the child and calls the hook), or delete the hook and read the inputs in `mount()`.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V035"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V035"]`
 
-### V036 — a view or handler uses an attribute or decorator argument djust 2.0.0 removes
-- **Severity**: Warning
-- **Method**: Runtime (class inspection; nothing constructed).
-- **What it detects**: a `LiveView` whose own body sets `cancel_async_on_disconnect`, or an `@event_handler` / `@server_function` with `parameter_policy="legacy"`. djust 2.0.0 refuses both when the class or decorator is created (#4199); until then they still work and this check lists them.
-- **Fix**: delete `cancel_async_on_disconnect` (an explicit view's background work is cancelled when its connection closes; work that must finish belongs in a task queue), and annotate the handler's parameters (`djust.V033` lists what the strict policy would refuse) before deleting `parameter_policy="legacy"`.
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["V036"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.V036"]`
+### V036 — Retired
+- **Retired in**: 2.0 (the spellings were refused, #4199)
+- **What it did**: warned about a `LiveView` that set `cancel_async_on_disconnect`, or an `@event_handler` / `@server_function` with `parameter_policy="legacy"`, ahead of their removal
+- **Why it was retired**: `cancel_async_on_disconnect = True` now raises `ImproperlyConfigured` when the class is created, and `parameter_policy="legacy"` when the decorator applies, each naming the replacement
+- **Migration**: remove `"V036"` from `suppress_checks`, `SILENCED_SYSTEM_CHECKS` and `# noqa` comments at your convenience; they now have no effect. The ID is never reused
 
 ### V037 — `sw_cacheable = True` on a view that is not the same for every visitor
 - **Severity**: Warning
@@ -1330,13 +1308,6 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   whatever `DEBUG` is; `"error"` raises `UnsuppliedTemplateNameError` on every
   such render, which fails a test, #4279); at render time the `X_count` notice is given only when `X` is a
   QuerySet, list, tuple or set (the values 1.x counted).
-
-### T028 — a template binding the strict policy would refuse
-- **Severity**: Warning
-- **Method**: Template scan (the ADR-037 binding scan; follows `{% extends %}` and `{% include %}`).
-- **What it detects**: an event binding whose handler runs under the legacy parameter policy and which sends something the strict policy would refuse: a `data-*` argument (strict handlers receive only `dj-value-*`), an argument the handler does not declare, or a value its annotation cannot accept. The same rules as `djust.T020` and `djust.T021`, applied to a handler that is still legacy, so the change can be made before strict becomes the only policy. A noqa comment works as for T020: `{# noqa: T028 -- reason #}`.
-- **Fix**: pass arguments with `dj-value-*` instead of `data-*` and make the handler's declared parameters match what the binding sends.
-- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T028"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.T028"]`
 
 ### T029 — Python code emits a `data-*` event argument
 - **Severity**: Warning

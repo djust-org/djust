@@ -103,11 +103,11 @@ def clear_presets(tag_name: Optional[str] = None) -> None:
 
 _BUTTON_PRESETS: Dict[str, Dict[str, Any]] = {
     "danger-confirm": {
-        "variant": "danger",
+        "variant": "destructive",
         "icon": "⚠",
     },
     "danger-sm": {
-        "variant": "danger",
+        "variant": "destructive",
         "size": "sm",
     },
     "primary-lg": {

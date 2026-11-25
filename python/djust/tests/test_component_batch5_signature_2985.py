@@ -143,13 +143,13 @@ class TestMarkup:
     @pytest.mark.parametrize(
         "given,expected",
         [
-            (204800, "204800"),
+            (204800, "60000"),
             (50_000, "50000"),
             (1, "1024"),
             (-5, "1024"),
-            ("x", "204800"),
-            (None, "204800"),
-            (1e999, "204800"),
+            ("x", "60000"),
+            (None, "60000"),
+            (1e999, "60000"),
         ],
     )
     def test_max_bytes_is_a_sane_integer(self, given, expected):

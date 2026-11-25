@@ -50,7 +50,8 @@ from djust.websocket import LiveViewConsumer
 from ._ws_frames import drain_extra, receive_type, types_of
 
 SENTINEL = "E1_ENTRY_SCOPE_SENTINEL"
-NONLEGACY = ["explicit", None, "invalid"]
+# Only "explicit": any other policy is refused when the class is created (#4199).
+NONLEGACY = ["explicit"]
 POLICIES = NONLEGACY
 STATIC_LOG = "Protected view operation failed"
 

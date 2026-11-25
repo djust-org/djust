@@ -13,6 +13,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { openContracts } from './_open_contracts.js';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
@@ -35,7 +36,7 @@ const UP = ({ slot = 'photos', max = 3, maxSize = 0, event = 'photos_uploaded', 
 
 function createEnv(bodyHtml, { preRegister, dataTransfer = true, setFiles = true, connected = true } = {}) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body><div dj-root>${bodyHtml}</div></body></html>`,
+        `<!DOCTYPE html><html><body><div dj-root dj-view="test.V">${bodyHtml}</div>${openContracts(bodyHtml)}</body></html>`,
         { url: 'http://localhost:8000/test/', runScripts: 'dangerously', pretendToBeVisual: true },
     );
     const { window } = dom;
@@ -50,6 +51,7 @@ function createEnv(bodyHtml, { preRegister, dataTransfer = true, setFiles = true
     } catch (_e) {
         // client.js may throw on DOM APIs jsdom lacks; hooks still load.
     }
+    // The page's contract block is read at init, which this env does not fire.
     const urls = { made: [], revoked: [] };
     let n = 0;
     window.URL.createObjectURL = (f) => { const u = `blob:mock/${++n}/${f.name}`; urls.made.push(u); return u; };
@@ -65,7 +67,9 @@ function createEnv(bodyHtml, { preRegister, dataTransfer = true, setFiles = true
     window.djust.uploads = window.djust.uploads || {};
     window.djust.uploads.activeUploads = new Map();
     window.djust.uploads.cancelUpload = vi.fn((ref) => { window.djust.uploads.activeUploads.delete(ref); });
-    window.djust.liveViewInstance = connected ? { ws: { readyState: 1 } } : null;
+    // The page's dj-view starts the client's own connection at init; keep the stub.
+    const instance = connected ? { ws: { readyState: 1 } } : null;
+    Object.defineProperty(window.djust, 'liveViewInstance', { get: () => instance, set: () => {}, configurable: true });
     if (preRegister) preRegister(window);
     return { window, warnings, urls, sent, setFiles };
 }

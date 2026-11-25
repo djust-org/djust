@@ -189,7 +189,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (LT, "rendered_stamped = _stamp_view_id(rendered_inner, view_id)"),
     ),
     (LT, "live_render"): S(
-        2,
+        1,
         "ids and the CSP nonce are escape()'d, lazy['trigger'] is checked against ('flush', 'visible'), the child body is a template render stamped by _stamp_view_id. The one formerly raw piece, lazy['placeholder'], goes through conditional_escape since #3819: a marked-safe value is markup, a plain str is text (Django's own rule)",
         (LT, 'if lazy_config["trigger"] not in ("flush", "visible"):'),
         (
@@ -198,7 +198,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         ),
         (LT, 'custom_placeholder = lazy_config["placeholder"]'),
         (LT, "inner = str(conditional_escape(custom_placeholder))"),
-        unreached="legacy child wrapper, removed by #4199",
     ),
     (CH, "HeatmapNode.render"): S(
         1,

@@ -11,7 +11,8 @@ Provides utilities to:
 from typing import Dict, Any
 from functools import lru_cache
 
-from .presets import THEME_PRESETS, ThemePreset, ThemeTokens, get_preset
+from .presets import THEME_PRESETS, ThemePreset, get_preset
+from ._types import ThemeTokens
 
 
 def generate_tailwind_config(

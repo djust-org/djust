@@ -5,8 +5,7 @@ Tests for the private (_-prefixed) attribute capture helpers.
 page-POST fallback runs ``mount()`` again, which rebuilds them); the tests of
 that save and of the reconnect restore were removed with it. The cases of the
 legacy ``_get_private_state`` / ``_restore_private_state`` helpers are removed
-too: they refuse on an explicit view, and the framework's own use of them
-(the legacy ``lazy=True`` child) goes with that path.
+too: the helpers were deleted with the legacy children (#4200).
 
 Fixes: #627, #611
 """
@@ -104,8 +103,7 @@ class TestFrameworkAttrs:
         assert "_components" in view._framework_attrs
         assert "_streams" in view._framework_attrs
         # _framework_attrs itself is NOT in the snapshot (set as last line),
-        # but it's still a framework attr that _get_private_state skips
-        # because it's in _framework_attrs OR because it's the sentinel itself.
+        # but it's still a framework attr, in ``_framework_attrs`` or the sentinel itself.
 
     def test_user_attrs_not_in_framework_attrs(self):
         view = PrivateAttrView()

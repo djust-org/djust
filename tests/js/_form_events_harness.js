@@ -8,17 +8,19 @@
  */
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
+import { packManifest } from './_parameter_manifest.js';
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
 export const param = (name, type, kind = 'positional_or_keyword', required = true) =>
     ({name, type, kind, required, reduced_checking: type === 'Any'});
 export const strict = (...parameters) => ({policy: 'strict', coerce_types: true, parameters});
-export const legacy = () => ({policy: 'legacy'});
+/** A handler that takes `**kwargs: Any`: every generated value reaches it. */
+export const anyArgs = () => strict(param('kwargs', 'Any', 'var_keyword', false));
 
 /**
  * @param {string} body markup inside the dj-view root
- * @param {object} handlers handler name -> contract (strict(...) / legacy())
+ * @param {object} handlers handler name -> contract (strict(...) / anyArgs())
  * @param {(request) => object} respond builds the JSON response body for each
  *        request ({event, params, calls, window}); default is an empty patch list.
  * @param {{transport?: 'http'|'ws'}} options `ws` drives the real WebSocket client
@@ -28,7 +30,7 @@ export const legacy = () => ({policy: 'legacy'});
  */
 export function setup(body, handlers = {}, respond = () => ({patches: []}), options = {}) {
     const ws = options.transport === 'ws';
-    const contracts = {version: 1, owners: [{view_id: null, component_id: null, handlers}]};
+    const contracts = packManifest({version: 1, owners: [{view_id: null, component_id: null, handlers}]});
     const block = `<script type="application/json" data-djust-parameter-contracts>${
         JSON.stringify({view: 'app.Page', contracts})}</script>`;
     const dom = new JSDOM(

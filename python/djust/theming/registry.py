@@ -9,9 +9,8 @@ into ``registry`` — breaking the ``registry ↔ theme_packs`` and
 
 This module owns the *discovery* logic (the only edges from the registry toward
 ``theme_packs`` / ``manifest`` / ``_builtin_presets`` / ``_config``) and installs
-it as the registry's discovery hook at import time. It re-exports
-``ThemeRegistry`` / ``get_registry`` for back-compat, so existing imports such as
-``from djust.theming.registry import get_registry`` keep working unchanged.
+it as the registry's discovery hook at import time. ``ThemeRegistry`` and
+``get_registry`` are imported for its own use; import them from ``djust.theming``.
 """
 
 import importlib
@@ -19,9 +18,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-# Re-export the singleton + accessor from the leaf for back-compat. External
-# callers and ``__init__`` import these from ``.registry``; identity is preserved.
-from ._registry_accessor import (  # noqa: F401
+from ._registry_accessor import (
     ThemeRegistry,
     get_registry,
     set_discovery_hook,
@@ -154,7 +151,7 @@ def register_preset(name: str, preset: Any) -> None:
     Call in your AppConfig.ready():
 
         from djust.theming.registry import register_preset
-        from djust.theming.presets import ThemePreset, ThemeTokens
+        from djust.theming import ThemePreset, ThemeTokens
 
         register_preset("my_brand", ThemePreset(
             name="my_brand",

@@ -623,7 +623,7 @@ class TestStickyHoldOrdering:
     """
 
     def test_sticky_hold_frame_sent_before_mount_frame(self):
-        """Drive the real ``handle_mount`` through an in-memory fake
+        """Drive the real ``_mount_page`` through an in-memory fake
         consumer with ``sticky_preserved`` supplied. Assert the index
         of the ``sticky_hold`` payload in the ``send_json`` call list
         is LESS than the index of the ``mount`` payload."""
@@ -642,10 +642,10 @@ class TestStickyHoldOrdering:
 
         consumer = _FakeConsumer()
 
-        # Minimal inline fake that satisfies the handle_mount contract.
+        # Minimal inline fake that satisfies the _mount_page contract.
         # We synthesize the "mount" frame + the pre-mount sticky_hold
         # emission path by invoking the block directly — running the
-        # full handle_mount would require the Rust renderer and a
+        # full _mount_page would require the Rust renderer and a
         # channel layer. The block under test is deterministic and
         # small: render HTML -> scan slots -> send sticky_hold ->
         # send mount. We test the SEND ORDER in that exact shape by
@@ -675,10 +675,8 @@ class TestStickyHoldOrdering:
         # Replicate the site-under-test inline (keeps the assertion
         # anchored to the ORDER contract without needing the full
         # Rust renderer). This is exactly the sequence
-        # ``handle_mount`` emits when ``sticky_preserved`` is non-empty.
+        # ``_mount_page`` emits when ``sticky_preserved`` is non-empty.
         async def _emit_sequence():
-            from djust.websocket import _find_sticky_slot_ids
-
             matched = _find_sticky_slot_ids(html)
             survivors_final: dict = {}
             for sid, c in sticky_preserved.items():
@@ -705,7 +703,7 @@ class TestStickyHoldOrdering:
         )
 
     def test_handle_mount_emits_sticky_hold_when_preserved_dict_provided(self):
-        """When ``sticky_preserved`` is passed to ``handle_mount``, the
+        """When ``sticky_preserved`` is passed to ``_mount_page``, the
         sticky_hold frame is included in the outbound frame sequence.
         This locks the PARAMETER contract — if the kwarg is dropped in
         a future refactor, this test fails."""
@@ -713,9 +711,9 @@ class TestStickyHoldOrdering:
 
         from djust.websocket import LiveViewConsumer
 
-        sig = inspect.signature(LiveViewConsumer.handle_mount)
+        sig = inspect.signature(LiveViewConsumer._mount_page)
         assert "sticky_preserved" in sig.parameters, (
-            "handle_mount must accept sticky_preserved kwarg so the "
+            "_mount_page must accept sticky_preserved kwarg so the "
             "live_redirect path can request pre-mount sticky_hold emission."
         )
         # Default must be None so normal mounts don't trip the sticky branch.
@@ -805,13 +803,13 @@ class TestLiveRedirectRequestResolverMatch:
 
 
 # ---------------------------------------------------------------------------
-# Self-review Fix #4: handle_mount failure drains staged stickys
+# Self-review Fix #4: _mount_page failure drains staged stickys
 # ---------------------------------------------------------------------------
 
 
 class TestHandleLiveRedirectMountCleansStickyOnFailure:
     """Regression test for Fix #4 — a render/auth failure in the NEW
-    view's ``handle_mount`` MUST drain any staged sticky children so
+    view's ``_mount_page`` MUST drain any staged sticky children so
     their background work / async tasks clean up. Without this, the
     stickys sit on ``self._sticky_preserved`` with zombie tasks
     running against a detached view."""
@@ -840,7 +838,7 @@ class TestHandleLiveRedirectMountCleansStickyOnFailure:
                 self._tick_task = None
                 self.view_instance = None
 
-            async def handle_mount(self, data, sticky_preserved=None, state_snapshot=None):  # type: ignore[override]
+            async def _mount_page(self, data, sticky_preserved=None, state_snapshot=None):  # type: ignore[override]
                 # Simulate a render-time failure AFTER preserved
                 # children are staged — e.g. Rust renderer raised,
                 # auth on the new view denied mid-way, etc.
@@ -861,7 +859,7 @@ class TestHandleLiveRedirectMountCleansStickyOnFailure:
 
         # Pre-stage stickys directly (simulates the outcome of
         # _preserve_sticky_children). handle_live_redirect_mount runs
-        # the staging step, then the wrapped handle_mount — we monkey-
+        # the staging step, then the wrapped _mount_page — we monkey-
         # patch the staging step via a parent-view mock.
         child_a = _FakeChild("audio")
         child_b = _FakeChild("chat")
@@ -1041,11 +1039,11 @@ class TestDisconnectDrainsStickyPreserved:
     """Regression test for Fix F2 — the WS disconnect path must call
     ``_on_sticky_unmount`` on any sticky child left in
     ``self._sticky_preserved`` (narrow window during a live_redirect where
-    the old view has staged survivors but ``handle_mount`` of the new view
+    the old view has staged survivors but ``_mount_page`` of the new view
     has not yet reattached them).
 
     Without this drain, a disconnect that lands between
-    ``_preserve_sticky_children`` and a successful ``handle_mount`` would
+    ``_preserve_sticky_children`` and a successful ``_mount_page`` would
     leak each sticky child's background tasks on a zombie consumer.
     """
 

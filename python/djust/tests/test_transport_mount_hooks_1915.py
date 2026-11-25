@@ -4,7 +4,7 @@ Phase 3.2 DEFINES the 5 transport mount-hooks the Phase 3.3b WS-mount flip needs
 exactly how Phase 2.3a defined the event hooks (``event_context`` /
 ``on_event_recorded``) DORMANT before the event flip
 wired + routed them. ``dispatch_mount`` does NOT call these hooks yet (Phase 3.3a
-wires them), and the bespoke WS ``handle_mount`` keeps doing all of this inline
+wires them), and the bespoke WS ``_mount_page`` keeps doing all of this inline
 (untouched until 3.3b). So this PR changes NO live behavior.
 
 The hooks (on the ``Transport`` protocol + ``WSConsumerTransport`` real impl +
@@ -30,7 +30,7 @@ The hooks (on the ``Transport`` protocol + ``WSConsumerTransport`` real impl +
 Each hook gets a MockTransport unit test + (for the WS impl) a real-
 ``WebsocketCommunicator`` test exercising it in ISOLATION against a genuinely
 mounted consumer. Plus a DORMANT-verification suite: ``dispatch_mount`` does not
-yet call the hooks (structural pin) and ``handle_mount`` still does the work
+yet call the hooks (structural pin) and ``_mount_page`` still does the work
 inline (unchanged).
 """
 
@@ -214,9 +214,7 @@ def test_sse_next_mount_version_returns_raw_rust_version():
 
 
 @pytest.mark.asyncio
-async def test_ws_on_mount_render_ready_emits_sticky_hold_for_a_child_the_tag_reattached(
-    monkeypatch,
-):
+async def test_ws_on_mount_render_ready_emits_sticky_hold_for_a_child_the_tag_reattached():
     """An explicit survivor is kept only when the ``{% live_render %}`` tag re-attached it
     (its expected class, inputs and request identity passed); the hook then reports it."""
     consumer = _FakeConsumer()
@@ -226,10 +224,6 @@ async def test_ws_on_mount_render_ready_emits_sticky_hold_for_a_child_the_tag_re
     child = SimpleNamespace(exposure_policy="explicit")
     consumer._sticky_preserved = {"slot-a": child}
     consumer._sticky_auto_reattached = {"slot-a"}
-
-    import djust.websocket as ws_mod
-
-    monkeypatch.setattr(ws_mod, "_find_sticky_slot_ids", lambda html: {"slot-a"})
 
     html_in = '<div dj-sticky-slot="slot-a"></div>'
     html_out = await transport.on_mount_render_ready(view, html_in)
@@ -243,9 +237,7 @@ async def test_ws_on_mount_render_ready_emits_sticky_hold_for_a_child_the_tag_re
 
 
 @pytest.mark.asyncio
-async def test_ws_on_mount_render_ready_drops_an_explicit_child_slot_markup_alone_cannot_reattach(
-    monkeypatch,
-):
+async def test_ws_on_mount_render_ready_drops_an_explicit_child_slot_markup_alone_cannot_reattach():
     """Bare slot markup cannot authorize an explicit child's reattachment: it is discarded."""
     consumer = _FakeConsumer()
     transport = WSConsumerTransport(consumer)
@@ -253,10 +245,6 @@ async def test_ws_on_mount_render_ready_drops_an_explicit_child_slot_markup_alon
 
     child = SimpleNamespace(exposure_policy="explicit")
     consumer._sticky_preserved = {"slot-a": child}
-
-    import djust.websocket as ws_mod
-
-    monkeypatch.setattr(ws_mod, "_find_sticky_slot_ids", lambda html: {"slot-a"})
 
     await transport.on_mount_render_ready(view, '<div dj-sticky-slot="slot-a"></div>')
 
@@ -381,7 +369,7 @@ def test_protocol_defaults_are_behavior_preserving():
 
 # --------------------------------------------------------------------------- #
 # DORMANT verification: dispatch_mount does NOT call the new hooks yet,
-# and the bespoke WS handle_mount still does the work inline (#1915).
+# and the bespoke WS _mount_page still does the work inline (#1915).
 # --------------------------------------------------------------------------- #
 
 
@@ -451,8 +439,8 @@ def test_dispatch_mount_stamps_version_via_next_mount_version():
 
 
 def test_bespoke_handle_mount_inline_work_moved_to_hooks_post_flip():
-    """Post-#1919 (THE MOUNT FLIP): the ~870-line bespoke ``handle_mount`` body was
-    DELETED — ``handle_mount`` is now a THIN SHIM over ``runtime.dispatch_mount``.
+    """Post-#1919 (THE MOUNT FLIP): the ~870-line bespoke ``_mount_page`` body was
+    DELETED — ``_mount_page`` is now a THIN SHIM over ``runtime.dispatch_mount``.
     The inline sites this test used to pin (the back-ref stamps, the no-arm version
     stamp, the #291 batch-gated close) MOVED into the ``WSConsumerTransport`` hooks
     (``on_view_instantiated`` / ``next_mount_version`` / ``finalize_mount_auth``).
@@ -460,9 +448,9 @@ def test_bespoke_handle_mount_inline_work_moved_to_hooks_post_flip():
     the hook IMPLS are exercised by the real-WebsocketCommunicator tests below."""
     from djust.websocket import LiveViewConsumer
 
-    src = inspect.getsource(LiveViewConsumer.handle_mount)
+    src = inspect.getsource(LiveViewConsumer._mount_page)
     # The shim delegates to the runtime; the inline work is gone.
-    assert "dispatch_mount(" in src, "handle_mount must be a shim over dispatch_mount post-flip"
+    assert "dispatch_mount(" in src, "_mount_page must be a shim over dispatch_mount post-flip"
     assert "_ws_consumer = self" not in src, (
         "the _ws_consumer back-ref stamp MOVED to on_view_instantiated (Finding B); "
         "it must NOT be inline in the shim"
@@ -482,7 +470,7 @@ def test_bespoke_handle_mount_inline_work_moved_to_hooks_post_flip():
 # against a genuinely-mounted ``LiveViewConsumer`` (no MockTransport). The
 # consumer is established by a real connect+mount; we retrieve it via the
 # observability registry (``view._ws_consumer`` is stamped inline by the
-# bespoke handle_mount), wrap it in ``WSConsumerTransport``, and call the hooks
+# bespoke _mount_page), wrap it in ``WSConsumerTransport``, and call the hooks
 # directly — proving the WS impls behave correctly against the real consumer.
 # --------------------------------------------------------------------------- #
 
@@ -517,7 +505,7 @@ async def _connect_mount_and_get_consumer(view_path: str, url: str = "/mh-1915/"
     """Connect a real ``WebsocketCommunicator``, mount ``view_path``, and return
     ``(communicator, consumer, mount_frame)`` — ``consumer`` is the LIVE
     ``LiveViewConsumer`` retrieved from the observability registry via
-    ``view._ws_consumer`` (stamped by the bespoke handle_mount)."""
+    ``view._ws_consumer`` (stamped by the bespoke _mount_page)."""
     from channels.testing import WebsocketCommunicator
     from django.contrib.sessions.backends.db import SessionStore
 

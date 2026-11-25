@@ -396,7 +396,6 @@ _GATE_SKIP_FILES = {
 # (file, function, receiver): reviewed, not a shared class/module namespace.
 _GATE_ALLOWED = {
     # Per-view instance dicts: owned by one session, mutated on its own turn.
-    ("observability/views.py", "_lenient_assigns", "view"),
     ("runtime.py", "handler", "view"),
     ("runtime.py", "_dispatch_event_render", "view"),
     # Function attributes copied once in ``as_view`` (Django's own pattern).

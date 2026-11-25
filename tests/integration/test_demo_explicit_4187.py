@@ -3,7 +3,7 @@
 The demo stated the legacy exposure policy on its shared navbar base (and
 so on every page built on it), on the navbar examples and on a deliberate
 legacy twin of the exposure matrix, and one strict-parameters handler stated
-``parameter_policy="legacy"``. Under ``event_parameter_policy = "strict"``
+``parameter_policy="legacy"``. Under strict event parameters
 the checks reported unannotated handler parameters (V016) and ``data-*``
 arguments a strict handler never receives (T020). Each page now declares its
 state with ``state()``, hands render-only values over in
@@ -41,7 +41,6 @@ from pathlib import Path
 
 import pytest
 from asgiref.sync import sync_to_async
-from django.test import override_settings
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -74,7 +73,7 @@ def _demo_python_files():
 
 
 def test_the_scan_finds_what_it_claims_to_find():
-    # Built, not written: tests/legacy_exposure_ledger.py counts a literal one.
+    # Built, not written, so this file states no literal legacy policy.
     legacy = '"' + "legacy" + '"'
     assert LEGACY_STATEMENT.search("    exposure_policy = " + legacy)
     assert LEGACY_STATEMENT.search("@event_handler(parameter_policy=%s)" % legacy.replace('"', "'"))
@@ -122,14 +121,12 @@ def _demo_views():
 
 
 def test_every_demo_view_runs_under_explicit_exposure():
-    from djust._exposure import uses_legacy_exposure
-
     views = _demo_views()
     assert len(views) > 100, len(views)
     legacy = sorted(
         "%s.%s" % (cls.__module__, cls.__qualname__)
         for cls in views
-        if uses_legacy_exposure(cls) or cls.exposure_policy != "explicit"
+        if cls.exposure_policy != "explicit"
     )
     assert legacy == []
 
@@ -137,25 +134,19 @@ def test_every_demo_view_runs_under_explicit_exposure():
 def test_the_demo_is_clean_under_strict_event_parameters():
     """V016 (an invalid strict contract), T019 (an event strict mode refuses),
     T020 (an argument a strict handler never receives) and V029 (a change the
-    HTTP fallback loses), with ``event_parameter_policy = "strict"``."""
-    from django.conf import settings
-
+    HTTP fallback loses)."""
     from djust.checks.bindings import check_event_bindings
     from djust.checks.components import check_undeclared_handler_state
     from djust.checks.parameters import check_event_parameter_contracts
-    from djust.validation import get_project_parameter_policy
 
     _demo_views()
-    config = {**getattr(settings, "LIVEVIEW_CONFIG", {}), "event_parameter_policy": "strict"}
-    with override_settings(LIVEVIEW_CONFIG=config):
-        assert get_project_parameter_policy() == "strict"
-        found = [
-            "%s %s" % (m.id, m.msg)
-            for m in list(check_event_parameter_contracts(None))
-            + list(check_event_bindings(None))
-            + list(check_undeclared_handler_state(None))
-            if m.id in ("djust.V016", "djust.T019", "djust.T020", "djust.V029")
-        ]
+    found = [
+        "%s %s" % (m.id, m.msg)
+        for m in list(check_event_parameter_contracts(None))
+        + list(check_event_bindings(None))
+        + list(check_undeclared_handler_state(None))
+        if m.id in ("djust.V016", "djust.T019", "djust.T020", "djust.V029")
+    ]
     demo = re.compile(r"(?<![\w.])(?:%s)[./][\w./]+" % "|".join(map(re.escape, DEMO_APPS)))
     # A view class defined by a docs snippet (tests/test_doc_snippets_execute.py,
     # module ``doc_snippet_*``) can name a demo template and outlive its test in

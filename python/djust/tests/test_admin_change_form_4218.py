@@ -8,7 +8,7 @@ These tests do not hand-write the payloads. They read the rendered page (the
 field's ``dj-input`` / ``dj-change`` binding, the form's ``dj-submit`` and its
 buttons) and build each event the way the client builds it
 (``09-event-binding.js``: ``_handleDjInput`` / ``_handleDjChange`` /
-``_handleDjSubmit``, legacy and strict), then send it over the WebSocket, SSE
+``_handleDjSubmit``), then send it over the WebSocket, SSE
 or the HTTP fallback POST. The earlier admin tests sent ``update_field``, an
 event the page never sends, which is how the refusal went unseen.
 """
@@ -31,10 +31,10 @@ from django.test import Client
 from django.urls import path
 
 from djust.admin_ext import DjustAdminSite, DjustModelAdmin
-from djust.config import config
 from djust.tests.test_admin_page_render import _Socket, _session_cookie
 from djust.tests.test_framework_classes_explicit_4185 import _post, _sse_request, _tab
 from djust_rentals.models import Property
+from djust._parameter_metadata import expand_parameter_manifest
 
 pytestmark = pytest.mark.admin
 
@@ -160,14 +160,6 @@ def site_urls(settings):
     _reset_route_map_cache()
 
 
-@pytest.fixture(params=["legacy", "strict"])
-def policy(request):
-    previous = config.get("event_parameter_policy", "legacy")
-    config.set("event_parameter_policy", request.param)
-    yield request.param
-    config.set("event_parameter_policy", previous)
-
-
 # --------------------------------------------------------------------------- #
 # A page model and the client's event construction
 # --------------------------------------------------------------------------- #
@@ -212,7 +204,9 @@ class _Page(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "script" and self._contracts is not None:
             block = json.loads("".join(self._contracts))
-            (owner,) = [o for o in block["contracts"]["owners"] if o["view_id"] is None]
+            (owner,) = [
+                o for o in expand_parameter_manifest(block["contracts"]) if o["view_id"] is None
+            ]
             self.contracts = owner["handlers"]
             self._contracts = None
         elif tag == "select":
@@ -303,13 +297,7 @@ def field_event(page: _Page, name: str, value: Any):
     assert binding, "the field %s has no live binding: %s" % (name, attrs)
     event, args = _parse_handler(binding)
     generated = {"value": value, "field": attrs.get("data-field") or name}
-    if _contract(page, event)["policy"] == "strict":
-        return event, _strict(page, event, generated, args)
-    params = dict(generated)
-    if args:
-        params["_args"] = args
-    params["_target"] = name
-    return event, params
+    return event, _strict(page, event, generated, args)
 
 
 def submit_event(page: _Page, typed: dict, button: Optional[str]):
@@ -330,12 +318,9 @@ def submit_event(page: _Page, typed: dict, button: Optional[str]):
     pressed = [b for b in page.buttons if b.get("type") == "submit" and b.get("name") == button]
     assert len(pressed) == 1, (button, page.buttons)
     submitter = pressed[0]
-    if _contract(page, event)["policy"] == "strict":
-        if submitter.get("name"):
-            values[submitter["name"]] = submitter.get("value", "")
-        return event, _strict(page, event, values, [])
-    values["_target"] = submitter.get("name") or submitter.get("id") or None
-    return event, values
+    if submitter.get("name"):
+        values[submitter["name"]] = submitter.get("value", "")
+    return event, _strict(page, event, values, [])
 
 
 # --------------------------------------------------------------------------- #
@@ -515,7 +500,7 @@ TRANSPORTS = ["websocket", "sse", "http"]
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("transport", TRANSPORTS)
-async def test_change_form_saves_what_was_typed(site_urls, django_user_model, transport, policy):
+async def test_change_form_saves_what_was_typed(site_urls, django_user_model, transport):
     row = await _seed()
     browser = await _staff(django_user_model)
     run = _Run(transport, browser, DETAIL_VIEW, "%s%d/change/" % (LIST, row.pk))
@@ -530,7 +515,7 @@ async def test_change_form_saves_what_was_typed(site_urls, django_user_model, tr
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("transport", TRANSPORTS)
-async def test_add_form_saves_what_was_typed(site_urls, django_user_model, transport, policy):
+async def test_add_form_saves_what_was_typed(site_urls, django_user_model, transport):
     browser = await _staff(django_user_model)
     run = _Run(transport, browser, CREATE_VIEW, LIST + "add/")
     page = _Page(await run.html())
@@ -547,7 +532,7 @@ async def test_add_form_saves_what_was_typed(site_urls, django_user_model, trans
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("transport", TRANSPORTS)
-async def test_a_typed_field_is_validated(site_urls, django_user_model, transport, policy):
+async def test_a_typed_field_is_validated(site_urls, django_user_model, transport):
     """The typed value reaches the form and is validated: a blank required field reports it."""
     row = await _seed()
     browser = await _staff(django_user_model)
@@ -575,7 +560,7 @@ async def test_save_without_the_forms_values_fails_loudly(site_urls, django_user
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("transport", TRANSPORTS)
-async def test_save_saves_the_values_it_carries(site_urls, django_user_model, transport, policy):
+async def test_save_saves_the_values_it_carries(site_urls, django_user_model, transport):
     """No field event arrived (a lost one, or none sent): Save alone saves the form on the page,
     and an unchecked checkbox (absent from the submission, as in a native post) saves False."""
     row = await _seed()
@@ -594,10 +579,8 @@ async def test_save_saves_the_values_it_carries(site_urls, django_user_model, tr
     "button, goes_to",
     [(None, "property/"), ("save_and_continue", None), ("save_and_add_another", "property/add/")],
 )
-async def test_each_button_goes_where_it_says(
-    site_urls, django_user_model, policy, button, goes_to
-):
-    """The pressed button reaches ``save`` (its name=value under strict, ``_target`` under legacy)
+async def test_each_button_goes_where_it_says(site_urls, django_user_model, button, goes_to):
+    """The pressed button reaches ``save`` (its name=value)
     and the page goes where the button says."""
     row = await _seed()
     browser = await _staff(django_user_model)
@@ -624,7 +607,7 @@ async def test_each_button_goes_where_it_says(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("transport", TRANSPORTS)
 async def test_add_then_continue_goes_to_the_new_rows_change_page(
-    site_urls, django_user_model, transport, policy
+    site_urls, django_user_model, transport
 ):
     """As in Django: the add page does not stay an add page (its next Save would add again)."""
     browser = await _staff(django_user_model)
@@ -650,7 +633,7 @@ async def test_continue_on_a_change_page_stays(site_urls, django_user_model, tra
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("transport", TRANSPORTS)
 async def test_a_forged_frame_does_not_write_readonly_or_excluded_fields(
-    site_urls, django_user_model, transport, policy
+    site_urls, django_user_model, transport
 ):
     row = await _seed()
     await sync_to_async(Property.objects.filter(pk=row.pk).update)(description="kept")
@@ -770,7 +753,7 @@ async def test_an_add_page_with_a_required_readonly_field_saves(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("transport", TRANSPORTS)
 async def test_a_forged_frame_does_not_write_a_field_the_admin_does_not_show(
-    site_urls, django_user_model, transport, policy
+    site_urls, django_user_model, transport
 ):
     """The custom form declares ``status`` and ``description``; ``ModelAdmin.fields`` leaves
     them off the page, so they are not the client's to write."""

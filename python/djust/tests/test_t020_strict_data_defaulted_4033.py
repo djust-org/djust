@@ -36,7 +36,6 @@ class Gap(LiveView):
 <button dj-click="pick" data-item-id="3" dj-value-item-id:int="3">both</button>
 <button dj-click="pick(3)" data-item-id="3">positional</button>
 <button dj-click="pick" data-other="3">undeclared</button>
-<button dj-click="loose" data-item-id="3">legacy</button>
 </div>"""
 
     @event_handler(parameter_policy="strict")
@@ -47,9 +46,6 @@ class Gap(LiveView):
     def need(self, item_id: int):
         pass
 
-    @event_handler(parameter_policy="legacy")
-    def loose(self, item_id: int = 0, **kwargs):
-        pass
 '''
 
 
@@ -72,8 +68,7 @@ def module(tmp_path):
 def _all(owner):
     engine = django_engine()
     assert engine is not None
-    # T028 is the 1.3 shape of these bindings (a legacy handler); it has its own tests.
-    return [m for m in _messages([scan_owner(owner, "view", engine, {})]) if m.id != "djust.T028"]
+    return list(_messages([scan_owner(owner, "view", engine, {})]))
 
 
 def _found(owner):
@@ -99,6 +94,6 @@ def test_required_parameter_is_still_reported_once(module):
     assert message.msg.endswith("need() requires 'item_id', which this binding never sends.")
 
 
-@pytest.mark.parametrize("text", [">sent<", ">both<", ">positional<", ">undeclared<", ">legacy<"])
-def test_bindings_that_send_the_argument_or_are_not_strict_are_quiet(module, text):
+@pytest.mark.parametrize("text", [">sent<", ">both<", ">positional<", ">undeclared<"])
+def test_bindings_that_send_the_argument_are_quiet(module, text):
     assert _line(module, text) not in _found(module.Gap)

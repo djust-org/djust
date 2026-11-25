@@ -15,6 +15,7 @@ push that must NOT arrive is followed by one that must, and the channel layer
 delivers a channel's messages in order.
 """
 
+from typing import Any
 import asyncio
 import json
 import threading
@@ -56,12 +57,12 @@ class GroupPage(LiveView):
         self.log.append(n)
         self.n = n
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def join_room(self, room="", **kwargs):
+    @event_handler
+    def join_room(self, room: str = "", **kwargs: Any):
         self.push_scope = room
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def push_to_my_class(self, n=0, **kwargs):
+    @event_handler
+    def push_to_my_class(self, n: int = 0, **kwargs: Any):
         """A handler that pushes to its own class: the sender skips its own echo (#1677)."""
         from djust import push_to_view
 
@@ -643,12 +644,10 @@ async def test_a_view_mounted_beside_the_page_view_has_its_own_channel():
 
 
 async def test_a_revoked_principal_receives_no_group_push_over_sse():
-    """A group push is a server turn: ``reauth_on_event`` refuses it on SSE as
-    it does on the WebSocket, and the refused view leaves its groups."""
+    """A group push is a server turn: it is authorized against the stored
+    session on SSE as on the WebSocket, and the refused view leaves its groups."""
     from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY
     from django.contrib.auth.models import User
-
-    from djust.config import config
 
     def login():
         user = User.objects.create_user("g3885%s" % uuid.uuid4().hex[:8], password="x")
@@ -659,33 +658,26 @@ async def test_a_revoked_principal_receives_no_group_push_over_sse():
         store.create()
         return user, store.session_key
 
-    previous = (config.get("reauth_on_event"), config.get("reauth_server_turn_interval"))
-    config.set("reauth_on_event", True)
-    config.set("reauth_server_turn_interval", 0)
-    try:
-        user, key = await sync_to_async(login)()
-        sid = str(uuid.uuid4())
-        request = await sync_to_async(_request)(
-            "GET", f"/djust/sse/{sid}/", {"view": MOD + "LoginPage", "_djust_url": "/login/"}, key
-        )
-        assert (await DjustSSEStreamView().get(request, session_id=sid)).status_code == 200
-        session = _sse_sessions[sid]
-        view = session.view_instance
-        channel = _member(session).channel_name
-        await apush_to_view(MOD + "LoginPage", handler="handle_set", payload={"n": 1})
-        await _sse_frames(session, _shows(1))
+    user, key = await sync_to_async(login)()
+    sid = str(uuid.uuid4())
+    request = await sync_to_async(_request)(
+        "GET", f"/djust/sse/{sid}/", {"view": MOD + "LoginPage", "_djust_url": "/login/"}, key
+    )
+    assert (await DjustSSEStreamView().get(request, session_id=sid)).status_code == 200
+    session = _sse_sessions[sid]
+    view = session.view_instance
+    channel = _member(session).channel_name
+    await apush_to_view(MOD + "LoginPage", handler="handle_set", payload={"n": 1})
+    await _sse_frames(session, _shows(1))
 
-        def revoke():
-            SessionStore(key).delete()
-            User.objects.filter(pk=user.pk).update(is_active=False)
+    def revoke():
+        SessionStore(key).delete()
+        User.objects.filter(pk=user.pk).update(is_active=False)
 
-        await sync_to_async(revoke)()
-        await apush_to_view(MOD + "LoginPage", handler="handle_set", payload={"n": 2})
-        await _sse_frames(session, lambda fs: any(f.get("code") == "permission_denied" for f in fs))
-        assert view.log == [1], "a revoked principal's group push applies nothing"
-    finally:
-        config.set("reauth_on_event", previous[0])
-        config.set("reauth_server_turn_interval", previous[1])
+    await sync_to_async(revoke)()
+    await apush_to_view(MOD + "LoginPage", handler="handle_set", payload={"n": 2})
+    await _sse_frames(session, lambda fs: any(f.get("code") == "permission_denied" for f in fs))
+    assert view.log == [1], "a revoked principal's group push applies nothing"
     layer = get_channel_layer()
     await wait_until(lambda: not _all_members(layer, channel), what="the refused view's groups")
 

@@ -89,7 +89,7 @@ SITES = {
 }
 
 
-@pytest.mark.parametrize("where", ["no-turn", "legacy", "explicit"])
+@pytest.mark.parametrize("where", ["no-turn", "explicit"])
 @pytest.mark.parametrize("site", sorted(SITES))
 def test_ownerless_log_sites_follow_the_turn(monkeypatch, caplog, site, where):
     with caplog.at_level(logging.DEBUG), _turn(where):
@@ -98,5 +98,5 @@ def test_ownerless_log_sites_follow_the_turn(monkeypatch, caplog, site, where):
         assert SENTINEL not in caplog.text
         assert "Protected view operation failed" in caplog.text
     else:
-        # Unchanged output outside a nonlegacy turn; also proves the catch ran.
+        # Unchanged output outside a turn; also proves the catch ran.
         assert SENTINEL in caplog.text

@@ -13,7 +13,7 @@ from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Awaitable, Callable, Iterator, Optional, TypeVar
 
-from ._exposure import ExposureError, states_exposure_policy, uses_legacy_exposure
+from ._exposure import ExposureError, states_exposure_policy
 
 PROTECTED_FAILURE = "Protected view operation failed"
 
@@ -62,11 +62,10 @@ def diagnostic_scope() -> Iterator[None]:
 def diagnostics_policy_allows(owner: Any) -> bool:
     """Whether this owner's failures may carry exception details.
 
-    A legacy owner always may, and so may an owner that states no policy at
-    all (see below). Under ``DEBUG`` every owner may, explicit ones
-    included: errors then read like Django's own DEBUG output, with the
+    An owner that states no policy at all may (see below). Under ``DEBUG``
+    every owner may: errors then read like Django's own DEBUG output, with the
     exception, traceback and technical error page (decision D-a, revised
-    2026-09-22). In production a nonlegacy owner's failures are value-free.
+    2026-09-22). In production a view's failures are value-free.
     Debug tooling projections (debug panel, bug capture) and SQL
     parameter capture are not error destinations and stay redacted.
     """
@@ -76,10 +75,7 @@ def diagnostics_policy_allows(owner: Any) -> bool:
         # no policy, so it restricts nothing. It grants nothing either: every
         # caller pairs it with the owners that do exist (the view, its class,
         # an enclosing restricted scope), and any one of those still makes the
-        # failure value-free. Reading it as the default policy would instead
-        # hide a legacy view's failures whenever one of these stood beside it.
-        return True
-    if uses_legacy_exposure(owner):
+        # failure value-free.
         return True
     try:
         from django.conf import settings
@@ -90,7 +86,7 @@ def diagnostics_policy_allows(owner: Any) -> bool:
 
 
 def restrict_diagnostics(view: Any) -> None:
-    """A nonlegacy owner makes the current diagnostic scope value-free,
+    """An owner makes the current diagnostic scope value-free,
     unless ``DEBUG`` is on (see :func:`diagnostics_policy_allows`)."""
     if not diagnostics_policy_allows(view):
         _details_allowed.set(False)
@@ -229,9 +225,9 @@ def log_failure_for(
 ) -> None:
     """:func:`log_failure` for code that runs outside a runtime turn.
 
-    Opens a scope restricted to each owner — any nonlegacy owner restricts, none
-    grants — so background tasks, consumer hooks and SSE flushes that have no
-    turn scope of their own still log value-free for a nonlegacy owner.
+    Opens a scope restricted to each owner — any owner restricts, none grants —
+    so background tasks, consumer hooks and SSE flushes that have no turn scope
+    of their own still log value-free outside ``DEBUG``.
     """
     with diagnostic_scope():
         for owner in owners:
@@ -243,8 +239,9 @@ def exception_details_allowed_for(owners: tuple[Any, ...]) -> bool:
     """Whether exception text may reach a non-log destination for these owners.
 
     The counterpart of :func:`log_failure_for` for sinks that are not log calls
-    (a client push, a stored error field): any nonlegacy owner, or an enclosing
-    restricted scope, makes the answer False; no owner grants details.
+    (a client push, a stored error field): any view owner outside ``DEBUG``, or
+    an enclosing restricted scope, makes the answer False; no owner grants
+    details.
     """
     with diagnostic_scope():
         for owner in owners:
@@ -260,7 +257,7 @@ def owned_diagnostic_scope(
     For transport entry points that run view code without a runtime turn of
     their own (the WebSocket ``receive`` verbs outside ``dispatch_message``).
     Whatever view the owner holds when a catch consults ``diagnostics_allowed``
-    restricts it, and a nested mount scope that fails for a nonlegacy view
+    restricts it, and a nested mount scope that fails for a view
     carries its restriction here.
     """
 
@@ -285,7 +282,7 @@ def _generic_server_error(request: Any, log: Any) -> Any:
 
 
 def protected_http_outcome(exc: BaseException) -> str:
-    """Classify a nonlegacy owner's escaping HTTP failure (ADR-038 D-a).
+    """Classify an owner's escaping HTTP failure (ADR-038 D-a).
 
     ``"raise"``: ``Http404`` and ``PermissionDenied`` keep Django's 404/403
     handling, which renders no frames or locals. ``"bad_request"``: the
@@ -313,7 +310,7 @@ def protected_server_error(
     outcome: str = "server_error",
     exc: Optional[BaseException] = None,
 ) -> Any:
-    """ADR-038 D-a: the HTTP/SSE response for a nonlegacy owner's failure.
+    """ADR-038 D-a: the HTTP/SSE response for an owner's failure.
 
     Call it after the failing ``except`` block has exited. It logs a static
     line, sends ``got_request_exception`` while a fresh value-free

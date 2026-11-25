@@ -226,7 +226,7 @@ async def test_native_mixin_catches_preserve_progress_without_exposing_errors(ca
             )
             owner._queue_deferred_activity_event("panel", "second", {"value": 8})
 
-            async def dispatch(target, event, params):
+            async def dispatch(target, event, params, event_ref=None):
                 assert target is owner
                 called.append((event, params))
                 if event == "first":

@@ -214,3 +214,23 @@ describe('Latency simulator', () => {
         expect(sent.length).toBe(before + 1);
     });
 });
+
+describe('Latency simulator jitter (#4307)', () => {
+    it('never reorders received frames', async () => {
+        const { dom } = createDom();
+        const transport = new dom.window.djust.LiveViewWebSocket();
+        transport.connect('ws://localhost/ws/');
+        const order = [];
+        transport.handleMessage = data => { order.push(data.n); return Promise.resolve(); };
+        dom.window.djust._simulatedLatency = 40;
+        dom.window.djust._simulatedJitter = 1;
+        // The first frame draws the longest delay, the second the shortest.
+        const draws = [0.999, 0];
+        dom.window.Math.random = () => draws.shift() ?? 0.5;
+        transport.ws.onmessage({ data: JSON.stringify({ type: 'noop', n: 1 }) });
+        transport.ws.onmessage({ data: JSON.stringify({ type: 'noop', n: 2 }) });
+        await new Promise(resolve => setTimeout(resolve, 150));
+        expect(order).toEqual([1, 2]);
+        dom.window.close();
+    });
+});

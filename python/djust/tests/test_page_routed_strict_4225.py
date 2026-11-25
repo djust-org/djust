@@ -4,8 +4,8 @@
 ``dj-copy-event`` and ``dj-dialog-close-event`` send no ``component_id`` and
 no ``view_id``, so the runtime runs them on the page's view wherever the
 element sits. The client resolved their strict contract under the nearest
-component or embedded child instead, which lists the same names as legacy
-handlers here, and sent the 1.x envelope the page's strict handler refuses.
+component or embedded child instead, which lists the same names as open
+handlers here, and sent arguments the page's closed strict handler refuses.
 
 The built client runs in jsdom against the real server (``_auto_recover_bridge``):
 a ``WebsocketCommunicator`` on ``LiveViewConsumer``, or the SSE stream and
@@ -33,7 +33,7 @@ from ._auto_recover_bridge import Browser, SSEServer, ws_connect, ws_forward
 CALLS: list = []
 
 #: Each directive's markup; every one names a handler the page declares strict
-#: and the component / child declare legacy.
+#: and the component / child declare open (``**kwargs``).
 MARKUP = {
     "viewport-top": '<div dj-viewport-top="load_more"><p id="vp-first">a</p><p>b</p></div>',
     "viewport-bottom": '<div dj-viewport-bottom="load_more"><p>a</p><p id="vp-last">b</p></div>',
@@ -86,21 +86,21 @@ null
 
 
 class _NestedHandlers:
-    """The page's handler names, as legacy handlers of a nested owner."""
+    """The page's handler names, as open (``**kwargs``) handlers of a nested owner."""
 
-    @event_handler(parameter_policy="legacy")
+    @event_handler
     def load_more(self, **kwargs: Any) -> None:
         CALLS.append(("nested", "load_more", kwargs))
 
-    @event_handler(parameter_policy="legacy")
+    @event_handler
     def mutated(self, **kwargs: Any) -> None:
         CALLS.append(("nested", "mutated", kwargs))
 
-    @event_handler(parameter_policy="legacy")
+    @event_handler
     def copied(self, **kwargs: Any) -> None:
         CALLS.append(("nested", "copied", kwargs))
 
-    @event_handler(parameter_policy="legacy")
+    @event_handler
     def closed(self, **kwargs: Any) -> None:
         CALLS.append(("nested", "closed", kwargs))
 

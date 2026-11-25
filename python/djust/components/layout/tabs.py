@@ -4,6 +4,7 @@ Tabs component for djust.
 Provides tabbed navigation with multiple panels.
 """
 
+from djust.components._alias_deprecation import warn_alias
 from typing import Dict, Any
 from dataclasses import dataclass
 from django.utils.html import conditional_escape
@@ -83,13 +84,14 @@ class TabsComponent(LiveComponent):
         self.vertical = kwargs.get("vertical", False)
         self.action = kwargs.get("action", "activate_tab")  # Custom action name
 
-        # Accept both TabItem objects and dicts for backward compatibility
+        # Dicts are deprecated to 3.0 (#4207): pass TabItem objects
         tabs = kwargs.get("tabs", [])
         self.tabs = []
         for tab in tabs:
             if isinstance(tab, TabItem):
                 self.tabs.append(tab.to_dict())
             else:
+                warn_alias("Tabs", "dict tabs", "TabItem objects")
                 self.tabs.append(tab)
 
         # Set first tab as active if none specified

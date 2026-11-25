@@ -74,7 +74,7 @@ class TestTransportDispatchParity:
 
         return (
             inspect.getsource(LiveViewConsumer._run_async_work_body),
-            inspect.getsource(ViewRuntime._execute_async_task_body),
+            inspect.getsource(ViewRuntime._execute_explicit_async_task),
         )
 
     def test_both_paths_delegate_to_the_shared_helper(self):

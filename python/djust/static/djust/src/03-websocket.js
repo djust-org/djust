@@ -371,6 +371,7 @@ class LiveViewWebSocket {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
+        this._parameterContractHeld = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
@@ -666,13 +667,18 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
+                    // Jitter never reorders frames: a frame is released no
+                    // earlier than the one before it, as a socket delivers
+                    // them (a digest frame follows its full manifest, #4307).
+                    const now = Date.now();
+                    this._simReleaseAt = Math.max(now + actual, this._simReleaseAt || 0);
                     // ``handleMessage`` is the queue-wrapper (#1098); its
                     // returned promise is the chain-tail with an internal
                     // ``.catch`` that already logs and swallows. The
                     // returned promise never rejects, so we just ignore it.
                     setTimeout(() => {
                         this.handleMessage(data, socket);
-                    }, actual);
+                    }, this._simReleaseAt - now);
                 } else {
                     this.handleMessage(data, socket);
                 }
@@ -1148,7 +1154,6 @@ class LiveViewWebSocket {
                 // Determine event name and trigger for loading state
                 const event = acknowledgeEventRequest(this, data);
                 await handleServerResponse(data, event?.eventName, event?.trigger, this);
-                completeLegacyAsyncBatches(this, data);
 
                 // After processing the event response, flush buffered
                 // patches only when ALL pending events have resolved.
@@ -1341,13 +1346,20 @@ class LiveViewWebSocket {
                 // Server is dropping events due to rate limiting — show brief warning, do NOT retry
                 // codeql[js/log-injection] -- data.message is a server-controlled rate limit message
                 console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
-                this._showRateLimitWarning();
-                // Stop loading state if applicable
-                if (this.lastEventName) {
+                if (data.ref != null) {
+                    // The dropped event's own request (#4309): settle it, end
+                    // its loading state, and apply what it held back.
+                    if (_pendingEventOwners.get(data.ref) === this) {
+                        cancelEventRequests(this, data.ref);
+                        if (!hasPendingEventRequests(this)) await flushServerUpdates(this);
+                    }
+                } else if (this.lastEventName) {
+                    // Stop loading state if applicable
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                this._showRateLimitWarning();
                 break;
 
             case 'hvr-applied':

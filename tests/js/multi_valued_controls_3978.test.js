@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
-import { legacy, setup, toggle } from './_form_events_harness.js';
+import { anyArgs, setup, toggle } from './_form_events_harness.js';
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
@@ -87,14 +87,15 @@ describe('draft manager keeps a group as a list (#3978)', () => {
         expect($('input[name="title"]').value).toBe('T');
     });
 
-    it('a draft saved before #3978 drops its group and radio entries, keeps the rest', () => {
+    it('a draft saved before #3978 is discarded whole, not partly restored (#4207)', () => {
         // The old format stored the LAST radio's value whether checked or not, and one box's
-        // boolean for a whole group: restoring either would pick the wrong choice.
-        const { $, $$ } = draftPage({ tags: true, size: 'm', title: 'Old', agree: true }, null);
+        // boolean for a whole group: nothing in it says what was chosen.
+        const { $, $$, win } = draftPage({ tags: true, size: 'm', title: 'Old', agree: true }, null);
         expect(checked($$('input[name="tags"]'))).toEqual([]);
         expect(checked($$('input[name="size"]'))).toEqual([]);
-        expect($('input[name="title"]').value).toBe('Old');
-        expect($('input[name="agree"]').checked).toBe(true); // a lone checkbox was never flattened
+        expect($('input[name="title"]').value).not.toBe('Old');
+        expect($('input[name="agree"]').checked).toBe(false);
+        expect(win.localStorage.getItem('djust_draft_k')).toBeNull();
     });
 
     it('a new save writes the current format', async () => {
@@ -148,12 +149,12 @@ describe('dj-auto-recover sends a group as a list (#3978)', () => {
                 <input type="checkbox" name="tags" value="c" checked>
                 <input type="checkbox" name="agree" checked>
                 <select name="colors" multiple><option value="r" selected>R</option><option value="g" selected>G</option></select>
-            </div>`, { restore_state: legacy() });
+            </div>`, { restore_state: anyArgs() });
         t.win.djust._isReconnect = true;
         t.win.djust._processAutoRecover();
         await t.settle();
         const sent = t.sent().find(s => s.event === 'restore_state');
-        expect(sent.params._form_values).toEqual({ tags: ['a', 'c'], agree: true, colors: ['r', 'g'] });
+        expect(sent.params.form_values).toEqual({ tags: ['a', 'c'], agree: true, colors: ['r', 'g'] });
     });
 });
 
@@ -164,7 +165,7 @@ describe('dj-model on a checkbox group binds a list (#3978)', () => {
                 <input type="checkbox" name="tags" value="a" dj-model="tags">
                 <input type="checkbox" name="tags" value="b" dj-model="tags">
                 <input type="checkbox" name="tags" value="c" dj-model="tags">
-            </form>`, { update_model: legacy() });
+            </form>`, { update_model: anyArgs() });
         const boxes = Array.from(t.win.document.querySelectorAll('input'));
         toggle(t.win, boxes[0], true);
         await t.settle();
@@ -178,7 +179,7 @@ describe('dj-model on a checkbox group binds a list (#3978)', () => {
     });
 
     it('a lone checkbox still binds a boolean', async () => {
-        const t = setup('<input type="checkbox" name="agree" dj-model="agree">', { update_model: legacy() });
+        const t = setup('<input type="checkbox" name="agree" dj-model="agree">', { update_model: anyArgs() });
         toggle(t.win, t.$('input[name="agree"]'), true);
         await t.settle();
         expect(t.sent().filter(s => s.event === 'update_model').at(-1).params).toMatchObject({ field: 'agree', value: true });

@@ -84,23 +84,6 @@ class FailingNoIdPage(LazyPage):
     n = state(0, persist="server")
 
 
-class LegacyLazyChild(LiveView):
-    exposure_policy = "legacy"  # legacy subject: #4167 a legacy lazy child routes over the socket
-    template = '<div>Legacy={{ pokes }}<button dj-click="poke">x</button></div>'
-
-    def mount(self, request, **kwargs):
-        self.pokes = 0
-
-    @event_handler()
-    def poke(self, **kwargs):
-        self.pokes += 1
-
-
-class LegacyLazyPage(LiveView):
-    exposure_policy = "legacy"  # legacy subject: #4167 a legacy lazy child routes over the socket
-    template_name = "lazy_4167_legacy.html"
-
-
 @pytest.fixture(autouse=True)
 async def close_worker_connections(transactional_db):
     from django.db import connections
@@ -136,7 +119,6 @@ def staged(monkeypatch, settings, tmp_path):
     for name, child, view_id in (
         ("lazy_4167_page.html", "LazyChild", "lz"),
         ("lazy_4167_refused.html", "RefusedChild", "lz"),
-        ("lazy_4167_legacy.html", "LegacyLazyChild", "ll"),
         ("lazy_4167_failing_noid.html", "FailingChild", None),
     ):
         id_kwarg = f' view_id="{view_id}"' if view_id else ""
@@ -214,19 +196,6 @@ async def test_lazy_explicit_child_routes_over_websocket_after_page_get():
             # The live child is reused across the parent's renders.
             assert "Lazy=3" in reply["html"]
             assert len(LazyChild.mounts) == mounts
-        finally:
-            await comm.disconnect()
-
-
-async def test_lazy_legacy_child_routes_over_websocket_after_page_get():
-    key = await sync_to_async(new_session)()
-    with override_settings(**WS_SETTINGS):
-        await sync_to_async(page_get)(LegacyLazyPage, key)
-        comm, _ = await connect(key, "LegacyLazyPage")
-        try:
-            reply = await event_reply(comm, "poke", view_id="ll")
-            assert reply["type"] == "embedded_update", reply
-            assert "Legacy=1" in reply["html"]
         finally:
             await comm.disconnect()
 

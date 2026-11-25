@@ -65,12 +65,8 @@ class TestDjChangeValue:
     class View(LiveView):
         exposure_policy = "explicit"
 
-        @event_handler(parameter_policy="legacy")
-        def toggle_untyped(self, value=False, **kw):
-            return value
-
-        @event_handler(parameter_policy="legacy")
-        def toggle_bool(self, value: bool = False, **kw):
+        @event_handler
+        def toggle_list(self, value: list[str], field: str):
             return value
 
         @event_handler(parameter_policy="strict")
@@ -79,27 +75,22 @@ class TestDjChangeValue:
 
     GROUP = {"value": ["a", "b"], "field": "done"}
 
-    def test_an_untyped_legacy_handler_receives_the_list_which_is_truthy(self):
+    def test_a_list_handler_receives_the_list_which_is_truthy(self):
         view = self.View()
-        result = validate_handler_params(view.toggle_untyped, dict(self.GROUP), "toggle_untyped")
+        result = validate_handler_params(view.toggle_list, dict(self.GROUP), "toggle_list")
         assert result["valid"]
         args, kwargs = validated_call_arguments(result)
-        got = view.toggle_untyped(*args, **kwargs)
+        got = view.toggle_list(*args, **kwargs)
         assert got == ["a", "b"]
         assert bool(got)
 
     def test_an_empty_group_is_a_falsy_list(self):
         view = self.View()
         result = validate_handler_params(
-            view.toggle_untyped, {"value": [], "field": "done"}, "toggle_untyped"
+            view.toggle_list, {"value": [], "field": "done"}, "toggle_list"
         )
         args, kwargs = validated_call_arguments(result)
-        assert view.toggle_untyped(*args, **kwargs) == []
-
-    def test_a_legacy_bool_handler_is_rejected_loudly(self):
-        result = validate_handler_params(self.View().toggle_bool, dict(self.GROUP), "toggle_bool")
-        assert not result["valid"]
-        assert "expected bool, got list" in result["error"]
+        assert view.toggle_list(*args, **kwargs) == []
 
     def test_a_strict_bool_handler_is_rejected(self):
         result = validate_handler_params(

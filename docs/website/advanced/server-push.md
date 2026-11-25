@@ -151,7 +151,7 @@ class JobView(LiveView):
         self.step = step
 ```
 
-- **It is the same turn as `push_to_view()` on the socket**: the turn-middleware chain runs (so `LIVEVIEW_CONFIG["sync_turn_wrapper"]` and `reauth_on_event` apply), the handler runs under the connection's render lock, the page renders once and the frame is sent with `source="broadcast"`.
+- **It is the same turn as `push_to_view()` on the socket**: the turn-middleware chain runs (so `LIVEVIEW_CONFIG["sync_turn_wrapper"]` and the per-turn re-authorization apply), the handler runs under the connection's render lock, the page renders once and the frame is sent with `source="broadcast"`.
 - **Busy deferral.** A push that finds a turn in progress (an event, a background result, a tick, or the lock held) is queued and replayed in arrival order once the lock frees; identical queued pushes coalesce, the queue is bounded (64, the oldest dropped), and a backlog costs one render. A push issued from inside an event handler is queued behind that event, so it never waits on its own turn.
 - **A browser cannot call it.** `server_push` is refused as a client event, by name (so a subclass that overrides it is covered too) and by function; only your server code reaches it.
 - **The handler is checked as `push_to_view()` checks it**: `handle_*`, `@event_handler` or `@push_handler`; any other name is refused with a `server_push: blocked handler` warning and never called. The handler name and the payload come from your server code; nothing a browser sends reaches `server_push()`.
@@ -179,7 +179,7 @@ When the client falls back to SSE (`use_websocket: False`, or a socket that exha
 - `push_to_view()` / `apush_to_view()`, view-wide and with `scope=` push scopes (v2.0, [#3885](https://github.com/djust-org/djust/issues/3885));
 - `db_notify` (`handle_info` from `listen()`) (v2.0, #3885).
 
-Each SSE-mounted view takes its own channel on the channel layer and joins the same groups a WebSocket session joins: the view-wide group of its class, the groups of its `push_scope` (followed when the view changes it) and the NOTIFY groups of its `listen()` channels. Delivery runs the WebSocket's checks: the tenant stamp, the handler allowlist and private-attribute guard of a push, the skip of a session's own echo, and the `reauth_on_event` re-check of a server turn. Because it goes through the channel layer, a push from another process (a Celery worker) reaches an SSE session with a shared layer (Redis) and does not with an in-memory layer, as for a WebSocket.
+Each SSE-mounted view takes its own channel on the channel layer and joins the same groups a WebSocket session joins: the view-wide group of its class, the groups of its `push_scope` (followed when the view changes it) and the NOTIFY groups of its `listen()` channels. Delivery runs the WebSocket's checks: the tenant stamp, the handler allowlist and private-attribute guard of a push, the skip of a session's own echo, and the authorization of every server turn against the stored session. Because it goes through the channel layer, a push from another process (a Celery worker) reaches an SSE session with a shared layer (Redis) and does not with an in-memory layer, as for a WebSocket.
 
 - A push that arrives while `mount()` is still running is applied after the mount frame is sent, in arrival order, as on a WebSocket. If that mount then fails or is refused, the push is discarded.
 - A `db_notify` that finds the view busy waits for it at most as long as a WebSocket's does (0.1 s, `djust.websocket._SERVER_TURN_LOCK_WAIT_S`) and is then dropped, not queued.
@@ -190,7 +190,7 @@ It does **not** get presence broadcasts: presence is not supported over SSE.
 Two things protect an SSE session that a WebSocket gets from `await send`:
 
 - **Back-pressure.** A frame the server produces is queued for the stream; nothing slows a producer when the client stops reading. While 128 frames are queued (`djust.sse._MAX_QUEUED_SERVER_FRAMES`), a **tick is skipped** (the next interval picks up the change) and a **`server_push()` is deferred**: queued, coalescing identical pushes, bounded at 64 with the oldest dropped, and replayed in order, as one render, once the client drains. Frames that answer a user event are never held back. The bound counts frames, not bytes: a few very large frames can still be queued.
-- **Re-authorization.** With `reauth_on_event` on, a tick or push of a view that sets `login_required` / `permission_required` re-reads the session and the user from the session store every `reauth_server_turn_interval` seconds, as a WebSocket does. A sign-out elsewhere, or a deactivated account, ends the stream with `permission_denied` instead of ticking on. Explicit-exposure roots reload the session on every server turn.
+- **Re-authorization.** A tick or push reloads the session and the user from the session store on every server turn, as a WebSocket does. A sign-out elsewhere, or a deactivated account, ends the stream with `permission_denied` instead of ticking on.
 
 The SSE push turn does not use the worker-pool offload that a WebSocket push turn may take (`worker_threads`); it runs the stock path.
 

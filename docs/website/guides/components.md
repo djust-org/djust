@@ -1334,7 +1334,7 @@ LIVEVIEW_CONFIG = {"theme": {"theme": "ios", "preset": "forest"}}
 <html>
 <head>
     {% theme_head link_css=True %}
-    <link href="{% static 'djust_theming/css/base.css' %}" rel="stylesheet">
+    <link href="{% static 'djust_theming/css/scaffold.css' %}" rel="stylesheet">
 </head>
 <body>
     {% theme_switcher %}          {# Full theme switcher UI #}

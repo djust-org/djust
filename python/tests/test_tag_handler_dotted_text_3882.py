@@ -33,9 +33,9 @@ TEMPLATES = {
 }
 
 
-def _render(template: str, value: str, policy: str) -> str:
+def _render(template: str, value: str) -> str:
     class _V(LiveView):
-        exposure_policy = policy
+        exposure_policy = "explicit"
 
         def get_context_data(self, **kwargs):
             ctx = super().get_context_data(**kwargs)
@@ -57,20 +57,18 @@ def _render(template: str, value: str, policy: str) -> str:
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("value", VALUES)
 @pytest.mark.parametrize("tag", sorted(TEMPLATES))
-def test_a_dotted_value_is_never_walked(tag: str, value: str, policy: str) -> None:
-    html = _render(TEMPLATES[tag], value, policy)
-    assert PLANTED not in html, (tag, value, policy, html)
-    assert PLANTED.replace("-", "") not in html.replace("-", ""), (tag, value, policy, html)
+def test_a_dotted_value_is_never_walked(tag: str, value: str) -> None:
+    html = _render(TEMPLATES[tag], value)
+    assert PLANTED not in html, (tag, value, html)
+    assert PLANTED.replace("-", "") not in html.replace("-", ""), (tag, value, html)
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("value", VALUES)
-def test_markdown_and_pwa_print_the_literal_text(value: str, policy: str) -> None:
-    md = _render(TEMPLATES["djust_markdown"], value, policy)
+def test_markdown_and_pwa_print_the_literal_text(value: str) -> None:
+    md = _render(TEMPLATES["djust_markdown"], value)
     assert value in re.sub(r"<[^>]+>", "", md), md
-    pwa = _render(TEMPLATES["djust_pwa_head"], value, policy)
+    pwa = _render(TEMPLATES["djust_pwa_head"], value)
     assert 'content="%s"' % value in pwa, pwa

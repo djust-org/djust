@@ -16,7 +16,7 @@
  * - Save: nothing is drawn -> nothing is sent and the status says so. Otherwise
  *   {signature: "data:image/png;base64,..."} goes to data-save-event (and the
  *   same value into the hidden form field). The value is never longer than
- *   data-max-bytes (default 200 KB): the signature is re-rendered at a lower
+ *   data-max-bytes (default and ceiling 60,000): the signature is re-rendered at a lower
  *   resolution until it fits, and refused when it cannot. When the server
  *   answers "Message too large" (the default WebSocket limit is 64 KiB) it is
  *   sent once more at a size that fits. The value is the browser's claim: the
@@ -35,7 +35,9 @@
 (function () {
   "use strict";
 
-  var DEFAULT_MAX_BYTES = 200 * 1024;
+  // The strict event collector refuses a text value over 65,536 characters, so
+  // nothing longer than this can reach the server (#4205).
+  var DEFAULT_MAX_BYTES = 60000;
   // What a WebSocket frame can carry at the default max_message_size (65536),
   // leaving room for the event's JSON envelope.
   var FRAME_TARGET = 48000;
@@ -68,16 +70,19 @@
       var sent = params;
       if (typeof d._strictBinding === "function") {
         var strict = d._strictBinding(root, eventName, params, [], root);
-        if (strict === false) return;
+        if (strict === false) return false;
         if (strict) sent = strict;
       }
       if (sent === params) addContext(sent, root);
       if (typeof d._markSlotOf === "function") d._markSlotOf(sent, root);
       d.handleEvent(eventName, sent);
+      return true;
     } else if (typeof hook.pushEvent === "function") {
       addContext(params, root);
       hook.pushEvent(eventName, params);
+      return true;
     }
+    return false;
   }
 
   function mid(a, b) {
@@ -554,7 +559,7 @@
     // --- saving -----------------------------------------------------------------------------------
 
     _cap: function () {
-      return Math.max(1024, num(this._root.getAttribute("data-max-bytes"), DEFAULT_MAX_BYTES));
+      return Math.min(DEFAULT_MAX_BYTES, Math.max(1024, num(this._root.getAttribute("data-max-bytes"), DEFAULT_MAX_BYTES)));
     },
 
     // The signature as a PNG data URL no longer than ``limit``: the largest
@@ -592,7 +597,9 @@
       this._awaiting = { size: made.url.length, scale: made.scale, retried: false };
       this._say("Signature saved");
       var eventName = this._root.getAttribute("data-save-event");
-      if (eventName) send(this, this._root, eventName, { signature: made.url });
+      if (eventName && !send(this, this._root, eventName, { signature: made.url })) {
+        this._say("The signature could not be sent. Clear it and draw a simpler one");
+      }
     },
 
     // "Message too large (N bytes)": the server's frame limit is smaller than
@@ -614,7 +621,9 @@
       this._sync();
       this._say("Signature sent at a smaller size");
       var eventName = this._root.getAttribute("data-save-event");
-      if (eventName) send(this, this._root, eventName, { signature: made.url });
+      if (eventName && !send(this, this._root, eventName, { signature: made.url })) {
+        this._say("The signature could not be sent. Clear it and draw a simpler one");
+      }
     },
   };
 

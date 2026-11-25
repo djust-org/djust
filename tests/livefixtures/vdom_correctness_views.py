@@ -11,6 +11,8 @@ replayed in jsdom by ``tests/js/vdom_correctness_v1_2_1_8.test.js``.
   ``<pre>``/``<code>``/``<textarea>``, which the server counts.
 """
 
+from typing import Any
+
 from djust import LiveView
 from djust.decorators import event_handler
 from djust import state
@@ -49,8 +51,8 @@ def keyed_filter_view(shape):
             ctx["items"] = self.items
             return ctx
 
-        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-        def set_items(self, items):
+        @event_handler
+        def set_items(self, items: list[Any]):
             self.items = list(items)
 
     _KeyedFilterView.__name__ = f"KeyedFilterView_{shape}"

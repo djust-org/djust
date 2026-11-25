@@ -82,7 +82,7 @@ class RunRequestView(LiveView):
 ```
 
 `AnyOf` works everywhere `permission_required` does: the HTTP GET, the
-WebSocket and SSE mounts, `reauth_on_event`, the `@permission_required` handler
+WebSocket and SSE mounts, the per-event re-check, the `@permission_required` handler
 decorator, the client route map, and `djust_audit` (inventory,
 `--dump-permissions` and `--permissions`, where it is `permissions_any`; see
 [Permissions document](permissions-document.md)).
@@ -137,9 +137,8 @@ class ProjectView(LiveView):
 
 Over WebSocket and SSE djust awaits it on the event loop. On a mount it runs
 inside the turn, so context variables your [turn middleware](turn-middleware.md)
-sets are visible; the `reauth_on_event` re-check runs in the `reauth` built-in,
-which is outside app middleware (it refuses before your middleware runs), so
-read what the check needs from `request`, not from middleware context. A sync check runs in asgiref's shared sync thread, the one thread
+sets are visible. Read what the check needs from `request`, not from
+middleware context. A sync check runs in asgiref's shared sync thread, the one thread
 that runs every sync handler and render for every connection, so a sync check
 that waits on I/O (for instance one that wraps an async call in
 `async_to_sync`) holds up every other user's events for as long as it waits.
@@ -152,10 +151,8 @@ The contract is the same as the sync form: return `False` or raise
 behaves exactly as above (403 / `permission_denied` / close 4403 for a
 signed-in user, the login redirect for an anonymous one), and any other
 exception refuses the mount or event (fails closed). The check runs at the
-same points as a sync one: before `mount()` on every transport, and, when
-`reauth_on_event` is on and the view sets `login_required` or
-`permission_required`, before every event and URL change (server turns at
-most every `reauth_server_turn_interval` seconds). The steps around it (`login_required`, `permission_required`, Django's access
+same points as a sync one: before `mount()` on every transport, and before
+every event, URL change and server turn, against a freshly loaded session. The steps around it (`login_required`, `permission_required`, Django's access
 mixins) still run first and in the same order.
 
 The synchronous paths (the HTTP GET, the page-POST fallback, the API,
@@ -447,7 +444,7 @@ This is a conscious trade-off shared by all LiveView-style frameworks (Phoenix, 
 **Mitigations:**
 - Use handler-level `@permission_required` for sensitive operations (checked per event)
 - WebSocket heartbeats will eventually detect stale sessions
-- Set `LIVEVIEW_CONFIG = {"reauth_on_event": True}` to re-run view-level auth (`login_required` / `permission_required`) on every event, at the cost of one session read per event. On failure the client is sent to the login URL and the socket closes with 4403. It runs on the [turn middleware](turn-middleware.md) chain, so it also covers URL changes, server pushes, ticks and background results (those re-check at most every `reauth_server_turn_interval` seconds). For your own per-turn checks, add `LIVEVIEW_MIDDLEWARE`.
+- View-level auth (`login_required` / `permission_required`) re-runs on every event, URL change, server push, tick and background result, against a freshly loaded session. The 1.3 keys `reauth_on_event` and `reauth_server_turn_interval` are refused at startup (#4199). For your own per-turn checks, add `LIVEVIEW_MIDDLEWARE` ([turn middleware](turn-middleware.md)).
 
 WebSocket close codes **4401** and **4403** stop automatic reconnects and transport
 fallback. Pending debounced/throttled edits are cancelled instead of replayed over
@@ -476,7 +473,6 @@ human-readable `error` text, on every transport:
 | Refusal | WebSocket / SSE frame | HTTP fallback |
 |---|---|---|
 | Authority revoked or session ended before an event or server push (`exposure_policy="explicit"`) | `{"type": "error", "error": "Event authorization failed. Please reload the page.", "code": "permission_denied"}`, then close 4403 (WebSocket) or end of stream (SSE) | Not applicable: the HTTP fallback re-checks each POST, see the next row |
-| `reauth_on_event` re-check failed | SSE: the same error frame (`"error": "Session is no longer authorized. Please reload the page."`), then end of stream. WebSocket: a `navigate` frame to the login URL, then close 4403, with no error frame, so `detail.error_code` is `null` | Not applicable |
 | `@permission_required` handler or view-level `permission_required` refused | `{"type": "error", "error": "Permission denied", "code": "permission_denied"}` | `403` with `{"error": "Permission denied", "code": "permission_denied"}` |
 | Object-level refusal (`has_object_permission`) | `{"type": "error", "error": "Access denied for this object.", "code": "permission_denied"}` | `403` with `{"error": "Access denied for this object.", "code": "permission_denied"}` |
 

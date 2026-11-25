@@ -189,6 +189,7 @@ class LiveViewSSE {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
+        this._parameterContractHeld = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         cancelEventRequests(this);
@@ -350,7 +351,6 @@ class LiveViewSSE {
             case 'html_update': {
                 const event = acknowledgeEventRequest(this, data);
                 await handleServerResponse(data, event?.eventName, event?.trigger, this);
-                completeLegacyAsyncBatches(this, data);
                 break;
             }
 

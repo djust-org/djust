@@ -17,8 +17,8 @@ the login page. Now
 
 Standalone, like the other scripts here: exits 0 on success and non-zero with
 the list of failures. ``MULTI_VIEW_BASE`` (default ``http://localhost:18439``)
-names the demo server; start the demo server with ``DJUST_DEMO_REAUTH_ON_EVENT=1`` (the signed-in case needs the
-per-event re-check); ``DJUST_SERVER_PYTHON`` names the demo server's Python (the
+names the demo server (every event is re-authorized, so the signed-in case needs no
+setting); ``DJUST_SERVER_PYTHON`` names the demo server's Python (the
 signed-in case creates a user and revokes it through the demo project's shell);
 ``CHROMIUM_EXECUTABLE`` optionally names the browser.
 """

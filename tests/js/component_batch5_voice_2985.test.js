@@ -14,6 +14,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { openContracts } from './_open_contracts.js';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
@@ -90,7 +91,7 @@ function createEnv(bodyHtml, { api = true, standard = false, preRegister, timers
     FakeSR.throwOnStop = false;
     FakeSR.silentAbort = false;
     const dom = new JSDOM(
-        `<!DOCTYPE html><html lang="de-DE"><body><div dj-root>${bodyHtml}<input id="elsewhere"></div></body></html>`,
+        `<!DOCTYPE html><html lang="de-DE"><body><div dj-root dj-view="test.V">${bodyHtml}<input id="elsewhere"></div>${openContracts(bodyHtml)}</body></html>`,
         { url: 'http://localhost:8000/test/', runScripts: 'dangerously', pretendToBeVisual: true },
     );
     const { window } = dom;
@@ -108,6 +109,8 @@ function createEnv(bodyHtml, { api = true, standard = false, preRegister, timers
     } catch (_e) {
         // client.js may throw on DOM APIs jsdom lacks; hooks still load.
     }
+    // The page's contract block is read at init, which this env does not fire.
+    try { window.djust._installPageParameterContracts(); } catch (_e) { /* no page */ }
     window.djust.handleEvent = (name, params) => { env.sent.push({ name, params }); };
     return env;
 }

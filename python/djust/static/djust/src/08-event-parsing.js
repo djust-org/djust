@@ -185,146 +185,6 @@ window.djust = window.djust || {};
 window.djust.parseEventHandler = parseEventHandler;
 
 /**
- * Extract parameters from element data-* attributes with optional type coercion.
- *
- * Supports typed attributes via suffix notation:
- *   data-sender-id:int="42"     -> { sender_id: 42 }
- *   data-enabled:bool="true"    -> { enabled: true }
- *   data-price:float="19.99"    -> { price: 19.99 }
- *   data-tags:json='["a","b"]'  -> { tags: ["a", "b"] }
- *   data-items:list="a,b,c"     -> { items: ["a", "b", "c"] }
- *   data-name="John"            -> { name: "John" } (default: string)
- *
- * @param {HTMLElement} element - Element to extract params from
- * @returns {Object} - Parameters with coerced types
- */
-function extractTypedParams(element) {
-    const params = Object.create(null); // null prototype prevents prototype-pollution
-
-    for (const attr of element.attributes) {
-        if (!attr.name.startsWith('data-')) continue;
-
-        // Skip djust internal attributes
-        if (attr.name.startsWith('data-liveview') ||
-            attr.name.startsWith('data-live-') ||
-            attr.name.startsWith('data-djust') ||
-            attr.name === 'dj-id' ||
-            attr.name === 'data-loading' ||
-            // Marks a dialog's explicit close control (51-keyboard-nav); a
-            // marker, not an argument: it must not reach the handler as `close`.
-            attr.name === 'data-dj-close' ||
-            attr.name === 'data-component-id') {
-            continue;
-        }
-
-        // Parse attribute name: data-sender-id:int -> key="sender_id", type="int"
-        const nameWithoutPrefix = attr.name.slice(5); // Remove "data-"
-        const colonIndex = nameWithoutPrefix.lastIndexOf(':');
-        let rawKey, typeHint;
-
-        if (colonIndex !== -1) {
-            rawKey = nameWithoutPrefix.slice(0, colonIndex);
-            typeHint = nameWithoutPrefix.slice(colonIndex + 1);
-        } else {
-            rawKey = nameWithoutPrefix;
-            typeHint = null;
-        }
-
-        // Convert kebab-case to snake_case, then strip dj_ namespace prefix
-        // so data-dj-preset="x" becomes {preset: "x"}, not {dj_preset: "x"}
-        let key = rawKey.replace(/-/g, '_');
-        if (key.startsWith('dj_')) {
-            key = key.slice(3);
-        }
-
-        // Prevent prototype pollution attacks
-        if (UNSAFE_KEYS.includes(key)) {
-            continue;
-        }
-        let value = attr.value;
-
-        // Apply type coercion based on suffix
-        if (typeHint) {
-            // Sanitize attribute name for logging (truncate, alphanumeric only)
-            const safeAttrName = String(attr.name).slice(0, 50).replace(/[^a-z0-9-:]/gi, '_');
-
-            switch (typeHint) {
-                case 'int':
-                case 'integer': {
-                    if (value === '') {
-                        value = 0;
-                    } else {
-                        const parsed = parseInt(value, 10);
-                        if (isNaN(parsed)) {
-                            console.warn(`[LiveView] Invalid int value for ${safeAttrName}: "${value}", using null`);
-                            value = null;  // Let server-side validation handle invalid input
-                        } else {
-                            value = parsed;
-                        }
-                    }
-                    break;
-                }
-
-                case 'float':
-                case 'number': {
-                    if (value === '') {
-                        value = 0.0;
-                    } else {
-                        const parsed = parseFloat(value);
-                        if (isNaN(parsed)) {
-                            console.warn(`[LiveView] Invalid float value for ${safeAttrName}: "${value}", using null`);
-                            value = null;  // Let server-side validation handle invalid input
-                        } else {
-                            value = parsed;
-                        }
-                    }
-                    break;
-                }
-
-                case 'bool':
-                case 'boolean':
-                    value = ['true', '1', 'yes', 'on', 'checked'].includes(value.toLowerCase());
-                    break;
-
-                case 'json':
-                case 'object':
-                case 'array':
-                    try {
-                        value = JSON.parse(value);
-                    } catch {
-                        console.warn(`[LiveView] Failed to parse JSON for ${safeAttrName}: "${value}"`);
-                        // Keep as string if JSON parse fails - server will validate
-                    }
-                    break;
-
-                case 'list':
-                    // Comma-separated list
-                    value = value ? value.split(',').map(v => v.trim()).filter(v => v) : [];
-                    break;
-
-                // Unknown type hint - keep as string
-                default:
-                    console.warn(`[LiveView] Unknown type hint "${typeHint}" for ${safeAttrName}, keeping as string`);
-                    break;
-            }
-        }
-
-        // eslint-disable-next-line security/detect-object-injection
-        params[key] = value;
-    }
-
-    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*,
-    // matching Phoenix's phx-value-* semantics.
-    const djValues = collectDjValues(element);
-    for (const [k, v] of Object.entries(djValues)) {
-        // eslint-disable-next-line security/detect-object-injection
-        params[k] = v;
-    }
-
-    return params;
-}
-
-/**
  * Collect dj-value-* attributes from an element and return as a params object.
  *
  * dj-value-* is the standard way to pass static context alongside events
@@ -368,7 +228,7 @@ function collectDjValues(element) {
 
         let value = attr.value;
 
-        // Apply type coercion (same logic as extractTypedParams)
+        // Apply type coercion
         if (typeHint) {
             switch (typeHint) {
                 case 'int':
@@ -415,55 +275,95 @@ function collectDjValues(element) {
 }
 
 // A mount owns its manifest. Never merge contracts by handler name, or retain
-// a previous mount's contracts when a legacy server omits this field.
+// a previous mount's contracts when a response omits this field. Wire v2
+// (#4307): distinct contracts and handler tables are listed once, and each
+// owner row names its table; owners share the (read-only) table Maps.
 function _installParameterContracts(transport, manifest, viewPath, resetPrimary = true, receiptOrder = 0) {
     if (!transport._parameterContracts || (resetPrimary && viewPath === transport.primaryViewPath)) {
         transport._parameterContracts = new Map();
         transport._parameterContractApplied = new Map();
+        transport._parameterContractHeld = new Map();
     }
     if (resetPrimary) transport._parameterContractApplied.set(viewPath, receiptOrder);
     transport._parameterContracts.set(viewPath, null);
+    (transport._parameterContractHeld ??= new Map()).delete(viewPath);
     if (manifest === undefined || manifest === null) return;
     const reject = () => { throw new Error('Invalid public parameter contracts'); };
-    // Keep invalid metadata distinguishable from an intentional legacy mount.
+    // Keep invalid metadata distinguishable from a tree with no handlers.
     transport._parameterContracts.set(viewPath, false);
     if (typeof viewPath !== 'string' || !viewPath) reject();
-    if (manifest.version !== 1 || !Array.isArray(manifest.owners) || manifest.owners.length > 1024 || JSON.stringify(manifest).length > 65536) reject();
-    const owners = new Map();
+    const n = Number.isInteger, ok = id => id === null || (typeof id === 'string' && id.length > 0);
+    if (manifest.version !== 2 || typeof manifest.digest !== 'string' || !Array.isArray(manifest.contracts) ||
+        !Array.isArray(manifest.handlers) || !Array.isArray(manifest.owners) || manifest.contracts.length > 1024 ||
+        manifest.handlers.length > 1024 || manifest.owners.length > 10000 ||
+        JSON.stringify([manifest.contracts, manifest.handlers]).length > 65536) reject();
+    const contracts = manifest.contracts.map(contract => {
+        if (!contract || typeof contract.coerce_types !== 'boolean' || !Array.isArray(contract.parameters) || contract.parameters.length > 1024) reject();
+        const seen = new Set();
+        const parameters = contract.parameters.map(parameter => {
+            if (!parameter || typeof parameter.name !== 'string' || seen.has(parameter.name) || typeof parameter.type !== 'string' ||
+                !['positional_only', 'positional_or_keyword', 'keyword_only', 'var_positional', 'var_keyword'].includes(parameter.kind) ||
+                typeof parameter.required !== 'boolean' || typeof parameter.reduced_checking !== 'boolean') reject();
+            seen.add(parameter.name);
+            return Object.freeze({name: parameter.name, type: parameter.type, kind: parameter.kind,
+                required: parameter.required, reduced_checking: parameter.reduced_checking});
+        });
+        return Object.freeze({coerce_types: contract.coerce_types, parameters: Object.freeze(parameters)});
+    });
     let count = 0;
-    for (const owner of manifest.owners) {
-        if (!owner || ![owner.view_id, owner.component_id].every(id => id === null || (typeof id === 'string' && id.length > 0))) reject();
-        const key = JSON.stringify([owner.view_id, owner.component_id]);
-        if (owners.has(key) || !owner.handlers || typeof owner.handlers !== 'object' || Array.isArray(owner.handlers)) reject();
+    const tables = manifest.handlers.map(table => {
+        if (!table || typeof table !== 'object' || Array.isArray(table)) reject();
         const handlers = new Map();
-        for (const [name, contract] of Object.entries(owner.handlers)) {
+        for (const [name, index] of Object.entries(table)) {
+            // An integer index into the frozen contracts array; any index out of range is undefined and rejected.
+            const contract = n(index) ? contracts[index] : undefined; // eslint-disable-line security/detect-object-injection
             if (++count > 10000 || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name) || !contract) reject();
-            if (contract.policy === 'legacy') {
-                handlers.set(name, Object.freeze({policy: 'legacy'}));
-            } else if (contract.policy === 'strict') {
-                if (typeof contract.coerce_types !== 'boolean' || !Array.isArray(contract.parameters) || contract.parameters.length > 1024) reject();
-                const seen = new Set();
-                const parameters = contract.parameters.map(parameter => {
-                    if (!parameter || typeof parameter.name !== 'string' || seen.has(parameter.name) || typeof parameter.type !== 'string' ||
-                        !['positional_only', 'positional_or_keyword', 'keyword_only', 'var_positional', 'var_keyword'].includes(parameter.kind) ||
-                        typeof parameter.required !== 'boolean' || typeof parameter.reduced_checking !== 'boolean') reject();
-                    seen.add(parameter.name);
-                    return Object.freeze({name: parameter.name, type: parameter.type, kind: parameter.kind,
-                        required: parameter.required, reduced_checking: parameter.reduced_checking});
-                });
-                handlers.set(name, Object.freeze({policy: 'strict', coerce_types: contract.coerce_types, parameters: Object.freeze(parameters)}));
-            } else reject();
+            handlers.set(name, contract);
         }
-        owners.set(key, handlers);
+        return handlers;
+    });
+    const owners = new Map();
+    for (const row of manifest.owners) {
+        if (!Array.isArray(row) || row.length !== 3 || !ok(row[0]) || !ok(row[1]) || !n(row[2]) || !tables[row[2]]) reject();
+        const key = JSON.stringify([row[0], row[1]]);
+        if (owners.has(key)) reject();
+        owners.set(key, tables[row[2]]);
     }
     if (!owners.has('[null,null]')) reject();
     transport._parameterContracts.set(viewPath, owners);
+    transport._parameterContractHeld.set(viewPath, manifest);
+    _cacheParameterManifest(transport, manifest);
+}
+
+// Content-addressed: a frame may name a manifest this transport already
+// received (#4307). The server elides only against the last digest it sent.
+function _cacheParameterManifest(transport, manifest) {
+    if (!manifest || typeof manifest.digest !== 'string') return;
+    const cache = transport._parameterManifests ??= new Map();
+    cache.delete(manifest.digest);
+    cache.set(manifest.digest, manifest);
+    if (cache.size > 4) cache.delete(cache.keys().next().value);
 }
 
 // Receipt order is client-owned, not a wire field or the VDOM version (child
 // replies have no parent VDOM version). Weak keys cannot retain consumed frames.
 function _recordParameterContractFrame(transport, data) {
     if (!data || typeof data !== 'object') return;
+    // An unchanged manifest arrives as its digest (#4307). Resolve it here, at
+    // receipt and before any buffering: frames are FIFO, so the full manifest
+    // for a digest is always received first. The server elides against the
+    // last manifest it sent at top level, which is kept outside the cache (a
+    // mount_batch's nested manifests cannot evict it); an HTTP answer names
+    // the scope's installed one. A miss installs as invalid and fails closed.
+    const m = data.parameter_contracts;
+    if (typeof m === 'string') {
+        const held = transport._parameterContractHeld?.get(data.parameter_contract_view);
+        data.parameter_contracts = transport._parameterManifest?.digest === m ? transport._parameterManifest
+            : held?.digest === m ? held : transport._parameterManifests?.get(m) || false;
+    } else if (m && typeof m.digest === 'string') {
+        transport._parameterManifest = m;
+        _cacheParameterManifest(transport, m);
+    }
     transport._parameterContractFrames ??= new WeakMap();
     transport._parameterContractSequence = (transport._parameterContractSequence || 0) + 1;
     transport._parameterContractFrames.set(data, transport._parameterContractSequence);
@@ -482,6 +382,7 @@ function _invalidateRenderParameterContracts(transport, data) {
     const mounts = transport?._parameterContracts;
     if (mounts?.has(path) && (mounts.get(path) !== null || Object.hasOwn(data, 'parameter_contracts'))) {
         mounts.set(path, false);
+        transport._parameterContractHeld?.delete(path);
         const order = transport._parameterContractFrames?.get(data);
         if (order !== undefined) transport._parameterContractApplied.set(path,
             Math.max(order, transport._parameterContractApplied.get(path) || 0));
@@ -489,7 +390,7 @@ function _invalidateRenderParameterContracts(transport, data) {
 }
 
 // Called after DOM application (including empty patches), before dj-mounted
-// or other bindings can run. Omission is safe only for a known legacy scope.
+// or other bindings can run. Omission is safe only for a scope whose tree declares no handlers.
 function _refreshRenderParameterContracts(transport, data) {
     const supplied = Object.hasOwn(data, 'parameter_contracts');
     if (!transport) {
@@ -539,7 +440,7 @@ function _lookupParameterContract(transport, viewPath, viewId, componentId, even
     return handlers.get(eventName);
 }
 
-// ADR-036 staged collector. Deliberately not called by legacy binders. The
+// ADR-036 staged collector. The
 // owner-scoped binder must supply only documented generated application values;
 // routing context is attached afterwards, never collected from markup here.
 // `accept(key, hint)` lets the binder veto a dj-value-* argument (contract checks);
@@ -662,5 +563,4 @@ function _collectStrictEventParams(element, generated = {}, positional = [], acc
 
 // Export for global access
 window.djust = window.djust || {};
-window.djust.extractTypedParams = extractTypedParams;
 window.djust.collectDjValues = collectDjValues;

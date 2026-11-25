@@ -2,11 +2,7 @@
 LiveView base class and decorator for reactive Django views
 """
 
-import io
-import json
 import logging
-import socket
-import threading
 import weakref
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Set, Union, cast
@@ -20,7 +16,6 @@ from django.views import View
 from ._class_snapshot import namespace as _class_namespace
 from ._mapping import mapping_values
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
-from ._deprecation import class_statement_stacklevel, warn_deprecated
 from .change_detection import CHANGE_DETECTION_IGNORED, deep_fingerprint, fingerprints_by_content
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
@@ -92,10 +87,8 @@ __all__ = [
 # that are not user state. Exposure-flip plan row 10 (section 5, G1) split it:
 # the change-detection skip list is ``change_detection.CHANGE_DETECTION_IGNORED``
 # (this set, same membership) and the reserved ``state()`` names are
-# ``_exposure.reserved_state_names()``. This name stays only for the legacy
-# exporters that still filter the attribute walk with it (``get_state``,
-# the private-state helpers, the
-# legacy debug panel and the exposure inventory); it goes with them (rows 7, 9).
+# ``_exposure.reserved_state_names()``. This name stays for the
+# ``_snapshot_user_private_attrs`` capture and the exposure inventory.
 _FRAMEWORK_INTERNAL_ATTRS: frozenset = CHANGE_DETECTION_IGNORED
 
 
@@ -180,21 +173,15 @@ def is_protected_http_entry(callback: Any) -> bool:
 
 
 def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., Any]:
-    """ADR-038 D-a: a nonlegacy class's HTTP entry fails with a value-free 500.
+    """ADR-038 D-a: a class's HTTP entry fails with a value-free 500.
 
     The constructor, ``setup``, ``on_mount`` hooks, ``mount``, ``handle_params``,
     ``get_context_data`` and render all run under Django's view callable with no
     protected scope, so under ``DEBUG`` Django's technical 500 page would show
     the exception and its frames' locals. The class owns the policy before an
-    instance exists. A legacy class keeps Django's callable itself, unchanged;
-    a class that became legacy after ``as_view`` re-raises as before.
+    instance exists.
     """
     from asgiref.sync import iscoroutinefunction, markcoroutinefunction
-
-    from ._exposure import uses_legacy_exposure
-
-    if uses_legacy_exposure(cls):
-        return view
 
     from ._exposure_diagnostics import (
         diagnostic_scope,
@@ -249,24 +236,6 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
     return protected
 
 
-#: Where the deprecation message sends a reader.
-EXPLICIT_EXPOSURE_GUIDE_URL = "https://docs.djust.org/state/explicit-exposure/"
-
-#: Classes whose own ``exposure_policy = "legacy"`` has been warned about, and
-#: classes whose MRO has been searched for one. Weak: tests assert that view
-#: classes can be collected.
-_LEGACY_POLICY_WARNED: "weakref.WeakSet[type]" = weakref.WeakSet()
-_LEGACY_POLICY_SEARCHED: "weakref.WeakSet[type]" = weakref.WeakSet()
-
-
-def _is_framework_class(cls: type) -> bool:
-    """Whether ``cls`` is shipped in ``djust`` (its test modules are not)."""
-    module = getattr(cls, "__module__", "") or ""
-    return module == "djust" or (
-        module.startswith("djust.") and not module.startswith("djust.tests.")
-    )
-
-
 def reserved_state_field_error(view_class: type, owner: type, name: str) -> Exception:
     """The error for a ``state()`` field declared under a reserved name (#4070)."""
     from ._exposure import ExposureConfigurationError
@@ -318,14 +287,11 @@ def _refuse_reserved_state_names(cls: type) -> None:
 def _warn_ignored_sticky_update_inputs(cls: type) -> None:
     """Warn when a class states ``sticky_update_inputs`` where it is ignored (#4181).
 
-    Only an explicit sticky child uses it: on a non-sticky child or a legacy
-    one (whose inputs are not part of an identity) it does nothing.
+    Only a sticky child uses it: on a non-sticky child it does nothing.
     """
     if not cls.__dict__.get("sticky_update_inputs"):
         return
-    from ._exposure import uses_legacy_exposure
-
-    if getattr(cls, "sticky", False) is True and not uses_legacy_exposure(cls):
+    if getattr(cls, "sticky", False) is True:
         return
     import warnings
 
@@ -335,61 +301,6 @@ def _warn_ignored_sticky_update_inputs(cls: type) -> None:
         UserWarning,
         stacklevel=3,
     )
-
-
-def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None:
-    """Warn, once per class, that the class states ``exposure_policy = "legacy"``.
-
-    The warning is about the class that *states* the policy, because that is
-    the line to change: a subclass that inherits the statement adds no second
-    warning. It is raised when the class is created, pointing at its ``class``
-    statement. A policy assigned to the class afterwards, or stated on a plain
-    mixin (which has no ``__init_subclass__`` of ours), is caught the first
-    time a view of that class is constructed (``at_class_statement=False``),
-    and points at the code that constructed it.
-
-    .. deprecated:: 2.0
-       ``exposure_policy = "legacy"``. Removed in 2.0.0.
-
-    A class shipped in djust that states ``"legacy"`` does not warn, here or
-    through a subclass: that statement is not the application's to change.
-    None does any more (#4185, #4183); the exemption stays until the policy
-    itself is removed.
-    """
-    if at_class_statement:
-        owners = [cls] if "exposure_policy" in cls.__dict__ else []
-    else:
-        if cls in _LEGACY_POLICY_SEARCHED:
-            return
-        owners = [base for base in cls.__mro__ if "exposure_policy" in base.__dict__][:1]
-    for owner in owners:
-        policy = owner.__dict__["exposure_policy"]
-        if type(policy) is not str or policy != "legacy":
-            continue
-        if owner in _LEGACY_POLICY_WARNED or _is_framework_class(owner):
-            continue
-        warn_deprecated(
-            'exposure_policy = "legacy" (stated on %s.%s)'
-            % (getattr(owner, "__module__", "?"), owner.__qualname__),
-            since="2.0",
-            removed_in="2.0.0",
-            instead=(
-                'exposure_policy = "explicit" (the default: declare state() fields and '
-                "supply template context in get_context_data(); see %s). A legacy view "
-                "keeps no state between requests in 2.0: the page-POST fallback mounts "
-                'it again on every POST; declare state(persist="server") for what must '
-                "survive" % EXPLICIT_EXPOSURE_GUIDE_URL
-            ),
-            # Both walk out of djust's own frames: to the ``class`` statement,
-            # or to the code that constructed the view.
-            stacklevel=class_statement_stacklevel(),
-        )
-        # Recorded only once the warning has been raised and returned. Under
-        # warnings-as-errors it raises instead, and then every construction
-        # (and a re-import of the module) fails, not just the first.
-        _LEGACY_POLICY_WARNED.add(owner)
-    if not at_class_statement:
-        _LEGACY_POLICY_SEARCHED.add(cls)
 
 
 class LiveView(
@@ -535,14 +446,6 @@ class LiveView(
 
         Multiple concurrent tasks are supported with named tasks. Phoenix LiveView users
         will find this API familiar.
-
-    .. deprecated:: 1.3
-        Defining ``_drain_announcements`` or ``_drain_focus`` on a subclass is
-        deprecated and the WebSocket/SSE flush that drains them is removed no
-        earlier than djust 2.0.0. Render a ``role="status"`` live region and
-        call ``JS.focus()`` through ``push_commands()`` instead. A hook added
-        after the class exists (``setattr``, a decorator, an instance
-        attribute) is not detected and does not warn.
     """
 
     template_name: Optional[str] = None
@@ -681,9 +584,10 @@ class LiveView(
     sticky_id: Optional[str] = None
 
     # ADR-038: a value reaches a template, the session or the browser only
-    # when the view declares it. ``"legacy"`` (every public attribute is
-    # exported) is still accepted when a class states it, and is deprecated:
-    # see ``_warn_legacy_exposure_policy``.
+    # when the view declares it. ``"explicit"`` is the only policy. Stating it
+    # is a no-op kept through 2.x; ``"legacy"`` and any other value are refused
+    # when the class is created (``_removed_settings.REMOVED_VIEW_ATTRIBUTE_VALUES``,
+    # #4199).
     exposure_policy: str = "explicit"
 
     # Streaming initial render (v0.6.1 — Phase 1).
@@ -766,67 +670,35 @@ class LiveView(
     # ============================================================================
 
     def _validate_exposure_configuration(self) -> None:
-        """Refuse exposure configurations that would widen or silently fall back.
+        """Refuse a removed exposure configuration on this instance or its class.
 
-        ``"legacy"`` and ``"explicit"`` are the supported policies (ADR-038).
-        Anything else is refused rather than treated as legacy. A legacy view
-        cannot declare exposure grants it would not honor. Only class
-        dictionaries are inspected: no property, factory, ORM query or
-        component descriptor is evaluated.
+        ``"explicit"`` is the only policy (ADR-038); ``"legacy"`` and any other
+        value are refused with ``ImproperlyConfigured`` (#4199). Class creation
+        refuses them first; this catches ``LiveView(exposure_policy=...)`` and a
+        policy assigned to the class after it was created. Only the instance and
+        class dictionaries are read: no property or descriptor is evaluated.
         """
-        from ._exposure import ExposureConfigurationError
+        from ._removed_settings import reject_removed_view_attributes
 
-        policy = self.exposure_policy
-        if type(policy) is not str or policy not in ("legacy", "explicit"):
-            raise ExposureConfigurationError(
-                "Invalid exposure_policy. Supported policies are 'legacy' and 'explicit'; "
-                "unknown policies cannot fall back to legacy exposure."
-            )
-        if policy == "explicit":
-            return
-        _warn_legacy_exposure_policy(type(self), at_class_statement=False)
-        from ._state import StateProperty
-
-        # Inspect class dictionaries only: checking configuration must not
-        # evaluate properties, factories, ORM queries or component descriptors.
-        seen_state_names: set[str] = set()
-        for owner in type(self).__mro__:
-            for name, declaration in _class_namespace(owner).items():  # #3151
-                if name in seen_state_names:
-                    continue
-                seen_state_names.add(name)
-                if issubclass(type(declaration), StateProperty) and (
-                    declaration.exposure.persist not in (None, False) or declaration.exposure.client
-                ):
-                    raise ExposureConfigurationError(
-                        "state() exposure grants require exposure_policy='explicit'. "
-                        "Legacy views cannot honor these grants."
-                    )
-                # The legacy walk renders every public field, so it cannot
-                # honour render=False either (#4050).
-                if issubclass(type(declaration), StateProperty) and declaration.render is False:
-                    raise ExposureConfigurationError(
-                        "state(render=False) requires exposure_policy='explicit'. "
-                        "Legacy views render every public attribute."
-                    )
+        reject_removed_view_attributes(self)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         from ._component_subscriptions import compile_subscriptions
-        from ._removed_settings import reject_removed_view_attributes
+        from ._removed_settings import reject_removed_view_attributes, upgrade_inspection_active
 
         reject_removed_view_attributes(cls)
         # #4045: a plain component in an explicit view's class body is one
         # object shared by every session. The mount path checks again
-        # (``_params_form._refuse_removed_configuration``).
+        # (``_params_form._refuse_removed_configuration``). 1.3 code has that
+        # shape, so djust_exposure_inventory's permit lets the class be created.
         from ._exposure_providers import class_level_plain_component_error
 
-        shared = class_level_plain_component_error(cls)
+        shared = None if upgrade_inspection_active() else class_level_plain_component_error(cls)
         if shared is not None:
             raise shared
 
         cls._component_subscriptions = compile_subscriptions(cls)
-        _warn_legacy_exposure_policy(cls, at_class_statement=True)
         # #4070: a state() field may not take a reserved name.
         _refuse_reserved_state_names(cls)
         _warn_ignored_sticky_update_inputs(cls)
@@ -872,7 +744,7 @@ class LiveView(
         self._sticky_preserved: Dict[str, Any] = {}
 
         # Track user-defined _private attr names (populated by
-        # _snapshot_user_private_attrs after mount, or _restore_private_state).
+        # _snapshot_user_private_attrs after mount, or a restore of automatic state).
         self._user_private_keys: Set[str] = set()
 
         # Object-permission cache (ADR-017, v0.9.5-1a). Populated by
@@ -1135,7 +1007,7 @@ class LiveView(
         set yet.
 
         A framework attribute first set DURING mount (``start_async()``'s
-        ``_async_tasks``, a lifecycle flag such as ``_djust_waiters_closed``)
+        ``_async_tasks``, a lifecycle flag such as ``_djust_child_disposed``)
         is not in the init-time ``_framework_attrs``; the
         ``_FRAMEWORK_INTERNAL_ATTRS`` list every other capture path honours
         excludes it here too (#3248).
@@ -1153,154 +1025,6 @@ class LiveView(
             and k not in meta_attrs
             and k not in _FRAMEWORK_INTERNAL_ATTRS
         }
-
-    def _framework_storage_slots(self) -> Set[str]:
-        """``_``-prefixed instance slots that are framework storage, not user
-        private state, and so are never saved in the private session (#2959).
-
-        - the ``_state_<name>`` slot of a PUBLIC ``state()`` field: its value
-          reaches the session through the public state (the context reads it
-          through the descriptor, and every restore path sets it back through
-          the descriptor), so a second copy here is redundant. A ``_``-named
-          ``state()`` field, or one listed in ``static_assigns``, never reaches
-          the public context, so its slot stays private.
-        - ``_reactive_state``: the descriptor's own bookkeeping; any restore
-          through the descriptor rebuilds it.
-
-        :meth:`_get_private_state` still saves a public ``state()`` slot whose
-        value holds a Django model: the public path flattens a model to a dict,
-        this one re-hydrates it (#1994).
-        """
-        static_skip = set(getattr(self, "static_assigns", []) or [])
-        slots = {"_reactive_state"}
-        for name, (kind, slot) in _descriptor_fields(type(self)).items():
-            if kind == "state" and not name.startswith("_") and name not in static_skip:
-                slots.add(slot)
-        return slots
-
-    def _get_private_state(self) -> Dict[str, Any]:
-        """Return serializable user-defined _private attributes (not framework internals).
-
-        Only persists attrs tracked in ``_user_private_keys`` — a set populated
-        by ``_snapshot_user_private_attrs()`` (after mount) and
-        ``_restore_private_state()``. Event handlers that add NEW private attrs
-        should add the name to ``self._user_private_keys`` directly, e.g.
-        ``self._user_private_keys.add('_name')``, or the attr will not be
-        persisted in subsequent save cycles.
-
-        Non-serializable values (locks, file handles, etc.) are silently skipped.
-        This is a legacy-only API; explicit persistence uses a bound adapter.
-
-        2.0: the page-POST fallback and the socket no longer save private
-        attributes; the one remaining caller is the legacy ``lazy=True`` child
-        on the page-POST fallback (``_lazy_containers.py``), which goes with
-        that path (exposure-flip plan row 9).
-        """
-        from ._exposure import require_legacy_state_api
-
-        require_legacy_state_api(self)
-        result: Dict[str, Any] = {}
-        user_keys: Set[str] = getattr(self, "_user_private_keys", set())
-        # A session written before #2959 may have restored these into
-        # ``_user_private_keys``; they are still not re-saved.
-        not_private = self._framework_storage_slots()
-        for key in user_keys:
-            # A framework attribute is never user private state, even when a
-            # session written before #3248 restored it into the tracked set.
-            if key not in self.__dict__ or key in _FRAMEWORK_INTERNAL_ATTRS:
-                continue
-            value = self.__dict__[key]
-            if key in not_private and not (key != "_reactive_state" and _holds_model(value)):
-                # The public state carries this value — except a Django model,
-                # which the public path flattens to a dict while this one
-                # re-hydrates it (#1994), so a model-holding slot stays.
-                continue
-            # Skip callables (bound methods, lambdas stored as attrs)
-            if callable(value):
-                continue
-            # ADR-031: a class-level component's slot holds a BoundComponent;
-            # persist its State (a dict) so ``__get__`` rehydrates it on restore.
-            from .components.base import BoundComponent
-
-            if isinstance(value, BoundComponent):
-                value = dict(value.state)
-            # #1994: encode Django models to a re-hydratable ref so a private
-            # model attr survives the session round-trip AS A MODEL (re-fetched
-            # on restore) instead of the lossy client dict normalize_django_value
-            # would otherwise produce. No-op for non-model values.
-            value = encode_private_model_refs(value)
-            # Attempt serialization — skip if not possible
-            try:
-                json.dumps(value, cls=DjangoJSONEncoder)
-                result[key] = value
-            except (TypeError, ValueError, OverflowError):
-                logger.debug(
-                    "Skipping non-serializable private attr %s.%s (%s)",
-                    type(self).__name__,
-                    key,
-                    type(value).__name__,
-                )
-                continue
-        return result
-
-    def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
-        """Restore legacy private attributes; explicit views require a bound adapter.
-
-        A ``"lifecycle"`` step of the ``sync_turn_wrapper`` (#3646): a private model
-        reference is re-fetched here (``decode_private_model_refs``, ``Model.objects.get``)
-        and a private attribute can be a property whose setter is application code. Its
-        one remaining caller (2.0) is the legacy lazy container on the page-POST
-        fallback; the step is entered here.
-
-        A guarded step: a wrapper whose ``__exit__`` swallows
-        an exception would otherwise turn a failing restore into a silent PARTIAL one
-        (the attributes before the failing key applied, the rest skipped). The failure
-        propagates as ``PermissionDenied`` instead.
-        """
-        from ._exposure import require_legacy_state_api
-        from .sync_turn import run_guarded_step
-
-        require_legacy_state_api(self)
-        run_guarded_step(self, "lifecycle", lambda: self._apply_private_state(private_state))
-
-    def _apply_private_state(self, private_state: Dict[str, Any]) -> None:
-        """The body of :meth:`_restore_private_state`, run inside its step."""
-        from .security import DANGEROUS_ATTRIBUTES
-
-        framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
-        meta_attrs = {"_framework_attrs", "_user_private_keys"}
-        for key, value in private_state.items():
-            if not isinstance(key, str):
-                continue
-            # The session is trusted, but this path used a raw setattr with no
-            # screen at all, unlike the public one (#3046). A dunder
-            # (``__class__``, ``__dict__``) is never user private state.
-            if key in DANGEROUS_ATTRIBUTES or (key.startswith("__") and key.endswith("__")):
-                logger.warning("Skipping restore of reserved private attribute %r", key)
-                continue
-            if (
-                key.startswith("_")
-                and key not in framework
-                and key not in meta_attrs
-                # A framework attribute set during mount is not in the
-                # init-time ``framework`` set; never restore one (#3248).
-                and key not in _FRAMEWORK_INTERNAL_ATTRS
-            ):
-                # #1994: re-hydrate model refs back to model instances (fresh DB
-                # fetch) so a private model attr comes back a MODEL, not a dict.
-                value = decode_private_model_refs(value)
-                # #2252: un-tag Decimals written by decimal_for_state_roundtrip
-                # so a private DecimalField attr comes back a DECIMAL, not a
-                # tag dict. This is the single decode point for all three
-                # callers of this method (mixins/request.py, runtime.py,
-                # mixins/sticky.py).
-                value = decode_state_roundtrip(value)
-                setattr(self, key, value)
-                # Track restored attrs as user-defined so they persist
-                # through subsequent save cycles.
-                user_keys = getattr(self, "_user_private_keys", None)
-                if user_keys is not None:
-                    user_keys.add(key)
 
     def _should_restore_snapshot(self, request: Any) -> bool:
         """Return True to allow the signed client snapshot to be restored.
@@ -1380,136 +1104,20 @@ class LiveView(
         """
         pass
 
-    # ============================================================================
-    # STATE SERIALIZATION VALIDATION
-    # ============================================================================
-
-    @staticmethod
-    def _is_serializable(value: Any) -> bool:
-        """Check if a value can be safely serialized to JSON for state transfer.
-
-        Returns True for primitives, collections, Django models/QuerySets, and
-        any value that json.dumps can handle. Returns False for service instances,
-        connections, file handles, threads, and other non-serializable objects.
-        """
-        # Primitives are always fine
-        if value is None or isinstance(value, (str, int, float, bool)):
-            return True
-
-        # Collections: check recursively would be expensive; allow them and
-        # let actual serialization catch nested issues
-        if isinstance(value, (list, tuple, set, frozenset)):
-            return True
-
-        if isinstance(value, dict):
-            return True
-
-        # Django models and QuerySets are serialized by JIT pipeline
-        try:
-            from django.db import models
-            from django.db.models import QuerySet
-
-            if isinstance(value, (models.Model, QuerySet)):
-                return True
-        except ImportError:
-            pass  # Django ORM not available; skip model/queryset check
-
-        # ADR-033 D6: a plain component is its state, and the state round
-        # trip carries it (``component_for_state_roundtrip``).
-        from .components.base import Component
-
-        if isinstance(value, Component):
-            return True
-
-        # Non-serializable types: file handles, threads, locks, sockets
-        _non_serializable: tuple[type, ...] = (io.IOBase, threading.Thread, socket.socket)
-        try:
-            # threading.Lock() returns _thread.lock which isn't directly a type
-            import _thread
-
-            _non_serializable = _non_serializable + (_thread.LockType,)
-        except (ImportError, AttributeError):
-            pass  # _thread.LockType unavailable on some platforms; skip lock detection
-        if isinstance(value, _non_serializable):
-            return False
-
-        # Detect common service/client patterns by type name
-        type_name = type(value).__name__.lower()
-        _suspect_names = ("service", "client", "session", "connection", "api")
-        if any(name in type_name for name in _suspect_names):
-            return False
-
-        # Detect objects with generic repr like '<ClassName object at 0x...>'
-        try:
-            obj_repr = repr(value)
-            if " object at 0x" in obj_repr:
-                return False
-        except Exception:
-            return False
-
-        # Final check: try to actually serialize it
-        try:
-            json.dumps(value, cls=DjangoJSONEncoder)
-            return True
-        except (TypeError, ValueError, OverflowError):
-            return False
-
     def get_state(self) -> Dict[str, Any]:
-        """Get serializable state from this LiveView instance.
+        """Get the client-visible state of this LiveView instance.
 
-        Explicit policy exports only declared ``client=True`` fields using the
-        bounded JSON contract. Rendering context and server-only state are not
-        inputs. Returned values are detached; failures never use legacy fallback.
-
-        Legacy policy iterates over public (non-underscore) instance attributes and validates
-        that each value can be serialized. In DEBUG mode, raises TypeError with
-        a helpful message for non-serializable values. In production, logs an
-        error and skips the attribute.
+        Exports only declared ``client=True`` fields using the bounded JSON
+        contract. Rendering context and server-only state are not inputs.
+        Returned values are detached; a failure raises ``ExposureError``
+        without the offending value.
 
         Returns:
-            Client-permitted declared values under explicit policy; serializable
-            public state under legacy policy.
+            The client-permitted declared values.
         """
-        from ._exposure import explicit_state_projection, uses_legacy_exposure
+        from ._exposure import explicit_state_projection
 
-        if not uses_legacy_exposure(self):
-            return explicit_state_projection(self, "client")
-
-        from django.conf import settings
-
-        state = {}
-        for key, value in self.__dict__.items():
-            if type(key) is not str or key.startswith("_"):  # #4143
-                continue
-
-            # #762: Skip framework-internal attrs so they don't pollute
-            # user-facing reactive state.
-            if key in _FRAMEWORK_INTERNAL_ATTRS:
-                continue
-
-            if callable(value):
-                continue
-
-            if not self._is_serializable(value):
-                class_name = self.__class__.__name__
-                value_type = type(value).__name__
-                msg = (
-                    f"Non-serializable value in {class_name}.{key}: "
-                    f"{value_type} cannot be stored in LiveView state. "
-                    f"Service instances, connections, and file handles must "
-                    f"be created in event handlers or accessed via utility "
-                    f"functions — not stored as instance attributes. "
-                    f"See: https://djust.org/docs/guides/services.md"
-                )
-                if getattr(settings, "DEBUG", False):
-                    raise TypeError(msg)
-                else:
-                    logger.error(msg)
-                    continue
-
-            state[key] = value
-
-        return state
+        return explicit_state_projection(self, "client")
 
     # ============================================================================
     # TEMPORARY ASSIGNS - Memory optimization for large collections

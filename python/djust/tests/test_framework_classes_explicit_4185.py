@@ -36,7 +36,6 @@ from djust import LiveView
 from djust._parameter_contract import ContractError, ParameterError
 from djust.admin_ext import DjustAdminSite, DjustModelAdmin
 from djust.components.descriptors import Dropdown, Modal, Tabs
-from djust.config import config
 from djust.tests.test_admin_page_render import _Socket, _session_cookie
 from djust.validation import (
     bind_declared_component_name,
@@ -97,8 +96,7 @@ def test_the_package_states_no_legacy_mode():
 def test_the_scan_finds_both_statement_forms(tmp_path):
     """Not vacuous: with nothing left in the package, a stand-in package that
     states both forms is reported."""
-    # Built from parts: this module states no legacy policy itself (the
-    # ledger in tests/legacy_exposure_ledger.py lists files that do).
+    # Built from parts: this module states no legacy policy itself.
     statement = "exposure_policy = %r" % "legacy"
     (tmp_path / "views.py").write_text("class V:\n    %s\n" % statement)
     (tmp_path / "handlers.py").write_text('x = event_handler(parameter_policy="legacy")\n')
@@ -171,14 +169,6 @@ def site_urls(settings):
     _reset_route_map_cache()
     yield
     _reset_route_map_cache()
-
-
-@pytest.fixture
-def strict_policy():
-    previous = config.get("event_parameter_policy", "legacy")
-    config.set("event_parameter_policy", "strict")
-    yield
-    config.set("event_parameter_policy", previous)
 
 
 def test_the_admin_and_terminal_views_are_explicit():
@@ -457,7 +447,7 @@ def test_any_other_component_id_is_refused(target):
         bind_declared_component_name(AliasPage().toggle_dropdown, {"component_id": target})
 
 
-def test_strict_validation_routes_component_id_to_the_alias(strict_policy):
+def test_strict_validation_routes_component_id_to_the_alias():
     view = AliasPage()
     ok = validate_handler_params(view.set_tab, {"component_id": "tabs", "value": "2"}, "set_tab")
     assert ok["valid"], ok
@@ -466,7 +456,7 @@ def test_strict_validation_routes_component_id_to_the_alias(strict_policy):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_the_alias_dispatches_under_strict_over_the_websocket(site_urls, strict_policy):
+async def test_the_alias_dispatches_under_strict_over_the_websocket(site_urls):
     """Events without a component_id reach the view-level alias, which
     resolves the single component of its type."""
     browser = Client()
@@ -483,7 +473,7 @@ async def test_the_alias_dispatches_under_strict_over_the_websocket(site_urls, s
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_the_alias_dispatches_under_strict_over_the_http_fallback(site_urls, strict_policy):
+async def test_the_alias_dispatches_under_strict_over_the_http_fallback(site_urls):
     browser = Client()
     page = await sync_to_async(browser.get)("/alias/")
     assert page.status_code == 200
@@ -504,7 +494,7 @@ async def test_the_alias_dispatches_under_strict_over_the_http_fallback(site_url
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_the_alias_dispatches_under_strict_over_sse(site_urls, strict_policy):
+async def test_the_alias_dispatches_under_strict_over_sse(site_urls):
     browser = Client()
     await sync_to_async(browser.get)("/alias/")
     key = browser.cookies[settings.SESSION_COOKIE_NAME].value

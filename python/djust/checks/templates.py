@@ -2222,7 +2222,7 @@ def held_template_reads(cls: type, processor_names: ProcessorNames) -> "HeldTemp
 
 @register("djust")
 def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """T027: an explicit view's template reads a name the view holds but does not supply."""
+    """T027: a view's template reads a name the view holds but does not supply."""
     errors: list[CheckMessage] = []
     if _is_check_suppressed("djust.T027"):
         return errors
@@ -2249,9 +2249,6 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
         key=lambda c: (getattr(c, "__module__", ""), getattr(c, "__qualname__", "")),
     ):
         if not _is_application_view(cls):
-            continue
-        policy = inspect.getattr_static(cls, "exposure_policy", None)
-        if type(policy) is not str or policy != "explicit":
             continue
         reads = held_template_reads(cls, processor_names)
         if reads == "no-template":

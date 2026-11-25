@@ -170,7 +170,7 @@ class MyView(LiveView):
 ```
 
 ### Event Handlers — always use `@event_handler`
-Examples assume the strict parameter policy; under legacy a `dj-input` also sends `field`.
+Strict parameters are the only policy (`parameter_policy="legacy"` is refused, #4199).
 ```python
 from djust.decorators import event_handler
 
@@ -184,7 +184,7 @@ def search(self, value: str = ""):
 - A field declared with `state(...)` (`from djust import state`) renders in the template (as above); `state(..., render=False)` keeps one out. Persisting it (`persist="server"`) or sending it raw to the browser (`client=True`) are separate grants.
 - Any other attribute set on `self` stays on the server, with or without an underscore: `self.total = 0` alone renders `{{ total }}` empty, with no error.
 - `get_context_data()` supplies derived and render-only values, including `@computed` values and `assign_async()` results; build on `super().get_context_data(**kwargs)`, which carries the declared fields. Framework mixins supply their own (`form_errors`, `streams`, `uploads`).
-- `_private` is a naming convention for internal state. `exposure_policy = "legacy"` restores the 1.x attribute walk and is deprecated. See `docs/website/state/explicit-exposure.md`.
+- `_private` is a naming convention for internal state. `exposure_policy = "legacy"` (the 1.x attribute walk) is refused with `ImproperlyConfigured` (#4199). See `docs/website/state/explicit-exposure.md`.
 
 ### Background Work — `start_async()` and `@background`
 For long-running operations (API calls, AI generation, file processing), use `AsyncWorkMixin` (included in `LiveView` base) to flush loading state immediately and run work in background:

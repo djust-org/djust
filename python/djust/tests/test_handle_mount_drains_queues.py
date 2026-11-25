@@ -20,7 +20,7 @@ paths.
 the SAME two drains onto ``ViewRuntime.dispatch_mount`` (the converged mount path
 the 3.3b flip will route WS mounts through). Per the symbol-migration grep canon,
 the source-grep pin MOVES to the runtime location IN THE SAME PR as the grow, so
-it pins the path the flip actually uses. The WS ``handle_mount`` copy stays
+it pins the path the flip actually uses. The WS ``_mount_page`` copy stays
 UNTOUCHED in 3.0 (the flip is 3.3b), and its drains are still verified here as a
 secondary pin so a 3.0-era refactor can't silently drop them from WS either.
 
@@ -119,25 +119,25 @@ class TestRuntimeDispatchMountSourceShape:
 
 
 # ---------------------------------------------------------------------------
-# Secondary pin: the WS handle_mount copy stays UNTOUCHED in Phase 3.0.
+# Secondary pin: the WS _mount_page copy stays UNTOUCHED in Phase 3.0.
 # ---------------------------------------------------------------------------
 
 
 class TestHandleMountSourceShape:
-    """Post-#1919 (THE MOUNT FLIP): ``handle_mount`` is a THIN SHIM that delegates
+    """Post-#1919 (THE MOUNT FLIP): ``_mount_page`` is a THIN SHIM that delegates
     to ``ViewRuntime.dispatch_mount`` — the two queue drains MOVED into the runtime
     (the primary pin ``TestRuntimeDispatchMountSourceShape`` above). The drains are
     NO LONGER in the WS shim source; pinning them here would FALSE-FAIL. Instead pin
     that the shim delegates to the runtime (so it inherits the runtime's drains)."""
 
     def _source(self) -> str:
-        return inspect.getsource(LiveViewConsumer.handle_mount)
+        return inspect.getsource(LiveViewConsumer._mount_page)
 
     def test_shim_delegates_to_runtime_dispatch_mount(self):
-        """The WS ``handle_mount`` shim routes through ``runtime.dispatch_mount``,
+        """The WS ``_mount_page`` shim routes through ``runtime.dispatch_mount``,
         which owns the #1280/#1283 drains (pinned by the runtime class above)."""
         assert "dispatch_mount(" in self._source(), (
-            "handle_mount must delegate to runtime.dispatch_mount post-#1919 — the "
+            "_mount_page must delegate to runtime.dispatch_mount post-#1919 — the "
             "mount-time _async_tasks (#1280) + _pending_push_events (#1283) drains "
             "live in the runtime now, so the shim inherits them via delegation."
         )
@@ -147,7 +147,7 @@ class TestHandleMountSourceShape:
         the runtime's responsibility post-flip."""
         src = self._source()
         assert "_dispatch_async_work" not in src and "_flush_push_events" not in src, (
-            "handle_mount is a thin shim post-#1919 — the mount-time drains belong "
+            "_mount_page is a thin shim post-#1919 — the mount-time drains belong "
             "to runtime.dispatch_mount, not the shim. Re-adding them here would "
             "double-drain. Found a drain call in the shim source."
         )

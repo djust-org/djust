@@ -11,9 +11,8 @@ A framework mixin that renders context declares a ``ProviderContract`` (see
   ``super().get_context_data()`` is a collision;
 * a provider can write only the keys its contract declares.
 
-Legacy views keep their exact behaviour: :func:`provide_context` is a plain
-item assignment for them. Provider values are render-only; no persistence,
-client, snapshot or debug projection reads the render context.
+Provider values are render-only; no persistence, client, snapshot or debug
+projection reads the render context.
 """
 
 from types import FunctionType
@@ -25,7 +24,6 @@ from ._exposure import (
     ExposureError,
     ProviderContract,
     provider_owners,
-    uses_legacy_exposure,
 )
 
 COLLISION = "Explicit context provider collision"
@@ -109,14 +107,11 @@ def _record(view: Any, keys: Iterable[str]) -> None:
 def provide_context(
     view: Any, context: Dict[str, Any], provider: str, key: str, value: Any
 ) -> None:
-    """Write one key as the named provider; a plain assignment for legacy views.
+    """Write one key as the named provider.
 
     ``provider`` is the ``ProviderContract.name`` the view class registered;
     the key must be one that contract declares.
     """
-    if uses_legacy_exposure(view):
-        context[key] = value
-        return
     if type(context) is not ExplicitRenderContext:
         raise ExposureError("Explicit context providers require the framework render context")
     context._provide(provider, key, value)
@@ -126,10 +121,7 @@ def provide_context(
 def provide_context_items(
     view: Any, context: Dict[str, Any], provider: str, items: Mapping[str, Any]
 ) -> None:
-    """Write several keys as the named provider; ``context.update`` for legacy views."""
-    if uses_legacy_exposure(view):
-        context.update(items)
-        return
+    """Write several keys as the named provider."""
     for key, value in items.items():
         provide_context(view, context, provider, key, value)
 
@@ -138,7 +130,7 @@ def require_no_provider_keys(
     view: Any, context: Mapping[str, Any], contract: ProviderContract
 ) -> None:
     """Reject an application-supplied value for a late provider's keys."""
-    if not uses_legacy_exposure(view) and contract.rendered.intersection(context):
+    if contract.rendered.intersection(context):
         raise ExposureError(COLLISION)
 
 
@@ -148,8 +140,7 @@ def require_mixin_before_view(cls: type, mixin: type) -> None:
     Such a mixin provides its names from ``get_context_data()``. The view
     base's ``get_context_data()`` does not call ``super()``, so a mixin listed
     after it is never asked and its names would render empty without an
-    error. A legacy view is not checked: its attribute walk renders the names
-    in either order, and it keeps working as written.
+    error.
     """
     from django.views import View
 
@@ -273,7 +264,7 @@ def components_provider(view_class: type) -> ProviderContract:
 
 
 #: Instance attribute naming the keys ``RequestMixin._processor_context``
-#: injected for a nonlegacy view (present only while that context is open).
+#: injected for a view (present only while that context is open).
 PROCESSOR_KEYS_ATTR = "_djust_processor_injected_keys"
 
 
@@ -359,10 +350,7 @@ def class_level_plain_component_error(view: Any) -> Optional[ExposureConfigurati
     created and a policy changed since). A plain component has no descriptor,
     so ``self.<name>`` is the one class attribute shared by every session of
     the worker: a handler's write to it reaches every user once it is rendered.
-    Legacy views are reported by the ``djust.V026`` system check instead.
     """
-    if uses_legacy_exposure(view):
-        return None
     view_class = view if isinstance(view, type) else type(view)
     names = class_level_plain_components(view_class)
     if not names:

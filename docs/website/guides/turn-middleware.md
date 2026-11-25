@@ -96,14 +96,13 @@ the API have page mounts and events.
 
 ```
 error_boundary   (built-in, always)
-  reauth         (built-in, when LIVEVIEW_CONFIG["reauth_on_event"] is on)
     LIVEVIEW_MIDDLEWARE[0] ... [n]
       the turn: login_required / permission_required, on_mount hooks,
       object permissions, mount() / handler / hook, render, send
 ```
 
 - **Built-ins are outermost and cannot be removed.** `LIVEVIEW_MIDDLEWARE`
-  lists only your middleware, so setting it never drops `reauth_on_event`.
+  lists only your middleware, so setting it never drops the error boundary.
 - **Your middleware wraps djust's view-level auth**, as Django middleware wraps a
   view and its decorators. It also sees anonymous users and turns djust is about
   to refuse.
@@ -204,7 +203,7 @@ def _as_caller(user_id):
   | `"tick"` | `handle_tick()` |
   | `"render"` | a render, on every transport: `get_context_data()`, the state sync that evaluates the QuerySets the context holds (the explicit JIT, the rows serialized for the template), and the template engine run, including the relations a template follows on a model and the template-time hooks below. Since #4276; before, only the `get_context_data()` call was inside, and the queries after it ran with no scope. One render is one entry: the steps inside it nest |
   | `"auth"` | an authorization decision that runs your code: `check_permissions()`, Django's access mixins and replayed `dispatch` decorators (`test_func`), `@permission_required` on a handler, and the object-permission check (`get_object()` + `has_object_permission()`) |
-  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the signed client snapshot's restore gate (`_should_restore_snapshot()`), the restore of a legacy lazy child's private state (`_restore_private_state()`, which re-fetches private model references; a guarded step, so a wrapper that swallows a failure cannot leave a half-restored view), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
+  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the signed client snapshot's restore gate (`_should_restore_snapshot()`), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
   | `"state_store"` | a call into the project's [state store](../state/state-store.md) (`DJUST_STATE_STORE`): the load of a view's saved state, its save after a turn, and the deletion of evicted states. Entered only when a store outside the session is configured (new with #4132) |
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
@@ -228,9 +227,8 @@ def _as_caller(user_id):
   exits cleanly. If the wrapper's `__exit__` swallows an exception that the check
   or an `on_mount` hook raised, djust raises `PermissionDenied` instead of
   treating the missing verdict as "allowed". The same guard covers the
-  `on_mount` chain and `_restore_private_state`,
-  because their outcome is a verdict too (a swallowed failure in the last would
-  otherwise leave a silently half-restored view). The guard belongs to the step djust enters: a check that runs
+  `on_mount` chain,
+  because its outcome is a verdict too. The guard belongs to the step djust enters: a check that runs
   *inside* another step on the same thread (an `"auth"` check called from a
   `mount()` that is itself being wrapped) does not enter the wrapper again, so a
   wrapper that swallows exceptions on the **outer** `"mount"` / `"event"` step is
@@ -243,7 +241,7 @@ def _as_caller(user_id):
   | Request | Entries, in order |
   |---|---|
   | HTTP page GET | `"auth"` (view-level), `"lifecycle"` (the `on_mount` chain, only when the view has one), `"mount"`, `"handle_params"`, `"auth"` (object check, when `get_object()` is overridden), `"render"` three times: the GET's own `get_context_data()` (evaluated once, #3725), together with the context processors and the normalizing of the context's models (whose `@property` and `get_*` methods may query), then the page render and the diff-baseline render, which read that context and each run the template engine (#4276) |
-  | HTTP POST event (legacy view: 2.0 keeps no state between requests, so every POST is this) | `"auth"`, `"mount"`, `"handle_params"`, `"auth"`, `"event"`, `"render"` |
+  | HTTP POST event (2.0 keeps no state between requests, so every POST is this) | `"auth"`, `"mount"`, `"handle_params"`, `"auth"`, `"event"`, `"render"` |
 
   Each is one entry on the thread that runs it. Keep the wrapper cheap.
 - `disconnected()` runs when a connection ends, outside any turn: the wrapper
@@ -411,10 +409,10 @@ timings. In development, read them from
 
 ## Built-in behaviour on the chain
 
-- **`reauth_on_event`** runs as the `reauth` built-in for legacy-exposure views
-  with `login_required` / `permission_required`: client turns re-check every
-  turn, server turns at most every `reauth_server_turn_interval` seconds.
-  `url_change` and background results are now re-checked too.
+- **Re-authorization** runs inside the turn, against a freshly loaded session,
+  on every client and server turn, `url_change` and background results
+  included. The 1.3 keys `reauth_on_event` and `reauth_server_turn_interval`
+  are refused at startup (#4199).
 - **Errors**: `PermissionDenied` anywhere in a turn becomes a deny; any other
   exception escaping a socket client turn is answered with the value-free error
   envelope. Server turns keep their own error handling.
@@ -440,5 +438,5 @@ async def test_anonymous_callers_are_sent_to_login():
 ## See also
 
 - [on_mount hooks](on-mount-hooks.md): mount-only logic per view
-- [Authentication](authentication.md): `login_required`, `reauth_on_event`
+- [Authentication](authentication.md): `login_required`, per-turn re-authorization
 - [ADR-044](https://github.com/djust-org/djust/blob/main/docs/adr/044-turn-middleware.md)

@@ -10,10 +10,9 @@ without forming a cycle.
 
 CodeQL flagged ~872 ``py/unsafe-cyclic-import`` alerts across the theme
 files because of the previous structure. Moving the pure type definitions
-here resolves them without behavioural change — ``presets.py`` and
-``theme_packs.py`` re-export the types for backward compatibility so
-existing user imports like ``from djust.theming.presets import ColorScale``
-keep working.
+here resolves them without behavioural change. Import the types from
+``djust.theming``; ``presets.py`` and ``theme_packs.py`` stopped re-exporting
+them in 2.0 (#4207).
 
 IMPORTANT: this module MUST NOT import from anywhere else in ``djust``.
 Only stdlib imports are allowed so the dependency graph stays acyclic.

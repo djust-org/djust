@@ -5,16 +5,14 @@ provider, a render-only projection of ``UploadManager.get_upload_state()``
 that drops the raw client-supplied ``client_name`` (templates get the
 sanitized ``safe_client_name``) and the server-side ``writer_result``.
 
-Uploads in flight resume across a reconnect on both policies (#4175, which
+Uploads in flight resume across a reconnect (#4175, which
 replaced ADR-038 D-g): a ``ResumableUploadWriter`` records the upload, bound
 to the session and, for an explicit view, to the mount binding's principal and
 view, and the ``upload_resume`` handshake re-attaches the parked writer. A
 plain upload's entry is not preserved: the remount starts with an empty upload
 manager and the client falls back to ``upload_register``, which still works.
 
-Legacy views keep their exact behaviour (no ``uploads`` context, store-backed
-resume); each explicit case pins a legacy control. Only the staged
-construction gate is bypassed. Runtime cases use the real ``ViewRuntime`` with
+Only the staged construction gate is bypassed. Runtime cases use the real ``ViewRuntime`` with
 DB sessions.
 """
 
@@ -150,20 +148,11 @@ def test_upload_provider_is_registered_render_only():
     assert uploads.persisted == frozenset() and uploads.client == frozenset()
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_uploads_as_application_kwarg(staged, monkeypatch, policy):
-    monkeypatch.setattr(UploadPage, "exposure_policy", policy)
+def test_uploads_as_application_kwarg(staged, monkeypatch):
     view = UploadPage()
     view.allow_upload("avatar", accept=".png")
-    if policy == "legacy":
-        # Control: legacy has no uploads provider, and never had an uploads
-        # key; its attribute walk ran (the declared field is there).
-        context = view.get_context_data(uploads="APP_SENTINEL")
-        assert "uploads" not in context
-        assert context["count"] == 0
-    else:
-        with pytest.raises(ExposureError, match="collision"):
-            view.get_context_data(uploads="APP_SENTINEL")
+    with pytest.raises(ExposureError, match="collision"):
+        view.get_context_data(uploads="APP_SENTINEL")
 
 
 # ---------------------------------------------------------------------------
@@ -174,9 +163,7 @@ def test_uploads_as_application_kwarg(staged, monkeypatch, policy):
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("view_class", [UploadPage, LiveViewFirstPage])
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_upload_progress_renders_from_the_provider(staged, monkeypatch, view_class, policy):
-    monkeypatch.setattr(view_class, "exposure_policy", policy)
+async def test_upload_progress_renders_from_the_provider(staged, monkeypatch, view_class):
     request = await sync_to_async(make_request)()
     runtime, transport = await _mount(request, view_class)
     assert not transport.errors, transport.errors
@@ -188,12 +175,8 @@ async def test_upload_progress_renders_from_the_provider(staged, monkeypatch, vi
     frames = json.dumps(transport.sent)
     assert "RAWDIR_SENTINEL" not in frames
     assert WRITER_SENTINEL not in frames
-    if policy == "legacy":
-        # Control: legacy views have never had an uploads context.
-        assert "|entry:" not in frames and "|cfg" not in frames
-    else:
-        assert f"|entry:{SAFE_NAME}:0|" in frames
-        assert "|cfg" in frames
+    assert f"|entry:{SAFE_NAME}:0|" in frames
+    assert "|cfg" in frames
 
 
 # ---------------------------------------------------------------------------
@@ -203,9 +186,7 @@ async def test_upload_progress_renders_from_the_provider(staged, monkeypatch, vi
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_mount_frame_upload_configs_are_configuration_only(staged, monkeypatch, policy):
-    monkeypatch.setattr(MountRegisteredPage, "exposure_policy", policy)
+async def test_mount_frame_upload_configs_are_configuration_only(staged, monkeypatch):
     request = await sync_to_async(make_request)()
     runtime, transport = await _mount(request, MountRegisteredPage)
     assert not transport.errors, transport.errors
@@ -227,9 +208,8 @@ async def test_mount_frame_upload_configs_are_configuration_only(staged, monkeyp
         assert sentinel not in configs
     whole = json.dumps(frame)
     assert "RAWDIR_SENTINEL" not in whole and WRITER_SENTINEL not in whole
-    if policy == "explicit":
-        # The only place the entry reaches the frame is the rendered page.
-        assert f"|entry:{SAFE_NAME}:0|" in frame["html"]
+    # The only place the entry reaches the frame is the rendered page.
+    assert f"|entry:{SAFE_NAME}:0|" in frame["html"]
 
 
 # ---------------------------------------------------------------------------
@@ -346,9 +326,7 @@ def resumable_store():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_upload_resume_then_reregister(staged, monkeypatch, resumable_store, policy):
-    monkeypatch.setattr(UploadPage, "exposure_policy", policy)
+async def test_upload_resume_then_reregister(staged, monkeypatch, resumable_store):
     view = UploadPage()
     view.allow_upload("avatar", accept=".png", max_entries=3, max_file_size=100000)
     consumer = _consumer(view)
@@ -366,7 +344,7 @@ async def test_upload_resume_then_reregister(staged, monkeypatch, resumable_stor
     await consumer._handle_upload_resume({"type": "upload_resume", "ref": "ref-resume"})
     reply = consumer.send_json.await_args.args[0]
     assert reply["type"] == "upload_resumed" and reply["ref"] == "ref-resume"
-    # Both policies consult the resumable state store (#4175). Since #2972 a
+    # The resume consults the resumable state store (#4175). Since #2972 a
     # resume also needs the upload's live writer parked in this process; a
     # bare state entry (no writer) answers not_found.
     assert consulted == ["ref-resume"]
@@ -399,17 +377,14 @@ async def test_upload_resume_then_reregister(staged, monkeypatch, resumable_stor
     assert [e.ref for e in view._upload_manager.get_entries("avatar")] == ["ref-new"]
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_resumable_writers_record_resume_state_for_both_policies(staged, monkeypatch, policy):
-    """#4175: an explicit view resumes uploads in flight too, so its
-    resumable writer records the upload in the resume store as a legacy
-    view's does."""
+def test_resumable_writers_record_resume_state(staged, monkeypatch):
+    """#4175: an explicit view resumes uploads in flight, so its resumable
+    writer records the upload in the resume store."""
     from djust.tests.test_resumable_uploads_821 import _RecordingInnerWriter
     from djust.uploads.resumable import ResumableUploadWriter
 
     store = InMemoryUploadState()
     writer = ResumableUploadWriter.with_inner(_RecordingInnerWriter, state_store=store)
-    monkeypatch.setattr(UploadPage, "exposure_policy", policy)
     view = UploadPage()
     view.allow_upload("avatar", accept=".png", max_entries=3, max_file_size=100000, writer=writer)
     entry = view._upload_manager.register_entry("avatar", "ref-w", RAW_NAME, "image/png", 10)
@@ -420,10 +395,9 @@ def test_resumable_writers_record_resume_state_for_both_policies(staged, monkeyp
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_upload_resume_with_a_parked_writer(staged, monkeypatch, policy):
+async def test_upload_resume_with_a_parked_writer(staged, monkeypatch):
     """Since #2972 a resume needs the upload's live writer parked in this
-    process; both policies re-attach it (#4175)."""
+    process; the view re-attaches it (#4175)."""
     from djust.uploads import resumable
     from djust.uploads.storage import (
         InMemoryUploadState,
@@ -441,7 +415,6 @@ async def test_upload_resume_with_a_parked_writer(staged, monkeypatch, policy):
         entry = _start(old, key="ws-session")
         old.cleanup()  # the socket dropped: the writer is parked
 
-        monkeypatch.setattr(UploadPage, "exposure_policy", policy)
         view = UploadPage()
         view._upload_manager = _manager()
         consumer = _consumer(view)

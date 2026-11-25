@@ -8,11 +8,12 @@ Each LiveView and LiveComponent template is scanned by
 - ``T020``: a known argument is missing, unexpected or supplied twice.
 - ``T021``: a literal value or wire-type hint the handler cannot accept.
 - ``T022``: markup supplies routing context (``view_id`` / ``component_id``).
-- ``T028``: a binding a legacy handler accepts that the strict policy would
-  refuse (#4190).
+
+``T028`` (a binding a legacy handler accepts that strict would refuse) was
+retired with the legacy parameter policy (#4205).
 
 Handlers are resolved through ``_parameter_metadata.declared_handlers`` and
-arguments through the runtime's own policy, coercion and strict contract, so
+arguments through the runtime's own coercion and strict contract, so
 the check and dispatch cannot disagree. No view or component is constructed or
 mounted, no handler runs and no queryset is evaluated. What cannot be decided
 statically is reported as dynamic or unsupported in the coverage report
@@ -33,7 +34,6 @@ from typing import Any, Optional
 
 from django.core.checks import CheckMessage, Info, register
 
-from djust._framework_code import is_djust_module
 from djust.checks.utils import DjustWarning, LineCounter, _is_check_suppressed
 
 BINDING_IDS = ("T019", "T020", "T021", "T022")
@@ -351,33 +351,11 @@ class _OwnerContext:
     # -- T020-T022 --------------------------------------------------------
 
     def _arguments(self, binding: Any, handler: Any) -> list[Finding]:
-        from djust._parameter_contract import ContractError
         from djust.checks.parameters import _bound
-        from djust.validation import get_handler_parameter_policy
 
         method = _bound(handler.member, handler.function, self.cls)
-        try:
-            policy = get_handler_parameter_policy(method)
-        except ContractError:
-            return []  # djust.C022 / V016 report the invalid policy.
-        payload = binding.payload
-        findings = _routing_findings(payload, strict=policy == "strict")
-        if policy == "strict":
-            findings += _strict_findings(binding, method)
-        else:
-            findings += _legacy_findings(binding, method)
-            if not is_djust_module(getattr(self.cls, "__module__", "") or ""):
-                findings += [
-                    Finding(
-                        "T028",
-                        "%s() runs under the legacy parameter policy; under strict, the only "
-                        "policy in djust 2.0.0: %s" % (binding.name, f.message),
-                        f.hint,
-                        expected=f.expected,
-                        supplied=f.supplied,
-                    )
-                    for f in _strict_findings(binding, method)
-                ]
+        findings = _routing_findings(binding.payload)
+        findings += _strict_findings(binding, method)
         findings += _form_field_findings(self.cls, binding, handler)
         return findings
 
@@ -389,15 +367,12 @@ _NAME_HINT = (
 )
 
 
-def _routing_findings(payload: Any, strict: bool = False) -> list[Finding]:
+def _routing_findings(payload: Any) -> list[Finding]:
     from djust._template_bindings import ROUTING_KEYS
 
     findings = []
     seen = set()
-    # ``values`` is the strict path's dj-value-* set; a legacy handler never reads it
-    # for the fixed-payload directives (#4240).
-    supplied = [*payload.legacy.items(), *(payload.values.items() if strict else ())]
-    for key, (attribute, _value, _hint) in supplied:
+    for key, (attribute, _value, _hint) in payload.values.items():
         if key in ROUTING_KEYS and attribute not in seen:
             seen.add(attribute)
             findings.append(
@@ -407,150 +382,6 @@ def _routing_findings(payload: Any, strict: bool = False) -> list[Finding]:
                     % (attribute, key),
                     "The framework attaches view and component context itself. Rename "
                     "the attribute; it could redirect the event to another owner.",
-                    supplied=[key],
-                )
-            )
-    return findings
-
-
-def _signature(method: Any) -> tuple[list[inspect.Parameter], bool]:
-    signature = inspect.signature(method)
-    params = [
-        p
-        for p in signature.parameters.values()
-        if p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
-    ]
-    open_ = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())
-    return params, open_
-
-
-def _legacy_findings(binding: Any, method: Any) -> list[Finding]:
-    from djust._template_bindings import ROUTING_KEYS
-
-    payload = binding.payload
-    try:
-        params, open_ = _signature(method)
-    except (TypeError, ValueError):
-        return []
-    accepted = [p.name for p in params]
-    required = [p.name for p in params if p.default is inspect.Parameter.empty]
-    keys = [*payload.generated, *payload.legacy_generated]
-    keys += [k for k in payload.legacy if k not in keys]
-    positional = payload.positional or []
-    positional_names = accepted[: len(positional)]
-    findings: list[Finding] = []
-    if not open_:
-        unexpected = [k for k in keys if k not in accepted and k not in ROUTING_KEYS]
-        if unexpected:
-            findings.append(
-                Finding(
-                    "T020",
-                    "%s sends %s, which %s() does not accept."
-                    % (binding.directive, _names(unexpected), binding.name),
-                    _unexpected_hint(binding, unexpected),
-                    expected=accepted,
-                    supplied=keys,
-                )
-            )
-    if len(positional) > len(accepted):
-        findings.append(
-            Finding(
-                "T020",
-                "%s passes %d positional arguments; %s() takes %d, and the rest are dropped."
-                % (binding.directive, len(positional), binding.name, len(accepted)),
-                "Remove the extra arguments or add parameters for them.",
-                expected=accepted,
-            )
-        )
-    if payload.legacy_complete and payload.generated_complete:
-        missing = [n for n in required if n not in keys and n not in positional_names]
-        if missing:
-            findings.append(
-                Finding(
-                    "T020",
-                    "%s() requires %s, which this binding never sends."
-                    % (binding.name, _names(missing)),
-                    "Add data-%s (or dj-value-%s) to the element, or give the parameter "
-                    "a default only if it is genuinely optional."
-                    % (missing[0].replace("_", "-"), missing[0].replace("_", "-")),
-                    expected=accepted,
-                    supplied=keys,
-                )
-            )
-    for first, second, key in payload.legacy_duplicates:
-        findings.append(
-            Finding(
-                "T020",
-                "%s and %s both send %r; the browser keeps only one." % (first, second, key),
-                "Remove one of the attributes.",
-                supplied=[key],
-            )
-        )
-    findings += _legacy_literal_findings(binding, method, positional_names, positional)
-    return findings
-
-
-def _unexpected_hint(binding: Any, unexpected: list[str]) -> str:
-    generated = set(binding.payload.generated) | set(binding.payload.legacy_generated)
-    if generated & set(unexpected):
-        return (
-            "Under the legacy parameter policy %s always sends %s. Accept them "
-            "(for example with **kwargs) or use the strict policy, which sends only "
-            "the names the handler declares." % (binding.directive, _names(sorted(generated)))
-        )
-    return "Rename the attribute to a parameter of the handler, or add the parameter."
-
-
-def _client_hint_value(value: str, hint: Optional[str]) -> Any:
-    """The value the legacy client sends for a typed data-* / dj-value-* literal."""
-    if hint in ("int", "integer"):
-        if value == "":
-            return 0
-        match = re.match(r"\s*[+-]?\d+", value)
-        return int(match.group()) if match else None
-    if hint in ("float", "number"):
-        if value == "":
-            return 0.0
-        match = re.match(r"\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", value)
-        return float(match.group()) if match else None
-    if hint in ("bool", "boolean"):
-        return value.lower() in ("true", "1", "yes", "on", "checked")
-    if hint in ("json", "object", "array"):
-        import json
-
-        try:
-            return json.loads(value)
-        except ValueError:
-            return value
-    if hint == "list":
-        return [v.strip() for v in value.split(",") if v.strip()]
-    return value
-
-
-def _legacy_literal_findings(
-    binding: Any, method: Any, positional_names: list[str], positional: list[Any]
-) -> list[Finding]:
-    from djust.validation import coerce_parameter_types, validate_parameter_types
-
-    literals: dict[str, tuple[str, Any]] = {}
-    for key, (attribute, value, hint) in binding.payload.legacy.items():
-        if value is not None:
-            literals[key] = (attribute, _client_hint_value(value, hint))
-    for name, value in zip(positional_names, positional):
-        literals[name] = ("%s argument %r" % (binding.directive, value), value)
-    findings = []
-    for key, (source, value) in literals.items():
-        coerced = coerce_parameter_types(method, {key: value})
-        errors = validate_parameter_types(method, coerced)
-        if errors:
-            error = errors[0]
-            findings.append(
-                Finding(
-                    "T021",
-                    "%s gives %s() %r for %r, which is not a valid %s."
-                    % (source, binding.name, value, key, error["expected"]),
-                    "Correct the literal, or change the parameter's annotation.",
-                    expected=[key],
                     supplied=[key],
                 )
             )
@@ -575,7 +406,7 @@ def _strict_findings(binding: Any, method: Any) -> list[Finding]:
     positional_params = [p for p in metadata if p["kind"].startswith("positional")]
     types_by_name = dict(contract.types)
     coerce = get_handler_coercion(method)
-    generated_names = [*payload.generated, *payload.strict_generated]
+    generated_names = [*payload.generated]
     generated = set(generated_names)
     sent_generated = [g for g in generated_names if g in named or open_]
     positional = payload.positional or []
@@ -947,7 +778,7 @@ def _messages(reports: list[OwnerReport]) -> list[CheckMessage]:
 def _emit(
     check_id: str, message: str, finding: Finding, report: OwnerReport, binding: Any
 ) -> CheckMessage:
-    """The one constructor of ``djust.T019``-``T022`` and ``T028`` (one ID, one emitter)."""
+    """The one constructor of ``djust.T019``-``T022`` (one ID, one emitter)."""
     details: dict[str, Any] = {
         "hint": finding.hint,
         "fix_hint": finding.hint,
@@ -964,8 +795,6 @@ def _emit(
         return BindingWarning(message, id="djust.T020", **details)
     if check_id == "djust.T021":
         return BindingWarning(message, id="djust.T021", **details)
-    if check_id == "djust.T028":
-        return BindingWarning(message, id="djust.T028", **details)
     return BindingWarning(message, id="djust.T022", **details)
 
 
@@ -973,9 +802,7 @@ def _emit(
 def check_event_bindings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """``djust.T019``-``T022``: template event bindings against their owners;
     ``djust.T024``: floor-excluded user fields in those templates."""
-    if all(
-        _is_check_suppressed("djust.%s" % check_id) for check_id in (*BINDING_IDS, "T024", "T028")
-    ):
+    if all(_is_check_suppressed("djust.%s" % check_id) for check_id in (*BINDING_IDS, "T024")):
         return []
     try:
         from djust.live_view import LiveView  # noqa: F401

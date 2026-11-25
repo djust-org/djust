@@ -3,7 +3,7 @@
 Callers must select declarations, authenticate storage, bind identities and
 check freshness separately. A schema digest is NOT a signature. These helpers
 never discover ordinary attributes, invoke a fallback serializer, or mutate a
-view during restore. Legacy exporters do not use them.
+view during restore.
 """
 
 import hashlib
@@ -382,15 +382,15 @@ class StateLimits:
 _DEFAULT_LIMITS = StateLimits()
 
 
-def _read_exposure_policy(view: Any) -> Any:
-    """Default only an undeclared policy, never a failing policy descriptor.
+def _read_exposure_policy(view: Any) -> str:
+    """``"explicit"``, the only policy; anything else is refused (#4199 refuses it earlier).
 
     An owner with no ``exposure_policy`` at all (``None``, a stub, an object
-    that is not a view) reads as ``"explicit"``, the ``LiveView`` default: it
-    has not asked for the legacy export, so it is not given it.
+    that is not a view) reads as ``"explicit"``, the ``LiveView`` default. A
+    failing policy descriptor is never defaulted: its error propagates.
     """
     try:
-        return view.exposure_policy
+        policy = view.exposure_policy
     except AttributeError:
         from inspect import getattr_static
 
@@ -398,6 +398,9 @@ def _read_exposure_policy(view: Any) -> Any:
         if getattr_static(view, "exposure_policy", missing) is not missing:
             raise
         return "explicit"
+    if type(policy) is not str or policy != "explicit":
+        raise ExposureError("Explicit state policy required")
+    return policy
 
 
 def states_exposure_policy(owner: Any) -> bool:
@@ -421,20 +424,9 @@ def states_exposure_policy(owner: Any) -> bool:
     return True
 
 
-def uses_legacy_exposure(view: Any) -> bool:
-    """Only the exact legacy policy may select a reflective export/restore path."""
-    try:
-        policy = _read_exposure_policy(view)
-        return type(policy) is str and policy == "legacy"
-    except Exception:  # noqa: BLE001 — an unreadable policy cannot grant legacy access
-        return False
-
-
 def _sw_cacheable_node(view: Any) -> bool:
-    """One view's own eligibility: a legacy view (until the legacy arm goes), or a
-    view whose class sets ``sw_cacheable = True`` (#4176). Fails closed."""
-    if uses_legacy_exposure(view):
-        return True
+    """One view's own eligibility: its class sets ``sw_cacheable = True`` (#4176).
+    Fails closed."""
     cls = view if isinstance(view, type) else type(view)
     try:
         return getattr(cls, "sw_cacheable", False) is True
@@ -461,8 +453,8 @@ def service_worker_cache_eligible(view: Any) -> bool:
         return False
 
 
-def explicit_debug_projection(view: Any) -> dict[str, Any] | None:
-    """Return bounded explicit debug data, or None only for the legacy policy.
+def explicit_debug_projection(view: Any) -> dict[str, Any]:
+    """Return bounded explicit debug data, or a projection-error marker.
 
     Diagnostic failures must not retry using reflection, repr, or context. Even
     a permitted field's factory can raise an exception containing secrets, so
@@ -471,14 +463,10 @@ def explicit_debug_projection(view: Any) -> dict[str, Any] | None:
     The ordinary runtime projection API still raises validation errors.
     """
     try:
-        policy = _read_exposure_policy(view)
-        if type(policy) is str and policy == "legacy":
-            return None
-        if type(policy) is str and policy == "explicit":
-            return ExposureContract.from_view_class(type(view)).project_view(view, "debug")
+        _read_exposure_policy(view)
+        return ExposureContract.from_view_class(type(view)).project_view(view, "debug")
     except Exception:  # noqa: BLE001 — diagnostic boundary; never expose exception values
         return {"_djust_projection_error": "State unavailable"}
-    return {"_djust_projection_error": "State unavailable"}
 
 
 def explicit_state_projection(view: Any, destination: Destination) -> dict[str, Any]:
@@ -494,18 +482,6 @@ def explicit_state_projection(view: Any, destination: Destination) -> dict[str, 
         return ExposureContract.from_view_class(type(view)).project_view(view, destination)
     except Exception:  # noqa: BLE001 — factory exceptions may contain secrets; fail closed
         raise ExposureError("Explicit state projection unavailable") from None
-
-
-def require_legacy_state_api(view: Any) -> None:
-    """Reject legacy persistence/restore helpers before inspecting any payload.
-
-    Explicit persistence must use a bound adapter, not raw dictionaries or
-    inferred private/component fields. Unknown policies cannot grant access.
-    """
-    if not uses_legacy_exposure(view):
-        raise ExposureError(
-            "Legacy state API requires legacy exposure; use a bound explicit adapter"
-        )
 
 
 def clone_json_state(value: Any, *, limits: StateLimits = _DEFAULT_LIMITS) -> Any:

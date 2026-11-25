@@ -653,9 +653,9 @@ decide what an event may carry. Values are converted exactly, and an event
 that doesn't fit is rejected before your code runs. The examples in these
 guides are written for it. It is the default since djust 2.0
 ([#4189](https://github.com/djust-org/djust/issues/4189)) and the only
-behaviour from 2.0.0 final ([#4171](https://github.com/djust-org/djust/issues/4171)).
-Until then a handler that still needs the 1.x behaviour can pin
-`@event_handler(parameter_policy="legacy")`.
+behaviour: `@event_handler(parameter_policy="legacy")` is refused with
+`ImproperlyConfigured` when the decorator applies
+([#4199](https://github.com/djust-org/djust/issues/4199)).
 
 ### Example: typed click arguments
 

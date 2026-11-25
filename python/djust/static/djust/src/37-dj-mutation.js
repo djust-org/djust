@@ -73,7 +73,7 @@ function _installDjMutationFor(el) {
         if (globalThis.djust && typeof globalThis.djust.handleEvent === 'function') {
             const strict = globalThis.djust._strictBinding(el, handlerName, payload, [], null, true);
             if (strict === false) return;
-            const sent = strict || payload;
+            const sent = strict;
             if (typeof globalThis.djust._markSlotOf === 'function') globalThis.djust._markSlotOf(sent, el);
             globalThis.djust.handleEvent(handlerName, sent);
         }
