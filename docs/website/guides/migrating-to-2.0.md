@@ -1161,5 +1161,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: e73b1c2141e4 -->
-<!-- generated-doc prose-sha256: 63bd97b6a486 -->
+<!-- generated-doc prose-sha256: c4e3bc452997 -->
