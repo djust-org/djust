@@ -151,8 +151,8 @@ async def test_post_render_discard_cleans_entire_preserved_subtree():
     await WSConsumerTransport(consumer).on_mount_render_ready(LifecycleView(), "<div></div>")
     assert not child._get_all_child_views()
     assert not grandchild._async_tasks
-    assert child._hooks == ["unmount"]
-    assert grandchild._hooks == ["unmount"]
+    assert child._hooks == ["unregister", "unmount"]
+    assert grandchild._hooks == ["unregister", "unmount"]
     assert not parent._get_all_child_views()
     assert frames == [{"type": "sticky_hold", "views": []}]
 
@@ -356,7 +356,7 @@ async def test_websocket_disconnect_disposes_active_and_staged_subtrees_once():
     for view in (child, grandchild):
         assert view._hooks == ["unregister", "unmount"]
     for view in (staged_child, staged_grandchild):
-        assert view._hooks == ["unmount"]
+        assert view._hooks == ["unregister", "unmount"]
 
 
 @pytest.mark.asyncio
@@ -442,7 +442,7 @@ async def test_real_sse_navigation_disposes_old_registered_subtree(settings):
             assert isinstance(session.view_instance, SecondPage)
             assert old._djust_child_disposed
             assert not nested._async_tasks
-            assert child._hooks == nested._hooks == ["unmount"]
+            assert child._hooks == nested._hooks == ["unregister", "unmount"]
         finally:
             session.shutdown()
             _sse_sessions.pop(session.session_id, None)
@@ -525,12 +525,12 @@ async def test_websocket_redirect_cleans_only_discarded_owned_subtrees(outcome):
             await consumer.handle_live_redirect_mount(data)
     else:
         await consumer.handle_live_redirect_mount(data)
-    assert parent._hooks == ordinary._hooks == ["unmount"]
+    assert parent._hooks == ordinary._hooks == ["unregister", "unmount"]
     if outcome == "survives":
         assert not child._hooks and not grandchild._hooks
         assert grandchild._async_tasks
         assert consumer.view_instance._get_child_view("child") is child
     else:
-        assert child._hooks == grandchild._hooks == ["unmount"]
+        assert child._hooks == grandchild._hooks == ["unregister", "unmount"]
         assert not grandchild._async_tasks
         assert not consumer._sticky_preserved

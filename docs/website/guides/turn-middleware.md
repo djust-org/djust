@@ -305,7 +305,7 @@ Everything above is the sync code djust runs on a worker thread through
   it cannot run inside it.
 - **Teardown hooks on the event loop.** `_on_sticky_unmount()`,
   `_cleanup_on_unregister()` and `_cleanup_uploads()` run when a view or child is
-  released. Which thread runs them depends on the transport:
+  released, a navigation included, once per view. Which thread runs them depends on the transport:
 
   | Release | Thread | Step |
   |---|---|---|
