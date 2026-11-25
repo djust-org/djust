@@ -415,3 +415,204 @@ def test_dry_run_and_root_need_fix():
         call_command("djust_exposure_inventory", "--dry-run", stdout=StringIO())
     with pytest.raises(CommandError, match="need --fix"):
         call_command("djust_exposure_inventory", "--root", ".", stdout=StringIO())
+
+
+# ---------------------------------------------------------------------------
+# Review findings: shapes the fixture does not cover
+# ---------------------------------------------------------------------------
+
+
+def _write_app(
+    tmp_path: Path, name: str, source: str, templates=None
+) -> tuple[Path, types.ModuleType]:
+    """A one-file app; ``POLICY`` in ``source`` stands for the 1.3 statement."""
+    app_dir = tmp_path / name
+    (app_dir / "templates").mkdir(parents=True)
+    for relpath, text in (templates or {}).items():
+        target = app_dir / "templates" / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(text.encode("utf-8"))
+    (app_dir / "views.py").write_bytes(source.replace("POLICY", POLICY).encode("utf-8"))
+    return app_dir, _load(app_dir / "views.py", name)
+
+
+INHERITED_INLINE = '''\
+from django.utils.html import format_html
+
+from djust import LiveView
+from djust.decorators import event_handler
+
+
+class Parent(LiveView):
+    exposure_policy = "explicit"
+    template = """<div dj-root>
+<p>x</p>
+<button dj-click="pick" data-item-id="1">x</button>
+</div>"""
+
+    @event_handler()
+    def pick(self, item_id: int = 0):
+        pass
+
+
+class Child(Parent):
+    def render_chip(self):  # the scan puts Parent's button line (3rd) on the next line
+        return format_html('<button dj-click="pick" data-item-id="{}">x</button>', 1)
+'''
+
+
+def test_an_inherited_inline_template_never_rewrites_python_built_html(tmp_path):
+    """The scan maps Parent's inline template onto Child's body, where its lines land
+    on format_html(); only text inside a ``template = "..."`` literal is rewritten.
+
+    Gate-off: drop the inline-template span check in ``_rewrite_markup`` and the
+    format_html() string is rewritten."""
+    app_dir, module = _write_app(tmp_path, "fix4209_inherited", INHERITED_INLINE)
+    report = json.loads(_fix(app_dir, module, "Child", extra=["--json"]))
+    text = (app_dir / "views.py").read_text(encoding="utf-8")
+    assert 'format_html(\'<button dj-click="pick" data-item-id="{}">x</button>\', 1)' in text
+    assert not [c for c in report["changes"] if c["kind"] == "data_argument_renamed"]
+    # Parent, run on its own, has its template rewritten.
+    _fix(app_dir, module, "Parent")
+    text = (app_dir / "views.py").read_text(encoding="utf-8")
+    assert '<button dj-click="pick" dj-value-item-id="1">x</button>' in text
+    assert 'data-item-id="{}"' in text
+
+
+RUNTIME_TEMPLATES = """\
+from django.template import Context, Template
+
+from djust import LiveView
+
+
+class DynView(LiveView):
+    POLICY
+
+    def mount(self, request, **kwargs):
+        self.template_name = "dyn.html"
+        self.n = "SEEN"
+
+
+class RawView(LiveView):
+    POLICY
+
+    def mount(self, request, **kwargs):
+        self.name = "bob"
+
+    def render(self, request=None):
+        return Template("<div dj-root>{{ name }}</div>").render(Context(self.get_context_data()))
+"""
+
+
+def test_a_view_whose_template_is_chosen_at_runtime_keeps_its_policy(tmp_path):
+    """A leaf view with no template attribute is not a template-less base.
+
+    Gate-off: let ``_template_less_base`` accept any class without a template and both
+    policy lines are deleted, so ``{{ n }}`` and ``{{ name }}`` render empty."""
+    app_dir, module = _write_app(
+        tmp_path, "fix4209_runtime", RUNTIME_TEMPLATES, {"dyn.html": "<div dj-root>{{ n }}</div>"}
+    )
+    before = _snapshot(app_dir)
+    report = json.loads(_fix(app_dir, module, "DynView", "RawView", extra=["--json"]))
+    assert _snapshot(app_dir) == before
+    assert report["changes"] == []
+    unreadable = {n["where"] for n in report["notes"] if n["kind"] == "unreadable_view"}
+    kept = {n["where"] for n in report["notes"] if n["kind"] == "policy_kept"}
+    assert unreadable == kept == {"fix4209_runtime.DynView", "fix4209_runtime.RawView"}
+
+
+SHARED_INCLUDE = (
+    "from djust import LiveView\r\n"
+    "from djust.decorators import event_handler\r\n"
+    "\r\n"
+    "\r\n"
+    "class AView(LiveView):\r\n"
+    "    POLICY\r\n"
+    '    template_name = "a.html"\r\n'
+    "\r\n"
+    "    def mount(self, request, **kwargs):\r\n"
+    "        self.n = 1\r\n"
+    "\r\n"
+    "    @event_handler()\r\n"
+    '    def add(self, sku="é", **kwargs):\r\n'
+    "        pass\r\n"
+    "\r\n"
+    "\r\n"
+    "class BView(LiveView):\r\n"
+    '    exposure_policy = "explicit"\r\n'
+    '    template_name = "b.html"\r\n'
+    "\r\n"
+    "    @event_handler()\r\n"
+    "    def add(self, **kwargs):\r\n"
+    "        pass\r\n"
+)
+
+
+def test_a_scoped_run_asks_every_owner_of_a_shared_include_and_keeps_crlf(tmp_path):
+    """``--view AView`` must not rename ``data-sku`` in a partial BView also renders,
+    whose ``add()`` does not declare ``sku``: under strict it would lose the value.
+
+    Gate-off: skip the out-of-scope vote in ``_rewrite_markup`` and p.html is rewritten."""
+    partial = '<span>é</span><button dj-click="add" data-sku="1">x</button>'
+    app_dir, module = _write_app(
+        tmp_path,
+        "fix4209_shared",
+        SHARED_INCLUDE,
+        {
+            "a.html": '<div dj-root>{{ n }}{% include "p.html" %}</div>',
+            "b.html": '<div dj-root>{% include "p.html" %}</div>',
+            "p.html": partial,
+        },
+    )
+    report = json.loads(_fix(app_dir, module, "AView", extra=["--json"]))
+    assert (app_dir / "templates" / "p.html").read_text(encoding="utf-8") == partial
+    assert any(
+        n["kind"] == "ambiguous_markup" and "data-sku" in n["detail"] for n in report["notes"]
+    )
+    raw = (app_dir / "views.py").read_bytes()
+    assert b"\n" not in raw.replace(b"\r\n", b"")  # every line ending is still \r\n
+    text = raw.decode("utf-8")
+    assert 'def add(self, sku: Any = "é", **kwargs):' in text
+    assert "from typing import Any\r\n" in text
+    assert 'context["n"] = self.n\r\n' in text
+    assert POLICY not in text
+    after_first = _snapshot(app_dir)
+    _unload(module)
+    again = _load(app_dir / "views.py", "fix4209_shared_again")
+    assert _fix(app_dir, again, "AView").startswith(
+        "djust_exposure_inventory --fix: nothing to change"
+    )
+    assert _snapshot(app_dir) == after_first
+
+
+GUIDE = REPO / "docs" / "website" / "guides" / "migrating-to-2.0.md"
+
+
+def test_the_guide_prints_what_fix_prints_for_its_cart_view(tmp_path):
+    """The guide's ``--fix`` sample is this command's output on the guide's own 1.3
+    ``CartView`` saved as ``shop/views.py``, run from the project root."""
+    guide = GUIDE.read_text(encoding="utf-8")
+    snippet = next(
+        block
+        for block in re.findall(r"```python\n(.*?)```", guide, re.DOTALL)
+        if "class CartView" in block and POLICY in block
+    )
+    sample = next(
+        block
+        for block in re.findall(r"```text\n(.*?)```", guide, re.DOTALL)
+        if block.startswith("djust_exposure_inventory --fix:")
+    )
+    project = tmp_path / "project"
+    (project / "shop").mkdir(parents=True)
+    (project / "shop" / "__init__.py").write_text("", encoding="utf-8")
+    (project / "shop" / "views.py").write_text(snippet, encoding="utf-8")
+    (project / "templates").mkdir()
+    package = types.ModuleType("shop")
+    package.__path__ = [str(project / "shop")]  # type: ignore[attr-defined]
+    sys.modules["shop"] = package
+    try:
+        module = _load(project / "shop" / "views.py", "shop.views")
+        output = _fix(project, module, "CartView")
+    finally:
+        sys.modules.pop("shop", None)
+    assert output == sample

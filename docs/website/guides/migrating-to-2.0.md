@@ -104,10 +104,10 @@ prints this:
 djust_exposure_inventory --fix: 1 file changed
 
 Changed:
-  views.py
-    line 15: CartView: deleted exposure_policy = "legacy"
-    line 18: data-sku -> dj-value-sku (dj-click="add": add() declares sku)
-    line 34: CartView: added get_context_data() supplying items, coupon, page
+  shop/views.py
+    line 6: CartView: deleted exposure_policy = "legacy"
+    line 9: data-sku -> dj-value-sku (dj-click="add": add() declares sku)
+    line 25: CartView: added get_context_data() supplying items, coupon, page
 
 Needs a person:
   shop.views.CartView: items, coupon and page are supplied from get_context_data(). Declare a name with state() instead when it is the view's state; add persist="server" only when it must survive a reconnect.
@@ -115,8 +115,9 @@ Needs a person:
 Next: run python manage.py check, then load each page and compare it with how it rendered before.
 ```
 
-The line numbers are those of the file before the fix, and paths are relative
-to `--root`.
+This assumes the step 1 code is the whole of `shop/views.py` and the command
+runs from the project root. The line numbers are those of the file before the
+fix, and paths are relative to `--root`.
 
 **What `--fix` does.**
 
@@ -672,7 +673,7 @@ For each handler:
 | `parameter_policy="legacy"` on a handler | Delete it | `djust.V036` | No: reported |
 | `LIVEVIEW_CONFIG["event_parameter_policy"]` | Delete the key | `djust.C045` (a startup error in 2.0.0) | No |
 | A `**kwargs` that absorbs what the browser sends | The declared parameters | — | No |
-| A `dj-auto-recover` handler that reads `_form_values` / `_data_attrs` | `form_values: dict[str, Any]`, `data_attrs: dict[str, str]` | `djust.V031` | No |
+| A `dj-auto-recover` handler that reads `_form_values` / `_data_attrs` | `form_values: dict[str, Any]`, `data_attrs: dict[str, str]` (2.0 only) | `djust.V031` | No |
 
 ### What changes
 
@@ -843,7 +844,8 @@ def restore(self, _form_values=None, _data_attrs=None):
     title = (_form_values or {}).get("title", "")
 ```
 
-becomes:
+becomes, on 2.0 only (the 1.3 client sends only `_form_values` and
+`_data_attrs`, so make this change after the upgrade):
 
 ```python
 from typing import Any
@@ -1234,7 +1236,7 @@ the rows that need it.
 | The service worker cached every page | `sw_cacheable = True` on public pages (2.0 only) | `djust.V037` | No |
 | Exception detail in production logs and error trackers | `LIVEVIEW_CONFIG = {"log_exception_detail": True}` (2.0 only) | — | No |
 | `reauth_on_event`, `reauth_server_turn_interval` | Delete them: every turn is re-authorized | `djust.C045` | No |
-| A `dj-auto-recover` handler on `_form_values` | `form_values` and `data_attrs` parameters | `djust.V031` | No ([section 2](#recovery-handlers-dj-auto-recover)) |
+| A `dj-auto-recover` handler on `_form_values` | `form_values` and `data_attrs` parameters (2.0 only) | `djust.V031` | No ([section 2](#recovery-handlers-dj-auto-recover)) |
 
 ### Sticky children
 
@@ -1472,4 +1474,4 @@ never in production settings. The helpers are described in the
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 2dd2d25ac6e3 -->
+<!-- generated-doc prose-sha256: c5bc5aa469c1 -->

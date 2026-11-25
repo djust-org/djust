@@ -501,19 +501,34 @@ def _is_legacy_owner(klass: Optional[type]) -> bool:
 
 
 def _template_less_base(cls: type) -> bool:
-    """A base view with no template of its own: nothing to supply."""
+    """A base view with nothing to render of its own: nothing to supply.
+
+    Only a class that states no template, does not choose one at runtime
+    (``get_template``/``get_template_names``/``render`` overridden) and is a base:
+    marked ``abstract`` or subclassed by a user view. A leaf view without a template
+    attribute sets one at runtime (``self.template_name = ...`` in ``mount()``) or
+    renders another way, so its template reads are unknown and it needs a person.
+    """
     from djust.checks.bindings import _overrides
     from djust.components.base import LiveComponent
     from djust.live_view import LiveView
+    from djust.management._introspect import is_user_class, walk_subclasses
 
     if inspect.getattr_static(cls, "template", None) or inspect.getattr_static(
         cls, "template_name", None
     ):
         return False
     framework = (LiveView, LiveComponent)
-    return not (
-        _overrides(cls, "get_template", framework)
-        or _overrides(cls, "get_template_names", framework)
+    if any(
+        _overrides(cls, name, framework)
+        for name in ("get_template", "get_template_names", "render")
+    ):
+        return False
+    if cls.__dict__.get("abstract") is True:
+        return True
+    return any(
+        is_user_class(sub) and sub.__dict__.get("abstract") is not True
+        for sub in walk_subclasses(cls)
     )
 
 
@@ -811,6 +826,8 @@ def _rewrite_policies(planner: _Planner, views: list[type]) -> None:
             inherited |= added.get(base, set())
         missing = [name for name in unsupplied if name not in inherited]
         will_supply = set(reads.supplied) | set(missing) | inherited
+        # Not reads.count_names(): that needs the stem supplied already, and here the
+        # stem becomes supplied only by what this run adds (missing, inherited).
         seen_counts: set[str] = set()
         for name, _line in reads.refs:
             if not name.endswith("_count") or name in seen_counts:
@@ -1174,10 +1191,55 @@ def _rename_in_tag(tag: str, renames: list[tuple[str, str]]) -> Optional[str]:
     return new
 
 
-def _rewrite_markup(planner: _Planner, owners: list[tuple[type, str]]) -> None:
+def _inline_template_spans(planner: _Planner, owners: list[tuple[type, str]]) -> dict[Path, list]:
+    """Per ``.py`` file, the text spans of the ``template = "..."`` string literals the
+    owners render (on the class whose body states ``template``).
+
+    A binding the scan reports in a ``.py`` file is rewritten only inside one of
+    these: the scan maps an inherited inline template's lines onto the subclass's
+    body (``_template_bindings._inline_location``), where they can land on HTML a
+    method builds in Python, which is reported (T029), never rewritten.
+    """
+    spans: dict[Path, list[tuple[int, int]]] = {}
+    for owner, _kind in owners:
+        klass = next((k for k in owner.__mro__ if "template" in vars(k)), None)
+        if klass is None or not isinstance(vars(klass)["template"], str):
+            continue
+        path = _source_file(klass)
+        source = planner.source(path) if path is not None and path.is_file() else None
+        tree = source.tree() if source else None
+        node = _find_qualname(tree, klass.__qualname__) if tree else None
+        if source is None or path is None or not isinstance(node, ast.ClassDef):
+            continue
+        for item in node.body:
+            target: Optional[ast.expr] = None
+            value: Optional[ast.expr] = None
+            if isinstance(item, ast.Assign) and len(item.targets) == 1:
+                target, value = item.targets[0], item.value
+            elif isinstance(item, ast.AnnAssign):
+                target, value = item.target, item.value
+            if (
+                isinstance(target, ast.Name)
+                and target.id == "template"
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+                and value.end_lineno is not None
+                and value.end_col_offset is not None
+            ):
+                spans.setdefault(path, []).append(
+                    (
+                        source.offset(value.lineno, value.col_offset),
+                        source.offset(value.end_lineno, value.end_col_offset),
+                    )
+                )
+    return spans
+
+
+def _rewrite_markup(planner: _Planner, owners: list[tuple[type, str]], scoped: bool) -> None:
     from djust._parameter_metadata import component_stop, declared_handlers, view_stop
     from djust._template_bindings import django_engine
-    from djust.checks.bindings import scan_owner
+    from djust.checks.bindings import _owners, scan_owner
+    from djust.management._introspect import is_user_class
 
     engine = django_engine()
     if engine is None:
@@ -1186,11 +1248,16 @@ def _rewrite_markup(planner: _Planner, owners: list[tuple[type, str]]) -> None:
     # (file, line, binding attribute, data attribute) -> decisions, and the facts to print
     decisions: dict[tuple[str, int, str, str], list[bool]] = {}
     details: dict[tuple[str, int, str, str], str] = {}
-    for owner, kind in owners:
+
+    def vote(owner: type, kind: str, only: Optional[set[str]]) -> set[str]:
+        """Record ``owner``'s decisions; returns the files it reads besides its own
+        template (includes, bases). ``only`` restricts it to those files, and an
+        owner voting only on them adds no note of its own."""
+        shared: set[str] = set()
         try:
             report = scan_owner(owner, kind, engine, cache)
         except Exception:  # noqa: BLE001 -- a template the scan cannot read is not rewritten
-            continue
+            return shared
         stop = view_stop if kind == "view" else component_stop
         handlers = {h.name: h for h in declared_handlers(owner, stop, server_functions=True)}
         for result in report.results:
@@ -1203,6 +1270,7 @@ def _rewrite_markup(planner: _Planner, owners: list[tuple[type, str]]) -> None:
                 or binding.name not in handlers
                 or not binding.payload.data_keys
                 or not binding.file
+                or (only is not None and binding.file not in only)
             ):
                 continue
             function = inspect.unwrap(handlers[binding.name].function)
@@ -1210,6 +1278,8 @@ def _rewrite_markup(planner: _Planner, owners: list[tuple[type, str]]) -> None:
                 params = inspect.signature(function).parameters
             except (TypeError, ValueError):
                 continue
+            if binding.file != report.file:
+                shared.add(binding.file)
             catch_all = any(p.kind is p.VAR_KEYWORD for p in params.values())
             for key, attribute in binding.payload.data_keys.items():
                 where = (binding.file, binding.line, binding.attribute, attribute)
@@ -1226,7 +1296,7 @@ def _rewrite_markup(planner: _Planner, owners: list[tuple[type, str]]) -> None:
                 if key in binding.payload.values:
                     continue
                 decisions.setdefault(where, []).append(False)
-                if catch_all:
+                if catch_all and only is None:
                     planner.note(
                         "catch_all_data",
                         "%s:%d" % (planner.rel(Path(binding.file).resolve()), binding.line),
@@ -1237,6 +1307,19 @@ def _rewrite_markup(planner: _Planner, owners: list[tuple[type, str]]) -> None:
                             _value_attribute(attribute),
                         ),
                     )
+        return shared
+
+    shared: set[str] = set()
+    for owner, kind in owners:
+        shared |= vote(owner, kind, None)
+    if scoped and shared:
+        # A partial or base template is shared with views outside --view/--app: each
+        # owner that reaches it votes too, or a rename would break its handler.
+        in_scope = {owner for owner, _kind in owners}
+        for owner, kind in _owners():
+            if owner not in in_scope and is_user_class(owner):
+                vote(owner, kind, shared)
+    inline_spans = _inline_template_spans(planner, owners)
 
     # Group the renames every owner agrees on by (file, line, binding attribute).
     groups: dict[tuple[str, int, str], list[str]] = {}
@@ -1276,6 +1359,21 @@ def _rewrite_markup(planner: _Planner, owners: list[tuple[type, str]]) -> None:
         if source is None:
             continue
         located = _locate_tag(source, line, binding_attribute, attributes)
+        if path.suffix == ".py":
+            # Only inside an inline template string; elsewhere it is Python-built HTML (T029).
+            if located is not None:
+                inside = any(
+                    first <= located[0] and located[1] <= last
+                    for first, last in inline_spans.get(path, [])
+                )
+            else:  # the line overlaps a template string: worth a note
+                line_from, line_to = source.line_start(line), source.line_start(line + 1)
+                inside = any(
+                    first < line_to and line_from < last
+                    for first, last in inline_spans.get(path, [])
+                )
+            if not inside:
+                continue
         if located is None:
             planner.note(
                 "ambiguous_markup",
@@ -1396,7 +1494,7 @@ def fix_views(classes: list[type], *, root: Path, write: bool, scoped: bool) -> 
     owners = _owners_in_scope(views, scoped)
     _rewrite_policies(planner, views)
     _rewrite_parameters(planner, owners)
-    _rewrite_markup(planner, owners)
+    _rewrite_markup(planner, owners, scoped)
     _report_python(planner, owners)
     return planner.finish(write)
 
