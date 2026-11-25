@@ -1061,7 +1061,12 @@ def as_bytes(frames: Any) -> bytes:
 
 @pytest.mark.parametrize("label,view_class,script", WS_CASES, ids=[case[0] for case in WS_CASES])
 async def test_websocket_frames_are_identical(monkeypatch, label, view_class, script):
-    before, after = await both(lambda: run_ws(view_class, script), monkeypatch)
+    from django.test import override_settings
+
+    # Every turn saved before its frame; ``..._with_saves_deferred`` below runs
+    # the same cases with an interval (the default since #4164).
+    with override_settings(DJUST_STATE_SAVE_INTERVAL=0):
+        before, after = await both(lambda: run_ws(view_class, script), monkeypatch)
     assert [f.get("type") for f in after] == [f.get("type") for f in before]
     for index, (old, new) in enumerate(zip(before, after)):
         assert as_bytes(new) == as_bytes(old), f"frame {index} of {label} differs"
@@ -1638,8 +1643,11 @@ async def test_a_shortcut_that_served_a_stale_value_fails_the_oracle(monkeypatch
     """Each shortcut, broken so that it reuses or skips what it must not, changes
     a frame one of the cases above compares. A comparison that stayed equal here
     would mean the oracle cannot see that shortcut go wrong."""
+    from django.test import override_settings
+
     sabotage, run = SABOTAGE[shortcut]
-    with harness.shortcuts(monkeypatch):
+    # The sabotaged shortcuts act on saves made before the frame (#4164).
+    with harness.shortcuts(monkeypatch), override_settings(DJUST_STATE_SAVE_INTERVAL=0):
         FLIPS["n"] = 0
         honest = await observe(run)
         with monkeypatch.context() as patch:

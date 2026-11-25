@@ -251,7 +251,9 @@ async def test_server_push_turn_is_one_hop_with_the_pool(pool, spies, hops):
         assert render == hook
         assert aclose_calls == 0
         # One hop for the turn; an explicit root adds only its state save.
-        assert turn_hops == ["turn", "run"], turn_hops
+        # With the default save interval (#4164) the turn's state is saved
+        # later: its second hop is the deferred turn's identity check.
+        assert turn_hops == ["turn", "check"], turn_hops
     else:
         # Stock: Channels' dispatch made its own hop for the message.
         assert aclose_calls == 1
@@ -375,7 +377,9 @@ async def test_tick_turn_is_one_hop_with_the_pool(pool, spies, hops):
     assert hook != loop_thread
     if pool:
         assert render == hook
-        assert turn_hops == ["turn", "run"], turn_hops
+        # With the default save interval (#4164) the turn's state is saved
+        # later: its second hop is the deferred turn's identity check.
+        assert turn_hops == ["turn", "check"], turn_hops
     else:
         assert "turn" not in turn_hops, turn_hops
 
@@ -417,7 +421,9 @@ async def test_db_notify_turn_is_one_hop_with_the_pool(pool, spies, hops):
         assert _SEEN["close_old_connections"] == [hook]
         assert render == hook
         assert aclose_calls == 0
-        assert turn_hops == ["turn", "run"], turn_hops
+        # With the default save interval (#4164) the turn's state is saved
+        # later: its second hop is the deferred turn's identity check.
+        assert turn_hops == ["turn", "check"], turn_hops
     else:
         assert aclose_calls == 1
 

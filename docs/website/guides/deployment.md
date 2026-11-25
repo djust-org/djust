@@ -351,7 +351,7 @@ The wrapper answers `lifespan` and passes every other scope to the application. 
 
 ### What a graceful stop keeps, per server
 
-View state is saved on an interval ([`DJUST_STATE_SAVE_INTERVAL`](../state/save-frequency.md)):
+View state is saved on an interval ([`DJUST_STATE_SAVE_INTERVAL`](../state/save-frequency.md), 2 seconds by default):
 over a WebSocket a turn answers first and its state reaches storage later. What
 is unsaved when the process stops is written when the server closes the
 socket, or at the ASGI `lifespan` shutdown (wrap the application with
@@ -376,7 +376,8 @@ to another process.
   kills after a grace period, a page still open then loses up to one interval.
   A load balancer that drains connections before the stop closes the sockets
   first, and every close saves.
-- **daphne**: a graceful stop is like a kill for unsaved changes. Run it with
+- **daphne**: a graceful stop is like a kill for unsaved changes: with the
+  default interval, up to 2 seconds of them. Run it with
   `DJUST_STATE_SAVE_INTERVAL = 0` (every turn saved before its reply), or use
   uvicorn.
 - **A kill** (SIGKILL, an out-of-memory kill, a lost host) under any server

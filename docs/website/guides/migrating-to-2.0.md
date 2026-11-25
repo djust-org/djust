@@ -1140,6 +1140,21 @@ state the old value.
   becomes `@background(survive_disconnect=True)`. It then runs to completion
   and its result is discarded
   ([#4182](https://github.com/djust-org/djust/issues/4182)).
+- **WebSocket and SSE turns save their state after the reply, within 2
+  seconds.** In 1.3 every turn's state was in storage before its reply. In
+  2.0 `DJUST_STATE_SAVE_INTERVAL` defaults to 2: a turn answers first and its
+  state is saved no later than 2 seconds after the first unsaved change, when
+  the connection closes, before a navigation, and at the ASGI `lifespan`
+  shutdown. Turns that send the browser elsewhere, write `request.session`,
+  or ask (`@event_handler(save=True)`, `self.save_state()`) are still saved
+  before their reply, and views with `persist="server"` / `persist="client"`
+  fields, `DJUST_STATE_STORE_STRICT`, and the HTTP fallback are unchanged.
+  Measured, a turn with the save taken out of it costs 30 to 38 per cent less.
+  A killed process (SIGKILL, out of memory) can lose up to 2 seconds of
+  changes, and under daphne a graceful stop can too. For the 1.3 behaviour
+  set `DJUST_STATE_SAVE_INTERVAL = 0`, or `state_save_interval = 0` on one
+  view ([#4164](https://github.com/djust-org/djust/issues/4164); see
+  [How often view state is saved](../state/save-frequency.md)).
 
 ### State a legacy view no longer keeps
 
@@ -1480,4 +1495,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: 443311bd20b1 -->
+<!-- generated-doc prose-sha256: df0b9fe7437a -->

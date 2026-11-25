@@ -1092,8 +1092,12 @@ async def test_release_forgets_an_overflowed_upload_with_no_accepted_chunks(monk
         await _spin_until(lambda: lane.queued() == 2, "the register and unmount")
         RELEASE.set()
         await _spin_until(lambda: "up" not in consumer._slot_map(), "the view's release")
-        assert consumer._pending_uploads == {}
-        assert consumer._aborted_uploads == {}
+        # The release flushes the view's deferred state (#4164) before it
+        # forgets the uploads: wait for the whole release, not its first step.
+        await _spin_until(
+            lambda: consumer._pending_uploads == {} and consumer._aborted_uploads == {},
+            "the release to forget the upload",
+        )
     finally:
         RELEASE.set()
         await communicator.disconnect()

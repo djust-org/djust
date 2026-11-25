@@ -453,6 +453,23 @@ async def flush_unsaved_states(reason: str = "shutdown", deadline: Optional[floa
     return written
 
 
+def _load_and_name_flush_group(load: Callable[[Any, Any], Any], view: Any, request: Any) -> Any:
+    """The mount's restore (``load``), then, for a view whose turns may be
+    deferred, the name of its tab's flush group, in the same sync hop: a
+    deferred turn joins it later without one (#4164 item 1)."""
+    restored = load(view, request)
+    from ._save_policy import holder_claims
+
+    if holder_claims(view):
+        from ._state_flush_request import flush_group
+
+        try:
+            view.__dict__["_djust_flush_group"] = flush_group(view, request) or ""
+        except Exception:  # noqa: BLE001 — named later, in the join's own hop
+            logger.debug("djust: the tab's state flush group was not named at the mount")
+    return restored
+
+
 def _save_session_writes(view: Any) -> None:
     """Store what the turn's handler wrote to ``request.session`` when the
     view's own state could not be saved (over its limit, option A): the
@@ -3958,7 +3975,9 @@ class ViewRuntime(RuntimeTurnPort):
                 from ._state_flush_request import request_flush
 
                 await request_flush(view_instance, request, page_serial)
-            restored = await sync_to_async(load_server_state)(view_instance, request)
+            restored = await sync_to_async(_load_and_name_flush_group)(
+                load_server_state, view_instance, request
+            )
             if page_serial is not None:
                 from ._automatic_state import turn_serial
 
@@ -6897,10 +6916,10 @@ class ViewRuntime(RuntimeTurnPort):
         _UNSAVED_RUNTIMES.add(self)
         if self._state_timer is None:
             self._arm_state_timer(view)
-        if view.__dict__.get("_djust_flush_group") is None:
+        if not view.__dict__.get("_djust_flush_group_joined"):
             join = getattr(self.transport, "join_state_flush_group", None)
             if callable(join):
-                view.__dict__["_djust_flush_group"] = ""  # asked once per view
+                view.__dict__["_djust_flush_group_joined"] = True  # once per view
                 task = asyncio.ensure_future(self._join_flush_group(view, join))
                 self._flush_group_task = task
 
@@ -6908,10 +6927,17 @@ class ViewRuntime(RuntimeTurnPort):
         from ._state_flush_request import flush_group
 
         try:
-            request = view.__dict__.get("_djust_event_request") or getattr(view, "request", None)
-            group = await sync_to_async(flush_group)(view, request)
-            if group is not None and await join(group):
-                view.__dict__["_djust_flush_group"] = group
+            # Named at the mount, in its own hop (``_load_and_name_flush_group``);
+            # a view mounted another way is named here, in one hop.
+            group = view.__dict__.get("_djust_flush_group")
+            if group is None:
+                request = view.__dict__.get("_djust_event_request") or getattr(
+                    view, "request", None
+                )
+                group = await sync_to_async(flush_group)(view, request)
+                view.__dict__["_djust_flush_group"] = group or ""
+            if group:
+                await join(group)
         except Exception:  # noqa: BLE001 — the interval and the close still save
             logger.warning("djust: could not join the tab's state flush group")
 

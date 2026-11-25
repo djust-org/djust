@@ -2,7 +2,8 @@
 
 Every explicit turn over WebSocket and SSE saves through
 ``ViewRuntime.commit_explicit_turn``, which asks ``_save_policy.save_mode``
-how. By default (no interval set) the answer is ``immediate``. These tests pin
+how. With the interval at 0 the answer is ``immediate``; unset, the interval
+is 2 seconds (#4164) and a socket event is ``deferred``. These tests pin
 
 * the set of call sites of ``commit_explicit_turn`` and that only it (and the
   flush) calls ``_save_explicit_root`` (derived from the source, so a new save path that
@@ -113,12 +114,38 @@ def test_a_transport_that_does_not_say_holds_nothing():
     assert Transport.holds_view.fget(object()) is False  # type: ignore[attr-defined]
 
 
-def test_every_answer_is_immediate_by_default():
-    """With ``DJUST_STATE_SAVE_INTERVAL`` unset, whatever the view and turn."""
+def test_with_the_interval_at_zero_every_answer_is_immediate(settings):
+    """``DJUST_STATE_SAVE_INTERVAL = 0``, whatever the view and turn."""
+    settings.DJUST_STATE_SAVE_INTERVAL = 0
     for transport in (WSConsumerTransport(object()), object()):
         for source in ("event", "url_change", "async"):
             assert _save_policy.save_mode(object(), transport, source=source) == "immediate"
     assert _save_policy.MODES == {"immediate", "deferred"}
+
+
+def test_unset_the_interval_is_two_seconds_and_a_socket_event_is_deferred(settings):
+    """#4164: the default. A socket event of a view with no ``persist=`` field
+    is deferred; a URL change, and a transport that does not hold the view
+    (the HTTP fallback), are not."""
+    if hasattr(settings, "DJUST_STATE_SAVE_INTERVAL"):
+        del settings.DJUST_STATE_SAVE_INTERVAL
+    assert _save_policy.DEFAULT_INTERVAL_S == 2.0
+    assert _save_policy.state_save_interval() == 2.0
+    ws = WSConsumerTransport(object())
+    assert _save_policy.save_mode(object(), ws, source="event") == "deferred"
+    assert _save_policy.save_mode(object(), ws, source="url_change") == "immediate"
+    assert _save_policy.save_mode(object(), object(), source="event") == "immediate"
+
+
+def test_the_default_is_read_as_zero_where_the_state_lifetime_is_too_short(settings):
+    """Half of ``DJUST_SERVER_STATE_MAX_AGE`` bounds every interval: under 4
+    seconds of lifetime the default is 0, without a warning (nothing was set)."""
+    if hasattr(settings, "DJUST_STATE_SAVE_INTERVAL"):
+        del settings.DJUST_STATE_SAVE_INTERVAL
+    settings.DJUST_SERVER_STATE_MAX_AGE = 3
+    _save_policy._WARNED.clear()
+    assert _save_policy.state_save_interval() == 0.0
+    assert _save_policy.SETTING not in _save_policy._WARNED
 
 
 class SeamCounter(LiveView):
@@ -156,11 +183,13 @@ def asked(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-async def test_a_websocket_event_asks_once_and_still_saves_before_its_frame(asked):
+async def test_a_websocket_event_asks_once_and_by_default_its_close_saves(asked):
+    """With the default interval (#4164) the turn is deferred; the socket's
+    close writes it."""
     key = await harness.new_session_key_async()
     with harness.ws_settings(MODULE):
         await sf.ws_run(SeamCounter, key, [("inc", None)])
-    assert asked == [("SeamCounter", "WSConsumerTransport", "event", "immediate")]
+    assert asked == [("SeamCounter", "WSConsumerTransport", "event", "deferred")]
     from asgiref.sync import sync_to_async
 
     envelope = await sync_to_async(sf.only_envelope)(key)
@@ -175,6 +204,8 @@ async def test_an_sse_event_asks_the_same_question(asked):
     key = await harness.new_session_key_async()
     with harness.ws_settings(MODULE, ROOT_URLCONF=MODULE):
         await sf.sse_run(SeamCounter, key, [("inc", None)], MODULE)
-    assert asked == [("SeamCounter", "SSESessionTransport", "event", "immediate")]
+    assert asked == [("SeamCounter", "SSESessionTransport", "event", "deferred")]
+    # Deferred: the store still holds the mount's state (this helper drops the
+    # SSE session without its close; the interval or the close would save).
     envelope = await sync_to_async(sf.only_envelope)(key)
-    assert envelope["values"]["count"] == 1
+    assert envelope["values"]["count"] == 0

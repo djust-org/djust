@@ -390,14 +390,14 @@ console.log("debug info"); // noqa: Q003
 ### C040 — State save interval cannot be used
 - **Severity**: Error
 - **Method**: Settings inspection (`DJUST_STATE_SAVE_INTERVAL`) and the `state_save_interval` class attribute of every project LiveView
-- **What it detects**: The interval is not `0` or a number of seconds from 0.5 to 60, or it exceeds half of `DJUST_SERVER_STATE_MAX_AGE` (a live page's saved state is rewritten at half its lifetime, which a longer interval would skip). At run time such a value is read as `0`: every turn's state is saved before its reply.
+- **What it detects**: The interval is not `0` or a number of seconds from 0.5 to 60, or it exceeds half of `DJUST_SERVER_STATE_MAX_AGE` (a live page's saved state is rewritten at half its lifetime, which a longer interval would skip). At run time such a value is read as `0`: every turn's state is saved before its reply. Only a value that is set is checked: unset, the interval is 2 seconds (read as `0`, without a report, where `DJUST_SERVER_STATE_MAX_AGE` is under 4 seconds).
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C040"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C040"]`
 - **False positives**: None.
 
 ### C041 — State save interval has no effect under a strict store
 - **Severity**: Info
 - **Method**: Settings inspection (`DJUST_STATE_STORE_STRICT`, `DJUST_STATE_SAVE_INTERVAL`) and the `state_save_interval` class attribute of every project LiveView
-- **What it detects**: `DJUST_STATE_STORE_STRICT` is `True` and a non-zero interval is set. Strict refuses a turn whose state cannot be stored, a promise about every turn, so every turn is saved before its reply and the interval has no effect.
+- **What it detects**: `DJUST_STATE_STORE_STRICT` is `True` and a non-zero interval is set explicitly (the 2-second default alone is not reported: strict simply saves every turn before its reply). Strict refuses a turn whose state cannot be stored, a promise about every turn, so every turn is saved before its reply and the interval has no effect.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["C041"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.C041"]`
 - **False positives**: None: the interval is ignored as reported.
 

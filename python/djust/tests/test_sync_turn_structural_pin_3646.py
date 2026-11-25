@@ -654,7 +654,14 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("runtime.py", "ViewRuntime._check_auth", "run_pre_mount_auth"): leaf(),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "snapshot_codec"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_and_send", "render_view_with_diff"): plumbing(_RENDER),
-    ("runtime.py", "ViewRuntime._dispatch_mount_body", "load_server_state"): plumbing(_SESSION),
+    # #4164 item 1: the restore, and the tab's flush group named in the same hop.
+    ("runtime.py", "ViewRuntime._dispatch_mount_body", "_load_and_name_flush_group"): plumbing(
+        _SESSION
+    ),
+    ("runtime.py", "ViewRuntime._join_flush_group", "flush_group"): plumbing(_SESSION),
+    ("_state_flush_request.py", "request_flush", "flush_group"): plumbing(_SESSION),
+    ("_state_flush_request.py", "request_flush", "stored_serial"): plumbing(_SESSION),
+    ("_state_flush_request.py", "request_flush", "_reload_session"): plumbing(_SESSION),
     # #4095: an over-limit turn goes back to the stored state.
     ("runtime.py", "ViewRuntime._refuse_over_limit_turn", "load_server_state"): plumbing(_SESSION),
     (

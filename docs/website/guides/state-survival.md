@@ -130,17 +130,18 @@ saved), then `handle_params()` and `handle_restore()`, then the event.
 
 ## When state is saved: before the reply, or on an interval
 
-With [`DJUST_STATE_SAVE_INTERVAL`](../state/save-frequency.md) above 0, a
-WebSocket or SSE turn answers first and its state reaches storage later: no
-later than the interval, at the socket's close, before a navigation, and at the
-ASGI `lifespan` shutdown. The rows above are measured with saves before every
-reply; this table is what changes with an interval.
+With [`DJUST_STATE_SAVE_INTERVAL`](../state/save-frequency.md) above 0 (2
+seconds by default), a WebSocket or SSE turn answers first and its state
+reaches storage later: no later than the interval, at the socket's close,
+before a navigation, and at the ASGI `lifespan` shutdown. The rows above are
+measured with `DJUST_STATE_SAVE_INTERVAL = 0` (saves before every reply);
+this table is what changes with an interval.
 
 <!-- BEGIN GENERATED survival-savemode: python -m tests.integration.multinode.survival_table --write -->
 |  | Graceful stop (SIGTERM under uvicorn), reconnect to another process | Process killed (SIGKILL), reconnect to another process | What the app author must do |
 |---|---|---|---|
 | Saved before every reply: `DJUST_STATE_SAVE_INTERVAL = 0`, a view with a `persist="server"` or `persist="client"` field, `DJUST_STATE_STORE_STRICT`, a turn marked `save=True` or calling `save_state()` | every change restored<br><sub>`test_save_mode_graceful_stop`</sub> | every change restored<br><sub>`test_save_mode_kill`</sub> | Nothing: storage holds what the page showed before the page shows it. |
-| Saved on an interval: `DJUST_STATE_SAVE_INTERVAL` above 0 (WebSocket and SSE turns) | every change restored: the socket's close saves<br><sub>`test_save_mode_graceful_stop`</sub> | the last save, at most the interval behind; the page is told its most recent changes could not be restored<br><sub>`test_save_mode_kill`</sub> | Stop with a server that closes its sockets or runs `lifespan` (see the deployment guide's per-server table). Mark a turn that must survive a kill `save=True`. |
+| Saved on an interval (the default): `DJUST_STATE_SAVE_INTERVAL` above 0, 2 seconds unless set (WebSocket and SSE turns) | every change restored: the socket's close saves<br><sub>`test_save_mode_graceful_stop`</sub> | the last save, at most the interval behind; the page is told its most recent changes could not be restored<br><sub>`test_save_mode_kill`</sub> | Stop with a server that closes its sockets or runs `lifespan` (see the deployment guide's per-server table). Mark a turn that must survive a kill `save=True`. |
 <!-- END GENERATED survival-savemode -->
 
 A graceful stop keeps everything only under a server that closes its sockets

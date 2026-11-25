@@ -148,12 +148,12 @@ async def _fire(rt: Any) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Default: nothing is deferred
+# At 0 (the 1.x default): nothing is deferred
 # ---------------------------------------------------------------------------
 
 
-async def test_by_default_every_websocket_turn_is_in_the_store_before_its_frame(runtimes):
-    with _settings():
+async def test_at_zero_every_websocket_turn_is_in_the_store_before_its_frame(runtimes):
+    with _settings(DJUST_STATE_SAVE_INTERVAL=0):
         key = await _page()
         comm, _ = await harness.mount_view(Deferred, key)
         try:
@@ -365,7 +365,8 @@ async def test_strict_store_and_declared_persistence_stay_immediate(settings):
         assert _save_policy.save_mode(view, object(), source="event") == "immediate"
         with override_settings(DJUST_STATE_STORE_STRICT=True):
             assert _save_policy.save_mode(view, transport, source="event") == "immediate"
-    assert _save_policy.save_mode(view, transport, source="event") == "immediate"
+    with override_settings(DJUST_STATE_SAVE_INTERVAL=0):
+        assert _save_policy.save_mode(view, transport, source="event") == "immediate"
 
 
 # ---------------------------------------------------------------------------

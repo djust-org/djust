@@ -1,16 +1,28 @@
 # How often view state is saved: `DJUST_STATE_SAVE_INTERVAL`
 
-By default every WebSocket and SSE turn saves the view's state before its
-reply: the browser never shows a state storage does not have. Saving is a
-large part of a turn's cost, though, and over a connection the view stays in
-the server's memory between turns, so it does not have to be read back from
-storage. `DJUST_STATE_SAVE_INTERVAL` lets those turns answer first and save
-later.
+Saving a view's state is a large part of a WebSocket or SSE turn's cost
+(about a third, [measured](#what-it-saves-a-turn)), and over a connection the
+view stays in the server's memory between turns, so it does not have to be
+read back from storage. So by default those turns answer first and save
+later: no later than `DJUST_STATE_SAVE_INTERVAL` seconds (2 by default) after
+the first unsaved change. Set it to `0` to save every turn before its reply,
+so the browser never shows a state storage does not have (the 1.x
+behaviour).
 
 ```python
 # settings.py
-DJUST_STATE_SAVE_INTERVAL = 5   # seconds; 0 (the default) saves before every reply
+DJUST_STATE_SAVE_INTERVAL = 2   # seconds, the default; 0 saves before every reply
 ```
+
+**Why 2 seconds.** The latency gain is the same for any value above 0: the
+reply no longer waits for the write. The value decides two other things:
+what a killed process can lose (at most the interval of changes) and how
+often a busy connection writes (at most once per interval; a user clicking
+steadily is saved about every 2 seconds instead of on every click). 2 keeps
+the loss on a kill to about one user action and the write rate below one in
+2 seconds per connection, and it fits any `DJUST_SERVER_STATE_MAX_AGE` of 4
+seconds or more (an interval must be at most half of it; below that the
+default is read as 0).
 
 ## What it guarantees
 
@@ -235,5 +247,5 @@ state. A reconnecting page sends its last serial back with its mount frame.
 
 | Setting | Meaning |
 |---------|---------|
-| `DJUST_STATE_SAVE_INTERVAL` | Seconds. Over a connection, state is saved no later than this after a change. `0` (default): before every reply. |
+| `DJUST_STATE_SAVE_INTERVAL` | Seconds, default `2`. Over a connection, state is saved no later than this after a change. `0`: before every reply. |
 | `state_save_interval` (view attribute) | The same for one view; `None`: the project's value. |

@@ -531,8 +531,8 @@ INTERVALS = [pytest.param(0, id="interval-0"), pytest.param(30, id="interval-30"
 
 
 def _settings(interval: int, **extra: Any) -> Any:
-    if interval:
-        extra["DJUST_STATE_SAVE_INTERVAL"] = interval
+    # 0 is stated: unset, the interval is 2 seconds (#4164).
+    extra["DJUST_STATE_SAVE_INTERVAL"] = interval
     return harness.ws_settings(MODULE, ROOT_URLCONF=MODULE, **extra)
 
 

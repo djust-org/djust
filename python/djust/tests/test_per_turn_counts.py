@@ -133,7 +133,13 @@ async def turn(monkeypatch, view_class, event_name, *off) -> Dict[str, Any]:
     with monkeypatch.context() as spies:
         counts = harness.counting(spies)
         key = await harness.new_session_key_async()
-        with harness.shortcuts(monkeypatch, *off), harness.ws_settings(MODULE):
+        # Counted with the save before the reply (the work a turn does when it
+        # saves; the default interval, #4164, moves it to the flush), unless
+        # the test states an interval.
+        from django.conf import settings
+
+        pinned = {"DJUST_STATE_SAVE_INTERVAL": getattr(settings, "DJUST_STATE_SAVE_INTERVAL", 0)}
+        with harness.shortcuts(monkeypatch, *off), harness.ws_settings(MODULE, **pinned):
             for name in off:
                 assert not _per_turn.on(name), f"{name} was not turned off"
             comm, _mount = await harness.mount_view(view_class, key)

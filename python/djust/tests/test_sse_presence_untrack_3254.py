@@ -97,7 +97,15 @@ def setup(monkeypatch):
     MOUNT_GATE["reached"].clear()
     _sse_sessions.clear()
     sse._sse_mounting.clear()
-    with override_settings(ROOT_URLCONF=__name__, LIVEVIEW_ALLOWED_MODULES=["djust"], DEBUG=False):
+    # Saves before each reply (#4164: unset, the interval is 2): a gated mount
+    # holds the one sync thread, and a deferred view's close would wait on it
+    # to flush, so the old stream could not finish closing while the gate holds.
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        LIVEVIEW_ALLOWED_MODULES=["djust"],
+        DEBUG=False,
+        DJUST_STATE_SAVE_INTERVAL=0,
+    ):
         yield
     _sse_sessions.clear()
     sse._sse_mounting.clear()

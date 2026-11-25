@@ -571,7 +571,8 @@ SAVEMODE_ROWS = (
     ),
     Row(
         "interval",
-        "Saved on an interval: `DJUST_STATE_SAVE_INTERVAL` above 0 (WebSocket and SSE turns)",
+        "Saved on an interval (the default): `DJUST_STATE_SAVE_INTERVAL` above 0, 2 seconds "
+        "unless set (WebSocket and SSE turns)",
         "Stop with a server that closes its sockets or runs `lifespan` (see the deployment "
         "guide's per-server table). Mark a turn that must survive a kill `save=True`.",
     ),
