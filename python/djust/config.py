@@ -182,7 +182,7 @@ class LiveViewConfig:
         # Bytes of outbound frames one connection may have waiting while the
         # client reads slowly (#3658). Past it a WebSocket is closed with 1013
         # and an SSE stream is ended, and the client reconnects and resyncs.
-        # One frame alone is always sent, whatever its size. 0 = no limit.
+        # The frame next in line is not counted, so one large frame is always sent. 0 = no limit.
         "max_outbound_buffer_bytes": DEFAULT_MAX_OUTBOUND_BUFFER_BYTES,
         # ``event_security`` was removed in 2.0 (#4101): only @event_handler
         # methods are client events, on every transport. "open" / "warn" fail

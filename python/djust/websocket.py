@@ -4357,9 +4357,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         """Single outbound chokepoint: drop frames once the socket is closed.
 
         Short-circuits when the connection is known-closed. Otherwise the
-        frame goes through the socket's bounded outbound buffer (#3658): with
-        no other send in flight it is sent at once, as before; while one is
-        in flight it waits its turn, and a backlog over
+        frame goes through the socket's bounded outbound buffer (#3658), whose
+        drain task sends the socket's frames in order: on an idle socket this
+        call returns once the frame is sent, as before; behind a backlog it
+        hands the frame off, and a backlog over
         ``LIVEVIEW_CONFIG["max_outbound_buffer_bytes"]`` closes the socket with
         1013. See :meth:`_transmit_frame` for the send-after-close handling.
         """

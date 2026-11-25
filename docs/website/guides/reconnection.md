@@ -227,17 +227,21 @@ LIVEVIEW_CONFIG = {
 
 | Transport | What is bounded | Over the limit |
 |-----------|-----------------|----------------|
-| WebSocket | Frames waiting while another frame of the same socket is still being handed to the ASGI server, in bytes (UTF-8 for text frames) | The socket is closed with code **1013** ("try again later"); the client reconnects with the usual backoff and remounts |
+| WebSocket | Frames waiting while another frame of the same socket is still being handed to the ASGI server, in bytes (UTF-8 for text frames), not counting the frame that goes next | The socket is closed with code **1013** ("try again later"); the client reconnects with the usual backoff and remounts |
 | SSE | Frames waiting in the session's queue for the stream to write them, in bytes (UTF-8 JSON), not counting the frame the stream takes next | The waiting frames are dropped and the stream ends; `EventSource` reconnects with the same session id and that mount resyncs the page |
 | HTTP page POST | Nothing to bound: each response carries the frames of its own event and nothing is held between requests | n/a |
 | Streamed HTTP render (`StreamingHttpResponse` of a page) | At most `DJUST_LAZY_CHUNK_QUEUE_MAX` rendered chunks (default 8); a full queue makes the renderer wait for the client (back-pressure) | The renderer waits; nothing is dropped |
 
 What the WebSocket limit covers, exactly:
 
-- **One frame always goes out.** With nothing waiting, a frame is sent at once,
-  whatever its size; the limit bounds the backlog behind it, not how large one
-  render may be.
-- **Order is kept.** Waiting frames go out in the order they were sent.
+- **One frame always goes out.** The frame next in line is not counted, so a
+  frame larger than the limit is never the reason for a close; the limit bounds
+  the backlog behind it, not how large one render may be.
+- **Order is kept.** One task per socket sends its frames, in the order they
+  were sent. A handler whose frame finds the socket idle waits until that frame
+  is sent (and sees a transport error, as before); one that finds a backlog
+  hands its frame off and carries on. A cancelled handler does not hold up the
+  frames behind its own.
 - **The limit is per connection**, so the memory one browser can pin is the
   limit times its open sockets.
 - **It measures what the ASGI server has not accepted yet.** uvicorn's

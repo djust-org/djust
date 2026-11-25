@@ -31,6 +31,7 @@ from djust import LiveView, event_handler
 from djust import state as djust_state
 from djust._outbound_buffer import OutboundBuffer, outbound_buffer_limit
 from djust.config import DEFAULT_MAX_OUTBOUND_BUFFER_BYTES, config as djust_config
+from djust.tests._ws_frames import WAIT_S
 from djust.websocket import WS_CLOSE_SLOW_CONSUMER, LiveViewConsumer
 
 
@@ -69,6 +70,14 @@ def _consumer(reader: SlowReader, limit: int = 1000) -> LiveViewConsumer:
 
 def _frame(n: int, pad: int = 0) -> Dict[str, Any]:
     return {"n": n, "pad": "x" * pad}
+
+
+async def _yield_until(done, turns: int = 1000) -> None:
+    """Give the event loop up to *turns* turns (no clock) for *done* to hold."""
+    for _ in range(turns):
+        if done():
+            return
+        await asyncio.sleep(0)
 
 
 async def _start_leader(consumer: LiveViewConsumer, reader: SlowReader, n: int, pad: int = 0):
@@ -144,7 +153,7 @@ async def test_the_backlog_never_passes_the_bound_and_overflow_closes_1013():
     while not getattr(consumer, "_ws_close_sent", False):
         n += 1
         await consumer.send_json(_frame(n, pad=180))
-        assert consumer._outbound.queued_bytes <= 1000
+        assert consumer._outbound.backlog_bytes <= 1000
     buffer = consumer._outbound
     assert 800 < buffer.peak_bytes <= 1000, "memory bound: the backlog stays under the limit"
     assert buffer.dead and buffer.queued_frames == 0, "the backlog is released at once"
@@ -251,7 +260,9 @@ async def test_disconnect_drops_the_queued_frames():
 
 
 @pytest.mark.asyncio
-async def test_a_cancelled_sender_leaves_its_followers_to_the_next_send():
+async def test_a_cancelled_sender_does_not_strand_the_frames_behind_it():
+    """Review 1: a sender cancelled mid-send (``cancel_async``, a tick, a lane
+    turn) must not leave the frames queued behind it waiting for a later send."""
     reader = SlowReader()
     consumer = _consumer(reader)
     leader = await _start_leader(consumer, reader, 1)
@@ -261,11 +272,120 @@ async def test_a_cancelled_sender_leaves_its_followers_to_the_next_send():
     leader.cancel()
     with pytest.raises(asyncio.CancelledError):
         await leader
-    assert consumer._outbound.queued_frames == 2
 
     reader.gate.set()
-    await consumer.send_json(_frame(4))
-    assert reader.texts() == [2, 3, 4], "the stranded frames go first, in order"
+    # No further send and no flush: the drain task delivers them by itself.
+    # (The cancelled sender's own frame was cancelled with it, as before.)
+    await _yield_until(lambda: len(reader.texts()) == 2)
+    assert reader.texts() == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_close_after_a_cancelled_sender_flushes_without_waiting_out_the_timeout(monkeypatch):
+    """Review 2: ``close()``'s flush is woken when the frames drain, even though
+    the sender that started the drain was cancelled; it does not time out."""
+    monkeypatch.setattr(ws_module, "_CLOSE_FLUSH_TIMEOUT_S", WAIT_S)
+    reader = SlowReader()
+    consumer = _consumer(reader)
+    leader = await _start_leader(consumer, reader, 1)
+    await consumer.send_json(_frame(2))
+
+    # The close starts waiting for the queued frame while the sender is still
+    # in flight; then the sender is cancelled.
+    closing = asyncio.ensure_future(consumer.close(code=1000))
+    await _yield_until(lambda: bool(consumer._outbound._waiters))
+    assert consumer._outbound._waiters
+    leader.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await leader
+
+    reader.gate.set()
+    await closing
+    assert not consumer._outbound.dead, "the flush completed; it did not give up"
+    kinds = [(m["type"], m.get("code")) for m in reader.sent]
+    assert kinds == [("websocket.send", None), ("websocket.close", 1000)]
+    assert reader.texts() == [2]
+
+
+@pytest.mark.asyncio
+async def test_close_is_bounded_when_nobody_is_sending_and_the_reader_never_reads(monkeypatch):
+    """Review 2: with the sender gone and a reader that never reads, ``close()``
+    gives up after its timeout instead of draining forever."""
+    monkeypatch.setattr(ws_module, "_CLOSE_FLUSH_TIMEOUT_S", 0.01)
+    reader = SlowReader()
+    consumer = _consumer(reader)
+    leader = await _start_leader(consumer, reader, 1)
+    await consumer.send_json(_frame(2))
+    leader.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await leader
+
+    await consumer.close(code=1000)
+    assert reader.closes() == [1000]
+    assert consumer._outbound.dead and consumer._outbound.queued_frames == 0
+    reader.gate.set()
+
+
+class PacedReader:
+    """An ASGI ``send`` that lets one ``websocket.send`` through per token."""
+
+    def __init__(self) -> None:
+        self.tokens = asyncio.Semaphore(0)
+        self.sent: List[int] = []
+        self.waiting = asyncio.Event()
+
+    async def __call__(self, message: Dict[str, Any]) -> None:
+        if message["type"] == "websocket.send":
+            self.waiting.set()
+            await self.tokens.acquire()
+            self.sent.append(json.loads(message["text"])["n"])
+
+
+@pytest.mark.asyncio
+async def test_a_sender_returns_once_its_own_frame_is_sent_while_others_keep_feeding():
+    """Review 3: other tasks feeding frames at the read rate must not keep a
+    sender (which may hold the render lock) draining their frames."""
+    reader = PacedReader()
+    consumer = LiveViewConsumer()
+    consumer.base_send = reader
+    buffer = consumer._outbound_buffer()
+    sender = asyncio.ensure_future(consumer.send_json(_frame(0)))
+    await reader.waiting.wait()
+    for n in range(1, 4):
+        await consumer.send_json(_frame(n))
+
+    reader.tokens.release()  # the reader takes exactly one frame: the sender's
+    await _yield_until(lambda: sender.done())
+    assert sender.done(), "the sender is still sending the other tasks' frames"
+    assert reader.sent == [0]
+    assert buffer.busy, "the other frames are still the drain task's"
+
+    # The feeders keep pace with the reader; the sender is long done.
+    for n in range(4, 50):
+        await consumer.send_json(_frame(n))
+        reader.tokens.release()
+    for _ in range(3):  # frames 1-3, still behind
+        reader.tokens.release()
+    assert await buffer.flush(WAIT_S)
+    assert reader.sent == list(range(50))
+
+
+@pytest.mark.asyncio
+async def test_one_queued_oversize_frame_does_not_close_a_healthy_client():
+    """Review 5: an oversize frame at the head of the queue is its own
+    allowance; the small frame behind it must not trigger 1013."""
+    reader = SlowReader()
+    consumer = _consumer(reader, limit=1000)
+    leader = await _start_leader(consumer, reader, 1)
+    await consumer.send_json(_frame(2, pad=5000))  # the head: always accepted
+    await consumer.send_json(_frame(3))  # small: well within the limit behind it
+    assert not getattr(consumer, "_ws_close_sent", False)
+    assert consumer._outbound.backlog_bytes == len(json.dumps(_frame(3)).encode())
+
+    reader.gate.set()
+    await leader
+    assert await consumer._outbound.flush(WAIT_S)
+    assert reader.texts() == [1, 2, 3]
 
 
 @pytest.mark.asyncio
@@ -280,13 +400,14 @@ async def test_a_transport_error_still_reaches_the_uncontended_sender():
 
 
 @pytest.mark.asyncio
-async def test_buffer_flush_drains_frames_a_failed_leader_left():
+async def test_a_queued_frame_whose_send_raises_does_not_stop_the_ones_behind_it(caplog):
     sent: List[int] = []
-    fail = [True]
+    gate = asyncio.Event()
 
     async def transmit(frame: int) -> bool:
-        if fail[0]:
-            fail[0] = False
+        if frame == 1:
+            await gate.wait()
+        if frame == 2:
             raise RuntimeError("transport")
         sent.append(frame)
         return True
@@ -294,14 +415,16 @@ async def test_buffer_flush_drains_frames_a_failed_leader_left():
     buffer: OutboundBuffer[int] = OutboundBuffer(
         transmit, lambda f: 1, lambda pending, limit: None, 10
     )
-    buffer._enqueue(2)  # a frame queued behind the leader that is about to fail
-    buffer._queue.appendleft((1, 1))
-    buffer.queued_bytes += 1
-    buffer._sending = False
-    with pytest.raises(RuntimeError):
-        await buffer.send(3)
-    assert await buffer.flush(1.0)
-    assert sent == [2, 3]
+    first = asyncio.ensure_future(buffer.send(1))
+    while not buffer._in_flight:
+        await asyncio.sleep(0)
+    await buffer.send(2)  # handed off: its sender moved on, so its error is logged
+    await buffer.send(3)
+    gate.set()
+    await first
+    assert await buffer.flush(WAIT_S)
+    assert sent == [1, 3]
+    assert "the transport raised" in caplog.text
 
 
 # -- end to end: overflow, then reconnect ----------------------------------
