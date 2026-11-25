@@ -4126,8 +4126,19 @@ fn extract_from_nodes(
                 true_expr,
                 condition,
                 false_expr,
-                filters: _,
+                filters,
             } => {
+                // The filters apply to the chosen arm, and their ARGUMENTS
+                // are reads like a `{{ }}`'s (#787): `{{ a if c else b|add:x }}`
+                // parses the trailing `|add:x` onto the node, and without
+                // this `x` was never a dependency, so a partial render or the
+                // loop item store (#4325) kept the bytes built with the old
+                // `x`.
+                for (_name, arg) in filters {
+                    if let Some(arg) = arg {
+                        extract_from_filter_arg(arg, variables);
+                    }
+                }
                 // The condition is an EXPRESSION, not an operand (#2745): the
                 // renderer evaluates it with `evaluate_condition_for_if`, the
                 // same machinery as `{% if %}`, so `x > y` / `x and y` are
