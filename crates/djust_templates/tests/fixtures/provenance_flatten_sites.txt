@@ -770,6 +770,23 @@ let old_raw = &old_html[entry.html_start..old_html_end];
 text_node_index[entry_idx].html_end = new_html_end;
 e.html_start = (e.html_start as isize + delta_add) as usize;
 e.html_end = (e.html_end as isize + delta_add) as usize;
+let mut i = text_node_index.partition_point(|e| e.html_start <= pfx);
+if pfx > text_node_index[i].html_end {
+if old_bytes.get(entry.html_end) != Some(&b'<') {
+let new_start = usize::try_from(entry.html_start as isize + shift).ok()?;
+let old_raw = old_html.get(entry.html_start..entry.html_end)?;
+if entry.html_end >= tail_start && shift == final_shift {
+if old_bytes.get(entry.html_end..)? != new_bytes.get(new_end..)? {
+let next_new_start = usize::try_from(next.html_start as isize + shift).ok()?;
+if next.html_start < entry.html_end
+|| old_bytes.get(entry.html_end..next.html_start)?
+let start = (entry.html_start as isize + delta) as usize;
+let old_run_len = entry.html_end - entry.html_start;
+entry.html_start = start;
+entry.html_end = start + new_run_len;
+entry.html_end =
+(entry.html_end as isize + (start as isize - entry.html_start as isize)) as usize;
+entry.html_start = start;
 offsets.extend(span.close.map(|(s, e)| [s, e]).into_iter().flatten());
 offsets.extend(stamp.flatten());
 PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Template parsing error: {e}"))
@@ -822,6 +839,8 @@ slow.set_changed_keys(vec!["label".to_string(), "highlight_id".to_string()]);
 .map(|x| x["path"].to_string())
 view.set_changed_keys(vec!["highlight_id".to_string()]);
 view.set_changed_keys(vec!["rows".to_string()]);
+view.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
+view.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
 let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
 view.set_changed_keys(vec!["label".to_string()]);
 view.set_changed_keys(vec!["rows".to_string()]);

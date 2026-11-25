@@ -210,7 +210,8 @@ const FAST_PATH_FRAGMENT: f64 = 1.0;
 /// the old VDOM's text nodes are patched in place. Two sites report it:
 /// `render_with_diff` (`try_text_region_fast_path`, after the fragment path
 /// could not fire — a single text span, resolved through the byte-offset
-/// `text_node_index`) and `render_binary_diff`
+/// `text_node_index`, then `try_multi_text_region_fast_path` for up to
+/// `MAX_TEXT_REGIONS` spans, #4325) and `render_binary_diff`
 /// (`djust_vdom::try_text_only_vdom_update_inplace`, its only text fast
 /// path — one or more text spans, resolved by walking the tree). A text
 /// change that `render_with_diff` would report as `FAST_PATH_FRAGMENT` is
@@ -2714,7 +2715,12 @@ impl RustLiveViewBackend {
                     self.last_html.as_ref(),
                     self.text_node_index.take(),
                 ) {
-                    let result = try_text_region_fast_path(old_html, &html, old_vdom, &mut index);
+                    let result = try_text_region_fast_path(old_html, &html, old_vdom, &mut index)
+                        .or_else(|| {
+                            // #4325: several text nodes changed (e.g. two
+                            // cells of one re-rendered row).
+                            try_multi_text_region_fast_path(old_html, &html, old_vdom, &mut index)
+                        });
                     self.text_node_index = Some(index);
                     result
                 } else {
@@ -6489,6 +6495,173 @@ fn try_text_region_fast_path(
     Some((new_vdom, vec![patch]))
 }
 
+/// Most text nodes [`try_multi_text_region_fast_path`] patches in one render
+/// (#4325). Past this the full parse + diff is the better bet anyway.
+const MAX_TEXT_REGIONS: usize = 8;
+
+/// The text-region fast path for a diff that touches SEVERAL text nodes
+/// (#4325), e.g. two cells of one row re-rendered by a list item delta.
+/// Called only when [`try_text_region_fast_path`] declined.
+///
+/// Walks the `text_node_index` from the text node holding the first
+/// differing byte. The index covers every non-blank text run inside the
+/// root, so between two consecutive entries there is only markup (and blank
+/// runs). Each step requires that markup to be byte-identical in the new
+/// HTML at the shifted offset, and takes the node's new text run as the
+/// bytes up to the next `<`. The walk stops once the rest of the old HTML is
+/// inside the common suffix at the final shift. So the new document is the
+/// old one with only text runs replaced by tag-free text, and the parse of it
+/// differs from the old tree only in those text nodes. Each changed node is
+/// then validated as the single-span path does (the old raw run decodes to
+/// the VDOM's text, the node is a text node, the new text is not blank),
+/// plus refusing `>`, CR, NUL and a change in a leading newline (which the
+/// parser drops after `<pre>`/`<textarea>`). Any doubt: `None`, full parse.
+/// The index is updated only when the path is taken.
+fn try_multi_text_region_fast_path(
+    old_html: &str,
+    new_html: &str,
+    old_vdom: &VNode,
+    text_node_index: &mut [TextNodeEntry],
+) -> Option<(VNode, Vec<djust_vdom::Patch>)> {
+    if text_node_index.is_empty() {
+        return None;
+    }
+    let old_bytes = old_html.as_bytes();
+    let new_bytes = new_html.as_bytes();
+    let old_len = old_bytes.len();
+    let new_len = new_bytes.len();
+    let min_len = old_len.min(new_len);
+    let mut pfx = 0;
+    while pfx < min_len && old_bytes[pfx] == new_bytes[pfx] {
+        pfx += 1;
+    }
+    if pfx == old_len && pfx == new_len {
+        return None;
+    }
+    let mut sfx = 0;
+    let max_sfx = min_len - pfx;
+    while sfx < max_sfx && old_bytes[old_len - 1 - sfx] == new_bytes[new_len - 1 - sfx] {
+        sfx += 1;
+    }
+    let tail_start = old_len - sfx;
+    let final_shift = new_len as isize - old_len as isize;
+
+    // The entry whose run holds (or ends right at) the first differing byte.
+    let mut i = text_node_index.partition_point(|e| e.html_start <= pfx);
+    if i == 0 {
+        return None;
+    }
+    i -= 1;
+    if pfx > text_node_index[i].html_end {
+        return None;
+    }
+    let first = i;
+
+    // (index entry, new run length, new decoded text)
+    let mut changes: Vec<(usize, usize, String)> = Vec::new();
+    let mut shift: isize = 0;
+    loop {
+        let entry = &text_node_index[i];
+        if old_bytes.get(entry.html_end) != Some(&b'<') {
+            return None;
+        }
+        let new_start = usize::try_from(entry.html_start as isize + shift).ok()?;
+        let new_end = new_start
+            + new_bytes
+                .get(new_start..)?
+                .iter()
+                .position(|&b| b == b'<')?;
+        let old_raw = old_html.get(entry.html_start..entry.html_end)?;
+        let new_raw = new_html.get(new_start..new_end)?;
+        if old_raw != new_raw {
+            if changes.len() == MAX_TEXT_REGIONS {
+                return None;
+            }
+            if new_raw.bytes().any(|b| matches!(b, b'>' | b'\r' | b'\0'))
+                || old_raw.starts_with('\n') != new_raw.starts_with('\n')
+            {
+                return None;
+            }
+            if !get_vdom_node(old_vdom, &entry.path).is_some_and(|n| n.is_text()) {
+                return None;
+            }
+            if text_node_value(old_vdom, &entry.path, old_raw).as_deref()
+                != Some(entry.text.as_str())
+            {
+                return None;
+            }
+            let new_text = text_node_value(old_vdom, &entry.path, new_raw)?;
+            if is_html_whitespace_only(&new_text) {
+                return None;
+            }
+            changes.push((i, new_raw.len(), new_text));
+            shift += new_raw.len() as isize - old_raw.len() as isize;
+        }
+        // Everything after this run is common suffix at the final shift.
+        if entry.html_end >= tail_start && shift == final_shift {
+            break;
+        }
+        let Some(next) = text_node_index.get(i + 1) else {
+            if old_bytes.get(entry.html_end..)? != new_bytes.get(new_end..)? {
+                return None;
+            }
+            break;
+        };
+        let next_new_start = usize::try_from(next.html_start as isize + shift).ok()?;
+        if next.html_start < entry.html_end
+            || next_new_start < new_end
+            || old_bytes.get(entry.html_end..next.html_start)?
+                != new_bytes.get(new_end..next_new_start)?
+        {
+            return None;
+        }
+        i += 1;
+    }
+    if changes.is_empty() {
+        return None;
+    }
+
+    let mut new_vdom = old_vdom.clone();
+    let mut patches = Vec::with_capacity(changes.len());
+    for (idx, _, new_text) in &changes {
+        let entry = &text_node_index[*idx];
+        let node = get_vdom_node_mut(&mut new_vdom, &entry.path)?;
+        node.text = Some(new_text.clone());
+        node.cached_html = None;
+        let d = if entry.djust_id.is_empty() {
+            None
+        } else {
+            Some(entry.djust_id.clone())
+        };
+        patches.push(djust_vdom::Patch::SetText {
+            path: entry.path.clone(),
+            d,
+            text: new_text.clone(),
+        });
+    }
+
+    // Shift the index: each changed run takes its new length, and every
+    // later entry moves by the cumulative difference.
+    let mut delta: isize = 0;
+    let mut pending = changes.into_iter().peekable();
+    for (j, entry) in text_node_index.iter_mut().enumerate().skip(first) {
+        let start = (entry.html_start as isize + delta) as usize;
+        if pending.peek().is_some_and(|c| c.0 == j) {
+            let (_, new_run_len, new_text) = pending.next()?;
+            let old_run_len = entry.html_end - entry.html_start;
+            entry.html_start = start;
+            entry.html_end = start + new_run_len;
+            entry.text = new_text;
+            delta += new_run_len as isize - old_run_len as isize;
+        } else {
+            entry.html_end =
+                (entry.html_end as isize + (start as isize - entry.html_start as isize)) as usize;
+            entry.html_start = start;
+        }
+    }
+    Some((new_vdom, patches))
+}
+
 fn starts_with_ci(slice: &[u8], prefix: &[u8]) -> bool {
     slice.len() >= prefix.len()
         && slice
@@ -9311,6 +9484,35 @@ mod fast_path_flag_tests {
         assert_eq!(timing(&view, "diff_ms"), 0.0);
         let patches = patches.expect("a diff render returns patches");
         assert!(patches.contains("SetText"), "patches: {patches}");
+    }
+
+    #[test]
+    fn text_changes_in_two_nodes_take_the_multi_region_fast_path() {
+        // #4325: the label and one loop cell change in the same render. The
+        // byte diff is two text spans with markup between them, so the
+        // single-span path declines and the multi-span path patches both.
+        let mut view = mounted();
+        view.update_state_rust(state("v1", 0, 1080));
+        view.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
+        let (html, patches, _v) = view.render_with_diff_detached().expect("re-render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
+        let patches: Vec<djust_vdom::Patch> =
+            serde_json::from_str(&patches.expect("patches")).expect("patch json");
+        let texts: Vec<&str> = patches
+            .iter()
+            .filter_map(|p| match p {
+                djust_vdom::Patch::SetText { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["v1", "1080"], "patches: {patches:?}");
+        assert!(html.contains(">1080</td>"), "html: {html}");
+
+        // The shifted index still serves the next render.
+        view.update_state_rust(state("v22", 0, 7));
+        view.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
+        view.render_with_diff_detached().expect("re-render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
     }
 
     // ------------------------------------------------------------------
