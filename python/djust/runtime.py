@@ -7571,8 +7571,12 @@ class ViewRuntime(RuntimeTurnPort):
                 patches_size = len(patches.encode("utf-8")) if isinstance(patches, str) else 0
                 html_size = len(html.encode("utf-8")) if html else 0
                 if patches_size and html_size < patches_size * 0.7:
-                    if hasattr(view, "_rust_view") and view._rust_view:
-                        view._rust_view.reset()
+                    # The baseline is kept (#4229). ``render_with_diff`` already
+                    # stored the tree this HTML was serialized from (its ``dj-id``s
+                    # included) and advanced the version, so the client's DOM after
+                    # this frame IS the baseline and the next event diffs normally.
+                    # (A ``reset()`` here made the next event a full-HTML reply too,
+                    # and restarted the Rust version, which SSE stamps on the wire.)
                     _compressed_patch_count = len(patch_list)
                     patch_list = None
 

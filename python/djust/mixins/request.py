@@ -2461,8 +2461,9 @@ class RequestMixin:
                 else:
                     # More patches than a whole page is worth: the whole page,
                     # numbered as every whole-page answer of this transport is
-                    # (v1; the client re-bases on it).
-                    self._rust_view.reset()
+                    # (v1; the client re-bases on it). The renderer keeps the
+                    # tree this HTML was serialized from (#4229): a reused
+                    # renderer's next answer diffs against the page just sent.
                     response_data = {
                         "html": html,
                         "version": version if reused_renderer else 1,
