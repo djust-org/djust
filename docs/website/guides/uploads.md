@@ -416,6 +416,12 @@ Add `resumable=True` to an `allow_upload()` slot whose writer is a `ResumableUpl
 
 When the WebSocket drops with an upload in flight, djust **suspends** a `ResumableUploadWriter` instead of aborting it: the state entry stays, and the inner writer (an open S3 multipart upload, say) is not aborted. The suspended upload waits for its client for up to 10 minutes (or the state's TTL, if shorter), at most 32 per process; past that, or when the cap is exceeded, the oldest is aborted as before. On reconnect the same session's `upload_resume` re-attaches it and the remaining chunks continue the same writer. A cancel, a writer error or a size-limit violation still aborts it and deletes the state. (Before 1.2.1 every disconnect aborted it, so resume never worked; #2972.)
 
+Explicit views (the 2.0 default) resume too (#4175). The resume record is bound to the session that registered the upload and to the view's owner: its user, tenant and page (the route, or the slot of a view mounted beside the page). The binding is checked on `upload_resume`, on every chunk, complete and cancel frame, and by `UploadStatusView`. Another session, user, tenant or page gets `not_found` (the same answer as for an unknown id), and a frame from a connection that does not own the upload is refused without affecting the upload. Offsets are kept server-side, and a chunk the server already has is skipped.
+
+Uploads run over the WebSocket only: SSE carries no binary upload frames, and the HTTP fallback POST carries none either. The HTTP part of the protocol is `UploadStatusView` (`GET djust/uploads/<id>/status`), which applies the same owner check.
+
+**Retention.** The resume record lives for `ttl_hours` (default 24 hours) in the state store. A suspended writer waits for its client for up to 10 minutes, at most 32 per process. The record is deleted when the upload finishes, is cancelled or aborted, or its suspended writer expires and is aborted.
+
 Resume continues the live writer, so it works for a reconnect **to the same server process**. When the reconnect lands on another process, or after a server restart, the server answers `not_found` and the client starts over from byte 0 — even with a shared state store such as Redis, which only lets `UploadStatusView` report progress across processes.
 
 ### Enable it
@@ -526,10 +532,12 @@ The wrapper delegates `open()`, `write_chunk()`, `close()` and `abort()` to the 
 
 | Failure | With `resumable=True` | Without |
 |---------|----------------------|---------|
-| WS drops, reconnects < TTL | Intended: resumes from last chunk. At rc10: restarts from byte 0 (see the known issue above) | Upload aborted |
-| Browser tab backgrounded (mobile) | Intended: resumes on foreground. At rc10: restarts from byte 0 if the WebSocket dropped | Upload aborted |
+| WS drops, reconnects to the same process within 10 minutes | Resumes from the last chunk, on legacy and explicit views alike | Upload aborted |
+| WS reconnect lands on another process | Restarts from byte 0 (the live writer is in the first process) | Upload aborted |
+| Browser tab backgrounded (mobile) | Resumes on foreground if the WebSocket reconnects to the same process within 10 minutes | Upload aborted |
+| Another session, user, tenant or page sends `upload_resume` | `not_found`; the owner's upload is not disturbed | n/a |
 | Server process restart (in-memory store) | Upload aborted | Upload aborted |
-| Server restart (Redis store) | Intended: resumes from last chunk. At rc10: a graceful shutdown runs the same disconnect abort, so expect a restart from byte 0 | Upload aborted |
+| Server restart (Redis store) | Restarts from byte 0: the record survives, but the live writer does not | Upload aborted |
 | Client closes tab | Upload aborted | Upload aborted |
 | Second tab tries to resume same upload | Resume refused (`locked`); that tab starts a fresh upload | n/a |
 

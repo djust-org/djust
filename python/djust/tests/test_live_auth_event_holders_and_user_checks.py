@@ -802,18 +802,14 @@ async def _upload_consumer(user_cls):
     return consumer, manager
 
 
-class _LegacyPostGatedParent(_PostGatedParent):
-    exposure_policy = "legacy"  # legacy subject: only a legacy view resumes an upload across a reconnect (ADR-038 D-g)
-
-
-def _legacy_upload_consumer(user):
+def _resume_upload_consumer(user):
     from djust.uploads import UploadManager
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer.__new__(LiveViewConsumer)
     consumer.send_json = AsyncMock()
     consumer.send_error = AsyncMock()
-    view = _LegacyPostGatedParent()
+    view = _PostGatedParent()
     view.request = _request(user)
     manager = UploadManager()
     manager.configure("doc", accept=".pdf", max_entries=2)
@@ -855,8 +851,8 @@ class TestPostOnlyRuleOnUploads:
         "user_cls, status", [(_MemberUser, "not_found"), (_SuperUser, "resumed")]
     )
     async def test_upload_resume(self, monkeypatch, user_cls, status):
-        consumer, manager = _legacy_upload_consumer(user_cls())
-        manager.resume_entry = lambda upload_id, session_key: object()
+        consumer, manager = _resume_upload_consumer(user_cls())
+        manager.resume_entry = lambda upload_id, session_key, owner=None: object()
         monkeypatch.setattr(
             "djust.uploads.resumable.resolve_resume_request",
             lambda **kwargs: {

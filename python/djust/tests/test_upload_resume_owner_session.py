@@ -70,9 +70,6 @@ def _consumer(session_key, manager):
     consumer.send_json = AsyncMock()
     consumer.send_error = AsyncMock()
     view = MagicMock()
-    # A bare MagicMock has no readable exposure policy, which ADR-038 treats
-    # as nonlegacy (no resume, D-g). These tests pin the legacy path.
-    view.exposure_policy = "legacy"
     view._upload_manager = manager
     consumer.view_instance = view
     session = MagicMock()
@@ -230,3 +227,118 @@ async def test_other_session_gets_404_over_http():
     resp = UploadStatusView().get(_status_request("other-sess"), upload_id=ref)
     assert resp.status_code == 404
     assert json.loads(resp.content) == {"status": "not_found"}
+
+
+# ---------------------------------------------------------------------------
+# #4175: an explicit view's upload is bound to its owner (principal + view).
+# Same session key, different principal: Django rotates the key on login, so
+# this needs a forged binding.
+# ---------------------------------------------------------------------------
+
+_OWNER_A = {"principal": "a" * 64, "view": "/t/upload/"}
+_OWNER_B = {"principal": "b" * 64, "view": "/t/upload/"}
+
+
+class _RecordingSink(_SinkWriter):
+    aborted: list = []
+
+    def abort(self, error):
+        type(self).aborted.append(error)
+
+
+def _owned_manager():
+    mgr = UploadManager()
+    mgr.configure("doc", writer=ResumableUploadWriter.with_inner(_RecordingSink), resumable=True)
+    return mgr
+
+
+def _owned_start(mgr, owner=_OWNER_A, key="same-sess"):
+    ref = str(uuid.uuid4())
+    entry = mgr.register_entry("doc", ref, "report.pdf", "application/pdf", 12, key, owner=owner)
+    assert entry is not None
+    assert mgr.add_chunk(ref, 0, b"AAAA", owner=owner) is not None
+    return ref, entry
+
+
+@pytest.fixture
+def _no_parked():
+    from djust.uploads import resumable
+
+    resumable._reset_suspended_uploads()
+    _RecordingSink.aborted = []
+    yield
+    resumable._reset_suspended_uploads()
+
+
+def test_resume_refused_for_another_principal_in_the_same_session():
+    ref, _entry = _owned_start(_owned_manager())
+    assert resolve_resume_request(ref, "same-sess", owner=_OWNER_B)["status"] == "not_found"
+    assert resolve_resume_request(ref, "same-sess", owner=None)["status"] == "not_found"
+    assert resolve_resume_request(ref, "same-sess", owner=_OWNER_A)["status"] == "resumed"
+
+
+def test_parked_upload_not_handed_to_another_owner(_no_parked):
+    old = _owned_manager()
+    ref, entry = _owned_start(old)
+    old.cleanup()  # the socket dropped: the writer is parked
+
+    other = _owned_manager()
+    assert other.resume_entry(ref, "same-sess", owner=_OWNER_B) is None
+    assert other.resume_entry(ref, "same-sess") is None
+    assert ref not in other._entries
+
+    mine = _owned_manager()
+    assert mine.resume_entry(ref, "same-sess", owner=_OWNER_A) is entry
+    assert _RecordingSink.aborted == []
+
+
+def test_chunk_complete_cancel_from_a_non_owner_are_refused_without_aborting(_no_parked):
+    mgr = _owned_manager()
+    ref, entry = _owned_start(mgr)
+
+    assert mgr.add_chunk(ref, 1, b"BBBB", owner=_OWNER_B) is None
+    assert mgr.add_chunk(ref, 1, b"BBBB", owner=None) is None
+    assert entry._error is None and not entry._writer_aborted
+    assert _RecordingSink.aborted == []
+
+    mgr.cancel_upload(ref, owner=_OWNER_B)
+    assert ref in mgr._entries
+    assert mgr.complete_upload(ref, owner=_OWNER_B) is None
+    assert not entry.complete and entry._error is None
+
+    assert mgr.add_chunk(ref, 1, b"BBBB", owner=_OWNER_A) is not None
+    assert entry.writer_instance._chunks_received == [0, 1]
+    # The view's own code (no owner given) is never refused.
+    mgr.cancel_upload(ref)
+    assert ref not in mgr._entries
+
+
+@pytest.mark.django_db
+def test_status_view_checks_the_principal():
+    from django.contrib.auth import get_user_model
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import RequestFactory
+
+    from djust._exposure_sessions import request_principal_digest
+    from djust.uploads.views import UploadStatusView
+
+    session = SessionStore()
+    session.create()
+    request = RequestFactory().get("/")
+    request.session = session
+    request.user = get_user_model().objects.create_user(username="ada", password="x")
+
+    mine = {"principal": request_principal_digest(request), "view": "/t/upload/"}
+    for owner, code in ((_OWNER_B, 404), (mine, 200)):
+        ref = str(uuid.uuid4())
+        get_default_store().set(
+            ref,
+            {
+                "upload_id": ref,
+                "session_key": session.session_key,
+                "owner": owner,
+                "chunks_received_ranges": [[0, 0]],
+            },
+            ttl=60,
+        )
+        assert UploadStatusView().get(request, upload_id=ref).status_code == code, owner

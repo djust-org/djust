@@ -709,6 +709,12 @@ class UploadEntry:
     # resumable writer records it so only that session can resume the upload
     # or read its status.
     _session_key: Optional[str] = field(default=None, repr=False)
+    # The explicit (ADR-038) owner that registered the upload (#4175): the
+    # mount binding's principal digest (session, user, tenant) and view. A
+    # resumable writer records it, and chunk / complete / cancel frames and a
+    # resume from any other owner are refused. ``None`` for a legacy owner,
+    # whose key is the session alone.
+    _owner: Optional[Dict[str, str]] = field(default=None, repr=False)
 
     @property
     def data(self) -> bytes:
@@ -825,6 +831,13 @@ class UploadEntry:
 # ============================================================================
 
 
+#: The default ``owner`` of :meth:`UploadManager.add_chunk` /
+#: ``complete_upload`` / ``cancel_upload``: a call by the framework or the
+#: view's own code, which no owner check refuses. A client frame passes the
+#: connection's owner (``None`` for a legacy view), #4175.
+SERVER_CALL: Any = object()
+
+
 class UploadManager:
     """
     Manages upload state for a single LiveView session.
@@ -842,9 +855,6 @@ class UploadManager:
         self._name_to_refs: Dict[str, List[str]] = {}  # upload_name -> [refs]
         self._temp_dir = temp_dir or tempfile.mkdtemp(prefix="djust_uploads_")
         self._csrf_token: Optional[str] = None
-        # False for an explicit (ADR-038) owner: resumable writers then keep
-        # no resume record. Legacy owners resume as before.
-        self._resume_allowed: bool = True
 
     def configure(
         self,
@@ -922,6 +932,7 @@ class UploadManager:
             writer_kwargs: Dict[str, Any] = {}
             if issubclass(writer_cls, ResumableUploadWriter):
                 writer_kwargs["session_key"] = entry._session_key
+                writer_kwargs["owner"] = entry._owner
             try:
                 entry.writer_instance = writer_cls(
                     upload_id=entry.ref,
@@ -930,10 +941,6 @@ class UploadManager:
                     expected_size=entry.client_size,
                     **writer_kwargs,
                 )
-                if not self._resume_allowed and hasattr(entry.writer_instance, "_store_available"):
-                    # A resumable writer then runs as a plain one: no resume
-                    # record (client filename, progress) is ever written.
-                    entry.writer_instance._store_available = False
             except Exception as exc:  # noqa: BLE001
                 # Do NOT surface the raw exception message to the client —
                 # writer implementations may embed IAM ARNs, bucket names,
@@ -1049,13 +1056,16 @@ class UploadManager:
         client_type: str,
         client_size: int,
         session_key: Optional[str] = None,
+        owner: Optional[Dict[str, str]] = None,
     ) -> Optional[UploadEntry]:
         """
         Register a new upload entry. Called when client announces a file selection.
 
         ``session_key`` is the registering connection's Django session key.
         Resumable uploads store it as the upload's owner; without one the
-        upload cannot be resumed.
+        upload cannot be resumed. ``owner`` is an explicit view's binding
+        (``resumable.upload_owner``, #4175): only a connection with the same
+        owner may send the upload's frames or resume it.
 
         Returns the entry, or None if validation fails.
         """
@@ -1113,23 +1123,50 @@ class UploadManager:
             client_type=client_type,
             client_size=client_size,
             _session_key=session_key,
+            _owner=owner,
         )
         self._entries[ref] = entry
         self._name_to_refs.setdefault(upload_name, []).append(ref)
         return entry
 
-    def add_chunk(self, ref: str, chunk_index: int, data: bytes) -> Optional[int]:
+    @staticmethod
+    def _owner_refuses(entry: UploadEntry, ref: str, owner: Any) -> bool:
+        """Whether a frame from ``owner`` must be refused for ``entry`` (#4175).
+
+        An upload an explicit view registered answers only its own owner. A
+        refusal is logged and changes nothing: the entry is not failed and its
+        writer is not aborted, so a stranger's frame cannot kill the upload.
+        ``SERVER_CALL`` (the default) is the framework or the view's own code,
+        never refused.
+        """
+        if owner is SERVER_CALL:
+            return False
+        if entry._owner is not None and entry._owner != owner:
+            from .._log_utils import sanitize_for_log
+
+            logger.warning(
+                "Upload frame refused for %s: this connection does not own the upload",
+                sanitize_for_log(ref),
+            )
+            return True
+        return False
+
+    def add_chunk(
+        self, ref: str, chunk_index: int, data: bytes, owner: Any = SERVER_CALL
+    ) -> Optional[int]:
         """
         Add a chunk to an upload.
 
         Returns progress (0-100) or None if ref not found or the chunk
-        was rejected (size limit, writer error).
+        was rejected (size limit, writer error, another owner).
 
         When the upload slot is configured with writer=, the chunk is
         piped to the writer and nothing is buffered to RAM or disk.
         """
         entry = self._entries.get(ref)
         if not entry:
+            return None
+        if self._owner_refuses(entry, ref, owner):
             return None
 
         # Fast-path: once an upload has been aborted (size limit, writer
@@ -1165,7 +1202,7 @@ class UploadManager:
         entry.add_chunk(chunk_index, data)
         return entry.progress
 
-    def complete_upload(self, ref: str) -> Optional[UploadEntry]:
+    def complete_upload(self, ref: str, owner: Any = SERVER_CALL) -> Optional[UploadEntry]:
         """
         Mark upload as complete and finalize.
 
@@ -1173,10 +1210,13 @@ class UploadManager:
         return value on entry.writer_result. For disk-buffered slots,
         writes chunks to a temp file and runs magic-byte validation.
 
-        Returns the entry if successful, None if finalization failed.
+        Returns the entry if successful, None if finalization failed or
+        ``owner`` does not own the upload.
         """
         entry = self._entries.get(ref)
         if not entry:
+            return None
+        if self._owner_refuses(entry, ref, owner):
             return None
 
         config = self._configs.get(entry.upload_name)
@@ -1215,7 +1255,9 @@ class UploadManager:
             logger.warning("Upload validation failed for %s: %s", ref, entry.error)
             return None
 
-    def resume_entry(self, ref: str, session_key: Optional[str]) -> Optional[UploadEntry]:
+    def resume_entry(
+        self, ref: str, session_key: Optional[str], owner: Optional[Dict[str, str]] = None
+    ) -> Optional[UploadEntry]:
         """Re-attach an upload suspended when its session closed (#2972).
 
         Called for an ``upload_resume`` whose state check succeeded. Takes the
@@ -1223,7 +1265,8 @@ class UploadManager:
         it here, so the client's remaining chunks continue the same writer.
         Returns None — and the caller answers ``not_found``, so the client
         starts over — when nothing is parked for this session in this
-        process, or this view has no matching upload slot.
+        process, this view has no matching upload slot, or the parked upload
+        belongs to another ``owner`` (an explicit view's binding, #4175).
         """
         from .resumable import (
             ResumableUploadWriter,
@@ -1249,21 +1292,31 @@ class UploadManager:
         )
         current_refs = self._name_to_refs.get(entry.upload_name, [])
         active = [r for r in current_refs if r in self._entries and not self._entries[r].complete]
-        if config is None or not same_writer or len(active) >= config.max_entries:
-            # Another view may own the slot: leave it parked for that one.
+        if (
+            config is None
+            or not same_writer
+            or len(active) >= config.max_entries
+            or entry._owner != owner
+        ):
+            # Another view (or another owner, #4175) may own the slot: leave
+            # it parked for that one.
             park_suspended_upload(entry)
             return None
         self._entries[ref] = entry
         self._name_to_refs.setdefault(entry.upload_name, []).append(ref)
         return entry
 
-    def cancel_upload(self, ref: str) -> None:
+    def cancel_upload(self, ref: str, owner: Any = SERVER_CALL) -> None:
         """Cancel and clean up an upload.
 
         For writer-configured slots, calls writer.abort() with a
         ConnectionAbortedError so the writer can release server-side
-        resources (e.g. S3 AbortMultipartUpload).
+        resources (e.g. S3 AbortMultipartUpload). A cancel from a connection
+        that does not own the upload (#4175) is refused and changes nothing.
         """
+        existing = self._entries.get(ref)
+        if existing is not None and self._owner_refuses(existing, ref, owner):
+            return
         entry = self._entries.pop(ref, None)
         if entry:
             if entry.writer_instance is not None and not entry._complete:
@@ -1448,15 +1501,9 @@ class UploadMixin:
 
     def _ensure_upload_manager(self) -> UploadManager:
         if self._upload_manager is None:
+            # Explicit views resume uploads in flight too (#4175, replacing
+            # ADR-038 D-g): the record is bound to the mount's owner.
             self._upload_manager = UploadManager()
-            # ADR-038 D-g: explicit views never resume uploads in flight, so
-            # their writers must not record resume state that nothing reads.
-            try:
-                from .._exposure import uses_legacy_exposure
-            except ImportError:  # pragma: no cover - loaded outside the package
-                pass  # no LiveView policy exists there; keep the legacy default
-            else:
-                self._upload_manager._resume_allowed = uses_legacy_exposure(self)
         return self._upload_manager
 
     def allow_upload(
@@ -1552,8 +1599,9 @@ class UploadMixin:
         ``uploads`` key. The value is ``get_upload_state()`` with each entry
         projected through :func:`_render_upload_entry`, which drops
         ``writer_result`` and the raw ``client_name``. Nothing here is
-        persisted, sent as client state or exported to debug tools, and under
-        decision D-g entries in flight do not survive a reconnect.
+        persisted, sent as client state or exported to debug tools. A
+        ``ResumableUploadWriter`` upload in flight resumes after a reconnect
+        (#4175); other entries in flight start over.
         """
         if not self._upload_manager:
             return {}

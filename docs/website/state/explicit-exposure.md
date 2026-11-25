@@ -304,8 +304,8 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   middleware is refused.
 - **Uploads.** `uploads` renders each entry's progress and a sanitized file
   name. The raw client file name and the writer's result are not included.
-  Uploads in flight are not resumed after a reconnect; the client registers
-  them again.
+  An upload in flight resumes after a reconnect, for the same session, user,
+  tenant and page (`ResumableUploadWriter`, `resumable=True`).
 - **Components.** Declare a `LiveComponent` at class level (`nav = Tabs(...)`).
   Each view gets its own copy, and its events reach it by `component_id`. A
   State-less `LiveComponent` (no `State` class) that a handler changes in place

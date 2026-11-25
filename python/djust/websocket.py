@@ -3690,6 +3690,16 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             logger.debug("failed to read the session key: %s", exc)
         return None
 
+    def _upload_owner(self) -> Optional[Dict[str, str]]:
+        """The owner an upload registered here is bound to: the explicit mount
+        binding's principal and view (#4175). None for a legacy view (its key
+        is the session alone)."""
+        from .uploads.resumable import upload_owner
+
+        runtime = getattr(self, "_runtime", None)
+        binding = getattr(runtime, "_explicit_mount_binding", None)
+        return upload_owner(binding) if binding is not None else None
+
     async def _handle_upload_register(self, data: Dict[str, Any]) -> None:
         """Handle upload_register message: client announces a file to upload."""
         if not self.view_instance:
@@ -3717,6 +3727,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             client_type=data.get("client_type", ""),
             client_size=data.get("client_size", 0),
             session_key=self._scope_session_key(),
+            owner=self._upload_owner(),
         )
 
         if entry:
@@ -3746,10 +3757,12 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
              "status": "resumed" | "not_found" | "locked",
              "bytes_received": N, "chunks_received": [0, 1, 2, ...]}
 
-        Session-scoped access: the state entry's stored ``session_key``
-        must be present and match the current WS session, else we reply
-        ``not_found`` (same response as missing, so the reply does not
-        reveal whether the id exists).
+        Owner-scoped access: the state entry's stored ``session_key`` must
+        be present and match the current WS session and, for an explicit
+        view, its stored owner must match this connection's mount binding
+        (principal and view, #4175), else we reply ``not_found`` (same
+        response as missing, so the reply does not reveal whether the id
+        exists).
         """
         from .uploads.resumable import resolve_resume_request
 
@@ -3758,27 +3771,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             await self.send_error("upload_resume requires a ref")
             return
 
-        # ADR-038 decision D-g: an explicit view does not preserve uploads in
-        # flight across a reconnect. Answer exactly as for an unknown ref,
-        # without consulting the resumable state store, so the client falls
-        # back to a fresh ``upload_register``.
-        view = self.view_instance
-        if view is not None:
-            from ._exposure import uses_legacy_exposure
-
-            if not uses_legacy_exposure(view):
-                await self.send_json(
-                    {
-                        "type": "upload_resumed",
-                        "ref": upload_id,
-                        "status": "not_found",
-                        "bytes_received": 0,
-                        "chunks_received": [],
-                    }
-                )
-                return
-
         session_key = self._scope_session_key()
+        owner = self._upload_owner()
 
         # Active-ref check: is another in-flight upload using this id?
         active = False
@@ -3803,6 +3797,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             upload_id=upload_id,
             session_key=session_key,
             active_refs=_active_ref,
+            owner=owner,
         )
         if (
             payload.get("status") == "resumed"
@@ -3832,7 +3827,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 if mgr is not None:
                     # Off the event loop: re-attaching may abort expired
                     # suspended uploads, which can be network I/O (S3).
-                    resumed = await sync_to_async(mgr.resume_entry)(upload_id, session_key)
+                    resumed = await sync_to_async(mgr.resume_entry)(
+                        upload_id, session_key, owner=owner
+                    )
             except Exception:  # noqa: BLE001 — resume must never crash the consumer
                 logger.exception("upload_resume: re-attaching the upload failed")
             if resumed is None:
@@ -3943,12 +3940,14 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             return
 
         ref = frame["ref"]
+        # Every frame is checked against the upload's owner (#4175).
+        owner = self._upload_owner()
 
         if frame["type"] == "chunk":
             # add_chunk() internally dispatches to either the disk-buffer
             # path or (when the upload slot was configured with writer=)
             # the writer's write_chunk() — no disk I/O on the writer path.
-            progress = mgr.add_chunk(ref, frame["chunk_index"], frame["data"])
+            progress = mgr.add_chunk(ref, frame["chunk_index"], frame["data"], owner=owner)
             if progress is not None:
                 # Send progress update (throttle to every 10%)
                 entry = mgr._entries.get(ref)
@@ -3966,7 +3965,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         elif frame["type"] == "complete":
             _real_consumer(self)._forget_upload(ref)
-            entry = mgr.complete_upload(ref)
+            entry = mgr.complete_upload(ref, owner=owner)
             if entry:
                 await self.send_json(build_progress_message(ref, 100, "complete"))
             else:
@@ -3984,7 +3983,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         elif frame["type"] == "cancel":
             _real_consumer(self)._forget_upload(ref)
-            mgr.cancel_upload(ref)
+            mgr.cancel_upload(ref, owner=owner)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
 
     async def close(self, code: Optional[int] = None, reason: Optional[str] = None) -> None:

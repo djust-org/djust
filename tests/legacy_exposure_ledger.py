@@ -20,6 +20,8 @@ MIGRATED_4082: tuple[str, ...] = (
     # Its last legacy cases (debug eval, time-travel replay) went with those
     # features in 2.0 (#4184).
     "python/djust/tests/test_push_handler_marker_3002.py",
+    # Its upload-resume case is explicit since explicit views resume (#4175).
+    "python/djust/tests/test_live_auth_event_holders_and_user_checks.py",
     "python/djust/tests/test_async_result_render_lock_2840.py",
     "python/djust/tests/test_async_work_render_lock_2830.py",
     "python/djust/tests/test_auth_refusal_codes_3319.py",
@@ -101,9 +103,6 @@ REMAINING_4082: dict[str, str] = {
     ),
     "python/djust/tests/test_live_auth_denials_and_wrappers.py": (
         "migrated; the post()-only event refusal cases stay legacy: a legacy view refuses the event and stays mounted"
-    ),
-    "python/djust/tests/test_live_auth_event_holders_and_user_checks.py": (
-        "migrated; the upload-resume case stays legacy: an explicit view does not resume an upload across a reconnect (ADR-038 D-g)"
     ),
     "python/djust/tests/test_multi_view_refusal_3252.py": (
         "migrated; the revocation cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
@@ -340,7 +339,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_undeclared_handler_state_v029_4053.py",
         "python/djust/tests/test_unsaved_model_list_2736.py",
         "python/djust/tests/test_update_model_allowlist.py",
-        "python/djust/tests/test_upload_resume_owner_session.py",
         "python/djust/tests/test_uploads_v121_11.py",
         "python/djust/tests/test_url_change_render_lock.py",
         "python/djust/tests/test_view_replacement_teardown_3244_3245.py",
@@ -449,5 +447,4 @@ REASONED_INLINE: tuple[str, ...] = (
     "python/djust/tests/test_async_check_permissions.py",
     "python/djust/tests/test_live_auth_denials_and_wrappers.py",
     "tests/unit/test_layout_switching.py",
-    "python/djust/tests/test_live_auth_event_holders_and_user_checks.py",
 )
