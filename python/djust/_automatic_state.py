@@ -235,16 +235,27 @@ def _unsaved_attrs(view_class: type) -> frozenset:
     return frozenset(names)
 
 
+def _unsaved_prefixes(view_class: type) -> Tuple[str, ...]:
+    """Private-name prefixes framework mixins keep ephemeral (``_djust_unsaved_prefixes``)."""
+    prefixes: list = []
+    for owner in view_class.__mro__:
+        declared = namespace(owner).get("_djust_unsaved_prefixes")
+        if isinstance(declared, tuple):
+            prefixes.extend(declared)
+    return tuple(prefixes)
+
+
 class _Names:
     """The name rule for one view: built once per save, asked per attribute."""
 
-    __slots__ = ("view_class", "framework", "reserved", "floor", "skipped")
+    __slots__ = ("view_class", "framework", "reserved", "floor", "skipped", "ephemeral")
 
     def __init__(self, view: Any) -> None:
         from .change_detection import CHANGE_DETECTION_IGNORED
         from .serialization import _resolve_sensitive_fields
 
         self.view_class = type(view)
+        self.ephemeral = _unsaved_prefixes(self.view_class)
         self.framework = getattr(view, "_framework_attrs", frozenset())
         self.reserved = (
             reserved_state_names() | CHANGE_DETECTION_IGNORED | _UNSAFE_KEYS | _NOT_STATE
@@ -272,6 +283,7 @@ class _Names:
             or len(name) > 128
             or not _PRIVATE.fullmatch(name)
             or name.startswith(("_djust_", "_state_"))
+            or (self.ephemeral and name.startswith(self.ephemeral))
             or name in self.reserved
             or name in self.framework
             or name in _PRIVATE_BOOKKEEPING
