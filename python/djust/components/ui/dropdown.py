@@ -73,24 +73,30 @@ def _item_href(item: Dict[str, Any]) -> str:
     return data_url_attr(url) if url else "#"
 
 
-#: Words that make a ``data`` key a URL (``dj-value-link``, ``dj-value-image-url`` ...): its value
-#: is checked like any URL, so a script scheme becomes ``#`` (#3898). The marked-safe sweep
-#: reads such an attribute as one a script may follow.
-_URL_KEY_WORDS = frozenset(
-    {
-        "url", "href", "src", "link", "uri", "redirect", "endpoint", "image", "img", "avatar",
-        "poster", "background", "thumbnail", "thumb", "logo", "asset", "download",
-        "navigate", "location", "action",
-    }
-)  # fmt: skip
+#: Control characters and spaces, removed before a value's scheme is read: a browser (and a
+#: legacy engine) reads ``java<TAB>script:`` as ``javascript:``.
+_SCHEME_NOISE = re.compile(r"[\x00-\x20]+")
+#: The schemes that run script or load a document: a ``data`` value that starts with one is
+#: written as ``#``, whatever its key.
+_SCRIPT_SCHEMES = ("javascript:", "vbscript:", "data:")
+
+
+def _data_value(value: Any) -> str:
+    """One ``data`` value as attribute text: escaped, and ``#`` for a script scheme.
+
+    ``dj-value-*`` attributes are event parameters the browser never follows, so any other
+    text (``ns:del``, an id, a relative path) is kept as written (#4002 review). The #3898
+    sweep still reads a URL-named one (``dj-value-link``) as one a script could follow, and
+    the script schemes are all it can do harm with.
+    """
+    if _SCHEME_NOISE.sub("", str(value)).lower().startswith(_SCRIPT_SCHEMES):
+        return "#"
+    return attr_text(value)
 
 
 def _data_attrs(data: Optional[Dict[str, Any]]) -> str:
-    """An item's ``data`` as ``dj-value-*`` attributes, every value escaped (#4186).
-
-    A dict or list value is written as JSON. A key named like a URL has its value checked
-    through ``data_url_attr`` (#4002: the class reads URLs, so the sweep holds it to that).
-    """
+    """An item's ``data`` as ``dj-value-*`` attributes (#4186): a dict or list value as JSON,
+    every value through :func:`_data_value`."""
     if not data:
         return ""
     import json
@@ -100,11 +106,7 @@ def _data_attrs(data: Optional[Dict[str, Any]]) -> str:
         if not _DATA_KEY_RE.match(str(key)):
             continue
         text = json.dumps(value) if isinstance(value, (dict, list)) else value
-        if set(re.split(r"[-_.]", str(key).lower())) & _URL_KEY_WORDS:
-            value_str = data_url_attr(text)
-        else:
-            value_str = attr_text(text)  # a plain str for JSON: always escaped
-        out += f' dj-value-{key}="{value_str}"'
+        out += f' dj-value-{key}="{_data_value(text)}"'
     return out
 
 

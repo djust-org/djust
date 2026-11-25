@@ -1167,20 +1167,21 @@ work; the class docstring gives each mapping. What a page sees:
 | Class | Draws | What changed |
 |---|---|---|
 | all eight | the twin's markup | An `id` on the outer element: the class's `id` (`alert`, `badge`, ..., or the explicit `id=` of `Modal` / `Dropdown`). The markup follows `css_framework` (Tailwind and plain variants), and the line breaks and indentation inside it changed. Text is still escaped whatever it is marked as. |
-| `Alert` | `AlertComponent` | The close button stays Bootstrap's `data-bs-dismiss="alert"` (the class renders the twin `standalone`); under Tailwind and plain it is the twin's `dj-click="dismiss"`. A variant other than info / success / warning / danger / error draws `alert-info` and warns. |
-| `Badge` | `BadgeComponent` | No size class: the default `md` badge loses `fs-6`, `lg` loses `fs-5`, and `size` other than `md` warns. An unknown variant draws `bg-primary`. |
-| `Button` | `ButtonComponent` | An unknown variant (including `link`) draws `btn-primary`. |
+| `Alert` | `AlertComponent` | The close button stays Bootstrap's `data-bs-dismiss="alert"` (the class renders the twin `standalone`); under Tailwind and plain, where nothing would receive its click, there is no close button. A variant other than info / success / warning / danger / error draws `alert-info` and warns. |
+| `Badge` | `BadgeComponent` | No size class: the default `md` badge loses `fs-6`, `lg` loses `fs-5`, and `size` other than `md` warns. An unknown variant draws `bg-primary` and warns. |
+| `Button` | `ButtonComponent` | An unknown variant (including `link`) draws `btn-primary` and warns. |
 | `Card` | `CardComponent` | `header` draws as `<h5 class="card-title">` inside `.card-body`, not a `.card-header`; the body is a `<p class="card-text">`; the footer gains `text-muted`. An empty header or footer draws no section. `variant` (`border` / `shadow`) is not drawn and warns. |
-| `Dropdown` | `DropdownComponent` | Items are `DropdownItem`s; `url` (checked and escaped, `javascript:` becomes `#`) and `disabled` (`disabled` class, `aria-disabled="true"`) carry over, and `action` / `icon` / `variant` / `data` now work too. The markup is on one line. |
-| `Modal` | `ModalComponent` | Under Bootstrap `show=False`, the default, still draws the hidden `modal fade` (no backdrop) for `data-bs-toggle` to open, and both close buttons are `data-bs-dismiss="modal"` (the class renders the twin `standalone`); under Tailwind and plain a hidden modal renders nothing. A shown modal is `modal fade show d-block` followed by a `.modal-backdrop`. It always has a header with a close button (`dismissable=False` warns) and, without a `footer`, a "Close" button. `centered` is not drawn and warns; `aria-labelledby` is gone. |
+| `Dropdown` | `DropdownComponent` | Items are `DropdownItem`s; `url` (checked and escaped, `javascript:` becomes `#`) and `disabled` (`disabled` class, `aria-disabled="true"`) carry over, and `action` / `icon` / `variant` / `data` now work too (a `data` value is escaped text; one with a `javascript:`, `vbscript:` or `data:` scheme becomes `#`). The markup is on one line. |
+| `Modal` | `ModalComponent` | Under Bootstrap `show=False`, the default, still draws the hidden `modal fade` (no backdrop) for `data-bs-toggle` to open, and both close buttons are `data-bs-dismiss="modal"` (the class renders the twin `standalone`); under Tailwind and plain a hidden modal renders nothing and raises a `UserWarning`, and a shown one has no close controls (nothing would receive them). A shown Bootstrap modal is `modal fade show d-block` followed by a `.modal-backdrop`. It always has a header with a close button (`dismissable=False` warns) and, without a `footer`, a "Close" button. `centered` is not drawn and warns; `aria-labelledby` is gone. |
 | `Progress` | `ProgressComponent` | The `.progress` element always carries a height (`1rem` by default), the inline width is a whole percent (`40%`, not `40.0%`) and the fill class truncates (`42.5` is `dj-progress-w-42`). An empty `label` counts as none. |
-| `Spinner` | `SpinnerComponent` | Wrapped in `<div id="spinner">`; `lg` / `xl` draw a size; an unknown `animation` draws `spinner-grow`. The screen-reader text is always "Loading...": `sr_text` warns. |
+| `Spinner` | `SpinnerComponent` | Wrapped in `<div id="spinner">`; `lg` / `xl` draw a size; the classes are single-spaced; an unknown `animation` draws `spinner-grow`. The screen-reader text is always "Loading...": `sr_text` warns. |
 
 `AlertComponent` and `ModalComponent` take `standalone=True` for this: their
-Bootstrap close controls become `data-bs-dismiss`, and a hidden `ModalComponent` is
-drawn hidden instead of as nothing. A component registered with a view keeps the
+Bootstrap close controls become `data-bs-dismiss`, a hidden `ModalComponent` is
+drawn hidden instead of as nothing, and under Tailwind and plain they draw no close
+controls. A component registered with a view keeps the
 default, `dj-click="dismiss"` and an empty hidden modal. `DropdownItem` gained `url`
-and `disabled`.
+and `disabled`. A deprecated argument warns from the constructor and from `update()`.
 
 The other simple classes (`Accordion`, `Avatar`, `Breadcrumb`, `ButtonGroup`,
 `Checkbox`, `Divider`, `Icon`, `Input`, `ListGroup`, `NavBar`, `Offcanvas`,
@@ -1526,4 +1527,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: 645410aabc77 -->
+<!-- generated-doc prose-sha256: f57b6679be0e -->

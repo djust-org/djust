@@ -48,7 +48,8 @@ class AlertComponent(LiveComponent):
         self.dismissible = kwargs.get("dismissible", True)
         self.visible = kwargs.get("visible", True)
         # Rendered on its own, never registered with a view (the simple ``Alert``, #4002): under
-        # Bootstrap the close button is Bootstrap's ``data-bs-dismiss="alert"``.
+        # Bootstrap the close button is Bootstrap's ``data-bs-dismiss="alert"``; under Tailwind
+        # and plain, where nothing would receive its click, there is none.
         self.standalone = bool(kwargs.get("standalone", False))
 
     def get_context(self) -> Dict[str, Any]:
@@ -146,7 +147,9 @@ class AlertComponent(LiveComponent):
         html += '<div class="flex">'
         html += f'<div class="flex-1">{conditional_escape(self.message)}</div>'
 
-        if self.dismissible:
+        # A standalone alert has no registered component to receive ``dismiss`` and no
+        # Bootstrap to close it: it draws no close button (#4002).
+        if self.dismissible and not self.standalone:
             html += f'<button type="button" dj-click="dismiss" data-component-id="{attr_text(self.component_id)}" class="ml-3 inline-flex rounded-md p-1.5 hover:bg-opacity-20">'
             html += '<span class="sr-only">Dismiss</span>'
             html += '<svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>'
@@ -163,7 +166,7 @@ class AlertComponent(LiveComponent):
         )
         html += f"{conditional_escape(self.message)}"
 
-        if self.dismissible:
+        if self.dismissible and not self.standalone:  # see _render_tailwind
             html += f'<button type="button" dj-click="dismiss" data-component-id="{attr_text(self.component_id)}">×</button>'
 
         html += "</div>"

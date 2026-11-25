@@ -8,11 +8,18 @@ One renderer (#4002): ``_render_custom`` returns the markup of ``BadgeComponent`
 class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
+from typing import Any
+
 from djust.components._alias_deprecation import warn_alias
 
 from ..base import Component
 from ._twin import plain_text, render_twin
 from .badge import BadgeComponent
+
+#: The variants ``BadgeComponent`` draws; it draws any other as ``primary``.
+_VARIANTS = frozenset(
+    {"primary", "secondary", "success", "danger", "warning", "info", "light", "dark"}
+)
 
 
 class Badge(Component):
@@ -29,7 +36,8 @@ class Badge(Component):
 
     Args:
         text: Badge text content (escaped, whatever it is marked as)
-        variant: Color variant (primary, secondary, success, danger, warning, info, light, dark)
+        variant: Color variant (primary, secondary, success, danger, warning, info, light, dark;
+            any other draws as primary and warns)
         size: Deprecated (#4002): ``BadgeComponent`` has no size, so any value draws the
             default badge; a value other than ``md`` warns. Size it with a ``fs-*`` class
             on the container instead.
@@ -63,8 +71,34 @@ class Badge(Component):
         self.size = size
         self.pill = pill
 
-        if size != "md":
-            warn_alias("Badge", "size", "a font-size class on the container (it draws no size)")
+        self._warn_unmapped()
+
+    def _warn_unmapped(self) -> None:
+        """Warn for an argument value the twin has no equivalent for (#4002).
+
+        ``stacklevel=5`` points at the caller of ``__init__`` / ``update``.
+        """
+        if self.size != "md":
+            warn_alias(
+                "Badge",
+                "size",
+                "a font-size class on the container (it draws no size)",
+                stacklevel=5,
+            )
+        if self.variant not in _VARIANTS:
+            warn_alias(
+                "Badge",
+                "variant outside the eight Bootstrap colours",
+                "primary, secondary, success, danger, warning, info, light or dark "
+                "(any other draws as primary)",
+                stacklevel=5,
+            )
+
+    def update(self, **kwargs: Any) -> Component:
+        """Update the properties, warning again for an argument the twin cannot draw."""
+        super().update(**kwargs)
+        self._warn_unmapped()
+        return self
 
     def _render_custom(self) -> str:
         return render_twin(

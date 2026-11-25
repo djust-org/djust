@@ -7,7 +7,7 @@ One renderer (#4002): ``_render_custom`` returns the markup of ``ModalComponent`
 this class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from ..base import Component
 
@@ -91,10 +91,27 @@ class Modal(Component):
         self.dismissable = dismissable
         self.show = show
 
-        if centered:
-            warn_alias("Modal", "centered", "the default dialog (it draws no centred one)")
-        if not dismissable:
-            warn_alias("Modal", "dismissable", "the close button (it is always drawn)")
+        self._warn_unmapped()
+
+    def _warn_unmapped(self) -> None:
+        """Warn for an argument value the twin has no equivalent for (#4002).
+
+        ``stacklevel=5`` points at the caller of ``__init__`` / ``update``.
+        """
+        if self.centered:
+            warn_alias(
+                "Modal", "centered", "the default dialog (it draws no centred one)", stacklevel=5
+            )
+        if not self.dismissable:
+            warn_alias(
+                "Modal", "dismissable", "the close button (it is always drawn)", stacklevel=5
+            )
+
+    def update(self, **kwargs: Any) -> Component:
+        """Update the properties, warning again for an argument the twin cannot draw."""
+        super().update(**kwargs)
+        self._warn_unmapped()
+        return self
 
     def _render_custom(self) -> str:
         return render_twin(

@@ -207,6 +207,8 @@ def test_twin_class_follows_the_css_framework(framework: str) -> None:
 DEPRECATED_ARGUMENTS = [
     ("Alert", {"text": "x", "variant": "primary"}, "variant outside"),
     ("Badge", {"text": "x", "size": "lg"}, "size"),
+    ("Badge", {"text": "x", "variant": "teal"}, "variant outside"),
+    ("Button", {"text": "x", "variant": "link"}, "variant outside"),
     ("Card", {"body": "x", "variant": "outlined"}, "variant"),
     ("Modal", {"body": "x", "centered": True}, "centered"),
     ("Modal", {"body": "x", "dismissable": False}, "dismissable"),
@@ -253,3 +255,34 @@ def test_an_argument_with_a_twin_equivalent_does_not_warn(
     with warnings.catch_warnings():
         warnings.simplefilter("error", DeprecationWarning)
         getattr(module, name)(**kwargs).render()
+
+
+UPDATED_DEPRECATED_ARGUMENTS = [
+    ("Alert", {"text": "x"}, {"variant": "primary"}, "variant outside"),
+    ("Badge", {"text": "x"}, {"size": "lg"}, "size"),
+    ("Badge", {"text": "x"}, {"variant": "teal"}, "variant outside"),
+    ("Button", {"text": "x"}, {"variant": "link"}, "variant outside"),
+    ("Card", {"body": "x"}, {"variant": "outlined"}, "variant"),
+    ("Modal", {"body": "x"}, {"centered": True}, "centered"),
+    ("Modal", {"body": "x"}, {"dismissable": False}, "dismissable"),
+    ("Spinner", {}, {"sr_text": "Wait"}, "sr_text"),
+]
+
+
+@pytest.mark.parametrize(
+    "name,kwargs,update,needle",
+    UPDATED_DEPRECATED_ARGUMENTS,
+    ids=[f"{n}-{next(iter(u))}" for n, _, u, _ in UPDATED_DEPRECATED_ARGUMENTS],
+)
+def test_update_to_an_argument_with_no_twin_equivalent_warns(
+    name: str, kwargs: dict[str, Any], update: dict[str, Any], needle: str
+) -> None:
+    from djust.components import _alias_deprecation
+
+    _alias_deprecation._WARNED.clear()
+    module = importlib.import_module(f"djust.components.ui.{MODULES[name]}_simple")
+    component = getattr(module, name)(**kwargs)
+    with pytest.warns(DeprecationWarning, match=f"{name}'s .*{needle}") as record:
+        assert component.update(**update) is component
+    assert record[0].filename == __file__  # the warning points at the caller of update()
+    _alias_deprecation._WARNED.clear()

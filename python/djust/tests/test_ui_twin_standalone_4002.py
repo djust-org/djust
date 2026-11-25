@@ -18,6 +18,7 @@ item without ``url`` / ``disabled`` draws what it drew.
 
 from __future__ import annotations
 
+import warnings
 from typing import Iterator
 
 import pytest
@@ -133,8 +134,44 @@ def test_a_standalone_hidden_modal_is_the_hidden_bootstrap_markup() -> None:
 
 
 @pytest.mark.parametrize("framework", ["tailwind", "plain"], indirect=True)
-def test_a_standalone_hidden_modal_outside_bootstrap_renders_nothing(framework: str) -> None:
-    assert ModalComponent(component_id="m", body="B", standalone=True).render() == ""
+def test_a_standalone_hidden_modal_outside_bootstrap_renders_nothing_and_warns(
+    framework: str,
+) -> None:
+    with pytest.warns(UserWarning, match="hidden standalone ModalComponent renders nothing"):
+        assert ModalComponent(component_id="m", body="B", standalone=True).render() == ""
+
+
+@pytest.mark.parametrize("framework", FRAMEWORKS, indirect=True)
+def test_a_registered_hidden_modal_does_not_warn(framework: str) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert ModalComponent(component_id="m", body="B").render() == ""
+
+
+@pytest.mark.parametrize("framework", ["tailwind", "plain"], indirect=True)
+def test_a_standalone_shown_modal_outside_bootstrap_draws_no_dead_close_control(
+    framework: str,
+) -> None:
+    html = str(ModalComponent(component_id="m", body="B", show=True, standalone=True).render())
+    assert "dj-click" not in html and "data-component-id" not in html
+    assert "B" in html
+
+
+@pytest.mark.parametrize("framework", ["tailwind", "plain"], indirect=True)
+def test_a_registered_shown_modal_outside_bootstrap_keeps_its_close_controls(
+    framework: str,
+) -> None:
+    html = str(ModalComponent(component_id="m", body="B", show=True).render())
+    assert 'dj-click="dismiss" data-component-id="m"' in html
+
+
+@pytest.mark.parametrize("framework", FRAMEWORKS, indirect=True)
+def test_registered_modal_escapes_its_id_the_same_in_header_and_footer(framework: str) -> None:
+    """Both close controls write the id escaped, the same way in every framework (the
+    Bootstrap footer's ``conditional_escape`` restored, as before #4002)."""
+    html = str(ModalComponent(component_id='m"1', body="B", show=True).render())
+    assert 'data-component-id="m"1"' not in html
+    assert html.count('data-component-id="m&quot;1"') == 2
 
 
 def test_a_standalone_shown_modal_closes_with_bootstrap() -> None:
@@ -180,20 +217,46 @@ def test_simple_alert_is_standalone() -> None:
     assert 'data-bs-dismiss="alert"' in html and "dj-click" not in html
 
 
-@pytest.mark.parametrize("framework", FRAMEWORKS, indirect=True)
-def test_a_url_named_data_value_is_checked_like_a_url(framework: str) -> None:
-    """``dropdown.py`` reads URLs now, so the marked-safe sweep (#3898) holds its
-    ``dj-value-*`` attributes to the URL policy: a URL-named key's script scheme becomes ``#``;
-    other keys are escaped text, as before."""
-    from django.utils.safestring import mark_safe
+@pytest.mark.parametrize("framework", ["tailwind", "plain"], indirect=True)
+def test_a_standalone_alert_outside_bootstrap_draws_no_dead_close_button(framework: str) -> None:
+    html = str(AlertComponent(component_id="a", message="m", standalone=True).render())
+    assert "dj-click" not in html and "<button" not in html
+    registered = str(AlertComponent(component_id="a", message="m").render())
+    assert 'dj-click="dismiss" data-component-id="a"' in registered
 
+
+# --- DropdownItem data values -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("framework", FRAMEWORKS, indirect=True)
+def test_data_values_are_kept_as_written(framework: str) -> None:
+    """``dj-value-*`` attributes are event parameters the browser never follows: any value but
+    a script scheme comes through as escaped text, whatever its key (#4002 review)."""
     html = _dropdown(
         DropdownItem(
             text="A",
             action="go",
-            data={"link": mark_safe("javascript:alert(1)"), "item_id": 4, "note": "a:b"},
+            data={"action": "ns:del", "link": "/a?b=1&c=2", "item_id": 4, "note": 'x"y'},
         )
     )
-    assert 'dj-value-link="#"' in html
-    assert 'dj-value-item_id="4"' in html and 'dj-value-note="a:b"' in html
-    assert "javascript" not in html
+    assert 'dj-value-action="ns:del"' in html
+    assert 'dj-value-link="/a?b=1&amp;c=2"' in html
+    assert 'dj-value-item_id="4"' in html and 'dj-value-note="x&quot;y"' in html
+
+
+@pytest.mark.parametrize("framework", FRAMEWORKS, indirect=True)
+@pytest.mark.parametrize("key", ["link", "action", "itemId", "nextUrl", "next", "target", "x"])
+@pytest.mark.parametrize(
+    "value",
+    ["javascript:alert(1)", " JaVaScRiPt:alert(1)", "java\tscript:alert(1)", "vbscript:x",
+     "data:text/html,<b>x</b>", "\x00javascript:x"],
+)  # fmt: skip
+def test_a_script_scheme_in_any_data_value_is_neutralised(
+    framework: str, key: str, value: str
+) -> None:
+    from django.utils.safestring import mark_safe
+
+    for claimed in (value, mark_safe(value)):
+        html = _dropdown(DropdownItem(text="A", action="go", data={key: claimed}))
+        assert f'dj-value-{key}="#"' in html
+        assert "script:" not in html.lower() and "data:" not in html

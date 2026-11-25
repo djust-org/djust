@@ -11,7 +11,7 @@ One renderer (#4002): ``_render_custom`` returns the markup of ``CardComponent``
 class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 from djust.components._alias_deprecation import warn_alias
 
@@ -51,10 +51,26 @@ class Card(Component):
         self.footer = footer
         self.variant = variant
 
-        if variant != "default":
+        self._warn_unmapped()
+
+    def _warn_unmapped(self) -> None:
+        """Warn for an argument value the twin has no equivalent for (#4002).
+
+        ``stacklevel=5`` points at the caller of ``__init__`` / ``update``.
+        """
+        if self.variant != "default":
             warn_alias(
-                "Card", "variant", "a border/shadow class on the container (it draws no variant)"
+                "Card",
+                "variant",
+                "a border/shadow class on the container (it draws no variant)",
+                stacklevel=5,
             )
+
+    def update(self, **kwargs: Any) -> Component:
+        """Update the properties, warning again for an argument the twin cannot draw."""
+        super().update(**kwargs)
+        self._warn_unmapped()
+        return self
 
     def _render_custom(self) -> str:
         return render_twin(

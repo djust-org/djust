@@ -20,6 +20,8 @@ One renderer (#4002): ``_render_custom`` returns the markup of ``SpinnerComponen
 class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
+from typing import Any
+
 from djust.components._alias_deprecation import warn_alias
 
 from ..base import Component
@@ -60,8 +62,26 @@ class Spinner(Component):
         self.animation = animation
         self.sr_text = sr_text
 
-        if sr_text != "Loading...":
-            warn_alias("Spinner", "sr_text", "the default screen-reader text (it draws no other)")
+        self._warn_unmapped()
+
+    def _warn_unmapped(self) -> None:
+        """Warn for an argument value the twin has no equivalent for (#4002).
+
+        ``stacklevel=5`` points at the caller of ``__init__`` / ``update``.
+        """
+        if self.sr_text != "Loading...":
+            warn_alias(
+                "Spinner",
+                "sr_text",
+                "the default screen-reader text (it draws no other)",
+                stacklevel=5,
+            )
+
+    def update(self, **kwargs: Any) -> Component:
+        """Update the properties, warning again for an argument the twin cannot draw."""
+        super().update(**kwargs)
+        self._warn_unmapped()
+        return self
 
     def _render_custom(self) -> str:
         return render_twin(

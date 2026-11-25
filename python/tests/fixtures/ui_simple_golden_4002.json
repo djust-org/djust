@@ -1944,14 +1944,14 @@
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {},
    "slice1_html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-success\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border text-success\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "variant": "success"
    },
@@ -1960,7 +1960,7 @@
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-x&quot;y\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border text-x&quot;y\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "variant": "x\"y"
    },
@@ -1978,7 +1978,7 @@
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\" style=\"width: 3rem; height: 3rem;\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border text-primary\" role=\"status\" style=\"width: 3rem; height: 3rem;\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "size": "lg"
    },
@@ -1987,7 +1987,7 @@
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "size": "zz"
    },
@@ -1996,7 +1996,7 @@
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div id=\"spinner\"><div class=\"spinner-grow  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-grow text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "animation": "grow"
    },
@@ -2005,7 +2005,7 @@
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div id=\"spinner\"><div class=\"spinner-grow  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-grow text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "animation": "zz"
    },
@@ -2014,7 +2014,7 @@
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "sr_text": "Wait"
    },
@@ -2023,7 +2023,7 @@
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "sr_text": "<b>x</b> & \"q\" 'a'"
    },
@@ -2032,7 +2032,7 @@
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "sr_text": ""
    },
