@@ -145,7 +145,8 @@ def test_head_string_only_after_body_falls_back_to_scripts():
 
 def test_client_scripts_go_before_the_real_body_close_once():
     html = _inject(_TRICKY_PAGE, RequestFactory().get("/"))
-    assert html.count("client.min.js") + html.count("djust/client.js") == 1
+    # The core bundle (#4007): one <script src>; its chunk URLs ride on it.
+    assert html.count('src="/static/djust/client-core') == 1
     assert html.rindex("djust/client") > html.index("document.write('</head>')")
     assert html.endswith("</body></html>")
 

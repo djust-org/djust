@@ -1,0 +1,16 @@
+{% extends "djust_workflow/base.html" %}
+{% block title %}Ticket{% endblock %}
+{% block content %}
+<div dj-root>
+    <p><a href="{% url 'djust_workflow:list' %}" dj-navigate>All tickets</a></p>
+    <h1>Ticket</h1>
+    {% if error_message %}<p class="error" role="alert">{{ error_message }}</p>{% endif %}
+
+    <form dj-submit="submit_form">
+        {% csrf_token %}
+        {{ form_html }}
+        <button type="submit" dj-loading.disable>Save</button>
+        <span class="loading muted" dj-loading.show>Saving...</span>
+    </form>
+</div>
+{% endblock %}

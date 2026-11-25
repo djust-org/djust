@@ -353,27 +353,39 @@ async def test_an_unchanged_turn_neither_serializes_nor_writes_the_saved_state(m
 
 
 async def test_the_compact_fingerprint_is_a_third_of_the_wide_one(monkeypatch):
-    """Counted, not weighed on a scale: the bytes of the fingerprint tuples a
-    socket holds for 1,000 rows. Each leaf was a 3-tuple and each dict item a
-    2-tuple; a leaf is now the value and a dict's items one flat tuple."""
+    """Counted, not weighed on a scale: the bytes of the fingerprint tuples
+    for 1,000 rows, held as trees (``digest_fingerprints`` off, so there is a
+    tree to weigh). Each leaf was a 3-tuple and each dict item a 2-tuple; a
+    leaf is now the value and a dict's items one flat tuple. With digests on,
+    the encoding changes what a turn allocates, not what the socket keeps."""
     now = await turn(monkeypatch, Table, "cell")
     wide = await turn(monkeypatch, Table, "cell", "compact_fingerprints")
     assert wide["reply"] == now["reply"] == "patch"
-    assert wide["fingerprints.retained_bytes"] > 3 * now["fingerprints.retained_bytes"]
     # The walk itself is the same walk: no node more, none fewer.
     assert wide["fingerprint_and_convert.nodes"] == now["fingerprint_and_convert.nodes"]
     assert wide["fingerprint.snapshot.nodes"] == now["fingerprint.snapshot.nodes"]
+    # What is kept is a digest either way.
+    assert wide["fingerprints.retained_bytes"] == now["fingerprints.retained_bytes"]
+    compact_trees = await turn(monkeypatch, Table, "cell", "digest_fingerprints")
+    wide_trees = await turn(
+        monkeypatch, Table, "cell", "compact_fingerprints", "digest_fingerprints"
+    )
+    assert (
+        wide_trees["fingerprints.retained_bytes"] > 3 * compact_trees["fingerprints.retained_bytes"]
+    )
 
 
-async def test_one_fingerprint_tree_is_held_where_two_were(monkeypatch):
-    """The dirty baseline and the last render's fingerprint of the rows are
-    built from the same row tuples, so the second costs one changed row and a
-    tuple of references. Turned off, the socket holds two whole trees."""
+async def test_a_digest_is_held_where_two_trees_were(monkeypatch):
+    """The dirty baseline and the last render's fingerprint of the rows are a
+    16-byte digest each (#3998). Turned off, the socket holds the two trees,
+    each larger than the rows; the turn sends the same keys either way."""
     now = await turn(monkeypatch, Table, "cell")
-    apart = await turn(monkeypatch, Table, "cell", "shared_fingerprints")
-    assert apart["reply"] == now["reply"] == "patch"
-    assert apart["fingerprints.retained_bytes"] > 1.8 * now["fingerprints.retained_bytes"]
-    assert apart["sent_keys"] == now["sent_keys"]
+    trees = await turn(monkeypatch, Table, "cell", "digest_fingerprints")
+    assert trees["reply"] == now["reply"] == "patch"
+    assert trees["sent_keys"] == now["sent_keys"]
+    # The baseline's entries and two digests: under 2 KB for 1,000 rows.
+    assert now["fingerprints.retained_bytes"] < 2048, now["fingerprints.retained_bytes"]
+    assert trees["fingerprints.retained_bytes"] > 100 * now["fingerprints.retained_bytes"]
 
 
 async def test_a_deferred_turn_saves_nothing_before_its_frame(monkeypatch):

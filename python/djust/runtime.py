@@ -2818,7 +2818,7 @@ def _context_changed_besides(view: Any, context: Dict[str, Any], name: str) -> O
     the reason the scoped path is not exact. Returns that key, or ``None``
     when only the component changed.
     """
-    from .change_detection import deep_fingerprint, fingerprints_by_content
+    from .change_detection import deep_digest, fingerprints_by_content
     from .mixins.rust_bridge import _FRAMEWORK_KEYS, _IMMUTABLE_TYPES_FOR_SYNC
 
     prev_refs = getattr(view, "_prev_context_refs", None)
@@ -2838,7 +2838,8 @@ def _context_changed_besides(view: Any, context: Dict[str, Any], name: str) -> O
         if key in skip:
             continue
         if isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value):
-            fp, truncated = deep_fingerprint(value)
+            # The sync keeps a digest per key (#3998); compare like with like.
+            fp, truncated = deep_digest(value)
             if truncated or key not in prev_fps or prev_fps[key] != fp:
                 return str(key)
         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
@@ -7853,10 +7854,9 @@ class ViewRuntime(RuntimeTurnPort):
         # component's fingerprint included, so it is not re-sent unchanged.
         view._changed_keys = None
         try:
-            from .change_detection import deep_fingerprint
+            from .change_detection import deep_digest
 
-            fp, truncated = deep_fingerprint(context[name])
-            view._prev_context_fingerprints[name] = object() if truncated else fp
+            view._prev_context_fingerprints[name] = deep_digest(context[name])[0]
         except Exception:  # noqa: BLE001 — bookkeeping; a miss only costs a re-sync
             pass
         timing = getattr(rust_view, "get_render_timing", None)

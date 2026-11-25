@@ -35,6 +35,19 @@ def test_checker_flags_tests_and_sources(tmp_path):
         for name in (
             "djust/static/djust/client.js",
             "djust/static/djust/client.min.js",
+            "djust/static/djust/client-core.js",
+            "djust/static/djust/client-core.min.js",
+            *(
+                f"djust/static/djust/chunks/{name}{suffix}"
+                for name in (
+                    "uploads",
+                    "virtual-list",
+                    "cursor-overlay",
+                    "tutorial",
+                    "service-worker",
+                )
+                for suffix in (".js", ".min.js")
+            ),
             "djust/tests/test_x.py",
             "djust/static/djust/src/00-namespace.js",
         ):
@@ -54,6 +67,9 @@ def test_checker_requires_the_bundles(tmp_path):
         tf.addfile(info)
     errors = _checker().check(str(sdist))
     assert any("missing djust/static/djust/client.js" in e for e in errors)
+    # The default injected bundle and its chunks are required too (#4007).
+    assert any("missing djust/static/djust/client-core.min.js" in e for e in errors)
+    assert any("missing djust/static/djust/chunks/uploads.min.js" in e for e in errors)
 
 
 def test_component_hooks_are_read_from_the_shipped_bundle():

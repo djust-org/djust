@@ -29,7 +29,7 @@ from asgiref.sync import iscoroutinefunction
 
 from ._state import StateProperty as StateProperty
 from ._state import state as state
-from .change_detection import deep_fingerprint, fingerprints_by_content
+from .change_detection import deep_digest, fingerprints_by_content
 from ._template_guards import alters_data  # noqa: F401 — re-export
 
 
@@ -957,8 +957,9 @@ def computed(*deps: Any) -> Any:
                 elif fingerprints_by_content(v):
                     # Structural (#2664): an in-place edit of a dep invalidates;
                     # a class-level component's State likewise (#2900).
-                    fp, truncated = deep_fingerprint(v)
-                    parts.append((name, "c", id(v), object() if truncated else fp))
+                    # A digest, not the tree: this key is kept per view
+                    # until the next read (#3998).
+                    parts.append((name, "c", id(v), deep_digest(v)[0]))
                 else:
                     parts.append((name, "id", id(v)))
             return tuple(parts)

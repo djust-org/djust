@@ -19,6 +19,8 @@ _RCDATA_RE = re.compile(
     r"<(title|textarea)(?=[\s/>])[^<>]*>.*?(?:</\1[^<>]*>|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
+
+
 # A tag name ends at whitespace, "/" or ">": ``<body-shell>`` is not ``<body>``.
 # End tags may carry junk before ">" (``</head foo>``), as browsers accept.
 # ``[^<>]*`` (not ``[^>]*``) keeps a tag from spanning into the next one, and
@@ -27,6 +29,21 @@ _HEAD_CLOSE_RE = re.compile(r"</head(?=[\s/>])[^<>]*>", re.IGNORECASE)
 _BODY_OPEN_RE = re.compile(r"<body(?=[\s/>])", re.IGNORECASE)
 _BODY_CLOSE_TAG_RE = re.compile(r"</body(?=[\s/>])[^<>]*>", re.IGNORECASE)
 _HTML_CLOSE_TAG_RE = re.compile(r"</html(?=[\s/>])[^<>]*>", re.IGNORECASE)
+
+# The client chunks scripts/build-client.sh builds (CHUNK_SPECS) and
+# static/djust/src/13c-chunk-loader.js loads (#4007). Kept in step by
+# tests/unit/test_client_chunks_4007.py.
+CLIENT_CHUNKS = ("uploads", "virtual-list", "cursor-overlay", "tutorial", "service-worker")
+
+
+def _static_url(path: str) -> str:
+    """``static(path)``, or ``/static/<path>`` when staticfiles cannot resolve it."""
+    from django.templatetags.static import static
+
+    try:
+        return str(static(path))
+    except (ValueError, AttributeError):
+        return f"/static/{path}"
 
 
 def _mask_document_text(html: str) -> str:
@@ -212,17 +229,28 @@ class PostProcessingMixin:
         # ``DJUST_CLIENT_JS_MINIFIED`` in settings (bool) takes precedence
         # over the DEBUG heuristic if an operator wants to test the
         # minified file locally.
-        client_js_name = "djust/client.js"
+        #
+        # #4007: the default is the CORE bundle, which loads the optional
+        # chunks (CLIENT_CHUNKS) only when the page uses them. Their static()
+        # URLs ride on the script tag as data-djust-chunks, so a hashed
+        # ManifestStaticFilesStorage name is used; the loaded <script> takes
+        # this tag's nonce. ``client_bundle: "full"`` injects every module.
         use_min = getattr(settings, "DJUST_CLIENT_JS_MINIFIED", not settings.DEBUG)
-        if use_min:
-            client_js_name = "djust/client.min.js"
-        try:
-            client_js_url = static(client_js_name)
-        except (ValueError, AttributeError):
-            client_js_url = f"/static/{client_js_name}"
+        suffix = ".min.js" if use_min else ".js"
+        full_bundle = config.get("client_bundle", "core") == "full"
+        client_js_name = ("djust/client" if full_bundle else "djust/client-core") + suffix
+        client_js_url = _static_url(client_js_name)
+
+        chunks_attr = ""
+        if not full_bundle:
+            chunk_urls = {
+                name: _static_url(f"djust/chunks/{name}{suffix}") for name in CLIENT_CHUNKS
+            }
+            chunks_attr = f' data-djust-chunks="{escape(json.dumps(chunk_urls, sort_keys=True))}"'
 
         script = (
-            f'<script src="{client_js_url}" defer data-turbo-track="reload"{nonce_attr}></script>'
+            f'<script src="{escape(client_js_url)}" defer data-turbo-track="reload"'
+            f"{chunks_attr}{nonce_attr}></script>"
         )
 
         # Official adapters (ADR-025 milestone C). Opt-in via

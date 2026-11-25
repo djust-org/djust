@@ -384,6 +384,7 @@ _KNOWN_UNGUARDED_SIZE_CLAIMS = {
     "scripts/check-doc-snippets.py": "the checker's own explanatory comments",
     "tests/test_check_doc_snippets.py": "fixture strings, deliberately out of band",
     "tests/test_client_size_manifest_2138.py": "this file's own fixture strings",
+    "tests/unit/test_client_chunks_4007.py": "fixture strings for the core/full markers",
 }
 
 

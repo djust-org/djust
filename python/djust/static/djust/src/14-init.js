@@ -126,7 +126,14 @@ function _startPageTransport(eagerContainers) {
 }
 
 // Initialize on load (support both normal page load and dynamic script injection via TurboNav)
+// #4007: under the core bundle the page's client chunks load first, so a page
+// that uses one binds and connects exactly as with the single bundle. With no
+// chunk needed (and always under the full bundle) init runs synchronously.
 function djustInit() {
+    _djustWithChunks(document, _djustInitNow);
+}
+
+function _djustInitNow() {
     if (globalThis.djustDebug) console.log('[LiveView] Initializing...');
 
     // Initialize lazy hydration manager
@@ -194,7 +201,7 @@ function djustInit() {
     if (pendingTurboReinit) {
         if (globalThis.djustDebug) console.log('[LiveView] Processing pending turbo:load reinit');
         pendingTurboReinit = false;
-        reinitLiveViewForTurboNav();
+        _djustWithChunks(document, reinitLiveViewForTurboNav);
     }
 }
 

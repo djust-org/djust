@@ -118,11 +118,9 @@ function applyHttpSideChannels(data) {
     }
     if (Array.isArray(data._push_events)) {
         // The WebSocket push_event case, per queued event.
+        // An upload event is held while the uploads chunk loads (#4007).
         data._push_events.forEach(function(frame) {
-            window.dispatchEvent(new CustomEvent('djust:push_event', {
-                detail: { event: frame.event, payload: frame.payload }
-            }));
-            dispatchPushEventToHooks(frame.event, frame.payload);
+            _djustDispatchPushEvent(frame.event, frame.payload);
         });
     }
     if (data._layout && window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {

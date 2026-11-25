@@ -1591,17 +1591,12 @@ def _break_compact_fingerprints(patch: Any) -> None:
     patch.setattr(state_pass, "_BARE", wrong)
 
 
-def _break_shared_fingerprints(patch: Any) -> None:
-    from djust.mixins import rust_bridge
+def _break_digest_fingerprints(patch: Any) -> None:
+    from djust import change_detection
 
-    # As if a stored fingerprint were reused without being equal: every key
-    # that has one reads as unchanged since the last sync.
-    def stale(fp: Any, held: Any, baseline_entry: Any) -> Any:
-        if held is not rust_bridge._MISSING:
-            return held, True
-        return fp, False
-
-    patch.setattr(rust_bridge, "_reuse_fingerprint", stale)
+    # As if the digest dropped what it hashes: every fingerprint has the same
+    # one, so every key that was kept reads as unchanged since the last sync.
+    patch.setattr(change_detection, "fingerprint_digest", lambda fp: b"\0" * 16)
 
 
 SABOTAGE = {
@@ -1624,7 +1619,7 @@ SABOTAGE = {
         _break_compact_fingerprints,
         lambda: run_ws(ScalarTypes, SCALAR_SCRIPT),
     ),
-    "shared_fingerprints": (_break_shared_fingerprints, lambda: run_ws(Derived, DERIVED_SCRIPT)),
+    "digest_fingerprints": (_break_digest_fingerprints, lambda: run_ws(Derived, DERIVED_SCRIPT)),
     "deferred_save": (_break_deferred_save, _deferred_reconnect_run),
 }
 
