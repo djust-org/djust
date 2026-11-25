@@ -554,6 +554,22 @@ class Socket:
             if predicate(frame):
                 return got
 
+    def drain(self, quiet: float) -> List[Dict[str, Any]]:
+        """Every frame that arrives until none has for ``quiet`` seconds."""
+        from websockets.exceptions import ConnectionClosed
+
+        got: List[Dict[str, Any]] = []
+        while True:
+            try:
+                raw = self.ws.recv(timeout=quiet)
+            except (TimeoutError, ConnectionClosed):
+                return got
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", "replace")
+            frame = json.loads(raw)
+            self.frames.append(frame)
+            got.append(frame)
+
     def send(self, frame: Dict[str, Any]) -> None:
         self.ws.send(json.dumps(frame))
 
@@ -580,6 +596,10 @@ class Socket:
             token = reconnect_from.snapshot_token
             if token:
                 frame["state_snapshot"] = {"view_slug": view, "state_json": token}
+            # The turn serial the page was last shown (#4164), as client.js sends it.
+            serial = reconnect_from.state_serial
+            if serial:
+                frame["state_serial"] = serial
         frame.update(extra)
         self.send(frame)
         return self.until(lambda f: f.get("type") in ("mount", "error"))
@@ -592,6 +612,15 @@ class Socket:
             if "state_snapshot_signed" in frame:
                 token = frame["state_snapshot_signed"]
         return token
+
+    @property
+    def state_serial(self) -> Optional[int]:
+        """The newest ``state_serial`` this socket received (#4164)."""
+        serial = None
+        for frame in self.frames:
+            if type(frame.get("state_serial")) is int:
+                serial = frame["state_serial"]
+        return serial
 
     def event(self, name: str, params=None, **extra) -> List[Dict[str, Any]]:
         """Send one event; frames until the answer to it (matched by ``ref``)."""
