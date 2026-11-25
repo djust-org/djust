@@ -639,6 +639,39 @@ impl RustLiveViewBackend {
         self.loop_render_cache.is_enabled()
     }
 
+    /// Enable or disable the index-keyed per-item loop store (#4325): a loop
+    /// whose item at an index hashes as it did reuses that item's output
+    /// from the previous render. On by default; `djust._per_turn`
+    /// `loop_item_render` switches it from the Python sync. Off drops what
+    /// it holds.
+    fn set_loop_item_store_enabled(&mut self, enabled: bool) {
+        self.loop_render_cache.item_store_mut().set_enabled(enabled);
+    }
+
+    /// Whether the per-item loop store is enabled (introspection).
+    fn loop_item_store_enabled(&self) -> bool {
+        self.loop_render_cache.item_store().is_enabled()
+    }
+
+    /// Items the per-item loop store served in the most recent render.
+    fn loop_item_store_hits(&self) -> u64 {
+        self.loop_render_cache.item_store().hits()
+    }
+
+    /// Items the per-item loop store looked up and rendered in the most
+    /// recent render.
+    fn loop_item_store_misses(&self) -> u64 {
+        self.loop_render_cache.item_store().misses()
+    }
+
+    /// Testing only: break the per-item loop store on purpose (1: serve a
+    /// stored item whatever its value, 2: ignore length and environment), so
+    /// the differential tests can prove they see a broken store. 0 restores.
+    #[pyo3(name = "_set_loop_item_store_sabotage")]
+    fn set_loop_item_store_sabotage(&mut self, mode: u8) {
+        self.loop_render_cache.item_store_mut().set_sabotage(mode);
+    }
+
     /// Snapshot the CALLING thread's render environment onto this view
     /// (ADR-029, #2741).
     ///

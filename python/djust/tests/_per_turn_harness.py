@@ -81,6 +81,22 @@ class _RustViewSpy:
         self._counts.changed.append(list(keys))
         return self._real.set_changed_keys(keys)
 
+    def _count_item_store(self) -> None:
+        real = self._real
+        if hasattr(real, "loop_item_store_hits"):
+            self._counts["loop_item_store.hits"] += real.loop_item_store_hits()
+            self._counts["loop_item_store.misses"] += real.loop_item_store_misses()
+
+    def render_with_diff(self, *args: Any, **kwargs: Any) -> Any:
+        out = self._real.render_with_diff(*args, **kwargs)
+        self._count_item_store()
+        return out
+
+    def render_binary_diff(self, *args: Any, **kwargs: Any) -> Any:
+        out = self._real.render_binary_diff(*args, **kwargs)
+        self._count_item_store()
+        return out
+
     def __getattr__(self, name: str) -> Any:
         return getattr(self._real, name)
 

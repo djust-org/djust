@@ -128,6 +128,18 @@ class SmallTable(Table):
     items = state(default_factory=list)
 
 
+class IfTable(Table):
+    """``Table`` with a ``{% if %}`` in the row, as the benchmark's table has:
+    the content-hash loop cache refuses that body, the item store takes it."""
+
+    exposure_policy = "explicit"
+    template = (
+        '<div dj-root><p>{{ title }}</p><table>{% for row in items %}<tr id="row-{{ row.id }}">'
+        "<td>{{ row.sku }}</td><td>{{ row.qty }}</td>"
+        "<td>{% if row.active %}on{% else %}off{% endif %}</td></tr>{% endfor %}</table></div>"
+    )
+
+
 async def turn(monkeypatch, view_class, event_name, *off) -> Dict[str, Any]:
     """The counts of ONE *event_name* turn on a warmed-up *view_class*."""
     with monkeypatch.context() as spies:
@@ -339,6 +351,17 @@ async def test_list_item_deltas_gate_off(monkeypatch):
     sent_now = now["update_state.bytes"] + now["update_state_items.bytes"]
     assert 50 * sent_now < off["update_state.bytes"]
     assert now["changed_keys"] == off["changed_keys"] == [["items"]]
+
+
+async def test_loop_item_render_gate_off(monkeypatch):
+    """One changed cell re-renders one loop item in Rust; the other rows come
+    from the per-item store (#4325). Off, every item renders. The frames are
+    the same either way (``test_per_turn_oracle.py``)."""
+    now = await turn(monkeypatch, IfTable, "cell")
+    off = await turn(monkeypatch, IfTable, "cell", "loop_item_render")
+    assert now["loop_item_store.hits"] == ROWS - 1
+    assert now["loop_item_store.misses"] == 1
+    assert off.get("loop_item_store.hits", 0) == 0
 
 
 async def test_an_unrelated_change_does_not_walk_the_list_in_the_sync(monkeypatch):

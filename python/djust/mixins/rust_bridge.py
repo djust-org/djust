@@ -1979,6 +1979,11 @@ class RustBridgeMixin:
             # list as it was before the handler. ``item_deltas`` maps the key
             # to ``(indices, converted rows)``; it is never converted whole.
             item_deltas: Dict[str, Tuple[List[int], List[Any]]] = {}
+            # Rust's index-keyed per-item loop store (#4325) follows its
+            # switch; it is on by default in Rust.
+            set_item_store = getattr(self._rust_view, "set_loop_item_store_enabled", None)
+            if set_item_store is not None:
+                set_item_store(_per_turn.on("loop_item_render"))
             if (
                 snapshot_walks is not None
                 and prev_refs

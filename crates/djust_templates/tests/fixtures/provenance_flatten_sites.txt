@@ -106,6 +106,10 @@ Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
 loop_dict.insert("parentloop".into(), parentloop);
 loop_dict.insert("length".into(), Value::Integer(len_values));
 let parent_if_loop_path = ctx.dj_if_loop_path().to_string();
+let env = format!(
+let site = format!(
+.flatten()
+.flatten();
 ctx.set_dj_if_loop_path(format!("{parent_if_loop_path}-{index}"));
 loop_dict.insert("counter0".into(), Value::Integer(counter as i64));
 loop_dict.insert("counter".into(), Value::Integer(counter as i64 + 1));
@@ -121,6 +125,7 @@ format!("{base}.{index}.{i}"),
 Some(html) => R::from(html),
 cache.insert(hash, html.to_string())
 item_html.to_string(),
+store.store(key, index, hash, html.to_string());
 other => Err(DjangoRustError::TemplateError(format!(
 format!(
 let kind = filters::python_type_name(&other).to_owned();

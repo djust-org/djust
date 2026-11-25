@@ -4122,6 +4122,56 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             })
                             .unwrap_or(false);
 
+                        // The index-keyed per-item store (#4325): serves an
+                        // item's output from the previous render when the item
+                        // at that index hashes the same and nothing else its
+                        // output reads changed (see `loop_cache::LoopItemStore`).
+                        // Outermost loops only, an untracked render, a body the
+                        // content cache did not take, an iterable with no safety
+                        // mark under it and no Python object under a loop name.
+                        let item_slot: Option<u64> = if loop_caching_enabled
+                            || R::TRACKED
+                            || normalised
+                            || context.get("forloop").is_some()
+                        {
+                            None
+                        } else {
+                            crate::loop_cache::with_active_item_store(|store| {
+                                if !iterable.contains('|')
+                                    && (context.has_safety_marks_under(iterable)
+                                        || context
+                                            .has_safety_marks_under(&context.alias_path(iterable)))
+                                {
+                                    return None;
+                                }
+                                if context.raw_py_objects().is_some_and(|objects| {
+                                    objects.contains_key("forloop")
+                                        || var_names.iter().any(|v| objects.contains_key(v))
+                                }) {
+                                    return None;
+                                }
+                                let env = format!(
+                                    "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{}",
+                                    ctx.autoescape(),
+                                    ctx.string_if_invalid(),
+                                    dj_if_markers_enabled(ctx),
+                                    ctx.auto_call(),
+                                    crate::timezone::active_timezone_name(),
+                                    djust_core::locale::number_format(),
+                                    djust_core::locale::unlocalized_number_format(),
+                                    USE_L10N_STACK.with(|stack| stack.borrow().last().copied()),
+                                    django_6_or_later(),
+                                );
+                                let site = format!(
+                                    "{iterable}\u{1f}{reversed}\u{1f}{parent_if_loop_path}\u{1f}{}\u{1f}{}",
+                                    ctx.dj_if_id_namespace(),
+                                    ctx.dj_if_include_path(),
+                                );
+                                store.begin_loop(nodes, var_names, &site, &env, len_values as usize)
+                            })
+                            .flatten()
+                        };
+
                         // No per-iteration `{% cycle %}` counter here any more (#2556):
                         // cycle state is per NODE per RENDER on the `Context`'s
                         // shared store, which the `ctx` clone above already
@@ -4129,6 +4179,30 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         // render of the node — Django's model — and a
                         // `{% resetcycle %}` in the body can reach it.
                         for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
+                            // #4325: the stored output of this index, when the
+                            // item hashes as it did. Not plain data: rendered
+                            // as usual, and the slot is emptied.
+                            let mut item_hash: Option<u128> = None;
+                            if let Some(key) = item_slot {
+                                let found = crate::loop_cache::with_active_item_store(|store| {
+                                    match store.item_hash(&item) {
+                                        Some(hash) => Some((hash, store.lookup(key, index, hash))),
+                                        None => {
+                                            store.forget(key, index);
+                                            None
+                                        }
+                                    }
+                                })
+                                .flatten();
+                                match found {
+                                    Some((_, Some(html))) => {
+                                        output.push_str(&html);
+                                        continue;
+                                    }
+                                    Some((hash, None)) => item_hash = Some(hash),
+                                    None => {}
+                                }
+                            }
                             // Set the per-iteration dj-if loop path (#1832).
                             // Composes for nested loops: an inner For reads this
                             // (non-empty) path and appends its own `-<index>`,
@@ -4504,6 +4578,20 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                                     // resulting subtree.
                                     output.append(&item_html);
                                 }
+                            } else if let (Some(key), Some(hash)) = (item_slot, item_hash) {
+                                // #4325: render, and store unless the render
+                                // read anything live from Python.
+                                let live_before = djust_core::context::live_read_count();
+                                let html = render_nodes_output::<L, R>(nodes, ctx, loader)?;
+                                let pure = djust_core::context::live_read_count() == live_before;
+                                crate::loop_cache::with_active_item_store(|store| {
+                                    if pure {
+                                        store.store(key, index, hash, html.to_string());
+                                    } else {
+                                        store.forget(key, index);
+                                    }
+                                });
+                                output.append(&html);
                             } else {
                                 output.append(&render_nodes_output::<L, R>(nodes, ctx, loader)?);
                             }

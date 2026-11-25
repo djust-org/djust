@@ -65,7 +65,7 @@
 use crate::parser::Node;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 
 /// Persistent per-item loop render cache.
 ///
@@ -132,6 +132,8 @@ pub struct LoopRenderCache {
     /// `begin_render` so it can never be predicted across requests. 0 means
     /// "not yet set" (no render in progress); the placeholder path is inert.
     nonce: u64,
+    /// The index-keyed per-item store (#4325), with its own switch.
+    item_store: LoopItemStore,
 }
 
 /// One loop item recorded in the per-render parse manifest (#1970).
@@ -153,10 +155,23 @@ pub struct ManifestEntry {
 impl LoopRenderCache {
     /// Create an enabled or disabled cache.
     pub fn new(enabled: bool) -> Self {
-        Self {
+        let mut cache = Self {
             enabled,
             ..Default::default()
-        }
+        };
+        // The index-keyed item store (#4325) is on unless switched off.
+        cache.item_store.enabled = true;
+        cache
+    }
+
+    /// The index-keyed per-item store (#4325).
+    pub fn item_store(&self) -> &LoopItemStore {
+        &self.item_store
+    }
+
+    /// The index-keyed per-item store (#4325), mutably.
+    pub fn item_store_mut(&mut self) -> &mut LoopItemStore {
+        &mut self.item_store
     }
 
     /// Is caching enabled?
@@ -185,6 +200,7 @@ impl LoopRenderCache {
     /// (`update_template`) — the cached fragments AND the body-pointer-keyed
     /// verdicts both reference the OLD AST and must not survive.
     pub fn clear(&mut self) {
+        self.item_store.clear();
         self.fragments.clear();
         self.seen_this_render.clear();
         self.cacheable_verdict.clear();
@@ -203,6 +219,7 @@ impl LoopRenderCache {
 
     /// Begin a render: reset the per-render bookkeeping.
     pub fn begin_render(&mut self) {
+        self.item_store.begin_render();
         self.seen_this_render.clear();
         self.hits = 0;
         self.misses = 0;
@@ -223,6 +240,7 @@ impl LoopRenderCache {
     /// Prune stale entries after a render: keep only the hashes seen this
     /// render so the cache size tracks the current item set (bounds memory).
     pub fn prune(&mut self) {
+        self.item_store.prune();
         if !self.enabled {
             return;
         }
@@ -251,7 +269,8 @@ impl LoopRenderCache {
     pub fn retained_bytes(&self) -> usize {
         use djust_core::retained::table_bytes;
         use std::mem::size_of;
-        let mut total = table_bytes(self.fragments.capacity(), size_of::<(u64, String)>())
+        let mut total = self.item_store.retained_bytes()
+            + table_bytes(self.fragments.capacity(), size_of::<(u64, String)>())
             + self.fragments.values().map(String::capacity).sum::<usize>()
             + table_bytes(self.seen_this_render.capacity(), size_of::<u64>())
             + table_bytes(
@@ -987,4 +1006,529 @@ pub fn with_active_cache<R>(f: impl FnOnce(&mut LoopRenderCache) -> R) -> Option
         return None;
     }
     Some(f(cache))
+}
+
+// ---------------------------------------------------------------------------
+// Index-keyed per-item store (#4325).
+//
+// The content-hash cache above refuses any body with a `{% if %}`, a nested
+// loop or a `forloop` read, because it serves a fragment at a DIFFERENT
+// position than the one it was rendered at. This store never does: it keeps,
+// per loop, the output of the item at each INDEX, and serves it again only at
+// that same index, for an item whose value hashes the same, in a loop whose
+// length and every other input to the body's output are the same. Under
+// those conditions the dj-if marker ids (`…-<index>`), the `forloop`
+// counters and `forloop.parentloop` are what they were, so the bytes are too.
+//
+// What the body's output can depend on, and how each is covered:
+//
+// * the item value: a keyed 128-bit hash of it (`item_hash`), plain data only
+//   (`None` for a live handle, a model, an encoded object: rendered as usual);
+// * index, counter, length: the slot index, and the length in the entry;
+// * the body itself: a structural hash of the AST (`body_signature`), so a
+//   re-parsed include at a reused address cannot serve the old body's bytes;
+// * everything else (autoescape, `string_if_invalid`, marker switch and
+//   prefix paths, timezone and number formats, the `{% localize %}` scope):
+//   the `env` string the renderer builds, which resets the entry when it
+//   changes;
+// * context reads: only bodies that read nothing but the loop variables and
+//   `forloop`, with no tag whose output depends on anything else
+//   (`body_is_item_storable`), and only for an outermost loop with no safety
+//   mark under its iterable (checked by the renderer each execution);
+// * Python: an item whose render made a live read is never stored.
+//
+// The store is on by default and switched by
+// `RustLiveView.set_loop_item_store_enabled` (`djust._per_turn`
+// `loop_item_render`).
+// ---------------------------------------------------------------------------
+
+/// One loop's stored items.
+#[derive(Debug, Default)]
+struct StoredLoop {
+    env: u64,
+    len: usize,
+    /// The store's render number when this loop last rendered.
+    last_render: u64,
+    items: Vec<Option<(u128, String)>>,
+}
+
+/// The index-keyed per-item store. See the section comment above.
+#[derive(Debug, Default)]
+pub struct LoopItemStore {
+    enabled: bool,
+    /// Testing only: 1 serves a stored item whatever its value now is, 2
+    /// ignores the environment and length. Lets the differential tests prove
+    /// they see a broken store.
+    sabotage: u8,
+    keys: (
+        std::collections::hash_map::RandomState,
+        std::collections::hash_map::RandomState,
+    ),
+    loops: HashMap<u64, StoredLoop>,
+    verdicts: HashMap<u64, bool>,
+    /// Renders begun, to age out loops that stopped rendering.
+    render_no: u64,
+    hits: u64,
+    misses: u64,
+}
+
+/// A loop not rendered for this many renders is dropped. A partial render
+/// that reuses a whole loop's cached node does not render it, so the window
+/// is wide: dropping only costs a full re-render of that loop later.
+const ITEM_STORE_MAX_IDLE_RENDERS: u64 = 64;
+
+impl LoopItemStore {
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        if !enabled {
+            self.clear();
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn set_sabotage(&mut self, mode: u8) {
+        self.sabotage = mode;
+    }
+
+    pub fn clear(&mut self) {
+        self.loops.clear();
+        self.verdicts.clear();
+    }
+
+    pub fn hits(&self) -> u64 {
+        self.hits
+    }
+
+    pub fn misses(&self) -> u64 {
+        self.misses
+    }
+
+    /// Approximate heap bytes held (stored item HTML plus slots).
+    pub fn retained_bytes(&self) -> usize {
+        self.loops
+            .values()
+            .map(|l| {
+                l.items.len() * std::mem::size_of::<Option<(u128, String)>>()
+                    + l.items
+                        .iter()
+                        .map(|i| i.as_ref().map_or(0, |(_, h)| h.capacity()))
+                        .sum::<usize>()
+            })
+            .sum()
+    }
+
+    fn begin_render(&mut self) {
+        self.render_no += 1;
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    fn prune(&mut self) {
+        let now = self.render_no;
+        self.loops
+            .retain(|_, l| now.saturating_sub(l.last_render) < ITEM_STORE_MAX_IDLE_RENDERS);
+    }
+
+    /// Open one execution of a loop: `None` when the body is not storable.
+    /// `site` is the loop's identity (body signature, iterable, variable
+    /// names, marker paths); `env` everything else its output depends on.
+    pub fn begin_loop(
+        &mut self,
+        body: &[Node],
+        var_names: &[String],
+        site: &str,
+        env: &str,
+        len: usize,
+    ) -> Option<u64> {
+        if !self.enabled {
+            return None;
+        }
+        let mut body_hasher = self.keys.0.build_hasher();
+        hash_body(body, &mut body_hasher);
+        var_names.hash(&mut body_hasher);
+        let body_sig = body_hasher.finish();
+        let storable = *self
+            .verdicts
+            .entry(body_sig)
+            .or_insert_with(|| body_is_item_storable(body, var_names));
+        if !storable {
+            return None;
+        }
+        let mut key_hasher = self.keys.0.build_hasher();
+        body_sig.hash(&mut key_hasher);
+        site.hash(&mut key_hasher);
+        let key = key_hasher.finish();
+        let env = self.keys.1.hash_one(env);
+        // A loop rendered twice in one page with the same identity keeps the
+        // first execution's items; the second only reads them.
+        let now = self.render_no;
+        let entry = self.loops.entry(key).or_default();
+        let first_this_render = entry.last_render != now;
+        entry.last_render = now;
+        if (entry.env != env || entry.len != len) && self.sabotage != 2 {
+            if !first_this_render {
+                return None;
+            }
+            entry.env = env;
+            entry.len = len;
+            entry.items.clear();
+        }
+        entry.items.resize_with(len, || None);
+        Some(key)
+    }
+
+    /// The keyed 128-bit hash of a plain item value; `None` when the value
+    /// is not plain data (it is then rendered and never stored).
+    pub fn item_hash(&self, value: &djust_core::Value) -> Option<u128> {
+        let mut a = self.keys.0.build_hasher();
+        let mut b = self.keys.1.build_hasher();
+        if !hash_plain(value, &mut a) || !hash_plain(value, &mut b) {
+            return None;
+        }
+        Some(((a.finish() as u128) << 64) | b.finish() as u128)
+    }
+
+    /// The stored output for `index` if it was rendered from an equal value.
+    pub fn lookup(&mut self, key: u64, index: usize, hash: u128) -> Option<String> {
+        let found = self
+            .loops
+            .get(&key)
+            .and_then(|l| l.items.get(index))
+            .and_then(|slot| slot.as_ref())
+            .filter(|(h, _)| *h == hash || self.sabotage == 1)
+            .map(|(_, html)| html.clone());
+        if found.is_some() {
+            self.hits += 1;
+        } else {
+            self.misses += 1;
+        }
+        found
+    }
+
+    pub fn store(&mut self, key: u64, index: usize, hash: u128, html: String) {
+        if let Some(slot) = self
+            .loops
+            .get_mut(&key)
+            .and_then(|l| l.items.get_mut(index))
+        {
+            *slot = Some((hash, html));
+        }
+    }
+
+    pub fn forget(&mut self, key: u64, index: usize) {
+        if let Some(slot) = self
+            .loops
+            .get_mut(&key)
+            .and_then(|l| l.items.get_mut(index))
+        {
+            *slot = None;
+        }
+    }
+}
+
+/// Built-in filters whose output depends on something other than their input
+/// and arguments (the clock, the active language, randomness), or that a
+/// project filter may shadow. A body using one is not storable.
+fn filter_is_item_storable(name: &str) -> bool {
+    crate::filter_arity::builtin_arity(name).is_some()
+        && !crate::filter_registry::is_registered_custom_filter(name)
+        && !matches!(
+            name,
+            "date"
+                | "time"
+                | "timesince"
+                | "timeuntil"
+                | "naturaltime"
+                | "naturalday"
+                | "floatformat"
+                | "filesizeformat"
+                | "yesno"
+                | "random"
+                | "localtime"
+                | "utc"
+                | "timezone"
+                | "pluralize"
+        )
+}
+
+/// Every `|name` in an expression string is a storable filter. Conservative:
+/// a `|` inside a string literal is read as a filter too.
+fn expr_filters_storable(expr: &str) -> bool {
+    expr.split('|').skip(1).all(|rest| {
+        let name: String = rest
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        filter_is_item_storable(&name)
+    })
+}
+
+/// Is this loop body safe for the index-keyed store, given its loop
+/// variables? Only node kinds whose output is a function of the values they
+/// read, reading only the loop variables and `forloop`.
+pub fn body_is_item_storable(nodes: &[Node], var_names: &[String]) -> bool {
+    if !nodes.iter().all(node_is_item_storable) {
+        return false;
+    }
+    crate::parser::body_root_var_names(nodes)
+        .iter()
+        .all(|root| root == "forloop" || var_names.iter().any(|v| v == root))
+}
+
+fn node_is_item_storable(node: &Node) -> bool {
+    match node {
+        Node::Located { nodes, .. } => nodes.iter().all(node_is_item_storable),
+        Node::Text(_) | Node::Comment | Node::Load(_) | Node::TemplateTag(_) => true,
+        Node::Variable(expr, filters, _) => {
+            expr_filters_storable(expr)
+                && filters.iter().all(|(name, arg)| {
+                    filter_is_item_storable(name)
+                        && arg.as_deref().is_none_or(expr_filters_storable)
+                })
+        }
+        Node::If {
+            condition,
+            true_nodes,
+            false_nodes,
+            ..
+        } => {
+            expr_filters_storable(condition)
+                && true_nodes.iter().all(node_is_item_storable)
+                && false_nodes.iter().all(node_is_item_storable)
+        }
+        Node::For {
+            iterable,
+            nodes,
+            empty_nodes,
+            ..
+        } => {
+            expr_filters_storable(iterable)
+                && nodes.iter().all(node_is_item_storable)
+                && empty_nodes.iter().all(node_is_item_storable)
+        }
+        Node::With { assignments, nodes } => {
+            assignments.iter().all(|(_, e)| expr_filters_storable(e))
+                && nodes.iter().all(node_is_item_storable)
+        }
+        Node::Spaceless { nodes } | Node::AutoEscape { nodes, .. } => {
+            nodes.iter().all(node_is_item_storable)
+        }
+        Node::Filter { filters, nodes } => {
+            filters.iter().all(|(name, arg)| {
+                filter_is_item_storable(name) && arg.as_deref().is_none_or(expr_filters_storable)
+            }) && nodes.iter().all(node_is_item_storable)
+        }
+        Node::InlineIf {
+            true_expr,
+            condition,
+            false_expr,
+            filters,
+        } => {
+            expr_filters_storable(true_expr)
+                && expr_filters_storable(condition)
+                && expr_filters_storable(false_expr)
+                && filters.iter().all(|(name, arg)| {
+                    filter_is_item_storable(name)
+                        && arg.as_deref().is_none_or(expr_filters_storable)
+                })
+        }
+        Node::FirstOf { args, asvar: None } => args.iter().all(|a| expr_filters_storable(a)),
+        Node::WidthRatio {
+            value,
+            max_value,
+            max_width,
+            asvar: None,
+        } => [value, max_value, max_width]
+            .iter()
+            .all(|e| expr_filters_storable(e)),
+        // Everything else reads state outside the body (cycle and ifchanged
+        // carry it across iterations, include and static read the context or
+        // settings, now reads the clock, custom and Python tags anything).
+        _ => false,
+    }
+}
+
+/// A structural hash of a body: every field of every storable node kind.
+/// Non-storable kinds hash their discriminant only; such a body is refused
+/// by `body_is_item_storable` before any item is stored.
+fn hash_body<H: Hasher>(nodes: &[Node], h: &mut H) {
+    nodes.len().hash(h);
+    for node in nodes {
+        std::mem::discriminant(node).hash(h);
+        match node {
+            Node::Located { nodes, .. } => hash_body(nodes, h),
+            Node::Text(t) | Node::TemplateTag(t) => t.hash(h),
+            Node::Load(names) => names.hash(h),
+            Node::Variable(expr, filters, in_attr) => {
+                expr.hash(h);
+                filters.hash(h);
+                in_attr.hash(h);
+            }
+            Node::If {
+                condition,
+                true_nodes,
+                false_nodes,
+                in_tag_context,
+                marker_id,
+            } => {
+                condition.hash(h);
+                in_tag_context.hash(h);
+                marker_id.hash(h);
+                hash_body(true_nodes, h);
+                hash_body(false_nodes, h);
+            }
+            Node::For {
+                var_names,
+                iterable,
+                reversed,
+                nodes,
+                empty_nodes,
+            } => {
+                var_names.hash(h);
+                iterable.hash(h);
+                reversed.hash(h);
+                hash_body(nodes, h);
+                hash_body(empty_nodes, h);
+            }
+            Node::With { assignments, nodes } => {
+                assignments.hash(h);
+                hash_body(nodes, h);
+            }
+            Node::Spaceless { nodes } => hash_body(nodes, h),
+            Node::AutoEscape { on, nodes } => {
+                on.hash(h);
+                hash_body(nodes, h);
+            }
+            Node::Filter { filters, nodes } => {
+                filters.hash(h);
+                hash_body(nodes, h);
+            }
+            Node::InlineIf {
+                true_expr,
+                condition,
+                false_expr,
+                filters,
+            } => {
+                true_expr.hash(h);
+                condition.hash(h);
+                false_expr.hash(h);
+                filters.hash(h);
+            }
+            Node::FirstOf { args, asvar } => {
+                args.hash(h);
+                asvar.hash(h);
+            }
+            Node::WidthRatio {
+                value,
+                max_value,
+                max_width,
+                asvar,
+            } => {
+                value.hash(h);
+                max_value.hash(h);
+                max_width.hash(h);
+                asvar.hash(h);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Hash a plain data value with a type tag per kind; `false` for anything
+/// that is not plain data (a live handle, an encoded object, a model, a
+/// dict view or named tuple, or a map with a non-scalar key).
+fn hash_plain<H: Hasher>(value: &djust_core::Value, h: &mut H) -> bool {
+    use djust_core::{ObjectKey, Value};
+    match value {
+        Value::None => 0u8.hash(h),
+        Value::Bool(b) => {
+            1u8.hash(h);
+            b.hash(h);
+        }
+        Value::Integer(i) => {
+            2u8.hash(h);
+            i.hash(h);
+        }
+        Value::Float(f) => {
+            3u8.hash(h);
+            f.to_bits().hash(h);
+        }
+        Value::String(s) => {
+            4u8.hash(h);
+            s.hash(h);
+        }
+        Value::SafeString(s) => {
+            5u8.hash(h);
+            s.hash(h);
+        }
+        Value::Decimal(s) => {
+            6u8.hash(h);
+            s.hash(h);
+        }
+        Value::BigInt(s) => {
+            7u8.hash(h);
+            s.hash(h);
+        }
+        Value::List(items) | Value::Tuple(items) => {
+            (if matches!(value, Value::List(_)) {
+                8u8
+            } else {
+                9u8
+            })
+            .hash(h);
+            items.len().hash(h);
+            for item in items {
+                if !hash_plain(item, h) {
+                    return false;
+                }
+            }
+        }
+        Value::Object(map) => {
+            10u8.hash(h);
+            map.len().hash(h);
+            for (key, item) in map {
+                match key {
+                    ObjectKey::Str(s) => {
+                        0u8.hash(h);
+                        s.hash(h);
+                    }
+                    ObjectKey::Int(i) => {
+                        1u8.hash(h);
+                        i.hash(h);
+                    }
+                    ObjectKey::Bool(b) => {
+                        2u8.hash(h);
+                        b.hash(h);
+                    }
+                    ObjectKey::None => 3u8.hash(h),
+                    _ => return false,
+                }
+                if !hash_plain(item, h) {
+                    return false;
+                }
+            }
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Run `f` with the active item store, if one is installed and enabled.
+/// Independent of the content-hash cache's own switch.
+pub fn with_active_item_store<R>(f: impl FnOnce(&mut LoopItemStore) -> R) -> Option<R> {
+    let ptr = ACTIVE_LOOP_CACHE.with(|c| c.get());
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: as for `with_active_cache`.
+    let cache: &mut LoopRenderCache = unsafe { &mut *ptr };
+    if !cache.item_store.enabled {
+        return None;
+    }
+    Some(f(&mut cache.item_store))
 }

@@ -34,6 +34,11 @@ setting, and there is no supported way to do it.
                             place, is sent to Rust as those rows
                             (``update_state_items``), not converted and sent
                             whole (#4325).
+``loop_item_render``        Rust's ``{% for %}`` reuses an item's output
+                            from the previous render when the item at that
+                            index hashes the same and nothing else the body
+                            reads changed (``LoopItemStore``, #4325). Off:
+                            every item renders.
 ``unchanged_save_skip``     The automatic state (#4107) is not written to the
                             session when its encoding equals what the store
                             already holds (or, with nothing stored, what
@@ -73,6 +78,7 @@ ALL: FrozenSet[str] = frozenset(
         "plain_sub_ids",
         "snapshot_fingerprints",
         "list_item_deltas",
+        "loop_item_render",
         "unchanged_save_skip",
         "compact_fingerprints",
         "digest_fingerprints",

@@ -2004,6 +2004,27 @@ impl Context {
         }
     }
 
+    /// Whether any scope frame holds a safety mark (a safe or an unsafe key)
+    /// at `prefix` or below it. The per-item loop store (#4325) serves a
+    /// stored row only when the loop's iterable has none, since a mark under
+    /// `items.<i>` changes how row `i` is escaped without changing its value.
+    pub fn has_safety_marks_under(&self, prefix: &str) -> bool {
+        let under = |key: &String| {
+            key == prefix
+                || key
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('.'))
+        };
+        self.stack
+            .iter()
+            .any(|frame| frame.safe_keys.iter().any(under) || frame.unsafe_keys.iter().any(under))
+    }
+
+    /// Whether resolution calls callables (ADR-024), for cache keys.
+    pub fn auto_call(&self) -> bool {
+        self.auto_call
+    }
+
     /// Check if a variable name is marked safe.
     pub fn is_safe(&self, key: &str) -> bool {
         self.get(key).is_some_and(Value::is_safe_string)
