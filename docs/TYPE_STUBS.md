@@ -102,8 +102,9 @@ Provides type information for Rust-exported functions and classes:
 #### LiveView Backend
 - `RustLiveView` - Rust-backed LiveView component
 
-#### UI Components (15 components)
-- `RustButton`, `RustAlert`, `RustCard`, `RustModal`, etc.
+#### UI Components
+- None since #4002: the `RustButton` ... `RustTooltip` classes were removed with the
+  `djust_components` crate; use `djust.components.ui`.
 
 ### `live_view.pyi` - LiveView Class Methods
 

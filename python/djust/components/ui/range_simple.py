@@ -1,29 +1,25 @@
 """
 Range (Slider) component for djust.
 
-Simple stateless range/slider input field with automatic Rust optimization.
+Simple stateless range/slider input field (Bootstrap 5).
+
+One renderer (#4002): ``_render_custom`` draws the markup the retired Rust ``RustRange`` drew,
+pinned byte for byte by ``python/tests/test_ui_simple_golden_4002.py``, with one fix: an
+explicit ``id`` is the input's ``id`` (the Rust instance never received it and used ``name``).
 """
 
-from typing import Any, Optional
+from typing import Optional
+
 from ..base import Component
 
-from django.utils.html import conditional_escape
 from djust.components.utils import attr_text
 
-from djust._rust import RustRange
+from ._number import number_text
 
 
 class Range(Component):
     """
     Range slider input component (Bootstrap 5).
-
-    Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
-    - Python fallback with f-strings
-    - Label, help text support
-    - Optional value display
-    - Configurable min, max, step
 
     Args:
         name: Range input name attribute
@@ -38,33 +34,10 @@ class Range(Component):
         disabled: Whether field is disabled
 
     Example:
-        >>> volume_slider = Range(
-        ...     name="volume",
-        ...     label="Volume",
-        ...     value=75,
-        ...     min_value=0,
-        ...     max_value=100,
-        ...     step=5,
-        ...     show_value=True
-        ... )
+        >>> volume_slider = Range(name="volume", label="Volume", value=75, step=5, show_value=True)
         >>> volume_slider.render()
         '<div class="mb-3">...'
     """
-
-    _rust_impl_class = RustRange
-
-    template = """<div class="mb-3">{% if label %}
-    <label for="{{ range_id }}" class="form-label">{{ label }}{% if show_value %} <span class="badge bg-secondary">{{ value }}</span>{% endif %}</label>{% endif %}
-    <input type="range"
-           class="form-range"
-           id="{{ range_id }}"
-           name="{{ name }}"
-           value="{{ value }}"
-           min="{{ min_value }}"
-           max="{{ max_value }}"
-           step="{{ step }}"{% if disabled %} disabled{% endif %}>{% if help_text %}
-    <div class="form-text">{{ help_text }}</div>{% endif %}
-</div>"""
 
     def __init__(
         self,
@@ -82,7 +55,6 @@ class Range(Component):
         # Use name as ID if not provided
         range_id = id or name
 
-        # Pass kwargs to parent to create Rust instance
         super().__init__(
             name=name,
             id=range_id,
@@ -96,9 +68,8 @@ class Range(Component):
             disabled=disabled,
         )
 
-        # Set instance attributes for Python/hybrid rendering
+        # Declared for type checkers; the base class already set each from the kwargs.
         self.name = name
-        self.range_id = range_id
         self.label = label
         self.value = value
         self.min_value = min_value
@@ -107,57 +78,29 @@ class Range(Component):
         self.show_value = show_value
         self.help_text = help_text
         self.disabled = disabled
-
-    def get_context_data(self) -> dict[str, Any]:
-        """Return context for template rendering."""
-        return {
-            "name": self.name,
-            "range_id": self.range_id,
-            "label": self.label,
-            "value": self.value,
-            "min_value": self.min_value,
-            "max_value": self.max_value,
-            "step": self.step,
-            "show_value": self.show_value,
-            "help_text": self.help_text,
-            "disabled": self.disabled,
-        }
+        self.range_id = range_id
 
     def _render_custom(self) -> str:
-        """Pure Python fallback (f-string rendering)."""
-        parts = ['<div class="mb-3">']
-
-        # Label
-        if self.label:
-            parts.append(
-                f'    <label for="{attr_text(self.range_id)}" class="form-label">{conditional_escape(self.label)}'
-            )
+        range_id = attr_text(self.id)
+        html = '<div class="mb-3">'
+        if self.label is not None:
+            html += f'\n    <label for="{range_id}" class="form-label">{attr_text(self.label)}'
             if self.show_value:
-                parts[-1] += (
-                    f' <span class="badge bg-secondary">{conditional_escape(self.value)}</span>'
-                )
-            parts[-1] += "</label>"
-
-        # Build range attributes
-        attrs = [
-            'type="range"',
-            'class="form-range"',
-            f'id="{attr_text(self.range_id)}"',
-            f'name="{attr_text(self.name)}"',
-            f'value="{attr_text(self.value)}"',
-            f'min="{attr_text(self.min_value)}"',
-            f'max="{attr_text(self.max_value)}"',
-            f'step="{attr_text(self.step)}"',
-        ]
+                html += f' <span class="badge bg-secondary">{number_text(self.value)}</span>'
+            html += "</label>"
+        html += (
+            '\n    <input type="range"'
+            '\n           class="form-range"'
+            f'\n           id="{range_id}"'
+            f'\n           name="{attr_text(self.name)}"'
+            f'\n           value="{number_text(self.value)}"'
+            f'\n           min="{number_text(self.min_value)}"'
+            f'\n           max="{number_text(self.max_value)}"'
+            f'\n           step="{number_text(self.step)}"'
+        )
         if self.disabled:
-            attrs.append("disabled")
-
-        parts.append(f"    <input {' '.join(attrs)}>")
-
-        # Help text
-        if self.help_text:
-            parts.append(f'    <div class="form-text">{conditional_escape(self.help_text)}</div>')
-
-        parts.append("</div>")
-
-        return "\n".join(parts)
+            html += " disabled"
+        html += ">"
+        if self.help_text is not None:
+            html += f'\n    <div class="form-text">{attr_text(self.help_text)}</div>'
+        return html + "\n</div>"

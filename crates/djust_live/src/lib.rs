@@ -8094,23 +8094,6 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Render environment (ADR-029)
     m.add_class::<RenderEnvPy>()?;
 
-    // Add pure Rust components (stateless, high-performance ~1μs rendering)
-    m.add_class::<djust_components::RustAlert>()?;
-    m.add_class::<djust_components::RustAvatar>()?;
-    m.add_class::<djust_components::RustBadge>()?;
-    m.add_class::<djust_components::RustButton>()?;
-    m.add_class::<djust_components::RustCard>()?;
-    m.add_class::<djust_components::RustDivider>()?;
-    m.add_class::<djust_components::RustIcon>()?;
-    m.add_class::<djust_components::RustModal>()?;
-    m.add_class::<djust_components::RustProgress>()?;
-    m.add_class::<djust_components::RustRange>()?;
-    m.add_class::<djust_components::RustSpinner>()?;
-    m.add_class::<djust_components::RustSwitch>()?;
-    m.add_class::<djust_components::RustTextArea>()?;
-    m.add_class::<djust_components::RustToast>()?;
-    m.add_class::<djust_components::RustTooltip>()?;
-
     // JIT auto-serialization
     m.add_function(wrap_pyfunction!(extract_template_variables_py, m)?)?;
     m.add_function(wrap_pyfunction!(extract_item_key_only_reads_py, m)?)?;

@@ -4,7 +4,6 @@ members = [
     "crates/djust_templates",
     "crates/djust_vdom",
     "crates/djust_live",
-    "crates/djust_components",
     # Vendored copy of crates.io `markup5ever_rcdom`, which has no 0.40 release
     # (#3011). Path-vendored under the SAME crate name so consumers need no
     # source change. See the crate's PROVENANCE.md.

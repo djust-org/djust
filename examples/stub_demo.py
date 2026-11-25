@@ -15,7 +15,6 @@ from djust._rust import (
     render_template_with_dirs,
     diff_html,
     extract_template_variables,
-    RustButton,
 )
 
 
@@ -82,22 +81,6 @@ def demo_extract_template_variables():
     return vars_dict
 
 
-def demo_rust_button():
-    """Demo: RustButton with type checking."""
-    # ✅ Correct usage with type-checked parameters
-    button = RustButton("submit-btn", "Submit Form")
-
-    html = button.render()
-    print(f"Button rendered successfully")
-
-    # ❌ These would be caught by type checker:
-    # button = RustButton()  # Error: missing required arguments
-    # button = RustButton("id", 123)  # Error: int is not str
-    # button.nonexistent_method()  # Error: method doesn't exist
-
-    return button
-
-
 def demo_wrong_method_name():
     """Demo: Type stubs catch typos in method names."""
     # ❌ Without type stubs, this typo would only be caught at runtime:
@@ -121,7 +104,6 @@ if __name__ == "__main__":
     demo_render_with_dirs()
     demo_diff_html()
     demo_extract_template_variables()
-    demo_rust_button()
 
     print("\n✅ All demos completed successfully!")
     print("\nBenefits of type stubs:")

@@ -314,21 +314,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "djust_components"
-version = "2.0.0-rc.5"
-dependencies = [
- "ahash",
- "criterion",
- "djust_core",
- "once_cell",
- "pyo3",
- "serde",
- "serde_json",
- "smallvec",
- "thiserror",
-]
-
-[[package]]
 name = "djust_core"
 version = "2.0.0-rc.5"
 dependencies = [
@@ -350,7 +335,6 @@ version = "2.0.0-rc.5"
 dependencies = [
  "criterion",
  "dashmap",
- "djust_components",
  "djust_core",
  "djust_templates",
  "djust_vdom",

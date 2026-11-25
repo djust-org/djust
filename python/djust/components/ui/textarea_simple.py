@@ -1,29 +1,25 @@
 """
 TextArea component for djust.
 
-Simple stateless textarea field with automatic Rust optimization.
+Simple stateless textarea field (Bootstrap 5).
+
+One renderer (#4002): ``_render_custom`` draws the markup the retired Rust ``RustTextArea``
+drew, pinned byte for byte by ``python/tests/test_ui_simple_golden_4002.py``, with one fix: an
+explicit ``id`` is the textarea's ``id`` (the Rust instance never received it and used ``name``).
 """
 
-from typing import Any, Optional
+from typing import Optional
+
 from ..base import Component
 
-from django.utils.html import conditional_escape
 from djust.components.utils import attr_text
 
-from djust._rust import RustTextArea
+_STATE_CLASS = {"valid": " is-valid", "invalid": " is-invalid"}
 
 
 class TextArea(Component):
     """
     Multi-line textarea component (Bootstrap 5).
-
-    Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
-    - Python fallback with f-strings
-    - Label, placeholder, help text support
-    - Validation states
-    - Configurable rows
 
     Args:
         name: Textarea name attribute
@@ -40,28 +36,10 @@ class TextArea(Component):
         validation_message: Validation feedback message
 
     Example:
-        >>> textarea = TextArea(
-        ...     name="description",
-        ...     label="Description",
-        ...     placeholder="Enter description...",
-        ...     rows=5,
-        ...     required=True
-        ... )
+        >>> textarea = TextArea(name="description", label="Description", rows=5, required=True)
         >>> textarea.render()
         '<div class="mb-3">...'
     """
-
-    _rust_impl_class = RustTextArea
-
-    template = """<div class="mb-3">{% if label %}
-    <label for="{{ textarea_id }}" class="form-label">{{ label }}{% if required %} <span class="text-danger">*</span>{% endif %}</label>{% endif %}
-    <textarea class="form-control{% if validation_state == "valid" %} is-valid{% endif %}{% if validation_state == "invalid" %} is-invalid{% endif %}"
-              id="{{ textarea_id }}"
-              name="{{ name }}"
-              rows="{{ rows }}"{% if placeholder %} placeholder="{{ placeholder }}"{% endif %}{% if required %} required{% endif %}{% if disabled %} disabled{% endif %}{% if readonly %} readonly{% endif %}>{{ value }}</textarea>{% if help_text %}
-    <div class="form-text">{{ help_text }}</div>{% endif %}{% if validation_message %}
-    <div class="{% if validation_state == "valid" %}valid{% else %}invalid{% endif %}-feedback">{{ validation_message }}</div>{% endif %}
-</div>"""
 
     def __init__(
         self,
@@ -81,7 +59,6 @@ class TextArea(Component):
         # Use name as ID if not provided
         textarea_id = id or name
 
-        # Pass kwargs to parent to create Rust instance
         super().__init__(
             name=name,
             id=textarea_id,
@@ -97,9 +74,8 @@ class TextArea(Component):
             validation_message=validation_message,
         )
 
-        # Set instance attributes for Python/hybrid rendering
+        # Declared for type checkers; the base class already set each from the kwargs.
         self.name = name
-        self.textarea_id = textarea_id
         self.label = label
         self.value = value
         self.placeholder = placeholder
@@ -110,73 +86,36 @@ class TextArea(Component):
         self.readonly = readonly
         self.validation_state = validation_state
         self.validation_message = validation_message
-
-    def get_context_data(self) -> dict[str, Any]:
-        """Return context for template rendering."""
-        return {
-            "name": self.name,
-            "textarea_id": self.textarea_id,
-            "label": self.label,
-            "value": self.value,
-            "placeholder": self.placeholder,
-            "help_text": self.help_text,
-            "rows": self.rows,
-            "required": self.required,
-            "disabled": self.disabled,
-            "readonly": self.readonly,
-            "validation_state": self.validation_state,
-            "validation_message": self.validation_message,
-        }
+        self.textarea_id = textarea_id
 
     def _render_custom(self) -> str:
-        """Pure Python fallback (f-string rendering)."""
-        parts = ['<div class="mb-3">']
-
-        # Label
-        if self.label:
-            required_mark = ' <span class="text-danger">*</span>' if self.required else ""
-            parts.append(
-                f'    <label for="{attr_text(self.textarea_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
-            )
-
-        # Build textarea classes
-        textarea_classes = ["form-control"]
-        if self.validation_state == "valid":
-            textarea_classes.append("is-valid")
-        elif self.validation_state == "invalid":
-            textarea_classes.append("is-invalid")
-
-        # Build textarea attributes
-        attrs = [
-            f'class="{" ".join(textarea_classes)}"',
-            f'id="{attr_text(self.textarea_id)}"',
-            f'name="{attr_text(self.name)}"',
-            f'rows="{attr_text(self.rows)}"',
-        ]
-        if self.placeholder:
-            attrs.append(f'placeholder="{attr_text(self.placeholder)}"')
+        textarea_id = attr_text(self.id)
+        html = '<div class="mb-3">'
+        if self.label is not None:
+            html += f'\n    <label for="{textarea_id}" class="form-label">{attr_text(self.label)}'
+            if self.required:
+                html += ' <span class="text-danger">*</span>'
+            html += "</label>"
+        state = self.validation_state
+        state_class = _STATE_CLASS.get(str(state), "") if state is not None else ""
+        html += (
+            f'\n    <textarea class="form-control{state_class}"'
+            f'\n              id="{textarea_id}"'
+            f'\n              name="{attr_text(self.name)}"'
+            f'\n              rows="{attr_text(self.rows)}"'
+        )
+        if self.placeholder is not None:
+            html += f' placeholder="{attr_text(self.placeholder)}"'
         if self.required:
-            attrs.append("required")
+            html += " required"
         if self.disabled:
-            attrs.append("disabled")
+            html += " disabled"
         if self.readonly:
-            attrs.append("readonly")
-
-        parts.append(f"    <textarea {' '.join(attrs)}>{conditional_escape(self.value)}</textarea>")
-
-        # Help text
-        if self.help_text:
-            parts.append(f'    <div class="form-text">{conditional_escape(self.help_text)}</div>')
-
-        # Validation feedback
-        if self.validation_message:
-            feedback_class = (
-                "valid-feedback" if self.validation_state == "valid" else "invalid-feedback"
-            )
-            parts.append(
-                f'    <div class="{feedback_class}">{conditional_escape(self.validation_message)}</div>'
-            )
-
-        parts.append("</div>")
-
-        return "\n".join(parts)
+            html += " readonly"
+        html += f">{attr_text(self.value)}</textarea>"
+        if self.help_text is not None:
+            html += f'\n    <div class="form-text">{attr_text(self.help_text)}</div>'
+        if self.validation_message is not None:
+            feedback = "valid-feedback" if state == "valid" else "invalid-feedback"
+            html += f'\n    <div class="{feedback}">{attr_text(self.validation_message)}</div>'
+        return html + "\n</div>"

@@ -361,7 +361,7 @@ def test_cargo_no_crate_files():
 def test_cargo_reverse_deps_read_from_the_real_workspace():
     rev = st.read_reverse_deps(ROOT)
     # djust_core is depended on by every other crate (Cargo.toml path deps).
-    assert rev["djust_core"] >= {"djust_vdom", "djust_templates", "djust_live", "djust_components"}
+    assert rev["djust_core"] >= {"djust_vdom", "djust_templates", "djust_live"}
 
 
 # --------------------------------------------------------------------------

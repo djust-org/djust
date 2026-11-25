@@ -74,18 +74,6 @@ def main():
     print_demo("Login/Register separator:", Divider(text="OR", margin="lg"))
     print_demo("Content break:", Divider(style="dashed", margin="md"))
 
-    # Check implementation
-    print("\n### IMPLEMENTATION INFO ###")
-    print("-" * 60)
-    try:
-        from djust._rust import RustDivider
-        print("✓ Using Rust implementation (high-performance)")
-        test = RustDivider()
-        print(f"  Rust render test: {test.render()}")
-    except (ImportError, AttributeError) as e:
-        print("✓ Using Python fallback (template rendering)")
-        print(f"  Note: {e}")
-
     print("\n" + "=" * 60)
     print("Demo complete!")
     print("=" * 60)

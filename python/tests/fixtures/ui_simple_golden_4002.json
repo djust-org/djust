@@ -1,0 +1,2659 @@
+{
+ "_doc": "Golden renders of the djust.components.ui simple components (#4002). Captured from the retired Rust crate (djust_components) before it was removed; entries with 'fix' differ from 'rust_html' on purpose. See python/tests/test_ui_simple_golden_4002.py.",
+ "cases": [
+  {
+   "cls": "Alert",
+   "csp_strict": false,
+   "html": "<div class=\"alert alert-info\" role=\"alert\">\n    Saved\n</div>",
+   "kwargs": {
+    "text": "Saved"
+   }
+  },
+  {
+   "cls": "Alert",
+   "csp_strict": false,
+   "html": "<div class=\"alert alert-info\" role=\"alert\">\n    &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n</div>",
+   "kwargs": {
+    "text": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Alert",
+   "csp_strict": false,
+   "html": "<div class=\"alert alert-info\" role=\"alert\">\n    &lt;em&gt;safe&lt;/em&gt;\n</div>",
+   "kwargs": {
+    "text": {
+     "safe": "<em>safe</em>"
+    }
+   }
+  },
+  {
+   "cls": "Alert",
+   "csp_strict": false,
+   "html": "<div class=\"alert alert-info\" role=\"alert\">\n    \n</div>",
+   "kwargs": {
+    "text": ""
+   }
+  },
+  {
+   "cls": "Alert",
+   "csp_strict": false,
+   "html": "<div class=\"alert alert-success\" role=\"alert\">\n    Saved\n</div>",
+   "kwargs": {
+    "text": "Saved",
+    "variant": "success"
+   }
+  },
+  {
+   "cls": "Alert",
+   "csp_strict": false,
+   "html": "<div class=\"alert alert-danger\" role=\"alert\">\n    Saved\n</div>",
+   "kwargs": {
+    "text": "Saved",
+    "variant": "danger"
+   }
+  },
+  {
+   "cls": "Alert",
+   "csp_strict": false,
+   "html": "<div class=\"alert alert-x&quot; y\" role=\"alert\">\n    Saved\n</div>",
+   "kwargs": {
+    "text": "Saved",
+    "variant": "x\" y"
+   }
+  },
+  {
+   "cls": "Alert",
+   "csp_strict": false,
+   "html": "<div class=\"alert alert-info alert-dismissible fade show\" role=\"alert\">\n    Saved\n    <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"alert\" aria-label=\"Close\"></button>\n</div>",
+   "kwargs": {
+    "dismissable": true,
+    "text": "Saved"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": null
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": null
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"#\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "javascript:alert(1)"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"#\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "javascript:alert(1)"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"https://e.com/a b.png?x=1&amp;y=2\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "https://e.com/a b.png?x=1&y=2"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"https://e.com/a b.png?x=1&amp;y=2\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "https://e.com/a b.png?x=1&y=2"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": ""
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": ""
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "<b>x</b> & \"q\" 'a'",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "<b>x</b> & \"q\" 'a'",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "initials": "AB",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "initials": "AB",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "initials": "<b>x</b> & \"q\" 'a'",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "initials": "<b>x</b> & \"q\" 'a'",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 2rem; height: 2rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "size": "sm",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"2rem\" data-dj-style-height=\"2rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "size": "sm",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 4rem; height: 4rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "size": "lg",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"4rem\" data-dj-style-height=\"4rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "size": "lg",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 6rem; height: 6rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "size": "xl",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"6rem\" data-dj-style-height=\"6rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "size": "xl",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 1.5rem; height: 1.5rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "size": "xs",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"1.5rem\" data-dj-style-height=\"1.5rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "size": "xs",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "size": "bogus",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "size": "bogus",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "shape": "square",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "shape": "square",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "shape": "rounded",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded\">\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "shape": "rounded",
+    "src": "/a.png"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-success border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png",
+    "status": "online"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-success border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png",
+    "status": "online"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-secondary border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png",
+    "status": "offline"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-secondary border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png",
+    "status": "offline"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-warning border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png",
+    "status": "away"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-warning border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png",
+    "status": "away"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-danger border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png",
+    "status": "busy"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-danger border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png",
+    "status": "busy"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-secondary border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png",
+    "status": "x\"y"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <img src=\"/a.png\" alt=\"Ann\" class=\"w-100 h-100 object-fit-cover rounded-circle\">\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-secondary border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "src": "/a.png",
+    "status": "x\"y"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": false,
+   "html": "<div class=\"position-relative d-inline-block\" style=\"width: 3rem; height: 3rem;\">\n    <div class=\"w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center rounded\">\n        <span class=\"fw-bold\">AB</span>\n    </div>\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-success border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "initials": "AB",
+    "shape": "square",
+    "src": null,
+    "status": "online"
+   }
+  },
+  {
+   "cls": "Avatar",
+   "csp_strict": true,
+   "html": "<div class=\"position-relative d-inline-block\" data-dj-style data-dj-style-width=\"3rem\" data-dj-style-height=\"3rem\">\n    <div class=\"w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center rounded\">\n        <span class=\"fw-bold\">AB</span>\n    </div>\n    <span class=\"position-absolute bottom-0 end-0 p-1 bg-success border border-white rounded-circle\"></span>\n</div>",
+   "kwargs": {
+    "alt": "Ann",
+    "initials": "AB",
+    "shape": "square",
+    "src": null,
+    "status": "online"
+   }
+  },
+  {
+   "cls": "Badge",
+   "csp_strict": false,
+   "html": "<span class=\"badge bg-primary fs-6\">New</span>",
+   "kwargs": {
+    "text": "New"
+   }
+  },
+  {
+   "cls": "Badge",
+   "csp_strict": false,
+   "html": "<span class=\"badge bg-primary fs-6\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</span>",
+   "kwargs": {
+    "text": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Badge",
+   "csp_strict": false,
+   "html": "<span class=\"badge bg-primary fs-6\">&lt;em&gt;safe&lt;/em&gt;</span>",
+   "kwargs": {
+    "text": {
+     "safe": "<em>safe</em>"
+    }
+   }
+  },
+  {
+   "cls": "Badge",
+   "csp_strict": false,
+   "html": "<span class=\"badge bg-primary fs-6\"></span>",
+   "kwargs": {
+    "text": ""
+   }
+  },
+  {
+   "cls": "Badge",
+   "csp_strict": false,
+   "html": "<span class=\"badge bg-danger fs-6\">New</span>",
+   "kwargs": {
+    "text": "New",
+    "variant": "danger"
+   }
+  },
+  {
+   "cls": "Badge",
+   "csp_strict": false,
+   "html": "<span class=\"badge bg-x&quot; y fs-6\">New</span>",
+   "kwargs": {
+    "text": "New",
+    "variant": "x\" y"
+   }
+  },
+  {
+   "cls": "Badge",
+   "csp_strict": false,
+   "html": "<span class=\"badge bg-primary\">New</span>",
+   "kwargs": {
+    "size": "sm",
+    "text": "New"
+   }
+  },
+  {
+   "cls": "Badge",
+   "csp_strict": false,
+   "html": "<span class=\"badge bg-primary fs-5\">New</span>",
+   "kwargs": {
+    "size": "lg",
+    "text": "New"
+   }
+  },
+  {
+   "cls": "Badge",
+   "csp_strict": false,
+   "html": "<span class=\"badge bg-primary\">New</span>",
+   "kwargs": {
+    "size": "zz",
+    "text": "New"
+   }
+  },
+  {
+   "cls": "Badge",
+   "csp_strict": false,
+   "html": "<span class=\"badge bg-primary fs-6 rounded-pill\">New</span>",
+   "kwargs": {
+    "pill": true,
+    "text": "New"
+   }
+  },
+  {
+   "cls": "Button",
+   "csp_strict": false,
+   "html": "<button type=\"button\" class=\"btn btn-primary\">Go</button>",
+   "kwargs": {
+    "text": "Go"
+   }
+  },
+  {
+   "cls": "Button",
+   "csp_strict": false,
+   "html": "<button type=\"button\" class=\"btn btn-primary\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</button>",
+   "kwargs": {
+    "text": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Button",
+   "csp_strict": false,
+   "html": "<button type=\"button\" class=\"btn btn-primary\">&lt;em&gt;safe&lt;/em&gt;</button>",
+   "kwargs": {
+    "text": {
+     "safe": "<em>safe</em>"
+    }
+   }
+  },
+  {
+   "cls": "Button",
+   "csp_strict": false,
+   "html": "<button type=\"button\" class=\"btn btn-secondary\">Go</button>",
+   "kwargs": {
+    "text": "Go",
+    "variant": "secondary"
+   }
+  },
+  {
+   "cls": "Button",
+   "csp_strict": false,
+   "html": "<button type=\"button\" class=\"btn btn-x&quot;y\">Go</button>",
+   "kwargs": {
+    "text": "Go",
+    "variant": "x\"y"
+   }
+  },
+  {
+   "cls": "Button",
+   "csp_strict": false,
+   "html": "<button type=\"button\" class=\"btn btn-primary btn-sm\">Go</button>",
+   "kwargs": {
+    "size": "sm",
+    "text": "Go"
+   }
+  },
+  {
+   "cls": "Button",
+   "csp_strict": false,
+   "html": "<button type=\"button\" class=\"btn btn-primary btn-lg\">Go</button>",
+   "kwargs": {
+    "size": "lg",
+    "text": "Go"
+   }
+  },
+  {
+   "cls": "Button",
+   "csp_strict": false,
+   "html": "<button type=\"button\" class=\"btn btn-primary\">Go</button>",
+   "kwargs": {
+    "size": "zz",
+    "text": "Go"
+   }
+  },
+  {
+   "cls": "Button",
+   "csp_strict": false,
+   "html": "<button type=\"button\" class=\"btn btn-primary\" disabled>Go</button>",
+   "kwargs": {
+    "disabled": true,
+    "text": "Go"
+   }
+  },
+  {
+   "cls": "Button",
+   "csp_strict": false,
+   "html": "<button type=\"button\" class=\"btn btn-outline-primary\">Go</button>",
+   "kwargs": {
+    "outline": true,
+    "text": "Go"
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n</div>",
+   "kwargs": {
+    "body": "Body"
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-body\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n</div>",
+   "kwargs": {
+    "body": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-body\">&lt;em&gt;safe&lt;/em&gt;</div>\n</div>",
+   "kwargs": {
+    "body": {
+     "safe": "<em>safe</em>"
+    }
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-body\"></div>\n</div>",
+   "kwargs": {
+    "body": ""
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-header\">Head</div>\n    <div class=\"card-body\">Body</div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "header": "Head"
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-header\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n    <div class=\"card-body\">Body</div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "header": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-header\"></div>\n    <div class=\"card-body\">Body</div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "header": ""
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n    <div class=\"card-footer\">Foot</div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "footer": "Foot"
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n    <div class=\"card-footer\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "footer": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n    <div class=\"card-footer\"></div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "footer": ""
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card border\">\n    <div class=\"card-body\">Body</div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "variant": "outlined"
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card shadow\">\n    <div class=\"card-body\">Body</div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "variant": "elevated"
+   }
+  },
+  {
+   "cls": "Card",
+   "csp_strict": false,
+   "html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "variant": "zz"
+   }
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<hr class=\"my-3\">",
+   "kwargs": {}
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<div class=\"d-flex align-items-center my-3\">\n    <hr class=\"flex-grow-1\">\n    <span class=\"px-3 text-muted\">OR</span>\n    <hr class=\"flex-grow-1\">\n</div>",
+   "kwargs": {
+    "text": "OR"
+   }
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<div class=\"d-flex align-items-center my-3\">\n    <hr class=\"flex-grow-1\">\n    <span class=\"px-3 text-muted\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</span>\n    <hr class=\"flex-grow-1\">\n</div>",
+   "kwargs": {
+    "text": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<div class=\"d-flex align-items-center my-3\">\n    <hr class=\"flex-grow-1\">\n    <span class=\"px-3 text-muted\">&lt;em&gt;safe&lt;/em&gt;</span>\n    <hr class=\"flex-grow-1\">\n</div>",
+   "kwargs": {
+    "text": {
+     "safe": "<em>safe</em>"
+    }
+   }
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<div class=\"d-flex align-items-center my-3\">\n    <hr class=\"flex-grow-1\">\n    <span class=\"px-3 text-muted\"></span>\n    <hr class=\"flex-grow-1\">\n</div>",
+   "kwargs": {
+    "text": ""
+   }
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<hr class=\"my-3 border-dashed\">",
+   "kwargs": {
+    "style": "dashed"
+   }
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<hr class=\"my-3 border-dotted\">",
+   "kwargs": {
+    "style": "dotted"
+   }
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<hr class=\"my-3\">",
+   "kwargs": {
+    "style": "x\"y"
+   }
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<hr class=\"my-2\">",
+   "kwargs": {
+    "margin": "sm"
+   }
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<hr class=\"my-4\">",
+   "kwargs": {
+    "margin": "lg"
+   }
+  },
+  {
+   "cls": "Divider",
+   "csp_strict": false,
+   "html": "<hr class=\"my-3\">",
+   "kwargs": {
+    "margin": "zz"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-4\"></i>",
+   "kwargs": {
+    "name": "star"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-fa-solid fa-star fs-4\"></i>",
+   "kwargs": {
+    "name": "fa-solid fa-star"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27; fs-4\"></i>",
+   "kwargs": {
+    "name": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"star fs-4\"></i>",
+   "kwargs": {
+    "library": "fontawesome",
+    "name": "star"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"star fs-4\"></i>",
+   "kwargs": {
+    "library": "custom",
+    "name": "star"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"star fs-4\"></i>",
+   "kwargs": {
+    "library": "zz",
+    "name": "star"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-6\"></i>",
+   "kwargs": {
+    "name": "star",
+    "size": "xs"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-5\"></i>",
+   "kwargs": {
+    "name": "star",
+    "size": "sm"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-3\"></i>",
+   "kwargs": {
+    "name": "star",
+    "size": "lg"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-2\"></i>",
+   "kwargs": {
+    "name": "star",
+    "size": "xl"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-4\"></i>",
+   "kwargs": {
+    "name": "star",
+    "size": "zz"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-4 text-danger\"></i>",
+   "kwargs": {
+    "color": "danger",
+    "name": "star"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-4 text-&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\"></i>",
+   "kwargs": {
+    "color": "<b>x</b> & \"q\" 'a'",
+    "name": "star"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-4\" aria-label=\"Star\" role=\"img\"></i>",
+   "kwargs": {
+    "label": "Star",
+    "name": "star"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-4\" aria-label=\"&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\" role=\"img\"></i>",
+   "kwargs": {
+    "label": "<b>x</b> & \"q\" 'a'",
+    "name": "star"
+   }
+  },
+  {
+   "cls": "Icon",
+   "csp_strict": false,
+   "html": "<i class=\"bi bi-star fs-4\" aria-label=\"\" role=\"img\"></i>",
+   "kwargs": {
+    "label": "",
+    "name": "star"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "<b>x</b> & \"q\" 'a'",
+    "id": "m1"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                <em>safe</em>\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": {
+     "safe": "<em>safe</em>"
+    },
+    "id": "m1"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"modal\" tabindex=\"-1\" aria-labelledby=\"modalLabel\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": null
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"a&quot;b\" tabindex=\"-1\" aria-labelledby=\"a&quot;bLabel\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": "a\"b"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-header\">\n                <h5 class=\"modal-title\" id=\"m1Label\">T</h5>\n                <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n            </div>\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1",
+    "title": "T"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-header\">\n                <h5 class=\"modal-title\" id=\"m1Label\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</h5>\n                <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n            </div>\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1",
+    "title": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1",
+    "title": ""
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n            <div class=\"modal-footer\">\n                F\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "footer": "F",
+    "id": "m1"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n            <div class=\"modal-footer\">\n                &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "footer": "<b>x</b> & \"q\" 'a'",
+    "id": "m1"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n            <div class=\"modal-footer\">\n                <em>safe</em>\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "footer": {
+     "safe": "<em>safe</em>"
+    },
+    "id": "m1"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "footer": "",
+    "id": "m1"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-sm\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1",
+    "size": "sm"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-lg\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1",
+    "size": "lg"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-xl\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1",
+    "size": "xl"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-zz\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1",
+    "size": "zz"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-dialog-centered\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "centered": true,
+    "id": "m1"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "dismissable": false,
+    "id": "m1"
+   }
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade show\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1",
+    "show": true
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" style=\"width: 0.0%\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 0
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 0
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" style=\"width: 100.0%\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 100
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 100
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" style=\"width: 100.0%\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 150
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 150
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" style=\"width: 0.0%\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": -5
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": -5
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" style=\"width: 33.3%\" aria-valuenow=\"33.333\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 33.333
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" aria-valuenow=\"33.333\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 33.333
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-43\" role=\"progressbar\" style=\"width: 42.5%\" aria-valuenow=\"42.5\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 42.5
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-43\" role=\"progressbar\" aria-valuenow=\"42.5\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 42.5
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-success dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 40,
+    "variant": "success"
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-success dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 40,
+    "variant": "success"
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-x&quot;y dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 40,
+    "variant": "x\"y"
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-x&quot;y dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "value": 40,
+    "variant": "x\"y"
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-striped bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "striped": true,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-striped bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "striped": true,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "animated": true,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "animated": true,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">40%</div></div>",
+   "kwargs": {
+    "show_label": true,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">40%</div></div>",
+   "kwargs": {
+    "show_label": true,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">Half</div></div>",
+   "kwargs": {
+    "label": "Half",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">Half</div></div>",
+   "kwargs": {
+    "label": "Half",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div></div>",
+   "kwargs": {
+    "label": "<b>x</b> & \"q\" 'a'",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div></div>",
+   "kwargs": {
+    "label": "<b>x</b> & \"q\" 'a'",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "label": "",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "label": "",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\" style=\"height: 20px\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "height": "20px",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\" data-dj-style data-dj-style-height=\"20px\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "height": "20px",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\" style=\"height: 2rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "height": "2rem",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\" data-dj-style data-dj-style-height=\"2rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "height": "2rem",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "height": "bad;x",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "height": "bad;x",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "height": "",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "height": "",
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" style=\"width: 33.3%\" aria-valuenow=\"40\" aria-valuemin=\"10\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "min_value": 10,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"10\" aria-valuemax=\"100\"></div></div>",
+   "kwargs": {
+    "min_value": 10,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-80\" role=\"progressbar\" style=\"width: 80.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"50\"></div></div>",
+   "kwargs": {
+    "max_value": 50,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-80\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"50\"></div></div>",
+   "kwargs": {
+    "max_value": 50,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-20\" role=\"progressbar\" style=\"width: 20.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"200\"></div></div>",
+   "kwargs": {
+    "max_value": 200,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-20\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"200\"></div></div>",
+   "kwargs": {
+    "max_value": 200,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": false,
+   "html": "<div class=\"progress\" style=\"height: 9px\"><div class=\"progress-bar progress-bar-striped progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">L</div></div>",
+   "kwargs": {
+    "animated": true,
+    "height": "9px",
+    "label": "L",
+    "show_label": true,
+    "striped": true,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Progress",
+   "csp_strict": true,
+   "html": "<div class=\"progress\" data-dj-style data-dj-style-height=\"9px\"><div class=\"progress-bar progress-bar-striped progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">L</div></div>",
+   "kwargs": {
+    "animated": true,
+    "height": "9px",
+    "label": "L",
+    "show_label": true,
+    "striped": true,
+    "value": 40
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"a&quot;b\"\n           name=\"a&quot;b\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "name": "a\"b"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "fix": "explicit id honoured",
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"r1\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "id": "r1",
+    "name": "vol"
+   },
+   "rust_html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>"
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "id": "",
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <label for=\"vol\" class=\"form-label\">Volume</label>\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "label": "Volume",
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <label for=\"vol\" class=\"form-label\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</label>\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "label": "<b>x</b> & \"q\" 'a'",
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <label for=\"vol\" class=\"form-label\"></label>\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "label": "",
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"0\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "name": "vol",
+    "value": 0
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"75.5\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "name": "vol",
+    "value": 75.5
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"100\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "name": "vol",
+    "value": 100
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"7\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "name": "vol",
+    "value": 7
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"10\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "min_value": 10,
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0.5\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "min_value": 0.5,
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"200\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "max_value": 200,
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"99.5\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "max_value": 99.5,
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"5\">\n</div>",
+   "kwargs": {
+    "name": "vol",
+    "step": 5
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"0.25\">\n</div>",
+   "kwargs": {
+    "name": "vol",
+    "step": 0.25
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n</div>",
+   "kwargs": {
+    "name": "vol",
+    "show_value": true
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n    <div class=\"form-text\">Help</div>\n</div>",
+   "kwargs": {
+    "help_text": "Help",
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n    <div class=\"form-text\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n</div>",
+   "kwargs": {
+    "help_text": "<b>x</b> & \"q\" 'a'",
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\">\n    <div class=\"form-text\"></div>\n</div>",
+   "kwargs": {
+    "help_text": "",
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"50\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\" disabled>\n</div>",
+   "kwargs": {
+    "disabled": true,
+    "name": "vol"
+   }
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "kwargs": {}
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-border text-success\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "kwargs": {
+    "variant": "success"
+   }
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-border text-x&quot;y\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "kwargs": {
+    "variant": "x\"y"
+   }
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-border text-primary spinner-border-sm\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "kwargs": {
+    "size": "sm"
+   }
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "kwargs": {
+    "size": "lg"
+   }
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "kwargs": {
+    "size": "zz"
+   }
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-grow text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "kwargs": {
+    "animation": "grow"
+   }
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-zz text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "kwargs": {
+    "animation": "zz"
+   }
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Wait</span>\n</div>",
+   "kwargs": {
+    "sr_text": "Wait"
+   }
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</span>\n</div>",
+   "kwargs": {
+    "sr_text": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Spinner",
+   "csp_strict": false,
+   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\"></span>\n</div>",
+   "kwargs": {
+    "sr_text": ""
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "label": "L",
+    "name": "n"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"a&quot;b\" name=\"a&quot;b\" value=\"on\">\n        <label class=\"form-check-label\" for=\"a&quot;b\">\n            L\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "label": "L",
+    "name": "a\"b"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"n\">\n            &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "label": "<b>x</b> & \"q\" 'a'",
+    "name": "n"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"n\">\n            &lt;em&gt;safe&lt;/em&gt;\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "label": {
+     "safe": "<em>safe</em>"
+    },
+    "name": "n"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"n\">\n            \n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "label": "",
+    "name": "n"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "fix": "explicit id honoured",
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"s1\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"s1\">\n            L\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "id": "s1",
+    "label": "L",
+    "name": "n"
+   },
+   "rust_html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n</div>"
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "id": "",
+    "label": "L",
+    "name": "n"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\" checked>\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "checked": true,
+    "label": "L",
+    "name": "n"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\" disabled>\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "disabled": true,
+    "label": "L",
+    "name": "n"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n    <div class=\"form-text\">Help</div>\n</div>",
+   "kwargs": {
+    "help_text": "Help",
+    "label": "L",
+    "name": "n"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n    <div class=\"form-text\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n</div>",
+   "kwargs": {
+    "help_text": "<b>x</b> & \"q\" 'a'",
+    "label": "L",
+    "name": "n"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n    <div class=\"form-text\"></div>\n</div>",
+   "kwargs": {
+    "help_text": "",
+    "label": "L",
+    "name": "n"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"yes\">\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "label": "L",
+    "name": "n",
+    "value": "yes"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"a&quot;b\">\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "label": "L",
+    "name": "n",
+    "value": "a\"b"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"\">\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "label": "L",
+    "name": "n",
+    "value": ""
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch form-check-inline\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\">\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n</div>",
+   "kwargs": {
+    "inline": true,
+    "label": "L",
+    "name": "n"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"a&quot;b\"\n              name=\"a&quot;b\"\n              rows=\"3\"></textarea>\n</div>",
+   "kwargs": {
+    "name": "a\"b"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "fix": "explicit id honoured",
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"t1\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n</div>",
+   "kwargs": {
+    "id": "t1",
+    "name": "bio"
+   },
+   "rust_html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n</div>"
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n</div>",
+   "kwargs": {
+    "id": "",
+    "name": "bio"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <label for=\"bio\" class=\"form-label\">Bio</label>\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n</div>",
+   "kwargs": {
+    "label": "Bio",
+    "name": "bio"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <label for=\"bio\" class=\"form-label\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</label>\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n</div>",
+   "kwargs": {
+    "label": "<b>x</b> & \"q\" 'a'",
+    "name": "bio"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <label for=\"bio\" class=\"form-label\"></label>\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n</div>",
+   "kwargs": {
+    "label": "",
+    "name": "bio"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\">hello</textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "value": "hello"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "value": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\">a\nb</textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "value": "a\nb"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\" placeholder=\"Type\"></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "placeholder": "Type"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\" placeholder=\"&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\"></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "placeholder": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\" placeholder=\"\"></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "placeholder": ""
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n    <div class=\"form-text\">Help</div>\n</div>",
+   "kwargs": {
+    "help_text": "Help",
+    "name": "bio"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n    <div class=\"form-text\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n</div>",
+   "kwargs": {
+    "help_text": "<b>x</b> & \"q\" 'a'",
+    "name": "bio"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n    <div class=\"form-text\"></div>\n</div>",
+   "kwargs": {
+    "help_text": "",
+    "name": "bio"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"5\"></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "rows": 5
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"0\"></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "rows": 0
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\" required></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "required": true
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\" disabled></textarea>\n</div>",
+   "kwargs": {
+    "disabled": true,
+    "name": "bio"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\" readonly></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "readonly": true
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control is-valid\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "validation_state": "valid"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control is-invalid\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "validation_state": "invalid"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "validation_state": "zz"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n    <div class=\"invalid-feedback\">Bad</div>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "validation_message": "Bad"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n    <div class=\"invalid-feedback\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "validation_message": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n    <div class=\"invalid-feedback\"></div>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "validation_message": ""
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control is-valid\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n    <div class=\"valid-feedback\">Msg</div>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "validation_message": "Msg",
+    "validation_state": "valid"
+   }
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "html": "<div class=\"mb-3\">\n    <textarea class=\"form-control is-invalid\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\"></textarea>\n    <div class=\"invalid-feedback\">Msg</div>\n</div>",
+   "kwargs": {
+    "name": "bio",
+    "validation_message": "Msg",
+    "validation_state": "invalid"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-info border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">ℹ</span>            <strong>T</strong><br>            M\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": "M",
+    "title": "T"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-info border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">ℹ</span>            M\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": "M",
+    "title": ""
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-info border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">ℹ</span>            <strong>&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</strong><br>            M\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": "M",
+    "title": "<b>x</b> & \"q\" 'a'"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-info border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">ℹ</span>            <strong>T</strong>        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": "",
+    "title": "T"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-info border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">ℹ</span>            <strong>T</strong><br>            &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": "<b>x</b> & \"q\" 'a'",
+    "title": "T"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-info border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">ℹ</span>            <strong>T</strong><br>            &lt;em&gt;safe&lt;/em&gt;\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": {
+     "safe": "<em>safe</em>"
+    },
+    "title": "T"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-success border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">✓</span>            <strong>T</strong><br>            M\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": "M",
+    "title": "T",
+    "variant": "success"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-warning border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">⚠</span>            <strong>T</strong><br>            M\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": "M",
+    "title": "T",
+    "variant": "warning"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-danger border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">✗</span>            <strong>T</strong><br>            M\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": "M",
+    "title": "T",
+    "variant": "danger"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-zz border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">ℹ</span>            <strong>T</strong><br>            M\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": "M",
+    "title": "T",
+    "variant": "zz"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-info border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">ℹ</span>            <strong>T</strong><br>            M\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "dismissable": false,
+    "message": "M",
+    "title": "T"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-info border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <strong>T</strong><br>            M\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "message": "M",
+    "show_icon": false,
+    "title": "T"
+   }
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-info border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\" data-bs-autohide=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n            <span class=\"me-2\">ℹ</span>            <strong>T</strong><br>            M\n        </div>\n        <button type=\"button\" class=\"btn-close btn-close-white me-2 m-auto\" data-bs-dismiss=\"toast\" aria-label=\"Close\"></button>\n    </div>\n</div>",
+   "kwargs": {
+    "auto_hide": true,
+    "message": "M",
+    "title": "T"
+   }
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\" title=\"Tip\">Hover</span>",
+   "kwargs": {
+    "content": "Hover",
+    "text": "Tip"
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\"title=\"Tip\">Hover</span>"
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\" title=\"Tip\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</span>",
+   "kwargs": {
+    "content": "<b>x</b> & \"q\" 'a'",
+    "text": "Tip"
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\"title=\"Tip\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</span>"
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\" title=\"Tip\"><em>safe</em></span>",
+   "kwargs": {
+    "content": {
+     "safe": "<em>safe</em>"
+    },
+    "text": "Tip"
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\"title=\"Tip\"><em>safe</em></span>"
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\" title=\"&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\">Hover</span>",
+   "kwargs": {
+    "content": "Hover",
+    "text": "<b>x</b> & \"q\" 'a'"
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\"title=\"&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\">Hover</span>"
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\" title=\"\">Hover</span>",
+   "kwargs": {
+    "content": "Hover",
+    "text": ""
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\"title=\"\">Hover</span>"
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"bottom\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\" title=\"Tip\">Hover</span>",
+   "kwargs": {
+    "content": "Hover",
+    "placement": "bottom",
+    "text": "Tip"
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"bottom\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\"title=\"Tip\">Hover</span>"
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\" title=\"Tip\">Hover</span>",
+   "kwargs": {
+    "content": "Hover",
+    "placement": "x\"y",
+    "text": "Tip"
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" data-bs-arrow=\"true\"title=\"Tip\">Hover</span>"
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"click\" data-bs-arrow=\"true\" title=\"Tip\">Hover</span>",
+   "kwargs": {
+    "content": "Hover",
+    "text": "Tip",
+    "trigger": "click"
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"click\" data-bs-arrow=\"true\"title=\"Tip\">Hover</span>"
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"focus\" data-bs-arrow=\"true\" title=\"Tip\">Hover</span>",
+   "kwargs": {
+    "content": "Hover",
+    "text": "Tip",
+    "trigger": "focus"
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"focus\" data-bs-arrow=\"true\"title=\"Tip\">Hover</span>"
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\" title=\"Tip\">Hover</span>",
+   "kwargs": {
+    "arrow": false,
+    "content": "Hover",
+    "text": "Tip"
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"top\" data-bs-trigger=\"hover\"title=\"Tip\">Hover</span>"
+  },
+  {
+   "cls": "Modal",
+   "csp_strict": false,
+   "html": "<div class=\"modal fade show\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-lg modal-dialog-centered\">\n        <div class=\"modal-content\">\n            <div class=\"modal-header\">\n                <h5 class=\"modal-title\" id=\"m1Label\">T</h5>\n                <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n            </div>\n            <div class=\"modal-body\">\n                B\n            </div>\n            <div class=\"modal-footer\">\n                F\n            </div>\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "body": "B",
+    "centered": true,
+    "footer": "F",
+    "id": "m1",
+    "show": true,
+    "size": "lg",
+    "title": "T"
+   }
+  },
+  {
+   "cls": "Switch",
+   "csp_strict": false,
+   "fix": "explicit id honoured",
+   "html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch form-check-inline\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"s1\" name=\"n\" value=\"on\" checked disabled>\n        <label class=\"form-check-label\" for=\"s1\">\n            L\n        </label>\n    </div>\n    <div class=\"form-text\">H</div>\n</div>",
+   "kwargs": {
+    "checked": true,
+    "disabled": true,
+    "help_text": "H",
+    "id": "s1",
+    "inline": true,
+    "label": "L",
+    "name": "n"
+   },
+   "rust_html": "<div class=\"mb-3\">\n    <div class=\"form-check form-switch form-check-inline\">\n        <input class=\"form-check-input\" type=\"checkbox\" role=\"switch\" id=\"n\" name=\"n\" value=\"on\" checked disabled>\n        <label class=\"form-check-label\" for=\"n\">\n            L\n        </label>\n    </div>\n    <div class=\"form-text\">H</div>\n</div>"
+  },
+  {
+   "cls": "Range",
+   "csp_strict": false,
+   "fix": "explicit id honoured",
+   "html": "<div class=\"mb-3\">\n    <label for=\"r1\" class=\"form-label\">V <span class=\"badge bg-secondary\">12.5</span></label>\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"r1\"\n           name=\"vol\"\n           value=\"12.5\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\" disabled>\n    <div class=\"form-text\">H</div>\n</div>",
+   "kwargs": {
+    "disabled": true,
+    "help_text": "H",
+    "id": "r1",
+    "label": "V",
+    "name": "vol",
+    "show_value": true,
+    "value": 12.5
+   },
+   "rust_html": "<div class=\"mb-3\">\n    <label for=\"vol\" class=\"form-label\">V <span class=\"badge bg-secondary\">12.5</span></label>\n    <input type=\"range\"\n           class=\"form-range\"\n           id=\"vol\"\n           name=\"vol\"\n           value=\"12.5\"\n           min=\"0\"\n           max=\"100\"\n           step=\"1\" disabled>\n    <div class=\"form-text\">H</div>\n</div>"
+  },
+  {
+   "cls": "TextArea",
+   "csp_strict": false,
+   "fix": "explicit id honoured",
+   "html": "<div class=\"mb-3\">\n    <label for=\"t1\" class=\"form-label\">Bio <span class=\"text-danger\">*</span></label>\n    <textarea class=\"form-control is-invalid\"\n              id=\"t1\"\n              name=\"bio\"\n              rows=\"3\" placeholder=\"P\" required></textarea>\n    <div class=\"invalid-feedback\">M</div>\n</div>",
+   "kwargs": {
+    "id": "t1",
+    "label": "Bio",
+    "name": "bio",
+    "placeholder": "P",
+    "required": true,
+    "validation_message": "M",
+    "validation_state": "invalid"
+   },
+   "rust_html": "<div class=\"mb-3\">\n    <label for=\"bio\" class=\"form-label\">Bio <span class=\"text-danger\">*</span></label>\n    <textarea class=\"form-control is-invalid\"\n              id=\"bio\"\n              name=\"bio\"\n              rows=\"3\" placeholder=\"P\" required></textarea>\n    <div class=\"invalid-feedback\">M</div>\n</div>"
+  },
+  {
+   "cls": "Tooltip",
+   "csp_strict": false,
+   "fix": "tooltip: space before title=",
+   "html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"left\" data-bs-trigger=\"click\" data-bs-arrow=\"true\" title=\"T\">C</span>",
+   "kwargs": {
+    "arrow": true,
+    "content": "C",
+    "placement": "left",
+    "text": "T",
+    "trigger": "click"
+   },
+   "rust_html": "<span class=\"d-inline-block\" tabindex=\"0\" data-bs-toggle=\"tooltip\" data-bs-placement=\"left\" data-bs-trigger=\"click\" data-bs-arrow=\"true\"title=\"T\">C</span>"
+  },
+  {
+   "cls": "Toast",
+   "csp_strict": false,
+   "html": "<div class=\"toast align-items-center text-bg-info border-0\" role=\"alert\" aria-live=\"assertive\" aria-atomic=\"true\">\n    <div class=\"d-flex\">\n        <div class=\"toast-body\">\n        </div>\n    </div>\n</div>",
+   "kwargs": {
+    "dismissable": false,
+    "message": "",
+    "show_icon": false,
+    "title": ""
+   }
+  }
+ ]
+}

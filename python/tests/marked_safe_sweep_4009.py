@@ -436,60 +436,6 @@ _CLASS_REQUIRED: dict = {
 }
 
 
-def rust_component_units() -> list[str]:
-    """The Rust components ``djust._rust`` exposes to Python (``RustButton`` ...)."""
-    from djust import _rust
-
-    return sorted(
-        n
-        for n in dir(_rust)
-        if n.startswith("Rust") and n != "RustLiveView" and getattr(_rust, n).__text_signature__
-    )
-
-
-def _rust_params(cls) -> list[tuple[str, object]]:
-    """``(name, default)`` of each parameter of a Rust component's constructor."""
-    text = cls.__text_signature__.strip("()")
-    out = []
-    for part in [p.strip() for p in text.split(",") if p.strip()]:
-        name, _, default = part.partition("=")
-        out.append((name.strip(), default.strip() or None))
-    return out
-
-
-def rust_component_findings(only=None, value=None, on_output=None) -> tuple[dict, set]:
-    """``({("rust-component", "Rust<X>", param, "scalar"): [finding]}, {rendered})``: each string
-    parameter of each Rust component given the marked-safe value, the others their defaults (a
-    required one a plain ``"x"``, a number for ``value``)."""
-    from djust import _rust
-
-    found: dict = {}
-    rendered: set = set()
-    value = attr_payload() if value is None else value
-    for name in rust_component_units():
-        if only is not None and name not in only:
-            continue
-        cls = getattr(_rust, name)
-        params = _rust_params(cls)
-        required = {p: (50.0 if p == "value" else "x") for p, default in params if default is None}
-        for param, default in params:
-            if default not in (None, "None") and not default.startswith(('"', "'")):
-                continue  # a bool or a number
-            if param == "value" and default is None:
-                continue
-            try:
-                out = cls(**{**required, param: value}).render()
-            except Exception:  # noqa: BLE001 - a value the component rejects draws nothing
-                continue
-            rendered.add(name)
-            if on_output is not None:
-                on_output(("rust-component", name, param, "scalar"), out)
-            hits = attr_findings(out)
-            if hits:
-                found[("rust-component", name, param, "scalar")] = hits
-    return found, rendered
-
-
 # --------------------------------------------------------------------------- #
 # An id and the references to it are escaped exactly once, and so match (#4009)
 

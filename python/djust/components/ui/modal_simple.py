@@ -1,69 +1,49 @@
 """
 Modal component for djust.
 
-Simple stateless modal dialog with automatic Rust optimization.
+Simple stateless modal dialog (Bootstrap 5).
+
+One renderer (#4002): ``_render_custom`` draws the markup this class's inline template drew
+(the retired Rust ``RustModal`` was never reached: its required ``id`` is the base class's own
+argument, so the constructor always fell back), pinned byte for byte by
+``python/tests/test_ui_simple_golden_4002.py``.
 """
 
-from typing import Any, Optional
+from typing import Optional
+
 from ..base import Component
 
 from django.utils.html import conditional_escape
 from djust.components.utils import attr_text
-
-from djust._rust import RustModal
 
 
 class Modal(Component):
     """
     Modal dialog component (Bootstrap 5).
 
-    Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
-    - Python fallback with f-strings
-
     Args:
-        title: Modal title text
-        body: Modal body content (HTML allowed)
-        footer: Optional footer content (HTML allowed)
+        title: Modal title text (escaped)
+        body: Modal body content (markup: escaped unless marked safe)
+        footer: Optional footer content (markup: escaped unless marked safe)
         size: Modal size (sm, md, lg, xl)
         centered: Whether to vertically center the modal
         dismissable: Whether to show close button in header
-        id: Modal ID for JavaScript control (auto-generated if not provided)
+        id: Modal ID for JavaScript control (defaults to ``"modal"``)
         show: Whether modal should be shown on page load
 
     Example:
         >>> modal = Modal(
         ...     title="Confirm Action",
         ...     body="Are you sure you want to continue?",
-        ...     footer='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Confirm</button>'
+        ...     footer=mark_safe('<button class="btn btn-primary">Confirm</button>'),
         ... )
         >>> modal.render()
-        '<div class="modal fade">...'
+        '<div class="modal fade" ...'
     """
 
-    _rust_impl_class = RustModal
-
     # #3932: parameters the constructor already ``conditional_escape``s (a plain string is
-    # escaped, a marked-safe one is developer markup): the template prints them as given.
+    # escaped, a marked-safe one is developer markup): printed as given.
     markup_slots = frozenset({"body", "footer"})
-
-    template = """<div class="modal fade{% if show %} show{% endif %}" id="{{ id }}" tabindex="-1" aria-labelledby="{{ id }}Label" aria-hidden="true">
-    <div class="modal-dialog{% if size != "md" %} modal-{{ size }}{% endif %}{% if centered %} modal-dialog-centered{% endif %}">
-        <div class="modal-content">{% if title %}
-            <div class="modal-header">
-                <h5 class="modal-title" id="{{ id }}Label">{{ title }}</h5>{% if dismissable %}
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>{% endif %}
-            </div>{% endif %}
-            <div class="modal-body">
-                {{ body }}
-            </div>{% if footer %}
-            <div class="modal-footer">
-                {{ footer }}
-            </div>{% endif %}
-        </div>
-    </div>
-</div>"""
 
     def __init__(
         self,
@@ -76,12 +56,11 @@ class Modal(Component):
         dismissable: bool = True,
         show: bool = False,
     ) -> None:
-        # ``body`` and ``footer`` are markup; the Rust renderer emits them as
-        # given, so they are HTML-escaped here unless they were marked safe.
+        # ``body`` and ``footer`` are markup: HTML-escaped here unless they were marked safe.
         body = conditional_escape(body)
         if footer is not None:
             footer = conditional_escape(footer)
-        # Pass kwargs to parent to create Rust instance
+
         super().__init__(
             body=body,
             id=id,
@@ -93,7 +72,7 @@ class Modal(Component):
             show=show,
         )
 
-        # Set instance attributes for Python/hybrid rendering
+        # Declared for type checkers; the base class already set each from the kwargs.
         self.body = body
         self.title = title
         self.footer = footer
@@ -102,68 +81,39 @@ class Modal(Component):
         self.dismissable = dismissable
         self.show = show
 
-    def get_context_data(self) -> dict[str, Any]:
-        """Return context for template rendering."""
-        return {
-            "body": self.body,
-            "title": self.title,
-            "footer": self.footer,
-            "size": self.size,
-            "centered": self.centered,
-            "dismissable": self.dismissable,
-            "id": self.id,
-            "show": self.show,
-        }
-
     def _render_custom(self) -> str:
-        """Pure Python fallback (f-string rendering)."""
-        # Build modal classes
-        modal_classes = ["modal", "fade"]
-        if self.show:
-            modal_classes.append("show")
-
-        # Build dialog classes
-        dialog_classes = ["modal-dialog"]
-        if self.size != "md":
-            dialog_classes.append(f"modal-{attr_text(self.size)}")
+        modal_id = attr_text(self.id)
+        size = str(self.size)
+        if size == "md":
+            dialog = "modal-dialog"
+        else:
+            dialog = f"modal-dialog modal-{attr_text(size)}"
         if self.centered:
-            dialog_classes.append("modal-dialog-centered")
-
+            dialog += " modal-dialog-centered"
         parts = [
-            f'<div class="{" ".join(modal_classes)}" id="{attr_text(self.id)}" tabindex="-1" aria-labelledby="{attr_text(self.id)}Label" aria-hidden="true">',
-            f'    <div class="{" ".join(dialog_classes)}">',
+            f'<div class="modal fade{" show" if self.show else ""}" id="{modal_id}" tabindex="-1"'
+            f' aria-labelledby="{modal_id}Label" aria-hidden="true">',
+            f'    <div class="{dialog}">',
             '        <div class="modal-content">',
         ]
-
-        # Add header if title exists
         if self.title:
             parts.append('            <div class="modal-header">')
             parts.append(
-                f'                <h5 class="modal-title" id="{attr_text(self.id)}Label">{conditional_escape(self.title)}</h5>'
+                f'                <h5 class="modal-title" id="{modal_id}Label">'
+                f"{attr_text(self.title)}</h5>"
             )
             if self.dismissable:
                 parts.append(
-                    '                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>'
+                    '                <button type="button" class="btn-close"'
+                    ' data-bs-dismiss="modal" aria-label="Close"></button>'
                 )
             parts.append("            </div>")
-
-        # Body
         parts.append('            <div class="modal-body">')
-        parts.append(f"                {conditional_escape(self.body)}")
+        parts.append(f"                {self.body}")
         parts.append("            </div>")
-
-        # Add footer if exists
         if self.footer:
             parts.append('            <div class="modal-footer">')
-            parts.append(f"                {conditional_escape(self.footer)}")
+            parts.append(f"                {self.footer}")
             parts.append("            </div>")
-
-        parts.extend(
-            [
-                "        </div>",
-                "    </div>",
-                "</div>",
-            ]
-        )
-
+        parts += ["        </div>", "    </div>", "</div>"]
         return "\n".join(parts)

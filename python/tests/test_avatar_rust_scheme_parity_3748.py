@@ -1,6 +1,8 @@
-"""The Rust ``Avatar`` reads a URL's scheme the way Python's ``urlsplit`` does (#3748).
+"""``Avatar`` reads a URL's scheme the way Python's ``urlsplit`` does (#3748).
 
-``crates/djust_components/src/simple/avatar.rs`` mirrors ``djust.components.utils.url_attr``
+Since #4002 the avatar is drawn in Python only (the Rust crate is gone) and this differential
+drives ``Avatar(src=...).render()`` against ``url_attr``. History: the crate's
+``simple/avatar.rs`` mirrored ``djust.components.utils.url_attr``
 (``image=True``). Its ``url_scheme`` removed only tab, CR and LF before reading the scheme, so a
 leading C0 control character other than those (``\\x01blob:...``, ``\\x00file:...``) failed the
 leading-letter test and the value was taken to have NO scheme: ``blob:`` / ``file:`` /
@@ -32,14 +34,7 @@ import pytest
 
 from djust.components.utils import url_attr
 
-try:  # the compiled extension: a worktree without it cannot run the differential
-    from djust._rust import RustAvatar
-except ImportError:  # pragma: no cover
-    RustAvatar = None
-
-pytestmark = [
-    pytest.mark.skipif(RustAvatar is None, reason="the Rust extension is not built"),
-]
+from djust.components.ui import Avatar
 
 C0_AND_SPACE = [chr(i) for i in range(0x21)]
 SCHEMES = [
@@ -66,8 +61,8 @@ SCHEMES = [
 
 
 def _rust_src(src: str) -> str | None:
-    """The ``src`` the Rust avatar prints, or ``None`` when it prints no image."""
-    html = RustAvatar(src, "", None, "md", "circle", None).render()
+    """The ``src`` the avatar prints, or ``None`` when it prints no image."""
+    html = str(Avatar(src=src).render())
     match = re.search(r'<img src="([^"]*)"', html)
     return match.group(1) if match else None
 

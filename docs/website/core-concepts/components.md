@@ -106,13 +106,11 @@ across every user of the view. Class-level declaration is for
 [`LiveComponent` descriptors](../guides/components.md#class-level-components),
 which give each view its own state.
 
-### Rendering Priority
+### One renderer
 
-Stateless components try rendering methods in order (fastest first):
-
-1. `_rust_impl_class` — Pure Rust implementation (~1μs)
-2. `template` string — Rust template engine (~5-10μs)
-3. `_render_custom()` — Python method (~50-100μs)
+A stateless component draws through one renderer (#4002): its `template` string (the Rust
+template engine) if it has one, else its `_render_custom()` Python method. The
+`djust.components.ui` simple components use `_render_custom()`.
 
 ## LiveComponent (Stateful)
 

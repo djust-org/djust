@@ -1,59 +1,46 @@
 """
 Progress component for djust.
 
-Simple stateless progress bar with automatic Rust optimization.
+Simple stateless progress bar (Bootstrap 5).
+
+One renderer (#4002): ``_render_custom`` draws the markup the retired Rust ``RustProgress``
+drew, pinned byte for byte by ``python/tests/test_ui_simple_golden_4002.py``.
 """
 
-from typing import Any, Optional
+from typing import Optional
+
 from ..base import Component
 
-from django.utils.html import conditional_escape
-from djust.components.utils import attr_text
+from djust.components.utils import attr_text, csp_strict, progress_fill, safe_css_length
 
-from djust.components.utils import progress_fill, safe_css_length, csp_strict, style_attrs
-
-from djust._rust import RustProgress
+from ._number import number_text
 
 
 class Progress(Component):
     """
     Progress bar component (Bootstrap 5).
 
-    Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
-    - Python fallback with f-strings
-
     Args:
-        value: Progress value (0-100)
+        value: Progress value (clamped to ``min_value``..``max_value``)
         variant: Color variant (primary, success, info, warning, danger)
         striped: Whether to show striped pattern
         animated: Whether to animate stripes (requires striped=True)
         show_label: Whether to show percentage label
-        label: Custom label text (overrides percentage)
-        height: Custom height (e.g., "20px", "2rem")
+        label: Custom label text (overrides percentage; escaped)
+        height: Custom height (e.g., "20px", "2rem"); anything but a CSS length is dropped
         min_value: Minimum value (default: 0)
         max_value: Maximum value (default: 100)
+
+    The fill is a ``dj-progress-w-N`` class. By default the height and the width are also the
+    inline style they have always been; with ``LIVEVIEW_CONFIG["csp_strict"]`` (a strict CSP
+    refuses ``style=``) the height is a ``data-dj-style-height`` the client applies and the
+    width is the class alone (#3979).
 
     Example:
         >>> progress = Progress(value=75, variant="success", show_label=True)
         >>> progress.render()
-        '<div class="progress">...'
+        '<div class="progress"><div class="progress-bar bg-success dj-progress-w-75" ...'
     """
-
-    _rust_impl_class = RustProgress
-
-    # The fill is a `dj-progress-w-N` class. By default the height and the width are also the
-    # inline style they have always been; with LIVEVIEW_CONFIG["csp_strict"] (a strict
-    # CSP refuses `style=`) the height is a `data-dj-style-height` the client applies (#3979).
-    template = """<div class="progress"{% if height %}{% if strict_styles %} data-dj-style data-dj-style-height="{{ height }}"{% else %} style="height: {{ height }}"{% endif %}{% endif %}>
-    <div class="progress-bar{% if striped %} progress-bar-striped{% endif %}{% if animated %} progress-bar-animated{% endif %} bg-{{ variant }} {{ fill_class }}"
-         role="progressbar"{% if not strict_styles %}
-         style="width: {{ percentage }}%"{% endif %}
-         aria-valuenow="{{ value }}"
-         aria-valuemin="{{ min_value }}"
-         aria-valuemax="{{ max_value }}">{% if show_label or label %}{{ label_text }}{% endif %}</div>
-</div>"""
 
     def __init__(
         self,
@@ -67,12 +54,10 @@ class Progress(Component):
         min_value: float = 0,
         max_value: float = 100,
     ):
-        # Clamp value and store parameters. ``height`` is written into a
-        # style attribute (all three render paths), so only a CSS length.
+        # ``height`` is written into a style attribute, so only a CSS length.
         height = safe_css_length(height, "") or None
         clamped_value = max(min_value, min(value, max_value))
 
-        # Pass kwargs to parent to create Rust instance
         super().__init__(
             value=clamped_value,
             variant=variant,
@@ -85,7 +70,7 @@ class Progress(Component):
             max_value=max_value,
         )
 
-        # Set instance attributes for Python/hybrid rendering
+        # Declared for type checkers; the base class already set each from the kwargs.
         self.value = clamped_value
         self.variant = variant
         self.striped = striped
@@ -96,11 +81,9 @@ class Progress(Component):
         self.min_value = min_value
         self.max_value = max_value
 
-        # Calculate percentage
         range_val = max_value - min_value
         self.percentage = ((self.value - min_value) / range_val * 100) if range_val > 0 else 0
 
-        # Determine label text
         if label:
             self.label_text = label
         elif show_label:
@@ -108,50 +91,39 @@ class Progress(Component):
         else:
             self.label_text = ""
 
-    def get_context_data(self) -> dict[str, Any]:
-        """Return context for template rendering."""
-        return {
-            "value": self.value,
-            "variant": self.variant,
-            "striped": self.striped,
-            "animated": self.animated,
-            "show_label": self.show_label,
-            "label": self.label,
-            "height": self.height,
-            "min_value": self.min_value,
-            "max_value": self.max_value,
-            "percentage": self.percentage,
-            "label_text": self.label_text,
-            "strict_styles": csp_strict(),
-            "fill_class": progress_fill(self.percentage)[0],
-        }
-
-    def _create_rust_instance(self, **props: Any) -> None:
-        """The Rust instance writes the project's style mode too (#3979)."""
-        super()._create_rust_instance(**props, strict_styles=csp_strict())
-
     def _render_custom(self) -> str:
-        """Pure Python fallback (f-string rendering)."""
-        # Build progress bar classes
-        classes = ["progress-bar"]
+        minimum, maximum = float(self.min_value), float(self.max_value)
+        value = min(max(float(self.value), minimum), maximum)
+        span = maximum - minimum
+        percentage = (value - minimum) / span * 100.0 if span > 0 else 0.0
+
+        bar = "progress-bar"
         if self.striped:
-            classes.append("progress-bar-striped")
+            bar += " progress-bar-striped"
         if self.animated:
-            classes.append("progress-bar-animated")
-        classes.append(f"bg-{attr_text(self.variant)}")
-        classes.append(progress_fill(self.percentage)[0])
+            bar += " progress-bar-animated"
 
-        # Build outer style
-        outer_style = style_attrs(height=self.height, css="height: {}")
-        width_line = "" if csp_strict() else f'\n         style="width: {self.percentage:.1f}%"'
+        if self.label is not None:
+            label_html = attr_text(self.label)
+        elif self.show_label:
+            label_html = f"{int(percentage)}%"
+        else:
+            label_html = ""
 
-        # Build label
-        label_html = conditional_escape(self.label_text) if (self.show_label or self.label) else ""
-
-        return f"""<div class="progress"{outer_style}>
-    <div class="{" ".join(classes)}"
-         role="progressbar"{width_line}
-         aria-valuenow="{self.value}"
-         aria-valuemin="{self.min_value}"
-         aria-valuemax="{self.max_value}">{label_html}</div>
-</div>"""
+        fill_class = progress_fill(percentage)[0]
+        if csp_strict():
+            outer = (
+                f' data-dj-style data-dj-style-height="{attr_text(str(self.height).strip())}"'
+                if self.height is not None
+                else ""
+            )
+            width = ""
+        else:
+            outer = f' style="height: {attr_text(self.height)}"' if self.height is not None else ""
+            width = f' style="width: {percentage:.1f}%"'
+        return (
+            f'<div class="progress"{outer}><div class="{bar} bg-{attr_text(self.variant)} '
+            f'{fill_class}" role="progressbar"{width}'
+            f' aria-valuenow="{number_text(value)}" aria-valuemin="{number_text(minimum)}"'
+            f' aria-valuemax="{number_text(maximum)}">{label_html}</div></div>'
+        )

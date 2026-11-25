@@ -1,8 +1,5 @@
 """
-Card Component - Stateless container with header, body, and footer
-
-A simple, stateless card component following the Badge/Button pattern.
-Uses the automatic 3-tier performance waterfall.
+Card Component - Stateless container with header, body, and footer.
 
 Features:
 - Header (optional)
@@ -10,54 +7,31 @@ Features:
 - Footer (optional)
 - Variants (default, outlined, elevated)
 
-Example:
-    from djust.components.ui import Card
-
-    # Simple card. Header, body and footer are escaped and render as text.
-    card = Card(
-        header="User Profile",
-        body="John Doe",
-        footer="Last edited today",
-    )
-
-Performance:
-    - Pure Rust: ~0.5 μs (if available)
-    - Hybrid: ~3-5 μs (template cached)
-    - Python: ~0.3 μs (f-string fallback)
+One renderer (#4002): ``_render_custom`` draws the Bootstrap 5 markup the retired Rust
+``RustCard`` drew, pinned byte for byte by ``python/tests/test_ui_simple_golden_4002.py``.
 """
 
-from typing import Any, Optional
+from typing import Optional
+
 from ..base import Component
 
-from django.utils.html import conditional_escape
+from djust.components.utils import attr_text
 
-from djust._rust import RustCard
+_VARIANT_CLASS = {"outlined": " border", "elevated": " shadow"}
 
 
 class Card(Component):
     """
-    Simple stateless Card component.
-
-    Automatic performance waterfall:
-    1. Pure Rust (RustCard) - if available
-    2. Rust template engine - with caching
-    3. Python f-strings - fallback
+    Simple stateless Card component (Bootstrap 5).
 
     Args:
         body: Body text (required, escaped)
         header: Optional header text (escaped)
         footer: Optional footer text (escaped)
         variant: Style variant (default, outlined, elevated)
+
+    A header or footer of ``""`` still draws its (empty) section; ``None`` leaves it out.
     """
-
-    _rust_impl_class = RustCard
-
-    # Template for hybrid rendering
-    template = """<div class="card{% if variant == "outlined" %} border{% endif %}{% if variant == "elevated" %} shadow{% endif %}">{% if header %}
-    <div class="card-header">{{ header }}</div>{% endif %}
-    <div class="card-body">{{ body }}</div>{% if footer %}
-    <div class="card-footer">{{ footer }}</div>{% endif %}
-</div>"""
 
     def __init__(
         self,
@@ -68,86 +42,17 @@ class Card(Component):
     ):
         super().__init__(body=body, header=header, footer=footer, variant=variant)
 
+        # Declared for type checkers; the base class already set each from the kwargs.
         self.body = body
         self.header = header
         self.footer = footer
         self.variant = variant
 
-    def get_context_data(self) -> dict[str, Any]:
-        return {
-            "body": self.body,
-            "header": self.header,
-            "footer": self.footer,
-            "variant": self.variant,
-        }
-
     def _render_custom(self) -> str:
-        """Python f-string fallback"""
-        from djust.config import config
-
-        framework = config.get("css_framework", "bootstrap5")
-
-        if framework == "bootstrap5":
-            return self._render_bootstrap()
-        elif framework == "tailwind":
-            return self._render_tailwind()
-        else:
-            return self._render_plain()
-
-    def _render_bootstrap(self) -> str:
-        variant_class = {
-            "default": "",
-            "outlined": " border",
-            "elevated": " shadow",
-        }.get(self.variant, "")
-
-        parts = [f'<div class="card{variant_class}">']
-
-        if self.header:
-            parts.append(f'    <div class="card-header">{conditional_escape(self.header)}</div>')
-
-        parts.append(f'    <div class="card-body">{conditional_escape(self.body)}</div>')
-
-        if self.footer:
-            parts.append(f'    <div class="card-footer">{conditional_escape(self.footer)}</div>')
-
-        parts.append("</div>")
-        return "\n".join(parts)
-
-    def _render_tailwind(self) -> str:
-        variant_class = {
-            "default": "bg-white rounded-lg",
-            "outlined": "bg-white rounded-lg border border-gray-200",
-            "elevated": "bg-white rounded-lg shadow-lg",
-        }.get(self.variant, "bg-white rounded-lg")
-
-        parts = [f'<div class="{variant_class}">']
-
-        if self.header:
-            parts.append(
-                f'    <div class="px-6 py-4 border-b font-semibold">{conditional_escape(self.header)}</div>'
-            )
-
-        parts.append(f'    <div class="px-6 py-4">{conditional_escape(self.body)}</div>')
-
-        if self.footer:
-            parts.append(
-                f'    <div class="px-6 py-4 border-t bg-gray-50">{conditional_escape(self.footer)}</div>'
-            )
-
-        parts.append("</div>")
-        return "\n".join(parts)
-
-    def _render_plain(self) -> str:
-        parts = ['<div class="card">']
-
-        if self.header:
-            parts.append(f'    <div class="card-header">{conditional_escape(self.header)}</div>')
-
-        parts.append(f'    <div class="card-body">{conditional_escape(self.body)}</div>')
-
-        if self.footer:
-            parts.append(f'    <div class="card-footer">{conditional_escape(self.footer)}</div>')
-
-        parts.append("</div>")
-        return "\n".join(parts)
+        html = f'<div class="card{_VARIANT_CLASS.get(str(self.variant), "")}">'
+        if self.header is not None:
+            html += f'\n    <div class="card-header">{attr_text(self.header)}</div>'
+        html += f'\n    <div class="card-body">{attr_text(self.body)}</div>'
+        if self.footer is not None:
+            html += f'\n    <div class="card-footer">{attr_text(self.footer)}</div>'
+        return html + "\n</div>"

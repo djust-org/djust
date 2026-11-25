@@ -7,9 +7,6 @@ Simple stateless input field.
 from typing import Any, Optional
 from ..base import Component
 
-from django.utils.html import conditional_escape
-from djust.components.utils import attr_text
-
 
 class Input(Component):
     """
@@ -126,60 +123,3 @@ class Input(Component):
             "validation_state": self.validation_state,
             "validation_message": self.validation_message,
         }
-
-    def _render_custom(self) -> str:
-        """Pure Python fallback (f-string rendering)."""
-        parts = ['<div class="mb-3">']
-
-        # Label
-        if self.label:
-            required_mark = ' <span class="text-danger">*</span>' if self.required else ""
-            parts.append(
-                f'    <label for="{attr_text(self.input_id)}" class="form-label">{conditional_escape(self.label)}{required_mark}</label>'
-            )
-
-        # Build input classes
-        input_classes = ["form-control"]
-        if self.size != "md":
-            input_classes.append(f"form-control-{attr_text(self.size)}")
-        if self.validation_state == "valid":
-            input_classes.append("is-valid")
-        elif self.validation_state == "invalid":
-            input_classes.append("is-invalid")
-
-        # Build input attributes
-        attrs = [
-            f'type="{attr_text(self.input_type)}"',
-            f'class="{" ".join(input_classes)}"',
-            f'id="{attr_text(self.input_id)}"',
-            f'name="{attr_text(self.name)}"',
-        ]
-        if self.value:
-            attrs.append(f'value="{attr_text(self.value)}"')
-        if self.placeholder:
-            attrs.append(f'placeholder="{attr_text(self.placeholder)}"')
-        if self.required:
-            attrs.append("required")
-        if self.disabled:
-            attrs.append("disabled")
-        if self.readonly:
-            attrs.append("readonly")
-
-        parts.append(f"    <input {' '.join(attrs)}>")
-
-        # Help text
-        if self.help_text:
-            parts.append(f'    <div class="form-text">{conditional_escape(self.help_text)}</div>')
-
-        # Validation feedback
-        if self.validation_message:
-            feedback_class = (
-                "valid-feedback" if self.validation_state == "valid" else "invalid-feedback"
-            )
-            parts.append(
-                f'    <div class="{feedback_class}">{conditional_escape(self.validation_message)}</div>'
-            )
-
-        parts.append("</div>")
-
-        return "\n".join(parts)
