@@ -238,7 +238,7 @@ class TestWSMountSkip:
         source = inspect.getsource(ViewRuntime._dispatch_mount_body)
         check_auth_pos = source.find("_check_auth(")
         mount_pos = source.find("await call_hook(view_instance.mount, request, **mount_kwargs)")
-        restore_pos = source.find("load_server_state)(view_instance, request)")
+        restore_pos = source.find("load_server_state, view_instance, request")
         assert check_auth_pos != -1, (
             "_check_auth (the pre-mount auth+tenant sequence) must exist in dispatch_mount"
         )
