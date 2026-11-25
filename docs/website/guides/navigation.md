@@ -144,7 +144,9 @@ initial values (`category="all"`, `page=1`) and the template gets the messages:
 ```
 
 `params_errors` is a plain dict, `{field: [messages]}`, with errors that belong to
-no field under `"__all__"`. It is `{}` when the URL is valid, so a message never
+no field under `"__all__"`. Under explicit exposure (the default) the template sees it
+only if the view declares it: `params_errors = state(default_factory=dict)`. Without
+that line the dict is set on the view but `{{ params_errors }}` renders empty. It is `{}` when the URL is valid, so a message never
 outlives the URL that caused it. (A form instance placed in a template context is
 rendered to `{field: html}`, so it has no `.errors` to read; that is why the
 messages are a separate dict.)
@@ -289,8 +291,8 @@ Things to know:
   `manage.py check` reports one that does (V023).
 - A `ModelChoiceField` is fine: validation runs on a worker thread on the socket paths.
 - A view declares what it renders ([explicit exposure](../state/explicit-exposure.md) is the
-  default), so to show the messages declare `params_errors = state(default_factory=dict)` and
-  pass it to `get_context_data()`.
+  default), so to show the messages declare `params_errors = state(default_factory=dict)`; the
+  declaration alone is enough.
 - A `params_form` that is not a form class raises `ImproperlyConfigured` on the first
   request; `manage.py check` reports it first (V023).
 - `params_form`, `params_form_fallback`, `http_status_of_state` and `state_attribute` are

@@ -35,6 +35,19 @@ class DocumentDetailView(LiveView):
         Comment.objects.create(document=self._object, body=body)
 ```
 
+> **Naming trap.** Inside a class body that sets the attribute
+> `permission_required = "app.access"`, the name `permission_required` is that
+> string, so a `@permission_required(...)` handler decorator in the same class
+> fails with `TypeError: 'str' object is not callable`. Import the decorator
+> under another name:
+>
+> ```python
+> from djust.decorators import event_handler
+> from djust.decorators import permission_required as require_permission
+> ```
+>
+> then write `@require_permission("app.change_item")` above `@event_handler()`.
+
 ## The four-layer onion
 
 djust calls the layers in order. The first denial wins; subsequent layers don't run.

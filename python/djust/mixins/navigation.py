@@ -194,7 +194,9 @@ class NavigationMixin:
                     self.page = params["page"]
 
         Invalid input goes to :meth:`handle_invalid_params` instead, and the
-        messages are in the template as ``params_errors``.
+        messages are in the template as ``params_errors``. Under explicit exposure
+        the view must declare ``params_errors = state(default_factory=dict)`` for
+        the template to see them; an undeclared attribute is not rendered.
         """
         pass
 
