@@ -30,7 +30,6 @@ from djust.push import apush_to_view
 pytest.importorskip("channels")
 
 VIEW = f"{__name__}._OffloadView"
-LEGACY_VIEW = f"{__name__}._LegacyOffloadView"
 _SEEN: dict = {}
 
 
@@ -88,17 +87,6 @@ class _OffloadView(LiveView):
         return super()._sync_state_to_rust(*args, **kwargs)
 
 
-class _LegacyOffloadView(_OffloadView):
-    """The same view under the legacy policy: the one-hop push turn runs for
-    both policies (#4152)."""
-
-    exposure_policy = "legacy"  # legacy subject: the one-hop push turn serves both policies
-    template = (
-        '<div dj-root dj-view="djust.tests.test_event_loop_offload_3074._LegacyOffloadView">'
-        "<b>{{ count }}</b><i>{{ label }}</i></div>"
-    )
-
-
 class _TickOffloadView(_OffloadView):
     """Ticks once with a change, then ticks with nothing to render (#4166)."""
 
@@ -114,16 +102,7 @@ class _TickOffloadView(_OffloadView):
             self.label = "ticked"
 
 
-class _LegacyTickOffloadView(_TickOffloadView):
-    exposure_policy = "legacy"  # legacy subject: the one-hop tick turn serves both policies
-    template = (
-        '<div dj-root dj-view="djust.tests.test_event_loop_offload_3074._LegacyTickOffloadView">'
-        "<b>{{ count }}</b><i>{{ label }}</i></div>"
-    )
-
-
 TICK_VIEW = f"{__name__}._TickOffloadView"
-LEGACY_TICK_VIEW = f"{__name__}._LegacyTickOffloadView"
 
 
 @pytest.fixture(params=[None, 2], ids=["stock", "pool"])
@@ -243,19 +222,18 @@ async def test_pre_event_snapshot_runs_with_the_handler(pool, spies):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("view", [VIEW, LEGACY_VIEW], ids=["explicit", "legacy"])
-async def test_server_push_turn_is_one_hop_with_the_pool(pool, spies, hops, view):
-    """Under both exposure policies (#4152): with the pool on, a push turn's
+async def test_server_push_turn_is_one_hop_with_the_pool(pool, spies, hops):
+    """(#4152) With the pool on, a push turn's
     connection check, authorization, hook and render are ONE hop. An explicit
     root's commit is its own save, after that hop and before the frame."""
     loop_thread = threading.get_ident()
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        comm = await _connect(view)
+        comm = await _connect(VIEW)
         try:
             _SEEN.clear()
             before = spies["aclose"]
             del hops[:]
-            await apush_to_view(view, handler="handle_push", payload={"label": "pushed"})
+            await apush_to_view(VIEW, handler="handle_push", payload={"label": "pushed"})
             frame = await _receive_until(comm, "patch")
             aclose_calls = spies["aclose"] - before
             turn_hops = list(hops)
@@ -266,7 +244,6 @@ async def test_server_push_turn_is_one_hop_with_the_pool(pool, spies, hops, view
     (hook,) = _SEEN["hook"]
     (render,) = _SEEN["render"]
     assert hook != loop_thread
-    explicit = view == VIEW
     if pool:
         # Connection check, hook and render on the session's thread, and no
         # separate Channels hop for the push message.
@@ -274,7 +251,7 @@ async def test_server_push_turn_is_one_hop_with_the_pool(pool, spies, hops, view
         assert render == hook
         assert aclose_calls == 0
         # One hop for the turn; an explicit root adds only its state save.
-        assert turn_hops == (["turn", "run"] if explicit else ["turn"]), turn_hops
+        assert turn_hops == ["turn", "run"], turn_hops
     else:
         # Stock: Channels' dispatch made its own hop for the message.
         assert aclose_calls == 1
@@ -377,14 +354,13 @@ def _receive_source(communicator, source):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("view", [TICK_VIEW, LEGACY_TICK_VIEW], ids=["explicit", "legacy"])
-async def test_tick_turn_is_one_hop_with_the_pool(pool, spies, hops, view):
+async def test_tick_turn_is_one_hop_with_the_pool(pool, spies, hops):
     """#4166: with the pool on, a tick's authorization, ``handle_tick``,
     change detection and render are ONE hop, as the push turn's are (#4152);
     an explicit root adds only its state save."""
     loop_thread = threading.get_ident()
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        comm = await _connect(view)
+        comm = await _connect(TICK_VIEW)
         try:
             _SEEN.clear()
             del hops[:]
@@ -399,7 +375,7 @@ async def test_tick_turn_is_one_hop_with_the_pool(pool, spies, hops, view):
     assert hook != loop_thread
     if pool:
         assert render == hook
-        assert turn_hops == (["turn", "run"] if view == TICK_VIEW else ["turn"]), turn_hops
+        assert turn_hops == ["turn", "run"], turn_hops
     else:
         assert "turn" not in turn_hops, turn_hops
 
@@ -415,14 +391,13 @@ async def _notify(label):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-@pytest.mark.parametrize("view", [VIEW, LEGACY_VIEW], ids=["explicit", "legacy"])
-async def test_db_notify_turn_is_one_hop_with_the_pool(pool, spies, hops, view):
+async def test_db_notify_turn_is_one_hop_with_the_pool(pool, spies, hops):
     """#4166: with the pool on, a ``db_notify`` turn's connection check,
     authorization, ``handle_info`` and render are ONE hop, and the message
     takes no separate Channels connection-check hop."""
     loop_thread = threading.get_ident()
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        comm = await _connect(view)
+        comm = await _connect(VIEW)
         try:
             _SEEN.clear()
             before = spies["aclose"]
@@ -442,7 +417,7 @@ async def test_db_notify_turn_is_one_hop_with_the_pool(pool, spies, hops, view):
         assert _SEEN["close_old_connections"] == [hook]
         assert render == hook
         assert aclose_calls == 0
-        assert turn_hops == (["turn", "run"] if view == VIEW else ["turn"]), turn_hops
+        assert turn_hops == ["turn", "run"], turn_hops
     else:
         assert aclose_calls == 1
 

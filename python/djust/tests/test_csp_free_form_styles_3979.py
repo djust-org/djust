@@ -375,7 +375,7 @@ def _dropdown() -> str:
     from djust.components._interactive import DropdownMenu
 
     class _Page(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root>{{ menu }}</div>"
         menu = DropdownMenu(label="Menu", items=[{"label": "A", "value": "a"}], visibility="client")
 

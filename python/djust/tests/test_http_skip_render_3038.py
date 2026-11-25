@@ -35,7 +35,7 @@ class Quiet(LiveComponent):
 
 
 class SkipPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0"><h1>{{ title }}</h1>{{ quiet }}</div>'
     quiet = Quiet()
 
@@ -108,7 +108,8 @@ class TestHttpSkipRender:
     def test_component_event_skip_answers_empty_patches(self):
         session = _get()
         body = _post(session, "bump_quietly", component_id="quiet")
-        assert body == {"patches": []}
+        assert body["patches"] == []
+        assert "html" not in body
         rendered = _post(session, "bump", component_id="quiet")
         assert rendered.get("patches") or rendered.get("html"), rendered
 

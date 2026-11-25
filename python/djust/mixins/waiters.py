@@ -297,6 +297,9 @@ class WaiterMixin:
             if not waiter.future.done():
                 cancel_on_owner_loop(waiter.future)
 
+    # Legacy-only (#4199): an explicit view disposes its own background tasks, so
+    # no explicit test depends on this or ``_djust_waiters_closed``; remove with
+    # the legacy subject.
     def _close_waiters(self, reason: str = "view_unmount") -> None:
         """
         Cancel every pending waiter and refuse later ones.

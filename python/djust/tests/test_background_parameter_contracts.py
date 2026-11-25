@@ -1,31 +1,33 @@
 """Bespoke background producers deliver the contract of their actual render."""
 
-import json
 import asyncio
+import json
 import threading
 from unittest.mock import AsyncMock
 
 import pytest
-from asgiref.sync import sync_to_async
 
 from djust import event_handler
-from djust.runtime import ViewRuntime, WSConsumerTransport
+from djust.tests._live_session import amount_on_consumer
 from djust.tests.test_background_html_fallback import BackgroundView
 from djust.websocket import LiveViewConsumer
 
-
-pytestmark = [pytest.mark.usefixtures("legacy_project_policy")]
-
-
-class LegacyBackgroundView(BackgroundView):
-    """``test_background_html_fallback.BackgroundView`` runs as explicit since
-    #4082; these tests install views on hand-built consumers and runtimes with
-    no mount, which an explicit view's turns refuse. Not migrated yet."""
-
-    exposure_policy = "legacy"  # not migrated (#4082): hand-built consumer/runtime, no mount
+pytestmark = [
+    # The project parameter policy is the legacy one here (#4205 removes it).
+    pytest.mark.usefixtures("legacy_project_policy"),
+    pytest.mark.django_db(transaction=True),
+]
 
 
-class ContractView(LegacyBackgroundView):
+class PlainBackgroundView(BackgroundView):
+    """``test_background_html_fallback.BackgroundView`` with no strict handler."""
+
+    exposure_policy = "explicit"
+
+
+class ContractView(PlainBackgroundView):
+    exposure_policy = "explicit"
+
     @event_handler(parameter_policy="strict")
     def choose(self, value: int):
         self.count = value
@@ -34,21 +36,29 @@ class ContractView(LegacyBackgroundView):
         self.count += 1
 
 
+CONTRACT_VIEW = f"{__name__}.ContractView"
+
+
 async def setup(full_html=False, view_class=ContractView):
-    view = view_class()
-    view.mount(None)
-    await sync_to_async(view.render_with_diff)()
-    if full_html:
-        view._rust_view.reset()
     consumer = LiveViewConsumer()
-    consumer.view_instance = view
     consumer.send_json = AsyncMock()
     consumer.send_error = AsyncMock()
+    # Mounted for real: an explicit view's background turns are authorized by
+    # the runtime that mounted it.
+    view = await amount_on_consumer(consumer, f"{__name__}.{view_class.__name__}")
+    if full_html:
+        view._rust_view.reset()
+    consumer.send_json.reset_mock()
+    consumer.send_error.reset_mock()
     consumer._flush_all_pending = AsyncMock()
-    runtime = ViewRuntime(WSConsumerTransport(consumer))
-    runtime.view_instance = view
-    runtime._parameter_contract_view = "app.Background"
-    consumer._runtime = runtime
+    # The mount's own frame is not a producer under test: the version counters and
+    # the recovery pair start where a producer's first frame finds them.
+    consumer._last_sent_version = 0
+    consumer._recovery_version = 0
+    consumer._recovery_html = None
+    consumer._recovery_contracts = None
+    consumer._recovery_owner = None
+    runtime = consumer._get_runtime()
     return consumer, view, runtime
 
 
@@ -79,7 +89,7 @@ async def test_background_frame_and_recovery_share_render_contract(source, full_
     await produce(consumer, source)
     frame = consumer.send_json.call_args.args[0]
     assert frame["type"] == ("html_update" if full_html else "patch")
-    assert frame["parameter_contract_view"] == "app.Background"
+    assert frame["parameter_contract_view"] == CONTRACT_VIEW
     assert frame["parameter_contracts"]["owners"][0]["handlers"]["choose"]["policy"] == "strict"
     assert frame["version"] == consumer._recovery_version == 1
     assert runtime._parameter_contracts_active is True
@@ -98,7 +108,7 @@ async def test_background_frame_and_recovery_share_render_contract(source, full_
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", SOURCES)
 async def test_legacy_background_frames_keep_legacy_shape(source):
-    consumer, _, _ = await setup(view_class=LegacyBackgroundView)
+    consumer, _, _ = await setup(view_class=PlainBackgroundView)
     if source.startswith("async"):
         consumer.view_instance.handle_async_result = lambda *args, **kwargs: None
     await produce(consumer, source)
@@ -211,7 +221,7 @@ async def test_cancelled_render_retains_lock_until_worker_settles(source):
 @pytest.mark.parametrize("source", SOURCES)
 async def test_replaced_owner_during_render_cannot_deliver(source):
     consumer, view, _ = await setup()
-    replacement = LegacyBackgroundView()
+    replacement = PlainBackgroundView()
     replacement.mount(None)
     original = view.render_with_diff
 
@@ -232,7 +242,7 @@ async def test_replaced_owner_during_render_cannot_deliver(source):
 @pytest.mark.parametrize("source", SOURCES)
 async def test_replaced_owner_while_waiting_never_runs_result_handler(source):
     consumer, view, _ = await setup()
-    replacement = LegacyBackgroundView()
+    replacement = PlainBackgroundView()
     replacement.mount(None)
     async with consumer._render_lock:
         task = asyncio.create_task(produce(consumer, source))
@@ -255,10 +265,17 @@ async def test_strict_background_snapshot_requires_its_mounted_runtime(failure, 
         runtime._parameter_contract_view = None
     elif failure == "owner":
         runtime.view_instance = None
+        consumer.close = AsyncMock()
     else:
         monkeypatch.setitem(sys.modules, "djust._parameter_metadata", None)
     await produce(consumer, "tick")
     consumer.send_json.assert_not_awaited()
+    if failure == "owner":
+        # An explicit turn with no mounted owner is refused before any render:
+        # the denial is sent and the socket closes.
+        consumer.close.assert_awaited_once_with(code=4403)
+        assert consumer.send_error.call_args.kwargs["code"] == "permission_denied"
+        return
     consumer.send_error.assert_awaited_once()
 
 

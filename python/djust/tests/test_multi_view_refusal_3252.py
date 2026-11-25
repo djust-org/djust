@@ -65,20 +65,6 @@ class NeedsLogin(Page):
     template = '<div dj-view="' + MOD + '.NeedsLogin"><b>secret</b></div>'
 
 
-# The reauth_on_event cases (``revocable``) revoke a principal through that
-# re-check, which runs for legacy views only (turns.reauth).
-class ReauthPage(Page):
-    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
-
-
-class ReauthWidget(Widget):
-    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
-
-
-class ReauthNeedsLogin(NeedsLogin):
-    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
-
-
 class NeedsPermission(Page):
     login_required = True
     permission_required = "auth.delete_user"
@@ -309,73 +295,6 @@ async def _signed_in_connect():
     return communicator
 
 
-@pytest.fixture
-def revocable(monkeypatch):
-    """``reauth_on_event`` on, and a way to revoke the signed-in user."""
-    from djust.config import config
-
-    async def anonymous(scope):
-        return AnonymousUser()
-
-    with override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True}):
-        config.reset()
-        try:
-            yield lambda: monkeypatch.setattr("channels.auth.get_user", anonymous)
-        finally:
-            config.reset()
-
-
-async def test_a_slot_whose_authority_is_revoked_is_refused_alone_and_the_page_stays(revocable):
-    # (Before: the re-check navigated the whole page to the login page, closed
-    # the socket with 4403 and only then sent a view_refused nobody could show.)
-    communicator = await _signed_in_connect()
-    try:
-        await _mount(communicator, ReauthPage)
-        await _frames(communicator, "mount")
-        for cls, target in ((ReauthWidget, "w1"), (ReauthNeedsLogin, "members")):
-            await _mount(communicator, cls, target)
-            await _frames(communicator, "mount")
-        revocable()
-        await _click_frame(communicator, "members", ref=7)
-        frames = await _frames(communicator, "view_refused", "navigate")
-        assert [f["type"] for f in frames] == ["view_refused"], frames
-        assert frames[-1]["target_id"] == "members"
-        assert frames[-1]["reason"] == "login_required" and frames[-1]["to"]
-        assert set(CONSUMERS[-1]._slot_map()) == {"w1"}
-        # The socket is alive and the page view and the sibling answer.
-        await communicator.send_json_to({"type": "ping"})
-        assert (await _frames(communicator, "pong"))[-1]["type"] == "pong"
-        assert (await _click(communicator))["type"] != "error"
-        assert (await _click(communicator, "w1"))["type"] != "error"
-        assert CLICKS == ["page", "widget"]
-    finally:
-        await communicator.disconnect()
-
-
-async def test_the_page_views_own_revoked_authority_still_navigates_and_closes_the_socket(
-    revocable,
-):
-    communicator = await _signed_in_connect()
-    try:
-        await _mount(communicator, ReauthNeedsLogin)
-        await _frames(communicator, "mount")
-        revocable()
-        await communicator.send_json_to({"type": "event", "event": "click", "params": {}, "ref": 1})
-        seen = []
-        while not seen or seen[-1]["type"] != "websocket.close":
-            seen.append(await communicator.receive_output())
-        assert [_kind(o) for o in seen] == ["navigate", "websocket.close"], seen
-        assert seen[-1]["code"] == 4403
-    finally:
-        await communicator.disconnect()
-
-
-def _kind(output):
-    if output["type"] == "websocket.send" and output.get("text"):
-        return json.loads(output["text"]).get("type")
-    return output["type"]
-
-
 async def _click_frame(communicator, target_id, ref=1):
     await communicator.send_json_to(
         {"type": "event", "event": "click", "params": {}, "ref": ref, "target_id": target_id}
@@ -524,37 +443,5 @@ async def test_over_sse_a_view_refused_after_it_mounted_shows_the_refusal_and_en
         )
         reply = await _sse_frame(stream, "patch", "html_update", "noop", "error", "view_refused")
         assert reply["type"] != "view_refused" and reply.get("target_id") == "w2", reply
-    finally:
-        await stream.aclose()
-
-
-async def test_over_sse_a_slot_whose_authority_is_revoked_is_refused_alone(revocable):
-    from unittest.mock import patch
-
-    session, key, stream, first = await _sse_open(ReauthPage)
-    try:
-        await _sse_post(
-            session,
-            key,
-            {"type": "mount", "view": MOD + ".ReauthWidget", "url": "/page/", "target_id": "w1"},
-        )
-        await _sse_frame(stream, "mount")
-        session._slots["w1"].view.login_required = True  # a view that requires auth
-        with patch("djust.auth.core.check_view_auth_lightweight", return_value=False):
-            await _sse_post(
-                session,
-                key,
-                {"type": "event", "event": "click", "params": {}, "ref": 4, "target_id": "w1"},
-            )
-        frames = []
-        while not frames or frames[-1]["type"] != "view_refused":
-            frames.append(await _sse_frame(stream, "view_refused", "error", "navigate"))
-        assert [f["type"] for f in frames] == ["view_refused"], frames
-        assert frames[-1]["reason"] == "permission_denied" and frames[-1]["target_id"] == "w1"
-        assert session._slots == {} and session.active
-        await _sse_post(session, key, {"type": "event", "event": "click", "params": {}, "ref": 5})
-        assert (await _sse_frame(stream, "patch", "html_update", "noop", "error"))[
-            "type"
-        ] != "error"
     finally:
         await stream.aclose()

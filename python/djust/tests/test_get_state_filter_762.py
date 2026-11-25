@@ -16,113 +16,38 @@ These tests make sure:
 """
 
 from djust import LiveView
+from djust.decorators import state
 from djust.live_view import _FRAMEWORK_INTERNAL_ATTRS
 from djust.websocket import _snapshot_assigns
 
 
 class TestGetStateFiltersFrameworkAttrs:
-    """``LiveView.get_state()`` should return only user-owned reactive state."""
+    """``LiveView.get_state()`` exports only the ``client=True`` fields (explicit exposure)."""
 
-    def test_get_state_excludes_framework_attrs(self):
-        """No framework-internal attr name appears in get_state() output."""
-
-        class EmptyView(LiveView):
-            exposure_policy = "legacy"
-            template_name = "test.html"
-
-            def mount(self, request, **kwargs):
-                pass  # no user state — only framework-set attrs should exist
-
-        view = EmptyView()
-        view.mount(None)
-
-        state = view.get_state()
-        leaked = set(state) & _FRAMEWORK_INTERNAL_ATTRS
-        assert not leaked, (
-            f"get_state() leaked framework-internal attrs: {sorted(leaked)}. "
-            f"These must be filtered via _FRAMEWORK_INTERNAL_ATTRS."
-        )
-
-    def test_get_state_includes_user_assigns(self):
-        """User-set public attrs MUST still surface — this is the whole point."""
-
+    def test_get_state_exports_only_client_fields_never_framework_attrs(self):
         class CounterView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
+            shown = state("visible", client=True)
 
             def mount(self, request, **kwargs):
-                self.count = 5
+                self.count = 5  # an ordinary attribute: not exported
                 self.name = "hello"
 
         view = CounterView()
-        view.mount(None)
-
-        state = view.get_state()
-        assert state.get("count") == 5
-        assert state.get("name") == "hello"
-
-    def test_get_state_filters_django_view_inherited_attrs(self):
-        """Django ``View``-inherited attrs (http_method_names, args, kwargs) filtered."""
-
-        class FilteredView(LiveView):
-            exposure_policy = "legacy"
-            template_name = "test.html"
-
-            def mount(self, request, **kwargs):
-                self.user_attr = "visible"
-
-        view = FilteredView()
-        # Simulate what View.as_view() does — set framework attrs on __dict__
+        # Simulate what View.as_view() and a mixin do: framework attrs on __dict__.
         view.http_method_names = ["get", "post"]
         view.args = ()
         view.kwargs = {}
-        view.mount(None)
-
-        state = view.get_state()
-        assert "http_method_names" not in state
-        assert "args" not in state
-        assert "kwargs" not in state
-        assert state.get("user_attr") == "visible"
-
-    def test_get_state_filters_djust_config_attrs(self):
-        """djust LiveView config attrs (sync_safe, login_required, template_name, ...) filtered."""
-
-        class ConfigView(LiveView):
-            exposure_policy = "legacy"
-            template_name = "test.html"
-
-            def mount(self, request, **kwargs):
-                self.count = 1
-
-        view = ConfigView()
-        # Set the typical framework attrs that normally land on __dict__
-        view.template_name = "test.html"
         view.sync_safe = True
         view.login_required = False
-        view.view_is_async = False
-        view.tick_interval = 0
         view.on_mount_count = 0
         view.page_meta = {}
-        view.static_assigns = []
-        view.temporary_assigns = {}
         view.mount(None)
 
-        state = view.get_state()
-        for framework_key in (
-            "template_name",
-            "sync_safe",
-            "login_required",
-            "view_is_async",
-            "tick_interval",
-            "on_mount_count",
-            "page_meta",
-            "static_assigns",
-            "temporary_assigns",
-        ):
-            assert framework_key not in state, (
-                f"get_state() still leaks framework attr '{framework_key}'"
-            )
-        assert state.get("count") == 1
+        exported = view.get_state()
+        assert exported == {"shown": "visible"}
+        assert not set(exported) & _FRAMEWORK_INTERNAL_ATTRS
 
 
 class TestSnapshotAssignsFiltersFrameworkAttrs:
@@ -130,7 +55,7 @@ class TestSnapshotAssignsFiltersFrameworkAttrs:
 
     def test_snapshot_assigns_skips_framework_attrs(self):
         class SnapshotView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -153,7 +78,7 @@ class TestSnapshotAssignsFiltersFrameworkAttrs:
         """Non-underscore user-set attrs still show up in snapshot."""
 
         class UserView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):
@@ -173,11 +98,12 @@ class TestDebugStateSizesFiltersFrameworkAttrs:
 
     def test_state_sizes_debug_payload_skips_framework_attrs(self):
         class DebugView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
+            visible = state("user", client=True)
 
             def mount(self, request, **kwargs):
-                self.visible = "user"
+                self.hidden = "not exported"
 
         view = DebugView()
         # Simulate framework-set attrs ending up on __dict__

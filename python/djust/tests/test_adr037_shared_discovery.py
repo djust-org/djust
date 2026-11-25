@@ -9,6 +9,7 @@ and that the retired independent derivations stay deleted.
 from __future__ import annotations
 
 import gc
+from typing import Any
 
 import pytest
 
@@ -159,8 +160,8 @@ def test_class_discovery_equals_dispatch_on_an_instance(collect):
             pass
 
         @staticmethod
-        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-        def static(self_less=None):
+        @event_handler()
+        def static(self_less: Any = None):
             pass
 
     view = SharedDiscoveryView()
@@ -257,37 +258,3 @@ def test_published_metadata_equals_the_dir_walk_on_framework_and_demo_views():
         assert actual == expected, cls
         compared += 1
     assert compared > 50
-
-
-# Stays legacy (split from the explicit migration): the debug panel's handler list is a legacy debug exporter (deletion step 7).
-def test_debug_panel_lists_exactly_the_handlers_dispatch_resolves(collect):
-    class DebugPanelView(LiveView):
-        exposure_policy = "legacy"
-        template = "<div dj-root></div>"
-
-        @staticmethod
-        @event_handler
-        def ping(**kwargs):
-            pass
-
-        @event_handler
-        def click(self, **kwargs):
-            pass
-
-        @event_handler(parameter_policy="strict")
-        def pick(self, item_id: int = 3) -> None:
-            pass
-
-    view = DebugPanelView()
-    handlers = view.get_debug_info()["handlers"]
-    assert sorted(handlers) == sorted(_event_methods(view))
-    assert "ping" in handlers  # A staticmethod handler was missing before row 10.
-    assert handlers["pick"]["params"] == [
-        {
-            "name": "item_id",
-            "kind": "positional_or_keyword",
-            "type": "int",
-            "required": False,
-            "reduced_checking": False,
-        }
-    ]

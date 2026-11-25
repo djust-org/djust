@@ -10,17 +10,15 @@ from djust.tests.test_runtime_child_routing_1892 import MockTransport
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["explicit", "invalid", None, "legacy_to_explicit"])
+@pytest.mark.parametrize("policy", ["explicit", "invalid", None])
 @pytest.mark.parametrize("failure", ["callback", "result_handler", "stale"])
-async def test_root_async_diagnostics_redact_nonlegacy_values(caplog, policy, failure):
+async def test_root_async_diagnostics_redact_values(caplog, policy, failure):
     caplog.set_level(logging.DEBUG)
     runtime = ViewRuntime(MockTransport())
-    view = SimpleNamespace(exposure_policy="legacy" if policy == "legacy_to_explicit" else policy)
+    view = SimpleNamespace(exposure_policy=policy)
     runtime.view_instance = view
 
     async def callback():
-        if policy == "legacy_to_explicit":
-            view.exposure_policy = "explicit"
         if failure == "stale":
             runtime.view_instance = None
             return None

@@ -160,18 +160,6 @@ class Declared(_Base):
         self.scratch += 1
 
 
-class LegacyCounter(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><pre>{{ count }}</pre></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    @event_handler()
-    def inc(self, **kwargs):
-        self.count += 1
-
-
 CASES = [
     (Counter, [("inc",), ("nothing",), ("inc",)], {"count": 2}),
     (
@@ -1028,14 +1016,6 @@ def test_a_cookie_session_holds_no_automatic_state(caplog):
     assert "signed_cookies" in said and "DJUST_AUTOMATIC_STATE = False" in said
 
 
-@pytest.mark.django_db
-def test_a_legacy_view_takes_no_part():
-    """Deprecated and on its way out: nothing is saved for it on any transport,
-    so a fallback POST cannot bring back a value older than its socket's."""
-    view, key, _ = _fallback(LegacyCounter, [("inc",), ("inc",)])
-    assert view.count == 1 and not _stored(key)
-
-
 # ---------------------------------------------------------------------------
 # The 1.3 model: a saved view is rebuilt, mount() does not run again
 # ---------------------------------------------------------------------------
@@ -1337,7 +1317,7 @@ def test_a_stored_name_the_view_would_not_save_is_not_put_back():
         login_required=False,
         password="injected",
         flash_rows=["injected"],
-        exposure_policy="legacy",
+        exposure_policy="explicit",
         brand_new="allowed: a handler may create attributes",
     )
     _tamper(

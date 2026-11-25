@@ -85,7 +85,7 @@ def poke_target():
 def _view_with_poke(**extra: Any) -> type:
     attrs = {"template": "<div dj-root>{{ a }}</div>", "a": 1, "poke": _Poke(), "z": 2}
     attrs.update(extra)
-    return type(f"PokeView{next(_COUNTER)}", (LiveView,), {"exposure_policy": "legacy", **attrs})
+    return type(f"PokeView{next(_COUNTER)}", (LiveView,), {"exposure_policy": "explicit", **attrs})
 
 
 def test_descriptor_fields_survives_a_class_write_mid_walk(poke_target):
@@ -94,15 +94,6 @@ def test_descriptor_fields_survives_a_class_write_mid_walk(poke_target):
     fields = _descriptor_fields(cls)  # RuntimeError before #3151
     assert isinstance(fields, dict)
     assert "_djust_descriptor_fields_cache" in cls.__dict__
-
-
-def test_legacy_context_walk_survives_a_class_write_mid_walk(poke_target):
-    cls = _view_with_poke()
-    view = cls()
-    view.mount(None)
-    poke_target(cls)
-    context = view.get_context_data()  # RuntimeError before #3151
-    assert context["a"] == 1 and context["z"] == 2
 
 
 # --------------------------------------------------------------------------
@@ -187,7 +178,9 @@ def _base_view() -> type:
         raise AttributeError("boom")
 
     attrs["boom"] = property(boom)
-    return type(f"SharedBase{next(_COUNTER)}", (LiveView,), {"exposure_policy": "legacy", **attrs})
+    return type(
+        f"SharedBase{next(_COUNTER)}", (LiveView,), {"exposure_policy": "explicit", **attrs}
+    )
 
 
 def _descriptor_walk(leaf: type) -> None:

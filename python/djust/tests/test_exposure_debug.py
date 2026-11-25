@@ -91,18 +91,6 @@ def test_unknown_policy_never_selects_legacy_debug_reflection(view, policy):
     assert _lenient_assigns(view) == {"_djust_projection_error": "State unavailable"}
 
 
-class _LegacyLiveView(LiveView):
-    """A bare LiveView under the legacy policy, whatever the framework default is."""
-
-    exposure_policy = "legacy"
-
-
-def test_legacy_debug_behavior_is_unchanged():
-    view = _LegacyLiveView()
-    view.public_note = "legacy"
-    assert _lenient_assigns(view)["public_note"] == "legacy"
-
-
 def test_mount_and_event_debug_metadata_do_not_walk_attributes(view):
     for payload in (view.get_debug_info(), view.get_debug_update()):
         assert set(payload["variables"]) == {"server_value", "client_value", "transient_value"}

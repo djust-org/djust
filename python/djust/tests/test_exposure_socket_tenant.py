@@ -42,18 +42,6 @@ class TenantSocketView(LiveView):
         self.count += 1
 
 
-class LegacyTenantSocketView(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><span>{{ count }}</span></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    @event_handler()
-    def bump(self):
-        self.count += 1
-
-
 @pytest.fixture(autouse=True)
 def staged(monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
@@ -100,18 +88,6 @@ async def test_explicit_socket_mount_resolves_the_configured_tenant(headers, ten
         view = TenantSocketView()
         adapter = await sync_to_async(server_state_adapter)(view, stored)
         assert await adapter.aload() == {"count": 1}
-
-
-async def test_legacy_socket_mount_is_unchanged_under_tenancy():
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **TENANCY):
-        request = await sync_to_async(make_request)()
-        socket, frame = await _mount(request, LegacyTenantSocketView, [(b"x-tenant-id", b"acme")])
-        try:
-            assert frame["type"] == "mount", frame
-            await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
-            assert (await socket.receive_json_from())["type"] in {"patch", "html_update"}
-        finally:
-            await socket.disconnect()
 
 
 @pytest.mark.parametrize("header,tenant_id", [("acme", "acme"), (None, None)])

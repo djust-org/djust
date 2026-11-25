@@ -103,14 +103,14 @@ def test_fused_and_plain_fingerprints_agree_at_budget_boundary(budget):
     assert converted[1] == data
 
 
-# Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
 def test_truncated_bookkeeping_stays_out_of_session_and_render_context():
     import json
 
     from djust.decorators import computed
+    from djust.testing import persisted_state
 
     class View(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @computed("rows")
         def last(self):
@@ -122,7 +122,7 @@ def test_truncated_bookkeeping_stays_out_of_session_and_render_context():
     view._prev_context_fingerprints = {"rows": object()}
     view.mark_clean()
     view._snapshot_user_private_attrs()
-    private = view._get_private_state()
+    persisted = persisted_state(view)
     context = view.get_context_data()
     for key in (
         "_djust_computed_cache",
@@ -131,9 +131,9 @@ def test_truncated_bookkeeping_stays_out_of_session_and_render_context():
         "_prev_context_fingerprints",
         "_dirty_baseline",
     ):
-        assert key not in private
+        assert key not in persisted.names
         assert key not in context
-    json.dumps(private)
+    json.dumps(persisted.server)
     json.dumps(context)
 
 

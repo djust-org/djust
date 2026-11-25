@@ -188,7 +188,7 @@ def _components_page(count: int) -> type:
 
     body: Dict[str, Any] = {
         "__module__": MODULE,
-        "exposure_policy": "legacy",
+        "exposure_policy": "explicit",
         "template": "<div dj-root><h1>{{ title }}</h1>"
         + "".join("{{ %s }}" % name for name in names)
         + "</div>",

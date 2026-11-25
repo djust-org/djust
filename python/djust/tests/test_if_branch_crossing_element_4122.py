@@ -58,11 +58,14 @@ def templates(settings, tmp_path):
 @pytest.mark.parametrize("base", ["if_else", "plain_if", "balanced"])
 def test_render(base, app):
     class View(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = f"child_{base}.html"
 
         def mount(self, request, **kwargs):
             self.app, self.title = app, "hello"
+
+        def get_context_data(self, **kwargs):
+            return {**super().get_context_data(**kwargs), "app": self.app, "title": self.title}
 
     client = LiveViewTestClient(View)
     client.mount()
@@ -85,11 +88,14 @@ def test_the_page_renders_each_branch_and_re_renders_after_an_event(app):
     from djust.decorators import event_handler
 
     class View(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "child_if_else.html"
 
         def mount(self, request, **kwargs):
             self.app, self.title = app, "hello"
+
+        def get_context_data(self, **kwargs):
+            return {**super().get_context_data(**kwargs), "app": self.app, "title": self.title}
 
         @event_handler()
         def retitle(self, **kwargs):
@@ -179,7 +185,7 @@ def test_the_refusal_reaches_the_developer_on_a_real_mount():
     from django.template import TemplateSyntaxError
 
     class View(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "child_both.html"
 
         def mount(self, request, **kwargs):

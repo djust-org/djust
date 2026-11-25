@@ -595,35 +595,13 @@ class NotifyWorkView(TurnView):
             self.count = result
 
 
-class LegacyNotifyWorkView(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><span>{{ count }}</span></div>"
-    _listen_channels = frozenset({"exposure_turns"})
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    def handle_info(self, message):
-        RAN.append("notify")
-        self.start_async(self._work)
-
-    def _work(self):
-        RAN.append("work")
-        return 21
-
-    def handle_async_result(self, name, result=None, error=None):
-        if error is None:
-            self.count = result
-
-
-@pytest.mark.parametrize("view_class", [NotifyWorkView, LegacyNotifyWorkView])
-async def test_start_async_from_a_server_originated_turn_runs(view_class):
+async def test_start_async_from_a_server_originated_turn_runs():
     """``start_async`` queued in ``handle_info`` (and likewise ``handle_tick`` or
     a ``server_push`` handler) was never dispatched: those turns do not drain
     the queue. It now runs and renders, and an explicit root persists it."""
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
         request = await sync_to_async(make_request)()
-        socket, _ = await _connect(request, view_class)
+        socket, _ = await _connect(request, NotifyWorkView)
         try:
             await _notify({})
             await _wait_for("work")
@@ -633,8 +611,7 @@ async def test_start_async_from_a_server_originated_turn_runs(view_class):
             assert results and "21" in json.dumps(results), frames
         finally:
             await socket.disconnect()
-        if view_class is NotifyWorkView:
-            assert ">21<" in await _restored_count(request, NotifyWorkView)
+        assert ">21<" in await _restored_count(request, NotifyWorkView)
 
 
 class HotReloadFailureView(LiveView):
@@ -648,28 +625,21 @@ class HotReloadFailureView(LiveView):
         return super().get_context_data(count=self.count, **kwargs)
 
 
-class LegacyHotReloadFailureView(HotReloadFailureView):
-    exposure_policy = "legacy"
-
-
 @pytest.mark.parametrize("debug", [True, False])
-@pytest.mark.parametrize("view_class", [HotReloadFailureView, LegacyHotReloadFailureView])
-async def test_hot_reload_render_failure_is_value_free_for_explicit_views(
-    view_class, debug, caplog
-):
+async def test_hot_reload_render_failure_is_value_free_for_explicit_views(debug, caplog):
     """Dev hot reload re-renders the mounted view, which runs its
     ``get_context_data``. Its catch-all logged the exception, with the
-    traceback, for any policy. Under ``DEBUG=False`` an explicit view's failure
-    must be value-free; under ``DEBUG=True`` it logs like a legacy view's
-    (ADR-038 D-a, revised 2026-09-22)."""
+    traceback. Under ``DEBUG=False`` an explicit view's failure must be
+    value-free; under ``DEBUG=True`` it logs the exception (ADR-038 D-a,
+    revised 2026-09-22)."""
     import logging
 
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **dict(SETTINGS, DEBUG=debug)):
         request = await sync_to_async(make_request)()
-        socket, _ = await _connect(request, view_class)
+        socket, _ = await _connect(request, HotReloadFailureView)
         try:
             # Fail the hot-reload render from the outside, as a code edit might.
-            view_class._fail_render = True
+            HotReloadFailureView._fail_render = True
             with caplog.at_level(logging.DEBUG):
                 await get_channel_layer().group_send(
                     "djust_hotreload", {"type": "hotreload", "file": "exposure_hotreload.py"}
@@ -681,9 +651,9 @@ async def test_hot_reload_render_failure_is_value_free_for_explicit_views(
                     assert asyncio.get_running_loop().time() < deadline, caplog.text
                     await asyncio.sleep(0.02)
         finally:
-            view_class._fail_render = False
+            HotReloadFailureView._fail_render = False
             await socket.disconnect()
-    if view_class is LegacyHotReloadFailureView or debug:
+    if debug:
         assert "HOTRELOAD_RENDER_SENTINEL" in caplog.text
         assert "Traceback" in caplog.text
         assert "Protected view operation failed" not in caplog.text

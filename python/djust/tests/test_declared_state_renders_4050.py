@@ -14,7 +14,6 @@ real paths: the HTTP GET, the runtime mount/event, a real
 import json
 import logging
 import re
-import warnings
 from typing import Any
 
 import pytest
@@ -25,7 +24,6 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
 from djust import LiveView, event_handler
-from djust._exposure import ExposureConfigurationError
 from djust.components.descriptors.base import LiveComponent
 from djust.decorators import state
 from djust.mixins.context import rendered_state_names
@@ -174,18 +172,6 @@ class WithComponent(LiveView):
     badge = Badge()
 
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
-
-    class LegacyCounter(LiveView):
-        exposure_policy = "legacy"
-        template = "<div dj-root>[{{ count }}][{{ plain }}]</div>"
-        count = state(5)
-
-        def mount(self, request, **kwargs):
-            self.plain = "legacy-plain"
-
-
 # ------------------------------------------------------------------ #
 # Helpers
 # ------------------------------------------------------------------ #
@@ -249,18 +235,6 @@ def test_render_false_keeps_a_declared_field_out_of_the_template():
     assert rendered_state_names(OptOut) == ("shown",)
 
 
-def test_render_false_is_refused_on_a_legacy_view():
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-
-        class LegacyOptOut(LiveView):
-            exposure_policy = "legacy"
-            hidden = state("x", render=False)
-
-    with pytest.raises(ExposureConfigurationError, match="render=False"):
-        LegacyOptOut()
-
-
 def test_render_must_be_a_boolean():
     with pytest.raises(TypeError, match="render"):
         state(0, render="no")
@@ -280,12 +254,6 @@ def test_render_is_not_part_of_the_exposure_schema():
 
     B.__qualname__ = A.__qualname__
     assert ExposureContract.from_view_class(A).schema == ExposureContract.from_view_class(B).schema
-
-
-@pytest.mark.django_db
-def test_a_legacy_view_is_unchanged():
-    html = _get(LegacyCounter)
-    assert "[5][legacy-plain]" in html, html
 
 
 # ------------------------------------------------------------------ #
@@ -689,15 +657,6 @@ class DeclaresUserHidden(LiveView):
     perms = state(None, render=False)
 
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
-
-    class LegacyDeclaresUser(LiveView):
-        exposure_policy = "legacy"
-        template = "<div dj-root>{{ user }}</div>"
-        user = state("SELECTED_USER")
-
-
 class DeclaresPerms(DeclaresUser):
     exposure_policy = "explicit"
     perms = state(None)
@@ -718,10 +677,9 @@ def test_v027_flags_a_declared_user_or_perms_field():
     assert [m.msg.split("'")[1] for m in _v027(DeclaresPerms)] == ["perms"]
 
 
-def test_v027_is_quiet_for_messages_render_false_and_legacy_views(settings):
+def test_v027_is_quiet_for_messages_and_render_false(settings):
     assert _v027(DeclaresMessages) == []
     assert _v027(DeclaresUserHidden) == []
-    assert _v027(LegacyDeclaresUser) == []
     settings.DJUST_CONFIG = {"suppress_checks": ["V027"]}
     assert _v027(DeclaresUser) == []
 

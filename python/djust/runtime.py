@@ -5406,7 +5406,10 @@ class ViewRuntime(RuntimeTurnPort):
             restrict_diagnostics(target_view)
         except Exception:  # noqa: BLE001 — never break the flush
             restrict_diagnostics(target_view)
-            if diagnostics_allowed():
+            from ._exposure_diagnostics import server_exception_detail_enabled
+
+            # The server log may name the failure under the #4180 opt-in.
+            if diagnostics_allowed() or server_exception_detail_enabled():
                 logger.exception(
                     "Runtime deferred-activity event %r on %s raised during dispatch",
                     sanitize_for_log(event_name or ""),

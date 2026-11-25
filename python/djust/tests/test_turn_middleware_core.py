@@ -61,12 +61,10 @@ not_callable = 42
 
 
 class _Port:
-    def __init__(self, handled=True, reauth_ok=True):
+    def __init__(self, handled=True):
         self.refused = []
         self.failed = []
-        self.reauths = []
         self.handled = handled
-        self.reauth_ok = reauth_ok
 
     async def turn_refused(self, turn, refusal):
         self.refused.append(refusal)
@@ -74,10 +72,6 @@ class _Port:
     async def turn_failed(self, turn, exc):
         self.failed.append(exc)
         return self.handled
-
-    async def turn_reauth(self, turn, *, server):
-        self.reauths.append(server)
-        return self.reauth_ok
 
 
 @pytest.fixture(autouse=True)
@@ -225,57 +219,6 @@ async def test_context_set_by_middleware_reaches_handler_sync_code_and_tasks():
     await spawned[0]
     assert seen == {"handler": "alice", "sync": "alice", "task": "alice"}
     assert caller.get() is None  # reset in the caller's own context
-
-
-class _View:
-    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
-    login_required = True
-
-
-class _OpenView:
-    login_required = False
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "kind,transport,expected",
-    [
-        ("event", "ws", [False]),
-        ("params", "sse", [False]),
-        ("render", "ws", [False]),
-        ("push", "ws", [True]),
-        ("async", "sse", [True]),
-        ("mount", "ws", []),
-        ("reconnect", "ws", []),
-        ("event", "http", []),
-        ("event", "api", []),
-    ],
-)
-async def test_reauth_builtin_runs_for_live_turns_only(kind, transport, expected):
-    port = _Port()
-    with override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True}):
-        await run_turn(Turn(kind, transport, view=_View(), port=port), _body)
-    assert port.reauths == expected
-    assert CALLS == ["body"]
-
-
-@pytest.mark.asyncio
-async def test_reauth_builtin_off_by_default_and_for_open_views():
-    port = _Port()
-    await run_turn(Turn("event", "ws", view=_View(), port=port), _body)
-    with override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True}):
-        await run_turn(Turn("event", "ws", view=_OpenView(), port=port), _body)
-    assert port.reauths == []
-
-
-@pytest.mark.asyncio
-async def test_failed_reauth_refuses_before_app_middleware_and_body():
-    port = _Port(reauth_ok=False)
-    with override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True}), _mw("mw_a"):
-        refusal = await run_turn(Turn("event", "ws", view=_View(), port=port), _body)
-    assert refusal.kind == "login" and refusal.sent
-    assert CALLS == []  # app middleware is inside the built-ins
-    assert port.refused == []  # the transport already answered
 
 
 @pytest.mark.asyncio

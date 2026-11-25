@@ -4,12 +4,11 @@
 ``get_context_data()`` and emits a widget VNode tree to the client. Under the
 explicit policy that context holds only deliberate additions, so a template
 that names an undeclared attribute renders it empty in the emitted tree. The
-legacy control reaches it through the attribute walk.
+rendered declared title is the control: the tree was emitted.
 """
 
 from unittest.mock import patch
 
-import pytest
 from django.template import Context, Template
 
 from djust import LiveView
@@ -19,7 +18,7 @@ NATIVE_TEMPLATE = "<Stack><Text>{{ secret_note }}</Text><Text>{{ title }}</Text>
 
 
 class NativeExposureView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "native_exposure.html"
 
     def mount(self, request, **kwargs):
@@ -36,14 +35,13 @@ def _render_with_django(template_name, context):
     return Template(NATIVE_TEMPLATE).render(Context(context))
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_native_tree_carries_only_the_context_projection(rf, db, policy):
+def test_native_tree_carries_only_the_context_projection(rf, db):
     from django.contrib.auth.models import AnonymousUser
     from django.contrib.sessions.backends.db import SessionStore
 
     from djust.renderers import ComposeRenderer
 
-    view_class = type("PolicyNativeView", (NativeExposureView,), {"exposure_policy": policy})
+    view_class = type("PolicyNativeView", (NativeExposureView,), {"exposure_policy": "explicit"})
     request = rf.get("/native/")
     request.user = AnonymousUser()
     request.session = SessionStore()
@@ -62,8 +60,5 @@ def test_native_tree_carries_only_the_context_projection(rf, db, policy):
 
     emitted = str(tree_json)
     assert '"tag": "text"' in emitted, "the native tree was not emitted"
-    if policy == "legacy":
-        assert SENTINEL in emitted
-    else:
-        assert SENTINEL not in emitted
-        assert "DECLARED_TITLE" in emitted
+    assert SENTINEL not in emitted
+    assert "DECLARED_TITLE" in emitted
