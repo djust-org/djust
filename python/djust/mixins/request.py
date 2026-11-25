@@ -244,6 +244,11 @@ def _start_background_run(
     def body() -> None:
         from django.db import connections
 
+        from .._surviving_work import ABANDONABLE_RUN, is_surviving
+
+        # Runs in this thread's own context copy: a survivor the request
+        # abandons is refused the view from then on (#4182).
+        ABANDONABLE_RUN.set(run)
         completed = False
         try:
             run.result = async_to_sync(runner)()
@@ -252,6 +257,11 @@ def _start_background_run(
             # Handed back to the request thread (a cancelled task as well).
             run.error = exc
             completed = True
+            if run.abandoned and is_surviving(callback) and isinstance(exc, Exception):
+                # Nobody reads an abandoned run's error: log it here.
+                from .async_work import log_survivor_failure
+
+                log_survivor_failure(view, exc)
         finally:
             if not completed:
                 # Anything else (SystemExit, KeyboardInterrupt) is not swallowed
@@ -368,7 +378,8 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
                                 "[djust HTTP] start_async task %s on %s did not finish within the "
                                 "%.4g second budget of http_fallback_background_timeout; the "
                                 "fallback stopped waiting for it and answers without its result. "
-                                "A sync callback keeps running on its worker thread.",
+                                "A sync callback, and a survive_disconnect=True task, keeps "
+                                "running on its worker thread.",
                                 sanitize_for_log(name),
                                 view.__class__.__name__,
                                 budget.timeout,
@@ -2461,6 +2472,14 @@ class RequestMixin:
             error_msg += f": {type(e).__name__}: {str(e)}"
 
             logger.error(error_msg, exc_info=True)
+            from .._exposure_diagnostics import (
+                send_request_exception,
+                server_exception_detail_enabled,
+            )
+
+            if server_exception_detail_enabled():
+                # #4180: the signal fires whatever the owner's policy.
+                send_request_exception(e, request)
 
             if settings.DEBUG:
                 error_details = {

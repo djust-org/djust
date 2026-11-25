@@ -1284,7 +1284,9 @@ def background(func: Optional[F] = None, *, survive_disconnect: bool = False) ->
     user disconnects or navigates away (#4182); see
     :meth:`~djust.mixins.async_work.AsyncWorkMixin.start_async`. Its result is
     then discarded, and setting declared state, pushing or scheduling on the
-    disposed view raises ``ViewDisposedError``:
+    disposed view raises ``ViewDisposedError``. Prefer an ``async def``
+    handler: a sync one runs on Django's shared sync thread, so a WebSocket's
+    teardown waits for it to return before the view is disposed:
 
         @event_handler
         @background(survive_disconnect=True)

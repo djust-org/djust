@@ -47,9 +47,17 @@ class GetBoom(LiveView):
         raise ValueError(SECRET)
 
 
+class AsyncGetBoom(GetBoom):
+    """``streaming_render`` makes ``as_view()`` return an async callable, so
+    the async branch of the HTTP error wrapper handles the failure."""
+
+    streaming_render = True
+
+
 urlpatterns = [
     path("t/boom/", Boom.as_view()),
     path("t/getboom/", GetBoom.as_view()),
+    path("t/agetboom/", AsyncGetBoom.as_view()),
     path("djust/", include(sse_urlpatterns)),
 ]
 
@@ -145,10 +153,21 @@ def test_string_false_is_false():
     assert server_exception_detail_enabled() is False
 
 
-def test_http_page_view_opt_in(caplog, received):
+PAGE_VIEWS = ["/t/getboom/", "/t/agetboom/"]
+
+
+def test_the_async_page_view_is_async():
+    from asgiref.sync import iscoroutinefunction
+
+    assert iscoroutinefunction(AsyncGetBoom.as_view())
+    assert not iscoroutinefunction(GetBoom.as_view())
+
+
+@pytest.mark.parametrize("url", PAGE_VIEWS)
+def test_http_page_view_opt_in(url, caplog, received):
     caplog.set_level(logging.DEBUG)
     with override_settings(LIVEVIEW_CONFIG=OPT_IN):
-        response = Client(raise_request_exception=False).get("/t/getboom/")
+        response = Client(raise_request_exception=False).get(url)
     assert response.status_code == 500
     assert SECRET not in response.content.decode()
     logged = _logged(caplog)
@@ -156,11 +175,12 @@ def test_http_page_view_opt_in(caplog, received):
     assert len(received) == 1 and isinstance(received[0], ValueError), received
 
 
-def test_http_page_view_without_the_opt_in(caplog, received):
+@pytest.mark.parametrize("url", PAGE_VIEWS)
+def test_http_page_view_without_the_opt_in(url, caplog, received):
     from djust._exposure import ExposureError
 
     caplog.set_level(logging.DEBUG)
-    response = Client(raise_request_exception=False).get("/t/getboom/")
+    response = Client(raise_request_exception=False).get(url)
     assert response.status_code == 500
     assert SECRET not in response.content.decode()
     assert SECRET not in _logged(caplog)
@@ -178,3 +198,37 @@ def test_log_failure_opt_in(caplog):
     with override_settings(LIVEVIEW_CONFIG=OPT_IN):
         log_failure_for(log, (view,), exc, "x %s", exc, traceback=True)
     assert SECRET in _logged(caplog)
+
+
+def test_send_request_exception_keeps_the_exceptions_context(received):
+    from djust._exposure_diagnostics import send_request_exception
+
+    cause = KeyError("cause")
+    exc = ValueError(SECRET)
+    exc.__context__ = cause
+    try:
+        raise RuntimeError("unrelated, being handled")
+    except RuntimeError:
+        send_request_exception(exc)
+    assert received == [exc]
+    assert exc.__context__ is cause and exc.__traceback__ is None
+
+
+def test_an_unprintable_exception_keeps_the_generic_answer(caplog):
+    from djust.security.error_handling import handle_exception
+
+    class Unprintable(Exception):
+        def __str__(self):
+            raise RuntimeError("no")
+
+    caplog.set_level(logging.DEBUG)
+    with override_settings(LIVEVIEW_CONFIG=OPT_IN):
+        answer = handle_exception(
+            Unprintable(),
+            error_type="event",
+            view_class="Boom",
+            event_name="boom",
+            expose_details=False,
+        )
+    assert answer["type"] == "error"
+    assert "Protected view operation failed (view=Boom, event=boom): Unprintable" in _logged(caplog)

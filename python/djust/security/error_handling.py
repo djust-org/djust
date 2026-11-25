@@ -300,17 +300,20 @@ def handle_exception(
                     protected_parts.append(f"view={sanitize_for_log(str(view_class))}")
                 if event_name:
                     protected_parts.append(f"event={sanitize_for_log(event_name)}")
-                protected_context = f" ({', '.join(protected_parts)})" if protected_parts else ""
+                try:
+                    safe_text = sanitize_for_log(str(exception))
+                except Exception:  # noqa: BLE001 — a raising __str__ must not break the error path
+                    safe_text = "<unprintable exception>"
                 # Through ``log_failure``, which reads the same opt-in: no raw
                 # exception-carrying logger call (test_log_exposure_pin).
                 log_failure(
                     protected_logger,
                     exception,
-                    "%s%s: %s: %s",
+                    "%s (%s): %s: %s" if protected_parts else "%s%s: %s: %s",
                     PROTECTED_FAILURE,
-                    protected_context,
+                    ", ".join(protected_parts),
                     type(exception).__name__,
-                    sanitize_for_log(str(exception)),
+                    safe_text,
                     traceback=True,
                 )
                 send_request_exception(exception)

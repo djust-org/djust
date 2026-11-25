@@ -128,9 +128,10 @@ async def run_async_callback(
         )
 
     if cancelled():
-        if survives:
+        if survives and getattr(owner, "_djust_child_disposed", False):
             # Decision 4 (#4182): a disposed view cannot be re-authorized, so a
-            # survivor that had not started yet is not started.
+            # survivor that had not started yet is not started. (One dropped
+            # by ``cancel_async_all()`` was cancelled on purpose: no warning.)
             logger.warning(
                 "survive_disconnect task on %s did not start: its view was disposed first",
                 type(owner).__name__,
@@ -157,7 +158,7 @@ async def run_async_callback(
     except Exception as exc:
         if cancelled():
             if survives:
-                _log_survivor_failure(owner, exc)
+                log_survivor_failure(owner, exc)
             raise asyncio.CancelledError from None
         raise
     finally:
@@ -176,7 +177,7 @@ async def run_async_callback(
     return result
 
 
-def _log_survivor_failure(owner: Any, exc: BaseException) -> None:
+def log_survivor_failure(owner: Any, exc: BaseException) -> None:
     """Log a ``survive_disconnect=True`` task's failure after its view was
     disposed: nothing else will report it (#4182)."""
     if isinstance(exc, ViewDisposedError):
@@ -189,7 +190,7 @@ def _log_survivor_failure(owner: Any, exc: BaseException) -> None:
         logger,
         (owner,),
         exc,
-        "survive_disconnect task on %s raised after its view was disposed: %s",
+        "survive_disconnect task on %s raised after its view was disposed or abandoned: %s",
         type(owner).__name__,
         exc,
         level="error",

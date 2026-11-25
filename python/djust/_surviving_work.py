@@ -22,13 +22,21 @@ from asgiref.sync import iscoroutinefunction
 #: The view whose ``survive_disconnect=True`` task is running in this context.
 SURVIVING_OWNER: ContextVar[Any] = ContextVar("djust_surviving_owner", default=None)
 
+#: The HTTP fallback's handle of the task running in this context (an object
+#: with an ``abandoned`` flag), set on the task's worker thread. Once the
+#: request stops waiting for a survivor and answers, the view the task holds
+#: is as gone as a disposed one (#4182 review).
+ABANDONABLE_RUN: ContextVar[Any] = ContextVar("djust_abandonable_run", default=None)
+
 _FLAG = "_djust_survive_disconnect"
 
 _MESSAGE = (
-    "%s was disposed (its connection closed) while a survive_disconnect=True task "
+    "%s was disposed (%s) while a survive_disconnect=True task "
     "was running, so the task may not %s. Keep the work's results outside the view "
     "(the database, a cache, a channel group) and let the next page read them."
 )
+_DISPOSED = "its connection closed"
+_ABANDONED = "the HTTP fallback answered without waiting for the task"
 
 
 class ViewDisposedError(RuntimeError):
@@ -73,7 +81,12 @@ def is_surviving(callback: Any) -> bool:
 
 
 def refuse_if_disposed(view: Any, what: str) -> None:
-    """Raise :class:`ViewDisposedError` when ``view`` is disposed and a
-    surviving task of that view is the caller."""
-    if getattr(view, "_djust_child_disposed", False) is True and SURVIVING_OWNER.get() is view:
-        raise ViewDisposedError(_MESSAGE % (type(view).__name__, what))
+    """Raise :class:`ViewDisposedError` when a surviving task of ``view`` is the
+    caller and ``view`` is disposed, or the HTTP fallback request that ran the
+    task has answered without it."""
+    if SURVIVING_OWNER.get() is not view:
+        return
+    if getattr(view, "_djust_child_disposed", False) is True:
+        raise ViewDisposedError(_MESSAGE % (type(view).__name__, _DISPOSED, what))
+    if getattr(ABANDONABLE_RUN.get(), "abandoned", False) is True:
+        raise ViewDisposedError(_MESSAGE % (type(view).__name__, _ABANDONED, what))

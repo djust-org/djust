@@ -159,6 +159,11 @@ def send_request_exception(exc: BaseException, request: Any = None) -> None:
     Receivers (Sentry's, for one) read ``sys.exc_info()``. WebSocket and SSE
     turns have no Django request, so ``request`` is ``None`` there. A failing
     receiver is logged with static text and never breaks the error path.
+
+    Receivers run inline, as Django runs them for a request; on the WebSocket
+    and SSE that is the event loop, so a receiver must be quick (an error
+    tracker's, which queues the event, is). Re-raising ``exc`` to make it the
+    handled exception leaves its context and traceback as they were.
     """
     from django.core.signals import got_request_exception
 
@@ -166,10 +171,16 @@ def send_request_exception(exc: BaseException, request: Any = None) -> None:
         if sys.exc_info()[1] is exc:
             got_request_exception.send(sender=None, request=request)
         else:
+            context, cause = exc.__context__, exc.__cause__
+            suppress, traceback = exc.__suppress_context__, exc.__traceback__
             try:
                 raise exc
             except BaseException:
                 got_request_exception.send(sender=None, request=request)
+            finally:
+                exc.__context__, exc.__cause__ = context, cause
+                exc.__suppress_context__ = suppress
+                exc.__traceback__ = traceback
     except Exception:  # noqa: BLE001 — a broken receiver must not break the error path
         _log.warning("got_request_exception receiver failed")
 

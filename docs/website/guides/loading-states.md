@@ -375,8 +375,9 @@ While the page is still connected nothing changes: the result renders and `handl
 - `cancel_async()` / `cancel_async_all()` cannot interrupt a running survivor; they only discard its result.
 - A survivor the view was disposed before it started (the window is the few milliseconds between the event's answer and the task's dispatch) is not started, and a warning is logged.
 - It survives in this process only. A server restart or a deploy still loses it; work that must survive those belongs in a task queue.
+- Prefer an `async def` callback. A sync one runs on Django's shared sync thread, as every sync callback does, so on the WebSocket the connection's teardown (which saves state on that same thread) waits until the callback returns; the view is disposed only then.
 
-On the HTTP fallback, a survivor still running when `http_fallback_background_timeout` is spent is not cancelled: the answer goes out without its result and the task finishes on its worker.
+On the HTTP fallback, a survivor still running when `http_fallback_background_timeout` is spent is not cancelled: the answer goes out without its result and the task finishes on its worker. From then on its view is treated as disposed: setting declared state, pushing or scheduling on it raises `ViewDisposedError`, which is logged.
 
 That matters because the loading flag is saved with the rest of the view's state, so it comes back with it, so the page shows a job as running that no longer exists. `mount()` cannot fix it, because restored state is applied after `mount()` returns. Clear the flag in `handle_restore()`, which runs once the restored values are in place:
 

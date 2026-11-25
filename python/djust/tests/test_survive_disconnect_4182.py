@@ -85,6 +85,16 @@ class Survivor(LiveView):
         self.status = "done"
         EVENTS.append("touched")
 
+    @event_handler
+    def threaded_touch(self, **kwargs):
+        self.start_async(self._threaded_touch, survive_disconnect=True, name="touch")
+
+    async def _threaded_touch(self):
+        EVENTS.append("started")
+        await asyncio.to_thread(THREAD_GATE.wait, 10)
+        self.status = "done"
+        EVENTS.append("touched")
+
     async def _threaded_work(self):
         EVENTS.append("started")
         try:
@@ -202,7 +212,6 @@ async def test_survivor_touching_the_disposed_view_gets_a_clear_error(caplog):
     await socket.disconnect()
     view = VIEWS[-1]
     await _until(lambda: view._djust_child_disposed is True, "the view to be disposed")
-    frames = len(socket.frames)
     GATE["gate"].set()
 
     def refused():
@@ -217,7 +226,7 @@ async def test_survivor_touching_the_disposed_view_gets_a_clear_error(caplog):
     assert "'status'" in message and "Survivor" in message, message
     assert "touched" not in EVENTS
     assert view.__dict__.get("_state_status") != "done"
-    assert len(socket.frames) == frames
+    assert not [e for e in EVENTS if isinstance(e, tuple)], "no handle_async_result after disposal"
 
 
 async def test_survivor_result_renders_while_connected():
@@ -228,7 +237,7 @@ async def test_survivor_result_renders_while_connected():
         await _until(lambda: "started" in EVENTS, "the work to start")
         GATE["gate"].set()
         await _until(lambda: ("handled", "send", "done") in EVENTS, "the result handler")
-        await socket.receive(("patch", "html_update", "noop"), timeout=5)
+        await socket.receive(("patch", "html_update"), timeout=5)
 
 
 def test_http_fallback_budget_does_not_cancel_a_survivor():
@@ -243,6 +252,32 @@ def test_http_fallback_budget_does_not_cancel_a_survivor():
             break
         threading.Event().wait(0.01)
     assert "finished" in EVENTS, EVENTS
+
+
+def test_an_abandoned_fallback_survivor_may_not_touch_the_view(caplog):
+    """The fallback answered without the survivor: its view is as gone as a
+    disposed one, so a state write raises instead of vanishing."""
+    caplog.set_level(logging.DEBUG)
+    page = open_live_page("/t/survivor/")
+    with override_settings(LIVEVIEW_CONFIG={"http_fallback_background_timeout": 0.05}):
+        response = page.post_event("threaded_touch")
+    assert response.status_code == 200
+    THREAD_GATE.set()
+
+    def refused():
+        return [
+            r
+            for r in caplog.records
+            if r.levelno == logging.ERROR and "HTTP fallback answered" in r.getMessage()
+        ]
+
+    for _ in range(500):
+        if refused():
+            break
+        threading.Event().wait(0.01)
+    assert refused(), [r.getMessage() for r in caplog.records]
+    assert "'status'" in refused()[0].getMessage()
+    assert "touched" not in EVENTS
 
 
 def test_http_fallback_budget_still_cancels_other_work():

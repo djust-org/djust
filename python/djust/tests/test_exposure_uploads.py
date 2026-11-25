@@ -503,6 +503,7 @@ class UploadResumePage(UploadMixin, LiveView):
 RESUME_URLCONF = types.ModuleType("upload_resume_urls")
 RESUME_URLCONF.urlpatterns = [  # type: ignore[attr-defined]
     path("t/upload/", UploadResumePage.as_view()),
+    path("t/upload-elsewhere/", UploadResumePage.as_view()),
     *upload_status_urlpatterns(),
 ]
 
@@ -624,4 +625,39 @@ async def test_status_endpoint_is_bound_to_the_owner(resume_site):
     assert json.loads(mine.content)["chunks_received"] == [0, 1]
     bobs = await sync_to_async(open_live_page)("/t/upload/", user=bob)
     assert (await sync_to_async(bobs.client.get)(url)).status_code == 404
+    await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_the_record_is_bound_to_the_mount_owner_not_only_the_session(resume_site):
+    """Same browser session and user, another page: the session check alone
+    would let it resume; the owner binding (principal + view) does not."""
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import RequestFactory
+
+    from djust._exposure_sessions import request_principal_digest
+    from djust.uploads.storage import get_default_store as current_store
+
+    alice = await sync_to_async(_user)("alice")
+    page = await sync_to_async(open_live_page)("/t/upload/", user=alice)
+    ref, first = await _upload_two_chunks(page)
+    await first.disconnect()
+
+    def principal():
+        request = RequestFactory().get("/t/upload/")
+        request.session = SessionStore(page.client.session.session_key)
+        request.user = alice
+        return request_principal_digest(request)
+
+    owner = current_store().get(ref)["owner"]
+    assert owner == {"principal": await sync_to_async(principal)(), "view": "/t/upload/"}
+
+    elsewhere = await sync_to_async(open_live_page)("/t/upload-elsewhere/", client=page.client)
+    assert elsewhere.session.session_key == page.session.session_key
+    socket, answer = await _resume(elsewhere, ref)
+    assert answer["status"] == "not_found", answer
+    await socket.disconnect()
+
+    socket, answer = await _resume(page, ref)
+    assert answer["status"] == "resumed", answer
     await socket.disconnect()
