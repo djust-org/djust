@@ -767,10 +767,9 @@ class TestRestoredEarlierStateIsCleaned:
             and re.search(r"restore_public_state\(", path.read_text())
             and path.name != "_state_restore.py"
         )
-        # 2.0 removed the page-POST fallback's restore (``mixins/request.py``).
-        assert found == [
-            "_lazy_containers.py",
-        ]
+        # 2.0 removed the page-POST fallback's restore (``mixins/request.py``) and the legacy lazy
+        # child's saved state (``_lazy_containers.py``, #4200): nothing but ``_state_restore`` restores.
+        assert found == []
 
 
 class TestTheReadTimeGuard:
