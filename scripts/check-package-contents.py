@@ -36,6 +36,12 @@ REQUIRED = [
     "djust/static/djust/chunks/cursor-overlay.min.js",
     "djust/static/djust/chunks/tutorial.min.js",
     "djust/static/djust/chunks/service-worker.min.js",
+    # The readable chunks the core loads under DEBUG.
+    "djust/static/djust/chunks/uploads.js",
+    "djust/static/djust/chunks/virtual-list.js",
+    "djust/static/djust/chunks/cursor-overlay.js",
+    "djust/static/djust/chunks/tutorial.js",
+    "djust/static/djust/chunks/service-worker.js",
 ]
 
 

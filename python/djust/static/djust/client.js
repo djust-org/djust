@@ -522,11 +522,9 @@ function applyHttpSideChannels(data) {
     }
     if (Array.isArray(data._push_events)) {
         // The WebSocket push_event case, per queued event.
+        // An upload event is held while the uploads chunk loads (#4007).
         data._push_events.forEach(function(frame) {
-            window.dispatchEvent(new CustomEvent('djust:push_event', {
-                detail: { event: frame.event, payload: frame.payload }
-            }));
-            dispatchPushEventToHooks(frame.event, frame.payload);
+            _djustDispatchPushEvent(frame.event, frame.payload);
         });
     }
     if (data._layout && window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
@@ -1124,11 +1122,9 @@ async function dispatchCommonFrame(transport, data, logPrefix) {
 
         case 'push_event':
             // Server-pushed event for JS hooks
-            window.dispatchEvent(new CustomEvent('djust:push_event', {
-                detail: { event: data.event, payload: data.payload }
-            }));
-            // Dispatch to dj-hook instances that registered via handleEvent
-            dispatchPushEventToHooks(data.event, data.payload);
+            // ...and to dj-hook instances that registered via handleEvent.
+            // An upload event is held while the uploads chunk loads (#4007).
+            _djustDispatchPushEvent(data.event, data.payload);
             // Clear loading state — when _skip_render is used, this is the
             // only response the client gets (no patch/html_update follows).
             globalLoadingManager.stopLoading(transport.lastEventName, transport.lastTriggerElement);
@@ -7766,6 +7762,10 @@ function reinitAfterDOMUpdate(scope) {
     // appended items render (initVirtualLists short-circuits on already-
     // tracked containers; refreshVirtualList is the re-window path).
     const reinitScope = scope || document;
+    // #4007: a chunked feature (dj-virtual, CursorOverlay, tutorial bubble)
+    // this update rendered for the first time loads its chunk now; the
+    // chunk's ready handler runs its init once it has loaded.
+    if (typeof _djustLoadChunksFor === 'function') _djustLoadChunksFor(reinitScope);
     if (window.djust.initVirtualLists) window.djust.initVirtualLists(reinitScope);
     if (window.djust.refreshVirtualList) {
         reinitScope.querySelectorAll('[dj-virtual]').forEach((el) => {
@@ -13116,6 +13116,19 @@ const _DJUST_CHUNK_SELECTORS = {
 const _djustClientScript = document.currentScript || null;
 const _djustChunkLoaded = {};
 const _djustChunkPromises = {};
+// A chunk that failed (error or timeout) is not requested again by the
+// page scans, and its failure is reported once.
+const _djustChunkFailed = {};
+// A request that neither loads nor errors must not hold back init for good.
+const _DJUST_CHUNK_TIMEOUT_MS = 10000;
+
+function _djustReportChunkFailure(name, err) {
+    // eslint-disable-next-line security/detect-object-injection
+    if (_djustChunkFailed[name]) return;
+    // eslint-disable-next-line security/detect-object-injection
+    _djustChunkFailed[name] = true;
+    console.error(err && err.message ? err.message : err);
+}
 
 function _djustClientNonce() {
     const own = _djustClientScript;
@@ -13173,21 +13186,31 @@ function loadClientChunk(name) {
             ': the client script has no src (use the full bundle, client.min.js)'));
     }
     const promise = new Promise(function (resolve, reject) {
+        // window.djust._chunkLoadTimeoutMs: private override, for tests.
+        const timeoutMs = window.djust._chunkLoadTimeoutMs || _DJUST_CHUNK_TIMEOUT_MS;
+        const timer = setTimeout(function () {
+            reject(new Error('[djust] client chunk ' + name + ' did not load within ' +
+                timeoutMs + ' ms (' + url + ')'));
+        }, timeoutMs);
         const script = document.createElement('script');
         script.src = url;
         const nonce = _djustClientNonce();
         if (nonce) script.setAttribute('nonce', nonce);
         script.setAttribute('data-djust-chunk', name);
-        script.onload = function () { resolve(); };
+        script.onload = function () { clearTimeout(timer); resolve(); };
         script.onerror = function () {
-            // eslint-disable-next-line security/detect-object-injection
-            delete _djustChunkPromises[name];
+            clearTimeout(timer);
             reject(new Error('[djust] failed to load client chunk ' + name + ' from ' + url));
         };
         document.head.appendChild(script);
     });
     // eslint-disable-next-line security/detect-object-injection
     _djustChunkPromises[name] = promise;
+    promise.catch(function () {
+        // An explicit loadClientChunk() later may try again; page scans do not.
+        // eslint-disable-next-line security/detect-object-injection
+        if (_djustChunkPromises[name] === promise) delete _djustChunkPromises[name];
+    });
     return promise;
 }
 
@@ -13198,11 +13221,13 @@ function _djustNeededChunks(root) {
     const needed = [];
     for (const name of Object.keys(_DJUST_CHUNK_SELECTORS)) {
         // eslint-disable-next-line security/detect-object-injection
-        if (_djustChunkLoaded[name]) continue;
+        if (_djustChunkLoaded[name] || _djustChunkFailed[name]) continue;
         // eslint-disable-next-line security/detect-object-injection
-        if (scope.querySelector && scope.querySelector(_DJUST_CHUNK_SELECTORS[name])) needed.push(name);
+        const selector = _DJUST_CHUNK_SELECTORS[name];
+        if ((scope.matches && scope.matches(selector)) ||
+            (scope.querySelector && scope.querySelector(selector))) needed.push(name);
     }
-    if (!_djustChunkLoaded['service-worker'] &&
+    if (!_djustChunkLoaded['service-worker'] && !_djustChunkFailed['service-worker'] &&
         typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) {
         needed.push('service-worker');
     }
@@ -13224,7 +13249,7 @@ function _djustWithChunks(root, fn) {
     if (globalThis.djustDebug) console.log('[djust] loading client chunks:', needed.join(', '));
     Promise.all(needed.map(function (name) {
         return loadClientChunk(name).catch(function (err) {
-            console.error(err && err.message ? err.message : err);
+            _djustReportChunkFailure(name, err);
         });
     })).then(function () {
         // queueMicrotask, not inside .then: an exception from init surfaces
@@ -13261,8 +13286,49 @@ function _djustForwardAfterLoad(chunk, getTarget, method) {
 
 function _djustBackgroundLoad(chunk) {
     loadClientChunk(chunk).catch(function (err) {
-        console.error(err && err.message ? err.message : err);
+        _djustReportChunkFailure(chunk, err);
+        if (chunk === 'uploads') _djustFlushUploadPushEvents();
     });
+}
+
+/**
+ * After a patch: load, in the background, the chunks the patched subtree
+ * now needs (a first dj-virtual list, CursorOverlay hook or tutorial bubble
+ * rendered by a patch or live_redirect). Each chunk's ready handler then runs
+ * its init over the document. Called from reinitAfterDOMUpdate().
+ */
+function _djustLoadChunksFor(scope) {
+    for (const name of _djustNeededChunks(scope)) _djustBackgroundLoad(name);
+}
+
+// Upload push events (e.g. ``djust:upload_progress`` from the view's
+// cancel_upload()) that arrive while the uploads chunk is loading are held,
+// listeners and hooks alike, and dispatched once it has run, so the chunk's
+// own listener sees them. Any push event whose name mentions "upload" is
+// held, so a listener the module adds later is covered without a change here.
+const _djustHeldUploadPushEvents = [];
+
+function _djustDispatchPushEvent(event, payload) {
+    if (typeof event === 'string' && event.indexOf('upload') !== -1 &&
+        window.djust.uploads && window.djust.uploads._djustStub &&
+        _djustChunkPromises['uploads']) {
+        _djustHeldUploadPushEvents.push([event, payload]);
+        return;
+    }
+    window.dispatchEvent(new CustomEvent('djust:push_event', {
+        detail: { event: event, payload: payload }
+    }));
+    dispatchPushEventToHooks(event, payload);
+}
+
+function _djustFlushUploadPushEvents() {
+    const held = _djustHeldUploadPushEvents.splice(0);
+    for (const entry of held) {
+        window.dispatchEvent(new CustomEvent('djust:push_event', {
+            detail: { event: entry[0], payload: entry[1] }
+        }));
+        dispatchPushEventToHooks(entry[0], entry[1]);
+    }
 }
 
 if (!window.djust.uploads) {
@@ -13309,6 +13375,7 @@ const _DJUST_CHUNK_READY = {
         const uploads = window.djust.uploads;
         if (_djustUploadConfigs !== undefined) uploads.setConfigs(_djustUploadConfigs);
         if (_djustUploadsBindWanted || window.djustInitialized) uploads.bindHandlers(document);
+        _djustFlushUploadPushEvents();
     },
     'virtual-list': function () {
         if (window.djustInitialized) window.djust.initVirtualLists(document);
@@ -13340,15 +13407,19 @@ window.djust._chunkReady = function (name) {
     }
 };
 
-// The core-scope bindings a chunk reads. build-client.sh rewrites each name a
-// chunk uses (CHUNK_SPECS) to a read through this object, so a reassigned
-// binding (liveViewWS) is read live.
-window.djust._chunkScope = Object.freeze({
-    get liveViewWS() { return liveViewWS; },
-    isWSConnected: isWSConnected,
-    slotIdFor: slotIdFor,
-    slotFrameFields: slotFrameFields,
-});
+// PRIVATE: window.djust._chunkScope is not an API. It holds the core-scope
+// bindings a chunk reads; build-client.sh rewrites each name a chunk uses
+// (CHUNK_SPECS) to a read through this object, so a reassigned binding
+// (liveViewWS) is read live. Only the core bundle exposes it: the build calls
+// this from the core bundle's last line.
+function _djustExposeChunkScope() {
+    window.djust._chunkScope = Object.freeze({
+        get liveViewWS() { return liveViewWS; },
+        isWSConnected: isWSConnected,
+        slotIdFor: slotIdFor,
+        slotFrameFields: slotFrameFields,
+    });
+}
 
 window.djust.loadClientChunk = loadClientChunk;
 window.djust._neededClientChunks = _djustNeededChunks;

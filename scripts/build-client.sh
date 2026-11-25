@@ -217,6 +217,8 @@ if ls "$SRC_DIR"/[0-9]*.js 1>/dev/null 2>&1; then
             fi
         done
         printf "\nwindow.djust._clientBundle = window.djust._clientBundle || 'core';\n"
+        # The private bridge chunks read core bindings through (13c-chunk-loader.js).
+        printf "if (window.djust._clientBundle === 'core') _djustExposeChunkScope();\n"
         printf '})();\n'
     } > "$CORE_OUT"
     echo "Built client-core.js ($(wc -c < "$CORE_OUT" | tr -d ' ') bytes, IIFE-wrapped)"

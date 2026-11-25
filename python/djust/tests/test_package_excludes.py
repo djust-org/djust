@@ -38,7 +38,7 @@ def test_checker_flags_tests_and_sources(tmp_path):
             "djust/static/djust/client-core.js",
             "djust/static/djust/client-core.min.js",
             *(
-                f"djust/static/djust/chunks/{name}.min.js"
+                f"djust/static/djust/chunks/{name}{suffix}"
                 for name in (
                     "uploads",
                     "virtual-list",
@@ -46,6 +46,7 @@ def test_checker_flags_tests_and_sources(tmp_path):
                     "tutorial",
                     "service-worker",
                 )
+                for suffix in (".js", ".min.js")
             ),
             "djust/tests/test_x.py",
             "djust/static/djust/src/00-namespace.js",

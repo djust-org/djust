@@ -24,11 +24,20 @@ const NONCE = 'n0nce-4007';
 
 // Serves python/djust/static/djust/** for /static/djust/** (and /hashed/**,
 // standing in for ManifestStaticFilesStorage names); records every request.
-function staticLoader() {
+// `hold` names chunks whose responses wait until `release(name)`; a held
+// chunk never released stalls like a request that gets no answer.
+function staticLoader(hold = []) {
     const requests = [];
-    const interceptor = requestInterceptor((request) => {
+    const gates = {};
+    for (const name of hold) {
+        let open;
+        gates[name] = { promise: new Promise((r) => { open = r; }), open: () => open() };
+    }
+    const interceptor = requestInterceptor(async (request) => {
         const u = new URL(request.url);
         requests.push(u.pathname + u.search);
+        const held = Object.keys(gates).find((n) => u.pathname.includes('/chunks/' + n + '.'));
+        if (held) await gates[held].promise;
         const rel = u.pathname.replace(/^\/static\/djust\//, '').replace(/^\/hashed\//, '');
         const file = path.join(STATIC, rel.replace(/\.abc123\./, '.'));
         if (!file.startsWith(STATIC) || !fs.existsSync(file)) {
@@ -38,16 +47,20 @@ function staticLoader() {
             headers: { 'Content-Type': 'application/javascript' },
         });
     });
-    return { requests, resources: { interceptors: [interceptor] } };
+    return {
+        requests,
+        resources: { interceptors: [interceptor] },
+        release: (name) => gates[name].open(),
+    };
 }
 
-function page(body, { bundle = 'client-core.js', chunkMap = null, extraHead = '', swController = false } = {}) {
-    const loader = staticLoader();
+function page(body, { bundle = 'client-core.js', chunkMap = null, extraHead = '', swController = false, hold = [] } = {}) {
+    const loader = staticLoader(hold);
     const mapAttr = chunkMap
         ? ` data-djust-chunks="${JSON.stringify(chunkMap).replace(/"/g, '&quot;')}"`
         : '';
     const dom = new JSDOM(`<!DOCTYPE html><html><head>
-<script nonce="${NONCE}">window.DJUST_USE_WEBSOCKET = false;</script>${extraHead}
+<script nonce="${NONCE}">window.DJUST_USE_WEBSOCKET = false; window.djust = { _chunkLoadTimeoutMs: 300 };</script>${extraHead}
 </head><body>${body}
 <script src="/static/djust/${bundle}" nonce="${NONCE}"${mapAttr}></script>
 </body></html>`, {
@@ -193,6 +206,78 @@ describe('core bundle: chunks load only when used (#4007)', () => {
     });
 });
 
+describe('core bundle: features a patch renders after init (#4007)', () => {
+    // reinitAfterDOMUpdate() is what every patch, html_update and
+    // live_redirect mount runs over the updated subtree.
+    it('a dj-virtual list a patch renders loads its chunk and is virtualized', async () => {
+        const { window, loader } = page('<div dj-view="app.V"><div id="tab"></div></div>');
+        await until(() => window.djustInitialized, 'init');
+        expect(chunkRequests(loader)).toEqual([]);
+        const rows = Array.from({ length: 50 }, (_, i) => `<div data-key="${i}">row ${i}</div>`).join('');
+        const tab = window.document.getElementById('tab');
+        tab.innerHTML = `<div id="vl" dj-virtual="items" dj-virtual-item-height="20" style="height:100px;overflow:auto">${rows}</div>`;
+        window.djust.reinitAfterDOMUpdate(tab);
+        await until(() => window.document.querySelectorAll('#vl [data-key]').length < 50, 'virtualized list');
+        expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/virtual-list.js']);
+    });
+
+    it('a CursorOverlay hook a patch renders loads its chunk and is mounted', async () => {
+        const { window, loader } = page('<div dj-view="app.V"><div id="tab"></div></div>');
+        await until(() => window.djustInitialized, 'init');
+        const tab = window.document.getElementById('tab');
+        tab.innerHTML = '<div id="co" dj-hook="CursorOverlay"><textarea></textarea></div>';
+        window.djust.reinitAfterDOMUpdate(tab);
+        // mounted() adds the overlay and the measuring mirror to the hook element.
+        await until(() => window.document.getElementById('co').children.length === 3, 'mounted hook');
+        expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/cursor-overlay.js']);
+    });
+
+    it('a chunk that failed is not requested again on every patch', async () => {
+        const { window, loader } = page('<div dj-view="app.V"><div id="tab"></div></div>', {
+            chunkMap: { 'virtual-list': '/static/djust/chunks/missing.js' },
+        });
+        const errors = [];
+        window.console.error = (...a) => errors.push(a.join(' '));
+        await until(() => window.djustInitialized, 'init');
+        const tab = window.document.getElementById('tab');
+        tab.innerHTML = '<div dj-virtual="x"></div>';
+        window.djust.reinitAfterDOMUpdate(tab);
+        await until(() => errors.length === 1, 'failure report');
+        window.djust.reinitAfterDOMUpdate(tab);
+        window.djust.reinitAfterDOMUpdate(tab);
+        await new Promise((r) => setTimeout(r, 50));
+        expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/missing.js']);
+        expect(errors.length).toBe(1);
+    });
+});
+
+describe('core bundle: stalled and slow chunks (#4007)', () => {
+    it('a chunk request that never answers times out and init proceeds', async () => {
+        const { window } = page('<div dj-view="app.V"><div dj-virtual="x"></div></div>', { hold: ['virtual-list'] });
+        const errors = [];
+        window.console.error = (...a) => errors.push(a.join(' '));
+        await until(() => window.djustInitialized, 'init after timeout');
+        expect(errors.some((e) => e.includes('did not load within 300 ms'))).toBe(true);
+    });
+
+    it('an upload push event that arrives while the uploads chunk loads reaches it', async () => {
+        const { window, loader } = page('<div dj-view="app.V"></div>', { hold: ['uploads'] });
+        await until(() => window.djustInitialized, 'init');
+        const seen = [];
+        window.addEventListener('djust:push_event', (e) => seen.push(e.detail.event));
+        window.djust.uploads.setConfigs({ avatar: {} });
+        await until(() => chunkRequests(loader).length === 1, 'uploads request');
+        const ws = window.djust.liveViewInstance;
+        await ws.handleMessage({ type: 'push_event', event: 'djust:upload_progress', payload: { ref: 'r1' } });
+        await ws.handleMessage({ type: 'push_event', event: 'other', payload: {} });
+        // Held, not lost: the unrelated event went through at once.
+        expect(seen).toEqual(['other']);
+        loader.release('uploads');
+        await until(() => !window.djust.uploads._djustStub && seen.length === 2, 'uploads chunk');
+        expect(seen).toEqual(['other', 'djust:upload_progress']);
+    });
+});
+
 describe('full bundle (#4007)', () => {
     it('client.js holds every module and loads no chunk', async () => {
         const items = '<div data-key="1">a</div>';
@@ -202,6 +287,8 @@ describe('full bundle (#4007)', () => {
         );
         await until(() => window.djustInitialized, 'init');
         expect(window.djust._clientBundle).toBe('full');
+        // The private bridge for chunks exists in the core build only.
+        expect(window.djust._chunkScope).toBeUndefined();
         expect(chunkRequests(loader)).toEqual([]);
         expect(window.djust.uploads._djustStub).toBeUndefined();
         expect(typeof window.djust.initVirtualLists).toBe('function');

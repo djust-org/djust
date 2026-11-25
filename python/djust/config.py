@@ -183,8 +183,8 @@ class LiveViewConfig:
         # Which client bundle the LiveView injects (#4007). "core" (default):
         # client-core.js, which loads the optional chunks (uploads, virtual
         # list, cursor overlay, tutorial bubble, service worker) only when the
-        # page uses them. "full": client.js, every module up front, nothing
-        # loaded later; for apps that add those dj-* attributes after init.
+        # page uses them (at load or when a patch renders them). "full":
+        # client.js, every module up front, nothing loaded later.
         "client_bundle": "core",
         # WebSocket per-message compression advisory flag (v0.6.0).
         # permessage-deflate negotiation actually happens in the ASGI

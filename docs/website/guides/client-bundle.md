@@ -30,6 +30,20 @@ request for each chunk the page uses.
 
 A TurboNav page swap does the same scan for the new page.
 
+A feature that first appears **after** the page has loaded (a patch, a tab
+switch, an `{% if %}` that turns true, or a `live_redirect` that renders the
+first `dj-virtual` list, `dj-hook="CursorOverlay"` or tutorial bubble) loads its
+chunk then: the scan runs over every patched subtree, and once the chunk has
+loaded the client sets the new element up (`dj-virtual` is virtualized, the
+hook is mounted). Until then the element shows as the server rendered it. A
+view that declares uploads loads the uploads chunk when it mounts, and an
+upload push event (`djust:upload_progress`) that arrives while that chunk is
+loading is held and delivered once it has run.
+
+A chunk request that fails, or gets no answer within 10 seconds, is reported
+once in the console; the page then starts without that feature, and later
+patches do not request it again.
+
 `djust.uploads` and `djust.registerServiceWorker()` exist from the start. Until
 their chunk has loaded they are stubs: `djust.uploads.uploadFile()`,
 `uploadPresigned()`, `cancelUpload()` and `djust.registerServiceWorker()`
@@ -58,12 +72,9 @@ your static files, as it already does for the client.
 
 ## The full bundle
 
-Some pages only gain one of the attributes above **after** the page has loaded:
-a patch or a `live_redirect` that renders the first `dj-virtual` list,
-`dj-hook="CursorOverlay"` or tutorial bubble. (Uploads are covered: a view that
-declares uploads loads the chunk when it mounts.) Until the core loads chunks for attributes added later (tracked in the
-follow-up to #4007), such apps should use the single bundle, which contains
-every module and loads nothing on demand:
+The single bundle contains every module and loads nothing on demand. Use it
+when one extra request per feature is not wanted, for example on a page that
+must work offline from a service worker that precaches only the client:
 
 ```python
 LIVEVIEW_CONFIG = {

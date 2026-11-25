@@ -91,11 +91,9 @@ async function dispatchCommonFrame(transport, data, logPrefix) {
 
         case 'push_event':
             // Server-pushed event for JS hooks
-            window.dispatchEvent(new CustomEvent('djust:push_event', {
-                detail: { event: data.event, payload: data.payload }
-            }));
-            // Dispatch to dj-hook instances that registered via handleEvent
-            dispatchPushEventToHooks(data.event, data.payload);
+            // ...and to dj-hook instances that registered via handleEvent.
+            // An upload event is held while the uploads chunk loads (#4007).
+            _djustDispatchPushEvent(data.event, data.payload);
             // Clear loading state — when _skip_render is used, this is the
             // only response the client gets (no patch/html_update follows).
             globalLoadingManager.stopLoading(transport.lastEventName, transport.lastTriggerElement);
