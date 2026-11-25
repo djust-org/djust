@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import uuid
+from pathlib import Path
 from typing import Any, List, Tuple
 
 import pytest
@@ -62,6 +64,13 @@ class Grid(LiveView):
         self.note = value
 
 
+class GridAfter(Grid):
+    """``Grid`` as the script leaves it, mounted fresh: the DOM the client must end with."""
+
+    offset = state(1000, persist="server")
+    note = state("again", persist="server")
+
+
 urlpatterns = [path("grid-4229/", Grid.as_view())]
 
 SETTINGS = {
@@ -98,7 +107,9 @@ def _assert_fallback_then_patches(answers: List[dict]) -> None:
     assert again["version"] == after["version"] + 1, answers
 
 
-async def _ws_answers(script: List[Tuple[str, dict]]) -> Tuple[dict, List[dict]]:
+async def _ws_answers(
+    script: List[Tuple[str, dict]], view: str = "Grid"
+) -> Tuple[dict, List[dict]]:
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
 
@@ -111,7 +122,7 @@ async def _ws_answers(script: List[Tuple[str, dict]]) -> Tuple[dict, List[dict]]
     answers: List[dict] = []
     try:
         await comm.receive_json_from(timeout=10)  # connect frame
-        await comm.send_json_to({"type": "mount", "view": f"{MODULE}.Grid", "url": "/grid-4229/"})
+        await comm.send_json_to({"type": "mount", "view": f"{MODULE}.{view}", "url": "/grid-4229/"})
         mounted = await _until(comm, ("mount",))
         for ref, (name, params) in enumerate(script, start=1):
             await comm.send_json_to({"type": "event", "event": name, "params": params, "ref": ref})
@@ -290,3 +301,45 @@ def test_http_a_whole_page_for_a_refused_token_is_not_marked_as_chosen_for_size(
     assert ">1149</li>" in answer["html"] and "whole_page" not in answer
     response = post_event(client, "/grid-4229/", "touch", {"value": "x"}, "A" * 22 + "." + "0" * 16)
     assert "whole_page" not in json.loads(response.content)
+
+
+# --------------------------------------------------------------------------- #
+# The client replay fixture
+# --------------------------------------------------------------------------- #
+
+FIXTURE = (
+    Path(__file__).resolve().parents[3]
+    / "tests"
+    / "js"
+    / "fixtures"
+    / "compression_fallback_4229.json"
+)
+WRITE_ENV = "DJUST_WRITE_COMPRESSION_FALLBACK_FIXTURE"
+_FRAME_KEYS = ("type", "html", "patches", "version", "event_name", "source", "ref")
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_committed_client_fixture_is_current():
+    """``tests/js/compression_fallback_baseline_4229.test.js`` replays these
+    WebSocket frames with the built client and compares its DOM with
+    ``fresh``, a fresh mount of the state the script ends in.
+
+    Generated, never edited: ``DJUST_WRITE_COMPRESSION_FALLBACK_FIXTURE=1``
+    and run this test.
+    """
+    mounted, answers = await _ws_answers(_SCRIPT)
+    fresh, _ = await _ws_answers([], view="GridAfter")
+    document = {
+        "_generated_by": "python/djust/tests/test_compression_fallback_baseline_4229.py",
+        "mount": {key: mounted[key] for key in ("html", "version")},
+        "frames": [{k: a[k] for k in _FRAME_KEYS if k in a} for a in answers],
+        "fresh": fresh["html"],
+    }
+    text = json.dumps(document, indent=1, sort_keys=True) + "\n"
+    if os.environ.get(WRITE_ENV):
+        FIXTURE.write_text(text, encoding="utf-8")
+    assert FIXTURE.exists(), "generate the fixture: see this test's docstring"
+    assert json.loads(FIXTURE.read_text(encoding="utf-8")) == json.loads(text), (
+        "tests/js/fixtures/compression_fallback_4229.json is stale: regenerate it"
+    )

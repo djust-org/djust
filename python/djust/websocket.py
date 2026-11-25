@@ -804,8 +804,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # SINGLE SOURCE OF TRUTH for the ``version`` field on every
         # client-checked outbound frame (patch / html_update / mount /
         # html_recovery). It is decoupled from the Rust view's internal
-        # ``self.version`` (which resets to 0 on baseline loss — e.g. a
-        # patch-compression ``_rust_view.reset()``). Stamping the consumer
+        # ``self.version`` (which ``_rust_view.reset()`` restarts at 0 on
+        # baseline loss — e.g. a contract-discovery failure or a background
+        # render's discarded baseline; the patch-compression fallback keeps
+        # its baseline since #4229). Stamping the consumer
         # counter keeps the wire sequence strictly monotonic per-CONNECTION,
         # so a post-baseline-loss ``html_update`` still satisfies the client's
         # ``clientVdomVersion === data.version - 1`` check
@@ -1734,8 +1736,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         """Single source of truth for the outbound VDOM wire version (#1788).
 
         Monotonic per-CONNECTION; decoupled from the Rust view's ``self.version``
-        (which resets to 0 on baseline loss — e.g. a patch-compression
-        ``_rust_view.reset()``). Every client-checked frame stamps THIS so the
+        (which ``_rust_view.reset()`` restarts at 0 on baseline loss — e.g. a
+        contract-discovery failure; the patch-compression fallback keeps its
+        baseline since #4229). Every client-checked frame stamps THIS so the
         wire sequence stays strictly monotonic across a Rust baseline reset, and
         a post-baseline-loss ``html_update`` still satisfies the client's
         ``clientVdomVersion === data.version - 1`` check — no ``request_html``
