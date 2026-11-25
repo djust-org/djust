@@ -23,7 +23,11 @@ from ..optimization.codegen import (
     compile_serializer,
     generate_serializer_code,
 )
-from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
+from ..optimization.query_optimizer import (
+    analyze_queryset_optimization,
+    light_relation_parent_bound,
+    optimize_queryset,
+)
 from ..serialization import CalledName, model_identity, normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
 
@@ -470,6 +474,15 @@ def _method_root_row_paths(model_class: Any, paths: List[str]) -> List[str]:
                 continue
             path = rest
             head, _, rest = path.partition(".")
+            # ``all.1.username`` / ``all.__len__`` (#3862): an index or a length read
+            # of the QuerySet's own ``all`` is answered from its rows too (#4326).
+            if head.isdigit():
+                if not rest:
+                    continue
+                path = rest
+                head, _, rest = path.partition(".")
+            if path == LENGTH_PATH:
+                continue
         if head in ALL_CHAIN_METHODS and not hasattr(model_class, head):
             continue
         kept.append(path)
@@ -812,6 +825,55 @@ def keep_rows_for_all_methods(view: Any, name: str, rows: Any) -> None:
     if _answers_all_from_its_rows(rows):
         rows = held_evaluated_queryset(rows)
     view.__dict__.setdefault("_all_method_rows", {})[name] = rows
+
+
+def _keep_nested_evaluated(view: Any, original: Any, evaluated: Any) -> None:
+    """Remember the evaluated twin of a QuerySet inside a container (#4326), by the
+    identity of the caller's QuerySet, for :func:`nested_raw_twin`. Reset per render
+    with ``_all_method_rows``."""
+    if not _answers_all_from_its_rows(evaluated):
+        list(evaluated)
+    view.__dict__.setdefault("_all_method_rows", {}).setdefault(_NESTED_EVALUATED, {})[
+        id(original)
+    ] = (original, held_evaluated_queryset(evaluated))
+
+
+#: The ``_all_method_rows`` slot that holds :func:`_keep_nested_evaluated`'s twins. Not a
+#: context name (a template name cannot start with ``_``), so the sidecar never ships it.
+_NESTED_EVALUATED = "__djust_nested_evaluated__"
+
+
+def nested_raw_twin(view: Any, name: str, container: Any) -> None:
+    """Hold a raw twin of the top-level ``container`` for the render sidecar (#4326).
+
+    ``{"d": {"users": qs}}`` with ``{{ d.users.all|length }}``, or
+    ``{{ x.groups.all.count }}`` beside ``{% for g in x.groups.all %}`` over
+    ``d.users``: the container ships with the QuerySet serialized to a list, which
+    answers neither ``all`` nor a relation method. The twin is a copy of the
+    container's dicts and lists with each such QuerySet replaced by its EVALUATED
+    clone (:func:`held_evaluated_queryset`), so the sidecar walk answers from the
+    rows the JIT already fetched, with no second query. Only a container that holds
+    one is kept; the eager value still wins every path it can answer.
+    """
+    held = (getattr(view, "_all_method_rows", None) or {}).get(_NESTED_EVALUATED) or {}
+    if not held:
+        return
+    found = [False]
+
+    def twin(value: Any) -> Any:
+        hit = held.get(id(value))
+        if hit is not None and hit[0] is value:
+            found[0] = True
+            return hit[1]
+        if type(value) is dict:
+            return {k: twin(v) for k, v in value.items()}
+        if type(value) is list:
+            return [twin(v) for v in value]
+        return value
+
+    copied = twin(container)
+    if found[0]:
+        view.__dict__["_all_method_rows"][name] = copied
 
 
 def _method_read_identity_rows(view: Any, queryset: Any, name: str) -> List[Any]:
@@ -1502,9 +1564,24 @@ class JITMixin:
             paths_for_var, key_variables = split_variable_keys(
                 _paths_for_variable(variable_paths_map, variable_name)
             )
-            if "." not in variable_name and variable_name in queryset_method_roots(
-                template_content
-            ):
+            original_queryset = queryset
+            # A QuerySet inside a container (``d.users``) whose own ``all`` /
+            # ``count`` / ... the template reads, or a relation of its rows read as
+            # rows AND through a method (#4326): the serialized list answers neither,
+            # so the evaluated QuerySet is kept for the container's raw twin
+            # (:func:`nested_raw_twin`), which the render sidecar walks.
+            nested_method_read = False
+            if "." in variable_name:
+                row_paths = _method_root_row_paths(queryset.model, paths_for_var)
+                nested_method_read = row_paths != paths_for_var or all_methods_need_rows(
+                    queryset.model, row_paths
+                )
+                if paths_for_var and not row_paths and not key_variables and not recursive_relation:
+                    items = list(queryset)
+                    _keep_nested_evaluated(self, original_queryset, queryset)
+                    return [model_identity(item) for item in items]
+                paths_for_var = row_paths
+            elif variable_name in queryset_method_roots(template_content):
                 row_paths = _method_root_row_paths(queryset.model, paths_for_var)
                 if paths_for_var and not row_paths and not key_variables and not recursive_relation:
                     return _method_read_identity_rows(self, queryset, variable_name)
@@ -1536,7 +1613,10 @@ class JITMixin:
             model_hash = _get_model_hash(model_class)
             # The resolved sort key is part of the key: a key that changes between
             # renders builds (and caches) its own path set (#3910).
-            cache_key = (template_hash, variable_name, model_hash, tuple(sort_keys))
+            # A QuerySet sliced to a few rows reads a lightly-read relation per row
+            # instead of prefetching it (#4326): its own cache slot.
+            per_parent = light_relation_parent_bound(queryset)
+            cache_key = (template_hash, variable_name, model_hash, tuple(sort_keys), per_parent)
 
             if cache_key in _jit_serializer_cache:
                 paths_for_var, optimization = _jit_serializer_cache[cache_key]
@@ -1546,7 +1626,9 @@ class JITMixin:
                     paths_for_var,
                 )
             else:
-                optimization = analyze_queryset_optimization(model_class, paths_for_var)
+                optimization = analyze_queryset_optimization(
+                    model_class, paths_for_var, per_parent_light_reads=per_parent
+                )
 
                 logger.debug(
                     "[JIT] Cache MISS for '%s' (%s) - generating serializer for paths: %s",
@@ -1583,6 +1665,8 @@ class JITMixin:
             result = serialize_queryset(items, paths_for_var, all_row_cap())
             if "." not in variable_name and all_methods_need_rows(model_class, paths_for_var):
                 keep_rows_for_all_methods(self, variable_name, items)
+            if nested_method_read:
+                _keep_nested_evaluated(self, original_queryset, queryset)
             # #4241: ``{{ qs.count }}`` / ``.exists`` / ``.first`` / ``.last`` on a
             # top-level QuerySet. The rows ship as a list, which cannot answer
             # the method (``list.count`` needs an argument in Django too), so the

@@ -293,6 +293,17 @@ class LiveViewConfig:
         # ``.count`` (never capped, one query), and one that needs one row
         # ``.first`` / ``.exists``.
         "queryset_all_row_cap": 100_000,
+        # A to-many relation the template reads only through a method
+        # (``.all.count``, ``.all.first.name``, ``.count``, ``.exists``), by index
+        # (``.all.0.name``) or for its length (``.all|length``, ``{% if %}``)
+        # needs at most a row of it, yet the JIT prefetched the WHOLE relation for
+        # every parent row (#4326). When the QuerySet is sliced to at most this
+        # many rows, such a relation is not prefetched: each parent row runs its
+        # own ``COUNT`` / ``LIMIT`` query instead. Unsliced (or sliced past this),
+        # the one prefetch query stays. The default ``1`` never adds a query (one
+        # parent, one query either way) while reading only the rows asked for;
+        # raise it when a few parents hold large relations, ``0`` always prefetches.
+        "queryset_light_relation_max_parents": 1,
         # Serialization behavior (issue #292)
         # When False (default): non-serializable values are converted via str() fallback with a warning log
         # When True: non-serializable values raise TypeError with actionable error message

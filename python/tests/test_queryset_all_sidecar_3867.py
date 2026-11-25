@@ -103,9 +103,10 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
 
     @pytest.mark.parametrize("name", ["count-then-loop", "loop-then-count"])
     def test_a_queryset_inside_a_container_keeps_no_rows(self, world, name) -> None:
-        """Y6: ``ctx.users`` is not a name in the context (the context holds ``ctx``), so no sidecar
-        entry can answer it and its rows are not kept (they hold evaluated models). The same mixed
-        read on a top-level name keeps them."""
+        """Y6: ``ctx.users`` is not a name in the context (the context holds ``ctx``), so no rows
+        are kept under it. Since #4326 the mixed read is answered by a raw twin of the CONTAINER,
+        kept under ``ctx`` (a context name), built from the rows the JIT fetched. The same mixed
+        read on a top-level name keeps its rows under that name."""
         from djust.testing import LiveViewTestClient
 
         def kept(source: str, attr: str, value) -> dict:
@@ -125,5 +126,7 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
 
         nested = MIXED[name].replace("in users", "in ctx.users")
         assert nested != MIXED[name]
-        assert kept(nested, "ctx", lambda: {"users": _users()}) == {}
+        twin = kept(nested, "ctx", lambda: {"users": _users()})
+        assert set(twin) == {"ctx", "__djust_nested_evaluated__"}, twin
+        assert list(twin["ctx"]["users"]) == list(_users())
         assert "users" in kept(MIXED[name], "users", _users)  # control: a top-level name is kept

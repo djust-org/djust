@@ -1217,7 +1217,7 @@ class RustBridgeMixin:
         recursive partial re-raises, as on legacy.
         """
         from .context import _jit_serialization_enabled
-        from .jit import _jit_template_content
+        from .jit import _jit_template_content, nested_raw_twin
 
         if not _jit_serialization_enabled():
             return
@@ -1258,6 +1258,8 @@ class RustBridgeMixin:
                     else self._deep_serialize_sequence
                 )
                 dict.__setitem__(context, key, walk(value, template_content, key))
+                # #4326: a nested QuerySet whose own ``all`` / methods the template reads.
+                nested_raw_twin(self, key, value)
         except Exception as exc:  # noqa: BLE001 - the normalize pass serializes what is left
             if template_content and "djust:recursive-partial" in template_content:
                 raise
