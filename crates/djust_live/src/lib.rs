@@ -5222,129 +5222,70 @@ fn serialize_model_gated(
 
 /// Build a tree structure from flat field paths for efficient nested traversal
 fn build_field_tree(paths: &[String]) -> std::collections::HashMap<String, PathNode> {
-    use std::collections::HashMap;
-
-    let mut root: HashMap<String, PathNode> = HashMap::new();
-
+    let mut root = std::collections::HashMap::new();
     for path in paths {
-        let parts: Vec<&str> = path.split('.').collect();
-        if parts.is_empty() {
-            continue;
-        }
-
-        let mut current = &mut root;
-        let mut i = 0;
-
-        while i < parts.len() {
-            let part = parts[i];
-
-            // Check if next part is numeric index (list access)
-            if let Some(index) = parts.get(i + 1).and_then(|next| next.parse::<usize>().ok()) {
-                let upto = index.saturating_add(1);
-                // This is a list attribute
-                let entry = current
-                    .entry(part.to_string())
-                    .or_insert_with(|| PathNode::List(HashMap::new(), upto));
-
-                match entry {
-                    PathNode::List(nested_map, bound) => {
-                        *bound = (*bound).max(upto);
-                        // Skip the numeric index and continue with remaining parts
-                        i += 2;
-                        if i < parts.len() {
-                            // Process remaining path within list items
-                            let remaining_parts: Vec<&str> = parts[i..].to_vec();
-                            let remaining_path = remaining_parts.join(".");
-
-                            // Recursively add remaining path to nested map
-                            let mut temp_map = std::mem::take(nested_map);
-                            add_path_to_tree(&mut temp_map, &remaining_path);
-                            *nested_map = temp_map;
-                        }
-                        break;
-                    }
-                    PathNode::Leaf => {
-                        // Convert Leaf to List (handles case where 'active_leases' was inserted before 'active_leases.0.property.name')
-                        *entry = PathNode::List(HashMap::new(), upto);
-                        if let PathNode::List(nested_map, _) = entry {
-                            // Skip the numeric index and continue with remaining parts
-                            i += 2;
-                            if i < parts.len() {
-                                // Process remaining path within list items
-                                let remaining_parts: Vec<&str> = parts[i..].to_vec();
-                                let remaining_path = remaining_parts.join(".");
-
-                                // Recursively add remaining path to nested map
-                                let mut temp_map = std::mem::take(nested_map);
-                                add_path_to_tree(&mut temp_map, &remaining_path);
-                                *nested_map = temp_map;
-                            }
-                        }
-                        break;
-                    }
-                    _ => {
-                        // Other type mismatch - skip this path and continue to next
-                        break;
-                    }
-                }
-            } else {
-                // Regular attribute
-                if i == parts.len() - 1 {
-                    // Leaf node
-                    current.entry(part.to_string()).or_insert(PathNode::Leaf);
-                } else {
-                    // Intermediate node
-                    let entry = current
-                        .entry(part.to_string())
-                        .or_insert_with(|| PathNode::Object(HashMap::new()));
-
-                    if matches!(entry, PathNode::Leaf) {
-                        *entry = PathNode::Object(HashMap::new());
-                    }
-                    match entry {
-                        PathNode::Object(nested_map) => {
-                            current = nested_map;
-                        }
-                        _ => {
-                            return root; // Type mismatch
-                        }
-                    }
-                }
-                i += 1;
-            }
-        }
+        add_path_to_tree(&mut root, path);
     }
-
     root
 }
 
 /// Helper to add a path to an existing tree
 fn add_path_to_tree(tree: &mut std::collections::HashMap<String, PathNode>, path: &str) {
+    let parts: Vec<&str> = path.split('.').collect();
+    add_parts_to_tree(tree, &parts);
+}
+
+/// Add `parts` under `tree`. A numeric segment after a name makes that name a
+/// list ([`PathNode::List`]) whose items take the rest, at ANY depth: the rest
+/// can hold another index (`all.0.permission_set.all.3.codename`, #3862).
+///
+/// A relation's `all` read both by index and otherwise (`all.0.name` beside
+/// `all.__len__` or `all.name`) is read as full rows: the index is dropped and
+/// the item paths merge into the `all` node, as the extractor does and as the
+/// Python codegen's `_build_path_tree` does (#3862). Any other shape mismatch
+/// skips the path.
+fn add_parts_to_tree(tree: &mut std::collections::HashMap<String, PathNode>, parts: &[&str]) {
     use std::collections::HashMap;
 
-    let parts: Vec<&str> = path.split('.').collect();
-    if parts.is_empty() {
+    let Some((part, rest)) = parts.split_first() else {
+        return;
+    };
+    let entry_name = (*part).to_string();
+    if let Some(index) = rest.first().and_then(|next| next.parse::<usize>().ok()) {
+        let upto = index.saturating_add(1);
+        let entry = tree
+            .entry(entry_name)
+            .or_insert_with(|| PathNode::List(HashMap::new(), upto));
+        if matches!(entry, PathNode::Leaf) {
+            *entry = PathNode::List(HashMap::new(), upto);
+        }
+        match entry {
+            PathNode::List(nested, bound) => {
+                *bound = (*bound).max(upto);
+                add_parts_to_tree(nested, &rest[1..]);
+            }
+            PathNode::Object(nested) if *part == "all" => add_parts_to_tree(nested, &rest[1..]),
+            _ => {}
+        }
         return;
     }
-
-    let mut current = tree;
-    for (i, part) in parts.iter().enumerate() {
-        if i == parts.len() - 1 {
-            current.entry(part.to_string()).or_insert(PathNode::Leaf);
-        } else {
-            let entry = current
-                .entry(part.to_string())
-                .or_insert_with(|| PathNode::Object(HashMap::new()));
-            if matches!(entry, PathNode::Leaf) {
-                *entry = PathNode::Object(HashMap::new());
-            }
-            match entry {
-                PathNode::Object(nested_map) => {
-                    current = nested_map;
-                }
-                _ => break,
-            }
+    if rest.is_empty() {
+        tree.entry(entry_name).or_insert(PathNode::Leaf);
+        return;
+    }
+    let entry = tree
+        .entry(entry_name)
+        .or_insert_with(|| PathNode::Object(HashMap::new()));
+    if matches!(entry, PathNode::Leaf) {
+        *entry = PathNode::Object(HashMap::new());
+    }
+    if *part == "all" {
+        if let PathNode::List(nested, _) = entry {
+            *entry = PathNode::Object(std::mem::take(nested));
         }
+    }
+    if let PathNode::Object(nested) = entry {
+        add_parts_to_tree(nested, rest);
     }
 }
 

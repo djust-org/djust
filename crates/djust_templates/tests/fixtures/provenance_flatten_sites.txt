@@ -752,11 +752,7 @@ let str_repr = value.str()?.to_string();
 return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
 let str_repr = value.str()?.to_string();
 Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind())
-.entry(part.to_string())
-current.entry(part.to_string()).or_insert(PathNode::Leaf);
-.entry(part.to_string())
-current.entry(part.to_string()).or_insert(PathNode::Leaf);
-.entry(part.to_string())
+let entry_name = (*part).to_string();
 out.insert(name.to_string());
 marks.insert(format!("{prefix}.{WHOLE_MARK}"));
 dict.set_item("__str__", value.str()?.to_string())?;

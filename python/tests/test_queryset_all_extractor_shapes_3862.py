@@ -95,6 +95,11 @@ INDEXED = {
     "past-the-end": "{% for u in users %}[{{ u.groups.all.5.id }}]{% endfor %}",
     "beside-a-loop": "{% for u in users %}[{{ u.groups.all.1.name }}:"
     "{% for g in u.groups.all %}{{ g.name }},{% endfor %}]{% endfor %}",
+    # An index inside the indexed row: both survive, at every depth (review of b61d6d52a).
+    "nested-index-perms": "{% for u in users %}"
+    "[{{ u.user_permissions.all.0.content_type.permission_set.all.3.codename }}]{% endfor %}",
+    "nested-index-users": "{% for u in users %}[{{ u.groups.all.0.user_set.all.0.username }}]"
+    "{% endfor %}",
 }
 
 
@@ -170,6 +175,49 @@ LENGTH = {
     "beside-join": "{% for u in users %}[{{ u.groups.all|length }}:"
     "{{ u.groups.all|join:',' }}]{% endfor %}",
 }
+
+
+@pytest.mark.django_db
+class TestTheTwoSerializersBuildTheSameTree:
+    """The Rust path tree (``add_parts_to_tree``) and the codegen's (``_build_path_tree``)."""
+
+    @pytest.mark.parametrize(
+        "paths",
+        [
+            ["user_permissions.all.0.content_type.permission_set.all.3.codename"],
+            ["groups.all.0.user_set.all.0.username", "username"],
+        ],
+        ids=["perms", "users"],
+    )
+    def test_a_nested_index_agrees(self, world, paths) -> None:
+        users = list(_users())
+        rust = _rust.serialize_queryset(users, paths)
+        assert rust == [_codegen(paths, "ser_nested_index_3862")(u) for u in users]
+        assert rust[0] != {}, rust
+
+    def test_the_nested_index_reaches_the_row(self, world) -> None:
+        out = _rust.serialize_queryset(
+            list(_users()), ["user_permissions.all.0.content_type.permission_set.all.3.codename"]
+        )
+        perm = out[0]["user_permissions"]["all"][0]
+        codenames = perm["content_type"]["permission_set"]["all"]
+        assert len(codenames) == 4 and codenames[3]["codename"], codenames
+
+    @pytest.mark.parametrize(
+        "paths",
+        [
+            ["groups.all.__len__", "groups.all.0.name"],
+            ["groups.all.0.name", "groups.all.__len__"],
+            ["groups.all.0.name", "groups.all.name"],
+            ["groups.all.name", "groups.all.0.name"],
+        ],
+    )
+    def test_a_mixed_all_node_is_read_as_full_rows(self, world, paths) -> None:
+        users = list(_users())
+        rust = _rust.serialize_queryset(users, paths)
+        assert rust == [_codegen(paths, "ser_mixed_all_3862")(u) for u in users]
+        assert [len(row["groups"]["all"]) for row in rust] == [MANY, 1, 0]
+        assert rust[1]["groups"]["all"] == [{"name": "g03"}]
 
 
 @pytest.mark.django_db

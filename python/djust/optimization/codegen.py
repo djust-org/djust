@@ -702,8 +702,38 @@ def _build_path_tree(paths: List[str]) -> Dict:
             current = current[part]
             i += 1
 
+    _merge_mixed_all_nodes(tree)
     _mark_whole_all_nodes(tree, paths)
     return tree
+
+
+def _merge_tree(into: Dict[str, Any], other: Dict[str, Any]) -> None:
+    for name, subtree in other.items():
+        if isinstance(subtree, dict) and isinstance(into.get(name), dict):
+            _merge_tree(into[name], subtree)
+        elif name not in into:
+            into[name] = subtree
+
+
+def _merge_mixed_all_nodes(tree: Dict[str, Any]) -> None:
+    """Read a relation's ``all`` that is read by index AND otherwise as full rows (#3862).
+
+    ``groups.all.0.name`` beside ``groups.all.__len__`` (or ``groups.all.name``):
+    the index is dropped and the item paths merge into the ``all`` node, as the
+    extractor does and as the Rust twin (``add_parts_to_tree``) does.
+    """
+    for name, subtree in tree.items():
+        if not isinstance(subtree, dict):
+            continue
+        if (
+            name == "all"
+            and "__list_item__" in subtree
+            and set(subtree) - {"__list_item__", ALL_UPTO_KEY}
+        ):
+            items = subtree.pop("__list_item__")
+            subtree.pop(ALL_UPTO_KEY, None)
+            _merge_tree(subtree, items)
+        _merge_mixed_all_nodes(subtree)
 
 
 def _mark_whole_all_nodes(tree: Dict[str, Any], paths: List[str]) -> None:
