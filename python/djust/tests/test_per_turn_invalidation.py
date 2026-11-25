@@ -1311,3 +1311,182 @@ class TestPlainByTheSnapshot:
         assert "a!?#%" in again
         # Only the turns whose list holds the object walk it for ids.
         assert walked_now == 2
+
+
+# =====================================================================================
+# Item-level list deltas to Rust (#4325)
+# =====================================================================================
+#
+# A list the handler changed in a few rows is sent to Rust as those rows. The
+# rows are found by comparing the pre- and post-event snapshot walks, and the
+# delta is applied only when the pre-event walk is what the last sync kept, so
+# Rust is known to hold the list as it was before the handler.
+
+
+def _grid(n: int = 40) -> List[Dict[str, Any]]:
+    return [{"id": i, "label": f"r{i}"} for i in range(n)]
+
+
+class Grid(LiveView):
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1><ul>{% for r in rows %}"
+        '<li id="r{{ r.id }}">{% if r.id %}{{ r.label }}{% else %}zero {{ r.label }}{% endif %}</li>'
+        "{% endfor %}</ul></div>"
+    )
+    title = state("t")
+    rows = state(default_factory=list)
+
+    def mount(self, request, **kwargs):
+        self.rows = _grid()
+
+    def _get_context_processors(self):
+        return []
+
+    @event_handler()
+    def one(self, i: int = 0, label: str = "x", **kwargs):
+        self.rows[i]["label"] = label
+
+    @event_handler()
+    def quiet(self, i: int = 0, label: str = "x", **kwargs):
+        # Changed, but this turn renders nothing: the next turn's pre-event
+        # walk is then NOT what Rust holds.
+        self.rows[i]["label"] = label
+        self._skip_render = True
+
+    @event_handler()
+    def replace_row(self, i: int = 0, label: str = "x", **kwargs):
+        self.rows[i] = {"id": i, "label": label}
+
+    @event_handler()
+    def many(self, **kwargs):
+        for row in self.rows[:20]:
+            row["label"] += "+"
+
+    @event_handler()
+    def grow(self, **kwargs):
+        self.rows.append({"id": len(self.rows), "label": "new"})
+
+    @event_handler()
+    def rebind(self, i: int = 0, label: str = "x", **kwargs):
+        rows = [dict(row) for row in self.rows]
+        rows[i]["label"] = label
+        self.rows = rows
+
+    @event_handler()
+    def unsafe(self, i: int = 0, **kwargs):
+        self.rows[i]["label"] = mark_safe("<b>bold</b>")
+
+    @event_handler()
+    def plain_markup(self, i: int = 0, **kwargs):
+        self.rows[i]["label"] = "<b>bold</b>"
+
+
+class LateGrid(Grid):
+    """``get_context_data`` changes a row after the snapshot: no delta."""
+
+    title = state("t")
+    rows = state(default_factory=list)
+
+    def get_context_data(self, **kwargs):
+        self.rows[1]["label"] = "late " + self.title
+        return super().get_context_data(**kwargs)
+
+    @event_handler()
+    def retitle(self, value: str = "u", **kwargs):
+        self.title = value
+        self.rows[2]["label"] = "early " + value
+
+
+async def _grid_run(view_class: type, events: List[Any], monkeypatch: Any, *off: str):
+    """Frames for *events*, the page HTML Rust holds after them, and the counts."""
+    with monkeypatch.context() as spies:
+        counts = harness.counting(spies)
+        key = await harness.new_session_key_async()
+        with harness.shortcuts(monkeypatch, *off), harness.ws_settings(MODULE):
+            comm, _mount = await harness.mount_view(view_class, key)
+            try:
+                frames = [await harness.event(comm, name, params) for name, params in events]
+                view = counts.view
+                html = await sync_to_async(lambda: view._rust_view.render())()
+            finally:
+                await comm.disconnect()
+    return frames, html, counts
+
+
+def _strip(frames: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {k: v for k, v in f.items() if k not in ("ref", "timing", "performance")} for f in frames
+    ]
+
+
+class TestListItemDeltas:
+    pytestmark = ws
+
+    async def _both(self, view_class: type, events: List[Any], monkeypatch: Any):
+        now = await _grid_run(view_class, events, monkeypatch)
+        off = await _grid_run(view_class, events, monkeypatch, "list_item_deltas")
+        assert _strip(now[0]) == _strip(off[0]), "the delta changed a frame"
+        assert now[1] == off[1], "Rust holds a different page with the delta"
+        return now, off
+
+    async def test_one_row_changed_in_the_handler_is_sent_as_that_row(self, monkeypatch):
+        events = [("one", {"i": 5, "label": "five"}), ("one", {"i": 0, "label": "nil"})]
+        now, off = await self._both(Grid, events, monkeypatch)
+        assert "five" in text(now[0][0]) and "zero nil" in text(now[0][1])
+        assert now[2]["update_state_items.calls"] == 2
+        assert now[2]["update_state_items.rows"] == 2
+        assert off[2].get("update_state_items.calls", 0) == 0
+        assert now[2]["update_state.bytes"] < off[2]["update_state.bytes"]
+
+    async def test_a_replaced_row_object_is_a_row_change(self, monkeypatch):
+        now, _off = await self._both(Grid, [("replace_row", {"i": 7, "label": "s"})], monkeypatch)
+        assert now[2]["update_state_items.rows"] == 1
+
+    async def test_a_change_rust_never_saw_is_not_lost(self, monkeypatch):
+        """A skipped turn changed row 3; the next turn changes row 4. The
+        pre-event walk of that turn is not what the last sync kept, so the
+        list goes whole and both rows render."""
+        events = [("quiet", {"i": 3, "label": "three"}), ("one", {"i": 4, "label": "four"})]
+        now, _off = await self._both(Grid, events, monkeypatch)
+        assert "three" in text(now[0][1]) and "four" in text(now[0][1])
+        assert now[2].get("update_state_items.calls", 0) == 0
+
+    @pytest.mark.parametrize(
+        "event",
+        [("many", {}), ("grow", {}), ("rebind", {"i": 2, "label": "re"})],
+        ids=["many_rows", "length", "rebound"],
+    )
+    async def test_the_list_goes_whole(self, monkeypatch, event):
+        now, _off = await self._both(Grid, [event], monkeypatch)
+        assert now[2].get("update_state_items.calls", 0) == 0
+
+    async def test_a_safe_string_row_goes_whole_and_plain_markup_is_escaped(self, monkeypatch):
+        events = [("unsafe", {"i": 6}), ("plain_markup", {"i": 6}), ("one", {"i": 6})]
+        now, _off = await self._both(Grid, events, monkeypatch)
+        assert '"tag": "b"' in text(now[0][0]), "the SafeString row lost its markup"
+        assert '"tag": "b"' not in text(now[0][1]), "plain markup in a row rendered as HTML"
+        assert "<b>bold</b>" in text(now[0][1])
+        # The SafeString turn and the one after it (its pre walk is not plain)
+        # go whole; only the last is a delta.
+        assert now[2]["update_state_items.calls"] == 1
+
+    async def test_a_row_changed_after_the_snapshot_goes_whole(self, monkeypatch):
+        now, _off = await self._both(LateGrid, [("retitle", {"value": "v"})], monkeypatch)
+        assert "late v" in text(now[0][0]) and "early v" in text(now[0][0])
+        assert now[2].get("update_state_items.calls", 0) == 0
+
+
+def test_update_state_items_refuses_and_changes_nothing():
+    from djust._rust import RustLiveView
+
+    view = RustLiveView("{% for r in rows %}{{ r }},{% endfor %}|{{ name }}")
+    view.update_state({"rows": [1, 2, 3], "name": "n"})
+    assert view.update_state_items("rows", [1], [20]) is True
+    assert view.render().startswith("1,20,3,")
+    assert view.update_state_items("missing", [0], [9]) is False
+    assert view.update_state_items("name", [0], [9]) is False
+    assert view.update_state_items("rows", [3], [9]) is False
+    assert view.update_state_items("rows", [0, 1], [9]) is False
+    assert view.update_state_items("rows", [0, 3], [7, 9]) is False
+    assert view.render().startswith("1,20,3,")

@@ -611,7 +611,7 @@ def _compute_changed_keys(pre: Dict[str, Any], post: Dict[str, Any]) -> set[str]
             changed.add(k)
         elif pre[k] != post[k]:
             changed.add(k)
-    return changed_keys_after(changed, post)
+    return changed_keys_after(changed, post, pre)
 
 
 class _OffloadedTurn(NamedTuple):

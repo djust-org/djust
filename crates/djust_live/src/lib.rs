@@ -754,6 +754,52 @@ impl RustLiveViewBackend {
         Ok(())
     }
 
+    /// Replace items of the list held under `key` in place (#4325).
+    ///
+    /// The item-level form of `update_state` for a list of which only a few
+    /// rows changed: `values[n]` replaces item `indices[n]`, converted exactly
+    /// as `update_state` converts a list's items. Returns `false` and changes
+    /// NOTHING when the state does not hold a `list` under `key`, an index is
+    /// out of range, or the two sequences differ in length; the caller then
+    /// sends the whole value through `update_state`.
+    ///
+    /// Like `update_state`, it revokes every safe grant on `key` and its
+    /// descendants: the caller uses it only for plain data (no `SafeString`
+    /// anywhere in the list), which is what the full path would mark.
+    fn update_state_items(
+        &mut self,
+        key: String,
+        indices: Vec<usize>,
+        values: &Bound<'_, PyList>,
+    ) -> PyResult<bool> {
+        if indices.len() != values.len() {
+            return Ok(false);
+        }
+        let mut converted: Vec<Value> = Vec::with_capacity(indices.len());
+        for value in values.iter() {
+            converted.push(value.extract::<Value>()?);
+        }
+        let len = match self.state.get(&key) {
+            Some(Value::List(items)) => items.len(),
+            _ => return Ok(false),
+        };
+        if indices.iter().any(|&index| index >= len) {
+            return Ok(false);
+        }
+        self.pending_partial_page = None;
+        if !self.safe_keys.is_empty() {
+            self.safe_keys.remove(&key);
+            let prefix = format!("{key}.");
+            self.safe_keys.retain(|k| !k.starts_with(&prefix));
+        }
+        if let Some(Value::List(items)) = std::sync::Arc::make_mut(&mut self.state).get_mut(&key) {
+            for (index, value) in indices.into_iter().zip(converted) {
+                items[index] = value;
+            }
+        }
+        Ok(true)
+    }
+
     /// Drop every state key absent from `keys`, returning the removed keys
     /// (#2564).
     ///

@@ -30,6 +30,10 @@ setting, and there is no supported way to do it.
                             (its fingerprint, and whether it is plain data)
                             instead of walking it again, when no application
                             code ran between the two (#3999).
+``list_item_deltas``        A list the handler changed in a few rows, in
+                            place, is sent to Rust as those rows
+                            (``update_state_items``), not converted and sent
+                            whole (#4325).
 ``unchanged_save_skip``     The automatic state (#4107) is not written to the
                             session when its encoding equals what the store
                             already holds (or, with nothing stored, what
@@ -68,6 +72,7 @@ ALL: FrozenSet[str] = frozenset(
         "serializable_by_type",
         "plain_sub_ids",
         "snapshot_fingerprints",
+        "list_item_deltas",
         "unchanged_save_skip",
         "compact_fingerprints",
         "digest_fingerprints",

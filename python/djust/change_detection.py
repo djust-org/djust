@@ -324,21 +324,26 @@ class ChangedKeys(set):  # type: ignore[type-arg]
     and the sync walks as before.
     """
 
-    __slots__ = ("fingerprints", "turn")
+    __slots__ = ("fingerprints", "pre_fingerprints", "turn")
 
     def __init__(self, keys: Any = ()) -> None:
         super().__init__(keys)
         self.fingerprints: Optional[Dict[int, SnapshotEntry]] = None
+        #: The PRE-event snapshot's walks, for the item-level list delta
+        #: (#4325): which rows of a list the handler changed in place.
+        self.pre_fingerprints: Optional[Dict[int, SnapshotEntry]] = None
         self.turn: Any = None
 
 
-def changed_keys_after(changed: Any, post: Any) -> ChangedKeys:
-    """*changed* as a :class:`ChangedKeys` carrying *post*'s walks and the turn."""
+def changed_keys_after(changed: Any, post: Any, pre: Any = None) -> ChangedKeys:
+    """*changed* as a :class:`ChangedKeys` carrying the snapshots' walks and the turn."""
     out = ChangedKeys(changed)
     if isinstance(post, AssignsSnapshot):
         turn = current_turn()
         if turn is not None:
             out.fingerprints = post.fingerprints
+            if isinstance(pre, AssignsSnapshot):
+                out.pre_fingerprints = pre.fingerprints
             out.turn = weakref.ref(turn)
     return out
 

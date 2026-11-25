@@ -563,6 +563,63 @@ def _snapshot_walks_for_sync(
     return walks
 
 
+#: A list shorter than this is sent whole: the delta saves nothing there.
+_ITEM_DELTA_MIN_LEN = 16
+
+
+def _list_item_delta(
+    key: str, value: Any, post: Any, pre: Any, previous: Any
+) -> Optional[Tuple[List[int], List[Any]]]:
+    """The rows of *value* to send to Rust instead of the whole list, or None (#4325).
+
+    *post* and *pre* are the post- and pre-event snapshot's walks of this very
+    list (``SnapshotEntry``: the object, its fingerprint tree, plain or not);
+    *previous* is what the last sync kept of the key's fingerprint. The delta
+    is sound only when all of these hold, and None sends the list whole:
+
+    * both walks are of this object (it was changed in place, not rebound),
+      and both found it plain data, so each row converts alone exactly as it
+      does inside the list and no row holds a ``SafeString``;
+    * the pre-event fingerprint is the one the last sync kept: Rust holds the
+      list exactly as it was before the handler, so replacing the rows whose
+      fingerprints differ gives exactly the list as it is now;
+    * the length did not change, and at most a quarter of the rows did.
+    """
+    if (
+        post is None
+        or pre is None
+        or post[0] is not value
+        or pre[0] is not value
+        or not (post[2] and pre[2])
+    ):
+        return None
+    post_tree, pre_tree = post[1], pre[1]
+    if (
+        type(post_tree) is not tuple
+        or type(pre_tree) is not tuple
+        or len(post_tree) != 2
+        or len(pre_tree) != 2
+        or post_tree[0] != "L"
+        or pre_tree[0] != "L"
+    ):
+        return None
+    post_rows, pre_rows = post_tree[1], pre_tree[1]
+    if len(post_rows) != len(pre_rows) or len(post_rows) != len(value):
+        return None
+    if len(value) < _ITEM_DELTA_MIN_LEN or previous != retained_fingerprint(pre_tree):
+        return None
+    indices = [i for i, (a, b) in enumerate(zip(pre_rows, post_rows)) if a != b]
+    if not indices or 4 * len(indices) > len(value):
+        return None
+    rows: List[Any] = []
+    for i in indices:
+        converted = convert_for_render(value[i], "%s.%d" % (key, i))
+        if converted is None or converted[0]:
+            return None
+        rows.append(converted[1])
+    return indices, rows
+
+
 #: ``_request_scoped_fingerprint``'s answer for a value it does not fingerprint.
 _NO_FINGERPRINT: Any = object()
 
@@ -1326,9 +1383,8 @@ class RustBridgeMixin:
             # The post-event snapshot's walks, taken before the context is
             # built (#3999). None unless no application code runs from the
             # snapshot to here (``_snapshot_walks_for_sync``).
-            snapshot_walks = _snapshot_walks_for_sync(
-                self, getattr(self, "_changed_keys", None), preloaded_context
-            )
+            turn_changed_keys = getattr(self, "_changed_keys", None)
+            snapshot_walks = _snapshot_walks_for_sync(self, turn_changed_keys, preloaded_context)
 
             # One place decides: preloaded, the GET's cached context, or a
             # fresh evaluation (#3725). Calling ``self.get_context_data`` here
@@ -1918,11 +1974,39 @@ class RustBridgeMixin:
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and isinstance(v, _IMMUTABLE_TYPES_FOR_SYNC)
             }
+            # A list the handler changed in a few rows is sent to Rust as those
+            # rows (#4325), when the pre-event snapshot proves Rust holds the
+            # list as it was before the handler. ``item_deltas`` maps the key
+            # to ``(indices, converted rows)``; it is never converted whole.
+            item_deltas: Dict[str, Tuple[List[int], List[Any]]] = {}
+            if (
+                snapshot_walks is not None
+                and prev_refs
+                and not getattr(self, "_force_full_html", False)
+                and _per_turn.on("list_item_deltas")
+                and hasattr(self._rust_view, "update_state_items")
+            ):
+                pre_walks = getattr(turn_changed_keys, "pre_fingerprints", None) or {}
+                for key, value in context.items():
+                    if type(value) is not list or key in _request_scoped_keys:
+                        continue
+                    delta = _list_item_delta(
+                        key,
+                        value,
+                        _snapshot_walk(key, value),
+                        pre_walks.get(id(value)),
+                        prev_fps.get(key, _MISSING),
+                    )
+                    if delta is not None and self._rust_view.update_state_items(
+                        key, delta[0], delta[1]
+                    ):
+                        item_deltas[key] = delta
+
             # A key already known to be sent (first render, a new key, a
             # changed name, ...) has not been fingerprinted yet: take the
             # fingerprint, the SafeString paths and the Rust value in one walk.
             self._prev_context_fingerprints = {
-                k: _fp_of(k, v, convert=context.get(k, _MISSING) is v)
+                k: _fp_of(k, v, convert=context.get(k, _MISSING) is v and k not in item_deltas)
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and _is_structural(v)
             }
@@ -1952,6 +2036,8 @@ class RustBridgeMixin:
             converted_values: Dict[str, Any] = {}
             needs_normalize = False
             for key, value in context.items():
+                if key in item_deltas:
+                    continue  # its changed rows are already in the Rust state (#4325)
                 # #1786: request-scoped, framework-provided context values
                 # (the request, auth ``user`` / ``perms``, messages storage)
                 # that are NOT JSON-serializable must not flow into

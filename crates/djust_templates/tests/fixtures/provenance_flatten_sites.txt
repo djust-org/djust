@@ -624,6 +624,7 @@ Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
 .flatten()
 self.dj_if_id_namespace = namespace.to_string();
 let prefix = format!("{key}.");
+let prefix = format!("{key}.");
 let key = (self.template_source.to_string(), self.template_dirs.clone());
 Ok(dict.into())
 page.rendered.html,

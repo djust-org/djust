@@ -1709,6 +1709,19 @@ def _break_snapshot_fingerprints(patch: Any) -> None:
     patch.setattr(rust_bridge, "_snapshot_walks_for_sync", trusting)
 
 
+def _break_list_item_deltas(patch: Any) -> None:
+    from djust.mixins import rust_bridge
+
+    real = rust_bridge._list_item_delta
+
+    # As if the row comparison missed the last changed row.
+    def short(*args: Any) -> Any:
+        delta = real(*args)
+        return None if delta is None else (delta[0][:-1], delta[1][:-1])
+
+    patch.setattr(rust_bridge, "_list_item_delta", short)
+
+
 SABOTAGE = {
     "unchanged_save_skip": (_break_unchanged_save_skip, _reconnect_run),
     "contract_cache": (_break_contract_cache, _redeclared_run),
@@ -1725,6 +1738,7 @@ SABOTAGE = {
         lambda: run_ws(Processors, COUNTER_SCRIPT),
     ),
     "plain_sub_ids": (_break_plain_sub_ids, lambda: run_ws(Opaque, OPAQUE_SCRIPT)),
+    "list_item_deltas": (_break_list_item_deltas, lambda: run_ws(Table, TABLE_SCRIPT)),
     "snapshot_fingerprints": (
         _break_snapshot_fingerprints,
         lambda: run_ws(LateWriter, LATE_SCRIPT),

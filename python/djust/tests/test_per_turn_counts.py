@@ -283,16 +283,18 @@ async def test_one_changed_cell_walks_the_list_three_times_not_four(monkeypatch)
     # Before and after the handler, and once to convert for Rust.
     assert now["snapshot_assigns.calls"] == 2
     assert 2 * size <= now["fingerprint.snapshot.nodes"] < 2 * size + 500
-    assert now["convert_for_render.nodes"] == size
+    # The conversion walks the changed row only (``list_item_deltas``, #4325).
+    assert now["convert_for_render.nodes"] == harness.nodes(make_rows(ROWS)[0])
     assert now.get("fingerprint_and_convert.calls", 0) == 0
     assert now.get("fingerprint.sync.calls", 0) == 0
     # No walk collects the id of every object under the list.
     assert now.get("collect_sub_ids.calls", 0) == 0
     assert off["collect_sub_ids.calls"] == 1
     assert off["collect_sub_ids.ids"] > ROWS
-    # Nothing else moved: the same key, the same bytes.
-    assert now["sent_keys"] == off["sent_keys"] == [["items"]]
-    assert now["update_state.bytes"] == off["update_state.bytes"]
+    # The same key is reported changed; it reaches Rust as one row.
+    assert now["changed_keys"] == off["changed_keys"] == [["items"]]
+    assert off["sent_keys"] == [["items"]] and now["sent_keys"] == [[]]
+    assert now["update_state_items.rows"] == 1
     assert off["fingerprint_and_convert.nodes"] == size
     assert off.get("convert_for_render.calls", 0) == 0
 
@@ -307,8 +309,10 @@ async def test_snapshot_fingerprints_gate_off(monkeypatch):
     assert off["fingerprint_and_convert.nodes"] == size
     assert off.get("convert_for_render.calls", 0) == 0
     assert off.get("collect_sub_ids.calls", 0) == now.get("collect_sub_ids.calls", 0) == 0
-    assert now["sent_keys"] == off["sent_keys"] == [["items"]]
-    assert now["update_state.bytes"] == off["update_state.bytes"]
+    # Without the snapshot's walks there is no row delta either: the list goes whole.
+    assert off["sent_keys"] == [["items"]]
+    assert off.get("update_state_items.calls", 0) == 0
+    assert now["changed_keys"] == off["changed_keys"] == [["items"]]
     assert now["snapshot_assigns.calls"] == off["snapshot_assigns.calls"] == 2
 
 
@@ -318,7 +322,23 @@ async def test_plain_sub_ids_gate_off_with_the_snapshot_walk(monkeypatch):
     off = await turn(monkeypatch, Table, "cell", "plain_sub_ids")
     assert off["collect_sub_ids.calls"] == 1
     assert off.get("fingerprint_and_convert.calls", 0) == 0
+    assert off["changed_keys"] == [["items"]]
+
+
+async def test_list_item_deltas_gate_off(monkeypatch):
+    """One changed cell reaches Rust as one row (#4325); off, the whole list is
+    converted and sent. The page Rust renders is the same either way
+    (``test_per_turn_oracle.py`` compares the frames)."""
+    size = harness.nodes(make_rows(ROWS))
+    now = await turn(monkeypatch, Table, "cell")
+    off = await turn(monkeypatch, Table, "cell", "list_item_deltas")
+    assert now["update_state_items.calls"] == 1 and now["update_state_items.rows"] == 1
+    assert off.get("update_state_items.calls", 0) == 0
+    assert off["convert_for_render.nodes"] == size
     assert off["sent_keys"] == [["items"]]
+    sent_now = now["update_state.bytes"] + now["update_state_items.bytes"]
+    assert 50 * sent_now < off["update_state.bytes"]
+    assert now["changed_keys"] == off["changed_keys"] == [["items"]]
 
 
 async def test_an_unrelated_change_does_not_walk_the_list_in_the_sync(monkeypatch):
@@ -340,7 +360,7 @@ async def test_the_walk_grows_with_the_list_and_no_faster(monkeypatch):
     """A quarter of the rows is a quarter of the walk: counted, not timed."""
     big = await turn(monkeypatch, Table, "cell")
     small = await turn(monkeypatch, SmallTable, "cell")
-    ratio = big["convert_for_render.nodes"] / small["convert_for_render.nodes"]
+    ratio = big["fingerprint.snapshot.nodes"] / small["fingerprint.snapshot.nodes"]
     assert 3.9 < ratio < 4.1
 
     def total(counts: Dict[str, Any]) -> int:

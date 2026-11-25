@@ -70,6 +70,13 @@ class _RustViewSpy:
         counts.sent.append(list(updates))
         return self._real.update_state(updates)
 
+    def update_state_items(self, key: Any, indices: Any, values: Any) -> Any:
+        counts = self._counts
+        counts["update_state_items.calls"] += 1
+        counts["update_state_items.rows"] += len(indices)
+        counts["update_state_items.bytes"] += len(json.dumps(values, default=str))
+        return self._real.update_state_items(key, indices, values)
+
     def set_changed_keys(self, keys: Any) -> Any:
         self._counts.changed.append(list(keys))
         return self._real.set_changed_keys(keys)

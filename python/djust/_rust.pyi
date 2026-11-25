@@ -1196,6 +1196,9 @@ class RustLiveView:
         """
         ...
 
+    def update_state_items(self, key: str, indices: List[int], values: List[Any]) -> bool:
+        """Replace items of the list under ``key`` in place; False (nothing changed) if it cannot."""
+        ...
     def retain_state_keys(self, keys: List[str]) -> List[str]:
         """
         Drop every state key absent from ``keys`` and return the removed keys.
