@@ -212,6 +212,10 @@ class ActivityMixin:
     async def _flush_deferred_activity_events(self, consumer: Any) -> None:
         """Drain all queues whose activity is now both visible and non-eager-skipped.
 
+        The transports' drains call this on the root view and then on every
+        embedded child it owns (#4179): a child's queued event is dispatched
+        through the child path, with the child's own checks.
+
         Called by :class:`~djust.websocket.LiveViewConsumer` after every
         successful ``handle_event`` / ``handle_info`` / ``db_notify``
         dispatch. The flush is ``async`` and ``await``s each dispatched

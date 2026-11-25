@@ -3545,6 +3545,57 @@ def _explicit_descendant(root: Any, view_id: Any) -> Any:
     return matches[0] if len(matches) == 1 else None
 
 
+def _owned_descendants(root: Any) -> List[Any]:
+    """Every embedded view the root owns now, through the registry chain (#4179).
+
+    Walks the server-owned registry as :func:`_explicit_descendant` does (a
+    child counts only while its parent's registry holds it under its own
+    ``view_id`` and it is not disposed), for both exposure policies, bounded
+    at 257 views.
+    """
+    found: List[Any] = []
+    pending = [root]
+    seen: set = set()
+    while pending and len(seen) < 257:
+        parent = pending.pop()
+        if id(parent) in seen:
+            continue
+        seen.add(id(parent))
+        registry = getattr(parent, "_child_views", None)
+        if type(registry) is not dict:
+            continue
+        for slot, child in tuple(registry.items()):
+            if (
+                getattr(child, "_parent_view", None) is not parent
+                or getattr(child, "_view_id", None) != slot
+                or getattr(child, "_djust_child_disposed", False)
+                or id(child) in seen
+            ):
+                continue
+            found.append(child)
+            pending.append(child)
+    return found
+
+
+def _still_owned(root: Any, child: Any) -> bool:
+    """Whether ``child`` is still registered under ``root``, at every level (#4179)."""
+    current = child
+    for _ in range(16):
+        if current is root:
+            return True
+        if current is None or getattr(current, "_djust_child_disposed", False):
+            return False
+        parent = getattr(current, "_parent_view", None)
+        registry = getattr(parent, "_child_views", None)
+        if (
+            type(registry) is not dict
+            or registry.get(getattr(current, "_view_id", None)) is not current
+        ):
+            return False
+        current = parent
+    return False
+
+
 def _public_decorator_metadata(view_instance: Any) -> List[Tuple[str, Dict[str, Any]]]:
     """``(name, _djust_decorators)`` for every public decorated method.
 
@@ -5215,7 +5266,15 @@ class ViewRuntime(RuntimeTurnPort):
         from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
 
         try:
+            # Owned embedded children too (#4179): snapshot first, so a child a
+            # released handler disposes reaches the ownership check instead.
+            children = _owned_descendants(view)
             await view._flush_deferred_activity_events(self)
+            for child in children:
+                if getattr(child, "_deferred_activity_events", None) and hasattr(
+                    child, "_flush_deferred_activity_events"
+                ):
+                    await child._flush_deferred_activity_events(self)
         except Exception:  # noqa: BLE001 — never fail the event for a drain bug
             restrict_diagnostics(view)
             restrict_diagnostics(self.view_instance)
@@ -5284,6 +5343,11 @@ class ViewRuntime(RuntimeTurnPort):
         * Exceptions are logged + swallowed so one bad queued event cannot break
           the rest of the drain (the flush also catches, defense-in-depth).
         """
+        if target_view is not self.view_instance:
+            # #4179: an event queued on an embedded child's activity.
+            return await self._dispatch_released_child_event(
+                target_view, event_name, params, event_ref
+            )
         from .websocket import _compute_changed_keys, _resolve_skip_render, _snapshot_assigns
 
         from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
@@ -5516,6 +5580,65 @@ class ViewRuntime(RuntimeTurnPort):
             )
             return True
 
+        # #4179: an event for a hidden (not eager) activity inside the child is
+        # queued on the child, as a root event is on the root, and released by
+        # the drains with the child's own checks. The marker never reaches
+        # handler validation.
+        activity = params.pop("_activity", None)
+        if (
+            activity
+            and hasattr(target_view, "is_activity_visible")
+            and not target_view.is_activity_visible(activity)
+            and not target_view._is_activity_eager(activity)
+        ):
+            target_view._queue_deferred_activity_event(activity, event_name, params)
+            noop: Dict[str, Any] = {"type": "noop", "source": "event", "event_name": event_name}
+            if event_ref is not None:
+                noop["ref"] = event_ref
+            await self.transport.send(noop)
+            return True
+
+        await self._run_child_event(
+            target_view, view_id, event_name, params, positional_args, event_ref
+        )
+        return True
+
+    async def _dispatch_released_child_event(
+        self,
+        target_view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        event_ref: Optional[int],
+    ) -> None:
+        """Run a released activity event queued on an embedded child (#4179).
+
+        The child path of a live child event: explicit checks, handler, object
+        permission, the child's own render and ``embedded_update``. A child no
+        longer on the page is dropped without an error frame.
+        """
+        root = self.view_instance
+        if root is None or not _still_owned(root, target_view):
+            logger.debug(
+                "Released activity event for an embedded view no longer on the page dropped"
+            )
+            return
+        params = dict(params or {})
+        positional_args = params.pop("_args", [])
+        await self._run_child_event(
+            target_view, target_view._view_id, event_name, params, positional_args, event_ref
+        )
+
+    async def _run_child_event(
+        self,
+        target_view: Any,
+        view_id: str,
+        event_name: str,
+        params: Dict[str, Any],
+        positional_args: List[Any],
+        event_ref: Optional[int],
+    ) -> None:
+        """Authorize, run, render and answer one event on an embedded child."""
+        view = self.view_instance
         from ._exposure import ExposureError, uses_legacy_exposure
 
         explicit_child = not uses_legacy_exposure(target_view)
@@ -5546,7 +5669,7 @@ class ViewRuntime(RuntimeTurnPort):
                     "Child event authorization failed. Please reload the page.",
                     code="permission_denied",
                 )
-                return True
+                return
 
         # Validate the handler against the CHILD (not the parent) — mirrors WS
         # using ``target_view`` for handler lookup (websocket.py:3498).
@@ -5558,7 +5681,7 @@ class ViewRuntime(RuntimeTurnPort):
             root_view=self.view_instance,
         )
         if handler is None:
-            return True
+            return
 
         coerce = get_handler_coerce_setting(handler)
         validation = validate_handler_params(
@@ -5578,7 +5701,7 @@ class ViewRuntime(RuntimeTurnPort):
                     "type_errors": validation["type_errors"],
                 },
             )
-            return True
+            return
 
         coerced_params = validation.get("coerced_params", params)
         call_args, call_kwargs = validated_call_arguments(validation)
@@ -5588,7 +5711,7 @@ class ViewRuntime(RuntimeTurnPort):
         except Exception as exc:
             if explicit_child:
                 await self.transport.send_error("Child event failed.", code="event_error")
-                return True
+                return
             response = handle_exception(
                 exc,
                 error_type="event",
@@ -5601,7 +5724,7 @@ class ViewRuntime(RuntimeTurnPort):
                 ),
             )
             await self.transport.send(response)
-            return True
+            return
 
         # Waiter notification (ADR-002 Phase 1b) — resolve waiters on the CHILD
         # view. Best-effort: a waiter bug must never break the event.
@@ -5627,7 +5750,7 @@ class ViewRuntime(RuntimeTurnPort):
                 await self.transport.send_error(
                     "Child state unavailable. Please reload the page.", code="state_error"
                 )
-                return True
+                return
 
         # Render just the child's subtree (single-sourced render core) and emit
         # the scoped full-HTML ``embedded_update`` frame. Mirrors the WS
@@ -5641,9 +5764,9 @@ class ViewRuntime(RuntimeTurnPort):
             if not explicit_child:
                 raise
             await self.transport.send_error("Child rendering unavailable.", code="render_error")
-            return True
+            return
         if explicit_child and not await self._persist_explicit_children_after_event(view):
-            return True
+            return
         _emit_full_html_update(target_view, "embedded_child", event_name, html, 0)
 
         msg: Dict[str, Any] = {
@@ -5677,7 +5800,9 @@ class ViewRuntime(RuntimeTurnPort):
             from ._child_async import dispatch_legacy_child_work
 
             dispatch_legacy_child_work(self, target_view, view_id, event_name, child_batch)
-        return True
+        # A child handler that showed its own hidden activity releases that
+        # activity's queue in the same round trip, as a root handler does (#4179).
+        await self._flush_deferred_activity_events()
 
     async def _dispatch_component_event(
         self,

@@ -622,7 +622,7 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ),
     (
         "runtime.py",
-        "ViewRuntime._dispatch_sticky_child_event",
+        "ViewRuntime._run_child_event",
         "render_embedded_child_html",
     ): plumbing(_RENDER, _GET_TEMPLATE),
     (
@@ -647,10 +647,8 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ): plumbing(_STATE),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "render_view_with_diff"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "mount_frame_metadata"): plumbing(_RENDER),
-    ("runtime.py", "ViewRuntime._dispatch_sticky_child_event", "resolve_explicit_child"): plumbing(
-        _STATE
-    ),
-    ("runtime.py", "ViewRuntime._dispatch_sticky_child_event", "enforce_object_permission"): leaf(),
+    ("runtime.py", "ViewRuntime._run_child_event", "resolve_explicit_child"): plumbing(_STATE),
+    ("runtime.py", "ViewRuntime._run_child_event", "enforce_object_permission"): leaf(),
     ("runtime.py", "ViewRuntime._dispatch_url_change_inner", "enforce_object_permission"): leaf(),
     (
         "runtime.py",
