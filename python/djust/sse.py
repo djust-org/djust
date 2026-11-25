@@ -494,7 +494,14 @@ class SSESession:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.view_instance: Optional[Any] = None
-        self.queue: asyncio.Queue = asyncio.Queue()
+        from ._outbound_buffer import ByteCountingQueue, outbound_buffer_limit
+
+        self.queue: ByteCountingQueue = ByteCountingQueue()
+        #: Bytes of frames that may wait for a slow reader before the stream is
+        #: ended so the client reconnects and resyncs (#3658). 0 = no limit.
+        self._outbound_limit = outbound_buffer_limit()
+        #: Set when the limit ended the stream: frames after it are dropped.
+        self._outbound_overflowed = False
         # Set once shutdown() queued the close sentinel: the stream reads
         # nothing after it, so later pushes are dropped (#3232).
         self._closed_sentinel_queued = False
@@ -975,6 +982,8 @@ class SSESession:
         """
         from .multiloop import is_multi_loop
 
+        if self._outbound_overflowed and msg is not None:
+            return  # the stream is ending; the client resyncs on reconnect (#3658)
         loop = self._loop
         if loop is not None and is_multi_loop() and loop.is_running():
             try:
@@ -996,9 +1005,41 @@ class SSESession:
             from ._parameter_metadata import elide_sent_manifest
 
             msg, sent = elide_sent_manifest(self, msg)
+            if self._outbound_limit and not self.queue.empty():
+                # The stream is behind (#3658): count what waits, in bytes.
+                size = len(json.dumps(msg, cls=DjangoJSONEncoder).encode("utf-8"))
+                pending = self.queue.queued_bytes + size
+                if pending > self._outbound_limit:
+                    self._end_slow_stream(pending)
+                    return
+                self.queue.put_sized(msg, size)
+                if sent is not None:
+                    self._parameter_contract_sent = sent
+                return
         self.queue.put_nowait(msg)
         if sent is not None:
             self._parameter_contract_sent = sent
+
+    def _end_slow_stream(self, pending: int) -> None:
+        """The client is not reading: end its stream so it reconnects (#3658).
+
+        The waiting frames are dropped and the close sentinel takes their
+        place, so the stream ends as soon as it finishes the frame it is
+        writing. ``EventSource`` then reconnects with the same id, and that
+        mount is a ``reconnect`` turn that resynchronises the page; the
+        stream's close runs the usual flush, linger and shutdown. Later
+        pushes are dropped, as after ``shutdown()``.
+        """
+        logger.warning(
+            "SSE client is not reading fast enough: %s bytes pending over the %s-byte "
+            "outbound limit; ending the stream of session %s so it reconnects and resyncs",
+            pending,
+            self._outbound_limit,
+            sanitize_for_log(self.session_id),
+        )
+        self._outbound_overflowed = True
+        self.queue.clear()
+        self.queue.put_nowait(None)
 
     def shutdown(self) -> None:
         """Signal the SSE stream generator to close the connection.
@@ -1634,13 +1675,17 @@ class DjustSSEStreamView(View):
                 # "mount"/"error"/"navigate" pushed synchronously above). When the
                 # mount failed, shutdown() already queued the sentinel, so this
                 # delivers the error/navigate even though session.active is False.
+                ended = False
                 while not session.queue.empty():
                     msg = session.queue.get_nowait()
                     if msg is None:
+                        # The sentinel ends the stream even while the session
+                        # is active (the outbound limit's close, #3658).
+                        ended = True
                         break
                     yield f"data: {json.dumps(msg, cls=DjangoJSONEncoder)}\n\n"
 
-                while session.active:
+                while session.active and not ended:
                     try:
                         msg = await asyncio.wait_for(
                             session.queue.get(), timeout=_KEEPALIVE_TIMEOUT

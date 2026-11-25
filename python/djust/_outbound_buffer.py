@@ -159,3 +159,47 @@ class OutboundBuffer(Generic[Frame]):
         for waiter in waiters:
             if not waiter.done():
                 waiter.set_result(None)
+
+
+class ByteCountingQueue(asyncio.Queue):  # type: ignore[type-arg]
+    """An ``asyncio.Queue`` that knows the bytes of the frames waiting in it.
+
+    The SSE session's outbound queue (#3658). A frame put with
+    :meth:`put_sized` counts its size until the stream takes it; one put with
+    ``put_nowait`` counts zero (the stream is about to take it, or it came
+    from another event loop and was not measured).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._sizes: Deque[int] = collections.deque()
+        self._next_size = 0
+        self.queued_bytes = 0
+        self.peak_bytes = 0
+
+    def put_sized(self, item: object, size: int) -> None:
+        self._next_size = size
+        try:
+            self.put_nowait(item)
+        finally:
+            self._next_size = 0
+
+    def clear(self) -> None:
+        """Drop every waiting item (an overflow ends the stream)."""
+        while True:
+            try:
+                self.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+
+    def _put(self, item: object) -> None:
+        super()._put(item)  # type: ignore[misc]
+        self._sizes.append(self._next_size)
+        self.queued_bytes += self._next_size
+        if self.queued_bytes > self.peak_bytes:
+            self.peak_bytes = self.queued_bytes
+
+    def _get(self) -> object:
+        item = super()._get()  # type: ignore[misc]
+        self.queued_bytes -= self._sizes.popleft()
+        return item

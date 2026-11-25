@@ -174,6 +174,15 @@ advanced features are **not available** over SSE:
 For file uploads over SSE, implement a separate standard Django file upload
 endpoint and call it directly from your template.
 
+## Slow clients
+
+A session's queued frames are bounded in bytes by
+`LIVEVIEW_CONFIG["max_outbound_buffer_bytes"]` (default 4 MiB, `0` = no
+limit). When a client reads so slowly that the backlog passes it, the backlog
+is dropped and the stream ends; `EventSource` reconnects with the same id and
+the reconnect mount resyncs the page. The limits of every transport are in
+[Reconnection: slow clients and outbound limits](website/guides/reconnection.md#slow-clients-and-outbound-limits).
+
 ## Multi-process deployments
 
 SSE sessions are stored **in-process** in a Python dict. In multi-worker

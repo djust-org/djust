@@ -228,7 +228,9 @@ LIVEVIEW_CONFIG = {
 | Transport | What is bounded | Over the limit |
 |-----------|-----------------|----------------|
 | WebSocket | Frames waiting while another frame of the same socket is still being handed to the ASGI server, in bytes (UTF-8 for text frames) | The socket is closed with code **1013** ("try again later"); the client reconnects with the usual backoff and remounts |
+| SSE | Frames waiting in the session's queue for the stream to write them, in bytes (UTF-8 JSON), not counting the frame the stream takes next | The waiting frames are dropped and the stream ends; `EventSource` reconnects with the same session id and that mount resyncs the page |
 | HTTP page POST | Nothing to bound: each response carries the frames of its own event and nothing is held between requests | n/a |
+| Streamed HTTP render (`StreamingHttpResponse` of a page) | At most `DJUST_LAZY_CHUNK_QUEUE_MAX` rendered chunks (default 8); a full queue makes the renderer wait for the client (back-pressure) | The renderer waits; nothing is dropped |
 
 What the WebSocket limit covers, exactly:
 
@@ -246,8 +248,21 @@ What the WebSocket limit covers, exactly:
   queued before it first, for up to 5 seconds, then closes anyway and drops
   them. A disconnect drops waiting frames at once.
 
+Over SSE the same limit applies to the session's queue. It sits beside the
+frame-count back-pressure for server-driven frames (#3809): at 128 queued
+frames a tick is skipped and a `self.server_push()` is deferred and coalesced,
+while frames answering an event are never held back. The byte limit is the
+backstop for everything else, events included.
+
 The server logs a warning naming the backlog and the limit each time it closes
-a socket with 1013.
+a socket with 1013 or ends an SSE stream.
+
+**What is coalesced and what needs a resync.** No transport merges or drops
+single frames: a frame accepted for a connection reaches it in order, or the
+connection ends. The one coalescing step is upstream of the wire, on SSE:
+deferred `server_push()` calls (above). Anything a client misses because its
+connection ended is recovered by the reconnect's fresh mount, never by
+replaying frames.
 
 ## SSE Transport
 
