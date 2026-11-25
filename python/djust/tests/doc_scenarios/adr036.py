@@ -67,7 +67,9 @@ def strict_policy(example):
     block = re.search(
         r'<script type="application/json" data-djust-parameter-contracts>(.*?)</script>', page, re.S
     )
-    handlers = json.loads(block.group(1))["contracts"]["owners"][0]["handlers"]
+    from djust._parameter_metadata import expand_parameter_manifest
+
+    handlers = expand_parameter_manifest(json.loads(block.group(1))["contracts"])[0]["handlers"]
     events = {event for event, _p, _s in PAYLOADS[name]}
     assert {handlers[e]["policy"] for e in events} == {"strict"}
     if example.path.endswith("core-concepts/events.md"):

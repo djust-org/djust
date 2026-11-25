@@ -13,6 +13,7 @@ from djust.validation import validate_handler_params, validated_call_arguments
 from djust.websocket_utils import _call_handler
 from djust import LiveView
 from djust import state
+from djust._parameter_metadata import expand_parameter_manifest
 
 
 class StrictTransportView(LiveView):
@@ -188,9 +189,11 @@ async def test_real_websocket_strict_positional_and_rejection():
             mounted = await socket.receive_json_from()
             assert mounted["type"] == "mount"
             contracts = mounted["parameter_contracts"]
-            assert contracts["version"] == 1
-            assert contracts["owners"][0]["handlers"]["select"]["policy"] == "strict"
-            assert "double" not in contracts["owners"][0]["handlers"]
+            assert contracts["version"] == 2
+            assert (
+                expand_parameter_manifest(contracts)[0]["handlers"]["select"]["policy"] == "strict"
+            )
+            assert "double" not in expand_parameter_manifest(contracts)[0]["handlers"]
             for value, expected in [("7", "patch"), ("SECRET_INVALID", "error")]:
                 await socket.send_json_to(
                     {
@@ -242,7 +245,9 @@ async def test_real_sse_strict_positional_and_rejection():
         try:
             mounted = next(frame for frame in drain(session) if frame["type"] == "mount")
             assert (
-                mounted["parameter_contracts"]["owners"][0]["handlers"]["select"]["policy"]
+                expand_parameter_manifest(mounted["parameter_contracts"])[0]["handlers"]["select"][
+                    "policy"
+                ]
                 == "strict"
             )
             for value in ("7", "SECRET_INVALID"):

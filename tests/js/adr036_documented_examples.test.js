@@ -7,6 +7,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { packManifest } from './_parameter_manifest.js';
 const { readFileSync } = await vi.importActual('node:fs');
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
@@ -26,7 +27,7 @@ const handlers = {
 };
 
 function mount(html) {
-    const contracts = {version: 1, owners: [{view_id: null, component_id: null, handlers}]};
+    const contracts = packManifest({version: 1, owners: [{view_id: null, component_id: null, handlers}]});
     const dom = new JSDOM(`<!DOCTYPE html><html><body><div dj-view="docs.Example">${html}</div>
         <script type="application/json" data-djust-parameter-contracts>${JSON.stringify({view: 'docs.Example', contracts})}</script>
         </body></html>`, {runScripts: 'dangerously', url: 'http://localhost/'});

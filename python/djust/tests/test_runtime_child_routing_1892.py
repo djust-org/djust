@@ -67,6 +67,7 @@ from djust import LiveView  # noqa: E402
 from djust.components.base import LiveComponent  # noqa: E402
 from djust.decorators import event_handler, state  # noqa: E402
 from djust.runtime import ViewRuntime  # noqa: E402
+from djust._parameter_metadata import expand_parameter_manifest
 
 
 # ------------------------------------------------------------------ #
@@ -309,7 +310,7 @@ class TestRuntimeStickyChildRouting:
                 assert "count=9" in updates[0]["html"]
                 owner = next(
                     owner
-                    for owner in updates[0]["parameter_contracts"]["owners"]
+                    for owner in expand_parameter_manifest(updates[0]["parameter_contracts"])
                     if owner["view_id"] == "child"
                 )
                 assert owner["handlers"]["begin"]["policy"] == "strict"

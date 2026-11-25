@@ -6,6 +6,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { packManifest } from './_parameter_manifest.js';
 const { readFileSync } = await vi.importActual('node:fs');
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
@@ -27,10 +28,10 @@ const rootHandlers = {
     save_all: strict(param('form', 'Any', 'var_keyword', false)),
     on_key: strict(param('key', 'str')),
 };
-const manifest = {version: 1, owners: [
+const manifest = packManifest({version: 1, owners: [
     {view_id: null, component_id: null, handlers: rootHandlers},
     {view_id: null, component_id: 'menu', handlers: {pick: strict(param('item_id', 'int'))}},
-]};
+]});
 
 function setup(body, contracts = manifest) {
     const block = contracts === undefined ? '' :

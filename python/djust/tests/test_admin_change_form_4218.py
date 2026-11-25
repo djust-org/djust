@@ -34,6 +34,7 @@ from djust.admin_ext import DjustAdminSite, DjustModelAdmin
 from djust.tests.test_admin_page_render import _Socket, _session_cookie
 from djust.tests.test_framework_classes_explicit_4185 import _post, _sse_request, _tab
 from djust_rentals.models import Property
+from djust._parameter_metadata import expand_parameter_manifest
 
 pytestmark = pytest.mark.admin
 
@@ -203,7 +204,9 @@ class _Page(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "script" and self._contracts is not None:
             block = json.loads("".join(self._contracts))
-            (owner,) = [o for o in block["contracts"]["owners"] if o["view_id"] is None]
+            (owner,) = [
+                o for o in expand_parameter_manifest(block["contracts"]) if o["view_id"] is None
+            ]
             self.contracts = owner["handlers"]
             self._contracts = None
         elif tag == "select":

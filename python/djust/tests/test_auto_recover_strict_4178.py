@@ -42,6 +42,7 @@ from djust.websocket import LiveViewConsumer
 
 from ._auto_recover_bridge import Browser, SSEServer, http_answer, ws_connect, ws_forward
 from ._ws_frames import drain_extra, has_type, receive_until
+from djust._parameter_metadata import expand_parameter_manifest
 
 FORM = """<div dj-root>
 <form dj-auto-recover="restore" data-step="2" data-mode="edit">
@@ -717,7 +718,11 @@ def test_a_recovery_target_keeps_its_own_policy():
 
     with override_settings(LIVEVIEW_CONFIG={}):
         manifest = parameter_contract_manifest(StrictRecovery())
-    root = next(o for o in manifest["owners"] if o["component_id"] is None and o["view_id"] is None)
+    root = next(
+        o
+        for o in expand_parameter_manifest(manifest)
+        if o["component_id"] is None and o["view_id"] is None
+    )
     contract = root["handlers"]["restore"]
     assert contract["policy"] == "strict"
     assert [(p["name"], p["type"]) for p in contract["parameters"]] == [

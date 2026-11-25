@@ -8,6 +8,7 @@
  */
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
+import { packManifest } from './_parameter_manifest.js';
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
@@ -29,7 +30,7 @@ export const anyArgs = () => strict(param('kwargs', 'Any', 'var_keyword', false)
  */
 export function setup(body, handlers = {}, respond = () => ({patches: []}), options = {}) {
     const ws = options.transport === 'ws';
-    const contracts = {version: 1, owners: [{view_id: null, component_id: null, handlers}]};
+    const contracts = packManifest({version: 1, owners: [{view_id: null, component_id: null, handlers}]});
     const block = `<script type="application/json" data-djust-parameter-contracts>${
         JSON.stringify({view: 'app.Page', contracts})}</script>`;
     const dom = new JSDOM(

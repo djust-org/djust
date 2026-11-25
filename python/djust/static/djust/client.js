@@ -1584,6 +1584,7 @@ class LiveViewWebSocket {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
+        this._parameterContractDigest = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
@@ -3208,6 +3209,7 @@ class LiveViewSSE {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
+        this._parameterContractDigest = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         cancelEventRequests(this);
@@ -5094,47 +5096,61 @@ function collectDjValues(element) {
 }
 
 // A mount owns its manifest. Never merge contracts by handler name, or retain
-// a previous mount's contracts when a response omits this field.
+// a previous mount's contracts when a response omits this field. Wire v2
+// (#4307): distinct contracts and handler tables are listed once, and each
+// owner row names its table; owners share the (read-only) table Maps.
 function _installParameterContracts(transport, manifest, viewPath, resetPrimary = true, receiptOrder = 0) {
     if (!transport._parameterContracts || (resetPrimary && viewPath === transport.primaryViewPath)) {
         transport._parameterContracts = new Map();
         transport._parameterContractApplied = new Map();
+        transport._parameterContractDigest = new Map();
     }
     if (resetPrimary) transport._parameterContractApplied.set(viewPath, receiptOrder);
     transport._parameterContracts.set(viewPath, null);
+    (transport._parameterContractDigest ??= new Map()).delete(viewPath);
     if (manifest === undefined || manifest === null) return;
     const reject = () => { throw new Error('Invalid public parameter contracts'); };
     // Keep invalid metadata distinguishable from a tree with no handlers.
     transport._parameterContracts.set(viewPath, false);
     if (typeof viewPath !== 'string' || !viewPath) reject();
-    if (manifest.version !== 1 || !Array.isArray(manifest.owners) || manifest.owners.length > 1024 || JSON.stringify(manifest).length > 65536) reject();
-    const owners = new Map();
+    const n = Number.isInteger, ok = id => id === null || (typeof id === 'string' && id.length > 0);
+    if (manifest.version !== 2 || typeof manifest.digest !== 'string' || !Array.isArray(manifest.contracts) ||
+        !Array.isArray(manifest.handlers) || !Array.isArray(manifest.owners) || manifest.contracts.length > 1024 ||
+        manifest.handlers.length > 1024 || manifest.owners.length > 10000 ||
+        JSON.stringify([manifest.contracts, manifest.handlers]).length > 65536) reject();
+    const contracts = manifest.contracts.map(contract => {
+        if (!contract || typeof contract.coerce_types !== 'boolean' || !Array.isArray(contract.parameters) || contract.parameters.length > 1024) reject();
+        const seen = new Set();
+        const parameters = contract.parameters.map(parameter => {
+            if (!parameter || typeof parameter.name !== 'string' || seen.has(parameter.name) || typeof parameter.type !== 'string' ||
+                !['positional_only', 'positional_or_keyword', 'keyword_only', 'var_positional', 'var_keyword'].includes(parameter.kind) ||
+                typeof parameter.required !== 'boolean' || typeof parameter.reduced_checking !== 'boolean') reject();
+            seen.add(parameter.name);
+            return Object.freeze({name: parameter.name, type: parameter.type, kind: parameter.kind,
+                required: parameter.required, reduced_checking: parameter.reduced_checking});
+        });
+        return Object.freeze({coerce_types: contract.coerce_types, parameters: Object.freeze(parameters)});
+    });
     let count = 0;
-    for (const owner of manifest.owners) {
-        if (!owner || ![owner.view_id, owner.component_id].every(id => id === null || (typeof id === 'string' && id.length > 0))) reject();
-        const key = JSON.stringify([owner.view_id, owner.component_id]);
-        if (owners.has(key) || !owner.handlers || typeof owner.handlers !== 'object' || Array.isArray(owner.handlers)) reject();
+    const tables = manifest.handlers.map(table => {
+        if (!table || typeof table !== 'object' || Array.isArray(table)) reject();
         const handlers = new Map();
-        for (const [name, contract] of Object.entries(owner.handlers)) {
-            if (++count > 10000 || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name) || !contract) reject();
-            if (contract.policy === 'strict') {
-                if (typeof contract.coerce_types !== 'boolean' || !Array.isArray(contract.parameters) || contract.parameters.length > 1024) reject();
-                const seen = new Set();
-                const parameters = contract.parameters.map(parameter => {
-                    if (!parameter || typeof parameter.name !== 'string' || seen.has(parameter.name) || typeof parameter.type !== 'string' ||
-                        !['positional_only', 'positional_or_keyword', 'keyword_only', 'var_positional', 'var_keyword'].includes(parameter.kind) ||
-                        typeof parameter.required !== 'boolean' || typeof parameter.reduced_checking !== 'boolean') reject();
-                    seen.add(parameter.name);
-                    return Object.freeze({name: parameter.name, type: parameter.type, kind: parameter.kind,
-                        required: parameter.required, reduced_checking: parameter.reduced_checking});
-                });
-                handlers.set(name, Object.freeze({policy: 'strict', coerce_types: contract.coerce_types, parameters: Object.freeze(parameters)}));
-            } else reject();
+        for (const [name, index] of Object.entries(table)) {
+            if (++count > 10000 || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name) || !n(index) || !contracts[index]) reject();
+            handlers.set(name, contracts[index]);
         }
-        owners.set(key, handlers);
+        return handlers;
+    });
+    const owners = new Map();
+    for (const row of manifest.owners) {
+        if (!Array.isArray(row) || row.length !== 3 || !ok(row[0]) || !ok(row[1]) || !n(row[2]) || !tables[row[2]]) reject();
+        const key = JSON.stringify([row[0], row[1]]);
+        if (owners.has(key)) reject();
+        owners.set(key, tables[row[2]]);
     }
     if (!owners.has('[null,null]')) reject();
     transport._parameterContracts.set(viewPath, owners);
+    transport._parameterContractDigest.set(viewPath, manifest.digest);
 }
 
 // Receipt order is client-owned, not a wire field or the VDOM version (child
@@ -5159,6 +5175,7 @@ function _invalidateRenderParameterContracts(transport, data) {
     const mounts = transport?._parameterContracts;
     if (mounts?.has(path) && (mounts.get(path) !== null || Object.hasOwn(data, 'parameter_contracts'))) {
         mounts.set(path, false);
+        transport._parameterContractDigest?.delete(path);
         const order = transport._parameterContractFrames?.get(data);
         if (order !== undefined) transport._parameterContractApplied.set(path,
             Math.max(order, transport._parameterContractApplied.get(path) || 0));
@@ -8406,6 +8423,7 @@ function _installPageParameterContracts() {
     _localEventTransport.primaryViewPath = path || null;
     _localEventTransport._parameterContracts = new Map();
     _localEventTransport._parameterContractApplied = new Map();
+    _localEventTransport._parameterContractDigest = new Map();
     if (!path) return;
     const block = document.querySelector('script[data-djust-parameter-contracts]');
     let manifest = null;

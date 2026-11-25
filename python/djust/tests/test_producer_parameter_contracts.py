@@ -14,6 +14,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.tests.test_ws_send_version_1788 import _receive_until
 from djust import state
+from djust._parameter_metadata import expand_parameter_manifest
 
 _BODY = ["Count: {{ count }}"]
 
@@ -210,7 +211,7 @@ class _OwnerLifecycleView(LiveView):
 
 
 def _owner(frame, component_id):
-    owners = frame["parameter_contracts"]["owners"]
+    owners = expand_parameter_manifest(frame["parameter_contracts"])
     return next((o for o in owners if o["component_id"] == component_id), None)
 
 

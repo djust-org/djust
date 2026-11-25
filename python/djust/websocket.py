@@ -1764,9 +1764,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             and frame.get("version") == getattr(self, "_recovery_version", None)
             and "parameter_contracts" in frame
         ):
-            # Held for the life of the connection, once per view. Every owner
-            # repeats its handlers' metadata, so a page of 20 components is
-            # ~8 KB of JSON that deflates to a few hundred bytes (#4189); it
+            # Held for the life of the connection, once per view: a
+            # deduplicated manifest (wire v2, #4307), compressed (#4189); it
             # is inflated only on the rare html_recovery request.
             self._recovery_contracts = zlib.compress(
                 json.dumps(

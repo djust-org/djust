@@ -11,6 +11,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { packManifest } from './_parameter_manifest.js';
 const { readFileSync } = await vi.importActual('node:fs');
 
 const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
@@ -24,7 +25,7 @@ const strict = names => ({policy: 'strict', coerce_types: true, parameters: name
 
 function setup(body, handlers) {
     const contracts = handlers === undefined ? undefined :
-        {version: 1, owners: [{view_id: null, component_id: null, handlers}]};
+        packManifest({version: 1, owners: [{view_id: null, component_id: null, handlers}]});
     const block = contracts === undefined ? '' :
         `<script type="application/json" data-djust-parameter-contracts>${JSON.stringify({view: 'app.Page', contracts})}</script>`;
     const dom = new JSDOM(`<!DOCTYPE html><html><body><div dj-view="app.Page">${body}</div>${block}</body></html>`,

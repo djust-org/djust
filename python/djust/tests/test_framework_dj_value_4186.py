@@ -40,6 +40,7 @@ from django.template import engines
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.validation import validate_handler_params, validated_call_arguments
+from djust._parameter_metadata import expand_parameter_manifest
 
 ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = ROOT / "python" / "djust"
@@ -845,7 +846,7 @@ async def test_data_table_events_over_websocket():
         socket, mounted = await _mount(f"{_MODULE}._TableView")
         try:
             contracts = mounted.get("parameter_contracts")
-            handlers = contracts["owners"][0]["handlers"]
+            handlers = expand_parameter_manifest(contracts)[0]["handlers"]
             assert handlers["on_table_sort"]["policy"] == "strict"
             steps = [
                 ("data_table.sort", "name|2|"),

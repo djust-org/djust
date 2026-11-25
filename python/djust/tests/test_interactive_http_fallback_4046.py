@@ -43,6 +43,7 @@ from djust.components.interactive import DropdownMenu
 from djust.decorators import event_handler
 from djust.tests import _per_turn_harness as harness
 from djust.tests.http_fallback_matrix import PAGE, post_event
+from djust._parameter_metadata import expand_parameter_manifest
 
 MODULE = __name__
 URL = harness.PATH
@@ -145,9 +146,9 @@ class Huge(LiveView):
     project_menu = DropdownMenu(label="Project", items=ITEMS)
     rows = DropdownMenu.collection()
     selected_action = state("", persist="server")
-    # Fits the 64 KB budget alone, but not with the rows' records. Padding rather
-    # than more rows: past ~90 such rows the page's strict parameter-contract
-    # manifest is over its own 64 KB limit first, and the event is refused.
+    # Fits the 64 KB budget alone, but not with the rows' records. Padding
+    # rather than more rows keeps the test fast (the contract manifest lists
+    # the rows' shared handler table once, so more rows would also fit, #4307).
     padding = state("p" * 58000, persist="server")
 
     def mount(self, request, **kwargs):
@@ -1423,7 +1424,7 @@ def test_the_manifest_keys_components_by_the_id_the_page_carries(routes):
     view = _view(request)
     page = [wire_id(view.project_menu)] + [wire_id(m) for m in view.row_menus]
     manifest = parameter_contract_manifest(view)
-    keyed = {o["component_id"] for o in manifest["owners"] if o["component_id"]}
+    keyed = {o["component_id"] for o in expand_parameter_manifest(manifest) if o["component_id"]}
     assert set(page) <= keyed
     assert view.project_menu.component_id not in keyed
 

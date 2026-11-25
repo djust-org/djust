@@ -12,6 +12,7 @@ from djust import event_handler
 from djust.tests._live_session import amount_on_consumer
 from djust.tests.test_background_html_fallback import BackgroundView
 from djust.websocket import LiveViewConsumer
+from djust._parameter_metadata import expand_parameter_manifest
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -89,7 +90,10 @@ async def test_background_frame_and_recovery_share_render_contract(source, full_
     frame = consumer.send_json.call_args.args[0]
     assert frame["type"] == ("html_update" if full_html else "patch")
     assert frame["parameter_contract_view"] == CONTRACT_VIEW
-    assert frame["parameter_contracts"]["owners"][0]["handlers"]["choose"]["policy"] == "strict"
+    assert (
+        expand_parameter_manifest(frame["parameter_contracts"])[0]["handlers"]["choose"]["policy"]
+        == "strict"
+    )
     assert frame["version"] == consumer._recovery_version == 1
     assert runtime._parameter_contracts_active is True
     snapshot = json.loads(zlib.decompress(consumer._recovery_contracts))

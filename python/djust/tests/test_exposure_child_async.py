@@ -9,6 +9,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from djust import LiveView, event_handler
 from djust._exposure_children import child_state_key
 from djust.tests.test_exposure_child_events import EventChild, mount
+from djust._parameter_metadata import expand_parameter_manifest
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -189,7 +190,7 @@ async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(monke
         assert not transport.errors
         owner = next(
             owner
-            for owner in frames[0]["parameter_contracts"]["owners"]
+            for owner in expand_parameter_manifest(frames[0]["parameter_contracts"])
             if owner["view_id"] == "menu"
         )
         assert owner["handlers"]["begin"]["policy"] == "strict"

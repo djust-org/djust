@@ -10,6 +10,8 @@
  * embedded view id the markup mentions.
  */
 
+import { packManifest } from './_parameter_manifest.js';
+
 const NAME = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 
 function handlerNames(html) {
@@ -44,7 +46,7 @@ export function openContracts(html, view = null, extraHandlers = []) {
     for (const [, id] of html.matchAll(/data-djust-embedded\s*=\s*"([^"]+)"/g)) {
         if (!seen.has('v' + id)) { seen.add('v' + id); owners.push({view_id: id, component_id: null, handlers}); }
     }
-    const manifest = {view, contracts: {version: 1, owners}};
+    const manifest = {view, contracts: packManifest({version: 1, owners})};
     return `<script type="application/json" data-djust-parameter-contracts>${JSON.stringify(manifest)}</script>`;
 }
 

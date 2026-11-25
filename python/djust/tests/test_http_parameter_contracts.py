@@ -13,6 +13,7 @@ import pytest
 from djust import LiveView
 from djust.decorators import event_handler
 from djust import state
+from djust._parameter_metadata import expand_parameter_manifest
 
 BLOCK = re.compile(
     r'<script type="application/json" data-djust-parameter-contracts>(.*?)</script>', re.S
@@ -78,7 +79,7 @@ def test_initial_page_carries_root_contracts_outside_the_live_root():
     assert len(blocks) == 1
     payload = json.loads(blocks[0])
     assert payload["view"] == _path(StrictPage)
-    root = payload["contracts"]["owners"][0]
+    root = expand_parameter_manifest(payload["contracts"])[0]
     assert (root["view_id"], root["component_id"]) == (None, None)
     assert root["handlers"]["choose"]["policy"] == "strict"
     # Server defaults never reach the page; the block is not VDOM content.
@@ -110,7 +111,10 @@ def test_http_render_responses_carry_the_rendered_snapshot(event, params):
     status, body = _post(StrictPage, request, event, params)
     assert status == 200, body
     assert body["parameter_contract_view"] == _path(StrictPage)
-    assert body["parameter_contracts"]["owners"][0]["handlers"]["choose"]["policy"] == "strict"
+    assert (
+        expand_parameter_manifest(body["parameter_contracts"])[0]["handlers"]["choose"]["policy"]
+        == "strict"
+    )
 
 
 @pytest.mark.django_db

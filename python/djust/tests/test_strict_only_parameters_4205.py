@@ -16,6 +16,7 @@ from djust import LiveView
 from djust._parameter_metadata import handler_metadata, parameter_contract_manifest
 from djust.decorators import event_handler
 from djust.validation import get_handler_signature_info, validate_handler_params
+from djust._parameter_metadata import expand_parameter_manifest
 
 
 class _View(LiveView):
@@ -75,7 +76,7 @@ def test_a_missing_required_argument_is_refused():
 def test_the_manifest_lists_only_strict_contracts_and_none_for_a_tree_with_no_handlers():
     manifest = parameter_contract_manifest(_View())
     assert manifest is not None
-    handlers = manifest["owners"][0]["handlers"]
+    handlers = expand_parameter_manifest(manifest)[0]["handlers"]
     assert {"plain", "pinned", "open_ended"} <= set(handlers)
     assert {h["policy"] for h in handlers.values()} == {"strict"}
     assert parameter_contract_manifest(_Empty()) is None

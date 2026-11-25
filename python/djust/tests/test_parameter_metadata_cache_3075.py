@@ -18,6 +18,7 @@ from djust import _parameter_metadata as pm
 from djust._parameter_metadata import _ABSENT, _instance_dict, parameter_contract_manifest
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import is_event_handler
+from djust._parameter_metadata import expand_parameter_manifest
 
 
 # The discovery exactly as it was before the cache (main @ d23acbf9f), kept
@@ -259,7 +260,9 @@ def test_a_monkeypatched_handler_is_seen_at_once(monkeypatch):
 
     monkeypatch.setattr(Base, "strict", replacement)
     data = parameter_contract_manifest(view)
-    assert data["owners"][0]["handlers"]["strict"]["parameters"][0]["type"] == "str"
+    assert (
+        expand_parameter_manifest(data)[0]["handlers"]["strict"]["parameters"][0]["type"] == "str"
+    )
     monkeypatch.delattr(Base, "strict")
     assert "strict" not in pm._event_methods(view)
 

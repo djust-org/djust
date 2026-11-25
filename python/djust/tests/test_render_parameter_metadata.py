@@ -7,6 +7,7 @@ import pytest
 
 from djust.runtime import ViewRuntime
 from djust.tests.test_parameter_metadata import StrictOwner
+from djust._parameter_metadata import expand_parameter_manifest
 
 
 class HandlerlessOwner:
@@ -29,14 +30,20 @@ async def test_render_contracts_follow_owner_replacement_and_removal(kind):
     first = {"type": kind, "version": 1}
     await owner._send_render_frame(first)
     assert first["parameter_contract_view"] == "app.Page"
-    assert first["parameter_contracts"]["owners"][1]["handlers"]["choose"]["policy"] == "strict"
+    assert (
+        expand_parameter_manifest(first["parameter_contracts"])[1]["handlers"]["choose"]["policy"]
+        == "strict"
+    )
 
     root._components["menu"] = HandlerlessOwner()
     second = {"type": kind, "version": 2}
     await owner._send_render_frame(second)
     assert second["parameter_contracts"] is None
     # Delayed references to the first frame must not observe newer owners.
-    assert first["parameter_contracts"]["owners"][1]["handlers"]["choose"]["policy"] == "strict"
+    assert (
+        expand_parameter_manifest(first["parameter_contracts"])[1]["handlers"]["choose"]["policy"]
+        == "strict"
+    )
     del root._components["menu"]
     third = {"type": kind, "version": 3}
     await owner._send_render_frame(third)

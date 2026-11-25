@@ -16,6 +16,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { packManifest } from './_parameter_manifest.js';
 const { readFileSync } = await vi.importActual('node:fs');
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
@@ -43,11 +44,11 @@ const nested = {
     load_more: anything, mutated: anything, copied: anything, closed: anything, pushed: anything,
     clicked: strict(param('n', 'int')),
 };
-const manifest = {version: 1, owners: [
+const manifest = packManifest({version: 1, owners: [
     {view_id: null, component_id: null, handlers: page},
     {view_id: null, component_id: 'cmp1', handlers: nested},
     {view_id: 'child1', component_id: null, handlers: nested},
-]};
+]});
 
 function setup(inner) {
     const block = '<script type="application/json" data-djust-parameter-contracts>' +

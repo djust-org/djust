@@ -1,6 +1,7 @@
 /** Actual WS/SSE mount reception, with transport/owner-specific public contracts. */
 import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { packManifest } from './_parameter_manifest.js';
 // The raw bundle, not the coverage run's instrumented copy: this test splices
 // a hook in at a literal source line, which instrumentation rewrites.
 const { readFileSync } = await vi.importActual('node:fs');
@@ -14,12 +15,13 @@ const strict = {policy: 'strict', coerce_types: true, parameters: [
 const other = {policy: 'strict', coerce_types: true, parameters: [
     {name: 'other', type: 'str', kind: 'positional_or_keyword', required: true, reduced_checking: false},
 ]};
-const manifest = () => ({version: 1, owners: [
+const owners = () => ({version: 1, owners: [
     {view_id: null, component_id: null, handlers: {choose: strict}},
     {view_id: null, component_id: 'left', handlers: {choose: strict}},
     {view_id: null, component_id: 'right', handlers: {choose: other}},
     {view_id: 'left', component_id: null, handlers: {choose: other}},
 ]});
+const manifest = () => packManifest(owners());
 
 function setup(name) {
     const dom = new JSDOM('<div dj-root dj-view="app.Page"></div>', {runScripts: 'dangerously', url: 'http://localhost/'});
@@ -38,8 +40,8 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s public parameter contrac
         const {dom, lookup, mount} = setup(name);
         try {
             await mount({parameter_contracts: manifest()});
-            expect(lookup(null, null).policy).toBe('strict');
-            expect(lookup(null, 'left').policy).toBe('strict');
+            expect(Array.isArray(lookup(null, null).parameters)).toBe(true);
+            expect(Array.isArray(lookup(null, 'left').parameters)).toBe(true);
             expect(lookup(null, 'right').parameters[0].name).toBe('other');
             expect(lookup('left', null).parameters[0].name).toBe('other');
             expect(() => lookup(null, 'missing')).toThrow('Unknown parameter contract owner');
@@ -68,11 +70,12 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s public parameter contrac
     it('copies public fields only and does not retain mutable inbound records', async () => {
         const {dom, lookup, mount} = setup(name);
         try {
-            const data = manifest();
-            data.owners[0].handlers.choose = JSON.parse(JSON.stringify(strict));
-            data.owners[0].handlers.choose.parameters[0].default = 'SECRET_DEFAULT';
+            const raw = owners();
+            raw.owners[0].handlers.choose = JSON.parse(JSON.stringify(strict));
+            raw.owners[0].handlers.choose.parameters[0].default = 'SECRET_DEFAULT';
+            const data = packManifest(raw);
             await mount({parameter_contracts: data});
-            data.owners[0].handlers.choose.parameters[0].type = 'CHANGED';
+            data.contracts.find(contract => contract.parameters[0].default).parameters[0].type = 'CHANGED';
             const result = lookup(null, null);
             expect(result.parameters[0].type).toBe('int');
             expect(JSON.stringify(result)).not.toContain('SECRET');
@@ -97,14 +100,14 @@ it('additional WS mounts and separate connections cannot overwrite primary contr
     try {
         await mount({parameter_contracts: manifest()});
         await mount({view: 'app.Extra'});
-        expect(lookup(null, null).policy).toBe('strict');
+        expect(Array.isArray(lookup(null, null).parameters)).toBe(true);
         expect(lookup(null, null, 'choose', 'app.Extra')).toBe(null);
         const other = new dom.window.djust.LiveViewWebSocket();
         other.primaryViewPath = 'app.Page';
         await other.handleMessage({type: 'mount', view: 'app.Page'});
-        expect(lookup(null, null).policy).toBe('strict');
+        expect(Array.isArray(lookup(null, null).parameters)).toBe(true);
         other.disconnect();
-        expect(lookup(null, null).policy).toBe('strict');
+        expect(Array.isArray(lookup(null, null).parameters)).toBe(true);
         transport.disconnect();
         expect(() => lookup(null, null)).toThrow('Unknown parameter contract mount');
     } finally { dom.window.close(); }

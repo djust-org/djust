@@ -4,6 +4,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { packManifest } from './_parameter_manifest.js';
 const { readFileSync } = await vi.importActual('node:fs');
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
@@ -12,11 +13,11 @@ const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 const param = (name, type, kind = 'positional_or_keyword', required = true) =>
     ({name, type, kind, required, reduced_checking: type === 'Any'});
 const strict = (...parameters) => ({policy: 'strict', coerce_types: true, parameters});
-const manifest = {version: 1, owners: [{view_id: null, component_id: null, handlers: {
+const manifest = packManifest({version: 1, owners: [{view_id: null, component_id: null, handlers: {
     only_value: strict(param('value', 'str')),
     with_name: strict(param('value', 'str'), param('name', 'str', 'positional_or_keyword', false)),
     open_kw: strict(param('value', 'str'), param('rest', 'Any', 'var_keyword', false)),
-}}]};
+}}]});
 
 function setup(body, contracts = manifest) {
     const block = contracts === undefined ? '' :

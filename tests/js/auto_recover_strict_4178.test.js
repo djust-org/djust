@@ -9,6 +9,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { packManifest } from './_parameter_manifest.js';
 const { readFileSync } = await vi.importActual('node:fs');
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
@@ -23,7 +24,7 @@ const handlers = {
     open: strict(param('rest', 'Any', 'var_keyword', false)),
     with_page: strict(param('form_values', 'dict[str, Any]'), param('page', 'int')),
 };
-const manifest = {version: 1, owners: [{view_id: null, component_id: null, handlers}]};
+const manifest = packManifest({version: 1, owners: [{view_id: null, component_id: null, handlers}]});
 
 const FORM = `
     <input name="title" value="Draft">
@@ -124,11 +125,11 @@ describe('dj-auto-recover inside a component or an embedded child view', () => {
     // The event carries no owner context, so the server routes it to the page's
     // view: the client must use the page view's contract, not the nearest owner's
     // (which does not list the handler).
-    const owned = {version: 1, owners: [
+    const owned = packManifest({version: 1, owners: [
         {view_id: null, component_id: null, handlers},
         {view_id: null, component_id: 'cmp1', handlers: {}},
         {view_id: 'child1', component_id: null, handlers: {other: strict()}},
-    ]};
+    ]});
 
     it('sends strict values from a component wrapper', async () => {
         const {dom, recover, sent} = setup(

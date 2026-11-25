@@ -189,6 +189,7 @@ class LiveViewSSE {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
+        this._parameterContractDigest = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         cancelEventRequests(this);

@@ -1,13 +1,14 @@
 import {it, expect} from 'vitest';
 import {JSDOM} from 'jsdom';
 import {readFileSync} from 'node:fs';
+import { packManifest } from './_parameter_manifest.js';
 
 const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 const P = (name, type) => ({name, type, kind: 'positional_or_keyword', required: true, reduced_checking: false});
 const handlers = {observe_toggle: {policy: 'strict', coerce_types: true,
     parameters: [P('open', 'bool'), P('sequence', 'int'), P('lifetime', 'str')]},
 select: {policy: 'strict', coerce_types: true, parameters: []}};
-const contracts = {version: 1, owners: [null, 'one', 'two', 'quiet'].map(id => ({view_id: null, component_id: id, handlers}))};
+const contracts = packManifest({version: 1, owners: [null, 'one', 'two', 'quiet'].map(id => ({view_id: null, component_id: id, handlers}))});
 const contractBlock = `<script type="application/json" data-djust-parameter-contracts>${JSON.stringify({view: 'test.V', contracts})}</script>`;
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 

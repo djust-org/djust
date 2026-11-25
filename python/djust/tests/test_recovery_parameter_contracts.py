@@ -52,7 +52,7 @@ async def test_cached_recovery_keeps_detached_render_snapshot(monkeypatch):
     sent = await rendered(consumer, runtime, transport)
     consumer.view_instance.choose = None  # shadowed: the owner has no handler, so no contracts
     original = copy.deepcopy(sent["parameter_contracts"])
-    sent["parameter_contracts"]["owners"][0]["handlers"].clear()
+    sent["parameter_contracts"]["handlers"][0].clear()
     sent["parameter_contracts"] = None
 
     def forbidden(_view):
@@ -307,25 +307,21 @@ async def test_first_strict_recovery_requires_later_explicit_clear():
 
 
 def test_held_recovery_contracts_are_deflated_and_round_trip():
-    """The snapshot lives as long as the connection, once per view; a page of
-    components repeats every handler's metadata per owner, so it is held deflated
-    (the view-memory guide's "view and consumer" row, #4189)."""
+    """The snapshot lives as long as the connection, once per view; even a
+    deduplicated manifest (wire v2, #4307) is held compressed (the view-memory
+    guide's "view and consumer" row, #4189)."""
     import json
     import zlib
 
     from djust.websocket import LiveViewConsumer
 
-    handler = {"policy": "strict", "coerce_types": True, "parameters": [{"name": "value"}] * 5}
+    contract = {"coerce_types": True, "parameters": [{"name": "value"}] * 5}
     contracts = {
-        "version": 1,
-        "owners": [
-            {
-                "view_id": None,
-                "component_id": f"c{i}",
-                "handlers": {f"h{j}": handler for j in range(6)},
-            }
-            for i in range(20)
-        ],
+        "version": 2,
+        "digest": "0123456789abcdef",
+        "contracts": [contract],
+        "handlers": [{f"h{j}": 0 for j in range(6)}],
+        "owners": [[None, None, 0]] + [[None, f"c{i}", 0] for i in range(100)],
     }
     frame = {
         "type": "patch",
@@ -340,5 +336,5 @@ def test_held_recovery_contracts_are_deflated_and_round_trip():
     held = consumer._recovery_contracts
     assert isinstance(held, bytes)
     plain = json.dumps({"parameter_contracts": contracts, "parameter_contract_view": "x.V"})
-    assert len(held) < len(plain) / 4
+    assert len(held) < len(plain) / 3
     assert json.loads(zlib.decompress(held)) == json.loads(plain)
