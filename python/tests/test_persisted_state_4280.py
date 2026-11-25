@@ -1,6 +1,6 @@
 """``persisted_state(view)`` is the public way to see what an explicit view would save (#4280).
 
-``_get_private_state()`` raises on an explicit view, and ``get_state()`` is what the view holds,
+``get_state()`` is what the view holds,
 not what it saves. ``persisted_state()`` splits the saved state by destination so a test can
 assert that rows a page only read are in none of them.
 """

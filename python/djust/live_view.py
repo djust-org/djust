@@ -91,10 +91,8 @@ __all__ = [
 # that are not user state. Exposure-flip plan row 10 (section 5, G1) split it:
 # the change-detection skip list is ``change_detection.CHANGE_DETECTION_IGNORED``
 # (this set, same membership) and the reserved ``state()`` names are
-# ``_exposure.reserved_state_names()``. This name stays only for the legacy
-# exporters that still filter the attribute walk with it (``get_state``,
-# the private-state helpers, the
-# legacy debug panel and the exposure inventory); it goes with them (rows 7, 9).
+# ``_exposure.reserved_state_names()``. This name stays for the
+# ``_snapshot_user_private_attrs`` capture and the exposure inventory.
 _FRAMEWORK_INTERNAL_ATTRS: frozenset = CHANGE_DETECTION_IGNORED
 
 
@@ -767,7 +765,7 @@ class LiveView(
         self._sticky_preserved: Dict[str, Any] = {}
 
         # Track user-defined _private attr names (populated by
-        # _snapshot_user_private_attrs after mount, or _restore_private_state).
+        # _snapshot_user_private_attrs after mount, or a restore of automatic state).
         self._user_private_keys: Set[str] = set()
 
         # Object-permission cache (ADR-017, v0.9.5-1a). Populated by
@@ -1030,7 +1028,7 @@ class LiveView(
         set yet.
 
         A framework attribute first set DURING mount (``start_async()``'s
-        ``_async_tasks``, a lifecycle flag such as ``_djust_waiters_closed``)
+        ``_async_tasks``, a lifecycle flag such as ``_djust_child_disposed``)
         is not in the init-time ``_framework_attrs``; the
         ``_FRAMEWORK_INTERNAL_ATTRS`` list every other capture path honours
         excludes it here too (#3248).
@@ -1048,154 +1046,6 @@ class LiveView(
             and k not in meta_attrs
             and k not in _FRAMEWORK_INTERNAL_ATTRS
         }
-
-    def _framework_storage_slots(self) -> Set[str]:
-        """``_``-prefixed instance slots that are framework storage, not user
-        private state, and so are never saved in the private session (#2959).
-
-        - the ``_state_<name>`` slot of a PUBLIC ``state()`` field: its value
-          reaches the session through the public state (the context reads it
-          through the descriptor, and every restore path sets it back through
-          the descriptor), so a second copy here is redundant. A ``_``-named
-          ``state()`` field, or one listed in ``static_assigns``, never reaches
-          the public context, so its slot stays private.
-        - ``_reactive_state``: the descriptor's own bookkeeping; any restore
-          through the descriptor rebuilds it.
-
-        :meth:`_get_private_state` still saves a public ``state()`` slot whose
-        value holds a Django model: the public path flattens a model to a dict,
-        this one re-hydrates it (#1994).
-        """
-        static_skip = set(getattr(self, "static_assigns", []) or [])
-        slots = {"_reactive_state"}
-        for name, (kind, slot) in _descriptor_fields(type(self)).items():
-            if kind == "state" and not name.startswith("_") and name not in static_skip:
-                slots.add(slot)
-        return slots
-
-    def _get_private_state(self) -> Dict[str, Any]:
-        """Return serializable user-defined _private attributes (not framework internals).
-
-        Only persists attrs tracked in ``_user_private_keys`` — a set populated
-        by ``_snapshot_user_private_attrs()`` (after mount) and
-        ``_restore_private_state()``. Event handlers that add NEW private attrs
-        should add the name to ``self._user_private_keys`` directly, e.g.
-        ``self._user_private_keys.add('_name')``, or the attr will not be
-        persisted in subsequent save cycles.
-
-        Non-serializable values (locks, file handles, etc.) are silently skipped.
-        This is a legacy-only API; explicit persistence uses a bound adapter.
-
-        2.0: the page-POST fallback and the socket no longer save private
-        attributes; the one remaining caller is the legacy ``lazy=True`` child
-        on the page-POST fallback (``_lazy_containers.py``), which goes with
-        that path (exposure-flip plan row 9).
-        """
-        from ._exposure import require_legacy_state_api
-
-        require_legacy_state_api(self)
-        result: Dict[str, Any] = {}
-        user_keys: Set[str] = getattr(self, "_user_private_keys", set())
-        # A session written before #2959 may have restored these into
-        # ``_user_private_keys``; they are still not re-saved.
-        not_private = self._framework_storage_slots()
-        for key in user_keys:
-            # A framework attribute is never user private state, even when a
-            # session written before #3248 restored it into the tracked set.
-            if key not in self.__dict__ or key in _FRAMEWORK_INTERNAL_ATTRS:
-                continue
-            value = self.__dict__[key]
-            if key in not_private and not (key != "_reactive_state" and _holds_model(value)):
-                # The public state carries this value — except a Django model,
-                # which the public path flattens to a dict while this one
-                # re-hydrates it (#1994), so a model-holding slot stays.
-                continue
-            # Skip callables (bound methods, lambdas stored as attrs)
-            if callable(value):
-                continue
-            # ADR-031: a class-level component's slot holds a BoundComponent;
-            # persist its State (a dict) so ``__get__`` rehydrates it on restore.
-            from .components.base import BoundComponent
-
-            if isinstance(value, BoundComponent):
-                value = dict(value.state)
-            # #1994: encode Django models to a re-hydratable ref so a private
-            # model attr survives the session round-trip AS A MODEL (re-fetched
-            # on restore) instead of the lossy client dict normalize_django_value
-            # would otherwise produce. No-op for non-model values.
-            value = encode_private_model_refs(value)
-            # Attempt serialization — skip if not possible
-            try:
-                json.dumps(value, cls=DjangoJSONEncoder)
-                result[key] = value
-            except (TypeError, ValueError, OverflowError):
-                logger.debug(
-                    "Skipping non-serializable private attr %s.%s (%s)",
-                    type(self).__name__,
-                    key,
-                    type(value).__name__,
-                )
-                continue
-        return result
-
-    def _restore_private_state(self, private_state: Dict[str, Any]) -> None:
-        """Restore legacy private attributes; explicit views require a bound adapter.
-
-        A ``"lifecycle"`` step of the ``sync_turn_wrapper`` (#3646): a private model
-        reference is re-fetched here (``decode_private_model_refs``, ``Model.objects.get``)
-        and a private attribute can be a property whose setter is application code. Its
-        one remaining caller (2.0) is the legacy lazy container on the page-POST
-        fallback; the step is entered here.
-
-        A guarded step: a wrapper whose ``__exit__`` swallows
-        an exception would otherwise turn a failing restore into a silent PARTIAL one
-        (the attributes before the failing key applied, the rest skipped). The failure
-        propagates as ``PermissionDenied`` instead.
-        """
-        from ._exposure import require_legacy_state_api
-        from .sync_turn import run_guarded_step
-
-        require_legacy_state_api(self)
-        run_guarded_step(self, "lifecycle", lambda: self._apply_private_state(private_state))
-
-    def _apply_private_state(self, private_state: Dict[str, Any]) -> None:
-        """The body of :meth:`_restore_private_state`, run inside its step."""
-        from .security import DANGEROUS_ATTRIBUTES
-
-        framework: frozenset[str] = getattr(self, "_framework_attrs", frozenset())
-        meta_attrs = {"_framework_attrs", "_user_private_keys"}
-        for key, value in private_state.items():
-            if not isinstance(key, str):
-                continue
-            # The session is trusted, but this path used a raw setattr with no
-            # screen at all, unlike the public one (#3046). A dunder
-            # (``__class__``, ``__dict__``) is never user private state.
-            if key in DANGEROUS_ATTRIBUTES or (key.startswith("__") and key.endswith("__")):
-                logger.warning("Skipping restore of reserved private attribute %r", key)
-                continue
-            if (
-                key.startswith("_")
-                and key not in framework
-                and key not in meta_attrs
-                # A framework attribute set during mount is not in the
-                # init-time ``framework`` set; never restore one (#3248).
-                and key not in _FRAMEWORK_INTERNAL_ATTRS
-            ):
-                # #1994: re-hydrate model refs back to model instances (fresh DB
-                # fetch) so a private model attr comes back a MODEL, not a dict.
-                value = decode_private_model_refs(value)
-                # #2252: un-tag Decimals written by decimal_for_state_roundtrip
-                # so a private DecimalField attr comes back a DECIMAL, not a
-                # tag dict. This is the single decode point for all three
-                # callers of this method (mixins/request.py, runtime.py,
-                # mixins/sticky.py).
-                value = decode_state_roundtrip(value)
-                setattr(self, key, value)
-                # Track restored attrs as user-defined so they persist
-                # through subsequent save cycles.
-                user_keys = getattr(self, "_user_private_keys", None)
-                if user_keys is not None:
-                    user_keys.add(key)
 
     def _should_restore_snapshot(self, request: Any) -> bool:
         """Return True to allow the signed client snapshot to be restored.

@@ -537,7 +537,7 @@ async def test_a_navigation_waits_for_every_running_handler():
         # The navigation is blocked waiting for the view's running turn.
         await _spin_until(lambda: lane.waiting() == 1, "the navigation to wait on the lane")
         # The view is still mounted and its handler has not ended: the navigation waits.
-        assert getattr(VIEWS["w"], "_djust_waiters_closed", False) is False
+        assert getattr(VIEWS["w"], "_djust_child_disposed", False) is False
         assert ("hold-end", "w") not in ORDER, "the navigation released a view mid-handler"
         RELEASE.set()
         await _until(communicator, "mount")

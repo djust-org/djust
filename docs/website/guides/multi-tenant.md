@@ -319,7 +319,8 @@ state in two places, and both are scoped by `TenantMixin.get_state_key_prefix()`
 (`tenant:<id>`, the id percent-encoded):
 
 - **The Django session**, under `liveview_tenant:<id>:<path>`: the state of a
-  legacy `lazy=True` child on the page-POST fallback. (2.0 removed the other
+  legacy `lazy=True` child on the page-POST fallback (2.0 removed that too, and
+  nothing writes it now). (2.0 removed the other
   saved state of a legacy view: the Rust view the framework stored per session
   and page in the state backend, and the public, private and component state
   the page-POST fallback restored. Nothing is saved for those to leak across

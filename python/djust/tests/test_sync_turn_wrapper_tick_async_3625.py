@@ -758,11 +758,8 @@ EXPECTED_HOOK_REFERENCES = {
     ("runtime.py", "ViewRuntime._execute_explicit_async_task.complete", "handle_async_result"): (
         "call_async_result"
     ),
-    # Embedded / sticky children: explicit and legacy owners.
+    # Embedded / sticky children.
     ("_child_async.py", "_execute_body.complete", "handle_async_result"): "call_async_result",
-    ("_child_async.py", "dispatch_legacy_child_work.run_body.complete", "handle_async_result"): (
-        "call_async_result"
-    ),
     # HTTP fallback: synchronous result hooks enter the async step.
     (
         "mixins/request.py",

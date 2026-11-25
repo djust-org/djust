@@ -1539,8 +1539,8 @@ class Transport(Protocol):
         adjusted) HTML the caller should use for the mount frame.
 
         - WS: on the ``live_redirect`` path (when the consumer staged a
-          ``_sticky_preserved`` dict), keeps the survivors the template tag
-          re-registered onto the new parent, discards the rest, and emits the
+          ``_sticky_preserved`` dict), keeps the survivors the destination's
+          ``{% live_render %}`` tags re-registered, discards the rest, and emits the
           ``sticky_hold`` frame BEFORE the mount frame so the client's
           ``reattachStickyAfterMount`` reconciliation is authoritative
           (websocket.py:2080-2082 reset + 2836-2903 emit). Returns ``html``
@@ -2246,8 +2246,8 @@ class WSConsumerTransport:
                     # keep it in survivors_final for an authoritative hold list.
                     survivors_final[sticky_id] = child
                 else:
-                    # No slot on the new page (or a child the tag did not
-                    # reattach): drop it, waiters included (#3244).
+                    # No slot on the new page (or the tag did not reattach
+                    # it): drop it, waiters included (#3244).
                     discard_sticky_child(child)
             consumer._sticky_preserved = survivors_final
             await consumer.send_json(
@@ -3238,10 +3238,10 @@ def _library_is_childless(
 def _explicit_descendant(root: Any, view_id: Any) -> Any:
     """Resolve a nested explicit child by ``view_id`` (ADR-038 E3-4).
 
-    Direct children keep their existing lookup. Below them, a root routes to
-    a descendant only through the server-owned registry chain, and only when
-    exactly one owned descendant carries that id; an ambiguous or unknown id
-    is not routed.
+    Direct children keep their existing lookup. Below them, an explicit root
+    routes to a descendant only through the server-owned registry chain, and
+    only when exactly one owned explicit descendant carries that id; an
+    ambiguous or unknown id is not routed.
     """
     if type(view_id) is not str:
         return None
@@ -5392,7 +5392,7 @@ class ViewRuntime(RuntimeTurnPort):
 
         try:
             await _call_handler(handler, call_kwargs or None, positional_args=call_args)
-        except Exception:
+        except Exception:  # noqa: BLE001 — no handler values in client errors
             await self.transport.send_error("Child event failed.", code="event_error")
             return
 
@@ -5406,7 +5406,7 @@ class ViewRuntime(RuntimeTurnPort):
             log_args=(event_name,),
         )
 
-        # The child's declared state is saved with the page (below).
+        # A child's declared state is saved with the page (below).
         try:
             from .auth.core import enforce_object_permission
 
@@ -5414,7 +5414,7 @@ class ViewRuntime(RuntimeTurnPort):
             await sync_to_async(enforce_object_permission)(target_view, event_request)
             # The shared post-render batch saves the owner and reconciles
             # nested slots together; no separate pre-render child flush.
-        except Exception:  # noqa: BLE001 — no save or success frame on failure
+        except Exception:  # noqa: BLE001 — no success frame on failure
             await self.transport.send_error(
                 "Child state unavailable. Please reload the page.", code="state_error"
             )
@@ -8121,8 +8121,8 @@ class ViewRuntime(RuntimeTurnPort):
             or getattr(root, "_djust_child_disposed", False)
         ):
             return
-        # Imported past the early return: this runs after every turn, on the
-        # event loop (#3095).
+        # Imported past the early return: this runs after every turn,
+        # on the event loop (#3095).
         from ._async_batch import AsyncBatch
         from ._child_async import dispatch_child_work
 

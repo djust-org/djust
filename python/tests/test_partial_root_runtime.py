@@ -317,24 +317,6 @@ def test_included_template_can_gain_partial_root_after_cache_warmup(tmp_path):
     assert view.dj_model_fields() == ["name"]
 
 
-def test_lazy_registration_plan_resolves_relative_includes_per_origin(tmp_path):
-    for name in ("plain", "lazy"):
-        (tmp_path / name).mkdir()
-    (tmp_path / "plain" / "piece.html").write_text("<p>plain</p>", encoding="utf-8")
-    (tmp_path / "lazy" / "piece.html").write_text(
-        '<div dj-view="child.V" dj-lazy="visible"></div>', encoding="utf-8"
-    )
-    source = '{% include "./piece.html" %}'
-    view = RustLiveView(source, [str(tmp_path)])
-    view.set_authenticated_partial_root(True)
-    view.set_template_origin("plain/page.html")
-    assert not view.lazy_registration_allowed()
-    view.set_template_origin("lazy/page.html")
-    assert view.lazy_registration_allowed()
-    view.set_template_origin("plain/page.html")
-    assert not view.lazy_registration_allowed()
-
-
 def test_root_replacement_preserves_framework_view_path_and_snapshot():
     source = (
         "{% partialdef a %}<main dj-root>A</main>{% endpartialdef %}"

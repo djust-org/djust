@@ -1513,8 +1513,7 @@ class RequestMixin:
         Every HTTP request builds the view afresh, so ids from the process-wide
         counter never repeat between the page GET and the event POST that
         follows; per-render numbering makes them repeat, which is what lets
-        an event be routed to the child it names. Both exposure policies get
-        per-render ids: both route their children over HTTP (#4173).
+        an event be routed to the child it names (#4173).
         """
         if hasattr(self, "_scope_child_ids_to_render"):
             self._scope_child_ids_to_render()
@@ -1526,9 +1525,7 @@ class RequestMixin:
         here (its output is not sent: a child's event answers with the child's
         own HTML). The child exists only if it passed what ``{% live_render %}``
         checks at registration: its view-level auth and its object permission,
-        against this request. A legacy page's legacy child and an explicit
-        page's explicit child are routed (#4173); a mixed-policy pair is not.
-        An explicit child must also pass the socket runtime's event checks
+        against this request (#4173). The child must also pass the socket runtime's event checks
         against this request (``child_event_adapter``: ownership, schema,
         reuse identity and state binding) and its view auth for an event.
         Anything else is refused by the caller, as it was before routing.
@@ -1558,16 +1555,13 @@ class RequestMixin:
             child = self._get_all_child_views().get(view_id)
         if child is None:
             child = self._http_fill_lazy_slot(view_id)
-        if child is None and not uses_legacy_exposure(self):
+        if child is None:
             # A nested explicit child, as the socket runtime resolves it.
             from ..runtime import _explicit_descendant
 
             child = _explicit_descendant(self, view_id)
         if child is None:
             return None
-        if uses_legacy_exposure(self) or uses_legacy_exposure(child):
-            # Same-policy pairs only: a mixed pair is not routed.
-            return child if uses_legacy_exposure(self) and uses_legacy_exposure(child) else None
         from .._exposure import ExposureError
         from .._exposure_children import child_event_adapter
         from ..auth.core import check_view_auth
@@ -1663,17 +1657,12 @@ class RequestMixin:
             return _contract_error_response()
         response.update(contract_fields)
         response["html"] = render_embedded_child_html(child)
-        if uses_legacy_exposure(self):
-            from .._lazy_containers import save_http_lazy
+        # The explicit tree's persisted fields (a sticky child's
+        # ``persist="server"`` state), and the session writes of the
+        # child's handler (#4162). A transient child keeps nothing.
+        from .._exposure_child_persistence import save_child_states
 
-            save_http_lazy(self, request, view_id, child)
-        else:
-            # The explicit tree's persisted fields (a sticky child's
-            # ``persist="server"`` state), and the session writes of the
-            # child's handler (#4162). A transient child keeps nothing.
-            from .._exposure_child_persistence import save_child_states
-
-            save_child_states(self, request)
+        save_child_states(self, request)
         response["event_name"] = event_name
         if cache_request_id:
             response["cache_request_id"] = cache_request_id

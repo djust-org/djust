@@ -677,8 +677,6 @@ class TestStickyHoldOrdering:
         # Rust renderer). This is exactly the sequence
         # ``handle_mount`` emits when ``sticky_preserved`` is non-empty.
         async def _emit_sequence():
-            from djust.websocket import _find_sticky_slot_ids
-
             matched = _find_sticky_slot_ids(html)
             survivors_final: dict = {}
             for sid, c in sticky_preserved.items():

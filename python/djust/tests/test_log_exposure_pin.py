@@ -45,7 +45,6 @@ LEGACY_GATED = {
 }
 
 FRAMEWORK_ONLY = {
-    ("_find_sticky_slot_ids", "sticky-slot parse failed; returning empty set"): "slot markup parse",
     ("_clear_live_handles", "%s failed during teardown"): (
         "teardown step names; confirm no application hook runs there"
     ),
@@ -108,23 +107,8 @@ RUNTIME_KNOWN_OPEN = {}
 # carrying log call there fails the test until it is classified.
 MIXIN_TABLES = {
     "live_view.py": ({}, {}),
-    "_child_lifecycle.py": (
-        {
-            ("discard_sticky_child", "sticky child %s raised"): (
-                "after `if not uses_legacy_exposure(child)` disposes and returns"
-            ),
-        },
-    ),
-    "mixins/sticky.py": (
-        {
-            ("_on_sticky_unmount", "sticky _on_sticky_unmount: cancel_async_all() fa"): (
-                "inside `if uses_legacy_exposure(self)`"
-            ),
-            ("_unregister_child", "child view %s _cleanup_on_unregister raised"): (
-                "nonlegacy children go to dispose_child_subtree and return first"
-            ),
-        },
-    ),
+    "_child_lifecycle.py": ({}, {}),
+    "mixins/sticky.py": ({}, {}),
     "mixins/activity.py": (
         {
             (
@@ -182,17 +166,7 @@ MIXIN_TABLES = {
         },
     ),
     "templatetags/live_tags.py": (
-        {
-            ("_render_eager", "live_render lazy: child %s.get_context_data rais"): (
-                "an explicit child raises a value-free ExposureError first"
-            ),
-            ("_render_sticky_child_html", "live_render: child %s.get_context_data raised; r"): (
-                "an explicit child raises a value-free ExposureError first"
-            ),
-            ("live_render", "live_render: child %s.get_context_data raised; r"): (
-                "an explicit child raises a value-free ExposureError first"
-            ),
-        },
+        {},
         {
             ("_resolve_css_class", "config.get_framework_class lookup failed: %s"): (
                 "framework config lookup"

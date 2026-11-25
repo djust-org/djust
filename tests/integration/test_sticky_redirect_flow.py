@@ -24,6 +24,7 @@ Three scenarios:
 from __future__ import annotations
 
 import asyncio
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -32,6 +33,18 @@ from django.test import RequestFactory
 from djust.live_view import LiveView
 from djust.testing import with_live_session
 from djust.websocket import LiveViewConsumer
+
+
+def _find_sticky_slot_ids(html: str) -> set[str]:
+    """The ``dj-sticky-slot`` values in ``html`` (the destination page's slots)."""
+    ids: set[str] = set()
+
+    class _Slots(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            ids.update(v for k, v in attrs if k == "dj-sticky-slot" and v)
+
+    _Slots(convert_charrefs=False).feed(html)
+    return ids
 
 
 pytestmark = pytest.mark.django_db
@@ -216,8 +229,6 @@ async def test_end_to_end_dashboard_to_settings_sticky_audio_player():
     from django.template import Context, Template
 
     settings_html = Template(_SettingsWithSlotView.template).render(Context({}))
-    from djust.websocket import _find_sticky_slot_ids
-
     assert _find_sticky_slot_ids(settings_html) == {"audio-player"}
 
     # Install new parent + re-register survivor.
@@ -321,7 +332,6 @@ async def test_live_redirect_to_non_live_session_full_reload_unmounts_sticky():
 
     # But the destination template has NO matching slot — reconcile.
     from django.template import Context, Template
-    from djust.websocket import _find_sticky_slot_ids
 
     dest_html = Template(_SettingsNoSlotView.template).render(Context({}))
     matched = _find_sticky_slot_ids(dest_html)
@@ -458,8 +468,6 @@ async def test_dashboard_to_dashboard_via_full_handle_mount_pipeline():
     # logic from handle_mount (lines around websocket.py:2278). Tests
     # the integration of: tag's auto-reattach + slot-scan skip-on-claim
     # + sticky_hold survivor list.
-    from djust.websocket import _find_sticky_slot_ids
-
     matched_ids = _find_sticky_slot_ids(rendered_html)
     survivors_final: Dict[str, Any] = {}
     for sticky_id, child in consumer._sticky_preserved.items():

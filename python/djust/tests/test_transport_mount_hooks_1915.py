@@ -214,9 +214,7 @@ def test_sse_next_mount_version_returns_raw_rust_version():
 
 
 @pytest.mark.asyncio
-async def test_ws_on_mount_render_ready_emits_sticky_hold_for_a_child_the_tag_reattached(
-    monkeypatch,
-):
+async def test_ws_on_mount_render_ready_emits_sticky_hold_for_a_child_the_tag_reattached():
     """An explicit survivor is kept only when the ``{% live_render %}`` tag re-attached it
     (its expected class, inputs and request identity passed); the hook then reports it."""
     consumer = _FakeConsumer()
@@ -226,10 +224,6 @@ async def test_ws_on_mount_render_ready_emits_sticky_hold_for_a_child_the_tag_re
     child = SimpleNamespace(exposure_policy="explicit")
     consumer._sticky_preserved = {"slot-a": child}
     consumer._sticky_auto_reattached = {"slot-a"}
-
-    import djust.websocket as ws_mod
-
-    monkeypatch.setattr(ws_mod, "_find_sticky_slot_ids", lambda html: {"slot-a"})
 
     html_in = '<div dj-sticky-slot="slot-a"></div>'
     html_out = await transport.on_mount_render_ready(view, html_in)
@@ -243,9 +237,7 @@ async def test_ws_on_mount_render_ready_emits_sticky_hold_for_a_child_the_tag_re
 
 
 @pytest.mark.asyncio
-async def test_ws_on_mount_render_ready_drops_an_explicit_child_slot_markup_alone_cannot_reattach(
-    monkeypatch,
-):
+async def test_ws_on_mount_render_ready_drops_an_explicit_child_slot_markup_alone_cannot_reattach():
     """Bare slot markup cannot authorize an explicit child's reattachment: it is discarded."""
     consumer = _FakeConsumer()
     transport = WSConsumerTransport(consumer)
@@ -253,10 +245,6 @@ async def test_ws_on_mount_render_ready_drops_an_explicit_child_slot_markup_alon
 
     child = SimpleNamespace(exposure_policy="explicit")
     consumer._sticky_preserved = {"slot-a": child}
-
-    import djust.websocket as ws_mod
-
-    monkeypatch.setattr(ws_mod, "_find_sticky_slot_ids", lambda html: {"slot-a"})
 
     await transport.on_mount_render_ready(view, '<div dj-sticky-slot="slot-a"></div>')
 

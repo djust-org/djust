@@ -298,9 +298,8 @@ Read it this way:
 
 - **The arrow list** is where the name goes today. Those are the places it
   stops going once the view is explicit. `session_state` and
-  `private_session` are always conditional on 2.0: a legacy view's state
-  reaches the session only when it renders as a `lazy=True` child and an event
-  reaches it over the HTTP fallback.
+  `private_session` are gone on 2.0: the legacy `lazy=True` child's session
+  entry was the last thing that wrote them, and nothing writes them now.
 - **`reconnect: fresh mount`** means the view runs `mount()` again when the
   socket reconnects, so nothing needs a persistence grant to behave as it does
   now. On 2.0 every view reads `fresh mount`, because nothing restores a
@@ -1212,8 +1211,8 @@ class FeedView(LiveView):
         self.offset += self._page_size
 ```
 
-A test that called `_get_private_state()` to check what a view keeps now raises on an
-explicit view. Use `LiveViewTestClient.persisted_state()` (or `djust.testing.persisted_state(view)`)
+A test that called `_get_private_state()` to check what a view keeps fails: the method is gone.
+Use `LiveViewTestClient.persisted_state()` (or `djust.testing.persisted_state(view)`)
 instead: it returns what the view would save, split by destination, and
 `"name" not in persisted_state(view).names` asserts that a value a page only reads is saved nowhere
 ([Asserting what is saved](../testing/index.md#asserting-what-is-saved)).
@@ -1471,3 +1470,4 @@ Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
 <!-- generated-doc prose-sha256: 3010d0c189bc -->
+<!-- generated-doc prose-sha256: ebc0727383bb -->

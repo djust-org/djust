@@ -724,45 +724,8 @@ def render_embedded_child_html(child_view: Any) -> str:
 
             child_view._record_dj_model_fields_from_source(template_str, get_template_dirs())
         return str(html)
-    except Exception:
+    except Exception:  # noqa: BLE001 — no exception detail reaches the page
         raise ExposureError("Explicit child rendering unavailable") from None
-
-
-def _find_sticky_slot_ids(html: str) -> set[str]:
-    """Return the set of ``dj-sticky-slot`` attribute values in ``html``.
-
-    Uses ``html.parser.HTMLParser`` (stdlib) — NEVER a regex — so that
-    quoted attribute values containing ``>`` and other HTML5 edge cases
-    don't derail the scan. The caller is
-    :meth:`LiveViewConsumer.handle_live_redirect_mount`, which uses the
-    result to decide which preserved sticky children to reattach on the
-    new parent.
-    """
-    if not html:
-        return set()
-    from html.parser import HTMLParser as _HTMLParser
-
-    class _SlotCollector(_HTMLParser):
-        def __init__(self) -> None:
-            super().__init__(convert_charrefs=False)
-            self.ids: set[str] = set()
-
-        def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
-            for name, value in attrs:
-                if name == "dj-sticky-slot" and value:
-                    self.ids.add(value)
-
-        def handle_startendtag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
-            self.handle_starttag(tag, attrs)
-
-    p = _SlotCollector()
-    try:
-        p.feed(html)
-        p.close()
-    except Exception:  # noqa: BLE001 — defensive; malformed HTML must not crash redirect
-        logger.warning("sticky-slot parse failed; returning empty set", exc_info=True)
-        return set()
-    return p.ids
 
 
 def _clear_live_handles(view_instance: Any) -> None:

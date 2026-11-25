@@ -463,7 +463,7 @@ _WS_ONLY_MARKERS = {
     # ``marker not in rt_src`` assertion trips → update this pin deliberately AND
     # note the move in ADR-022. This keeps the mount-side WS↔runtime delta VISIBLE
     # as the mount convergence proceeds.
-    # ``_find_sticky_slot_ids`` and ``register_view``
+    # ``register_view``
     # gained DORMANT ``WSConsumerTransport`` mount-hook impls in ADR-022 Iter 3
     # Phase 3.2 (#1915):
     # ``on_mount_render_ready`` (Finding B sticky preservation), and

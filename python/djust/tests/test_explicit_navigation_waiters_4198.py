@@ -18,10 +18,8 @@ opt-in cases went with that file (covered by ``test_view_tracked_tasks.py``
 and ``test_exposure_sse_close_3221.py``).
 
 These tests pin the dispose semantics (the view's tasks are cancelled and its
-waiters are gone), not ``_close_waiters`` itself: they still pass with
-``_close_waiters`` disabled, because an explicit view's own task disposal
-cancels the work first. ``_close_waiters`` serves legacy views only and goes
-with them (#4199).
+waiters are gone). ``_close_waiters`` was legacy-only and went with the legacy
+children (#4200): a released view refuses new waiters through child disposal.
 
 Both transports are driven through their real entry points: a
 ``WebsocketCommunicator`` against ``LiveViewConsumer``, and the SSE stream and

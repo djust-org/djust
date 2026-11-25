@@ -1271,23 +1271,6 @@ impl RustLiveViewBackend {
         })
     }
 
-    /// Preserve the existing conservative lazy registration planner while
-    /// a separate authenticated-root render tracks provenance. Match the
-    /// legacy lazy path: do not attach raw Python sidecars or pre-evaluate a
-    /// stateful property merely to decide whether registration is allowed.
-    fn lazy_registration_allowed(&self) -> PyResult<bool> {
-        // Classify immutable source snapshots without resolving any template
-        // operand or application value. A dynamic dependency fails closed.
-        Ok(static_lazy_tree(
-            &self.template_source,
-            &self.template_dirs,
-            self.template_origin.as_deref(),
-            &mut HashSet::new(),
-            0,
-        )?
-        .unwrap_or(false))
-    }
-
     /// Automatic compiled-tree planning plus stable authored node addresses.
     fn render_lazy_html(&mut self) -> PyResult<LazyRenderOutput> {
         if self.potential_authenticated_partial_root {
@@ -3757,87 +3740,6 @@ fn watch_lazy_selector(
         }
     }
     Ok(())
-}
-/// Walk immutable template source snapshots for lazy syntax without invoking
-/// template operands, filters, or Python objects. Unknown and dynamic forms
-/// fail closed. Each dependency's bytes are read once and analyzed directly,
-/// so replacement of a file between two planning phases cannot invoke code.
-fn static_lazy_tree(
-    source: &str,
-    dirs: &[PathBuf],
-    current: Option<&str>,
-    active: &mut HashSet<String>,
-    depth: usize,
-) -> PyResult<Option<bool>> {
-    if depth > 20 {
-        return Ok(None);
-    }
-    let identity = current.unwrap_or(source).to_owned();
-    if !active.insert(identity.clone()) {
-        return Ok(None);
-    }
-    let result = (|| {
-        let template = cached_template(source)?;
-        let mut refs = Vec::new();
-        lazy_dependencies(template.authored_nodes(), &mut refs);
-        let mut found = resolved_lazy_syntax(template.authored_nodes());
-        for dep in refs {
-            let token = dep.operand.trim();
-            if !(token.starts_with(['\'', '"'])
-                && token.ends_with(['\'', '"'])
-                && !djust_templates::filter_lexer::has_unquoted_pipe(token))
-            {
-                return Ok(None);
-            }
-            for (_, expression) in &dep.bindings {
-                let value = expression.trim();
-                let quoted = value.starts_with(['\'', '"'])
-                    && value.ends_with(['\'', '"'])
-                    && !djust_templates::filter_lexer::has_unquoted_pipe(value);
-                if !quoted
-                    && !matches!(value, "True" | "False" | "None")
-                    && value.parse::<f64>().is_err()
-                {
-                    return Ok(None);
-                }
-            }
-            // A quoted literal with no filters is resolved without touching
-            // the render context or invoking application-defined code.
-            let name =
-                match djust_templates::renderer::resolve_template_reference(token, &Context::new())
-                {
-                    Ok(Value::String(name) | Value::SafeString(name) | Value::ModelName(name)) => {
-                        name
-                    }
-                    _ => return Ok(None),
-                };
-            let Ok(name) = djust_templates::inheritance::construct_relative_path_allow_recursion(
-                dep.origin.as_deref().or(current),
-                &name,
-                true,
-            ) else {
-                return Ok(None);
-            };
-            let base = name.split_once('#').map_or(name.as_str(), |(base, _)| base);
-            let Some(path) = dirs
-                .iter()
-                .map(|dir| dir.join(base))
-                .find(|path| path.is_file())
-            else {
-                return Ok(None);
-            };
-            let Ok(child) = lazy_source_file(&path) else {
-                return Ok(None);
-            };
-            match static_lazy_tree(&child, dirs, Some(base), active, depth + 1)? {
-                Some(child_found) => found |= child_found,
-                None => return Ok(None),
-            }
-        }
-        Ok(Some(found))
-    })();
-    active.remove(&identity);
-    result
 }
 
 fn needs_lazy_tree(

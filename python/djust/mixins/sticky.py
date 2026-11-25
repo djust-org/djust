@@ -188,15 +188,13 @@ class StickyChildRegistry:
         event carrying a child's ``view_id`` can be routed to that child (#3104).
 
         Called by the HTTP request methods immediately before each render of a
-        parent (either exposure policy, #4173), never over a socket: there
+        parent (#4173), never over a socket: there
         children live across renders and the process-wide counter keeps their
         ids unique. A child of a previous render of this request (an
         auto-numbered, non-sticky one: a throwaway) is dropped from the
         registry so the next render reuses its id; an explicit one is also
         disposed with its subtree. Pinned and sticky children are left alone.
         """
-        from .._exposure import uses_legacy_exposure
-
         self.__dict__["_render_child_ids"] = itertools.count(1)
         self.__dict__["_render_assigned_ids"] = set()
         registry = getattr(self, "_child_views", None)
@@ -208,7 +206,7 @@ class StickyChildRegistry:
             if _AUTO_VIEW_ID.fullmatch(vid) and getattr(child, "sticky", False) is not True
         ]:
             child = registry.pop(view_id, None)
-            if child is not None and not uses_legacy_exposure(child):
+            if child is not None:
                 from .._child_lifecycle import dispose_child_subtree
 
                 dispose_child_subtree(child)
@@ -249,36 +247,16 @@ class StickyChildRegistry:
     def _unregister_child(self, view_id: str) -> None:
         """Drop ``view_id`` from the registry and tear the child down.
 
-        An explicit child is disposed with its subtree. A legacy child has its
-        waiters closed and its own embedded children unregistered
-        (``release_legacy_child``, #3244), then its cleanup hook runs. The hook
-        (optional on the child) is wrapped so a buggy hook can't break the
-        disconnect loop — we log and continue.
+        The child is disposed with its subtree (``dispose_child_subtree``).
         """
         if not hasattr(self, "_child_views"):
             return
         child = self._child_views.pop(view_id, None)
         if child is None:
             return
-        from .._exposure import uses_legacy_exposure
+        from .._child_lifecycle import dispose_child_subtree
 
-        if not uses_legacy_exposure(child):
-            from .._child_lifecycle import dispose_child_subtree
-
-            dispose_child_subtree(child)
-            return
-        from .._child_lifecycle import release_legacy_child
-
-        # Its waiters and nested children first (#3244), then the app hook.
-        release_legacy_child(child)
-        cleanup = getattr(child, "_cleanup_on_unregister", None)
-        if callable(cleanup):
-            try:
-                from .._child_lifecycle import call_teardown_hook
-
-                call_teardown_hook(child, cleanup)
-            except Exception:  # noqa: BLE001 — defensive: never break disconnect
-                logger.exception("child view %s _cleanup_on_unregister raised", view_id)
+        dispose_child_subtree(child)
 
     # ------------------------------------------------------------------
     # Queries (used by the consumer's event-dispatch path)
@@ -329,12 +307,7 @@ class StickyChildRegistry:
             try:
                 cancel_all()
             except Exception:  # noqa: BLE001 — cleanup hook must not raise
-                from .._exposure import uses_legacy_exposure
-
-                if uses_legacy_exposure(self):
-                    logger.exception("sticky _on_sticky_unmount: cancel_async_all() failed")
-                else:
-                    logger.error("Explicit sticky async cleanup failed")
+                logger.error("Explicit sticky async cleanup failed")
         return None
 
     def _on_sticky_update(self, changed: Dict[str, Any]) -> None:
@@ -379,14 +352,12 @@ class StickyChildRegistry:
           every render; the hook must be idempotent.
         * Private by name, so no client event can name it: it is reachable
           only from the ``{% live_render %}`` tag, never over the socket.
-        * A legacy sticky preserved across ``live_redirect`` is not called:
-          that child is not rendered again, the browser keeps its DOM. An
-          explicit one carried there is called with the destination's changed
-          updatable inputs, and re-rendered to the browser after the mount
-          frame.
+        * A child carried across ``live_redirect`` is called with the
+          destination's changed updatable inputs, and re-rendered to the
+          browser after the mount frame.
         * A child that does not override it keeps today's behaviour: the new
           values are ignored and djust logs a warning naming them.
-        * A child with ``exposure_policy = "explicit"`` receives only the
+        * A child receives only the
           inputs named in its ``sticky_update_inputs``. Every other input is
           part of its identity: a change to one remounts the child (its
           ``persist="server"`` state is not restored either), so this is
@@ -436,13 +407,7 @@ class StickyChildRegistry:
             sticky_id = getattr(child, "sticky_id", None) or _view_id
             if not _authorized(child):
                 from .._child_lifecycle import discard_sticky_child
-                from .._exposure import uses_legacy_exposure
 
-                if uses_legacy_exposure(child):
-                    logger.info(
-                        "Sticky child %s auth denied for new request; discarding",
-                        sticky_id,
-                    )
                 discard_sticky_child(child)
                 continue
             # ``_authorized`` already set ``child.request`` to the new request

@@ -585,15 +585,10 @@ class TestEveryOtherTypeIsUntouched:
 #: `mixins/rust_bridge.py` (which #2252 named as a read site) has no restore
 #: path at all.
 EXPECTED_DECODE_SITES = {
-    # #3252: restore the lazy child's server-held public/private session state,
-    # tagged at save_http_lazy's encoder-less JSON boundary.
-    ("_lazy_containers.py", "mount_http_lazy"),
     # #4107: a view's saved state, read back from the session.
     ("_automatic_state.py", "_read"),
     # ... and the in-memory copy an over-limit refusal rolls back to.
     ("_automatic_state.py", "_decoded"),
-    # The body of `_restore_private_state`, which enters its `lifecycle` step around it (#3646).
-    ("live_view.py", "_apply_private_state"),
     # 2.0 removed the page-POST fallback's session restore and the component
     # session restore, with their decodes (``mixins/request.py``,
     # ``mixins/components.py``).

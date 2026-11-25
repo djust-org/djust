@@ -428,7 +428,6 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         # ADR-038 E2-1: the keys registered providers rendered this pass.
         "_explicit_context_provider_keys",
         "_djust_child_disposed",
-        "_djust_waiters_closed",
         "_async_task_handles",
         "_tracked_tasks",
         "_async_tasks",

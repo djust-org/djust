@@ -203,7 +203,7 @@ def _as_caller(user_id):
   | `"tick"` | `handle_tick()` |
   | `"render"` | a render, on every transport: `get_context_data()`, the state sync that evaluates the QuerySets the context holds (the explicit JIT, the rows serialized for the template), and the template engine run, including the relations a template follows on a model and the template-time hooks below. Since #4276; before, only the `get_context_data()` call was inside, and the queries after it ran with no scope. One render is one entry: the steps inside it nest |
   | `"auth"` | an authorization decision that runs your code: `check_permissions()`, Django's access mixins and replayed `dispatch` decorators (`test_func`), `@permission_required` on a handler, and the object-permission check (`get_object()` + `has_object_permission()`) |
-  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the signed client snapshot's restore gate (`_should_restore_snapshot()`), the restore of a legacy lazy child's private state (`_restore_private_state()`, which re-fetches private model references; a guarded step, so a wrapper that swallows a failure cannot leave a half-restored view), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
+  | `"lifecycle"` | the `on_mount` hooks (the whole chain is one entry), `connected()` and `disconnected()`, the signed client snapshot's restore gate (`_should_restore_snapshot()`), and a released view's teardown hooks **only when they run on a worker thread**; on the event loop they run with no step (see [Not wrapped](#not-wrapped)) |
   | `"state_store"` | a call into the project's [state store](../state/state-store.md) (`DJUST_STATE_STORE`): the load of a view's saved state, its save after a turn, and the deletion of evicted states. Entered only when a store outside the session is configured (new with #4132) |
 - `view` is the view or component whose code runs; `turn` is
   `djust.turns.current_turn()`, or `None` when the step runs outside a turn (a
@@ -227,9 +227,8 @@ def _as_caller(user_id):
   exits cleanly. If the wrapper's `__exit__` swallows an exception that the check
   or an `on_mount` hook raised, djust raises `PermissionDenied` instead of
   treating the missing verdict as "allowed". The same guard covers the
-  `on_mount` chain and `_restore_private_state`,
-  because their outcome is a verdict too (a swallowed failure in the last would
-  otherwise leave a silently half-restored view). The guard belongs to the step djust enters: a check that runs
+  `on_mount` chain,
+  because its outcome is a verdict too. The guard belongs to the step djust enters: a check that runs
   *inside* another step on the same thread (an `"auth"` check called from a
   `mount()` that is itself being wrapped) does not enter the wrapper again, so a
   wrapper that swallows exceptions on the **outer** `"mount"` / `"event"` step is

@@ -8,9 +8,9 @@ connections by any path that walks the instance.
 
 The legacy private-state capture and restore this issue first fixed
 (``_get_private_state`` / ``_restore_private_state``, the ``__private`` session
-key) went with the legacy exposure policy (#4194): an explicit view refuses
-both methods (``test_exposure_state_apis.py``) and persists only declared
-``state()`` fields, so the tests that drove them were deleted with it.
+key) went with the legacy exposure policy (#4194, #4200): an explicit view
+persists only declared ``state()`` fields, so the tests that drove them were
+deleted with it.
 """
 
 from __future__ import annotations

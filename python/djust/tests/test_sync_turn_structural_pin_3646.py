@@ -376,13 +376,9 @@ LEAVES: Dict[Tuple[str, str], Tuple[str, Optional[str]]] = {
     ("hooks.py", "run_on_mount_hooks"): ("run_guarded_step", "lifecycle"),
     ("_child_lifecycle.py", "run_view_disconnected"): ("run_sync_step", "lifecycle"),
     ("_child_lifecycle.py", "begin_live_connection"): ("sync_step", "lifecycle"),
-    ("live_view.py", "LiveView._restore_private_state"): ("run_guarded_step", "lifecycle"),
     # teardown hooks (#3646): every site that calls one goes through call_teardown_hook
     ("_child_lifecycle.py", "call_teardown_hook"): ("run_teardown_step", "lifecycle"),
     ("_child_lifecycle.py", "dispose_child_subtree"): ("call_teardown_hook", None),
-    ("_child_lifecycle.py", "discard_sticky_child"): ("call_teardown_hook", None),
-    ("_child_lifecycle.py", "release_root_view"): ("call_teardown_hook", None),
-    ("mixins/sticky.py", "StickyChildRegistry._unregister_child"): ("call_teardown_hook", None),
     # the hook-calling helpers (their step comes from the hook's name, or is fixed)
     ("_view_hooks.py", "call_hook"): ("sync_step", None),
     ("_view_hooks.py", "call_hook_sync"): ("run_sync_step", None),
@@ -487,6 +483,9 @@ _ABANDON = (
     "release_root_view, whose teardown hooks enter a lifecycle step off the loop "
     "(test_an_sse_response_close_runs_the_teardown_hooks_inside_a_lifecycle_step)"
 )
+_RELEASE = (
+    "releases the view through dispose_child_subtree (a leaf: its teardown hooks are stepped there)"
+)
 _PRESERVE = (
     "re-checks each sticky child through the auth leaves and discards a refused one "
     "through discard_sticky_child (a leaf, so its teardown hooks are stepped here)"
@@ -520,11 +519,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("_child_async.py", "_execute_body.complete", "render_embedded_child_html"): plumbing(
         _RENDER, _GET_TEMPLATE
     ),
-    (
-        "_child_async.py",
-        "dispatch_legacy_child_work.run_body.complete",
-        "render_embedded_child_html",
-    ): plumbing(_RENDER, _GET_TEMPLATE),
     ("_child_lifecycle.py", "fire_view_disconnected", "run_view_disconnected"): leaf(),
     ("_child_lifecycle.py", "arelease_root_view", "_clear_live_handles"): plumbing(
         "drops the Rust live handles (framework state); calls no view hook"
@@ -734,12 +728,12 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("sse.py", "SSESession._untrack_replaced_presence", "untrack_view_presence"): leaf(),
     ("sse.py", "DjustSSEStreamView.get", "page_request"): plumbing(_SESSION),
     ("sse.py", "DjustSSEMessageView.post", "_request_owns_session"): plumbing(_SESSION),
-    ("sse.py", "SSESession._release_slot", "release_root_view"): leaf(),
+    ("sse.py", "SSESession._release_slot", "release_root_view"): plumbing(_RELEASE),
     ("sse.py", "DjustSSEStreamView.get", "django_session.save"): plumbing(_SESSION),
     ("sse.py", "DjustSSEMessageView.post", "protected_server_error"): plumbing(_ERROR_PAGE),
     ("sse.py", "SSESession._replace_view", "PresenceManager.per_connection"): plumbing(_SESSION),
     ("sse.py", "DjustSSEStreamView.get", "protected_server_error"): plumbing(_ERROR_PAGE),
-    ("sse.py", "SSESession._replace_view", "release_root_view"): leaf(),
+    ("sse.py", "SSESession._replace_view", "release_root_view"): plumbing(_RELEASE),
     ("streaming.py", "StreamingMixin.push_state", "render"): plumbing(_RENDER),
     ("streaming.py", "StreamingMixin.push_state", "self._strip_comments_and_whitespace"): plumbing(
         _RENDER
@@ -753,9 +747,7 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("streaming.py", "StreamingMixin._render_stream_fragment", "tmpl.render"): external(
         _DJANGO_TEMPLATE
     ),
-    ("templatetags/live_tags.py", "live_render._lazy_thunk", "_render_eager"): plumbing(
-        _RENDER, _GET_TEMPLATE
-    ),
+    ("templatetags/live_tags.py", "live_render._lazy_thunk", "_render_eager"): plumbing(_RENDER),
     ("testing.py", "_call_hook", "context.run"): plumbing(_RENDER),
     # djust.testing's live-session helpers (#4191): the test's own session save,
     # and the bare consumer's session/user read, off the event loop; no view hook.
