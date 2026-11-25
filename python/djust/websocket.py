@@ -2048,6 +2048,39 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             await self.send_json(response)
             await self._flush_all_pending()
 
+    async def _dispatch_released_child_event(
+        self,
+        target_view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        event_ref: Optional[int] = None,
+    ) -> None:
+        """Release an event queued on an embedded child's activity (#4179).
+
+        The root's authority is freshly checked first (a revoked one is denied
+        and closed 4403, as for a root event); the child's own checks, handler,
+        render and ``embedded_update`` are the runtime's child path. A child no
+        longer on the page is dropped without an error frame.
+        """
+        from ._exposure import uses_legacy_exposure
+        from .runtime import _still_owned
+
+        root = self.view_instance
+        runtime = getattr(self, "_runtime", None)
+        if root is None or runtime is None or not _still_owned(root, target_view):
+            logger.debug(
+                "Released activity event for an embedded view no longer on the page dropped"
+            )
+            return
+        if not uses_legacy_exposure(root) and not await self._authorize_released_explicit_event(
+            root
+        ):
+            return  # root authority revoked: denied and closed 4403, as for a root event
+        try:
+            await runtime._dispatch_released_child_event(target_view, event_name, params, event_ref)
+        finally:
+            self._end_explicit_turn(root)
+
     async def _authorize_released_explicit_event(self, target_view: Any) -> bool:
         """Freshly authorize an explicit view's queued event released here (ADR-038).
 
@@ -2056,7 +2089,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         from ``db_notify`` with no authorized turn, so each released event gets
         the runtime's check — ``authorize_event`` on a fresh request against the
         mount binding — and the runtime's fail-closed outcome. Only the mounted
-        root carries that binding; any other nonlegacy target is refused.
+        root carries that binding, so it is only called with the root: children
+        are dispatched through the runtime's child path under the root's fresh
+        authority (``_dispatch_released_child_event``, #4179).
         """
         if self.view_instance is None:
             # Already denied (or torn down) earlier in this drain.
@@ -2262,6 +2297,12 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # are dispatched. For an explicit view that includes fresh
         # authorization, which this drain (run from db_notify, outside any
         # authorized runtime turn) must apply itself.
+        root = self.view_instance
+        if target_view is not root:
+            # #4179: an event queued on an embedded child's activity goes
+            # through the runtime's child path under the root's authority.
+            await self._dispatch_released_child_event(target_view, event_name, params, event_ref)
+            return
         if not uses_legacy_exposure(target_view):
             if not await self._authorize_released_explicit_event(target_view):
                 return
@@ -6283,7 +6324,17 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         current = self.view_instance
         if current is not None and hasattr(current, "_flush_deferred_activity_events"):
             try:
+                from .runtime import _owned_descendants
+
+                # Owned embedded children too (#4179): snapshot first, so a
+                # child a released handler disposes reaches the ownership check.
+                children = _owned_descendants(current)
                 await current._flush_deferred_activity_events(self)
+                for child in children:
+                    if getattr(child, "_deferred_activity_events", None) and hasattr(
+                        child, "_flush_deferred_activity_events"
+                    ):
+                        await child._flush_deferred_activity_events(self)
             except Exception as exc:  # noqa: BLE001
                 self._log_view_hook_failure(
                     view,

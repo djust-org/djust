@@ -315,6 +315,28 @@ def _refuse_reserved_state_names(cls: type) -> None:
                 raise reserved_state_field_error(cls, owner, name)
 
 
+def _warn_ignored_sticky_update_inputs(cls: type) -> None:
+    """Warn when a class states ``sticky_update_inputs`` where it is ignored (#4181).
+
+    Only an explicit sticky child uses it: on a non-sticky child or a legacy
+    one (whose inputs are not part of an identity) it does nothing.
+    """
+    if not cls.__dict__.get("sticky_update_inputs"):
+        return
+    from ._exposure import uses_legacy_exposure
+
+    if getattr(cls, "sticky", False) is True and not uses_legacy_exposure(cls):
+        return
+    import warnings
+
+    warnings.warn(
+        "%s.%s sets sticky_update_inputs, which only an explicit-exposure sticky "
+        "child (sticky = True) uses; it is ignored here." % (cls.__module__, cls.__qualname__),
+        UserWarning,
+        stacklevel=3,
+    )
+
+
 def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None:
     """Warn, once per class, that the class states ``exposure_policy = "legacy"``.
 
@@ -801,6 +823,7 @@ class LiveView(
         _warn_legacy_exposure_policy(cls, at_class_statement=True)
         # #4070: a state() field may not take a reserved name.
         _refuse_reserved_state_names(cls)
+        _warn_ignored_sticky_update_inputs(cls)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

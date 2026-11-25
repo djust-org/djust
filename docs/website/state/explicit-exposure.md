@@ -336,7 +336,10 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   them in `get_context_data()`.
 - **Embedded children.** Sticky explicit children persist their declared
   fields. Non-sticky explicit children are transient and may not declare
-  persisted fields.
+  persisted fields. A sticky child's `{% live_render %}` inputs are part of
+  its identity, except those it names in `sticky_update_inputs`, which reach
+  its `_on_sticky_update` hook instead (see
+  [Sticky LiveViews](../guides/sticky-liveviews.md)).
 - **`lazy=True` children.** A lazy explicit child is a transient child that
   mounts when its slot is filled, on the plain page render and on the
   streaming GET. The fill reads the session and user from storage again and
@@ -353,7 +356,14 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   object permission, a `mount()` raising `Http404` or `PermissionDenied`)
   shows `child '<view path>' denied access` as on the page GET; any other
   failure shows `Lazy child <id> failed.` (`Lazy child failed.` when the tag
-  has no `view_id=`). Either way it receives no events.
+  has no `view_id=`). Either way it receives no events. On the page-POST
+  fallback an event from the child mounts that one slot's child again under
+  the POST's request, with the same checks, and runs on it (#4173). The
+  attribute form (`<div dj-view="..." dj-lazy>`) on an explicit page
+  hydrates over the page POST too (#4174): it is mounted with the checks of
+  an eager child under its lazy address, and keeps exactly its
+  `persist="server"` fields between POSTs; its other state starts again
+  from `mount()`.
 - **Tenancy.** The configured tenant resolver is applied to every request,
   including WebSocket mounts, whether or not `TenantMiddleware` is installed.
 - **Invalidation.** Change detection is unchanged. After mutating an object in

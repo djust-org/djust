@@ -946,9 +946,10 @@ class RequestMixin:
         # #3252: the VDOM-diff render below runs the template a SECOND time, so
         # the tag stashes a second thunk for every lazy slot. Those are NOT
         # interchangeable with the page pass: `_prepare_child_ids` scopes the
-        # ids per render, and an explicit-exposure parent assigns different ones
-        # on the two passes. Hold the page pass and restore it below, so neither
-        # the fill nor the streaming emitter ever sees the baseline's copies.
+        # ids per render (both passes now get the same ids on either policy,
+        # #4173), but each pass stashes its own thunk objects. Hold the page
+        # pass and restore it below, so neither the fill nor the streaming
+        # emitter ever sees the baseline's copies.
         page_lazy_thunks = list(getattr(self, "_lazy_thunks", None) or [])
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
@@ -1514,11 +1515,10 @@ class RequestMixin:
         Every HTTP request builds the view afresh, so ids from the process-wide
         counter never repeat between the page GET and the event POST that
         follows; per-render numbering makes them repeat, which is what lets
-        an event be routed to the child it names. A page that does not use
-        legacy exposure keeps the counter: its children are not routed over
-        HTTP.
+        an event be routed to the child it names. Both exposure policies get
+        per-render ids: both route their children over HTTP (#4173).
         """
-        if uses_legacy_exposure(self) and hasattr(self, "_scope_child_ids_to_render"):
+        if hasattr(self, "_scope_child_ids_to_render"):
             self._scope_child_ids_to_render()
 
     def _http_embedded_child(self, request: "HttpRequest", view_id: Any) -> Optional[Any]:
@@ -1528,12 +1528,14 @@ class RequestMixin:
         here (its output is not sent: a child's event answers with the child's
         own HTML). The child exists only if it passed what ``{% live_render %}``
         checks at registration: its view-level auth and its object permission,
-        against this request. Only a legacy page's legacy child is routed over
-        HTTP: an explicit-exposure child's turn is authorized against the mount
-        binding the socket transports hold, which a stateless request has not.
+        against this request. A legacy page's legacy child and an explicit
+        page's explicit child are routed (#4173); a mixed-policy pair is not.
+        An explicit child must also pass the socket runtime's event checks
+        against this request (``child_event_adapter``: ownership, schema,
+        reuse identity and state binding) and its view auth for an event.
         Anything else is refused by the caller, as it was before routing.
         """
-        if type(view_id) is not str or not view_id or not uses_legacy_exposure(self):
+        if type(view_id) is not str or not view_id:
             return None
         self._prepare_child_ids()
         with self._processor_context(request):
@@ -1556,9 +1558,67 @@ class RequestMixin:
         child = mount_http_lazy(self, request, view_id)
         if child is None:
             child = self._get_all_child_views().get(view_id)
-        if child is None or not uses_legacy_exposure(child):
+        if child is None:
+            child = self._http_fill_lazy_slot(view_id)
+        if child is None and not uses_legacy_exposure(self):
+            # A nested explicit child, as the socket runtime resolves it.
+            from ..runtime import _explicit_descendant
+
+            child = _explicit_descendant(self, view_id)
+        if child is None:
             return None
+        if uses_legacy_exposure(self) or uses_legacy_exposure(child):
+            # Same-policy pairs only: a mixed pair is not routed.
+            return child if uses_legacy_exposure(self) and uses_legacy_exposure(child) else None
+        from .._exposure import ExposureError
+        from .._exposure_children import child_event_adapter
+        from ..auth.core import check_view_auth
+
+        try:
+            # The socket runtime's event checks (runtime.py resolve_explicit_child),
+            # against this request: ownership, schema, reuse identity
+            # (session, user, tenant, route, slot, inputs) and state binding.
+            child_event_adapter(child, self, request)
+        except ExposureError:
+            return None
+        child.request = request
+        if check_view_auth(child, request, event=True) is not None:
+            raise PermissionDenied("Embedded view denied")
         return child
+
+    def _http_fill_lazy_slot(self, view_id: str) -> Optional[Any]:
+        """Mount the ``{% live_render lazy %}`` child ``view_id`` names, or ``None``.
+
+        A lazy slot's child is mounted by its fill, which only the page GET
+        runs (``_fill_lazy_slots``): the POST's render stashes the fill and
+        registers nothing, so an event from the child found no child. Running
+        that one slot's fill here mounts the child with the checks of its fill
+        (the eager ones, and for an explicit child the identity compiled when
+        the tag rendered). Its envelope is not sent; the other slots are not
+        filled. A refused fill registers nothing, and the caller refuses the
+        event.
+        """
+        thunks = list(getattr(self, "_lazy_thunks", None) or [])
+        self._lazy_thunks = []
+        thunk = next((t for vid, t in thunks if vid == view_id), None)
+        if thunk is None:
+            return None
+        from asgiref.sync import async_to_sync
+
+        try:
+            async_to_sync(thunk)()
+        except Exception as exc:  # noqa: BLE001 — the event is refused below
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (self,),
+                exc,
+                "Lazy slot %s could not be mounted for an HTTP POST event",
+                sanitize_for_log(view_id),
+            )
+            return None
+        return self._get_all_child_views().get(view_id)
 
     def _http_child_response(
         self,
@@ -1605,9 +1665,17 @@ class RequestMixin:
             return _contract_error_response()
         response.update(contract_fields)
         response["html"] = render_embedded_child_html(child)
-        from .._lazy_containers import save_http_lazy
+        if uses_legacy_exposure(self):
+            from .._lazy_containers import save_http_lazy
 
-        save_http_lazy(self, request, view_id, child)
+            save_http_lazy(self, request, view_id, child)
+        else:
+            # The explicit tree's persisted fields (a sticky child's
+            # ``persist="server"`` state), and the session writes of the
+            # child's handler (#4162). A transient child keeps nothing.
+            from .._exposure_child_persistence import save_child_states
+
+            save_child_states(self, request)
         response["event_name"] = event_name
         if cache_request_id:
             response["cache_request_id"] = cache_request_id
@@ -1905,8 +1973,9 @@ class RequestMixin:
             # its children (the same ids on every request, ``_prepare_child_ids``),
             # and the child's handler is then validated, authorized and run
             # exactly as the page's own would be. An id that names no child of
-            # this page (forged, stale, an explicit-exposure child, which this
-            # transport does not route) is refused, not run on the parent.
+            # this page (forged, stale, or a child whose exposure policy differs
+            # from the page's) is refused, not run on the parent. An explicit
+            # child also passes the socket runtime's event checks (#4173).
             # Same rule as ``ViewRuntime`` (pop, then route only a truthy id
             # other than this view's own), so the transports cannot disagree.
             view_id = None
@@ -2175,6 +2244,22 @@ class RequestMixin:
                 _run_http_background_work(owner, bg_budget)
                 if owner is not self:
                     _run_http_background_work(self, bg_budget)
+
+            if child_view is not None and not legacy_exposure:
+                # The object permission again after the handler, as the socket
+                # runtime re-checks an explicit child's (#4173).
+                from ..auth.core import enforce_object_permission
+
+                try:
+                    enforce_object_permission(child_view, request)
+                except PermissionDenied:
+                    logger.warning(
+                        "Auth denied for %s: embedded child object permission (HTTP POST)",
+                        type(child_view).__name__,
+                    )
+                    return JsonResponse(
+                        {"error": "Permission denied", "code": "permission_denied"}, status=403
+                    )
 
             if child_view is not None:
                 return self._http_child_response(

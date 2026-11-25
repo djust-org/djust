@@ -400,7 +400,7 @@ CALLERS = {
     ("websocket.py", "LiveViewConsumer._dispatch_single_event_body"): "WebSocket consumer",
     ("runtime.py", "ViewRuntime._dispatch_event_render"): "runtime (WebSocket, SSE)",
     ("runtime.py", "ViewRuntime._dispatch_single_event_body"): "runtime batch events",
-    ("runtime.py", "ViewRuntime._dispatch_sticky_child_event"): "sticky child views",
+    ("runtime.py", "ViewRuntime._run_child_event"): "sticky child views",
     ("runtime.py", "ViewRuntime._dispatch_component_event"): "component events",
     ("mixins/request.py", "RequestMixin._post_turn_body"): "page-POST fallback",
     ("testing.py", "LiveViewTestClient.send_event"): "test client",

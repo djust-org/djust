@@ -102,8 +102,8 @@ The contract above holds on every connection the page can have; what differs is 
 | | WebSocket | SSE stream | Page POST (no `EventSource`) |
 |---|---|---|---|
 | Page view | yes | yes | yes |
-| Lazy views (`dj-lazy`) | one `mount` frame each, or one `mount_batch` | one `mount` POST each (no `mount_batch`) | not hydrated: `djust:error` with `code: "view_unavailable"` |
-| Events, routed by view | yes | yes | the page view's, and a legacy page's legacy `{% live_render %}` children's; an explicit child's and a lazy view's are refused |
+| Lazy views (`dj-lazy`) | one `mount` frame each, or one `mount_batch` | one `mount` POST each (no `mount_batch`) | hydrated with a page POST when its exposure policy matches the page's (an explicit one keeps only its `persist="server"` fields); otherwise not hydrated: `djust:error` with `code: "view_unavailable"` |
+| Events, routed by view | yes | yes | the page view's, and its `{% live_render %}` children's and `dj-lazy` views' when they share the page's exposure policy; a mixed-policy one's is refused |
 | Hooks (`pushEvent`) | to the view they sit in | to the view they sit in | no |
 | Uploads | yes | no | no |
 | `push_to_view` groups and scopes, presence, `db_notify` | per view | none, for any view | none |
@@ -119,7 +119,7 @@ Over SSE the session is the connection: a lazy container hydrates once the page 
 
 Where a view cannot go live, the client says so (`djust:error` with `code: "view_unavailable"`, which the dev error overlay shows) instead of leaving a container that looks interactive, and an event from inside such a container is refused. It is never sent to the page view, which would run it there.
 
-- **Embedded `{% live_render %}` children are routed on every transport.** Over HTTP-only the request renders the page once to register its children, then validates, authorizes and runs the handler on the child the event's `view_id` names, and answers with the child's own HTML. See [HTTP-Only Mode](http-only-mode.md#embedded-views-over-the-http-fallback).
+- **Embedded `{% live_render %}` children are routed on every transport.** Over HTTP-only the request renders the page once to register its children, then validates, authorizes and runs the handler on the child the event's `view_id` names, and answers with the child's own HTML. A child whose exposure policy differs from the page's is not routed there. See [HTTP-Only Mode](http-only-mode.md#embedded-views-over-the-http-fallback).
 - **State is per view on every transport.** An [explicit-exposure](../state/explicit-exposure.md) view's `persist="server"` state is stored under its own address, so two views of one class on one page (and the page view) each restore their own after a reconnect. A view beside the page view takes part in no navigation snapshot: the signed snapshot the client keeps for Back is the page view's, and a sibling's frames neither replace nor revoke it.
 
 ## Behaviors worth knowing
