@@ -65,8 +65,9 @@ Total run time on this machine: 3.5 minutes.
 
 The app does no database or API work of its own. Everything measured is
 framework cost, including the session save (one SQLite read and write per turn).
-Browser-side patch and input time is not measured here: that needs a real
-browser, and is follow-up #4314 (v2.1.0), which #4001 will measure against.
+The browser's side of the same turns (input to send, applying the answer, long
+tasks) is measured separately in a real browser: see
+[Browser side of a turn](#browser-side-of-a-turn-4314) below (#4314).
 
 ## Results at RTT 0 (server cost)
 
@@ -189,6 +190,92 @@ for keyed lists, a Rust fast path for a turn that changes two text regions,
 and the per-render serialization on the state backend are the follow-up
 (v2.1.0).
 
+## Browser side of a turn (#4314)
+
+`make benchmark-client-turns` (`scripts/bench_client_turns.py`) serves the same
+Django project and the same five views as the server bench (it imports them),
+with uvicorn in-process and `LiveViewConsumer` on `/ws/live/`, and drives each
+page in headless Chromium through the shipped client with real DOM events: a
+typed value on a `dj-input` (form, editor), a click on a `dj-click` button
+(table, dashboard, push). Committed as
+[`client-turns-baseline.json`](client-turns-baseline.json).
+
+Measured 2026-11-25 on the machine above, Chromium 158.0.8127.36 headless, at
+`02beb674f` (after #4001 / #4328). 30 measured turns per cell after 3 warm-up
+turns, one cell at a time, under `nice -n 10`: p95 is the second-largest sample
+of 30, so read it as noisy. Total run time about one minute.
+
+Two changes to the server bench's pages, so a browser can drive them: the
+table, dashboard and push pages get one `<button dj-click>`, and the form and
+editor inputs carry `dj-debounce="0"`. The shipped default debounces a typed
+`dj-input` by 300 ms, a fixed timer by design: with it, "send" below is that
+300 ms plus the figure shown. The page loads the unminified `client-core.js`
+(the same source as `client-core.min.js`) with a timer inserted around the
+response handler.
+
+Columns, from `performance.now()` in the page, p50 / p95 ms:
+
+- **send**: input event dispatched to the event frame handed to
+  `WebSocket.send` / `fetch` (binding, rate-limit wrapper, parameters,
+  serialization, and for HTTP the render digest of the page).
+- **apply**: time inside the client's response handler: `applyPatches`, or the
+  whole-page morph, plus `reinitAfterDOMUpdate`; summed over a push turn's two
+  answers.
+- **total**: input to the last answer applied. It includes the server's turn
+  and the loopback network, so it is context, not a client figure.
+- **long**: main-thread long tasks (50 ms or more) during the 30 turns, with
+  the longest.
+- **down**: the answer's bytes (WebSocket message; `fetch` body).
+
+Cells: `ws` (the default, state saved), `http` (the page-POST fallback with the
+save: patches), `http-nosave` (`automatic_state = False`: each POST re-mounts
+and answers with the whole page).
+
+| Shape | Elements | Cell | send | apply | total | long | down bytes |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| form | 35 | ws | 0.4 / 1.2 | 0.5 / 1.5 | 7.3 / 12.7 | 0 | 404 |
+| form | 35 | http | 0.9 / 3.0 | 0.7 / 1.3 | 66.3 / 73.9 | 0 | 264 |
+| form | 35 | http-nosave | 0.7 / 2.8 | 0.9 / 1.9 | 18.3 / 24.9 | 0 | 1,277 |
+| table | 6,019 | ws | 0.2 / 0.6 | 1.1 / 2.0 | 29.6 / 42.0 | 0 | 407 |
+| table | 6,019 | http | 9.5 / 20.3 | 9.5 / 18.3 | 180.2 / 228.5 | 0 | 250 |
+| table | 6,019 | http-nosave | 0.8 / 14.9 | 34.5 / 49.4 | 107.0 / 166.7 | 1 (53 ms) | 192,807 |
+| dashboard | 66 | ws | 0.1 / 0.4 | 0.3 / 0.6 | 5.5 / 8.7 | 0 | 403 |
+| dashboard | 66 | http | 0.6 / 1.2 | 0.6 / 1.1 | 62.1 / 88.7 | 0 | 243 |
+| dashboard | 66 | http-nosave | 0.4 / 0.9 | 0.7 / 2.0 | 17.4 / 29.4 | 0 | 1,849 |
+| push | 18 | ws | 0.2 / 0.4 | 0.6 / 1.2 | 8.7 / 16.0 | 0 | 719 |
+| editor | 18 | ws | 0.4 / 2.0 | 0.3 / 0.5 | 7.4 / 8.8 | 0 | 4,642 |
+| editor | 18 | http | 0.9 / 2.5 | 0.6 / 1.3 | 25.0 / 60.1 | 0 | 4,456 |
+| editor | 18 | http-nosave | 0.7 / 2.7 | 0.6 / 1.0 | 19.3 / 25.8 | 0 | 4,925 |
+
+A separate run of the same command with the client from before #4001
+(`--client` with `client-core.js` from `6c9526298`), apply p50 / p95: table
+over `ws` 3.6 / 6.3 ms (now 1.1 / 2.0), over `http` 12.9 / 26.2 (now
+9.5 / 18.3), the table's whole-page morph 31.5 / 45.2 (now 34.5 / 49.4: the
+morph path is not scoped, so that is run-to-run noise); every other cell
+within 0.3 ms. #4001's own by-size bench
+(`scripts/bench_client_patch_turn.py`, an unrelated counter update with no
+server) went from 0.2 / 0.6 / 6.0 ms to 0.2 / 0.2 / 0.2 ms p50 at 100 / 1,000 /
+10,000 elements.
+
+What this says:
+
+1. **Over the socket the browser's part is about a millisecond** for every
+   shape, the 1,000-row table included (6,000 elements): the turn is the
+   server's (compare the server table above). Input to send is under 0.5 ms.
+2. **The HTTP fallback costs the browser about 10 ms each way on the table**,
+   with patches: the render digest (`domShape`, a walk of the whole LiveView
+   root) is computed before the POST is sent, and again before the answer's
+   patches are applied (the `_applyIf` check, #4108). That is the remaining
+   client cost that grows with the page; making the digest incremental is the
+   follow-up.
+3. **The whole-page answer** (`http-nosave`, 193 KB for the table) takes
+   35 ms p50 to morph, with one long task (53 ms) in 30 turns. The small
+   shapes' whole-page answers cost under 1 ms more than their patches.
+
+The server's `total` figures here are not comparable with the server table's:
+uvicorn shares this process with the Playwright driver, and the server bench's
+HTTP figures do not pay the HTTP server.
+
 ## Reproduce
 
 ```sh
@@ -196,9 +283,14 @@ make benchmark-transports                       # full run, ~3.5 min here
 make benchmark-transports JSON=/tmp/run.json COMPARE=docs/performance/turn-transports-baseline.json
 python scripts/bench_turn_transports.py --shapes table --transports ws,http --rtt 0
 python scripts/bench_turn_transports.py --quick  # seconds; what the CI test runs
+make benchmark-client-turns                     # the browser side (#4314), ~1 min here
+python scripts/bench_client_turns.py --shapes table --cells ws,http-nosave --turns 10
 ```
 
 `--compare` prints the p50 and CPU ratio for every cell both runs have. The CI
 test `python/djust/tests/test_bench_turn_transports_3657.py` runs the script at
 `--quick` size and checks its output and that the committed JSON has every
-cell; it asserts nothing about durations (#2156).
+cell; it asserts nothing about durations (#2156). The browser bench needs Chromium
+and is not run in CI; `python/djust/tests/test_bench_client_turns_4314.py`
+checks what can rot without a browser (the hook it inserts into the client,
+the triggers it adds to the pages, every cell in the committed JSON).

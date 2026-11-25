@@ -1,0 +1,303 @@
+{
+  "machine": {
+    "python": "3.12.3",
+    "django": "5.2.17",
+    "djust": "2.0.0rc5",
+    "platform": "Linux-6.18.44-fc-v880-x86_64-with-glibc2.39",
+    "cpu": "Intel(R) Xeon(R) Processor @ 2.30GHz",
+    "cpus": 4,
+    "browser": "Chromium 158.0.8127.36 (headless)"
+  },
+  "turns": 30,
+  "warmup": 3,
+  "rows": 1000,
+  "settle_ms": 50,
+  "cells": [
+    {
+      "shape": "form",
+      "cell": "ws",
+      "turns": 30,
+      "elements": 35,
+      "answer": "patches",
+      "send": {
+        "p50": 0.4,
+        "p95": 1.2
+      },
+      "apply": {
+        "p50": 0.5,
+        "p95": 1.5
+      },
+      "total": {
+        "p50": 7.25,
+        "p95": 12.7
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 404
+    },
+    {
+      "shape": "form",
+      "cell": "http",
+      "turns": 30,
+      "elements": 35,
+      "answer": "patches",
+      "send": {
+        "p50": 0.9,
+        "p95": 3
+      },
+      "apply": {
+        "p50": 0.7,
+        "p95": 1.3
+      },
+      "total": {
+        "p50": 66.25,
+        "p95": 73.9
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 264
+    },
+    {
+      "shape": "form",
+      "cell": "http-nosave",
+      "turns": 30,
+      "elements": 35,
+      "answer": "page",
+      "send": {
+        "p50": 0.7,
+        "p95": 2.8
+      },
+      "apply": {
+        "p50": 0.85,
+        "p95": 1.9
+      },
+      "total": {
+        "p50": 18.3,
+        "p95": 24.9
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 1277
+    },
+    {
+      "shape": "table",
+      "cell": "ws",
+      "turns": 30,
+      "elements": 6019,
+      "answer": "patches",
+      "send": {
+        "p50": 0.2,
+        "p95": 0.6
+      },
+      "apply": {
+        "p50": 1.1,
+        "p95": 2
+      },
+      "total": {
+        "p50": 29.6,
+        "p95": 42
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 407
+    },
+    {
+      "shape": "table",
+      "cell": "http",
+      "turns": 30,
+      "elements": 6019,
+      "answer": "patches",
+      "send": {
+        "p50": 9.45,
+        "p95": 20.3
+      },
+      "apply": {
+        "p50": 9.45,
+        "p95": 18.3
+      },
+      "total": {
+        "p50": 180.15,
+        "p95": 228.5
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 250
+    },
+    {
+      "shape": "table",
+      "cell": "http-nosave",
+      "turns": 30,
+      "elements": 6019,
+      "answer": "page",
+      "send": {
+        "p50": 0.8,
+        "p95": 14.9
+      },
+      "apply": {
+        "p50": 34.5,
+        "p95": 49.4
+      },
+      "total": {
+        "p50": 107.0,
+        "p95": 166.7
+      },
+      "long_tasks": 1,
+      "long_max_ms": 53,
+      "down_bytes": 192807
+    },
+    {
+      "shape": "dashboard",
+      "cell": "ws",
+      "turns": 30,
+      "elements": 66,
+      "answer": "patches",
+      "send": {
+        "p50": 0.1,
+        "p95": 0.4
+      },
+      "apply": {
+        "p50": 0.3,
+        "p95": 0.6
+      },
+      "total": {
+        "p50": 5.5,
+        "p95": 8.7
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 403
+    },
+    {
+      "shape": "dashboard",
+      "cell": "http",
+      "turns": 30,
+      "elements": 66,
+      "answer": "patches",
+      "send": {
+        "p50": 0.6,
+        "p95": 1.2
+      },
+      "apply": {
+        "p50": 0.55,
+        "p95": 1.1
+      },
+      "total": {
+        "p50": 62.1,
+        "p95": 88.7
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 243
+    },
+    {
+      "shape": "dashboard",
+      "cell": "http-nosave",
+      "turns": 30,
+      "elements": 66,
+      "answer": "page",
+      "send": {
+        "p50": 0.4,
+        "p95": 0.9
+      },
+      "apply": {
+        "p50": 0.7,
+        "p95": 2
+      },
+      "total": {
+        "p50": 17.35,
+        "p95": 29.4
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 1849
+    },
+    {
+      "shape": "push",
+      "cell": "ws",
+      "turns": 30,
+      "elements": 18,
+      "answer": "patches",
+      "send": {
+        "p50": 0.2,
+        "p95": 0.4
+      },
+      "apply": {
+        "p50": 0.6,
+        "p95": 1.2
+      },
+      "total": {
+        "p50": 8.7,
+        "p95": 16
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 719
+    },
+    {
+      "shape": "editor",
+      "cell": "ws",
+      "turns": 30,
+      "elements": 18,
+      "answer": "patches",
+      "send": {
+        "p50": 0.4,
+        "p95": 2
+      },
+      "apply": {
+        "p50": 0.3,
+        "p95": 0.5
+      },
+      "total": {
+        "p50": 7.35,
+        "p95": 8.8
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 4642
+    },
+    {
+      "shape": "editor",
+      "cell": "http",
+      "turns": 30,
+      "elements": 18,
+      "answer": "patches",
+      "send": {
+        "p50": 0.85,
+        "p95": 2.5
+      },
+      "apply": {
+        "p50": 0.6,
+        "p95": 1.3
+      },
+      "total": {
+        "p50": 24.95,
+        "p95": 60.1
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 4456
+    },
+    {
+      "shape": "editor",
+      "cell": "http-nosave",
+      "turns": 30,
+      "elements": 18,
+      "answer": "page",
+      "send": {
+        "p50": 0.7,
+        "p95": 2.7
+      },
+      "apply": {
+        "p50": 0.6,
+        "p95": 1
+      },
+      "total": {
+        "p50": 19.25,
+        "p95": 25.8
+      },
+      "long_tasks": 0,
+      "long_max_ms": 0,
+      "down_bytes": 4925
+    }
+  ]
+}
