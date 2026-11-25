@@ -41,7 +41,15 @@ MOD = __name__
 
 def limits(fields=None, size=None, **extra):
     """A LIVEVIEW_CONFIG that sets the two limits (``None`` keeps the default) and no rate limit."""
-    cfg: Dict[str, Any] = {"rate_limit": {"rate": 10**9, "burst": 10**9}, **extra}
+    # The subject here is the form-data bounds, with floods far past the strict
+    # parameter contract's own budget (1,024 members to a collection, 10,000
+    # nodes, 64 KB of text: ``_parameter_contract.MAX_*``), which would refuse
+    # the event first. Legacy binding lets the flood reach the bounds under test.
+    cfg: Dict[str, Any] = {
+        "rate_limit": {"rate": 10**9, "burst": 10**9},
+        "event_parameter_policy": "legacy",
+        **extra,
+    }
     if fields is not None:
         cfg["max_form_fields"] = fields
     if size is not None:

@@ -12,7 +12,7 @@ Usage:
             self.messages = []
 
         @event_handler
-        async def send_message(self, content, **kwargs):
+        async def send_message(self, content: Any, **kwargs):
             self.messages.append({"role": "user", "content": content})
             self.messages.append({"role": "assistant", "content": ""})
 

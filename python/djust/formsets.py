@@ -12,11 +12,11 @@ Two use shapes:
    row to remove::
 
        @event_handler
-       def add_row(self, formset=None, **kwargs):
+       def add_row(self, formset: Any = None, **kwargs):
            self.addresses = add_row(AddressFormSet, data=self._formset_data)
 
        @event_handler
-       def remove_row(self, formset=None, prefix=None, **kwargs):
+       def remove_row(self, formset: Any = None, prefix: Any = None, **kwargs):
            self.addresses = remove_row(AddressFormSet, prefix, data=self._formset_data)
 
 2. **Mixin** — :class:`FormSetHelpersMixin` provides ``add_row`` /

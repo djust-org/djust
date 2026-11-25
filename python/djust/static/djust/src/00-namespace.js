@@ -151,8 +151,18 @@ window.djust.wsUrl = function wsUrl() {
 //
 // console.warn / console.error are NOT guarded — those indicate real problems
 // and should be visible in prod.
+//
+// A page may wrap console.log (a test harness that joins its arguments, say).
+// Strict event params are null-prototype objects, which `args.join(' ')`
+// cannot stringify, so such a wrapper throws. Diagnostics must never abort the
+// code path being logged, so a throwing console is swallowed here.
 window.djLog = function djLog(...args) {
-    if (globalThis.djustDebug) console.log(...args);
+    if (!globalThis.djustDebug) return;
+    try {
+        console.log(...args);
+    } catch (_) {
+        /* a page-installed console.log hook threw; logging is best-effort */
+    }
 };
 
 // ============================================================================

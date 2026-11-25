@@ -451,7 +451,7 @@ class TestUsageWithEvents:
         handler the descriptor would have run."""
         snippet = _detail("accordion")._base_ctx["usage_snippet"]
         assert "self._component = Accordion(items=" in snippet
-        assert "def accordion_toggle(self, value, **kwargs):" in snippet
+        assert "def accordion_toggle(self, value: Any, **kwargs: Any):" in snippet
         assert (
             'self._component.active = "" if self._component.active == value else value' in snippet
         )
@@ -521,7 +521,7 @@ class TestUsageWithEvents:
         assert view._base_ctx["events"] == ["set_rating"]
         assert "from djust.decorators import event_handler" in snippet
         assert "@event_handler()" in snippet
-        assert "def set_rating(self, value, **kwargs):" in snippet
+        assert "def set_rating(self, value: Any, **kwargs: Any):" in snippet
         # ADR-033: the component is held in mount() and the handler writes
         # to it; the value arrives typed, so no int(), no rebuild. It is held
         # privately and get_context_data() hands that same object to the

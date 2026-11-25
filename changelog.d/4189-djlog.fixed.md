@@ -1,0 +1,1 @@
+- **Debug logging no longer aborts event dispatch.** `djLog` swallows a throwing page-installed `console.log` hook; strict event params are null-prototype objects that a hook doing `args.join(" ")` cannot stringify, which dropped every event under `djustDebug`. (#4189)

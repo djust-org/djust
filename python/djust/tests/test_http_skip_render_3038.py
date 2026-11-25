@@ -108,8 +108,11 @@ class TestHttpSkipRender:
     def test_component_event_skip_answers_empty_patches(self):
         session = _get()
         body = _post(session, "bump_quietly", component_id="quiet")
-        assert body["patches"] == []
-        assert "html" not in body
+        # Strict is the default (#4189): every answer re-advertises the page's
+        # parameter contracts. They are metadata, not a render.
+        contracts = {"parameter_contracts", "parameter_contract_view"}
+        assert {k: v for k, v in body.items() if k not in contracts} == {"patches": []}
+        assert contracts <= set(body)
         rendered = _post(session, "bump", component_id="quiet")
         assert rendered.get("patches") or rendered.get("html"), rendered
 

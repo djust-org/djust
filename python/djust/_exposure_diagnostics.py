@@ -175,7 +175,7 @@ def send_request_exception(exc: BaseException, request: Any = None) -> None:
             suppress, traceback = exc.__suppress_context__, exc.__traceback__
             try:
                 raise exc
-            except BaseException:
+            except type(exc):
                 got_request_exception.send(sender=None, request=request)
             finally:
                 exc.__context__, exc.__cause__ = context, cause

@@ -332,7 +332,10 @@ def _unload(module: types.ModuleType) -> None:
 
 
 @pytest.fixture
-def fixture(tmp_path):
+def fixture(tmp_path, legacy_project_policy):
+    # The subject is T020-T022 under the legacy policy: the fixture handlers
+    # are undecorated, so they take the project policy, which is strict since
+    # #4189. The two handlers that pin ``parameter_policy="strict"`` say so.
     templates = tmp_path / "templates"
     for name, text in TEMPLATES.items():
         target = templates / name

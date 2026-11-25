@@ -7,8 +7,11 @@ and that only a demo Counter ever hydrated on the client. djust `2.0.0` removed
 it (#4006), together with the client's `initReactCounters`. `from djust import
 ReactMixin` (and the other two names) raises `ImportError` naming the
 replacement and the migration guide, and a capitalized tag in a template is a
-template error that names the same replacement. An uppercase spelling of an
-ordinary HTML or SVG element (`<DIV>`, `<BR>`) is still HTML. Mount a
+template error that names the same replacement. HTML reads element
+names in any case, so an ordinary HTML or SVG element spelled in capitals or mixed
+case (`<DIV>`, `<BR>`, `<TextArea>`) is still HTML; the component shape, a
+self-closing non-void element such as `<Button label="x" />`, and a name HTML
+does not have, such as `<Widget>`, are refused. Mount a
 client-side widget with a hook:
 
 <!-- doc-snippet-check: anti-pattern -->
