@@ -515,6 +515,52 @@ def test_tooltip_marked_safe_content_passes_through_on_the_default_render_path()
     assert "<b>ok</b>" in str(Tooltip(mark_safe("<b>ok</b>"), "tip").render())
 
 
+@pytest.mark.parametrize("write", ["update", "setattr"])
+def test_markup_slots_written_after_construction_are_escaped(write: str) -> None:
+    """``__init__`` escapes a markup slot, but ``update()`` or an attribute write puts a plain
+    string back: the render escapes it again (review of #4002)."""
+    from djust.components.ui.modal_simple import Modal
+    from djust.components.ui.tooltip_simple import Tooltip
+
+    modal = Modal("b", id="m", show=True)
+    tooltip = Tooltip("c", "tip")
+    if write == "update":
+        modal.update(body="<script>x</script>", footer="<i>f</i>")
+        tooltip.update(content="<script>y</script>")
+    else:
+        modal.body, modal.footer = "<script>x</script>", "<i>f</i>"
+        tooltip.content = "<script>y</script>"
+    html = str(modal.render())
+    assert "<script>" not in html and "&lt;script&gt;x&lt;/script&gt;" in html
+    assert "<i>f</i>" not in html and "&lt;i&gt;f&lt;/i&gt;" in html
+    html = str(tooltip.render())
+    assert "<script>" not in html and "&lt;script&gt;y&lt;/script&gt;" in html
+
+
+def test_markup_slots_marked_safe_after_construction_pass_through() -> None:
+    from djust.components.ui.modal_simple import Modal
+    from djust.components.ui.tooltip_simple import Tooltip
+
+    modal = Modal("b", id="m", show=True)
+    modal.update(body=mark_safe("<p>b</p>"))
+    tooltip = Tooltip("c", "tip")
+    tooltip.update(content=mark_safe("<b>c</b>"))
+    assert "<p>b</p>" in str(modal.render())
+    assert ">" + "<b>c</b>" + "<" in str(tooltip.render())
+
+
+@pytest.mark.parametrize(
+    "value,text", [("abc", "abc"), (None, "None"), ('1" onfocus="x', "1&quot; onfocus=&quot;x")]
+)
+def test_range_non_number_renders_as_escaped_text(value: Any, text: str) -> None:
+    """``Range`` prints a value ``float()`` refuses as escaped text, as the template the crate
+    fell back to did, instead of raising (review of #4002)."""
+    html = _python_render(Range(name="r", value=value, show_value=True, label="L"), "bootstrap5")
+    assert f'value="{text}"' in html
+    assert f'<span class="badge bg-secondary">{text}</span>' in html
+    assert 'onfocus="' not in html
+
+
 def test_dropdown_item_url_is_not_drawn():
     """``DropdownItem`` has no URL (#4002 slice 3): a simple item's ``url`` warns and the item
     links to ``#``, whatever the URL."""

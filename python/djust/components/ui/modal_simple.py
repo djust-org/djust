@@ -98,8 +98,10 @@ class Modal(Component):
             ModalComponent,
             self.id,
             title=plain_text(self.title),
-            body=self.body,
-            footer=self.footer or "",
+            # Escaped again here, not only in ``__init__``: ``update(body=...)`` or an attribute
+            # write puts a plain string back (a marked-safe one passes unchanged).
+            body=conditional_escape(self.body),
+            footer=conditional_escape(self.footer) if self.footer else "",
             size=self.size,
             show=bool(self.show),
         )

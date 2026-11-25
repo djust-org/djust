@@ -652,6 +652,9 @@ class DashboardView(LiveView):
 
 **Python side** (`python/djust/components/ui/badge.py`):
 
+> **Removed in #4002:** the `djust._rust.Rust*` component classes and the `djust_components`
+> crate no longer exist; the snippet below cannot run. See `docs/components/RUST_COMPONENTS.md`.
+
 ```python
 from djust.components.base import Component
 from typing import Optional
@@ -1093,6 +1096,9 @@ Create Rust implementations:
 4. Spinner → RustSpinner
 
 Link them in Python wrappers:
+
+> **Removed in #4002:** the `djust._rust.Rust*` component classes and the `djust_components`
+> crate no longer exist; the snippet below cannot run. See `docs/components/RUST_COMPONENTS.md`.
 
 ```python
 from djust._rust import RustBadge

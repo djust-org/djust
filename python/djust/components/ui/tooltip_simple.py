@@ -81,5 +81,5 @@ class Tooltip(Component):
         return (
             '<span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip"'
             f' data-bs-placement="{placement}" data-bs-trigger="{trigger}"{arrow}'
-            f' title="{attr_text(self.text)}">{self.content}</span>'
+            f' title="{attr_text(self.text)}">{conditional_escape(self.content)}</span>'
         )
