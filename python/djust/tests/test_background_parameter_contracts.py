@@ -1,6 +1,7 @@
 """Bespoke background producers deliver the contract of their actual render."""
 
 import json
+import zlib
 import asyncio
 import threading
 from unittest.mock import AsyncMock
@@ -83,7 +84,7 @@ async def test_background_frame_and_recovery_share_render_contract(source, full_
     assert frame["parameter_contracts"]["owners"][0]["handlers"]["choose"]["policy"] == "strict"
     assert frame["version"] == consumer._recovery_version == 1
     assert runtime._parameter_contracts_active is True
-    snapshot = json.loads(consumer._recovery_contracts)
+    snapshot = json.loads(zlib.decompress(consumer._recovery_contracts))
     assert snapshot["parameter_contracts"] == frame["parameter_contracts"]
     # A later declaration cannot change the snapshot of the recovery HTML.
     view.choose = None
@@ -117,7 +118,7 @@ async def test_last_strict_handler_removal_keeps_emitting_explicit_clear(source)
     for _ in range(2):
         await produce(consumer, source)
         assert consumer.send_json.call_args.args[0]["parameter_contracts"] is None
-        assert json.loads(consumer._recovery_contracts)["parameter_contracts"] is None
+        assert json.loads(zlib.decompress(consumer._recovery_contracts))["parameter_contracts"] is None
 
 
 @pytest.mark.asyncio

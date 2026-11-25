@@ -11,6 +11,7 @@ import logging
 import msgpack
 import uuid
 import weakref
+import zlib
 from typing import (
     Any,
     Awaitable,
@@ -1820,7 +1821,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # request_html path), so the attribute is str | None across its lifetime.
         self._recovery_html: Optional[str] = html
         self._recovery_version = getattr(self, "_last_sent_version", 0)
-        self._recovery_contracts: Optional[str] = None
+        self._recovery_contracts: Optional[bytes] = None
         view = getattr(self, "view_instance", None)
         try:
             self._recovery_owner = weakref.ref(view) if view is not None else None
@@ -1835,11 +1836,18 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             and frame.get("version") == getattr(self, "_recovery_version", None)
             and "parameter_contracts" in frame
         ):
-            self._recovery_contracts = json.dumps(
-                {
-                    "parameter_contracts": frame["parameter_contracts"],
-                    "parameter_contract_view": frame["parameter_contract_view"],
-                }
+            # Held for the life of the connection, once per view. Every owner
+            # repeats its handlers' metadata, so a page of 20 components is
+            # ~8 KB of JSON that deflates to a few hundred bytes (#4189); it
+            # is inflated only on the rare html_recovery request.
+            self._recovery_contracts = zlib.compress(
+                json.dumps(
+                    {
+                        "parameter_contracts": frame["parameter_contracts"],
+                        "parameter_contract_view": frame["parameter_contract_view"],
+                    }
+                ).encode("utf-8"),
+                6,
             )
 
     def _next_version_armed(self, html: str) -> int:
@@ -5294,7 +5302,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # version which is DISCARDED for the wire — sending it would desync the
         # client against the consumer counter.
         version = getattr(self, "_recovery_version", 0)
-        contracts = getattr(self, "_recovery_contracts", None)
+        packed = getattr(self, "_recovery_contracts", None)
+        contracts: Optional[str] = (
+            zlib.decompress(packed).decode("utf-8") if packed is not None else None
+        )
         runtime = getattr(self, "_runtime", None)
 
         def contract_snapshot() -> Optional[str]:
