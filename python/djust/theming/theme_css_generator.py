@@ -449,7 +449,7 @@ class CompleteThemeCSSGenerator:
             [
                 "  /* Typography */",
                 f"  --font-sans: {typo.body_font};",
-                "  --font-mono: ui-monospace, SFMono-Regular, monospace;",
+                f"  --font-mono: {typo.mono_font};",
             ]
         )
         if typo.heading_font and typo.heading_font != typo.body_font:
