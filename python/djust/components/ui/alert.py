@@ -47,6 +47,9 @@ class AlertComponent(LiveComponent):
         self.type = kwargs.get("type", "info")  # info, success, warning, danger, error
         self.dismissible = kwargs.get("dismissible", True)
         self.visible = kwargs.get("visible", True)
+        # Rendered on its own, never registered with a view (the simple ``Alert``, #4002): under
+        # Bootstrap the close button is Bootstrap's ``data-bs-dismiss="alert"``.
+        self.standalone = bool(kwargs.get("standalone", False))
 
     def get_context(self) -> Dict[str, Any]:
         """Get alert context"""
@@ -117,7 +120,13 @@ class AlertComponent(LiveComponent):
         html += f"{conditional_escape(self.message)}"
 
         if self.dismissible:
-            html += f'<button type="button" class="btn-close" dj-click="dismiss" data-component-id="{attr_text(self.component_id)}" aria-label="Close"></button>'
+            if self.standalone:
+                close_attrs = 'data-bs-dismiss="alert"'
+            else:
+                close_attrs = (
+                    f'dj-click="dismiss" data-component-id="{attr_text(self.component_id)}"'
+                )
+            html += f'<button type="button" class="btn-close" {close_attrs} aria-label="Close"></button>'
 
         html += "</div>"
         return html

@@ -9,7 +9,6 @@ this class's arguments (the mapping is in the class docstring), so the widget ha
 
 from typing import Any, Dict, List, Optional, Union
 
-from djust.components._alias_deprecation import warn_alias
 
 from ..base import Component
 from ._twin import plain_text, render_twin
@@ -24,10 +23,8 @@ class Dropdown(Component):
         label: Button text (escaped, whatever it is marked as)
         items: List of menu item dicts. Each becomes a ``DropdownItem``: ``label`` is its
             ``text`` (escaped), ``divider`` its ``divider``; the ``DropdownItem`` keys
-            ``text``, ``action``, ``icon``, ``variant`` and ``data`` pass through.
-            Deprecated (#4002): ``url`` and ``disabled`` have no ``DropdownItem``
-            equivalent. A ``url`` other than ``"#"`` warns and the item links to ``"#"``
-            (route it with ``action``); ``disabled`` warns and is not drawn.
+            ``text``, ``action``, ``icon``, ``variant``, ``data``, ``url`` (checked and
+            escaped; ``javascript:`` becomes ``#``) and ``disabled`` pass through.
         variant: Color variant (primary, secondary, success, danger, warning, info, light, dark)
         size: Button size (sm, md, lg)
         split: Use split button style
@@ -37,6 +34,7 @@ class Dropdown(Component):
     Examples:
         items = [
             {'label': 'Edit', 'action': 'edit_item'},
+            {'label': 'Docs', 'url': '/docs/'},
             {'divider': True},
             {'label': 'Delete', 'action': 'delete_item', 'variant': 'danger'},
         ]
@@ -91,11 +89,6 @@ class Dropdown(Component):
         self.split = split
         self.direction = direction
 
-        if any(item.get("url", "#") != "#" for item in items):
-            warn_alias("Dropdown", "items' url key", "a DropdownItem action (an item links to '#')")
-        if any(item.get("disabled") for item in items):
-            warn_alias("Dropdown", "items' disabled key", "leaving the item out (it is not drawn)")
-
     def _render_custom(self) -> str:
         return render_twin(
             DropdownComponent,
@@ -119,4 +112,6 @@ def _dropdown_item(item: Dict[str, Any]) -> DropdownItem:
         data=item.get("data"),
         icon=plain_text(item.get("icon", "")),
         variant=item.get("variant") or "",
+        url=item.get("url") or "",
+        disabled=bool(item.get("disabled")),
     )

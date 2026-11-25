@@ -55,6 +55,10 @@ class ModalComponent(LiveComponent):
         self.footer = kwargs.get("footer", "")
         self.show_modal = kwargs.get("show", False)
         self.size = kwargs.get("size", "md")  # sm, md, lg, xl
+        # Rendered on its own, never registered with a view (the simple ``Modal``, #4002): under
+        # Bootstrap the close controls are Bootstrap's ``data-bs-dismiss="modal"`` and a hidden
+        # modal is drawn hidden (for ``data-bs-toggle``) instead of as nothing.
+        self.standalone = bool(kwargs.get("standalone", False))
 
     def get_context(self) -> Dict[str, Any]:
         """Get modal context"""
@@ -115,12 +119,14 @@ class ModalComponent(LiveComponent):
 
     def render(self) -> SafeString:
         """Render modal with inline HTML"""
-        if not self.show_modal:
-            return ""
-
         from ...config import config
 
         framework = config.get("css_framework", "bootstrap5")
+
+        if not self.show_modal:
+            if self.standalone and framework == "bootstrap5":
+                return mark_safe(self._render_bootstrap())
+            return ""
 
         if framework == "bootstrap5":
             return mark_safe(self._render_bootstrap())
@@ -140,24 +146,36 @@ class ModalComponent(LiveComponent):
         size_map = {"sm": "modal-sm", "md": "", "lg": "modal-lg", "xl": "modal-xl"}
         size_class = size_map.get(self.size, "")
 
+        if self.standalone:
+            # Bootstrap's own controls: nothing on the server receives ``dismiss`` (#4002).
+            close_attrs = 'data-bs-dismiss="modal"'
+        else:
+            close_attrs = f'dj-click="dismiss" data-component-id="{attr_text(self.component_id)}"'
+        if self.show_modal:
+            modal_class, hidden_attr = "modal fade show d-block", ""
+            backdrop = '<div class="modal-backdrop fade show"></div>'
+        else:
+            # Only a standalone modal is drawn hidden: Bootstrap shows it (``data-bs-toggle``).
+            modal_class, hidden_attr, backdrop = "modal fade", ' aria-hidden="true"', ""
+
         html = f"""
-        <div class="modal fade show d-block" id="{attr_text(self.component_id)}" tabindex="-1">
+        <div class="{modal_class}" id="{attr_text(self.component_id)}" tabindex="-1"{hidden_attr}>
             <div class="modal-dialog {size_class}">
                 <div class="modal-content">
                     <div class="modal-header">
                         <h5 class="modal-title">{conditional_escape(self.title)}</h5>
-                        <button type="button" class="btn-close" dj-click="dismiss" data-component-id="{attr_text(self.component_id)}" aria-label="Close"></button>
+                        <button type="button" class="btn-close" {close_attrs} aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
                         {conditional_escape(self.body)}
                     </div>
                     <div class="modal-footer">
-                        {self._footer_html(f'<button type="button" class="btn btn-secondary" dj-click="dismiss" data-component-id="{conditional_escape(self.component_id)}">Close</button>')}
+                        {self._footer_html(f'<button type="button" class="btn btn-secondary" {close_attrs}>Close</button>')}
                     </div>
                 </div>
             </div>
         </div>
-        <div class="modal-backdrop fade show"></div>
+        {backdrop}
         """
         return html
 

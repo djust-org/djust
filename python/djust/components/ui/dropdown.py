@@ -12,7 +12,7 @@ from ..base import LiveComponent
 from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString, mark_safe
 
-from djust.components.utils import attr_text
+from djust.components.utils import attr_text, data_url_attr
 
 
 # ``data-*`` attribute names: letters, digits, "-" and "_" only.
@@ -31,6 +31,9 @@ class DropdownItem:
         icon: Optional icon/emoji to display before text
         variant: Optional color variant (danger, warning, etc.)
         divider: If True, renders as a divider line instead
+        url: Optional link target. Checked and escaped like any URL (a non-navigation
+            scheme such as ``javascript:`` becomes ``#``); without one the item links to ``#``.
+        disabled: Draw the item disabled (no click handler, ``aria-disabled="true"``)
     """
 
     text: str = ""
@@ -39,6 +42,8 @@ class DropdownItem:
     icon: str = ""
     variant: str = ""
     divider: bool = False
+    url: str = ""
+    disabled: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary format for backward compatibility"""
@@ -55,7 +60,17 @@ class DropdownItem:
             result["icon"] = self.icon
         if self.variant:
             result["variant"] = self.variant
+        if self.url:
+            result["url"] = self.url
+        if self.disabled:
+            result["disabled"] = True
         return result
+
+
+def _item_href(item: Dict[str, Any]) -> str:
+    """An item's ``href``: its ``url`` checked and escaped (#4002), else ``#``."""
+    url = item.get("url")
+    return data_url_attr(url) if url else "#"
 
 
 class DropdownComponent(LiveComponent):
@@ -166,8 +181,11 @@ class DropdownComponent(LiveComponent):
                 item_variant = attr_text(item.get("variant", ""))
                 data = item.get("data", {})
 
-                click_attr = f' dj-click="{action}"' if action else ""
+                disabled = bool(item.get("disabled"))
+                click_attr = f' dj-click="{action}"' if action and not disabled else ""
                 variant_class = f" text-{item_variant}" if item_variant else ""
+                if disabled:
+                    variant_class += " disabled"
 
                 # Add dj-value-* attributes for event parameters (#4186)
                 data_attrs = ""
@@ -185,7 +203,8 @@ class DropdownComponent(LiveComponent):
                         data_attrs += f' dj-value-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text
-                html += f'<li><a class="dropdown-item{variant_class}" href="#"{click_attr}{data_attrs}>{content}</a></li>'
+                disabled_attr = ' aria-disabled="true"' if disabled else ""
+                html += f'<li><a class="dropdown-item{variant_class}" href="{_item_href(item)}"{disabled_attr}{click_attr}{data_attrs}>{content}</a></li>'
 
         html += "</ul></div>"
         return html
@@ -230,10 +249,16 @@ class DropdownComponent(LiveComponent):
                 item_variant = conditional_escape(item.get("variant", ""))
                 data = item.get("data", {})
 
-                click_attr = (
-                    f' dj-click="{action}; open = false"' if action else ' dj-click="open = false"'
-                )
+                disabled = bool(item.get("disabled"))
+                if disabled:
+                    click_attr = ""
+                elif action:
+                    click_attr = f' dj-click="{action}; open = false"'
+                else:
+                    click_attr = ' dj-click="open = false"'
                 variant_class = " text-red-600" if item_variant == "danger" else " text-gray-700"
+                state_class = " opacity-50 cursor-not-allowed" if disabled else " hover:bg-gray-100"
+                disabled_attr = ' aria-disabled="true"' if disabled else ""
 
                 # Add dj-value-* attributes for event parameters (#4186)
                 data_attrs = ""
@@ -250,7 +275,7 @@ class DropdownComponent(LiveComponent):
                         data_attrs += f' dj-value-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text
-                html += f'<a href="#" class="block px-4 py-2 text-sm{variant_class} hover:bg-gray-100"{click_attr}{data_attrs}>{content}</a>'
+                html += f'<a href="{_item_href(item)}" class="block px-4 py-2 text-sm{variant_class}{state_class}"{disabled_attr}{click_attr}{data_attrs}>{content}</a>'
 
         html += "</div></div></div>"
         return html
@@ -270,7 +295,10 @@ class DropdownComponent(LiveComponent):
                 icon = conditional_escape(item.get("icon", ""))
                 data = item.get("data", {})
 
-                click_attr = f' dj-click="{action}"' if action else ""
+                disabled = bool(item.get("disabled"))
+                click_attr = f' dj-click="{action}"' if action and not disabled else ""
+                item_class = "dropdown-item disabled" if disabled else "dropdown-item"
+                disabled_attr = ' aria-disabled="true"' if disabled else ""
 
                 # Add dj-value-* attributes for event parameters (#4186)
                 data_attrs = ""
@@ -287,7 +315,7 @@ class DropdownComponent(LiveComponent):
                         data_attrs += f' dj-value-{key}="{value_str}"'
 
                 content = f"{icon} {text}" if icon else text
-                html += f'<a href="#" class="dropdown-item"{click_attr}{data_attrs}>{content}</a>'
+                html += f'<a href="{_item_href(item)}" class="{item_class}"{disabled_attr}{click_attr}{data_attrs}>{content}</a>'
 
         html += "</div></div>"
         return html

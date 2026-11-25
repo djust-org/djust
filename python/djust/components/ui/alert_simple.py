@@ -41,7 +41,8 @@ class Alert(Component):
         variant: Alert type (``type``): info, success, warning, danger or error. Any other
             value (primary, secondary, light, dark) draws as ``info`` and warns
             (deprecated, #4002).
-        dismissable: Whether alert can be dismissed (``dismissible``)
+        dismissable: Whether alert can be dismissed (``dismissible``). It is rendered
+            ``standalone``: under Bootstrap the close button is ``data-bs-dismiss="alert"``.
     """
 
     def __init__(
@@ -71,4 +72,5 @@ class Alert(Component):
             message=plain_text(self.text),
             type=self.variant,
             dismissible=bool(self.dismissable),
+            standalone=True,
         )

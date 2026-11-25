@@ -211,8 +211,6 @@ DEPRECATED_ARGUMENTS = [
     ("Modal", {"body": "x", "centered": True}, "centered"),
     ("Modal", {"body": "x", "dismissable": False}, "dismissable"),
     ("Spinner", {"sr_text": "Wait"}, "sr_text"),
-    ("Dropdown", {"label": "M", "items": [{"label": "A", "url": "/a"}]}, "url"),
-    ("Dropdown", {"label": "M", "items": [{"label": "A", "disabled": True}]}, "disabled"),
 ]
 
 
@@ -242,6 +240,7 @@ def test_an_argument_with_no_twin_equivalent_warns(
         ("Progress", {"value": 3, "label": "l", "striped": True, "height": "2px"}),
         ("Spinner", {"size": "sm", "animation": "grow"}),
         ("Dropdown", {"label": "M", "items": [{"label": "A", "action": "go"}]}),
+        ("Dropdown", {"label": "M", "items": [{"label": "A", "url": "/a", "disabled": True}]}),
     ],
 )
 def test_an_argument_with_a_twin_equivalent_does_not_warn(

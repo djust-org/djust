@@ -75,7 +75,7 @@ arguments onto its twin's and returns the twin's markup, so the widget has one r
 the output follows `css_framework` the way the twin's does. Each class docstring gives its
 argument mapping; an argument the twin has no equivalent for still works and raises a
 `DeprecationWarning`. What the markup change means for a page (the component `id`, the
-dismiss buttons, the variant and size classes, a hidden `Modal` rendering nothing) is under
+dismiss buttons, the variant and size classes, the `Modal` layout) is under
 "Markup that changed" in the [2.0 migration guide](../website/guides/migrating-to-2.0.md).
 Text is still escaped whatever it is marked as: the simple class hands the twin plain strings.
 
@@ -87,7 +87,7 @@ Building the twin costs a construct per render. Build+render, same script and sh
 | Badge | 7.74 | 13.64 |
 | Button | 8.06 | 15.96 |
 | Card | 6.80 | 13.28 |
-| Modal | 10.13 | 12.79 (hidden: renders nothing) |
+| Modal | 10.13 | 12.79 (measured hidden, before it drew the hidden markup) |
 | Progress | 14.73 | 33.87 |
 | Spinner | 8.41 | 12.94 |
 

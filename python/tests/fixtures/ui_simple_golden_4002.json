@@ -72,7 +72,7 @@
   {
    "cls": "Alert",
    "csp_strict": false,
-   "html": "<div class=\"alert alert-info alert-dismissible fade show\" role=\"alert\" id=\"alert\">Saved<button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"alert\" aria-label=\"Close\"></button></div>",
+   "html": "<div class=\"alert alert-info alert-dismissible fade show\" role=\"alert\" id=\"alert\">Saved<button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"alert\" aria-label=\"Close\"></button></div>",
    "kwargs": {
     "dismissable": true,
     "text": "Saved"
@@ -1066,7 +1066,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
@@ -1077,7 +1077,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "<b>x</b> & \"q\" 'a'",
     "id": "m1",
@@ -1088,7 +1088,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        <em>safe</em>\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        <em>safe</em>\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": {
      "safe": "<em>safe</em>"
@@ -1101,7 +1101,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"modal\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"modal\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": null,
@@ -1112,7 +1112,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"a&quot;b\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"a&quot;b\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"a&quot;b\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"a&quot;b\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "a\"b",
@@ -1123,7 +1123,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\">T</h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\">T</h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
@@ -1135,7 +1135,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
@@ -1147,7 +1147,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
@@ -1159,7 +1159,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        F\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        F\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "footer": "F",
@@ -1171,7 +1171,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "footer": "<b>x</b> & \"q\" 'a'",
@@ -1183,7 +1183,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <em>safe</em>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <em>safe</em>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "footer": {
@@ -1197,7 +1197,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "footer": "",
@@ -1209,7 +1209,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-sm\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-sm\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
@@ -1221,7 +1221,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-lg\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-lg\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
@@ -1233,7 +1233,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-xl\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-xl\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
@@ -1245,7 +1245,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
@@ -1257,7 +1257,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "centered": true,
@@ -1269,7 +1269,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "dismissable": false,
@@ -1281,7 +1281,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
@@ -2706,7 +2706,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-lg\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\">T</h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        B\n                    </div>\n                    <div class=\"modal-footer\">\n                        F\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-lg\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\">T</h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        B\n                    </div>\n                    <div class=\"modal-footer\">\n                        F\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "B",
     "centered": true,
@@ -2799,7 +2799,7 @@
     "show": false
    },
    "csp_strict": false,
-   "html": ""
+   "html": "\n        <div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-hidden=\"true\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        \n        "
   },
   {
    "cls": "Dropdown",
@@ -2871,7 +2871,7 @@
     "id": "dd"
    },
    "csp_strict": false,
-   "html": "<div class=\"btn-group dropdown\" id=\"dd\"><button type=\"button\" class=\"btn btn-primary dropdown-toggle\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\">M</button><ul class=\"dropdown-menu\"><li><a class=\"dropdown-item\" href=\"#\">A</a></li><li><a class=\"dropdown-item\" href=\"#\">B</a></li></ul></div>"
+   "html": "<div class=\"btn-group dropdown\" id=\"dd\"><button type=\"button\" class=\"btn btn-primary dropdown-toggle\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\">M</button><ul class=\"dropdown-menu\"><li><a class=\"dropdown-item\" href=\"/a\">A</a></li><li><a class=\"dropdown-item disabled\" href=\"#\" aria-disabled=\"true\">B</a></li></ul></div>"
   },
   {
    "cls": "Dropdown",
@@ -2915,6 +2915,52 @@
    },
    "csp_strict": false,
    "html": "<div class=\"btn-group dropend\" id=\"dropdown\"><button type=\"button\" class=\"btn btn-a&quot;b dropdown-toggle\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\">M</button><ul class=\"dropdown-menu\"></ul></div>"
+  },
+  {
+   "cls": "Modal",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1",
+    "title": "T",
+    "size": "lg"
+   },
+   "csp_strict": false,
+   "html": "\n        <div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-hidden=\"true\">\n            <div class=\"modal-dialog modal-lg\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\">T</h5>\n                        <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" data-bs-dismiss=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        \n        "
+  },
+  {
+   "cls": "Alert",
+   "kwargs": {
+    "text": "Saved",
+    "variant": "warning",
+    "dismissable": true
+   },
+   "csp_strict": false,
+   "html": "<div class=\"alert alert-warning alert-dismissible fade show\" role=\"alert\" id=\"alert\">Saved<button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"alert\" aria-label=\"Close\"></button></div>"
+  },
+  {
+   "cls": "Dropdown",
+   "kwargs": {
+    "label": "M",
+    "items": [
+     {
+      "label": "A",
+      "url": "javascript:alert(1)"
+     },
+     {
+      "label": "B",
+      "url": "/p\" onmouseover=\"y"
+     },
+     {
+      "label": "C",
+      "url": "https://x.example/?a=1&b=2",
+      "disabled": true,
+      "action": "go"
+     }
+    ],
+    "id": "dd2"
+   },
+   "csp_strict": false,
+   "html": "<div class=\"btn-group dropdown\" id=\"dd2\"><button type=\"button\" class=\"btn btn-primary dropdown-toggle\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\">M</button><ul class=\"dropdown-menu\"><li><a class=\"dropdown-item\" href=\"#\">A</a></li><li><a class=\"dropdown-item\" href=\"/p&quot; onmouseover=&quot;y\">B</a></li><li><a class=\"dropdown-item disabled\" href=\"https://x.example/?a=1&amp;b=2\" aria-disabled=\"true\">C</a></li></ul></div>"
   }
  ]
 }

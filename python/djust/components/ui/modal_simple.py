@@ -33,19 +33,22 @@ class Modal(Component):
         dismissable: Deprecated (#4002): ``ModalComponent`` always draws its close button;
             ``False`` warns and the button is still drawn.
         id: Modal ID (``ModalComponent``'s ``component_id``; defaults to ``"modal"``)
-        show: Whether the modal is drawn. ``ModalComponent`` draws nothing while it is
-            hidden, so ``show=False`` (the default) renders ``""``; render the modal when it
-            is to be shown.
+        show: Whether the modal is shown. Hidden (the default), Bootstrap draws it as
+            ``modal fade`` with no backdrop, for ``data-bs-toggle="modal"`` to open; Tailwind
+            and plain draw nothing.
+
+    It is rendered ``standalone``: no view receives the twin's ``dismiss``, so under Bootstrap
+    the close controls are ``data-bs-dismiss="modal"``.
 
     Example:
         >>> modal = Modal(
         ...     title="Confirm Action",
         ...     body="Are you sure you want to continue?",
         ...     footer=mark_safe('<button class="btn btn-primary">Confirm</button>'),
-        ...     show=True,
+        ...     id="confirm",
         ... )
         >>> modal.render()
-        '... <div class="modal fade show d-block" id="modal" tabindex="-1"> ...'
+        '... <div class="modal fade" id="confirm" tabindex="-1" aria-hidden="true"> ...'
     """
 
     # #3932: parameters the constructor already ``conditional_escape``s (a plain string is
@@ -104,4 +107,5 @@ class Modal(Component):
             footer=conditional_escape(self.footer) if self.footer else "",
             size=self.size,
             show=bool(self.show),
+            standalone=True,
         )
