@@ -68,6 +68,7 @@ import gc
 import json
 import os
 import platform
+import shutil
 import statistics
 import sys
 import tempfile
@@ -94,11 +95,14 @@ NOT_APPLICABLE = {("push", "http"): "the HTTP fallback has no live channel for p
 # --------------------------------------------------------------------------- #
 
 
-def _configure() -> None:
+def _configure() -> str:
+    """Configure Django on a fresh SQLite file; returns its directory (``main``
+    removes it at the end of the run)."""
     import django
     from django.conf import settings
 
-    db_path = os.path.join(tempfile.mkdtemp(prefix="djust-bench-turn-"), "bench.sqlite3")
+    tmp_dir = tempfile.mkdtemp(prefix="djust-bench-turn-")
+    db_path = os.path.join(tmp_dir, "bench.sqlite3")
     settings.configure(
         SECRET_KEY="bench-secret-key-not-for-production-0123456789",
         DEBUG=False,
@@ -136,6 +140,7 @@ def _configure() -> None:
     from django.core.management import call_command
 
     call_command("migrate", verbosity=0, run_syncdb=True)
+    return tmp_dir
 
 
 # --------------------------------------------------------------------------- #
@@ -403,11 +408,37 @@ class Conn:
             kind = answer.get("type", "?")
             if kind not in ("patch", "html_update"):
                 raise RuntimeError("turn answered %r" % (answer,))
+            if self.shape == "push":
+                await self._await_renders(seen, 2)
             # Every frame that arrived for this turn (a push sends two renders).
             down = sum(_compact(f) for f in list(self.live.frames)[seen:])
+            await self._drain()
         if self.half:
             await asyncio.sleep(self.half)
         return kind, up, down
+
+    def _renders_since(self, seen: int) -> int:
+        frames = list(self.live.frames)[seen:]
+        return sum(1 for f in frames if f.get("type") in ("patch", "html_update"))
+
+    async def _await_renders(self, seen: int, wanted: int) -> None:
+        """Wait until ``wanted`` render frames have arrived since ``seen``.
+
+        The push frame has arrived before the answer in every run so far (it
+        is sent first, on one ordered connection), but the bytes of the turn
+        must not depend on that: if it has not, wait for it.
+        """
+        while self._renders_since(seen) < wanted:
+            await self.live.receive(("patch", "html_update"), timeout=30)
+
+    async def _drain(self) -> None:
+        """Read the frames ``send_event`` skipped (the push render), so they do
+        not pile up unread across turns."""
+        while True:
+            try:
+                await self.live.receive(timeout=0)
+            except asyncio.TimeoutError:
+                return
 
     async def close(self) -> None:
         if self.live is not None:
@@ -727,7 +758,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.rtt is None:
         args.rtt = [0.0, 20.0] if args.quick else [0.0, 20.0, 100.0, 250.0]
 
-    _configure()
+    tmp_dir = _configure()
+    try:
+        return _measure_and_report(args)
+    finally:
+        from django.db import connections
+
+        connections.close_all()
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _measure_and_report(args: argparse.Namespace) -> int:
     _install_views(args.rows)
     info = machine()
     print(

@@ -14,18 +14,27 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 SCRIPT = os.path.join(ROOT, "scripts", "bench_turn_transports.py")
 
 
 def _load_script():
-    spec = importlib.util.spec_from_file_location("bench_turn_transports_3657", SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
+    """Import the script as a module. Its import puts ``ROOT/python`` on
+    ``sys.path``; that is put back as it was, so no later test sees it."""
+    saved = list(sys.path)
+    try:
+        spec = importlib.util.spec_from_file_location("bench_turn_transports_3657", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+    finally:
+        sys.path[:] = saved
     return module
 
 
+@pytest.mark.slow
 def test_benchmark_script_runs_every_transport(tmp_path):
     out = tmp_path / "result.json"
     env = {k: v for k, v in os.environ.items() if k != "DJANGO_SETTINGS_MODULE"}

@@ -35,7 +35,7 @@ Workloads, all explicit exposure (`state()` fields) with strict parameters:
 | `form` | six fields with error spans and a computed `invalid` | edits one field and re-validates it |
 | `table` | 1,000 rows of dicts, five cells each | changes one cell of one row |
 | `dashboard` | 24 scalars, a 20-item list, a dict, two `LiveComponent`s | changes one scalar |
-| `push` | an async handler that calls `push_state()` and then finishes | two renders, two patch frames |
+| `push` | an async handler that calls `push_state()` and then finishes | two renders, two patch frames; the turn ends when both have arrived |
 | `editor` | a ~4 KB text area, a derived word count | sends the whole text back (as `dj-input` does) |
 
 Save modes: `save` is the shipped default (each turn saves the view's state in
@@ -43,9 +43,12 @@ the server-side session); `nosave` is `automatic_state = False`. With `nosave`,
 the HTTP fallback runs `mount()` on every POST and answers with the whole page,
 as documented; that row is a different behaviour, not a cheaper one.
 
-Simulated RTT: the client holds each frame it sends for RTT/2 before the server
-gets it, and each answer for RTT/2 after the server sends it, on a kept-alive
-connection. No TCP or TLS handshake and no bandwidth limit is modelled, so a
+Simulated RTT: the client does `asyncio.sleep(RTT/2)` before it sends each
+event and `asyncio.sleep(RTT/2)` after the answer is back, on a kept-alive
+connection. That is a fixed delay around the turn, so the 20/100/250 ms columns
+are the 0 ms column plus the RTT by construction; they show where a delay that
+size puts the server cost, not any interaction between latency and the
+transports. No TCP or TLS handshake and no bandwidth limit is modelled, so a
 cold HTTPS fallback request pays one or two more round trips than shown.
 
 Columns: p50 / p95 turn latency; CPU per turn (`time.process_time`, client and
@@ -62,8 +65,8 @@ Total run time on this machine: 3.5 minutes.
 
 The app does no database or API work of its own. Everything measured is
 framework cost, including the session save (one SQLite read and write per turn).
-Browser-side patch and input time is not measured here: that needs a browser
-and is #4001's measurement.
+Browser-side patch and input time is not measured here: that needs a real
+browser, and is follow-up #4314 (v2.1.0), which #4001 will measure against.
 
 ## Results at RTT 0 (server cost)
 
@@ -99,8 +102,9 @@ p95 stayed under 3.2 ms everywhere except the table (5 to 7 ms; a max of 30 to
 | push | 31.2 | 34.7 | n/a | 113.8 | 116.3 | n/a | 262.8 | 265.8 | n/a |
 | editor | 31.3 | 33.6 | 34.1 | 111.6 | 116.7 | 115.0 | 261.4 | 264.8 | 266.3 |
 
-Each transport costs one round trip per turn on a warm connection: latency is
-RTT plus the server cost above, within noise. Past 20 ms of RTT the network is
+Each transport costs one round trip per turn on a warm connection, so latency
+is RTT plus the server cost above, within noise. That is how the delay is
+simulated (see Method), not a finding. Past 20 ms of RTT the network is
 most of the turn for every shape except the 1,000-row table, and the transports
 are within 5 ms of each other except the table over HTTP. Two cells have one
 outlier sample that sets their p95 (editor/sse at 20 ms: 308 ms; push/sse at
