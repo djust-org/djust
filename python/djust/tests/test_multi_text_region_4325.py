@@ -65,7 +65,7 @@ def _state(rows: list[dict], **extra: str) -> dict:
     return base
 
 
-_ID = re.compile(r'(dj-id="|"d":"|"child_d":"|"dj-id":"|"djust_id":")([^"]*)"')
+_ID = re.compile(r'(dj-id="|"d":"|"child_d":"|"parent_d":"|"dj-id":"|"djust_id":")([^"]*)"')
 
 
 def _canonical(prev_html: str, html: str, patches: str) -> tuple[str, str]:
