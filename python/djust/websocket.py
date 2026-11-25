@@ -271,6 +271,17 @@ _UPLOAD_PROGRESS = "handle_upload_progress"
 _UPLOAD_FINISHED = "handle_upload_finished"
 _UPLOAD_FAILED = "handle_upload_failed"
 
+
+def _live_upload_entry(manager: Any, ref: Any) -> Any:
+    """The entry of upload ``ref`` when it is still running (not finished, not
+    failed), else None (#4312)."""
+    entries = getattr(manager, "_entries", None)
+    entry = entries.get(ref) if isinstance(entries, dict) else None
+    if entry is None or entry.error is not None or entry.complete:
+        return None
+    return entry
+
+
 #: Running upload-timeout tasks (#4118), held so none is collected mid-run.
 _UPLOAD_EXPIRY_TASKS: Set["asyncio.Task[None]"] = set()
 
@@ -3035,15 +3046,18 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             self._note_upload_owner(data.get("ref"), consumer)
         queued = self._queue_on_lane(consumer, handler, data)
         if queued is None:
-            self._finish_queued_upload(handler, data, consumer)
+            stopped = self._finish_queued_upload(handler, data, consumer)
             await self._refuse_busy_view(data)
+            await self._fail_stopped_upload(consumer, stopped)
             return
         if queued:
             return
+        stopped = None
         try:
             await getattr(consumer, handler)(data)
         finally:
-            self._finish_queued_upload(handler, data, consumer)
+            stopped = self._finish_queued_upload(handler, data, consumer)
+        await self._fail_stopped_upload(consumer, stopped)
 
     #: Uploads whose ``upload_register`` / ``upload_resume`` is queued on a view's
     #: lane remembered at most this many at a time (#3252).
@@ -3066,20 +3080,40 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         while len(pending) > self._MAX_PENDING_UPLOADS:
             pending.pop(next(iter(pending)))
 
-    def _finish_queued_upload(self, handler: str, data: Dict[str, Any], consumer: Any) -> None:
+    def _finish_queued_upload(self, handler: str, data: Dict[str, Any], consumer: Any) -> Any:
         """An ``upload_register`` / ``upload_resume`` has run (or was refused): its
         ref no longer needs the pending map, and an upload that was stopped while
-        its register waited is cancelled now that its entry exists."""
+        its register waited is cancelled now that its entry exists.
+
+        Returns the entry so cancelled when it was still live (its view's
+        ``handle_upload_failed`` is due, #4312; see :meth:`_fail_stopped_upload`),
+        else None.
+        """
         if handler not in ("_handle_upload_register", "_handle_upload_resume"):
-            return
+            return None
         ref = data.get("ref")
         if not isinstance(ref, str):
-            return
+            return None
         (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)
         if ref in (getattr(self, "_aborted_uploads", None) or {}):
             manager = getattr(getattr(consumer, "view_instance", None), "_upload_manager", None)
             if manager is not None:
+                entry = _live_upload_entry(manager, ref)
                 manager.cancel_upload(ref)
+                return entry
+        return None
+
+    async def _fail_stopped_upload(self, consumer: Any, entry: Any) -> None:
+        """Tell the view an upload the busy-view path stopped has failed (#4312).
+
+        The browser was told ``error`` ("The view is busy..."); the view hears
+        ``handle_upload_failed(name, entry, "error")``. Nothing for ``None``.
+        """
+        if entry is None:
+            return
+        manager = getattr(getattr(consumer, "view_instance", None), "_upload_manager", None)
+        if manager is not None:
+            await consumer._run_upload_hook(manager, _UPLOAD_FAILED, entry, "error")
 
     def _forget_upload(self, ref: Any) -> None:
         """An upload ended (complete, cancel, error): drop what is remembered of it."""
@@ -3161,10 +3195,12 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         handler, data = item
         try:
             if handler:
+                stopped = None
                 try:
                     await getattr(self, handler)(data)
                 finally:
-                    _real_consumer(self)._finish_queued_upload(handler, data, self)
+                    stopped = _real_consumer(self)._finish_queued_upload(handler, data, self)
+                await _real_consumer(self)._fail_stopped_upload(self, stopped)
             else:
                 await self._dispatch_runtime_owned(data)
         except Exception as e:
@@ -3688,6 +3724,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         mgr = self.view_instance._upload_manager
         # Uploads past their ``timeout=`` free their places first (#4118).
         await self._expire_overdue_uploads(mgr)
+        ref = data.get("ref", "")
+        replaced = _live_upload_entry(mgr, ref) if isinstance(ref, str) else None
         entry = mgr.register_entry(
             upload_name=data.get("upload_name", ""),
             ref=data.get("ref", ""),
@@ -3707,6 +3745,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     "upload_name": entry.upload_name,
                 }
             )
+            if replaced is not None and replaced is not entry:
+                # A second register of a ref replaced the started upload: that
+                # one ends here (#4312).
+                await self._run_upload_hook(mgr, _UPLOAD_FAILED, replaced, "error")
             await self._run_upload_hook(mgr, _UPLOAD_STARTED, entry)
         else:
             await self.send_error("Upload rejected (check file type, size, or max entries)")
@@ -3880,11 +3922,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)
         manager = getattr(owner.view_instance, "_upload_manager", None)
         entries = getattr(manager, "_entries", None)
+        stopped = None
         if manager is not None and isinstance(entries, dict) and ref in entries:
+            stopped = _live_upload_entry(manager, ref)
             manager.cancel_upload(ref)
         message = build_progress_message(ref, 0, "error")
         message["error"] = "The view is busy and cannot take more of this upload; try again."
         await owner.send_json(message)
+        # Queued on the view's lane past its byte budget: a hook is not refused.
+        await self._fail_stopped_upload(owner, stopped)
 
     def _known_upload_owner(self, ref: Any) -> Any:
         """The consumer-like whose view registered the upload ``ref``, or None.
@@ -3944,7 +3990,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if progress is not None:
                 # Send progress update (throttle to every 10%)
                 entry = mgr._entries.get(ref)
-                if entry and (progress % 10 == 0 or progress >= 100):
+                # Each 10% step once: a slow-moving upload (tiny chunks of a
+                # large file) or one past its announced size does not repeat
+                # a step on every chunk (#4312).
+                if entry and entry.next_progress_step():
                     await self.send_json(build_progress_message(ref, progress))
                     config = mgr.get_config(entry.upload_name)
                     if config is not None and config.progress_hook:
@@ -4000,11 +4049,16 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         The hooks are optional methods on the view: ``handle_upload_started``,
         ``handle_upload_progress`` (opt-in per slot, ``progress_hook=True``),
         ``handle_upload_finished`` and ``handle_upload_failed``. A view that
-        defines none pays nothing: no lock, no turn, no render. The caller is
-        the upload frame's own turn (on the view's lane when it has one, #3252),
-        so a hook runs in order with the view's other frames. It waits for the
-        render lock as an event does, then runs as a ``push``/``upload`` turn
-        that renders and drains, like a server push.
+        defines none pays nothing: no lock, no turn, no render.
+
+        On a socket that hosts several views (or whose view has turns queued),
+        the hook is a turn on the view's lane (#3252): queued after the frame
+        that called for it, so it runs in order with the view's other frames
+        and a slow hook never holds up the receive loop or another view. Called
+        from the lane's own running turn, it runs there, before the frames
+        queued behind. A socket with one idle view runs it inline, as an event.
+        Either way it waits for the render lock as an event does, then runs as
+        a ``push``/``upload`` turn that renders and drains, like a server push.
         """
         view = self.view_instance
         if view is None or getattr(view, "_upload_manager", None) is not mgr:
@@ -4012,6 +4066,25 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # A hook is a method the view's class defines.
         if not callable(getattr(type(view), hook, None)):
             return
+        lane = getattr(self, "_lane", None)
+        if not (lane is not None and lane.running_here()) and (
+            _real_consumer(self)._slot_map() or (lane is not None and lane.busy())
+        ):
+            if lane is None:
+                lane = self._lane = ViewLane()
+            # Always accepted (a hook is not refused like a frame): an upload
+            # calls at most started, eleven progress steps and one ending.
+            lane.submit(self._run_queued_upload_hook, (view, hook, entry, extra), size=0)
+            return
+        await self._render_lock.acquire()
+        await self._run_upload_hook_turn(view, hook, entry, extra)
+
+    @owned_diagnostic_scope
+    async def _run_queued_upload_hook(self, item: Tuple[Any, str, Any, Tuple[Any, ...]]) -> None:
+        """Run an upload hook queued on the view's lane (#4312)."""
+        view, hook, entry, extra = item
+        if self.view_instance is not view:
+            return  # the view was replaced while the hook waited
         await self._render_lock.acquire()
         await self._run_upload_hook_turn(view, hook, entry, extra)
 

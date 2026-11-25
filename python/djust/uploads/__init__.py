@@ -671,7 +671,7 @@ class UploadConfig:
     # dropped) and the browser is told. ``None`` (default): no limit.
     timeout: Optional[float] = None
     # #4312 — call the view's ``handle_upload_progress(name, entry)`` at each
-    # progress step the browser is sent (every 10%). Off by default.
+    # 10% step the browser is sent (each step once). Off by default.
     progress_hook: bool = False
 
     def __post_init__(self) -> None:
@@ -748,6 +748,19 @@ class UploadEntry:
     # #4312 — True when the error is a writer's ``UploadRefused`` (the
     # ``refused`` reason of ``handle_upload_failed``).
     _refused: bool = field(default=False, repr=False)
+    # #4312 — the last 10% step (``progress // 10``, 10 at 100%) the browser
+    # was sent: each step is sent, and the progress hook run, once.
+    _progress_step: int = field(default=0, repr=False)
+
+    def next_progress_step(self) -> bool:
+        """Whether the upload has reached a 10% step it has not reported yet;
+        records it when so (#4312). A step is reported once, 100% included,
+        however many chunks it takes to cross it."""
+        step = self.progress // 10
+        if step <= self._progress_step:
+            return False
+        self._progress_step = step
+        return True
 
     @property
     def data(self) -> bytes:
@@ -1758,8 +1771,8 @@ class UploadMixin:
                 ``uploadFile()`` promise rejects with "Upload timed out after
                 N seconds.". ``None`` (default) sets no limit.
             progress_hook: Call the view's ``handle_upload_progress(name,
-                entry)`` at each progress step the browser is sent (every
-                10%), as a turn of the view with a render (#4312). Off by
+                entry)`` at each 10% step the browser is sent (each step
+                once), as a turn of the view with a render (#4312). Off by
                 default; the view must define ``handle_upload_progress``.
 
         Returns:

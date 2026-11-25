@@ -14,8 +14,10 @@ Optional view hooks, each run as a turn of the view with a render:
 Everything here goes over a real socket, through the real consumer.
 """
 
+import asyncio
 import json
 import struct
+import threading
 import types
 import uuid
 
@@ -246,32 +248,71 @@ async def test_a_raising_hook_is_logged_and_the_upload_goes_on(site, caplog):
 
 
 # ---------------------------------------------------------------------------
-# Progress: opt-in, throttled to the browser's 10% steps
+# Progress: opt-in, once per 10% step, the steps the browser gets
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_progress_hook_runs_at_the_steps_the_browser_gets(site):
+async def test_progress_hook_runs_once_per_step_the_browser_gets(site):
     _, socket = await _open()
     ref = await _start(socket, "prog")
     await _until(socket, lambda f: _renders(f, "started prog"))
     # 14 chunks: 3 bytes each and one of 1 (40 bytes). Progress runs 7, 15,
-    # 22, 30, ... 97, 100; the browser hears 30, 60, 90 and 100.
+    # 22, 30, 37, 45, ... 97, 100: each 10% step is reported at the first
+    # chunk that reaches it, and once (37 is still step 3, 97 step 9).
     data = b"x" * 40
     for i, start in enumerate(range(0, 40, 3)):
         await socket.communicator.send_to(bytes_data=_chunk(ref, i, data[start : start + 3]))
     frames = await _until(socket, lambda f: _renders(f, "progress prog 100"))
+    steps = [15, 22, 30, 45, 52, 60, 75, 82, 90, 100]
     sent = [f["progress"] for f in frames if f["type"] == "upload_progress"]
-    assert sent == [30, 60, 90, 100]
+    assert sent == steps
     progress_calls = [c for c in CALLS if c[0] == "progress"]
-    assert [c[3] for c in progress_calls] == [30, 60, 90, 100]
+    assert [c[3] for c in progress_calls] == steps
     # Each step's render follows its own progress frame.
     order = [
         ("p", f["progress"]) if f["type"] == "upload_progress" else ("r",)
         for f in frames
         if f["type"] in ("upload_progress", "patch")
     ]
-    assert order == [("p", 30), ("r",), ("p", 60), ("r",), ("p", 90), ("r",), ("p", 100), ("r",)]
+    assert order == [item for step in steps for item in (("p", step), ("r",))]
+    await socket.disconnect()
+
+
+async def _send_chunks_then_ping(socket, ref, count):
+    for i in range(count):
+        await socket.communicator.send_to(bytes_data=_chunk(ref, i, b"x"))
+    # Frames run in order: the pong comes once every chunk has been handled.
+    await socket.send({"type": "ping"})
+    return await _until(socket, lambda f: f.get("type") == "pong")
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_tiny_chunks_of_a_large_file_report_no_step_until_one_is_reached(site):
+    _, socket = await _open()
+    ref = await _start(socket, "prog", size=10_000_000)
+    await _until(socket, lambda f: _renders(f, "started prog"))
+    # 30 one-byte chunks of a 10 MB file: progress stays 0, no step is reached.
+    frames = await _send_chunks_then_ping(socket, ref, 30)
+    assert [f for f in frames if f["type"] in ("upload_progress", "patch")] == []
+    await socket.receive_nothing(("upload_progress", "patch", "html_update"), within=0.2)
+    assert [c for c in CALLS if c[0] == "progress"] == []
+    await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_chunks_past_the_announced_size_report_100_once(site):
+    _, socket = await _open()
+    ref = await _start(socket, "prog", size=1)
+    await _until(socket, lambda f: _renders(f, "started prog"))
+    # Every chunk after the first keeps the upload at 100%.
+    frames = await _send_chunks_then_ping(socket, ref, 20)
+    assert [f["progress"] for f in frames if f["type"] == "upload_progress"] == [100]
+    assert [f for f in frames if f["type"] == "patch"] and _renders(
+        [f for f in frames if f["type"] == "patch"][-1], "progress prog 100"
+    )
+    await socket.receive_nothing(("upload_progress", "patch", "html_update"), within=0.2)
+    assert [c[3] for c in CALLS if c[0] == "progress"] == [100]
     await socket.disconnect()
 
 
@@ -405,6 +446,21 @@ async def test_a_view_without_hooks_renders_nothing_for_its_uploads(site):
     await socket.disconnect()
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_a_second_register_of_a_started_ref_fails_the_first(site):
+    _, socket = await _open()
+    ref = await _start(socket, "boom")
+    await _start(socket, "boom", ref=ref)
+    await socket.receive_nothing(("never",), within=0.3)
+    # The replaced upload ends (failed, error) before its replacement starts.
+    assert [c[:4] if c[0] == "failed" else c[0] for c in CALLS] == [
+        "started",
+        ("failed", "boom", ref, "error"),
+        "started",
+    ]
+    await socket.disconnect()
+
+
 def test_failure_reason_mapping():
     mgr = UploadManager()
     mgr.configure("doc", accept=".txt", max_file_size=4)
@@ -415,3 +471,226 @@ def test_failure_reason_mapping():
     assert upload_failure_reason(entry) == "refused"
     entry._error, entry._refused = "Upload writer rejected chunk", False
     assert upload_failure_reason(entry) == "error"
+
+
+# ---------------------------------------------------------------------------
+# A socket that hosts several views: hooks run on the view's lane (#3252)
+# ---------------------------------------------------------------------------
+
+MOD = __name__
+#: Set when a blocking hook or handler is running; the test lets go with RELEASE.
+HELD = threading.Event()
+RELEASE = threading.Event()
+PATIENCE = 20.0
+
+
+async def _block():
+    HELD.set()
+    await asyncio.get_running_loop().run_in_executor(None, RELEASE.wait, PATIENCE)
+
+
+class LanePage(LiveView):
+    template = '<div dj-root dj-view="' + MOD + '.LanePage"><b>page</b></div>'
+
+    @event_handler()
+    async def quick(self, **kwargs):
+        CALLS.append(("quick",))
+
+
+class SlowUploader(UploadMixin, LiveView):
+    template = '<div dj-view="' + MOD + '.SlowUploader"><b>up</b></div>'
+
+    def mount(self, request, **kwargs):
+        self.allow_upload("doc", accept=".txt", writer=SinkWriter, max_file_size=1000)
+
+    async def handle_upload_started(self, name, entry):
+        CALLS.append(("started", name, entry.ref))
+
+    async def handle_upload_finished(self, name, entry):
+        CALLS.append(("finished-start", name, entry.ref))
+        await _block()
+        CALLS.append(("finished-end", name, entry.ref))
+
+    def handle_upload_failed(self, name, entry, reason):
+        CALLS.append(("failed", name, entry.ref, reason))
+
+    @event_handler()
+    async def hold(self, **kwargs):
+        await _block()
+
+    @event_handler()
+    def bump(self, **kwargs):
+        CALLS.append(("bump",))
+
+
+@pytest.fixture
+def lanes():
+    HELD.clear()
+    RELEASE.clear()
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=["djust.tests"], DEBUG=False):
+        yield
+    RELEASE.set()
+
+
+async def _socket():
+    from channels.testing import WebsocketCommunicator
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.db import SessionStore
+
+    from djust.websocket import LiveViewConsumer
+
+    consumers = []
+
+    class _Recorded(LiveViewConsumer):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            consumers.append(self)
+
+    store = SessionStore()
+    await sync_to_async(store.create)()
+    communicator = WebsocketCommunicator(_Recorded.as_asgi(), "/ws/")
+    communicator.scope["session"] = store
+    communicator.scope["user"] = AnonymousUser()
+    assert (await communicator.connect())[0]
+    await communicator.receive_json_from()
+    for cls, target in ((LanePage, None), (SlowUploader, "up")):
+        frame = {"type": "mount", "view": MOD + "." + cls.__name__, "url": "/p/"}
+        if target:
+            frame["target_id"] = target
+        await communicator.send_json_to(frame)
+        await _frames(communicator, lambda f: f.get("type") == "mount")
+    consumer = consumers[-1]
+    return communicator, consumer, consumer._slot_map()["up"].facade
+
+
+async def _frames(communicator, predicate, timeout=PATIENCE):
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    seen = []
+    while True:
+        seen.append(await communicator.receive_json_from(timeout=deadline - loop.time()))
+        if predicate(seen[-1]):
+            return seen
+
+
+async def _spin(predicate, what):
+    for _ in range(4000):
+        if predicate():
+            return
+        await asyncio.sleep(0.001)
+    raise AssertionError("timed out waiting for " + what)
+
+
+async def _wait_held():
+    assert await asyncio.get_running_loop().run_in_executor(None, HELD.wait, PATIENCE)
+
+
+def _register(ref, size):
+    return {
+        "type": "upload_register",
+        "target_id": "up",
+        "upload_name": "doc",
+        "ref": ref,
+        "client_name": "a.txt",
+        "client_type": "text/plain",
+        "client_size": size,
+    }
+
+
+def _event(name, ref, target=None):
+    frame = {"type": "event", "event": name, "params": {}, "ref": ref}
+    if target:
+        frame["target_id"] = target
+    return frame
+
+
+def _reply_to(ref):
+    return lambda f: (
+        f.get("type") in ("patch", "html_update", "noop", "error") and f.get("ref") == ref
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_slow_hook_does_not_delay_another_view_and_keeps_its_views_order(lanes):
+    communicator, _, facade = await _socket()
+    try:
+        ref = str(uuid.uuid4())
+        await communicator.send_json_to(_register(ref, 3))
+        await _frames(communicator, lambda f: f.get("type") == "upload_registered")
+        await _spin(lambda: not facade._lane.busy(), "the register to drain")
+        # The view is idle, so its frames are handled in the receive loop; the
+        # finished hook they call for is queued on its lane and blocks there.
+        await communicator.send_to(bytes_data=_chunk(ref, 0, b"abc"))
+        await communicator.send_to(bytes_data=_complete(ref))
+        await _wait_held()
+        # Another view's event is answered while the hook is still blocked.
+        await communicator.send_json_to(_event("quick", 7))
+        await _frames(communicator, _reply_to(7), timeout=5.0)
+        # The uploading view's own next event waits for its hook.
+        await communicator.send_json_to(_event("bump", 8, "up"))
+        await communicator.send_json_to({"type": "ping"})
+        await _frames(communicator, lambda f: f.get("type") == "pong", timeout=5.0)
+        assert ("finished-end", "doc", ref) not in CALLS and ("bump",) not in CALLS
+        RELEASE.set()
+        await _frames(communicator, _reply_to(8))
+        assert CALLS == [
+            ("started", "doc", ref),
+            ("finished-start", "doc", ref),
+            ("quick",),
+            ("finished-end", "doc", ref),
+            ("bump",),
+        ]
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_an_upload_stopped_while_its_register_waited_fails_with_error(lanes, monkeypatch):
+    communicator, consumer, facade = await _socket()
+    try:
+        await communicator.send_json_to(_event("hold", 1, "up"))
+        await _wait_held()
+        monkeypatch.setattr(type(consumer), "_upload_queue_budget", lambda self: 1000)
+        ref = str(uuid.uuid4())
+        await communicator.send_json_to(_register(ref, 600))
+        await communicator.send_to(bytes_data=_chunk(ref, 0, b"a" * 300))  # fits
+        await _spin(lambda: facade._lane.queued() == 2, "the register and the first chunk")
+        await communicator.send_to(bytes_data=_chunk(ref, 1, b"b" * 300))  # does not
+        stopped = await _frames(communicator, lambda f: f.get("type") == "upload_progress")
+        assert stopped[-1]["status"] == "error" and "busy" in stopped[-1]["error"]
+        RELEASE.set()
+        await _frames(communicator, _reply_to(1))
+        await _spin(lambda: not facade._lane.busy(), "the lane to drain")
+        # The queued register ran (started), then its upload was cancelled.
+        assert CALLS == [("started", "doc", ref), ("failed", "doc", ref, "error")]
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_a_started_upload_stopped_by_a_full_lane_fails_with_error(lanes, monkeypatch):
+    communicator, consumer, facade = await _socket()
+    try:
+        ref = str(uuid.uuid4())
+        await communicator.send_json_to(_register(ref, 600))
+        await _frames(communicator, lambda f: f.get("type") == "upload_registered")
+        await _spin(lambda: not facade._lane.busy(), "the register to drain")
+        await communicator.send_json_to(_event("hold", 1, "up"))
+        await _wait_held()
+        monkeypatch.setattr(type(consumer), "_upload_queue_budget", lambda self: 1000)
+        await communicator.send_to(bytes_data=_chunk(ref, 0, b"a" * 300))  # fits
+        await _spin(lambda: facade._lane.queued() == 1, "the first chunk")
+        await communicator.send_to(bytes_data=_chunk(ref, 1, b"b" * 300))  # does not
+        stopped = await _frames(communicator, lambda f: f.get("type") == "upload_progress")
+        assert stopped[-1]["status"] == "error" and "busy" in stopped[-1]["error"]
+        RELEASE.set()
+        await _frames(communicator, _reply_to(1))
+        await _spin(lambda: not facade._lane.busy(), "the lane to drain")
+        # Once, after the view's busy turn; the queued chunk of the stopped
+        # upload fails nothing more.
+        assert CALLS == [("started", "doc", ref), ("failed", "doc", ref, "error")]
+    finally:
+        RELEASE.set()
+        await communicator.disconnect()

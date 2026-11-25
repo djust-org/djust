@@ -117,7 +117,7 @@ class PhotosView(UploadMixin, LiveView):
 | `chunk_size` | `int` | `64512` | Chunk size for transfer (default 63KB; clamped so a chunk frame, header included, fits `max_message_size`) |
 | `auto_upload` | `bool` | `True` | Start upload immediately when files are selected |
 | `timeout` | `float` or `None` | `None` | Seconds an upload may take from its registration (from the resume, for a resumed upload). An upload unfinished by then is cancelled: its writer is aborted with a `TimeoutError`, its entry dropped, and the browser told ("Upload timed out after N seconds."). `None` sets no limit. |
-| `progress_hook` | `bool` | `False` | Call the view's `handle_upload_progress(name, entry)` at each 10% step the browser is sent. Needs that method on the view (`allow_upload` raises `ImproperlyConfigured` without it). See [Upload hooks](#upload-hooks-in-the-view). |
+| `progress_hook` | `bool` | `False` | Call the view's `handle_upload_progress(name, entry)` at each 10% step the browser is sent (each step once). Needs that method on the view (`allow_upload` raises `ImproperlyConfigured` without it). See [Upload hooks](#upload-hooks-in-the-view). |
 
 ```python
 # Single image
@@ -145,11 +145,13 @@ A view hears its uploads through optional methods. Define the ones you need; a v
 | Method | Called |
 |--------|--------|
 | `handle_upload_started(name, entry)` | After the server accepts the file's registration, and again after a resume (a resumed upload starts again; `entry.progress` shows what already arrived). |
-| `handle_upload_progress(name, entry)` | Only on a slot with `progress_hook=True`: at each 10% step the browser is sent (30, 60, 90, 100 for an upload whose chunks cross those steps). |
+| `handle_upload_progress(name, entry)` | Only on a slot with `progress_hook=True`: at each 10% step the browser is sent. A step is reported once, at the first chunk that reaches it (an upload in 3-byte chunks of 40 bytes reports 15, 22, 30, 45, 52, 60, 75, 82, 90, 100), so an upload calls it at most ten times however many chunks it has. |
 | `handle_upload_finished(name, entry)` | After the upload completes (the writer closed, or the file was validated and written). `entry.writer_result` is set. |
-| `handle_upload_failed(name, entry, reason)` | When the upload fails. `reason` is one of `"refused"` (the writer raised `UploadRefused`; its message is `entry.error`), `"too_large"` (over `max_file_size` or the announced size), `"timeout"` (the slot's `timeout=`), `"cancelled"` (the browser cancelled an upload in flight) or `"error"` (anything else: a writer fault, a content check). |
+| `handle_upload_failed(name, entry, reason)` | When the upload fails. `reason` is one of `"refused"` (the writer raised `UploadRefused`; its message is `entry.error`), `"too_large"` (over `max_file_size` or the announced size), `"timeout"` (the slot's `timeout=`), `"cancelled"` (the browser cancelled an upload in flight) or `"error"` (anything else: a writer fault, a content check, an upload stopped because its view was too busy to queue more of it, a second register of the same ref). |
 
-`name` is the slot name. Each hook runs as a turn of the view, like a server push: in order with the view's other frames (on the view's lane when the socket carries several views), under the render lock, followed by a render and the usual end-of-turn work (`push_event`, flash messages, `start_async`). Set `self._skip_render = True` in a hook to send no frame. A hook that raises is logged and renders nothing; the upload carries on as if the hook were absent.
+`name` is the slot name. Each hook runs as a turn of the view, like a server push: in order with the view's other frames, under the render lock, followed by a render and the usual end-of-turn work (`push_event`, flash messages, `start_async`). Set `self._skip_render = True` in a hook to send no frame. A hook that raises is logged and renders nothing; the upload carries on as if the hook were absent.
+
+When the socket carries several views, a hook is queued on its view's lane, after the frame that called for it: a slow hook holds up its own view's later frames (as a slow event handler does) but never the other views'.
 
 ```python
 class DocumentView(UploadMixin, LiveView):
@@ -177,7 +179,7 @@ What calls no hook:
 - The view's own `cancel_upload()`: the view already knows. A started, progress or finished hook also does not run for an upload the view cancelled or consumed before the hook's turn.
 - A cancel of an upload that had already finished or failed, and the chunks that still arrive for a failed upload: `handle_upload_failed` runs once per upload.
 - An upload refused at registration (type, size, `max_entries`): it never started.
-- An upload stopped because its view's lane was full, or dropped when the connection closes.
+- An upload dropped when the connection closes.
 
 Uploads, and so these hooks, are WebSocket-only: the SSE transport and the HTTP fallback carry no file uploads.
 
