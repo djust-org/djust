@@ -6390,13 +6390,19 @@ _page_header_actions_key = "__page_header_actions__"
 
 
 class PageHeaderActionsNode(template.Node):
-    """Renders the actions slot inside a page header."""
+    """``{% page_header_actions %}``: drawn by ``PageHeaderActionsHandler`` (#4331), the one
+    implementation. Inside a ``{% page_header %}`` the parent reads the content from the context
+    and draws the slot itself, so the node stashes it there and draws nothing."""
 
     def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
     def render(self, context: Any) -> SafeString:
+        from djust.components.rust_handlers import PageHeaderActionsHandler
+
         content = self.nodelist.render(context)
+        if context.get(_page_header_actions_key) is None:
+            return mark_safe(PageHeaderActionsHandler().render([], content, {}))
         # Stash the rendered actions content on the context for the parent
         context[_page_header_actions_key] = content
         return ""
@@ -6453,7 +6459,9 @@ class PageHeaderNode(template.Node):
         # Actions
         actions_section = ""
         if actions_html.strip():
-            actions_section = f'<div class="dj-page-header__actions">{actions_html}</div>'
+            from djust.components.rust_handlers import PageHeaderActionsHandler
+
+            actions_section = PageHeaderActionsHandler().render([], actions_html, {})
 
         return mark_safe(
             f'<header class="{cls}">'
@@ -6802,27 +6810,42 @@ def do_nav_item(parser: Any, token: Any) -> template.Node:
 
 
 class AppSidebarNode(template.Node):
+    """``{% app_sidebar %}``: drawn by ``AppSidebarHandler`` (#4331). ``AppShellNode`` reads
+    ``nodelist`` and draws its own slot."""
+
     def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
     def render(self, context: Any) -> SafeString:
-        return ""  # rendered by AppShellNode
+        from djust.components.rust_handlers import AppSidebarHandler
+
+        return mark_safe(AppSidebarHandler().render([], self.nodelist.render(context), {}))
 
 
 class AppHeaderNode(template.Node):
+    """``{% app_header %}``: drawn by ``AppHeaderHandler`` (#4331). ``AppShellNode`` reads
+    ``nodelist`` and draws its own slot."""
+
     def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
     def render(self, context: Any) -> SafeString:
-        return ""  # rendered by AppShellNode
+        from djust.components.rust_handlers import AppHeaderHandler
+
+        return mark_safe(AppHeaderHandler().render([], self.nodelist.render(context), {}))
 
 
 class AppContentNode(template.Node):
+    """``{% app_content %}``: drawn by ``AppContentHandler`` (#4331). ``AppShellNode`` reads
+    ``nodelist`` and draws its own slot."""
+
     def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
     def render(self, context: Any) -> SafeString:
-        return ""  # rendered by AppShellNode
+        from djust.components.rust_handlers import AppContentHandler
+
+        return mark_safe(AppContentHandler().render([], self.nodelist.render(context), {}))
 
 
 class AppShellNode(template.Node):
@@ -6908,16 +6931,24 @@ def do_app_content(parser: Any, token: Any) -> template.Node:
 
 
 class ToolbarSeparatorNode(template.Node):
+    """``{% toolbar_separator %}``: drawn by ``ToolbarSeparatorHandler`` (#4331)."""
+
     def render(self, context: Any) -> SafeString:
-        return ""  # rendered by ToolbarNode
+        from djust.components.rust_handlers import ToolbarSeparatorHandler
+
+        return mark_safe(ToolbarSeparatorHandler().render([], {}))
 
 
 class ToolbarOverflowNode(template.Node):
+    """``{% toolbar_overflow %}``: drawn by ``ToolbarOverflowHandler`` (#4331)."""
+
     def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
 
     def render(self, context: Any) -> SafeString:
-        return ""  # rendered by ToolbarNode
+        from djust.components.rust_handlers import ToolbarOverflowHandler
+
+        return mark_safe(ToolbarOverflowHandler().render([], self.nodelist.render(context), {}))
 
 
 class ToolbarNode(template.Node):
@@ -6944,17 +6975,8 @@ class ToolbarNode(template.Node):
 
         parts = []
         for node in self.nodelist:
-            if isinstance(node, ToolbarSeparatorNode):
-                parts.append('<div class="dj-toolbar__separator" role="separator"></div>')
-            elif isinstance(node, ToolbarOverflowNode):
-                overflow_content = node.nodelist.render(context)
-                parts.append(
-                    f'<div class="dj-toolbar__overflow">'
-                    f'<button class="dj-toolbar__overflow-trigger" aria-label="More actions" '
-                    f'aria-expanded="false" aria-haspopup="true">'
-                    f'<span class="dj-toolbar__overflow-icon">&#8942;</span></button>'
-                    f'<div class="dj-toolbar__overflow-menu">{overflow_content}</div></div>'
-                )
+            if isinstance(node, (ToolbarSeparatorNode, ToolbarOverflowNode)):
+                parts.append(node.render(context))
             else:
                 rendered = node.render(context)
                 if rendered.strip():
