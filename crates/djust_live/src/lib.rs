@@ -6689,10 +6689,21 @@ fn try_multi_text_region_fast_path(
         } else {
             Some(entry.djust_id.clone())
         };
+        // The parent's dj-id plus this node's index in it (#4001), as the
+        // tree diff emits them; only together, and only when the parent has one.
+        let (parent_d, index) = match entry.path.split_last() {
+            Some((&index, parent_path)) => get_vdom_node_mut(&mut new_vdom, parent_path)
+                .and_then(|parent| parent.djust_id.clone())
+                .filter(|id| !id.is_empty())
+                .map_or((None, None), |id| (Some(id), Some(index))),
+            None => (None, None),
+        };
         patches.push(djust_vdom::Patch::SetText {
             path: entry.path.clone(),
             d,
             text: new_text.clone(),
+            parent_d,
+            index,
         });
     }
 
@@ -9563,6 +9574,41 @@ mod fast_path_flag_tests {
             .collect();
         assert_eq!(texts, ["v1", "1080"], "patches: {patches:?}");
         assert!(html.contains(">1080</td>"), "html: {html}");
+
+        // #4001: each SetText carries the parent's dj-id and its index, the
+        // same as a full diff of the same change would emit.
+        let mut slow = mounted();
+        slow.update_state_rust(state("v1", 0, 1080));
+        slow.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
+        slow.fragment_text_map = None;
+        slow.node_html_cache = Vec::new(); // force a full render + diff
+        let (_html, full, _v) = slow.render_with_diff_detached().expect("full diff");
+        let full: Vec<djust_vdom::Patch> =
+            serde_json::from_str(&full.expect("patches")).expect("patch json");
+        let hints = |ps: &[djust_vdom::Patch]| -> Vec<(Vec<usize>, Option<String>, Option<usize>)> {
+            ps.iter()
+                .filter_map(|p| match p {
+                    djust_vdom::Patch::SetText {
+                        path,
+                        parent_d,
+                        index,
+                        ..
+                    } => Some((path.clone(), parent_d.clone(), *index)),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert!(
+            hints(&patches)
+                .iter()
+                .any(|h| h.1.is_some() && h.2.is_some()),
+            "patches: {patches:?}"
+        );
+        assert_eq!(
+            hints(&patches),
+            hints(&full),
+            "fast: {patches:?} full: {full:?}"
+        );
 
         // The shifted index still serves the next render.
         view.update_state_rust(state("v22", 0, 7));

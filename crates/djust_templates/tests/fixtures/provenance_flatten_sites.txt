@@ -845,6 +845,7 @@ slow.set_changed_keys(vec!["label".to_string(), "highlight_id".to_string()]);
 view.set_changed_keys(vec!["highlight_id".to_string()]);
 view.set_changed_keys(vec!["rows".to_string()]);
 view.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
+slow.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
 view.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
 let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
 view.set_changed_keys(vec!["label".to_string()]);
