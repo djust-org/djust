@@ -1556,6 +1556,9 @@ class TestThePinnedClassLivesOnTheClassAndIsCollectable:
         return form
 
     def containers(self):
+        # Warm the sensitive-field memo first: it is None until first use (or after
+        # an earlier test's override_settings), and filling it is not growth.
+        serialization._resolve_sensitive_fields()
         return {
             name: len(value)
             for name, value in vars(serialization).items()
