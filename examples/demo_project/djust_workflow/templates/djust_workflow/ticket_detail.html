@@ -2,7 +2,7 @@
 {% block title %}{{ ticket.title }}{% endblock %}
 {% block content %}
 <div dj-root>
-    <p><a href="/workflow/" dj-navigate>All tickets</a></p>
+    <p><a href="{% url 'djust_workflow:list' %}" dj-navigate>All tickets</a></p>
     <h1>{{ ticket.title }}</h1>
     <p class="muted">{{ ticket.status }}, {{ ticket.priority }}, opened by {{ ticket.created_by.username }}</p>
     <p>{{ ticket.body }}</p>
@@ -15,7 +15,7 @@
         <button dj-click="close_ticket" dj-loading.disable>Close ticket</button>
         <span class="loading muted" dj-loading.show dj-loading.for="close_ticket">Closing...</span>
         {% endif %}
-        <a href="/workflow/{{ ticket.pk }}/edit/" dj-navigate>Edit</a>
+        <a href="{% url 'djust_workflow:edit' ticket.pk %}" dj-navigate>Edit</a>
     {% endif %}
 </div>
 {% endblock %}

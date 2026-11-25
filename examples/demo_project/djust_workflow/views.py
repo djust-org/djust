@@ -4,9 +4,11 @@ Guide: docs/website/guides/incremental-django-workflow.md
 """
 
 from django.core.paginator import Paginator
+from django.http import Http404
 from django.db import transaction
 from django.db.models import Q
 from django.urls import reverse
+from django.utils.safestring import mark_safe
 
 from djust import LiveView, state
 from djust.decorators import event_handler
@@ -25,6 +27,15 @@ class NotificationError(Exception):
 
 def notify_requester(ticket):
     """Stand-in for a slow or flaky call (mail, chat, webhook). Tests make it fail."""
+
+
+class LiveFormHtml:
+    """Renders the form with ``as_live`` so the page has no hand-written inputs."""
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form_html"] = mark_safe(self.as_live())
+        return context
 
 
 class TicketListView(LiveView):
@@ -69,6 +80,7 @@ class TicketListView(LiveView):
             total=page.paginator.count,
             prev_page=page.number - 1 if page.has_previous() else None,
             next_page=page.number + 1 if page.has_next() else None,
+            status_choices=[("all", "All"), *Ticket.Status.choices],
             can_add=self.request.user.has_perm("djust_workflow.add_ticket"),
         )
         return context
@@ -86,14 +98,17 @@ class TicketDetailView(LiveView):
         self.ticket_pk = pk  # the URL's id; the object itself is read fresh each time
 
     def get_object(self):
-        return Ticket.objects.select_related("created_by").get(pk=self.ticket_pk)
-
-    def has_object_permission(self, request, obj):
-        return Ticket.objects.visible_to(request.user).filter(pk=obj.pk).exists()
+        # Scoped to what this user may see, so a missing ticket and somebody
+        # else's ticket are the same answer: a 404.
+        tickets = Ticket.objects.visible_to(self.request.user).select_related("created_by")
+        return tickets.filter(pk=self.ticket_pk).first()
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context["ticket"] = self.get_object()
+        ticket = self._object or self.get_object()
+        if ticket is None:
+            raise Http404("No such ticket.")
+        context["ticket"] = ticket
         context["can_close"] = self.request.user.has_perm("djust_workflow.change_ticket")
         return context
 
@@ -118,7 +133,7 @@ class TicketDetailView(LiveView):
         self.success_message = "Ticket closed."
 
 
-class TicketCreateView(FormMixin, LiveView):
+class TicketCreateView(LiveFormHtml, FormMixin, LiveView):
     template_name = "djust_workflow/ticket_form.html"
     login_required = True
     permission_required = "djust_workflow.add_ticket"
@@ -134,7 +149,7 @@ class TicketCreateView(FormMixin, LiveView):
         self.error_message = "Please correct the errors below."
 
 
-class TicketEditView(ModelFormMixin[Ticket], LiveView):
+class TicketEditView(LiveFormHtml, ModelFormMixin[Ticket], LiveView):
     template_name = "djust_workflow/ticket_form.html"
     login_required = True
     permission_required = "djust_workflow.change_ticket"

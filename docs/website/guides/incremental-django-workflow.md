@@ -93,7 +93,7 @@ class TicketListParams(forms.Form):
     """The list page's query string: what ``?status=open&q=vpn&page=2`` may say."""
 
     status = forms.ChoiceField(
-        choices=[("all", "All"), ("open", "Open"), ("closed", "Closed")],
+        choices=[("all", "All"), *Ticket.Status.choices],
         required=False,
         initial="all",
     )
@@ -239,20 +239,32 @@ class TicketQuerySet(models.QuerySet):
 ```
 
 The list uses it to scope what it shows, and the detail view uses the same rule
-through `get_object()` and `has_object_permission()`. djust runs both at mount
-and again before every event, so access revoked while the page is open stops the
-next click:
+in `get_object()`. A ticket that does not exist and a ticket the user may not see
+are the same answer, a 404, so a visitor cannot probe for ids by comparing a 404
+with a 403:
 
 <!-- example: views.py -->
 ```python
 class TicketDetailView(LiveView):
     # ...
     def get_object(self):
-        return Ticket.objects.select_related("created_by").get(pk=self.ticket_pk)
+        # Scoped to what this user may see, so a missing ticket and somebody
+        # else's ticket are the same answer: a 404.
+        tickets = Ticket.objects.visible_to(self.request.user).select_related("created_by")
+        return tickets.filter(pk=self.ticket_pk).first()
 
-    def has_object_permission(self, request, obj):
-        return Ticket.objects.visible_to(request.user).filter(pk=obj.pk).exists()
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        ticket = self._object or self.get_object()
+        if ticket is None:
+            raise Http404("No such ticket.")
 ```
+
+An unscoped `get_object()` that returned any ticket, with a separate
+`has_object_permission()` to refuse it, would answer 403 for a ticket that exists
+and 404 for one that does not. See [authorization](authorization.md) for
+`has_object_permission()` and the four layers. `test_missing_and_not_visible_tickets_are_both_404`
+checks both answers.
 
 A handler can need more than the page does. Closing a ticket needs
 `change_ticket`; the decorator is checked before the handler runs:
@@ -315,7 +327,7 @@ is yours to write, so the owner comes from the request, not the form:
 
 <!-- example: views.py -->
 ```python
-class TicketCreateView(FormMixin, LiveView):
+class TicketCreateView(LiveFormHtml, FormMixin, LiveView):
     template_name = "djust_workflow/ticket_form.html"
     login_required = True
     permission_required = "djust_workflow.add_ticket"
@@ -337,7 +349,7 @@ the URL and checks access before the form exists and again on each event. Scope
 
 <!-- example: views.py -->
 ```python
-class TicketEditView(ModelFormMixin[Ticket], LiveView):
+class TicketEditView(LiveFormHtml, ModelFormMixin[Ticket], LiveView):
     template_name = "djust_workflow/ticket_form.html"
     login_required = True
     permission_required = "djust_workflow.change_ticket"
@@ -348,17 +360,26 @@ class TicketEditView(ModelFormMixin[Ticket], LiveView):
         return Ticket.objects.visible_to(self.request.user)
 ```
 
-Both pages share one template. Errors come from `field_errors`, and each field
-sits next to its message:
+Both pages share one template. Do not write the inputs by hand: `as_live()`
+renders every field with its label, its error message and the `validate_field`
+binding, in the CSS framework you configured. Put it in the context:
+
+<!-- example: views.py -->
+```python
+class LiveFormHtml:
+    """Renders the form with ``as_live`` so the page has no hand-written inputs."""
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["form_html"] = mark_safe(self.as_live())
+        return context
+```
 
 <!-- example: templates/djust_workflow/ticket_form.html -->
 ```html
     <form dj-submit="submit_form">
         {% csrf_token %}
-        <p>
-            <label>Title <input name="title" value="{{ form_data.title }}" dj-change="validate_field"></label>
-            {% if field_errors.title %}<span class="error">{{ field_errors.title.0 }}</span>{% endif %}
-        </p>
+        {{ form_html }}
 ```
 
 Keep `{% csrf_token %}`: it is what the HTTP fallback transport (below) verifies.

@@ -2,28 +2,13 @@
 {% block title %}Ticket{% endblock %}
 {% block content %}
 <div dj-root>
-    <p><a href="/workflow/" dj-navigate>All tickets</a></p>
+    <p><a href="{% url 'djust_workflow:list' %}" dj-navigate>All tickets</a></p>
     <h1>Ticket</h1>
     {% if error_message %}<p class="error" role="alert">{{ error_message }}</p>{% endif %}
 
     <form dj-submit="submit_form">
         {% csrf_token %}
-        <p>
-            <label>Title <input name="title" value="{{ form_data.title }}" dj-change="validate_field"></label>
-            {% if field_errors.title %}<span class="error">{{ field_errors.title.0 }}</span>{% endif %}
-        </p>
-        <p>
-            <label>Details <textarea name="body" dj-change="validate_field">{{ form_data.body }}</textarea></label>
-            {% if field_errors.body %}<span class="error">{{ field_errors.body.0 }}</span>{% endif %}
-        </p>
-        <p>
-            <label>Priority
-                <select name="priority" dj-change="validate_field">
-                    <option value="normal" {% if form_data.priority == "normal" %}selected{% endif %}>Normal</option>
-                    <option value="urgent" {% if form_data.priority == "urgent" %}selected{% endif %}>Urgent</option>
-                </select>
-            </label>
-        </p>
+        {{ form_html }}
         <button type="submit" dj-loading.disable>Save</button>
         <span class="loading muted" dj-loading.show>Saving...</span>
     </form>

@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from django.contrib.auth.models import Permission, User
 from django.core.exceptions import PermissionDenied
+from django.http import Http404
 from django.test import Client
 
 from djust.testing import LiveViewTestClient, MountRedirect
@@ -127,11 +128,25 @@ def test_a_user_sees_only_their_own_tickets(staff, tickets):
     assert "Mine only" in html and "Printer" not in html
 
 
-def test_detail_denies_somebody_elses_ticket(staff, tickets):
+def test_detail_hides_somebody_elses_ticket(staff, tickets):
     other = make_user("other", "view_ticket")
     ticket = Ticket.objects.filter(created_by=staff).first()
-    with pytest.raises(PermissionDenied):
-        LiveViewTestClient(TicketDetailView, user=other).mount(pk=ticket.pk)
+    client = LiveViewTestClient(TicketDetailView, user=other)
+    client.mount(pk=ticket.pk)
+    with pytest.raises(Http404):
+        client.render()
+
+
+def test_missing_and_not_visible_tickets_are_both_404(staff, tickets):
+    other = make_user("other2", "view_ticket")
+    theirs = Ticket.objects.filter(created_by=staff).first()
+    client = Client()
+    client.force_login(other)
+    missing = client.get("/workflow/999999/")
+    hidden = client.get("/workflow/%d/" % theirs.pk)
+    assert missing.status_code == hidden.status_code == 404
+    client.force_login(staff)
+    assert client.get("/workflow/%d/" % theirs.pk).status_code == 200
 
 
 def test_create_needs_add_ticket():

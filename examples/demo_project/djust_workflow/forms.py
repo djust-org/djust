@@ -9,7 +9,7 @@ class TicketListParams(forms.Form):
     """The list page's query string: what ``?status=open&q=vpn&page=2`` may say."""
 
     status = forms.ChoiceField(
-        choices=[("all", "All"), ("open", "Open"), ("closed", "Closed")],
+        choices=[("all", "All"), *Ticket.Status.choices],
         required=False,
         initial="all",
     )
