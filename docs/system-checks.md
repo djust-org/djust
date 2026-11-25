@@ -1165,10 +1165,9 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
     and arguments on a directive that sends its value verbatim (`dj-submit`,
     `dj-keydown`, `dj-keyup`, `dj-click-away`).
   - `T020`: a required argument the binding never sends; an argument the
-    handler does not accept (under the legacy policy, `dj-input`, `dj-change`
-    and `dj-submit` always send `field` and `_target`); extra positional
-    arguments; or two attributes that send the same name. Under the strict
-    policy, `data-*` attributes are not sent at all: use `dj-value-*`. A
+    handler does not accept; extra positional arguments; or two attributes
+    that send the same name. `data-*` attributes are not sent at all (strict
+    is the only parameter policy in 2.0): use `dj-value-*`. A
     `data-*` attribute naming a declared parameter is reported whether the
     parameter is required or has a default; with a default the handler would
     otherwise run with it and no error (#4033). A `data-*` attribute that names

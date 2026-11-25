@@ -28,8 +28,6 @@ GUIDE = REPO_ROOT / "docs/website/guides/migrating-to-2.0.md"
 TEXT = GUIDE.read_text(encoding="utf-8")
 
 CHECK_IDS = {
-    "V033",
-    "T028",
     "V034",
     "V035",
     "V037",
@@ -39,7 +37,7 @@ CHECK_IDS = {
     "T020",
     "V031",
 }
-FIX_STATUS = ("Yes", "Partly", "No", "—")
+FIX_STATUS = ("Yes", "Partly", "No")
 
 
 def _guide_blocks():
@@ -95,8 +93,13 @@ def test_capability_tables_name_a_check_and_a_fix_status():
             assert len(cells) == 4, cells
             fix = cells[3].strip().replace("`", "")
             assert fix.startswith(FIX_STATUS), f"unknown --fix status: {fix!r}"
-            for check_id in re.findall(r"djust\.([A-Z]\d{3})", cells[2]):
-                assert (REPO_ROOT / "docs/checks" / f"{check_id}.md").exists(), check_id
+            reported_by = cells[2].strip()
+            assert reported_by and reported_by != "—", f"no reporter named: {cells}"
+            for check_id in re.findall(r"djust\.([A-Z]\d{3})", reported_by):
+                doc = REPO_ROOT / "docs/checks" / f"{check_id}.md"
+                assert doc.exists(), check_id
+                # A retired check is never reported, so it cannot be how a row is found.
+                assert "status: retired" not in doc.read_text(encoding="utf-8"), check_id
     mentioned = set(re.findall(r"djust\.([A-Z]\d{3})", TEXT))
     assert CHECK_IDS <= mentioned, CHECK_IDS - mentioned
 
