@@ -624,7 +624,6 @@ Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
 .flatten()
 self.dj_if_id_namespace = namespace.to_string();
 let prefix = format!("{key}.");
-let prefix = format!("{key}.");
 let key = (self.template_source.to_string(), self.template_dirs.clone());
 Ok(dict.into())
 page.rendered.html,
@@ -689,6 +688,7 @@ PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
 PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 Some("[]".to_string())
+let prefix = format!("{key}.");
 let prefix = format!("{key}.");
 let open = format!("<{tag} ");
 let close = format!("</{tag}>");

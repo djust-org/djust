@@ -780,25 +780,7 @@ impl RustLiveViewBackend {
         for value in values.iter() {
             converted.push(value.extract::<Value>()?);
         }
-        let len = match self.state.get(&key) {
-            Some(Value::List(items)) => items.len(),
-            _ => return Ok(false),
-        };
-        if indices.iter().any(|&index| index >= len) {
-            return Ok(false);
-        }
-        self.pending_partial_page = None;
-        if !self.safe_keys.is_empty() {
-            self.safe_keys.remove(&key);
-            let prefix = format!("{key}.");
-            self.safe_keys.retain(|k| !k.starts_with(&prefix));
-        }
-        if let Some(Value::List(items)) = std::sync::Arc::make_mut(&mut self.state).get_mut(&key) {
-            for (index, value) in indices.into_iter().zip(converted) {
-                items[index] = value;
-            }
-        }
-        Ok(true)
+        Ok(self.replace_state_items(&key, indices, converted))
     }
 
     /// Drop every state key absent from `keys`, returning the removed keys
@@ -2975,6 +2957,32 @@ impl RustLiveViewBackend {
         std::sync::Arc::make_mut(&mut self.state)
             .insert(component_id.clone(), Value::SafeString(html));
         self.safe_keys.insert(component_id);
+    }
+
+    /// Rust core of `update_state_items`: replace the rows at `indices` of
+    /// the list `key` with `values`, already converted. `false` (nothing
+    /// written) when `key` is not a list or an index is out of range.
+    /// Writes through `make_mut`, so a render holding the map keeps its copy.
+    fn replace_state_items(&mut self, key: &str, indices: Vec<usize>, values: Vec<Value>) -> bool {
+        let len = match self.state.get(key) {
+            Some(Value::List(items)) => items.len(),
+            _ => return false,
+        };
+        if indices.len() != values.len() || indices.iter().any(|&index| index >= len) {
+            return false;
+        }
+        self.pending_partial_page = None;
+        if !self.safe_keys.is_empty() {
+            self.safe_keys.remove(key);
+            let prefix = format!("{key}.");
+            self.safe_keys.retain(|k| !k.starts_with(&prefix));
+        }
+        if let Some(Value::List(items)) = std::sync::Arc::make_mut(&mut self.state).get_mut(key) {
+            for (index, value) in indices.into_iter().zip(values) {
+                items[index] = value;
+            }
+        }
+        true
     }
 
     /// Shared core of `update_state` (the Python entry point) and
@@ -9771,6 +9779,12 @@ mod state_is_shared_not_copied_2737 {
                 "set_component_html",
                 Box::new(|v: &mut RustLiveViewBackend| {
                     v.set_component_html("k".to_string(), "<i>k</i>".to_string())
+                }),
+            ),
+            (
+                "replace_state_items",
+                Box::new(|v: &mut RustLiveViewBackend| {
+                    assert!(v.replace_state_items("rows", vec![1], vec![Value::Integer(9)]));
                 }),
             ),
         ];
