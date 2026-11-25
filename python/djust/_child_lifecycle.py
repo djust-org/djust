@@ -101,12 +101,10 @@ def dispose_child_subtree(child: Any, *, navigation: bool = False) -> None:
             WaiterMixin._cancel_all_waiters(current, reason="child_disposed")
         except Exception:  # noqa: BLE001
             logger.error("Child waiter cleanup failed")
-        hooks = (
-            ("_cleanup_uploads", "_on_sticky_unmount")
-            if navigation
-            else ("_cleanup_uploads", "_cleanup_on_unregister", "_on_sticky_unmount")
-        )
-        for name in hooks:
+        # A child's own cleanup hook runs on navigation too, as it did for 1.3
+        # children: whatever it frees (files, subscriptions) must not leak when
+        # the page moves on. Disposal marks the child, so it runs once.
+        for name in ("_cleanup_uploads", "_cleanup_on_unregister", "_on_sticky_unmount"):
             try:
                 hook = getattr(current, name, None)
                 if callable(hook):

@@ -1,0 +1,1 @@
+- **An embedded child's `_cleanup_on_unregister()` runs when the page navigates away**, as it did for 1.3 children. Before, a navigation ran only `_cleanup_uploads()` and `_on_sticky_unmount()`, so whatever the hook frees (files, subscriptions) leaked until the socket closed. Each disposed view runs it once, including a sticky child the destination page drops.

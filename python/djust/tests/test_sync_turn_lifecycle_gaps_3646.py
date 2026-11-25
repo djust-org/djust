@@ -299,9 +299,15 @@ async def _post(session, key, body):
     assert response.status_code == 200
 
 
-#: What leaving a page for another runs: an explicit child's ``_cleanup_on_unregister`` is
-#: not part of a navigation's teardown (``dispose_child_subtree(navigation=True)``).
-NAVIGATION_HOOKS = {"on_sticky_unmount", "cleanup_uploads", "page_cleanup_uploads"}
+#: What leaving a page for another runs: every teardown hook, including each child's
+#: ``_cleanup_on_unregister`` (as for a 1.3 child), once per disposed view.
+NAVIGATION_HOOKS = {
+    "on_sticky_unmount",
+    "cleanup_uploads",
+    "page_cleanup_uploads",
+    "cleanup_on_unregister",
+    "explicit_cleanup_on_unregister",
+}
 
 
 def _all_ran_in_a_lifecycle_step_off_the_loop(loop_thread, hooks=HOOKS):
@@ -368,7 +374,6 @@ async def test_an_sse_navigation_runs_the_teardown_hooks_inside_a_lifecycle_step
         await stream.aclose()
 
     _all_ran_in_a_lifecycle_step_off_the_loop(loop_thread, NAVIGATION_HOOKS)
-    assert not {"cleanup_on_unregister", "explicit_cleanup_on_unregister"} & set(labels())
 
 
 async def test_an_sse_response_close_still_tears_down_when_the_wrapper_cannot_open_its_scope(
@@ -579,8 +584,6 @@ async def test_a_sticky_child_its_auth_now_denies_is_discarded_inside_a_lifecycl
 
     for hook in ("sticky_on_sticky_unmount", "sticky_cleanup_on_unregister"):
         found = seen(hook)
-        if hook == "sticky_cleanup_on_unregister" and not found:
-            continue  # a navigation discard runs only _on_sticky_unmount
         assert found, (hook, SEEN)
         for step, thread in found:
             assert step == "lifecycle", (hook, step, SEEN)
