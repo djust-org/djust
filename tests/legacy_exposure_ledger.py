@@ -81,6 +81,12 @@ MIGRATED_STEP3: tuple[str, ...] = (
     "python/djust/tests/test_stream_only_handlers_3639.py",
     # Its last legacy case (the flat <field>_choices names) is explicit since #4177.
     "tests/unit/test_wizard_mixin.py",
+    # -- implementer 1: #4192, #4193, #4198 (add lines here) --
+    # -- end of implementer 1 --
+    # -- implementer 2: #4194, #4195 (add lines here) --
+    # -- end of implementer 2 --
+    # -- implementer 3: #4196, #4197 (add lines here) --
+    # -- end of implementer 3 --
 )
 
 #: Files #4185 moved off the legacy policy with the framework classes they
@@ -158,6 +164,8 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_held_rows_4112.py",
         # #4185: djust.V032 names an admin widget that states the legacy policy.
         "python/djust/tests/test_admin_legacy_widget_v032.py",
+        "python/djust/tests/test_interactive_http_fallback_4046.py",
+        # -- implementer 1: #4192, #4193, #4198 (delete lines only) --
         "python/djust/tests/_view_memory_scenarios.py",
         "python/djust/tests/test_adr034_delegated_rows.py",
         "python/djust/tests/test_adr037_binding_checks.py",
@@ -253,7 +261,14 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_hvr_cross_module.py",
         "python/djust/tests/test_if_branch_crossing_element_4122.py",
         "python/djust/tests/test_interactive_bindings.py",
-        "python/djust/tests/test_interactive_http_fallback_4046.py",
+        "python/djust/tests/test_legacy_async_cancel_on_disconnect.py",
+        "python/djust/tests/test_legacy_context_framework_config_2960.py",
+        "python/djust/tests/test_legacy_navigation_waiters_3236.py",
+        "python/djust/tests/test_legacy_view_keeps_no_session_state.py",
+        "python/djust/tests/test_sse_legacy_close_3232.py",
+        "python/tests/test_legacy_exposure_check_4047.py",
+        # -- end of implementer 1 --
+        # -- implementer 2: #4194, #4195 (delete lines only) --
         "python/djust/tests/test_interactive_collections_c3.py",
         "python/djust/tests/test_interactive_observations.py",
         "python/djust/tests/test_interactive_public_api_c1.py",
@@ -265,10 +280,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_lazy_provenance_followups_3428.py",
         "python/djust/tests/test_lazy_provenance_http_3252.py",
         "python/djust/tests/test_lazy_provenance_round2_3427.py",
-        "python/djust/tests/test_legacy_async_cancel_on_disconnect.py",
-        "python/djust/tests/test_legacy_context_framework_config_2960.py",
-        "python/djust/tests/test_legacy_navigation_waiters_3236.py",
-        "python/djust/tests/test_legacy_view_keeps_no_session_state.py",
         "python/djust/tests/test_lifecycle_contract_3007.py",
         "python/djust/tests/test_liveview_partial_root_parity.py",
         "python/djust/tests/test_model_form_lifecycle_adr035.py",
@@ -310,7 +321,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_shared_room_clock_ws_3005.py",
         "python/djust/tests/test_single_get_context_data_3725.py",
         "python/djust/tests/test_snapshot_persistence_after_removal.py",
-        "python/djust/tests/test_sse_legacy_close_3232.py",
         "python/djust/tests/test_sse_push_groups_3885.py",
         "python/djust/tests/test_sse_view_slots_3252.py",
         "python/djust/tests/test_state_store_4132.py",
@@ -347,6 +357,8 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_view_tracked_tasks.py",
         "python/djust/tests/test_wizard_steps_hook_3982_4011.py",
         "python/djust/tests/test_ws_event_flip_parity_1896.py",
+        # -- end of implementer 2 --
+        # -- implementer 3: #4196, #4197 (delete lines only) --
         "python/tests/payload_drivers_3774.py",
         "python/tests/test_action_state_reconnect.py",
         "python/tests/test_adr027_callable_arm_2621.py",
@@ -366,7 +378,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/tests/test_jit_list_property.py",
         "python/tests/test_jit_template_paths.py",
         "python/tests/test_lazy_slot_http_fallback_3252.py",
-        "python/tests/test_legacy_exposure_check_4047.py",
         "python/tests/test_liveview_jit_integration.py",
         "python/tests/test_liveview_request_framework_attr_1545.py",
         "python/tests/test_model_container_spelling.py",
@@ -430,6 +441,7 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "tests/unit/test_sw_advanced.py",
         "tests/unit/test_tick_skip.py",
         "tests/unit/test_view_state_v1_2_1_7.py",
+        # -- end of implementer 3 --
     }
 )
 
