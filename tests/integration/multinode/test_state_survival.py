@@ -1054,3 +1054,76 @@ def test_session_cost_per_event(db_cluster, survival):
         }
         for column, value in observed.items():
             survival.observe("cost", row, column, str(value))
+
+
+# ---------------------------------------------------------------------------
+# Save modes (#4164 item 7)
+# ---------------------------------------------------------------------------
+
+PLAIN = V + "PlainCounterView"
+#: The interval of the ``interval`` rows: longer than any test, so nothing
+#: is saved by the timer.
+MODE_INTERVALS = {"immediate": 0, "interval": 60}
+
+
+def _two_plain_events(cluster: Cluster):
+    browser = Browser(cluster)
+    status, body, _ = browser.get("A", "/plain/")
+    assert status == 200, body[:300]
+    socket_a = browser.socket("A")
+    assert kinds(socket_a.mount(PLAIN, "/plain/")) == ["mount"]
+    socket_a.event("increment")
+    socket_a.event("increment")
+    return browser, socket_a
+
+
+def _reconnect_plain(browser: Browser, socket_a, cluster: Cluster):
+    socket_b = browser.socket("B")
+    mounted = socket_b.mount(PLAIN, "/plain/", reconnect_from=socket_a)
+    probe = probe_from(mounted)
+    notices = [frame.get("code") for frame in socket_b.drain(1.0) if frame.get("type") == "error"]
+    socket_b.close()
+    assert probe["mounted_pid"] == cluster["B"].pid
+    return probe["plain_attr"], notices
+
+
+@pytest.mark.parametrize("mode", sorted(MODE_INTERVALS))
+def test_save_mode_graceful_stop(mode, survival):
+    survival.scope(rows=[mode])
+    with Cluster("db", "memory", None, save_interval=MODE_INTERVALS[mode]) as cluster:
+        browser, socket_a = _two_plain_events(cluster)
+        cluster["A"].terminate()
+        assert socket_a.recv() is None
+        count, notices = _reconnect_plain(browser, socket_a, cluster)
+    assert notices == []
+    survival.observe(
+        "savemode",
+        mode,
+        "graceful",
+        {
+            "immediate": "every change restored",
+            "interval": "every change restored: the socket's close saves",
+        }[mode]
+        if count == 2
+        else "restored %s" % count,
+    )
+
+
+@pytest.mark.parametrize("mode", sorted(MODE_INTERVALS))
+def test_save_mode_kill(mode, survival):
+    survival.scope(rows=[mode])
+    with Cluster("db", "memory", None, save_interval=MODE_INTERVALS[mode]) as cluster:
+        browser, socket_a = _two_plain_events(cluster)
+        cluster["A"].kill()
+        assert socket_a.recv() is None
+        count, notices = _reconnect_plain(browser, socket_a, cluster)
+    if count == 2 and notices == []:
+        outcome = "every change restored"
+    elif count == 0 and notices == ["state_not_restored"]:
+        outcome = (
+            "the last save, at most the interval behind; the page is told its most recent "
+            "changes could not be restored"
+        )
+    else:
+        outcome = "restored %s, notices %s" % (count, notices)
+    survival.observe("savemode", mode, "kill", outcome)

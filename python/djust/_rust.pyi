@@ -375,7 +375,7 @@ def dj_root_stamp_offsets(html: str) -> List[int]:
     without ``dj-view``, outside other views' containers (#2981, #3155)."""
     ...
 
-def diff_html(old_html: str, new_html: str) -> str:
+def diff_html(old_html: str, new_html: str, *, id_keys: bool = False) -> str:
     """
     Compute diff between two HTML strings.
 
@@ -385,6 +385,10 @@ def diff_html(old_html: str, new_html: str) -> str:
     Args:
         old_html: The old HTML string
         new_html: The new HTML string
+        id_keys: Opt in to keying every element that has no ``dj-key`` /
+            ``data-key`` by its ``id`` (#4228), for HTML rendered without
+            ``dj-if`` boundary markers. ``False`` (the default) leaves the
+            output unchanged. See ``docs/website/advanced/vdom-architecture.md``.
 
     Returns:
         JSON string containing the patches
@@ -485,6 +489,10 @@ def extract_template_variables(template: str) -> Dict[str, List[str]]:
 
 def extract_item_key_only_reads(template: str) -> Dict[str, List[str]]:
     """The ``dictsort`` / ``regroup`` key paths nothing else in the template reads (#3919)."""
+    ...
+
+def extract_printed_item_key_reads(template: str) -> Dict[str, List[str]]:
+    """The ``dictsort`` key paths something else in the template also reads (#4267)."""
     ...
 
 def extract_own_reads(template: str) -> Dict[str, List[str]]:
@@ -1188,6 +1196,16 @@ class RustLiveView:
         """
         ...
 
+    def update_state_items(self, key: str, indices: List[int], values: List[Any]) -> bool:
+        """Replace items of the list under ``key`` in place; False (nothing changed) if it cannot."""
+        ...
+    def set_loop_item_store_enabled(self, enabled: bool) -> None:
+        """Switch the index-keyed per-item loop store (#4325); on by default."""
+        ...
+    def loop_item_store_enabled(self) -> bool: ...
+    def loop_item_store_hits(self) -> int: ...
+    def loop_item_store_misses(self) -> int: ...
+    def _set_loop_item_store_sabotage(self, mode: int) -> None: ...
     def retain_state_keys(self, keys: List[str]) -> List[str]:
         """
         Drop every state key absent from ``keys`` and return the removed keys.
@@ -1410,120 +1428,6 @@ class RustLiveView:
         ...
 
 # ============================================================================
-# Rust UI Components
-# ============================================================================
-
-class RustButton:
-    """
-    Rust-backed Button component.
-
-    High-performance button with support for Bootstrap 5, Tailwind, and plain HTML.
-    """
-
-    def __init__(
-        self,
-        id: str,
-        label: str,
-        *,
-        variant: Optional[str] = None,
-        size: Optional[str] = None,
-        outline: Optional[bool] = None,
-        disabled: Optional[bool] = None,
-        full_width: Optional[bool] = None,
-        icon: Optional[str] = None,
-        on_click: Optional[str] = None,
-    ) -> None: ...
-    @property
-    def id(self) -> str: ...
-    @property
-    def label(self) -> str: ...
-    @label.setter
-    def label(self, value: str) -> None: ...
-    @property
-    def disabled(self) -> bool: ...
-    @disabled.setter
-    def disabled(self, value: bool) -> None: ...
-    def variant(self, variant: str) -> None: ...
-    def render(self) -> str: ...
-    def render_with_framework(self, framework: str) -> str: ...
-    def with_variant(self, variant: str) -> "RustButton": ...
-    def with_size(self, size: str) -> "RustButton": ...
-    def with_outline(self, outline: bool) -> "RustButton": ...
-    def with_disabled(self, disabled: bool) -> "RustButton": ...
-    def with_icon(self, icon: str) -> "RustButton": ...
-    def with_on_click(self, handler: str) -> "RustButton": ...
-
-class RustAlert:
-    """Rust-backed Alert component."""
-    def __init__(self, id: str, message: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustAvatar:
-    """Rust-backed Avatar component."""
-    def __init__(self, id: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustBadge:
-    """Rust-backed Badge component."""
-    def __init__(self, id: str, text: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustCard:
-    """Rust-backed Card component."""
-    def __init__(self, id: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustDivider:
-    """Rust-backed Divider component."""
-    def __init__(self, id: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustIcon:
-    """Rust-backed Icon component."""
-    def __init__(self, id: str, name: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustModal:
-    """Rust-backed Modal component."""
-    def __init__(self, id: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustProgress:
-    """Rust-backed Progress bar component."""
-    def __init__(self, id: str, value: float, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustRange:
-    """Rust-backed Range slider component."""
-    def __init__(self, id: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustSpinner:
-    """Rust-backed Spinner component."""
-    def __init__(self, id: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustSwitch:
-    """Rust-backed Switch/Toggle component."""
-    def __init__(self, id: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustTextArea:
-    """Rust-backed TextArea component."""
-    def __init__(self, id: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustToast:
-    """Rust-backed Toast notification component."""
-    def __init__(self, id: str, message: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-class RustTooltip:
-    """Rust-backed Tooltip component."""
-    def __init__(self, id: str, **kwargs: Any) -> None: ...
-    def render(self) -> str: ...
-
-# ============================================================================
 # Module Exports
 # ============================================================================
 
@@ -1571,6 +1475,7 @@ __all__ = [
     "fast_json_dumps",
     "extract_template_variables",
     "extract_item_key_only_reads",
+    "extract_printed_item_key_reads",
     "extract_own_reads",
     "compute_template_hash",
     "crosses_as_encoded",
@@ -1623,22 +1528,6 @@ __all__ = [
     "RenderEnv",
     # LiveView backend
     "RustLiveView",
-    # UI Components
-    "RustAlert",
-    "RustAvatar",
-    "RustBadge",
-    "RustButton",
-    "RustCard",
-    "RustDivider",
-    "RustIcon",
-    "RustModal",
-    "RustProgress",
-    "RustRange",
-    "RustSpinner",
-    "RustSwitch",
-    "RustTextArea",
-    "RustToast",
-    "RustTooltip",
     "set_active_timezone",
     "active_timezone_name",
     "set_number_format",

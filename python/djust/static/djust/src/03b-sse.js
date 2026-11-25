@@ -107,6 +107,10 @@ class LiveViewSSE {
             document.body.classList.add('dj-connected');
             document.body.classList.remove('dj-disconnected');
 
+            // Hooks that got disconnected() (this stream dropped, or the
+            // WebSocket did before this fallback opened) get reconnected().
+            notifyHooksReconnected();
+
             // Track reconnections for form recovery
             if (this._hasConnectedBefore) {
                 if (window.djust) window.djust._isReconnect = true;
@@ -180,6 +184,9 @@ class LiveViewSSE {
                 document.body.classList.add('dj-disconnected');
                 document.body.classList.remove('dj-connected');
             }
+            // The stream dropped (EventSource retries by itself) or closed:
+            // hooks get disconnected() once, as over WebSocket (#3656).
+            notifyHooksDisconnected();
         };
     }
 
@@ -612,6 +619,8 @@ class LiveViewSSE {
         // #3988: as the WebSocket mount does (reconnectStateSnapshot, 03-websocket.js).
         const snapshot = reconnectStateSnapshot(viewPath);
         if (snapshot) frame.state_snapshot = snapshot;
+        const serial = reconnectStateSerial(viewPath);
+        if (serial !== null) frame.state_serial = serial;
         return this.sendMessage(frame);
     }
 

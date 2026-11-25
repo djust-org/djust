@@ -417,12 +417,13 @@ class TestOneProducerNotSix:
         }
         # serialization.py: the def, the main path, the FK shorthand, the
         # max-depth shorthand. jit.py: the identity-only subset, and the
-        # identity rows of a QuerySet read only through its methods (#4272).
+        # identity rows of a QuerySet read only through its methods (#4272),
+        # and the same for a nested QuerySet's rows (#4326).
         # rendering.py: the serialization-raised fallback (the JIT-unavailable
         # one went with the optional extension in 2.0).
         assert callers == {
             "serialization.py": 4,
-            "jit.py": 2,
+            "jit.py": 3,
             "rendering.py": 1,
         }, (
             f"the `model_identity` call sites moved: {callers}. Six producers "

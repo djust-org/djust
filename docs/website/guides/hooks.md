@@ -84,21 +84,109 @@ window.djust.hooks = Object.assign(window.djust.hooks || {}, {
 | Callback | When Called |
 |----------|------------|
 | `mounted()` | Element first appears in the DOM. Initialize libraries, bind listeners. |
-| `updated()` | After a server re-render patches the DOM. Sync libraries with new data. |
+| `updated()` | After a server re-render that changed the hook's element or anything inside it (after a full morph: every render). Sync libraries with new data. |
+| `updateOn: 'render'` | Optional property on the hook definition: get `updated()` after every render, as before #4001. |
 | `shouldUpdate()` | Optional synchronous predicate before `updated()`; returning `false` skips that callback only. |
 | `beforeUpdate()` | Before an incremental patch batch or full HTML morph, once per update within the updated root (including scoped child updates). Save state that would be lost (scroll position, selection). |
-| `destroyed()` | Element removed from the DOM. Clean up libraries, observers, timers. |
-| `disconnected()` | WebSocket connection drops. Show offline indicators. |
-| `reconnected()` | WebSocket restored after disconnect. Refresh state. |
+| `destroyed()` | Element removed from the DOM, replaced, or its `dj-hook` removed or renamed. Clean up libraries, observers, timers. |
+| `disconnected()` | The live connection (WebSocket or SSE) drops. Show offline indicators. |
+| `reconnected()` | A connection is open again after `disconnected()`. Refresh state. |
 
-Hooks normally receive `updated()` after every update, including unrelated
-changes. For an expensive widget, `shouldUpdate()` can compare its relevant
+The exact rules for when each one runs are in [The lifecycle contract](#the-lifecycle-contract) below.
+
+After an incremental patch a hook receives `updated()` only when the patch
+changed its element (an attribute) or something inside it (text, attributes,
+children inserted, removed or moved); a patch elsewhere on the page does not
+reach it (#4001). A full morph still updates every hook. A widget that reads
+state from outside its element sets `updateOn: 'render'` on its definition to
+get `updated()` after every render. For an expensive widget, `shouldUpdate()` can compare its relevant
 inputs and return `false` when no work is needed. Compare raw attribute values
 before reading `this.values` if parsing large JSON payloads is costly. This
 opt-in does not suppress `beforeUpdate()`, removal cleanup, or connection
 callbacks. Only synchronous `false` skips the update; errors and promises
 fail open. A widget must account for every dependency it uses, including any
 changes to children or external state, before opting in.
+
+## The lifecycle contract
+
+These rules hold for every hook, under the full bundle and the default core
+bundle alike (#3656). `tests/js/hook-lifecycle-contract-3656.test.js` has a test
+for each, and `tests/playwright/test_hook_lifecycle_3656.py` checks them in a
+real browser.
+
+An **update** below is one server render applied to the page: an incremental
+patch batch, a full HTML morph (including recovery after failed patches, a
+`live_redirect` and the render that follows a reconnect), or a scoped update of
+an embedded or child view. A page swap (a navigation that loads a new page
+shell) is not an update: the old page's hooks get `destroyed()` and the new
+page's `mounted()`, with no `beforeUpdate()`.
+
+1. **One instance per element node.** A hook instance is created for one DOM
+   node and keeps it: `this.el` never changes. An update that keeps the node
+   keeps the instance (attribute and text changes, a keyed move or reorder);
+   `djust.getHook(el)` returns the same object. An update that replaces the
+   node (the tag changes, an unkeyed list is re-matched by position, a page
+   swap rebuilds it) destroys the old instance
+   and mounts a new one on the new node. Renaming `dj-hook` on the same node, or
+   removing it in a full morph, also destroys the instance (an incremental patch
+   never removes a `dj-*` attribute). To tie a hook to a row rather than to a
+   position, give the element an `id` or `dj-key`.
+2. **`mounted()` runs exactly once per instance**: on page load for the hooks
+   already in the page, and after an update for the hooks it inserted. A hook
+   mounted by an update gets no `updated()` for that same update, also when a
+   `mounted()` calls `djust.updateHooks()` itself.
+3. **`beforeUpdate()` runs once per update, before its first DOM change**, for
+   every mounted hook whose element is inside the region being updated (the
+   whole view, or the container of a scoped update). Hooks outside that region
+   get none.
+4. **`updated()` runs after the update has been applied** and djust has bound
+   the `dj-*` attributes it inserted. After an incremental patch batch it runs
+   for every hook whose element or subtree the batch changed (an attribute of
+   the element, or text, attributes or children anywhere inside it), and for
+   every hook whose definition sets `updateOn: 'render'`; a hook the batch did
+   not touch gets none, though it got `beforeUpdate()` (#4001). After a full
+   HTML morph, and on the first patch after a child or sticky view's update or
+   a reconnect, it runs for every hook whose element is still in the document,
+   including hooks outside the updated region. Use `shouldUpdate()` to skip it.
+5. **`destroyed()` runs exactly once per instance**, when its element leaves the
+   document, is replaced, or loses or renames its `dj-hook`, at the end of the
+   update that did it. An element leaving with a [`dj-remove`](declarative-ux-attrs)
+   exit transition stays mounted while the transition plays and is destroyed
+   when it is finally removed. After `destroyed()` the instance gets no more
+   callbacks and no `handleEvent()` deliveries.
+6. **Order within one update**: every `beforeUpdate()`, then the DOM change,
+   then every `destroyed()`, then `mounted()` and `updated()` in document order
+   (a parent before its children). So a replacement's `mounted()` always comes
+   after the old instance's `destroyed()`.
+7. **`dj-update="ignore"` regions** are never patched: a hook on or inside an
+   ignored element keeps its instance and node for as long as the region stays,
+   and still gets `beforeUpdate()` / `updated()` like any other hook. On a full
+   morph the ignored element's own attributes are frozen too, so put the hook
+   and its `dj-hook-value-*` on a wrapper (see [Why `dj-update="ignore"`](#why-dj-updateignore)).
+   `dj-update="append"` / `"prepend"` keep the existing children (their hooks
+   are updated) and mount hooks on the added ones. `dj-ignore-attrs` leaves the
+   listed attributes alone; `this.values` always reads the current attribute.
+8. **`disconnected()` and `reconnected()` pair up per instance**, over WebSocket
+   and SSE alike. A hook gets one `disconnected()` when the live connection
+   drops, however many reconnect attempts then fail, and one `reconnected()`
+   when a connection is open again: a WebSocket that opens (also the first
+   one, after a failed first handshake), an SSE stream that opens (also as
+   the fallback after WebSocket), or an event answered over the page-POST
+   HTTP fallback, which counts as connected. `reconnected()` never comes without a `disconnected()`
+   before it. A hook mounted while the connection is down gets `disconnected()`
+   right after `mounted()`. `reconnected()` runs as soon as the connection is
+   open, before the server's render of the view arrives; that render is an
+   ordinary update (rules 3 to 6).
+9. **A failing hook stays contained.** Every callback (including
+   `shouldUpdate()` and `handleEvent()` callbacks) runs inside `try`/`catch`; an
+   exception or a rejected promise is logged as
+   `[dj-hook] Error in Name.callback():` and the patch, the other hooks and the
+   rest of the update go on. A hook whose `mounted()` throws stays mounted, so
+   its `destroyed()` still runs and can undo a partial setup. A registry entry
+   that is not an object is reported as unregistered and skipped.
+10. **Callbacks are not awaited** (see below): `destroyed()` can run while an
+    async `mounted()` is still pending, so check for what it set up before
+    disposing of it.
 
 ### Async lifecycle callbacks (v0.8.6+)
 

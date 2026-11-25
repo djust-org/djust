@@ -909,6 +909,73 @@ fn splice_accumulating_into(
     }
 }
 
+/// Prefix of a diff key derived from an element's `id` by [`key_by_id`]. It
+/// keeps an `id`-derived key from colliding with an explicit `dj-key` of the
+/// same text (`dj-key="a"` and `id="a"` on siblings are different keys).
+pub const ID_KEY_PREFIX: &str = "#";
+
+/// OPT-IN: key every element that has no `dj-key` / `data-key` by its `id`
+/// (#4228). Call it on BOTH trees, after parsing and before [`diff`].
+///
+/// djust's own render path never calls this: the Rust template engine emits
+/// `dj-if` boundary markers, and the differ matches a conditional block by its
+/// marker, so the siblings after it keep their identity. HTML that reaches the
+/// differ WITHOUT those markers (a host that renders with another template
+/// engine, `render_template` output fed to `diff_html`) has no such anchor: an
+/// unkeyed `{% if %}` block that appears is paired by position with the
+/// sibling that used to be there, and every following sibling is rewritten
+/// (`Replace` / `SetText`), which wipes typed form input. With the siblings
+/// keyed by `id`, the same change is one `InsertChild`.
+///
+/// The rule, per element node:
+/// - an explicit non-empty `dj-key` / `data-key` (already in [`VNode::key`])
+///   always wins; the `id` is not looked at;
+/// - otherwise a non-empty `id` becomes the key [`ID_KEY_PREFIX`]`+ id`;
+/// - the direct children of a `dj-update` container (any value) and of a
+///   `dj-virtual` container are left alone: `dj-update="append"/"prepend"`
+///   rows are keyed by `id` by [`splice_accumulating_subtrees`] (#3639), and
+///   the client resolves `dj-virtual` rows by their `dj-key` attribute, which
+///   an `id`-derived key does not have. Their descendants are still keyed.
+///
+/// Two siblings sharing an `id` (invalid HTML) get the same key; the differ
+/// treats a repeated key as ambiguous (DJE-051 warning) and pairs those
+/// siblings by position, as it does without this pass. An `id` that encodes
+/// position (`row-{{ forloop.counter }}`) pairs rows by position too, which is
+/// what unkeyed diffing does anyway.
+///
+/// Idempotent: a node that already has a key is never re-keyed.
+pub fn key_by_id(root: &mut VNode) {
+    key_by_id_inner(root, false);
+}
+
+/// True when `node`'s key was derived from its `id` by [`key_by_id`]: it
+/// starts with [`ID_KEY_PREFIX`] and the node has no explicit non-empty
+/// `dj-key` / `data-key` attribute.
+pub(crate) fn has_id_derived_key(node: &VNode) -> bool {
+    let explicit = |name: &str| node.attrs.get(name).is_some_and(|v| !v.is_empty());
+    node.key
+        .as_deref()
+        .is_some_and(|k| k.starts_with(ID_KEY_PREFIX))
+        && !explicit("dj-key")
+        && !explicit("data-key")
+}
+
+fn key_by_id_inner(node: &mut VNode, exempt: bool) {
+    if node.tag.starts_with('#') {
+        return;
+    }
+    if !exempt && node.key.is_none() {
+        if let Some(id) = node.attrs.get("id").filter(|id| !id.is_empty()) {
+            node.key = Some(format!("{ID_KEY_PREFIX}{id}"));
+        }
+    }
+    let exempt_children =
+        node.attrs.contains_key("dj-update") || node.attrs.contains_key("dj-virtual");
+    for child in &mut node.children {
+        key_by_id_inner(child, exempt_children);
+    }
+}
+
 /// Cache the HTML serialization for all `dj-update="ignore"` subtrees in a VDOM tree.
 /// Call this after the first render so subsequent `to_html()` calls can skip
 /// serialization for these static sections.
@@ -1398,11 +1465,25 @@ pub enum Patch {
         node: VNode,
     },
     /// Update text content
+    ///
+    /// A text node has no `djust_id`, so `d` is normally `None` and `path`
+    /// alone would make the client walk child lists from the root. `parent_d`
+    /// and `index` (#4001) name the text node's parent element by its dj-id
+    /// and the node's position among that parent's significant children
+    /// (the same frame as `InsertChild.index`), so the client finds it with
+    /// one id lookup. Both are optional on the wire: a client resolving by
+    /// `path` ignores them, and a patch without them still resolves by `path`.
     SetText {
         path: Vec<usize>,
         #[serde(skip_serializing_if = "Option::is_none")]
         d: Option<String>,
         text: String,
+        /// The parent element's djust_id (#4001).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_d: Option<String>,
+        /// The node's index among the parent's significant children (#4001).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
     },
     /// Set an attribute
     SetAttr {
@@ -1951,14 +2032,34 @@ pub fn try_text_patches(old_vdom: &VNode, old_html: &str, new_html: &str) -> Opt
         .map(|change| {
             let d = get_text_node_at_path(old_vdom, &change.path)
                 .and_then(|node| node.djust_id.clone());
-            Patch::SetText {
-                path: change.path,
-                d,
-                text: change.new_text,
-            }
+            set_text_patch(old_vdom, change.path, d, change.new_text)
         })
         .collect();
     Some(patches)
+}
+
+/// A `SetText` for the text node at `path` under `root`, naming its parent
+/// element by dj-id plus the node's index in it (#4001), so the client finds
+/// the node with one id lookup instead of walking `path` from the root. The
+/// parent fields are left out when the parent has no dj-id (or `path` is
+/// empty); `path` still resolves the node then.
+pub fn set_text_patch(root: &VNode, path: Vec<usize>, d: Option<String>, text: String) -> Patch {
+    let (parent_d, index) = match path.split_last() {
+        Some((&last, parent_path)) => match get_text_node_at_path(root, parent_path)
+            .and_then(|parent| parent.djust_id.clone())
+        {
+            Some(pid) => (Some(pid), Some(last)),
+            None => (None, None),
+        },
+        None => (None, None),
+    };
+    Patch::SetText {
+        path,
+        d,
+        text,
+        parent_d,
+        index,
+    }
 }
 
 fn get_text_node_at_path<'a>(vdom: &'a VNode, path: &[usize]) -> Option<&'a VNode> {

@@ -32,7 +32,7 @@ row serializers (``serialize_queryset``, ``optimization/codegen.py``), the Pytho
 
 The LiveView entry is the explicit default (#4264).
 
-Refs #3911, #3910, #3912, #3918, #3919, #3920, #3862, #4264.
+Refs #3911, #3910, #3912, #3918, #3919, #3920, #3862, #4264, #4267.
 """
 
 # ruff: noqa: F811
@@ -813,3 +813,263 @@ class TestRegroupBesideDictsort4264:
         got, want = _agrees(render, self.SEPARATE, {"users": _users(shape)})
         assert want == "|cara:cara;abe:abe;bob:bob;"
         assert got == "|None:caraabebob;"
+
+
+# ---------------------------------------------------------------------------------------------
+# A method sort key the body also prints (#4267)
+# ---------------------------------------------------------------------------------------------
+#: The body prints the method, so the row carries its CALLED value where a column would be;
+#: Django's ``dictsort`` never calls a method key, compares bound methods and renders ``""``.
+PRINTED_METHOD_KEY_CASES = [
+    (
+        "method-key",
+        "{% for u in users|dictsort:'get_username' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "method-key-reversed",
+        "{% for u in users|dictsortreversed:'get_username' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "attribute-key-beside-a-printed-method",
+        "{% for u in users|dictsort:'email' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "attribute-key-reversed-beside-a-printed-method",
+        "{% for u in users|dictsortreversed:'first_name' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "missing-key-beside-a-printed-method",
+        "{% for u in users|dictsort:'nope' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "variable-key-naming-a-printed-method",
+        "{% for u in users|dictsort:key %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "a-path-through-a-printed-method",
+        "{% for u in users|dictsort:'get_username.upper' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "one-row-is-never-compared",
+        "{% for u in users|slice:':1'|dictsort:'get_username' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "two-printed-methods-sorted-by-one",
+        "{% for u in users|dictsort:'get_full_name' %}{{ u.get_username }}"
+        "{{ u.get_full_name }},{% endfor %}",
+    ),
+]
+
+
+@pytest.mark.django_db
+class TestAPrintedMethodSortKey4267:
+    """``QuerySet`` rows come from the Rust ``serialize_queryset`` (``backend``, ``liveview``)
+    and ``list[Model]`` rows on a LiveView from the generated code (``optimization/codegen.py``),
+    so the two shapes are the two serializers; ``render_template`` takes live handles."""
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    @pytest.mark.parametrize("render", ENTRIES)
+    @pytest.mark.parametrize(
+        "name,source", PRINTED_METHOD_KEY_CASES, ids=[c[0] for c in PRINTED_METHOD_KEY_CASES]
+    )
+    def test_renders_like_django(self, world, render, shape, name, source) -> None:
+        _pk_order_is_not_any_sort_order()
+        context = {"users": _users(shape), "key": "get_username"}
+        got, want = _agrees(render, source, context)
+        assert got == want, (name, shape)
+
+    @pytest.mark.parametrize("render", ENTRIES)
+    def test_the_controls_are_what_django_renders(self, world, render) -> None:
+        """Django really renders the method key empty, the attribute key sorted and one row."""
+        context = {"users": _users("QuerySet"), "key": "get_username"}
+        cases = dict(PRINTED_METHOD_KEY_CASES)
+        assert _django_render(cases["method-key"], context) == ""
+        assert _django_render(cases["method-key-reversed"], context) == ""
+        assert _django_render(cases["missing-key-beside-a-printed-method"], context) == ""
+        assert _django_render(cases["attribute-key-beside-a-printed-method"], context) == (
+            "bob,cara,abe,"
+        )
+        assert _django_render(cases["one-row-is-never-compared"], context) == "cara,"
+
+    @pytest.mark.parametrize("render", ENTRIES)
+    def test_a_nested_list_sorted_by_a_printed_method(self, world, render) -> None:
+        source = (
+            "{% for g in groups %}[{% for u in g.user_set.all|dictsort:'get_username' %}"
+            "{{ u.get_username }},{% endfor %}]{% endfor %}"
+        )
+        got, want = _agrees(render, source, {"groups": Group.objects.order_by("pk")})
+        assert got == want == "[][cara,]"
+
+    @pytest.mark.parametrize("serializer", ["rust", "codegen"])
+    def test_both_serializers_rows_are_marked_alike(self, world, serializer) -> None:
+        """The marking is one rule over any producer's rows (#1646): the Rust serializer's and
+        the codegen's rows come out with the same keys, in the same order, the method key a
+        ``CalledName`` and nothing added."""
+        from djust.mixins.jit import mark_called_sort_keys
+        from djust.optimization.codegen import compile_serializer, generate_serializer_code
+        from djust.serialization import CalledName
+
+        source = dict(PRINTED_METHOD_KEY_CASES)["two-printed-methods-sorted-by-one"]
+        paths = ["get_full_name", "get_username"]
+        users = list(_users("QuerySet"))
+        if serializer == "rust":
+            rows = _rust.serialize_queryset(users, paths)
+        else:
+            code = generate_serializer_code("User", paths, "ser_mark_4267")
+            rows = [compile_serializer(code, "ser_mark_4267")(u) for u in users]
+        before = [list(row) for row in rows]
+        marked = mark_called_sort_keys(rows, User, source, "users")
+        assert [list(row) for row in marked] == before
+        for row in marked:
+            kinds = {key: type(key) for key in row}
+            assert kinds == {"get_full_name": CalledName, "get_username": str}
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "{% for u in users %}{{ u.get_username }}{% endfor %}",
+            "{% for u in users|dictsort:'username' %}{{ u.get_username }}{% endfor %}",
+            "{% for u in users|dictsort:'get_username' %}{{ u.pk }}{% endfor %}",
+        ],
+        ids=["no-sort", "a-column-key", "a-key-only-method"],
+    )
+    def test_other_templates_mark_nothing(self, world, source) -> None:
+        """No printed method sort key, no marking: the rows are returned as they came."""
+        from djust.mixins.jit import called_sort_key_paths
+
+        assert called_sort_key_paths(User, source, "users") == frozenset()
+
+    def test_the_marked_paths(self) -> None:
+        from djust.mixins.jit import called_sort_key_paths
+
+        source = (
+            "{% for u in users|dictsort:'get_username.upper' %}{{ u.get_username }}{% endfor %}"
+            "{% for u in users|dictsort:key %}{{ u.get_full_name }}{% endfor %}"
+            "{% for g in groups %}{% for u in g.user_set.all|dictsort:'get_full_name' %}"
+            "{{ u.get_full_name }}{% endfor %}{% endfor %}"
+        )
+        assert called_sort_key_paths(User, source, "users", ["key"], {"key": "get_full_name"}) == {
+            "get_username",
+            "get_full_name",
+        }
+        assert called_sort_key_paths(Group, source, "groups") == {"user_set.all.get_full_name"}
+
+    @pytest.mark.parametrize("serializer", ["rust", "codegen"])
+    @pytest.mark.parametrize(
+        "name,source",
+        [c for c in PRINTED_METHOD_KEY_CASES if c[0] != "one-row-is-never-compared"],
+        ids=[c[0] for c in PRINTED_METHOD_KEY_CASES if c[0] != "one-row-is-never-compared"],
+    )
+    def test_each_serializers_rows_render_like_django(
+        self, world, serializer, name, source
+    ) -> None:
+        """The two paths taken apart from the entries: each one's own rows, marked, rendered."""
+        from djust.mixins.jit import mark_called_sort_keys
+        from djust.optimization.codegen import compile_serializer, generate_serializer_code
+
+        paths = ["email", "first_name", "get_full_name", "get_username"]
+        users = list(_users("QuerySet"))
+        if serializer == "rust":
+            rows = _rust.serialize_queryset(users, paths)
+        else:
+            code = generate_serializer_code("User", paths, "ser_rows_4267")
+            rows = [compile_serializer(code, "ser_rows_4267")(u) for u in users]
+        context = {"key": "get_username"}
+        rows = mark_called_sort_keys(rows, User, source, "users", ["key"], context)
+        got = _clean(_rust.render_template(source, {**context, "users": rows}))
+        want = _django_render(source, {**context, "users": users})
+        assert got == want, name
+
+    def test_gate_off_unmarked_rows_sort_by_the_called_value(self, world) -> None:
+        """The marker is what does it: the same rows unmarked sort by the method's text."""
+        from djust.mixins.jit import mark_called_sort_keys
+
+        source = dict(PRINTED_METHOD_KEY_CASES)["method-key"]
+        rows = _rust.serialize_queryset(list(_users("QuerySet")), ["get_username"])
+        assert _rust.render_template(source, {"users": rows}) == "abe,bob,cara,"
+        mark_called_sort_keys(rows, User, source, "users")
+        assert _rust.render_template(source, {"users": rows}) == ""
+
+    def test_a_plain_str_key_is_data(self) -> None:
+        """Only the ``CalledName`` TYPE is the marker: a plain key of the same name sorts."""
+        rows = [{"get_username": "b"}, {"get_username": "a"}]
+        source = "{% for r in rows|dictsort:'get_username' %}{{ r.get_username }},{% endfor %}"
+        got, want = _agrees(_raw_render, source, {"rows": rows})
+        assert got == want == "a,b,"
+
+
+#: Sinks that print a row's keys or the row itself (#4267 review): a marked row must print
+#: exactly what the same row unmarked prints.
+ROW_KEY_SINKS = [
+    ("items", "{% for u in users %}{% for k, v in u.items %}[{{ k }}]{% endfor %};{% endfor %}"),
+    ("keys", "{% for u in users %}{{ u.keys }};{% endfor %}"),
+    ("pprint", "{{ users|pprint }}"),
+    ("first-whole", "{% with f=users|first %}{{ f }}{% endwith %}"),
+]
+
+
+@pytest.mark.django_db
+class TestTheMarkerNeverPrints4267:
+    SORT = "{% for u in users|dictsort:'get_username' %}{{ u.get_username }},{% endfor %}|"
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    @pytest.mark.parametrize("render", ENTRIES)
+    @pytest.mark.parametrize("name,sink", ROW_KEY_SINKS, ids=[c[0] for c in ROW_KEY_SINKS])
+    def test_a_marked_row_prints_as_the_unmarked_row(
+        self, world, render, shape, name, sink, monkeypatch
+    ) -> None:
+        from djust.mixins import jit
+
+        source = self.SORT + sink
+        context = {"users": _users(shape)}
+        got = _clean(render(source, dict(context)))
+        monkeypatch.setattr(jit, "called_sort_key_paths", lambda *a, **k: frozenset())
+        unmarked = _clean(render(source, dict(context)))
+        assert "__djust" not in got
+        sorted_part, printed = got.split("|", 1)
+        assert sorted_part == _django_render(self.SORT, dict(context)).rstrip("|") == ""
+        assert printed == unmarked.split("|", 1)[1], name
+
+
+@pytest.mark.django_db
+class TestTheMarkerSurvivesStoredState4267:
+    """A state backend keeps the view as ``serialize_msgpack`` bytes and hands back a clone
+    (InMemory and Redis alike). A render that reuses stored rows must still sort as Django."""
+
+    SOURCE = "{% for u in users|dictsort:'get_username' %}{{ u.get_username }},{% endfor %}"
+
+    def _view(self):
+        from djust._rust import RustLiveView
+        from djust.mixins.jit import mark_called_sort_keys
+
+        rows = _rust.serialize_queryset(list(_users("QuerySet")), ["get_username"])
+        view = RustLiveView(self.SOURCE)
+        view.set_state("users", mark_called_sort_keys(rows, User, self.SOURCE, "users"))
+        return view
+
+    def test_a_msgpack_round_trip_keeps_the_method_key(self, world) -> None:
+        from djust._rust import RustLiveView
+
+        view = self._view()
+        assert view.render() == _django_render(self.SOURCE, {"users": _users("QuerySet")}) == ""
+        clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+        assert clone.render() == ""
+
+    def test_the_in_memory_backend_clone_keeps_the_method_key(self, world) -> None:
+        from djust.state_backends.memory import InMemoryStateBackend
+
+        backend = InMemoryStateBackend()
+        backend.set("k-4267", self._view())
+        stored = backend.get("k-4267")
+        assert stored is not None
+        assert stored[0].render() == ""
+
+    def test_gate_off_an_untagged_clone_sorts(self, world) -> None:
+        """Non-vacuity: the same rows stored unmarked sort by the called value."""
+        from djust._rust import RustLiveView
+
+        rows = _rust.serialize_queryset(list(_users("QuerySet")), ["get_username"])
+        view = RustLiveView(self.SOURCE)
+        view.set_state("users", rows)
+        clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+        assert clone.render() == "abe,bob,cara,"

@@ -308,17 +308,16 @@ _COMPONENT_COUNTER_LOCK = threading.Lock()
 
 class Component(TemplateMutatorGuard, ABC):
     """
-    Base class for stateless presentation components with automatic performance optimization.
+    Base class for stateless presentation components.
 
-    The Component class implements a performance waterfall that automatically selects
-    the fastest available rendering method:
+    A component has ONE renderer (#4002), the first of these it defines:
 
-    1. Pure Rust implementation (if available) → ~1μs per render (fastest)
-    2. template with Rust rendering → ~5-10μs per render (fast)
-    3. _render_custom() Python method → ~50-100μs per render (flexible)
-
-    This unified design allows components to start simple (Python) and be optimized
-    incrementally (hybrid → Rust) without changing the API.
+    1. ``_rust_impl_class`` -- a native class built from the constructor kwargs whose
+       ``render()`` returns the HTML. No class in djust uses it any more (the Rust
+       simple-component crate was removed in #4002); it stays for a project's own.
+    2. ``template`` -- an inline template rendered through the template engine.
+    3. ``_render_custom()`` -- Python that returns the HTML. The ``djust.components.ui``
+       simple components use this (a few microseconds per render).
 
     Usage - Hybrid (Recommended):
         class Badge(Component):
@@ -349,30 +348,8 @@ class Component(TemplateMutatorGuard, ABC):
                 else:
                     return self._render_plain()
 
-    Usage - Rust Optimized (Maximum Performance):
-        from djust._rust import RustBadge
-
-        class Badge(Component):
-            # Link to Rust implementation (used if available)
-            _rust_impl_class = RustBadge
-
-            # Fallback to hybrid
-            template = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
-
-            def __init__(self, text: str, variant: str = "primary"):
-                super().__init__(text=text, variant=variant)
-                self.text = text
-                self.variant = variant
-
-    Key Features:
-        - Automatic performance optimization
-        - Graceful degradation (Rust → Hybrid → Python)
-        - Single consistent API
-        - Zero overhead (no runtime detection)
-        - Framework-agnostic
-
     Attributes:
-        _rust_impl_class: Optional Rust implementation class
+        _rust_impl_class: Optional native implementation class (none in djust itself)
         template: Optional template for hybrid rendering
     """
 
@@ -516,13 +493,14 @@ class Component(TemplateMutatorGuard, ABC):
                 counter = Component._component_counter
             self._component_key = f"{self.__class__.__name__}_{counter}"
 
-        # Try to create Rust instance if implementation exists
-        self._create_rust_instance(**kwargs)
+        # Store kwargs as attributes: what ``_render_custom`` / ``get_context_data`` read, and
+        # what a native instance's render falls back to when a later rebuild fails. Set before
+        # the native instance exists, so the write-through below does not rebuild it per key.
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
-        # Store kwargs as attributes for Python/hybrid rendering
-        if self._rust_instance is None:
-            for key, value in kwargs.items():
-                setattr(self, key, value)
+        # Create the native instance if the class names an implementation
+        self._create_rust_instance(**kwargs)
 
     def event_attrs(self, event: Optional[str], trigger: str = "click", **params: Any) -> str:
         """The attributes an element emits an event with (ADR-033 D4/D5).
@@ -629,7 +607,7 @@ class Component(TemplateMutatorGuard, ABC):
             current_props = {}
             for key, value in self.__dict__.items():
                 # A key that is not a ``str`` is not an attribute name (#4143).
-                if type(key) is str and not key.startswith("_"):
+                if type(key) is str and not key.startswith("_") and key != "state":
                     current_props[key] = value
 
             # CRITICAL: Include the 'id' property value (it's a property, not in __dict__)
@@ -686,12 +664,8 @@ class Component(TemplateMutatorGuard, ABC):
 
     def render(self) -> str:
         """
-        Render component using fastest available method.
-
-        Performance waterfall:
-        1. Rust implementation (fastest: ~1μs)
-        2. template with Rust rendering (fast: ~5-10μs)
-        3. _render_custom() override (flexible: ~50-100μs)
+        Render the component through its renderer (see the class docstring, #4002):
+        a native instance, else ``template``, else ``_render_custom()``.
 
         Returns:
             HTML string marked as safe for Django templates
@@ -703,7 +677,7 @@ class Component(TemplateMutatorGuard, ABC):
             When writing template, avoid using {% elif %} due to a known bug
             in the Rust template engine. Use separate {% if %} blocks instead.
         """
-        # 1. Try pure Rust implementation (fastest)
+        # 1. A native implementation (none in djust itself since #4002)
         if self._rust_instance is not None:
             return cast(str, mark_safe(self._rust_instance.render()))
 
@@ -788,7 +762,7 @@ class Component(TemplateMutatorGuard, ABC):
         """
         raise NotImplementedError(
             f"{self.__class__.__name__} must define either:\n"
-            f"  - _rust_impl_class (for pure Rust)\n"
+            f"  - _rust_impl_class (a native implementation)\n"
             f"  - template (for hybrid rendering)\n"
             f"  - _render_custom() method (for custom Python)"
         )

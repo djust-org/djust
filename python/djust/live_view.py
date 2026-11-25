@@ -825,6 +825,16 @@ class LiveView(
         self._djust_auto_saved_url: Any = None
         self._djust_auto_url_changed = False
         self._djust_restore_changed_view = True
+        # #4164: the turn serial of the state the page is shown and of the
+        # stored one, the reconnect's "not restored" flag, the tab's flush
+        # group (named at the mount) and whether it was joined, and a fallback
+        # request's claim waiting for a changing save.
+        self._djust_turn_serial = 0
+        self._djust_saved_serial = 0
+        self._djust_not_restored = False
+        self._djust_flush_group: Any = None
+        self._djust_flush_group_joined = False
+        self._djust_auto_pending_claim: Any = None
         self._framework_attrs: frozenset = frozenset(self.__dict__.keys())
 
         # v0.8.0 — @action server-action state. Initialized AFTER
@@ -1042,12 +1052,12 @@ class LiveView(
     def save_state(self) -> None:
         """Save this view's state before the current turn's reply.
 
-        With ``DJUST_STATE_SAVE_INTERVAL`` (or the view's
-        ``state_save_interval``) set, a WebSocket or SSE turn's state may be
+        With ``DJUST_STATE_SAVE_INTERVAL`` (2 seconds by default) or the
+        view's ``state_save_interval`` above 0, a WebSocket or SSE turn's state may be
         written up to that many seconds after its reply. Call this from a
         handler, a background callback or ``handle_tick()`` when this turn's
         state must be in storage before the page shows it (a step another
-        system relies on, say). With no interval set every turn is saved
+        system relies on, say). With the interval at 0 every turn is saved
         before its reply anyway, and this changes nothing. The same as
         ``@event_handler(save=True)`` for one turn.
         """

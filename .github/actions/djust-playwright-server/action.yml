@@ -78,9 +78,9 @@ runs:
       shell: bash
       # Readiness poll (#1943). The fixed 30s `page.goto` deadline in the
       # playwright tests intermittently red-barred the BLOCKING browser-smoke
-      # gate (#1869) on cold-cache CI runs: when the `djust_components` Rust
-      # crate compiles from scratch the first request to the demo route is
-      # slow, so the server wasn't ready when playwright connected.
+      # gate (#1869) on cold-cache CI runs: when the Rust extension compiled
+      # from scratch the first request to the demo route was slow, so the
+      # server wasn't ready when playwright connected.
       #
       # Two changes remove that cold-start race while keeping the gate's signal
       # intact (a genuinely-broken server still fails LOUD — see below):

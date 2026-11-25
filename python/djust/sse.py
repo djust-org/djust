@@ -494,7 +494,14 @@ class SSESession:
     def __init__(self, session_id: str):
         self.session_id = session_id
         self.view_instance: Optional[Any] = None
-        self.queue: asyncio.Queue = asyncio.Queue()
+        from ._outbound_buffer import ByteCountingQueue, outbound_buffer_limit
+
+        self.queue: ByteCountingQueue = ByteCountingQueue()
+        #: Bytes of frames that may wait for a slow reader before the stream is
+        #: ended so the client reconnects and resyncs (#3658). 0 = no limit.
+        self._outbound_limit = outbound_buffer_limit()
+        #: Set when the limit ended the stream: frames after it are dropped.
+        self._outbound_overflowed = False
         # Set once shutdown() queued the close sentinel: the stream reads
         # nothing after it, so later pushes are dropped (#3232).
         self._closed_sentinel_queued = False
@@ -513,6 +520,9 @@ class SSESession:
         # Presence untracks scheduled by shutdown() (#3254): held so a task is
         # not garbage-collected before it finishes, dropped when it does.
         self._presence_untrack_tasks: set[asyncio.Task] = set()
+        # Views whose presence the stream's close already untracked (before its
+        # flush, #4164): ``shutdown`` does not untrack them again.
+        self._presence_untracked: set[int] = set()
         # In-flight ``disconnected()`` hook runs (#3007), held until they finish.
         self._disconnected_tasks: set[asyncio.Task] = set()
         # The views mounted beside the page view (#3252), by ``target_id``. Empty
@@ -972,6 +982,8 @@ class SSESession:
         """
         from .multiloop import is_multi_loop
 
+        if self._outbound_overflowed and msg is not None:
+            return  # the stream is ending; the client resyncs on reconnect (#3658)
         loop = self._loop
         if loop is not None and is_multi_loop() and loop.is_running():
             try:
@@ -984,7 +996,12 @@ class SSESession:
                 # in full too (#4307).
                 if isinstance(msg, dict) and "parameter_contracts" in msg:
                     self._parameter_contract_sent = None
-                loop.call_soon_threadsafe(self.queue.put_nowait, msg)
+                if msg is None or not self._outbound_limit:
+                    loop.call_soon_threadsafe(self.queue.put_nowait, msg)
+                else:
+                    # Measured here, counted on the session's loop (#3658).
+                    size = len(json.dumps(msg, cls=DjangoJSONEncoder).encode("utf-8"))
+                    loop.call_soon_threadsafe(self._put_measured, msg, size)
                 return
         sent = None
         if msg is not None:
@@ -993,9 +1010,53 @@ class SSESession:
             from ._parameter_metadata import elide_sent_manifest
 
             msg, sent = elide_sent_manifest(self, msg)
+            if self._outbound_limit and not self.queue.empty():
+                # The stream is behind (#3658): count what waits, in bytes.
+                size = len(json.dumps(msg, cls=DjangoJSONEncoder).encode("utf-8"))
+                if self._put_measured(msg, size) and sent is not None:
+                    self._parameter_contract_sent = sent
+                return
         self.queue.put_nowait(msg)
         if sent is not None:
             self._parameter_contract_sent = sent
+
+    def _put_measured(self, msg: Dict[str, Any], size: int) -> bool:
+        """Queue *msg* counting its *size*, or end the stream past the limit (#3658).
+
+        Runs on the session's loop. The head frame (the stream's next write)
+        is not counted, so one large frame alone always goes. ``False`` when
+        the frame was dropped.
+        """
+        if self._outbound_overflowed:
+            return False
+        if not self.queue.empty():
+            pending = self.queue.backlog_bytes + size
+            if pending > self._outbound_limit:
+                self._end_slow_stream(pending)
+                return False
+        self.queue.put_sized(msg, size)
+        return True
+
+    def _end_slow_stream(self, pending: int) -> None:
+        """The client is not reading: end its stream so it reconnects (#3658).
+
+        The waiting frames are dropped and the close sentinel takes their
+        place, so the stream ends as soon as it finishes the frame it is
+        writing. ``EventSource`` then reconnects with the same id, and that
+        mount is a ``reconnect`` turn that resynchronises the page; the
+        stream's close runs the usual flush, linger and shutdown. Later
+        pushes are dropped, as after ``shutdown()``.
+        """
+        logger.warning(
+            "SSE client is not reading fast enough: %s bytes pending over the %s-byte "
+            "outbound limit; ending the stream of session %s so it reconnects and resyncs",
+            pending,
+            self._outbound_limit,
+            sanitize_for_log(self.session_id),
+        )
+        self._outbound_overflowed = True
+        self.queue.clear()
+        self.queue.put_nowait(None)
 
     def shutdown(self) -> None:
         """Signal the SSE stream generator to close the connection.
@@ -1029,6 +1090,17 @@ class SSESession:
             self.runtime.view_instance = None
         self._put(None)  # None is the sentinel value
         self._closed_sentinel_queued = True
+
+    def untrack_presence_at_close(self) -> None:
+        """The stream closed: untrack every view's presence now, before the
+        close's state flush (#4164), which can wait for the turn locks and a
+        save; ``shutdown`` then skips them."""
+        views = [self.view_instance, *(slot.view for slot in list(self._slots.values()))]
+        for view in views:
+            if view is not None:
+                self._untrack_presence(view)
+                # Held by this session until ``shutdown``: the id stays its own.
+                self._presence_untracked.add(id(view))
 
     def _shutdown_slot(self, slot: Any) -> None:
         """The close of one view mounted beside the page view: ``shutdown``'s steps for it."""
@@ -1089,7 +1161,7 @@ class SSESession:
         session that a same-owner reconnect has replaced under its id, or that
         a reconnect is still mounting to, is not untracked.
         """
-        if not getattr(view, "_presence_tracked", False):
+        if not getattr(view, "_presence_tracked", False) or id(view) in self._presence_untracked:
             return
         from .presence import PresenceManager
 
@@ -1620,13 +1692,17 @@ class DjustSSEStreamView(View):
                 # "mount"/"error"/"navigate" pushed synchronously above). When the
                 # mount failed, shutdown() already queued the sentinel, so this
                 # delivers the error/navigate even though session.active is False.
+                ended = False
                 while not session.queue.empty():
                     msg = session.queue.get_nowait()
                     if msg is None:
+                        # The sentinel ends the stream even while the session
+                        # is active (the outbound limit's close, #3658).
+                        ended = True
                         break
                     yield f"data: {json.dumps(msg, cls=DjangoJSONEncoder)}\n\n"
 
-                while session.active:
+                while session.active and not ended:
                     try:
                         msg = await asyncio.wait_for(
                             session.queue.get(), timeout=_KEEPALIVE_TIMEOUT
@@ -1642,6 +1718,9 @@ class DjustSSEStreamView(View):
                 # Closing: another owner may now take this id (#3164).
                 session._stream_closed = True
                 if mounted:
+                    # Presence first: the flush below can wait for the turn
+                    # locks and a save, and peers should see the leave now.
+                    session.untrack_presence_at_close()
                     # Saved now, not after the linger: a reconnect in the
                     # linger reads the store (design: save frequency).
                     await _flush_session_states(session, "disconnect")

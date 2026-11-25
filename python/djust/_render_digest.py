@@ -118,8 +118,10 @@ _DROPS_FIRST_NEWLINE = frozenset(("pre", "textarea", "listing"))
 #: Elements whose content is text up to their own end tag.
 _RAW_TEXT = frozenset(("script", "style", "textarea", "title"))
 
-#: Keys of a patch that name a node by its generated id.
-_ID_HINTS = ("d", "ref_d", "child_d")
+#: Keys of a patch that name a node by its generated id. ``parent_d`` is a
+#: ``SetText``'s parent (#4001); its ``index`` counts within that parent and is
+#: dropped with it (see :func:`path_addressed`).
+_ID_HINTS = ("d", "ref_d", "child_d", "parent_d")
 
 
 def digest_binding(view: Any, request: Any) -> tuple[str, ...] | None:
@@ -529,6 +531,12 @@ def path_addressed(patches: list[Any]) -> list[Any]:
     out = []
     for patch in patches:
         if isinstance(patch, dict) and any(key in patch for key in _ID_HINTS):
-            patch = {key: value for key, value in patch.items() if key not in _ID_HINTS}
+            # A SetText's index belongs to its parent_d (#4001); other patches'
+            # index is a placement and stays.
+            dropped = _ID_HINTS + ("index",) if patch.get("type") == "SetText" else _ID_HINTS
+            patch = {key: value for key, value in patch.items() if key not in dropped}
+        if isinstance(patch, dict) and isinstance(patch.get("patches"), list):
+            # A VirtualUpdate's inner patches carry the same hints (#4001).
+            patch = {**patch, "patches": path_addressed(patch["patches"])}
         out.append(patch)
     return out

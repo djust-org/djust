@@ -8,5 +8,8 @@ from ._builtin import DjangoBuiltinTagHandler
 
 @register("now")
 class NowTagHandler(DjangoBuiltinTagHandler):
+    # Django's node binds only its `as <name>` target (#4124).
+    BINDS_ONLY_AS_VAR = True
+
     def __init__(self) -> None:
         super().__init__("now", now)

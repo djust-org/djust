@@ -226,6 +226,11 @@ class TestEveryOperandSiteRoutesThroughTheOneHelper:
         )
         src = parser.read_text(encoding="utf-8")
         body = src.split("\nfn extract_from_expression(", 1)[1].split("\nfn ", 1)[0]
+        # Since #3862 the split lives in `condition_tokens`, which
+        # extract_from_expression calls; follow the call so the pin still
+        # finds the set instead of reporting it missing.
+        if "condition_tokens(" in body:
+            body = src.split("\nfn condition_tokens(", 1)[1].split("\nfn ", 1)[0]
         # The separator SET is the string literal handed to `.contains(c)`.
         # Match only that literal: the same line carries `|c: char|` (closure
         # syntax) and `||` (logical or), and a naive substring check on the

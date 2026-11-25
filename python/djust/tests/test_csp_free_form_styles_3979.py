@@ -309,33 +309,17 @@ def _ui_progress(framework: str, **kw: Any) -> Callable[[], str]:
     return render
 
 
-def _progress_simple(path: str) -> Callable[[], str]:
-    def render() -> str:
-        from djust.components.ui.progress_simple import Progress
+def _progress_simple() -> str:
+    """``ui.Progress`` has one renderer since #4002: ``ProgressComponent``'s (slice 3)."""
+    from djust.components.ui.progress_simple import Progress
 
-        p = Progress(value=40, height="12px")
-        if path == "python":
-            return p._render_custom()
-        if path == "template":
-            p._rust_instance = None
-            return str(p.render())
-        assert p._rust_instance is not None
-        return str(p.render())
-
-    return render
+    return str(Progress(value=40, height="12px").render())
 
 
-def _avatar_simple(rust: bool) -> Callable[[], str]:
-    def render() -> str:
-        from djust.components.ui.avatar_simple import Avatar
+def _avatar_simple() -> str:
+    from djust.components.ui.avatar_simple import Avatar
 
-        a = Avatar(initials="AB", size="lg")
-        if rust:
-            assert a._rust_instance is not None
-            return str(a.render())
-        return a._render_bootstrap()
-
-    return render
+    return str(Avatar(initials="AB", size="lg").render())
 
 
 def _navbar() -> str:
@@ -478,32 +462,14 @@ SITES: dict[
         [("height", "12px")],
         {"both": ["dj-progress-w-40"]},
     ),
-    "progress_simple python": (
-        _progress_simple("python"),
-        ['style="height: 12px"', 'style="width: 40.0%"'],
+    "progress_simple": (
+        _progress_simple,
+        ['style="height: 12px;"', 'style="width: 40%"'],
         [("height", "12px")],
         {"both": ["dj-progress-w-40"]},
     ),
-    "progress_simple template": (
-        _progress_simple("template"),
-        ['style="height: 12px"', 'style="width: 40.0%"'],
-        [("height", "12px")],
-        {"both": ["dj-progress-w-40"]},
-    ),
-    "RustProgress": (
-        _progress_simple("rust"),
-        ['style="height: 12px"', 'style="width: 40.0%"'],
-        [("height", "12px")],
-        {"both": ["dj-progress-w-40"]},
-    ),
-    "avatar_simple python": (
-        _avatar_simple(False),
-        ['style="width: 4rem; height: 4rem;"'],
-        [("width", "4rem"), ("height", "4rem")],
-        {},
-    ),
-    "RustAvatar": (
-        _avatar_simple(True),
+    "avatar_simple": (
+        _avatar_simple,
         ['style="width: 4rem; height: 4rem;"'],
         [("width", "4rem"), ("height", "4rem")],
         {},

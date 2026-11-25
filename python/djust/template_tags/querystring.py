@@ -38,5 +38,8 @@ from ._builtin import DjangoBuiltinTagHandler
 class QuerystringTagHandler(DjangoBuiltinTagHandler):
     """``{% querystring %}`` — ``defaulttags.querystring``'s compile function, Django's."""
 
+    # Django's node binds only its `as <name>` target (#4124).
+    BINDS_ONLY_AS_VAR = True
+
     def __init__(self) -> None:
         super().__init__("querystring", _defaulttags.tags["querystring"])

@@ -712,8 +712,11 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             // null rootEl is correct for the root view.
             // `_applyIf` is set by the page-POST fallback for a patch answer
             // (11-event-handler.js): a function, so never from the wire.
+            // #4001: the patches report what they changed, so the rescans
+            // after them cover the change, not the page.
+            const changes = {};
             const success = await applyPatches(data.patches, null,
-                typeof data._applyIf === 'function' ? data._applyIf : null);
+                typeof data._applyIf === 'function' ? data._applyIf : null, changes);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.
@@ -768,7 +771,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             if (!window.djust._mountReady) window.djust._mountReady = true;
 
             _refreshRenderParameterContracts(transport, data);
-            reinitAfterDOMUpdate();
+            reinitAfterDOMUpdate(undefined, changes);
         }
         // Apply full HTML update (fallback)
         else if (data.html) {
@@ -1466,6 +1469,12 @@ function storeSignedSnapshot(data, primaryViewPath) {
     );
     if (!eligible || typeof data.view !== 'string' || !data.view ||
         ['__proto__', 'constructor', 'prototype'].includes(data.view)) return;
+    // #4164: the turn serial of the state this frame shows. A reconnect sends
+    // it back, so the server can tell when it restored an older state.
+    if (!revocation && Number.isInteger(data.state_serial) && data.state_serial >= 0) {
+        if (!window.djust._stateSerial) window.djust._stateSerial = Object.create(null);
+        window.djust._stateSerial[data.view] = data.state_serial;
+    }
     const token = data.state_snapshot_signed;
     // Cache invalidation sentinel, not a comparison of authentication secrets.
     // eslint-disable-next-line security/detect-possible-timing-attacks
@@ -1487,6 +1496,18 @@ function storeSignedSnapshot(data, primaryViewPath) {
 // echoed verbatim; the server validates its signature, age and binding, and
 // ignores one it does not accept. Shared by the WebSocket and SSE mounts (#1646).
 // Only a reconnect sends it: a first mount has no earlier state to bring back.
+// #4164: the turn serial a reconnecting page view sends with its mount frame
+// (the last one a frame showed it), or null on a first mount.
+function reconnectStateSerial(viewPath) {
+    if (!(window.djust && window.djust._isReconnect)) return null;
+    const serials = window.djust._stateSerial;
+    if (!serials || typeof viewPath !== 'string' || !viewPath ||
+        !Object.prototype.hasOwnProperty.call(serials, viewPath)) return null;
+    // eslint-disable-next-line security/detect-object-injection
+    const serial = serials[viewPath];
+    return Number.isInteger(serial) && serial > 0 ? serial : null;
+}
+
 function reconnectStateSnapshot(viewPath) {
     if (!(window.djust && window.djust._isReconnect)) return null;
     const bag = window.djust._clientState;
@@ -1685,13 +1706,17 @@ class LiveViewWebSocket {
             document.body.style.removeProperty('--dj-reconnect-attempt');
             this._removeReconnectBanner();
 
+            // Hooks that got disconnected() get reconnected() on ANY open, the
+            // first one included: a failed first handshake or a socket that
+            // dropped before a navigation reset connectedAt still left them
+            // offline (#3656). A no-op for hooks that are not offline.
+            notifyHooksReconnected();
+
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
                 // Set reconnect flag for dj-auto-recover
                 if (window.djust) window.djust._isReconnect = true;
-                // Notify hooks of reconnection
-                notifyHooksReconnected();
                 // Public CustomEvent consumed by dj-track-static (v0.6.0)
                 // and available to application code that wants to react
                 // to reconnect without patching internal WS state.
@@ -2698,6 +2723,8 @@ class LiveViewWebSocket {
         // Never for a view mounted beside it: the server ships no token for one.
         const snapshot = options.primary ? reconnectStateSnapshot(viewPath) : null;
         if (snapshot) frame.state_snapshot = snapshot;
+        const serial = options.primary ? reconnectStateSerial(viewPath) : null;
+        if (serial !== null) frame.state_serial = serial;
         this.sendMessage(frame);
         return true;
     }
@@ -3138,6 +3165,10 @@ class LiveViewSSE {
             document.body.classList.add('dj-connected');
             document.body.classList.remove('dj-disconnected');
 
+            // Hooks that got disconnected() (this stream dropped, or the
+            // WebSocket did before this fallback opened) get reconnected().
+            notifyHooksReconnected();
+
             // Track reconnections for form recovery
             if (this._hasConnectedBefore) {
                 if (window.djust) window.djust._isReconnect = true;
@@ -3211,6 +3242,9 @@ class LiveViewSSE {
                 document.body.classList.add('dj-disconnected');
                 document.body.classList.remove('dj-connected');
             }
+            // The stream dropped (EventSource retries by itself) or closed:
+            // hooks get disconnected() once, as over WebSocket (#3656).
+            notifyHooksDisconnected();
         };
     }
 
@@ -3643,6 +3677,8 @@ class LiveViewSSE {
         // #3988: as the WebSocket mount does (reconnectStateSnapshot, 03-websocket.js).
         const snapshot = reconnectStateSnapshot(viewPath);
         if (snapshot) frame.state_snapshot = snapshot;
+        const serial = reconnectStateSerial(viewPath);
+        if (serial !== null) frame.state_serial = serial;
         return this.sendMessage(frame);
     }
 
@@ -4581,11 +4617,14 @@ function _installDraftListeners() {
  * counts as restored, so a saved value cannot land on it later). `atInit`
  * restores every field, as the page-load restore always did.
  */
-function syncDraftFields(atInit) {
-    if (!document.querySelector('[data-draft-enabled]')) return;
+function syncDraftFields(atInit, changes) {
+    // #4001: after a patch, only the fields it inserted or re-attributed (a
+    // rename makes a new field); a field it left alone was synced before.
+    const fields = changes ? _scanSet('[data-draft="true"]', changes) : null;
+    if (fields ? fields.length === 0 : !document.querySelector('[data-draft-enabled]')) return;
     _installDraftListeners();
     const savedByKey = new Map();
-    document.querySelectorAll('[data-draft="true"]').forEach(field => {
+    (fields || document.querySelectorAll('[data-draft="true"]')).forEach(field => {
         if (_draftRestored.get(field) === field.name) return;
         // Renamed since it was last seen: a new field, so what the user typed
         // under the old name says nothing about this one.
@@ -4669,8 +4708,10 @@ function initDraftMode() {
 // the page must not wipe a draft the user started after the submit.
 const _draftClearApplied = new WeakSet();
 
-function applyDraftClearFlag() {
-    document.querySelectorAll('[data-draft-enabled]').forEach(function (root) {
+function applyDraftClearFlag(changes) {
+    // #4001: data-draft-clear comes and goes with a patch, which inserts the
+    // draft root or changes its attributes: a change record names it.
+    _scanSet('[data-draft-enabled]', changes).forEach(function (root) {
         if (!root.hasAttribute('data-draft-clear')) {
             _draftClearApplied.delete(root);
             return;
@@ -5724,18 +5765,69 @@ const _scopedRegistry = new Map();
 let _scopedDelegationInstalled = false;
 
 /**
+ * Does a patch's change record (#4001) add, remove or re-mark a LiveView root?
+ * Then the governed-roots set is stale and only a full scan is correct. The
+ * selector is wider than _refreshScopedGovernorRoots' (it also matches
+ * <html>/<head>), which only sends more updates down the full path.
+ */
+function _changesTouchRoots(changes) {
+    const sel = '[dj-view], [dj-root]';
+    const hit = (n) => n.nodeType === 1 && (n.matches(sel) || n.querySelector(sel) !== null);
+    if (changes.inserted.some(hit) || changes.removed.some(hit)) return true;
+    for (const names of changes.attrs.values()) {
+        if (names.has('dj-view') || names.has('dj-root')) return true;
+    }
+    return false;
+}
+
+/**
+ * The elements matching `selector` that a patch's change record (#4001)
+ * covers: inside an inserted subtree (its root included) or with a changed
+ * attribute. An element the patch did not insert and whose attributes it did
+ * not change is as it was at the last scan, so its binding is too.
+ */
+function _changedMatches(changes, selector) {
+    const out = new Set();
+    changes.inserted.forEach(function(r) {
+        if (r.matches(selector)) out.add(r);
+        r.querySelectorAll(selector).forEach(function(el) { out.add(el); });
+    });
+    changes.attrs.forEach(function(_names, el) {
+        if (el.isConnected && el.matches(selector)) out.add(el);
+    });
+    return Array.from(out);
+}
+
+/**
+ * The elements a bind loop visits (#4001): with a change record, the ones it
+ * covers (see _changedMatches); without one, every match under `root` (the
+ * document by default), as every bind loop scanned before.
+ */
+function _scanSet(selector, changes, root) {
+    return changes ? _changedMatches(changes, selector) : (root || document).querySelectorAll(selector);
+}
+
+/**
  * Scan the DOM for elements with dj-window-[event] / dj-document-[event] attributes
  * and register them in the scoped registry for delegated dispatch.
+ *
+ * `changes` (#4001): what a patch batch changed (see _summarizeMutations).
+ * With it, only the inserted subtrees and the elements whose attributes
+ * changed are scanned: an untouched element's attributes are as they were at
+ * the last scan, and its registry entry with them. Eviction still visits the
+ * whole registry (its size is the number of declaring elements, not the page).
  */
-function _scanScopedElements() {
+function _scanScopedElements(changes) {
     const scopedPrefixes = ['dj-window-', 'dj-document-'];
     const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+    const scoped = changes && changes.scoped && !_changesTouchRoots(changes);
     // Refresh the shared governed-roots set first: the registry eviction
     // below and the orphan sweep both judge staleness against it, and the
     // set must describe the CURRENT DOM on every bind. Root-selection rules
     // (every root, outermost only, MUST match the sweep's set) live on
-    // _refreshScopedGovernorRoots (#2110, #2832).
-    _refreshScopedGovernorRoots();
+    // _refreshScopedGovernorRoots (#2110, #2832). A scoped scan keeps the set:
+    // _changesTouchRoots established that no root came, went or changed.
+    if (!scoped) _refreshScopedGovernorRoots();
 
     // Clear stale entries through the SAME predicate the orphan sweep uses
     // (#2832): the element left the DOM, the server dropped the attribute,
@@ -5817,6 +5909,18 @@ function _scanScopedElements() {
                 });
             }
         }
+    }
+
+    if (scoped) {
+        changes.inserted.forEach(function(r) {
+            if (!_isGovernedByScopedRoots(r)) return;
+            scanElement(r);
+            r.querySelectorAll('*').forEach(scanElement);
+        });
+        changes.attrs.forEach(function(_names, el) {
+            if (el.isConnected && _isGovernedByScopedRoots(el)) scanElement(el);
+        });
+        return;
     }
 
     if (_scopedGovernorRoots.length === 0) {
@@ -6985,10 +7089,10 @@ async function _flushNativeObservation(element, record) {
     }
 }
 
-function _bindNativeDropdownObservers(root) {
+function _bindNativeDropdownObservers(root, changes) {
     const selector = '[data-dj-native-dropdown]';
-    const elements = Array.from(root.querySelectorAll(selector));
-    if (root.matches && root.matches(selector)) elements.unshift(root);
+    const elements = Array.from(_scanSet(selector, changes, root));
+    if (!changes && root.matches && root.matches(selector)) elements.unshift(root);
     elements.forEach(element => {
         let record = _nativeDropdownObservers.get(element);
         const handler = element.getAttribute('data-dj-observe-toggle');
@@ -7032,9 +7136,12 @@ function _bindNativeDropdownObservers(root) {
 
 window.addEventListener('online', () => _bindNativeDropdownObservers(document));
 
-function bindLiveViewEvents(scope) {
+function bindLiveViewEvents(scope, changes) {
     const root = scope || getLiveViewRoot() || document;
-    _bindNativeDropdownObservers(root);
+    // #4001: `changes` (a patch's change record, reinitAfterDOMUpdate decides
+    // when it applies) narrows every bind loop below to what the patch
+    // inserted or re-attributed. Without it each loop scans as before.
+    _bindNativeDropdownObservers(root, changes);
 
     // Install delegated listeners on the LiveView root element.
     // Only install on actual [dj-view]/[dj-root] elements, NOT on document.body
@@ -7045,12 +7152,12 @@ function bindLiveViewEvents(scope) {
 
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
     if (window.djust.uploads) {
-        window.djust.uploads.bindHandlers(scope);
+        window.djust.uploads.bindHandlers(scope, changes);
     }
 
     // Bind navigation directives (dj-patch, dj-navigate)
     if (window.djust.navigation) {
-        window.djust.navigation.bindDirectives(scope);
+        window.djust.navigation.bindDirectives(scope, changes);
     }
 
     // === Per-element scanning section (only for non-delegable events) ===
@@ -7061,8 +7168,8 @@ function bindLiveViewEvents(scope) {
     const pollSelector = '[dj-poll]';
     // The scan root itself can carry the poll (`<div dj-root dj-poll="...">`):
     // querySelectorAll sees only its descendants.
-    const pollElements = Array.from(root.querySelectorAll(pollSelector));
-    if (typeof root.matches === 'function' && root.matches(pollSelector)) pollElements.unshift(root);
+    const pollElements = Array.from(_scanSet(pollSelector, changes, root));
+    if (!changes && typeof root.matches === 'function' && root.matches(pollSelector)) pollElements.unshift(root);
     pollElements.forEach(element => {
         const pollHandler = element.getAttribute('dj-poll');
         if (!pollHandler) return;
@@ -7145,10 +7252,10 @@ function bindLiveViewEvents(scope) {
     // registry entries for elements that left the DOM, so repeated calls are
     // safe and cheap. Without this, a dj-window-keydown.escape on patch-inserted
     // content would silently never bind (#1996).
-    _scanScopedElements();
+    _scanScopedElements(changes);
 
     // --- Feature 2: dj-click-away ---
-    document.querySelectorAll('[dj-click-away]').forEach(element => {
+    _scanSet('[dj-click-away]', changes).forEach(element => {
         const handlerName = element.getAttribute('dj-click-away');
         if (_isHandlerBound(element, 'click-away')) {
             // #2845 — a surviving element keeps both its listener and its
@@ -7183,7 +7290,7 @@ function bindLiveViewEvents(scope) {
     });
 
     // --- Feature 3: dj-shortcut ---
-    document.querySelectorAll('[dj-shortcut]').forEach(element => {
+    _scanSet('[dj-shortcut]', changes).forEach(element => {
         const attrValue = element.getAttribute('dj-shortcut');
         const allowInInput = element.hasAttribute('dj-shortcut-in-input');
 
@@ -7281,7 +7388,7 @@ function bindLiveViewEvents(scope) {
     // element actually entered/left, so moving from a parent into its child
     // fires neither the parent's leave nor its enter — the entire reason
     // these directives use these event types rather than mouseover/mouseout.
-    document.querySelectorAll('[dj-mouseenter], [dj-mouseleave]').forEach(element => {
+    _scanSet('[dj-mouseenter], [dj-mouseleave]', changes).forEach(element => {
         for (let mi = 0; mi < 2; mi++) {
             const attrName = mi === 0 ? 'dj-mouseenter' : 'dj-mouseleave';
             const attrValue = element.getAttribute(attrName);
@@ -7333,13 +7440,13 @@ function bindLiveViewEvents(scope) {
 
     // Re-scan dj-loading attributes after DOM updates so dynamically
     // added elements (e.g. inside modals) get registered.
-    globalLoadingManager.scanAndRegister();
+    globalLoadingManager.scanAndRegister(changes);
 
     // dj-mounted: fire event for elements that have entered the DOM after
     // initial mount. Uses WeakSet to track already-fired elements so each
     // DOM node only triggers once (replaced nodes are new objects and will fire again).
     if (window.djust._mountReady) {
-        document.querySelectorAll('[dj-mounted]').forEach(el => {
+        _scanSet('[dj-mounted]', changes).forEach(el => {
             if (_mountedElements.has(el)) return;
             _mountedElements.add(el);
 
@@ -7723,60 +7830,93 @@ function clearOptimisticState(eventName) {
 // will scroll again — correct behavior for newly inserted content.
 const _scrolledElements = new WeakSet();
 
-function reinitAfterDOMUpdate(scope) {
-    bindLiveViewEvents(scope);
+function reinitAfterDOMUpdate(scope, changes) {
+    // #4001: `changes` is what the patches just applied changed (applyPatches'
+    // collector). With it, every rescan below visits the inserted subtrees and
+    // changed elements instead of the page, and hooks hear only of changes to
+    // their own element or subtree. The page is scanned as before when there is
+    // no record (mount, morph, navigation), when the patch added, removed or
+    // re-marked a LiveView root, and on the first render after a reconnect.
+    // A batch applied without a record since the last rescan (child and sticky
+    // views, cached answers) also forces one full scan, which binds what it
+    // inserted and refreshes the governed-roots set.
+    const pendingFull = window.djust._fullRescanPending;
+    window.djust._fullRescanPending = false;
+    const scoped = changes && changes.scoped && !pendingFull && !window.djust._isReconnect
+        && !_changesTouchRoots(changes) ? changes : null;
+    // A page-wide scan covers what was inserted between patches; collect anew
+    // from here (#4001 review: the next scoped record includes what follows).
+    if (!scoped && (!scope || scope === document) && typeof _ambientReset === 'function') _ambientReset();
+    bindLiveViewEvents(scope, scoped);
     // A clear_draft() from an event handler arrives in a patch (#2971).
-    applyDraftClearFlag();
+    applyDraftClearFlag(scoped);
     // A data-draft field this update inserted is restored and saved from its
     // first render, not only the ones present at init (#3351).
-    syncDraftFields();
+    syncDraftFields(false, scoped);
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
-    // are visible to mountHooks().
+    // are visible to updateHooks().
     if (window.djust.extractColocatedHooks) {
-        window.djust.extractColocatedHooks(scope || document);
+        if (scoped) scoped.inserted.forEach((r) => window.djust.extractColocatedHooks(r));
+        else window.djust.extractColocatedHooks(scope || document);
     }
-    if (window.djust.mountHooks) {
-        // updateHooks scans for [dj-hook] — scope it too
-        const hookRoot = scope || getLiveViewRoot();
-        hookRoot.querySelectorAll('[dj-hook]').forEach(el => {
-            // Delegate to the hook system's per-element logic
-            if (window.djust.mountHooks) window.djust.mountHooks(el);
-        });
-    }
-    updateHooks();
+    // One pass over the document: destroyed() for hooks that left, then
+    // updated() / mounted() in document order. A separate mount sweep here
+    // gave a nested hook inserted by the update mounted() AND updated() in
+    // the same update (#3656).
+    updateHooks(undefined, scoped);
 
     // dj-model: an input this update inserted (or whose dj-model attributes it
     // changed) is bound here, not only at init (#3334). Idempotent: the bind
     // guard is a JS property on the element, never a DOM attribute a morph
     // would strip, so an unchanged input is skipped on every pass.
-    if (window.djust.bindModelElements) window.djust.bindModelElements(scope || document);
+    if (window.djust.bindModelElements) window.djust.bindModelElements(scope || document, scoped);
 
     // {% djust_offline_indicator %} text / status class for any indicator
-    // this update inserted (#3051, 52-offline-state.js).
-    if (window.djust._syncOfflineIndicators) window.djust._syncOfflineIndicators(scope || document);
+    // this update inserted (#3051, 52-offline-state.js), or whose content or
+    // attributes it rewrote.
+    if (window.djust._syncOfflineIndicators) {
+        if (scoped) {
+            const indicators = new Set(_changedMatches(scoped, '.djust-offline-indicator'));
+            scoped.touched.forEach((el) => {
+                const ind = el.closest('.djust-offline-indicator');
+                if (ind) indicators.add(ind);
+            });
+            indicators.forEach((el) => window.djust._syncOfflineIndicators(el));
+        } else {
+            window.djust._syncOfflineIndicators(scope || document);
+        }
+    }
 
     // dj-virtual / dj-viewport-*: re-scan after VDOM morph so new containers
     // get observers and existing ones pick up new first/last children. For
     // dj-virtual, existing containers must ALSO be refreshed so stream-
     // appended items render (initVirtualLists short-circuits on already-
     // tracked containers; refreshVirtualList is the re-window path).
+    // #4001: a patch on a page that tracks none and inserts none skips both.
     const reinitScope = scope || document;
     // #4007: a chunked feature (dj-virtual, CursorOverlay, tutorial bubble)
     // this update rendered for the first time loads its chunk now; the
     // chunk's ready handler runs its init once it has loaded.
-    _djustLoadChunksFor(reinitScope);
-    if (window.djust.initVirtualLists) window.djust.initVirtualLists(reinitScope);
-    if (window.djust.refreshVirtualList) {
-        reinitScope.querySelectorAll('[dj-virtual]').forEach((el) => {
-            window.djust.refreshVirtualList(el);
-        });
+    _djustLoadChunksFor(reinitScope, scoped);
+    const tracked = (fn) => (typeof fn === 'function' ? fn() : 0);
+    if (!scoped || tracked(window.djust._virtualListsTracked) > 0
+            || _changedMatches(scoped, '[dj-virtual], [data-dj-virtual-shell]').length > 0) {
+        if (window.djust.initVirtualLists) window.djust.initVirtualLists(reinitScope);
+        if (window.djust.refreshVirtualList) {
+            reinitScope.querySelectorAll('[dj-virtual]').forEach((el) => {
+                window.djust.refreshVirtualList(el);
+            });
+        }
     }
-    if (window.djust.initInfiniteScroll) window.djust.initInfiniteScroll(reinitScope);
+    if (window.djust.initInfiniteScroll && (!scoped || tracked(window.djust._infiniteScrollTracked) > 0
+            || _changedMatches(scoped, '[dj-viewport-top], [dj-viewport-bottom]').length > 0)) {
+        window.djust.initInfiniteScroll(reinitScope);
+    }
 
     // dj-scroll-into-view: auto-scroll elements into view after DOM updates
     const scrollRoot = scope || document;
-    scrollRoot.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
+    _scanSet('[dj-scroll-into-view]', scoped, scrollRoot).forEach(el => {
         if (_scrolledElements.has(el)) return;
         _scrolledElements.add(el);
 
@@ -8006,6 +8146,7 @@ function _processFormRecovery() {
 
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
+window.djust._scanSet = _scanSet;
 window.djust.reinitAfterDOMUpdate = reinitAfterDOMUpdate;
 window.djust.installDelegatedListeners = installDelegatedListeners;
 window.djust._isHandlerBound = _isHandlerBound;
@@ -8107,7 +8248,9 @@ const globalLoadingManager = {
     },
 
     // Scan and register all elements with dj-loading attributes
-    scanAndRegister() {
+    // `changes` (#4001): after a patch, only the elements it inserted or
+    // re-attributed; one it left alone is registered already.
+    scanAndRegister(changes) {
         this.syncPending();
         // Clean up entries for elements no longer in the DOM (e.g. after morphdom/patches)
         this.registeredElements.forEach((_config, element) => {
@@ -8126,7 +8269,7 @@ const globalLoadingManager = {
             '[dj-loading\\.for]'
         ].join(',');
 
-        const loadingElements = document.querySelectorAll(selectors);
+        const loadingElements = _scanSet(selectors, changes);
         loadingElements.forEach(element => {
             // Skip elements already registered — preserves originalState captured
             // before loading started (client-side loading modifies DOM styles,
@@ -8378,7 +8521,8 @@ function _noteRenderDigest(data, sent) {
         _setRenderToken(data.render_digest);
     }
     if (!sent || !changed) return;
-    if (!whole) {
+    // A whole page chosen for its size (#4229) answered a token that matched.
+    if (!whole || data.whole_page === 'size') {
         _httpDigestMisses = 0;
     } else if (++_httpDigestMisses >= 2) {
         _httpDigestHold = _HTTP_DIGEST_HOLD;
@@ -8914,6 +9058,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
+        // A working page-POST fallback is a connection: hooks left offline by
+        // a socket that never came back get reconnected() (#3656).
+        if (!teardown) notifyHooksReconnected();
         // This response belongs to the outgoing view; never patch the new one.
         if (teardown || !ownsHttpResponse()) return;
         const data = await response.json();
@@ -9446,6 +9593,53 @@ function childHost(node) {
 function _childByDjId(node, host, id) {
     if (host === node) return node.querySelector(`:scope > [dj-id="${CSS.escape(id)}"]`);
     return Array.from(host.children).find((c) => c.getAttribute('dj-id') === id) || null;
+}
+
+// The containers of other views inside a view: their dj-ids are numbered by
+// that view's own renders, so the same id can name an unrelated element there.
+const _NESTED_VIEW_SELECTOR = '[dj-view], [data-djust-embedded], [dj-sticky-root]';
+
+/**
+ * The element with dj-id `id` that belongs to the view rooted at `scope`: the
+ * first in document order with no other view's container between it and
+ * `scope` (a `{% live_render %}` child or a sticky view numbers its ids
+ * independently). Null when there is none.
+ */
+function _ownDjIdElement(scope, id) {
+    if (!scope) return null;
+    const sel = `[dj-id="${CSS.escape(id)}"]`;
+    const owned = (el) => {
+        for (let a = el; a && a !== scope; a = a.parentElement) {
+            if (a.matches(_NESTED_VIEW_SELECTOR)) return false;
+        }
+        return true;
+    };
+    // The first match is the usual answer, and querySelector stops there.
+    const first = scope.querySelector(sel);
+    if (!first || owned(first)) return first;
+    for (const el of scope.querySelectorAll(sel)) if (owned(el)) return el;
+    return null;
+}
+
+/**
+ * The text node a `SetText` names by its parent's dj-id and its index among
+ * the parent's significant children (#4001), or null, and `path` resolves it.
+ * A text node has no dj-id of its own, so without these the client walked the
+ * child lists from the root. Counting stops at the index: no child array.
+ */
+function _textNodeByParent(patch, rootEl) {
+    if (patch.d || typeof patch.parent_d !== 'string' || !Number.isInteger(patch.index)) return null;
+    const parent = _ownDjIdElement(rootEl || getLiveViewRoot(), patch.parent_d);
+    // Inside a [dj-virtual] list dj-ids are positional and rows are detached
+    // (#2113): leave such a node to the path, which carries that guard.
+    if (!parent || parent.closest('[dj-virtual]')) return null;
+    const preserveWhitespace = isWhitespacePreserving(parent);
+    let remaining = patch.index;
+    for (let c = childHost(parent).firstChild; c; c = c.nextSibling) {
+        if (!isSignificantChild(c, preserveWhitespace)) continue;
+        if (remaining-- === 0) return c.nodeType === 3 || c.nodeType === 8 ? c : null;
+    }
+    return null;
 }
 
 function getNodeByPath(path, djustId = null, rootEl = null) {
@@ -10672,58 +10866,190 @@ const _SHAPE_SKIPPED = new Set(('class style dj-id open hidden disabled checked 
 const _SHAPE_SKIPPED_PREFIX = /^(aria-|data-djust-|data-dj-|data-upload-|data-stream-)/;
 const _shapeText = (text) => text.replace(/[ \t\n\r\f]+/g, ' ').replace(/^ | $/g, '');
 
+// #4001: the fallback computes the shape before every request and again before
+// it applies the answer, and walking a 6,000-element page costs ~10 ms each
+// time. So each element's piece of the text (its open tag, its children's
+// pieces, '>') is hashed once and kept with its CRC-32, its Adler-32 sums and
+// its length; a parent's piece combines its children's (zlib's crc32_combine
+// and adler32_combine), which gives the value of hashing the whole text in one
+// pass, byte for byte. A MutationObserver on the document forgets the pieces of
+// every element a change is in or under, and of every element (re)inserted (a
+// node changed while detached). The content of a <template> is not observed,
+// so nothing in or around one is kept. Work follows the change, not the page.
+const _SHAPE_POLY = 0xEDB88320;
+const _SHAPE_BASE = 65521;
+
+/** (a * b) mod the CRC-32 polynomial, reflected (zlib's multmodp). */
+function _shapeMulMod(a, b) {
+    let p = 0;
+    for (let m = 0x80000000; m; m >>>= 1) {
+        if (a & m) {
+            p ^= b;
+            if ((a & (m - 1)) === 0) break;
+        }
+        b = b & 1 ? (b >>> 1) ^ _SHAPE_POLY : b >>> 1;
+    }
+    return p >>> 0;
+}
+
+const _SHAPE_X2N = (() => {
+    const table = new Uint32Array(32);
+    let p = 0x40000000;
+    table[0] = p;
+    for (let n = 1; n < 32; n++) table[n] = p = _shapeMulMod(p, p); // eslint-disable-line security/detect-object-injection
+    return table;
+})();
+const _shapeX8n = new Map();
+
+/** x^(8 * len) mod the polynomial: what appending `len` bytes does to a CRC. */
+function _shapeShift(len) {
+    let p = _shapeX8n.get(len);
+    if (p !== undefined) return p;
+    p = 0x80000000;
+    for (let n = len, k = 3; n; n = Math.floor(n / 2), k++) {
+        if (n & 1) p = _shapeMulMod(_SHAPE_X2N[k & 31], p);
+    }
+    if (_shapeX8n.size > 4096) _shapeX8n.clear();
+    _shapeX8n.set(len, p);
+    return p;
+}
+
+/** A running hash of the shape text: bytes streamed in, kept pieces combined in. */
+class _ShapeHash {
+    constructor() {
+        this.crc = 0xFFFFFFFF; // the CRC register (pre-conditioned)
+        this.a = 1;
+        this.b = 0;
+        this.len = 0;
+        this.volatile = false; // holds a piece that cannot be kept
+    }
+    byte(code) {
+        this.crc = _SHAPE_CRC[(this.crc ^ code) & 0xFF] ^ (this.crc >>> 8);
+        this.a = (this.a + code) % _SHAPE_BASE;
+        this.b = (this.b + this.a) % _SHAPE_BASE;
+        this.len++;
+    }
+    /** The UTF-8 bytes of `text`. */
+    put(text) {
+        for (const char of text) {
+            const c = char.codePointAt(0);
+            if (c < 0x80) this.byte(c);
+            else if (c < 0x800) { this.byte(0xC0 | (c >> 6)); this.byte(0x80 | (c & 63)); }
+            else if (c < 0x10000) { this.byte(0xE0 | (c >> 12)); this.byte(0x80 | ((c >> 6) & 63)); this.byte(0x80 | (c & 63)); }
+            else { this.byte(0xF0 | (c >> 18)); this.byte(0x80 | ((c >> 12) & 63)); this.byte(0x80 | ((c >> 6) & 63)); this.byte(0x80 | (c & 63)); }
+        }
+    }
+    /** Append a finished piece, as if its bytes were streamed in. */
+    add(piece) {
+        if (piece.volatile) this.volatile = true;
+        if (!piece.len) return;
+        const crc = (_shapeMulMod(_shapeShift(piece.len), (this.crc ^ 0xFFFFFFFF) >>> 0) ^ piece.crc) >>> 0;
+        this.crc = (crc ^ 0xFFFFFFFF) >>> 0;
+        const rem = piece.len % _SHAPE_BASE;
+        let a = this.a + piece.a + _SHAPE_BASE - 1;
+        let b = (rem * this.a) % _SHAPE_BASE + this.b + piece.b + _SHAPE_BASE - rem;
+        if (a >= _SHAPE_BASE) a -= _SHAPE_BASE;
+        if (a >= _SHAPE_BASE) a -= _SHAPE_BASE;
+        if (b >= _SHAPE_BASE * 2) b -= _SHAPE_BASE * 2;
+        if (b >= _SHAPE_BASE) b -= _SHAPE_BASE;
+        this.a = a;
+        this.b = b;
+        this.len += piece.len;
+    }
+    piece() {
+        return {crc: (this.crc ^ 0xFFFFFFFF) >>> 0, a: this.a, b: this.b, len: this.len, volatile: this.volatile};
+    }
+}
+
+// The kept pieces, and the observer that forgets them. `var`: #1370.
+var _shapePieces = null; // eslint-disable-line no-var
+var _shapeObserver = null; // eslint-disable-line no-var
+
+function _shapeForget(records) {
+    for (const r of records) {
+        for (let n = r.target; n; n = n.parentNode) _shapePieces.delete(n);
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => {
+                if (n.nodeType !== 1) return;
+                _shapePieces.delete(n);
+                n.querySelectorAll('*').forEach((el) => _shapePieces.delete(el));
+            });
+        }
+    }
+}
+
+/** True when pieces may be kept: the observer that forgets them is running. */
+function _shapeWatch() {
+    if (!_shapeObserver && typeof MutationObserver === 'function') {
+        _shapePieces = new WeakMap();
+        _shapeObserver = new MutationObserver(_shapeForget);
+        _shapeObserver.observe(document,
+            { subtree: true, childList: true, attributes: true, characterData: true });
+    }
+    if (!_shapeObserver) return false;
+    _shapeForget(_shapeObserver.takeRecords());
+    return true;
+}
+
+/** Append the pieces of `node`'s significant children to `hash`. */
+function _shapeChildren(hash, node, keep) {
+    for (const child of getSignificantChildren(node)) {
+        if (child.nodeType === Node.COMMENT_NODE) {
+            hash.put('!');
+        } else if (child.nodeType === Node.TEXT_NODE) {
+            hash.put('"' + _shapeText(child.textContent) + '\0');
+        } else {
+            hash.add(_shapePiece(child, keep));
+        }
+    }
+}
+
+/** `el`'s piece: `<tag attrs`, its children (or its shown text), `>`. */
+function _shapePiece(el, keep) {
+    if (keep) {
+        const kept = _shapePieces.get(el);
+        if (kept) return kept;
+    }
+    const hash = new _ShapeHash();
+    // A template's content is another tree, which the observer does not see.
+    if (el.tagName === 'TEMPLATE') hash.volatile = true;
+    const csrf = el.getAttribute('name') === 'csrfmiddlewaretoken';
+    const attrs = [];
+    for (const name of el.getAttributeNames()) {
+        const lower = name.toLowerCase();
+        if (_SHAPE_SKIPPED.has(lower) || _SHAPE_SKIPPED_PREFIX.test(lower)) continue;
+        // Django masks the CSRF token again on every render.
+        if (csrf && lower === 'value') continue;
+        attrs.push(' ' + lower + '=' + el.getAttribute(name) + '\0');
+    }
+    hash.put('<' + el.tagName.toLowerCase() + attrs.sort().join(''));
+    // dj-disable-with shows other text while its request is out.
+    const shown = el.getAttribute('data-djust-original-text');
+    // A dj-update="ignore" subtree is the client's (#4283): not walked.
+    if (el.getAttribute('dj-update') !== 'ignore') {
+        if (shown === null) _shapeChildren(hash, el, keep && !hash.volatile);
+        else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) hash.put('"' + _shapeText(shown) + '\0');
+    }
+    hash.put('>');
+    const piece = hash.piece();
+    if (keep && !piece.volatile) _shapePieces.set(el, piece);
+    return piece;
+}
+
 /** The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed. */
 function domShape(root) {
     if (!root) return null;
-    let crc = 0xFFFFFFFF, a = 1, b = 0;
-    const byte = (code) => {
-        crc = _SHAPE_CRC[(crc ^ code) & 0xFF] ^ (crc >>> 8);
-        a = (a + code) % 65521;
-        b = (b + a) % 65521;
-    };
-    // The UTF-8 bytes of `text`.
-    const put = (text) => {
-        for (const char of text) {
-            const c = char.codePointAt(0);
-            if (c < 0x80) byte(c);
-            else if (c < 0x800) { byte(0xC0 | (c >> 6)); byte(0x80 | (c & 63)); }
-            else if (c < 0x10000) { byte(0xE0 | (c >> 12)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
-            else { byte(0xF0 | (c >> 18)); byte(0x80 | ((c >> 12) & 63)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
-        }
-    };
-    const walk = (node) => {
-        for (const child of getSignificantChildren(node)) {
-            if (child.nodeType === Node.COMMENT_NODE) {
-                put('!');
-            } else if (child.nodeType === Node.TEXT_NODE) {
-                put('"' + _shapeText(child.textContent) + '\0');
-            } else {
-                const csrf = child.getAttribute('name') === 'csrfmiddlewaretoken';
-                const attrs = [];
-                for (const name of child.getAttributeNames()) {
-                    const lower = name.toLowerCase();
-                    if (_SHAPE_SKIPPED.has(lower) || _SHAPE_SKIPPED_PREFIX.test(lower)) continue;
-                    // Django masks the CSRF token again on every render.
-                    if (csrf && lower === 'value') continue;
-                    attrs.push(' ' + lower + '=' + child.getAttribute(name) + '\0');
-                }
-                put('<' + child.tagName.toLowerCase() + attrs.sort().join(''));
-                // dj-disable-with shows other text while its request is out.
-                const shown = child.getAttribute('data-djust-original-text');
-                // A dj-update="ignore" subtree is the client's (#4283): not walked.
-                if (child.getAttribute('dj-update') !== 'ignore') {
-                    if (shown === null) walk(child);
-                    else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) put('"' + _shapeText(shown) + '\0');
-                }
-                put('>');
-            }
-        }
-    };
-    walk(root);
+    const hash = new _ShapeHash();
+    // The root's own children are walked every time: which of a <body> root's
+    // children count depends on the page (isForeignBodyChild), not on them.
+    _shapeChildren(hash, root, _shapeWatch() && root.tagName !== 'TEMPLATE');
+    const {crc, a, b} = hash.piece();
     const hex = (n) => (n >>> 0).toString(16).padStart(8, '0');
-    return hex(crc ^ 0xFFFFFFFF) + hex((b << 16) | a);
+    return hex(crc) + hex((b << 16) | a);
 }
 window.djust.domShape = domShape;
+// Tests: forget every kept piece, so the next shape is computed from scratch.
+window.djust._domShapeForgetAll = () => { if (_shapePieces) _shapePieces = new WeakMap(); };
 
 const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
 
@@ -11774,7 +12100,8 @@ function applySinglePatch(patch, rootEl = null) {
     // rootEl is threaded in by the scoped applier (Sticky LiveViews
     // Phase B) so child / sticky patches don't resolve against the
     // parent view's dj-id namespace.
-    const node = getNodeByPath(patch.path, patch.d, rootEl);
+    const node = (patch.type === 'SetText' && _textNodeByParent(patch, rootEl))
+        || getNodeByPath(patch.path, patch.d, rootEl);
     // v0.7.0 — {% dj_activity %} gate. If the target node lives inside
     // a HIDDEN activity wrapper that is NOT eager, we intentionally
     // skip the subtree patch so local DOM state (form values, scroll
@@ -12282,6 +12609,12 @@ function _shouldUseViewTransition() {
  * on full success, ``false`` if any patch failed (caller may trigger a
  * full re-render fallback).
  *
+ * ``changes`` (#4001): an object the call fills with what the patches changed
+ * — inserted and removed roots, changed attributes, text-only updates (see
+ * ``_summarizeMutations``). The response handler passes it on to
+ * ``reinitAfterDOMUpdate`` so the rescans cover the change, not the page. The
+ * boolean result stays the return value: every caller tests it.
+ *
  * **Two paths**:
  *
  * - **Direct (default)**: just runs the inner patch loop and resolves
@@ -12301,7 +12634,7 @@ function _shouldUseViewTransition() {
  * to abandon the animation and return false so the caller can trigger
  * a full re-render fallback. ADR-013.
  */
-async function applyPatches(patches, rootEl = null, applyIf = null) {
+async function applyPatches(patches, rootEl = null, applyIf = null, changes = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -12310,7 +12643,7 @@ async function applyPatches(patches, rootEl = null, applyIf = null) {
     // `applyIf` (#4108) is asked at the last moment, in the same synchronous
     // step as the first mutation: under a View Transition that is the update
     // callback, which runs later than this call. False applies nothing.
-    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl));
+    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl, changes));
 
     if (_shouldUseViewTransition()) {
         let innerResult = true;
@@ -12343,7 +12676,23 @@ async function applyPatches(patches, rootEl = null, applyIf = null) {
  * It runs INSIDE the View Transition callback, not after it — a render after
  * `updateCallbackDone` would land past the transition's snapshot.
  */
-function _applyPatchesInner(patches, rootEl) {
+function _applyPatchesInner(patches, rootEl, changes = null) {
+    // #4001: what this batch changed, for the caller to scope its rescans to.
+    // Recorded by a MutationObserver rather than by each patch op, so every
+    // path that inserts (placements, Replace, subtrees, virtual-list renders,
+    // a hook's beforeUpdate) is covered; takeRecords() reads it synchronously.
+    // It is the page's long-lived observer (_ambientStart): what was inserted
+    // or re-attributed since the last rescan, outside any patch, joins the
+    // record too.
+    const observer = changes ? _ambientStart() : null;
+    if (observer) {
+        _ambientCollect(observer.takeRecords());
+    } else if (patches && patches.length) {
+        // A batch nobody records (a child or sticky view's patches, a cached
+        // answer): nothing tells the next scoped rescan what it inserted, so
+        // the next reinitAfterDOMUpdate scans the page instead (#4001).
+        window.djust._fullRescanPending = true;
+    }
     try {
         if (!patches || patches.length === 0) return true;
         return _withBeforeUpdateHooks(rootEl || getLiveViewRoot(),
@@ -12352,7 +12701,130 @@ function _applyPatchesInner(patches, rootEl) {
         if (typeof window.djust._flushVirtualKeyedOps === 'function') {
             window.djust._flushVirtualKeyedOps();
         }
+        if (observer) {
+            _summarizeMutations(observer.takeRecords(), changes);
+            _ambientMergeInto(changes);
+        }
     }
+}
+
+// #4001 review: a scoped rescan must not see only the patch window. Before it,
+// every patch scanned the page, so an element inserted between patches (by a
+// hook's mounted(), app code, a virtual list's scroll render) was bound by the
+// next patch. One observer, started by the first scoped patch or full rescan
+// and kept for the page's life, collects those elements and dj-* changes
+// between patches; the next patch's record includes them. Cost follows the
+// mutations, not the page. Past _AMBIENT_LIMIT entries it gives up and asks
+// for one full rescan instead. `var`: read before this module runs (#1370).
+var _ambientObserver = null; // eslint-disable-line no-var
+var _ambientAdded = null; // eslint-disable-line no-var
+var _ambientAttrs = null; // eslint-disable-line no-var
+const _AMBIENT_LIMIT = 5000;
+
+function _ambientCollect(records) {
+    if (!_ambientAdded) return;
+    for (const r of records) {
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => { if (n.nodeType === 1) _ambientAdded.add(n); });
+        } else if (r.type === 'attributes') {
+            let names = _ambientAttrs.get(r.target);
+            if (!names) _ambientAttrs.set(r.target, names = new Set());
+            names.add(r.attributeName);
+        }
+    }
+    if (_ambientAdded.size + _ambientAttrs.size > _AMBIENT_LIMIT) {
+        window.djust._fullRescanPending = true;
+        _ambientAdded.clear();
+        _ambientAttrs.clear();
+    }
+}
+
+function _ambientStart() {
+    if (!_ambientObserver && typeof MutationObserver === 'function') {
+        _ambientAdded = new Set();
+        _ambientAttrs = new Map();
+        _ambientObserver = new MutationObserver(_ambientCollect);
+        _ambientObserver.observe(document,
+            { subtree: true, childList: true, attributes: true, characterData: true });
+    }
+    return _ambientObserver;
+}
+
+/** A full rescan is about to cover the page: start collecting afresh from here. */
+function _ambientReset() {
+    if (!_ambientStart()) return;
+    _ambientObserver.takeRecords();
+    _ambientAdded.clear();
+    _ambientAttrs.clear();
+}
+
+/** Add what was collected between patches to a patch's record, then forget it. */
+function _ambientMergeInto(changes) {
+    if (!_ambientAdded || (!_ambientAdded.size && !_ambientAttrs.size)) return;
+    const all = new Set(changes.inserted);
+    _ambientAdded.forEach((n) => { if (n.isConnected) all.add(n); });
+    changes.inserted = Array.from(all).filter((n) => {
+        for (let p = n.parentNode; p; p = p.parentNode) if (all.has(p)) return false;
+        return true;
+    });
+    _ambientAttrs.forEach((names, el) => {
+        if (!el.isConnected) return;
+        const mine = changes.attrs.get(el);
+        if (mine) names.forEach((n) => mine.add(n));
+        else changes.attrs.set(el, names);
+    });
+    _ambientAdded.clear();
+    _ambientAttrs = new Map();
+}
+
+/**
+ * Fill `out` with what `records` changed (#4001):
+ *
+ * - `inserted`: connected elements added, outermost only (a descendant of
+ *   another inserted element is covered by it). A moved element counts.
+ * - `removed`: nodes taken out and not put back.
+ * - `attrs`: Map of element to the Set of attribute names that changed.
+ * - `text`: how many text-only changes (character data, text nodes added).
+ * - `touched`: Set of the connected elements a record targeted (the element
+ *   whose attribute changed, the parent whose children changed, the parent of
+ *   changed character data). A hook's subtree changed iff one of these is the
+ *   hook element or inside it.
+ * - `scoped: true`: the record is complete, so a rescan may use it instead of
+ *   walking the page. A caller without it scans the page as before.
+ */
+function _summarizeMutations(records, out) {
+    const added = new Set();
+    const removed = [];
+    const attrs = new Map();
+    const touched = new Set();
+    let text = 0;
+    for (const r of records) {
+        const target = r.type === 'characterData' ? r.target.parentNode : r.target;
+        if (target && target.nodeType === 1 && target.isConnected) touched.add(target);
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => { if (n.nodeType === 1) added.add(n); else text++; });
+            r.removedNodes.forEach((n) => removed.push(n));
+        } else if (r.type === 'attributes') {
+            let names = attrs.get(r.target);
+            if (!names) attrs.set(r.target, names = new Set());
+            names.add(r.attributeName);
+        } else {
+            text++;
+        }
+    }
+    const inserted = [];
+    added.forEach((n) => {
+        if (!n.isConnected) return;
+        for (let p = n.parentNode; p; p = p.parentNode) if (added.has(p)) return;
+        inserted.push(n);
+    });
+    out.inserted = inserted;
+    out.removed = removed.filter((n) => !n.isConnected);
+    out.attrs = attrs;
+    out.text = text;
+    out.touched = touched;
+    out.scoped = true;
+    return out;
 }
 
 /**
@@ -12412,6 +12884,8 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
 if (typeof globalThis !== 'undefined') {
     globalThis.djust = globalThis.djust || {};
     globalThis.djust.applyPatches = applyPatches;
+    globalThis.djust._summarizeMutations = _summarizeMutations;
+    globalThis.djust._ambientReset = _ambientReset;
 }
 
 // ============================================================================
@@ -13233,7 +13707,7 @@ function loadClientChunk(name) {
 }
 
 /** Names of the chunks `root` needs that are not loaded yet (core bundle only). */
-function _djustNeededChunks(root) {
+function _djustNeededChunks(root, changes) {
     if (!_djustIsCoreBundle()) return [];
     const scope = root || document;
     const needed = [];
@@ -13242,7 +13716,9 @@ function _djustNeededChunks(root) {
         if (_djustChunkLoaded[name] || _djustChunkFailed[name]) continue;
         // eslint-disable-next-line security/detect-object-injection
         const selector = _DJUST_CHUNK_SELECTORS[name];
-        if ((scope.matches && scope.matches(selector)) ||
+        // #4001: after a patch, only what it inserted or re-attributed.
+        if (changes ? _changedMatches(changes, selector).length > 0
+            : (scope.matches && scope.matches(selector)) ||
             (scope.querySelector && scope.querySelector(selector))) needed.push(name);
     }
     if (!_djustChunkLoaded['service-worker'] && !_djustChunkFailed['service-worker'] &&
@@ -13315,8 +13791,8 @@ function _djustBackgroundLoad(chunk) {
  * rendered by a patch or live_redirect). Each chunk's ready handler then runs
  * its init over the document. Called from reinitAfterDOMUpdate().
  */
-function _djustLoadChunksFor(scope) {
-    for (const name of _djustNeededChunks(scope)) _djustBackgroundLoad(name);
+function _djustLoadChunksFor(scope, changes) {
+    for (const name of _djustNeededChunks(scope, changes)) _djustBackgroundLoad(name);
 }
 
 // Upload push events (e.g. ``djust:upload_progress`` from the view's
@@ -14533,9 +15009,13 @@ if (document.readyState === 'loading') {
      * Bind upload-related event handlers.
      * Called after DOM updates (mount, patch, etc.)
      */
-    function bindUploadHandlers() {
+    // `changes` (#4001): a patch's change record; then only the elements it
+    // inserted or re-attributed are visited (window.djust._scanSet).
+    function bindUploadHandlers(_scope, changes) {
+        const scan = (sel) => (changes && window.djust._scanSet
+            ? window.djust._scanSet(sel, changes) : document.querySelectorAll(sel));
         // File inputs with dj-upload
-        document.querySelectorAll('[dj-upload]').forEach(input => {
+        scan('[dj-upload]').forEach(input => {
             const uploadName = input.getAttribute('dj-upload');
 
             // #2858 — the change closure captures `uploadName` at bind time,
@@ -14569,7 +15049,7 @@ if (document.readyState === 'loading') {
         });
 
         // Drop zones with dj-upload-drop
-        document.querySelectorAll('[dj-upload-drop]').forEach(zone => {
+        scan('[dj-upload-drop]').forEach(zone => {
             const uploadName = zone.getAttribute('dj-upload-drop');
 
             // #2858 — same rebuild-or-skip rule as the [dj-upload] loop
@@ -15820,10 +16300,13 @@ window.djust.getActiveStreams = getActiveStreams;
         return e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey;
     }
 
-    function bindNavigationDirectives() {
+    // `changes` (#4001): a patch's change record; then only the elements it
+    // inserted or re-attributed are bound (a bound one keeps its listener).
+    function bindNavigationDirectives(_scope, changes) {
+        const scan = (sel) => (changes ? _scanSet(sel, changes) : document.querySelectorAll(sel));
         // dj-patch: Update URL params without remount
         // Select/input elements are handled by the delegated document listener above.
-        document.querySelectorAll('[dj-patch]').forEach(function (el) {
+        scan('[dj-patch]').forEach(function (el) {
             if (_patchBound.has(el)) return;
             _patchBound.add(el);
 
@@ -15846,7 +16329,7 @@ window.djust.getActiveStreams = getActiveStreams;
         });
 
         // dj-navigate: Navigate to a different view
-        document.querySelectorAll('[dj-navigate]').forEach(function (el) {
+        scan('[dj-navigate]').forEach(function (el) {
             if (_navigateBound.has(el)) return;
             _navigateBound.add(el);
 
@@ -15870,7 +16353,7 @@ window.djust.getActiveStreams = getActiveStreams;
         // it client-side. Runs on each call because bindNavigationDirectives is
         // invoked from reinitAfterDOMUpdate (initial load + every SPA mount and
         // patch), so the highlight tracks the current page. (#1756)
-        updateAriaCurrent();
+        updateAriaCurrent(changes);
     }
 
     /**
@@ -15881,9 +16364,16 @@ window.djust.getActiveStreams = getActiveStreams;
      * (e.g. a sister-site link) are never "current". Apps style the active link
      * via ``[dj-navigate][aria-current="page"]``.
      */
-    function updateAriaCurrent() {
+    // The path the last full sync ran for: while it holds, only links a patch
+    // inserted or re-attributed can be out of sync (#4001).
+    // `var`: a navigation handler above may run before this line has.
+    var _ariaSyncedPath = null; // eslint-disable-line no-var
+    function updateAriaCurrent(changes) {
         const here = window.location.pathname;
-        document.querySelectorAll('[dj-navigate]').forEach(function (el) {
+        const links = changes && here === _ariaSyncedPath
+            ? _scanSet('[dj-navigate]', changes) : document.querySelectorAll('[dj-navigate]');
+        if (!changes || here !== _ariaSyncedPath) _ariaSyncedPath = here;
+        links.forEach(function (el) {
             // A link that carries ``data-dj-nav`` has its own active rule
             // (theme_nav_item: path PREFIX, not equality, and an ``active``
             // class) managed by the theme's components.js, when that script is
@@ -16337,168 +16827,260 @@ function _deferMissingHookSweep() {
     return true;
 }
 
+// The lifecycle contract (#3656), documented in docs/website/guides/hooks.md
+// ("The lifecycle contract"); tests/js/hook-lifecycle-contract-3656.test.js has
+// one test per rule.
+//
+//   - An instance belongs to one element node for its whole life. A patch that
+//     keeps the node (attributes, text, a keyed move) keeps the instance; a
+//     node that is replaced, removed or loses/changes its dj-hook gets
+//     destroyed(), and a replacement node a fresh instance with mounted().
+//   - mounted() and destroyed() run exactly once per instance. A hook mounted
+//     by an update gets no updated() for that update.
+//   - After an update: first destroyed() for every hook that left, then
+//     mounted() / updated() in document order (parents before children).
+//   - disconnected() / reconnected() pair per instance: one disconnected() per
+//     lost connection (not one per failed retry), and reconnected() only after
+//     it. A hook mounted while offline gets disconnected() after mounted().
+//   - Every callback is isolated: a throw or a rejected promise is logged and
+//     the patch, the other hooks and the rest of the update go on.
+
+// True between a lost connection and the next open one. `var` with no
+// initializer, as _activeHooks above: an earlier module may run first.
+var _hooksOffline; // eslint-disable-line no-var
+// The hooks mounted by the updateHooks() pass in progress, nested passes
+// (a mounted() that re-enters updateHooks()) included: none of them gets
+// updated() in that update. Null outside a pass.
+var _hooksMountedInPass; // eslint-disable-line no-var
+
+function _callHook(entry, name) {
+    // `name` is one of the fixed lifecycle names, never page input.
+    // eslint-disable-next-line security/detect-object-injection
+    const fn = entry.instance[name];
+    if (typeof fn === 'function') {
+        _safeCallHook(fn.bind(entry.instance), `${entry.hookName}.${name}()`);
+    }
+}
+
+/** `root` itself (when it carries dj-hook) and its dj-hook descendants, in document order. */
+function _hookElements(root) {
+    const els = Array.from(root.querySelectorAll('[dj-hook]'));
+    if (root.nodeType === 1 && root.hasAttribute('dj-hook')) els.unshift(root);
+    return els;
+}
+
+function _mountHookEl(el, hooks, deferMissing) {
+    const hookName = el.getAttribute('dj-hook');
+    // eslint-disable-next-line security/detect-object-injection
+    const hookDef = hooks[hookName];
+    if (!hookDef || (typeof hookDef !== 'object' && typeof hookDef !== 'function')) {
+        if (!hookDef) _unmountedHooks().add(el);
+        if (!hookDef && deferMissing && _deferMissingHookSweep()) return;
+        console.warn(`[dj-hook] No hook registered for "${hookName}"`);
+        return;
+    }
+    _unmountedHooks().delete(el);
+    const entry = { hookName, instance: _createHookInstance(hookDef, el), el };
+    _activeHooks.set(_getHookElId(el), entry);
+    if (_hooksMountedInPass) _hooksMountedInPass.add(entry);
+    _callHook(entry, 'mounted');
+    if (_hooksOffline) {
+        entry.offline = true;
+        _callHook(entry, 'disconnected');
+    }
+}
+
+/** Visit the dj-hook elements under `root`; a throw for one does not stop the others. */
+function _eachHookEl(root, visit) {
+    _hookElements(root).forEach((el) => {
+        try {
+            visit(el);
+        } catch (e) {
+            console.error('[dj-hook] Error in %s:', el.getAttribute('dj-hook'), e);
+        }
+    });
+}
+
+function _destroyHookEntry(elId, entry) {
+    // Deleted first: destroyed() runs once even if it re-enters updateHooks().
+    _activeHooks.delete(elId);
+    _callHook(entry, 'destroyed');
+}
+
+/**
+ * destroyed() for every hook whose element left the document, and for every
+ * hook under `root` whose element dropped or changed its dj-hook.
+ */
+function _destroyDetachedHooks(root) {
+    _ensureHooksInit();
+    root = root || document;
+    for (const [elId, entry] of _activeHooks) {
+        const el = entry.el;
+        if (!el.isConnected || (root.contains(el) && el.getAttribute('dj-hook') !== entry.hookName)) {
+            _destroyHookEntry(elId, entry);
+        }
+    }
+}
+
+/**
+ * Mount the hooks under `root` that are not mounted yet. Called on init.
+ * After a DOM update use updateHooks(), which also updates and destroys.
+ */
 function mountHooks(root, options) {
     _ensureHooksInit();
     const deferMissing = Boolean(options && options.deferMissing);
-    root = root || document;
     const hooks = _getHookDefs();
-    const elements = root.querySelectorAll('[dj-hook]');
-
-    elements.forEach(el => {
-        const hookName = el.getAttribute('dj-hook');
-        const elId = _getHookElId(el);
-
-        // Skip if already mounted
-        if (_activeHooks.has(elId)) {
-            return;
-        }
-
-        // eslint-disable-next-line security/detect-object-injection
-        const hookDef = hooks[hookName];
-        if (!hookDef) {
-            if (deferMissing && _deferMissingHookSweep()) return;
-            console.warn(`[dj-hook] No hook registered for "${hookName}"`);
-            return;
-        }
-
-        const instance = _createHookInstance(hookDef, el);
-        _activeHooks.set(elId, { hookName, instance, el });
-
-        // Call mounted() (async-tolerant — see _safeCallHook)
-        if (typeof instance.mounted === 'function') {
-            _safeCallHook(instance.mounted.bind(instance), `${hookName}.mounted()`);
-        }
+    _eachHookEl(root || document, (el) => {
+        if (!_activeHooks.has(_getHookElId(el))) _mountHookEl(el, hooks, deferMissing);
     });
 }
 
 /**
  * Notify active hooks that a DOM update is about to happen.
- * Call this BEFORE applying patches.
+ * Called BEFORE the first DOM change of an update (12-vdom-patch.js), for the
+ * hooks whose element is inside the updated root.
  */
 function beforeUpdateHooks(root) {
     _ensureHooksInit();
     root = root || document;
     for (const [, entry] of _activeHooks) {
-        // Only call if element is still in the DOM
-        if (root.contains(entry.el) && typeof entry.instance.beforeUpdate === 'function') {
-            _safeCallHook(
-                entry.instance.beforeUpdate.bind(entry.instance),
-                `${entry.hookName}.beforeUpdate()`,
-            );
-        }
+        if (root.contains(entry.el)) _callHook(entry, 'beforeUpdate');
     }
 }
 
+function _updateHookEntry(entry) {
+    const instance = entry.instance;
+    if (typeof instance.updated !== 'function') return;
+    if (typeof instance.shouldUpdate === 'function') {
+        try {
+            // Only an explicit synchronous false suppresses the callback.
+            // Exceptions and async predicates fail open so an update is
+            // never silently lost; observe rejected promises as well.
+            const decision = instance.shouldUpdate();
+            if (decision === false) return;
+            if (decision && typeof decision.then === 'function') {
+                Promise.resolve(decision).catch((e) =>
+                    console.error('[dj-hook] Error in %s:', `${entry.hookName}.shouldUpdate()`, e),
+                );
+            }
+        } catch (e) {
+            console.error('[dj-hook] Error in %s:', `${entry.hookName}.shouldUpdate()`, e);
+        }
+    }
+    _callHook(entry, 'updated');
+}
+
 /**
- * Called after a DOM patch to update/mount/destroy hooks as needed.
+ * The dj-hook elements a patch's change record (#4001) concerns, in document
+ * order: the ones it inserted or whose attributes it changed (new or renamed
+ * hooks), the mounted ones whose element or subtree it changed (an element in
+ * `touched` is the hook element or inside it), and the mounted ones whose
+ * definition asks for every render (`updateOn: 'render'`). Cost follows the
+ * change and the number of mounted hooks, not the page.
  */
-function updateHooks(root) {
+// dj-hook elements seen while their hook was not registered (#4001 review): a
+// hook registered later (a dynamic import, after the #3992 retry) is mounted by
+// the next update, as the page-wide sweep did, without a page-wide sweep.
+// `var`, filled on first use: the init sweep can run before this module (#1370).
+var _unmountedHookEls; // eslint-disable-line no-var
+function _unmountedHooks() {
+    return _unmountedHookEls || (_unmountedHookEls = new Set());
+}
+
+function _changedHookElements(changes) {
+    const els = new Set(_changedMatches(changes, '[dj-hook]'));
+    const waiting = _unmountedHooks();
+    if (waiting.size) {
+        const hooks = _getHookDefs();
+        waiting.forEach((el) => {
+            if (!el.isConnected) waiting.delete(el);
+            else if (hooks[el.getAttribute('dj-hook')]) els.add(el);
+        });
+    }
+    changes.touched.forEach((node) => {
+        for (let el = node; el && el.nodeType === 1; el = el.parentNode) {
+            const entry = el._djustHookId && _activeHooks.get(el._djustHookId);
+            if (entry && entry.el === el) els.add(el);
+        }
+    });
+    for (const [, entry] of _activeHooks) {
+        if (entry.instance.updateOn === 'render' && entry.el.isConnected) els.add(entry.el);
+    }
+    return Array.from(els).sort((a, b) =>
+        (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+}
+
+/**
+ * Called after a DOM update: destroy the hooks that left, then update the
+ * hooks that stayed and mount the new ones, in document order.
+ *
+ * `changes` (#4001): the change record of an incremental patch. Then only the
+ * hooks it concerns are visited (see _changedHookElements): a hook whose
+ * element and subtree the patch left alone gets no updated(). Disposal still
+ * checks every mounted hook (detached, or its dj-hook renamed). Without a
+ * record (mount, morph, navigation, child or sticky updates) every hook under
+ * `root` is visited and updated, as before.
+ */
+function updateHooks(root, changes) {
     _ensureHooksInit();
     root = root || document;
     const hooks = _getHookDefs();
-
-    // 1. Find all currently hooked elements in the DOM
-    const currentElements = new Set();
-    root.querySelectorAll('[dj-hook]').forEach(el => {
-        const elId = _getHookElId(el);
-        currentElements.add(elId);
-
-        const hookName = el.getAttribute('dj-hook');
-        let existing = _activeHooks.get(elId);
-        if (existing && (existing.el !== el || existing.hookName !== hookName)) {
-            // A replacement node or changed hook definition needs a fresh
-            // instance; dispose resources belonging to the old one first.
-            if (typeof existing.instance.destroyed === 'function') {
-                _safeCallHook(existing.instance.destroyed.bind(existing.instance),
-                    `${existing.hookName}.destroyed()`);
-            }
-            _activeHooks.delete(elId);
-            existing = null;
-        }
-
-        if (existing) {
-            // Element still exists — call updated() if requested.
-            let update = true;
-            if (typeof existing.instance.updated === 'function' &&
-                typeof existing.instance.shouldUpdate === 'function') {
-                try {
-                    // Only an explicit synchronous false suppresses the callback.
-                    // Exceptions and async predicates fail open so an update is
-                    // never silently lost; observe rejected promises as well.
-                    const decision = existing.instance.shouldUpdate();
-                    if (decision === false) update = false;
-                    if (decision && typeof decision.then === 'function') {
-                        Promise.resolve(decision).catch((e) =>
-                            console.error('[dj-hook] Error in %s:', `${hookName}.shouldUpdate()`, e),
-                        );
-                    }
-                } catch (e) {
-                    console.error('[dj-hook] Error in %s:', `${hookName}.shouldUpdate()`, e);
-                }
-            }
-            if (update && typeof existing.instance.updated === 'function') {
-                _safeCallHook(
-                    existing.instance.updated.bind(existing.instance),
-                    `${hookName}.updated()`,
-                );
-            }
-        } else {
-            // New element — mount it
-            // eslint-disable-next-line security/detect-object-injection
-            const hookDef = hooks[hookName];
-            if (!hookDef) {
-                console.warn(`[dj-hook] No hook registered for "${hookName}"`);
+    const outermost = !_hooksMountedInPass;
+    if (outermost) _hooksMountedInPass = new Set();
+    try {
+        _destroyDetachedHooks(root);
+        const visit = (el) => {
+            const elId = _getHookElId(el);
+            const entry = _activeHooks.get(elId);
+            if (entry && entry.el === el) {
+                if (!_hooksMountedInPass.has(entry)) _updateHookEntry(entry);
                 return;
             }
-            const instance = _createHookInstance(hookDef, el);
-            _activeHooks.set(elId, { hookName, instance, el });
-            if (typeof instance.mounted === 'function') {
-                _safeCallHook(instance.mounted.bind(instance), `${hookName}.mounted()`);
-            }
+            // Another node carrying this node's hook id (a copied expando): the
+            // instance belongs to that node, so this one gets a fresh instance.
+            if (entry) _destroyHookEntry(elId, entry);
+            _mountHookEl(el, hooks, false);
+        };
+        if (!changes) {
+            _eachHookEl(root, visit);
+            return;
         }
-    });
-
-    // 2. Destroy hooks whose elements were removed
-    for (const [elId, entry] of _activeHooks) {
-        if (!currentElements.has(elId)) {
-            if (typeof entry.instance.destroyed === 'function') {
-                _safeCallHook(
-                    entry.instance.destroyed.bind(entry.instance),
-                    `${entry.hookName}.destroyed()`,
-                );
+        _changedHookElements(changes).forEach((el) => {
+            if (!el.isConnected) return;
+            try {
+                visit(el);
+            } catch (e) {
+                console.error('[dj-hook] Error in %s:', el.getAttribute('dj-hook'), e);
             }
-            _activeHooks.delete(elId);
-        }
+        });
+    } finally {
+        if (outermost) _hooksMountedInPass = null;
     }
 }
 
 /**
- * Notify all hooks of WebSocket disconnect.
+ * Notify hooks that the live connection (WebSocket or SSE) dropped. Once per
+ * lost connection: the failed retries that follow call this again and are
+ * ignored until notifyHooksReconnected().
  */
 function notifyHooksDisconnected() {
     _ensureHooksInit();
+    _hooksOffline = true;
     for (const [, entry] of _activeHooks) {
-        if (typeof entry.instance.disconnected === 'function') {
-            _safeCallHook(
-                entry.instance.disconnected.bind(entry.instance),
-                `${entry.hookName}.disconnected()`,
-            );
-        }
+        if (entry.offline) continue;
+        entry.offline = true;
+        _callHook(entry, 'disconnected');
     }
 }
 
-/**
- * Notify all hooks of WebSocket reconnect.
- */
+/** Notify the hooks that got disconnected() that a connection is open again. */
 function notifyHooksReconnected() {
     _ensureHooksInit();
+    _hooksOffline = false;
     for (const [, entry] of _activeHooks) {
-        if (typeof entry.instance.reconnected === 'function') {
-            _safeCallHook(
-                entry.instance.reconnected.bind(entry.instance),
-                `${entry.hookName}.reconnected()`,
-            );
-        }
+        if (!entry.offline) continue;
+        entry.offline = false;
+        _callHook(entry, 'reconnected');
     }
 }
 
@@ -16526,15 +17108,7 @@ function dispatchPushEventToHooks(eventName, payload) {
  */
 function destroyAllHooks() {
     _ensureHooksInit();
-    for (const [, entry] of _activeHooks) {
-        if (typeof entry.instance.destroyed === 'function') {
-            _safeCallHook(
-                entry.instance.destroyed.bind(entry.instance),
-                `${entry.hookName}.destroyed()`,
-            );
-        }
-    }
-    _activeHooks.clear();
+    for (const [elId, entry] of _activeHooks) _destroyHookEntry(elId, entry);
 }
 
 /**
@@ -16782,14 +17356,50 @@ const _MODEL_EXACT = ['[dj-model]', '[dj-model\\.lazy]', '[dj-model\\.debounce]'
 const _MODEL_NUMBERED_CANDIDATES = ['input', 'textarea', 'select', '[contenteditable]'];
 
 /**
- * Scan and bind all dj-model elements.
+ * Scan and bind all dj-model elements; with a patch's `changes` (#4001), only
+ * those the patch inserted or whose attributes it changed.
  *
  * Runs after every DOM update (#3334), so the common case must be cheap: a page
  * of already-bound inputs costs the native selector matches and a few property
  * reads per element, not an attribute walk (#3355).
  */
-function bindModelElements(root) {
-    root = root || document;
+function bindModelElements(root, changes) {
+    if (changes && changes.scoped) {
+        // #4001: after a patch batch, only what it inserted or re-attributed
+        // can hold a new or changed binding.
+        changes.inserted.forEach(el => {
+            _bindModelCandidate(el);
+            _bindModelIn(el);
+        });
+        changes.attrs.forEach((_names, el) => {
+            if (el.isConnected) _bindModelCandidate(el);
+        });
+        return;
+    }
+    _bindModelIn(root || document);
+}
+
+/**
+ * Bind `el` itself when it carries a dj-model attribute it is not bound by:
+ * any element for the spellings a selector names, and for dj-model.debounce-N
+ * only the elements the full scan considers (_MODEL_NUMBERED_CANDIDATES).
+ */
+function _bindModelCandidate(el) {
+    if (_modelUnchanged(el)) return;
+    if (!_MODEL_EXACT.some(sel => el.matches(sel)) &&
+        !_MODEL_NUMBERED_CANDIDATES.some(sel => el.matches(sel))) return;
+    const names = el.getAttributeNames();
+    for (let i = 0; i < names.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        if (names[i].startsWith('dj-model')) {
+            _bindModel(el);
+            return;
+        }
+    }
+}
+
+/** The dj-model elements under `root` (descendants; not `root` itself). */
+function _bindModelIn(root) {
     _MODEL_EXACT.forEach(selector => {
         root.querySelectorAll(selector).forEach(el => {
             if (!_modelUnchanged(el)) _bindModel(el);
@@ -18178,6 +18788,9 @@ window.djust.bindModelElements = bindModelElements;
 
 (function initVirtualListModule() {
     const STATE = new WeakMap();
+    // The containers in STATE, countable (#4001): a patch on a page that
+    // tracks none skips the virtual-list rescan.
+    const TRACKED = new Set();
     const DEFAULT_OVERSCAN = 3;
     const DEFAULT_ESTIMATED_HEIGHT = 50;
     const DEFAULT_KEY_ATTR = 'data-key';
@@ -18357,6 +18970,7 @@ window.djust.bindModelElements = bindModelElements;
         }
 
         STATE.set(container, state);
+        TRACKED.add(container);
         render(state);
     }
 
@@ -18612,6 +19226,7 @@ window.djust.bindModelElements = bindModelElements;
         if (state.resizeObserver) state.resizeObserver.disconnect();
         if (state.itemObserver) state.itemObserver.disconnect();
         STATE.delete(container);
+        TRACKED.delete(container);
     }
 
     // Tear down a virtualization whose container was REPURPOSED for a different
@@ -19143,6 +19758,7 @@ window.djust.bindModelElements = bindModelElements;
     window.djust._flushVirtualKeyedOps = flushKeyedOps;
     window.djust._virtualPrune = virtualPrune;
     window.djust.initVirtualLists = initVirtualLists;
+    window.djust._virtualListsTracked = () => TRACKED.size;
     window.djust.refreshVirtualList = refreshVirtualList;
     window.djust.teardownVirtualList = teardownVirtualList;
     window.djust._findVirtualListHolding = findVirtualListHolding;
@@ -19176,6 +19792,9 @@ window.djust.bindModelElements = bindModelElements;
 
 (function initInfiniteScrollModule() {
     const STATE = new WeakMap();
+    // The containers in STATE, countable (#4001): a patch on a page that
+    // tracks none skips the rescan.
+    const TRACKED = new Set();
     const DEFAULT_THRESHOLD = 0.1;
 
     function parseFloatAttr(el, name, fallback) {
@@ -19276,6 +19895,7 @@ window.djust.bindModelElements = bindModelElements;
         });
 
         STATE.set(container, state);
+        TRACKED.add(container);
         observeSentinels(state);
     }
 
@@ -19331,10 +19951,12 @@ window.djust.bindModelElements = bindModelElements;
         if (!state) return;
         if (state.observer) state.observer.disconnect();
         STATE.delete(container);
+        TRACKED.delete(container);
     }
 
     window.djust = window.djust || {};
     window.djust.initInfiniteScroll = initInfiniteScroll;
+    window.djust._infiniteScrollTracked = () => TRACKED.size;
     window.djust.resetViewport = resetViewport;
     window.djust.teardownInfiniteScroll = teardownInfiniteScroll;
 })();
@@ -19429,7 +20051,9 @@ window.djust.bindModelElements = bindModelElements;
      */
     function extractAndRegister(root) {
         root = root || document;
-        const scripts = root.querySelectorAll('script[type="djust/hook"]');
+        const scripts = Array.from(root.querySelectorAll('script[type="djust/hook"]'));
+        // A patch can insert the script itself as the root it hands over (#4001).
+        if (root.matches && root.matches('script[type="djust/hook"]')) scripts.unshift(root);
         for (const scriptEl of scripts) {
             if (scriptEl.dataset.djustHookRegistered === '1') continue;
             const hookName = scriptEl.getAttribute('data-hook');
@@ -20580,7 +21204,10 @@ globalThis.djust.djDialog = {
 
     function _onError(e) {
         const detail = (e && e.detail) || {};
-        if (detail.code === 'state_error' && detail.transient === true) {
+        // #4164: a reconnect that restored an older state than the page
+        // showed, and changes not saved yet, are notices of the same kind.
+        const notice = detail.code === 'state_error' || detail.code === 'state_not_restored';
+        if (notice && detail.transient === true) {
             _showSaving(detail);
             return;
         }
@@ -21582,6 +22209,9 @@ function _finalizeRemoval(el) {
     if (el.parentNode) {
         el.parentNode.removeChild(el);
     }
+    // A hook on or inside the element is destroyed now, not at the next
+    // update (#3656): no update follows the end of an exit transition.
+    if (typeof _destroyDetachedHooks === 'function') _destroyDetachedHooks();
 }
 
 // #4108: end every exit still playing under `root` now. A whole-page answer

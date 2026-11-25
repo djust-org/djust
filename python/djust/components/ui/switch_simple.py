@@ -1,32 +1,23 @@
 """
 Switch component for djust.
 
-Simple stateless toggle switch with automatic Rust optimization.
-This is a specialized checkbox styled as a Bootstrap form-switch.
+Simple stateless toggle switch: a checkbox styled as a Bootstrap 5 form-switch.
+
+One renderer (#4002): ``_render_custom`` draws the markup the retired Rust ``RustSwitch``
+drew, pinned byte for byte by ``python/tests/test_ui_simple_golden_4002.py``, with one fix: an
+explicit ``id`` is the input's ``id`` (the Rust instance never received it and used ``name``).
 """
 
-from typing import Any, Optional
+from typing import Optional
+
 from ..base import Component
 
-from django.utils.html import conditional_escape
 from djust.components.utils import attr_text
-
-from djust._rust import RustSwitch
 
 
 class Switch(Component):
     """
     Switch toggle component (Bootstrap 5).
-
-    A toggle switch styled component that behaves like a checkbox
-    but with a modern switch appearance.
-
-    Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
-    - Python fallback with f-strings
-    - Label, help text support
-    - Bootstrap 5 form-switch styles
 
     Args:
         name: Switch name attribute
@@ -39,46 +30,10 @@ class Switch(Component):
         inline: Render inline (for use in groups)
 
     Example:
-        >>> switch = Switch(
-        ...     name="notifications",
-        ...     label="Enable notifications",
-        ...     checked=True
-        ... )
+        >>> switch = Switch(name="notifications", label="Enable notifications", checked=True)
         >>> switch.render()
         '<div class="mb-3">...'
-
-        >>> # With help text
-        >>> switch = Switch(
-        ...     name="dark_mode",
-        ...     label="Dark Mode",
-        ...     help_text="Enable dark theme for the interface"
-        ... )
-
-        >>> # Disabled switch
-        >>> switch = Switch(
-        ...     name="premium",
-        ...     label="Premium Features",
-        ...     checked=False,
-        ...     disabled=True
-        ... )
     """
-
-    _rust_impl_class = RustSwitch
-
-    template = """<div class="mb-3">
-    <div class="form-check form-switch{% if inline %} form-check-inline{% endif %}">
-        <input class="form-check-input"
-               type="checkbox"
-               role="switch"
-               id="{{ id }}"
-               name="{{ name }}"
-               value="{{ value }}"{% if checked %} checked{% endif %}{% if disabled %} disabled{% endif %}>
-        <label class="form-check-label" for="{{ id }}">
-            {{ label }}
-        </label>
-    </div>{% if help_text %}
-    <div class="form-text">{{ help_text }}</div>{% endif %}
-</div>"""
 
     def __init__(
         self,
@@ -91,7 +46,6 @@ class Switch(Component):
         value: str = "on",
         inline: bool = False,
     ):
-        # Pass kwargs to parent to create Rust instance
         super().__init__(
             name=name,
             label=label,
@@ -103,66 +57,29 @@ class Switch(Component):
             inline=inline,
         )
 
-        # Set instance attributes for Python/hybrid rendering
+        # Declared for type checkers; the base class already set each from the kwargs.
         self.name = name
         self.label = label
-        # Note: self.id comes from base class property
         self.checked = checked
         self.disabled = disabled
         self.help_text = help_text
         self.value = value
         self.inline = inline
 
-    def get_context_data(self) -> dict[str, Any]:
-        """Return context for template rendering."""
-        return {
-            "name": self.name,
-            "label": self.label,
-            "id": self.id,  # Use base class id property
-            "checked": self.checked,
-            "disabled": self.disabled,
-            "help_text": self.help_text,
-            "value": self.value,
-            "inline": self.inline,
-        }
-
     def _render_custom(self) -> str:
-        """Pure Python fallback (f-string rendering)."""
-        parts = ['<div class="mb-3">']
-
-        # Build form-check classes
-        check_classes = ["form-check", "form-switch"]
-        if self.inline:
-            check_classes.append("form-check-inline")
-
-        parts.append(f'    <div class="{" ".join(check_classes)}">')
-
-        # Build input attributes
-        attrs = [
-            'class="form-check-input"',
-            'type="checkbox"',
-            'role="switch"',
-            f'id="{attr_text(self.id)}"',  # Use base class id property
-            f'name="{attr_text(self.name)}"',
-            f'value="{attr_text(self.value)}"',
-        ]
-        if self.checked:
-            attrs.append("checked")
-        if self.disabled:
-            attrs.append("disabled")
-
-        parts.append(f"        <input {' '.join(attrs)}>")
-        parts.append(
-            f'        <label class="form-check-label" for="{attr_text(self.id)}">'
-        )  # Use base class id property
-        parts.append(f"            {conditional_escape(self.label)}")
-        parts.append("        </label>")
-        parts.append("    </div>")
-
-        # Help text
-        if self.help_text:
-            parts.append(f'    <div class="form-text">{conditional_escape(self.help_text)}</div>')
-
-        parts.append("</div>")
-
-        return "\n".join(parts)
+        switch_id = attr_text(self.id)
+        inline = " form-check-inline" if self.inline else ""
+        state = (" checked" if self.checked else "") + (" disabled" if self.disabled else "")
+        html = (
+            '<div class="mb-3">'
+            f'\n    <div class="form-check form-switch{inline}">'
+            f'\n        <input class="form-check-input" type="checkbox" role="switch" id="{switch_id}"'
+            f' name="{attr_text(self.name)}" value="{attr_text(self.value)}"{state}>'
+            f'\n        <label class="form-check-label" for="{switch_id}">'
+            f"\n            {attr_text(self.label)}"
+            "\n        </label>"
+            "\n    </div>"
+        )
+        if self.help_text is not None:
+            html += f'\n    <div class="form-text">{attr_text(self.help_text)}</div>'
+        return html + "\n</div>"

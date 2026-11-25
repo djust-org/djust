@@ -44,7 +44,7 @@ This directory contains comprehensive documentation for djust organized by topic
 - **[Migration Guide](components/COMPONENT_MIGRATION_GUIDE.md)** - Upgrade existing components
 - **[Performance Optimization](components/COMPONENT_PERFORMANCE_OPTIMIZATION.md)** - Make components faster
 - **[Unified Design](components/COMPONENT_UNIFIED_DESIGN.md)** - Automatic Rust optimization
-- **[Rust Components](components/RUST_COMPONENTS.md)** - Rust-powered component implementation
+- **[Rust Components](components/RUST_COMPONENTS.md)** - the removed Rust simple-component crate and the benchmark behind its removal (#4002)
 
 **Component Library**:
 - [Breadcrumb](components/BREADCRUMB_COMPONENT_SUMMARY.md)

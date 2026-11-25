@@ -919,6 +919,43 @@ _ENVELOPE = frozenset(
         "url",
     }
 )
+#: The same with the tab's turn serial (#4164 item 1). An envelope written
+#: before the serial existed reads as serial 0.
+_ENVELOPE_SERIAL = _ENVELOPE | {"serial"}
+
+#: The turn serial of the state a view holds (shown on the page), and of the
+#: state its store holds (#4164 item 1). Replies carry the first; a reconnect
+#: that restores a lower serial than its page showed tells the page so.
+_SERIAL = "_djust_turn_serial"
+_SAVED_SERIAL = "_djust_saved_serial"
+
+
+def _int(value: Any) -> int:
+    return value if type(value) is int and value >= 0 else 0
+
+
+def turn_serial(view: Any) -> Optional[int]:
+    """The turn serial of the state ``view`` holds, or None when its state is
+    not saved (nothing to compare a reconnect with)."""
+    if _not_saved(view):
+        return None
+    return _int(view.__dict__.get(_SERIAL))
+
+
+def note_unsaved_change(view: Any) -> None:
+    """A turn changed ``view`` and its save was deferred: the state it shows
+    is one serial past what any save wrote (several deferred turns share one
+    serial; it counts states the store may lack, not turns)."""
+    current = _int(view.__dict__.get(_SERIAL))
+    if current == _int(view.__dict__.get(_SAVED_SERIAL)):
+        view.__dict__[_SERIAL] = current + 1
+
+
+def _serial_owed(view: Any) -> bool:
+    """Whether the page was shown a serial no save has written yet: the next
+    save writes even when the state compares equal to the stored one, so the
+    store's serial catches up."""
+    return _int(view.__dict__.get(_SERIAL)) > _int(view.__dict__.get(_SAVED_SERIAL))
 
 
 class _Store:
@@ -1543,6 +1580,7 @@ class Saved:
         "text",
         "created",
         "url",
+        "serial",
     )
 
     def __init__(
@@ -1557,7 +1595,9 @@ class Saved:
         text: str,
         created: int,
         url: Optional[str] = None,
+        serial: int = 0,
     ) -> None:
+        self.serial = serial  # the turn serial of the stored state (#4164)
         self.url = url  # the query the state was saved under, canonical
         self.public = public
         self.private = private
@@ -1581,7 +1621,7 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
     from .serialization import StateValueError, decode_state_roundtrip
 
     envelope = _stored_envelope(view, store)
-    if type(envelope) is not dict or set(envelope) != _ENVELOPE:
+    if type(envelope) is not dict or set(envelope) not in (_ENVELOPE, _ENVELOPE_SERIAL):
         return None
     created, expires = envelope["created"], envelope["expires"]
     public, private = envelope["values"], envelope["private"]
@@ -1637,6 +1677,7 @@ def _read(view: Any, store: _Store) -> Optional[Saved]:
             _encode([public, private, envelope["remount"], components]),
             created,
             envelope["url"] if type(envelope["url"]) is str else None,
+            _int(envelope.get("serial")),
         )
     except StateValueError:
         logger.warning("djust: stored view state could not be restored and was discarded")
@@ -1742,6 +1783,11 @@ _HOLDER_PREFIX = "_djust_hold_"
 MAX_HOLDERS = 4 * MAX_TABS
 
 
+#: Where a fallback request's claim on its tab waits for a save that changes
+#: the stored state (:func:`_hold`, :func:`stage`).
+_PENDING_CLAIM = "_djust_auto_pending_claim"
+
+
 def holder_key(store: "_Store") -> str:
     return _HOLDER_PREFIX + store.key[len(_KEY_PREFIX) :]
 
@@ -1812,7 +1858,9 @@ def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
     Only a socket holds a token afterwards (``socket``): it keeps the view and
     may write after its last turn. A fallback request takes the tab (so an
     older socket is fenced out) but writes within its own request, as before,
-    and is not fenced against another fallback request.
+    and is not fenced against another fallback request. It takes it only when
+    its save changes the stored state (#4164 item 2): a request that changes
+    nothing renders the stored state and leaves the tab to its socket.
 
     The rule (:func:`djust._session_merge.holder_refuses`): a socket's save
     is refused only when a DIFFERENT, unexpired token is stored. No record
@@ -1821,7 +1869,9 @@ def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
     ==============================================  ===========================
     Case                                            Older socket A's late write
     ==============================================  ===========================
-    B restores the tab (socket or fallback)         refused (B's token stored)
+    B restores the tab (socket, or a fallback       refused (B's token stored)
+    request that changes the state)
+    B is a fallback request that changes nothing    accepted (B records nothing)
     B starts from ``mount()``, nothing stored       refused: B records a token
     (the finding-1 bypass)                          too
     A's state evicted / cleared / expired, then B   refused (B's token stored)
@@ -1837,8 +1887,8 @@ def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
                                                     only lets others through)
     A is the oldest of 33 tabs (record dropped)     accepted, re-recorded
     two fresh sockets A then B                      A refused (last taker holds)
-    a fallback request after A                      A refused; the fallback
-                                                    itself is never refused
+    a fallback request after A that changes the     A refused; the fallback
+    state                                           itself is never refused
     A superseded, then its record is wiped          refused: A's in-memory
                                                     superseded flag wins
     ==============================================  ===========================
@@ -1849,6 +1899,7 @@ def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
     from ._session_merge import save_merged, track_session
 
     view.__dict__.pop("_djust_auto_holder", None)
+    view.__dict__.pop(_PENDING_CLAIM, None)
     if not _save_policy.holder_claims(view):
         return
     session = store.session
@@ -1856,12 +1907,32 @@ def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
         return  # saved whole: nothing to fence with
     token = secrets.token_urlsafe(12)
     key = holder_key(store)
+    if not socket:
+        # A fallback request takes the tab only by saving a CHANGED state
+        # (#4164 item 2): one that changes nothing renders what is stored and
+        # must not fence out a socket holding newer, unsaved changes, whose
+        # flush would otherwise be refused. :func:`stage` records the claim.
+        view.__dict__[_PENDING_CLAIM] = (key, _holder_record(token, store.max_age))
+        return
     session[key] = _holder_record(token, store.max_age)
     _prune_holders(session, key)
     if write:
         save_merged(session, session.session_key)
-    if socket:
-        view.__dict__["_djust_auto_holder"] = token
+    view.__dict__["_djust_auto_holder"] = token
+
+
+def _record_pending_claim(view: Any, session: Any, changed: bool) -> None:
+    """A fallback request's claim on its tab (:func:`_hold`), recorded with
+    the first of its saves that changes the stored state; a request whose
+    saves change nothing records none."""
+    if not changed:
+        return
+    claim = view.__dict__.pop(_PENDING_CLAIM, None)
+    if claim is None:
+        return
+    key, record = claim
+    session[key] = record
+    _prune_holders(session, key)
 
 
 def saved(view: Any, request: Any, *, socket: bool = False) -> Optional[Saved]:
@@ -1884,6 +1955,9 @@ def saved(view: Any, request: Any, *, socket: bool = False) -> Optional[Saved]:
         _hold(view, store, socket=socket, write=socket and found is not None)
     # The query the state was saved under, for ``note_url`` to compare with.
     view.__dict__["_djust_auto_saved_url"] = found.url if found is not None else None
+    # The turn serial carries on from the stored state (#4164 item 1).
+    serial = found.serial if found is not None else 0
+    view.__dict__[_SERIAL] = view.__dict__[_SAVED_SERIAL] = serial
     if found is not None:
         view.__dict__["_djust_auto_basis"] = _Basis(
             _digest(found.text),
@@ -2295,14 +2369,15 @@ def stage(
     basis = _basis(view)
     skip = _per_turn.on("unchanged_save_skip")
     now = int(time.time())
-    if skip and basis is not None and hint is not None and not hint:
+    owed = _serial_owed(view)
+    if skip and basis is not None and hint is not None and not hint and not owed:
         if _still_fresh(basis, now):
             return None
     state = project(view)
     settled = view.__dict__.get("_djust_auto_settled")
     now_digest = _digest(state.text)
     unchanged = basis is not None and now_digest in (basis.stored, settled)
-    if skip and basis is not None and unchanged and _still_fresh(basis, now):
+    if skip and basis is not None and unchanged and _still_fresh(basis, now) and not owed:
         return None
     store = _store(view, request, create=create)
     if store is None:
@@ -2356,7 +2431,16 @@ def stage(
         # The query string the view last read (``note_url``), canonical; None
         # when handle_params() never ran on it.
         "url": view.__dict__.get("_djust_auto_url"),
+        # The turn serial of this state (#4164 item 1): the one the page was
+        # shown, or the next one when this save is the turn's own.
+        "serial": 0,
     }
+    previous_serials = (view.__dict__.get(_SERIAL), view.__dict__.get(_SAVED_SERIAL))
+    serial = _int(previous_serials[0])
+    if not unchanged and not owed:
+        serial += 1
+    envelope["serial"] = serial
+    view.__dict__[_SERIAL] = view.__dict__[_SAVED_SERIAL] = serial
     session = store.session
     previous = session.get(store.key, _MISSING)
     previous_basis = view.__dict__.get("_djust_auto_basis")
@@ -2390,6 +2474,7 @@ def stage(
     # and refuse the tab's only holder.
     token = _holder_token(view)
     holder = holder_key(store)
+    _record_pending_claim(view, session, changed=not unchanged and not page_load)
     if token is not None and not page_load:
         session[holder] = _holder_record(token, store.max_age)
         _fence(session, store.key, holder, token)
@@ -2415,6 +2500,7 @@ def stage(
             session[store.key] = previous
         view.__dict__["_djust_auto_basis"] = previous_basis
         view.__dict__["_djust_auto_settled"] = previous_settled
+        view.__dict__[_SERIAL], view.__dict__[_SAVED_SERIAL] = previous_serials
 
     if state_store is not None and not _kept_in_session(state_store):
         # The store write this save still owes (``write_pending``). It rides

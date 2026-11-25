@@ -243,7 +243,9 @@ async def test_over_sse_the_turn_is_served_and_warned_once(view_class, caplog):
     sid = str(uuid.uuid4())
     with (
         caplog.at_level(logging.WARNING, logger="djust"),
-        harness.ws_settings(MODULE, ROOT_URLCONF=MODULE),
+        # Each turn saved before its reply: the warning is the save's (#4164:
+        # unset, the interval would defer it past this test's stream).
+        harness.ws_settings(MODULE, ROOT_URLCONF=MODULE, DJUST_STATE_SAVE_INTERVAL=0),
     ):
         first = await sync_to_async(request_for)(
             "GET",

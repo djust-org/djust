@@ -15,6 +15,11 @@ attributes named:
 ``explicit_nosave`` ``explicit`` with ``automatic_state = False`` (#4128): the
                    exposure work without the automatic save, so the cost can be
                    split into "exposure" and "saving".
+``explicit_interval`` ``explicit`` with ``state_save_interval = 60`` (#4164):
+                   the save is deferred to the flush (``DJUST_STATE_SAVE_INTERVAL``),
+                   so the turn pays the identity check and the change mark,
+                   not the write. The timer does not fire within a run; the
+                   close flushes.
 =================  ===========================================================
 
 Three shapes:
@@ -60,7 +65,7 @@ from djust.decorators import state
 from djust.tests import _per_turn_harness as harness
 
 MODULE = __name__
-SETTINGS = ("explicit", "explicit_nosave")
+SETTINGS = ("explicit", "explicit_nosave", "explicit_interval")
 ROWS = 500
 WARMUP = 3
 
@@ -188,7 +193,9 @@ class DashboardBody(LiveView):
 def _concrete(body: type, setting: str) -> type:
     attrs: Dict[str, Any] = {"__module__": MODULE}
     attrs["exposure_policy"] = "explicit"
-    attrs["automatic_state"] = setting == "explicit"
+    attrs["automatic_state"] = setting != "explicit_nosave"
+    # 0: every turn saved before its reply; 60: deferred to the flush (#4164).
+    attrs["state_save_interval"] = 60 if setting == "explicit_interval" else 0
     name = f"{body.__name__[: -len('Body')]}_{setting}"
     made = type(name, (body,), attrs)
     globals()[name] = made
@@ -292,13 +299,15 @@ def run_all(rounds: int) -> Dict[str, Dict[str, float]]:
 
 def format_table(medians: Dict[str, Dict[str, float]]) -> str:
     lines = [
-        "shape       explicit ms  nosave ms  ratio  +ms     rounds",
+        "shape       explicit ms  nosave ms  interval ms  nosave/explicit  interval/explicit"
+        "  rounds",
     ]
     for shape, row in medians.items():
         explicit, nosave = row["explicit"], row["explicit_nosave"]
+        interval = row["explicit_interval"]
         lines.append(
-            f"{shape:<10} {explicit:11.3f}  {nosave:9.3f}  {nosave / explicit:5.2f}"
-            f"  {nosave - explicit:+6.3f}  {int(row['rounds'])}"
+            f"{shape:<10} {explicit:11.3f}  {nosave:9.3f}  {interval:11.3f}"
+            f"  {nosave / explicit:15.2f}  {interval / explicit:17.2f}  {int(row['rounds'])}"
         )
     return "\n".join(lines)
 

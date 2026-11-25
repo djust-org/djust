@@ -580,10 +580,13 @@
         return e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey;
     }
 
-    function bindNavigationDirectives() {
+    // `changes` (#4001): a patch's change record; then only the elements it
+    // inserted or re-attributed are bound (a bound one keeps its listener).
+    function bindNavigationDirectives(_scope, changes) {
+        const scan = (sel) => (changes ? _scanSet(sel, changes) : document.querySelectorAll(sel));
         // dj-patch: Update URL params without remount
         // Select/input elements are handled by the delegated document listener above.
-        document.querySelectorAll('[dj-patch]').forEach(function (el) {
+        scan('[dj-patch]').forEach(function (el) {
             if (_patchBound.has(el)) return;
             _patchBound.add(el);
 
@@ -606,7 +609,7 @@
         });
 
         // dj-navigate: Navigate to a different view
-        document.querySelectorAll('[dj-navigate]').forEach(function (el) {
+        scan('[dj-navigate]').forEach(function (el) {
             if (_navigateBound.has(el)) return;
             _navigateBound.add(el);
 
@@ -630,7 +633,7 @@
         // it client-side. Runs on each call because bindNavigationDirectives is
         // invoked from reinitAfterDOMUpdate (initial load + every SPA mount and
         // patch), so the highlight tracks the current page. (#1756)
-        updateAriaCurrent();
+        updateAriaCurrent(changes);
     }
 
     /**
@@ -641,9 +644,16 @@
      * (e.g. a sister-site link) are never "current". Apps style the active link
      * via ``[dj-navigate][aria-current="page"]``.
      */
-    function updateAriaCurrent() {
+    // The path the last full sync ran for: while it holds, only links a patch
+    // inserted or re-attributed can be out of sync (#4001).
+    // `var`: a navigation handler above may run before this line has.
+    var _ariaSyncedPath = null; // eslint-disable-line no-var
+    function updateAriaCurrent(changes) {
         const here = window.location.pathname;
-        document.querySelectorAll('[dj-navigate]').forEach(function (el) {
+        const links = changes && here === _ariaSyncedPath
+            ? _scanSet('[dj-navigate]', changes) : document.querySelectorAll('[dj-navigate]');
+        if (!changes || here !== _ariaSyncedPath) _ariaSyncedPath = here;
+        links.forEach(function (el) {
             // A link that carries ``data-dj-nav`` has its own active rule
             // (theme_nav_item: path PREFIX, not equality, and an ``active``
             // class) managed by the theme's components.js, when that script is

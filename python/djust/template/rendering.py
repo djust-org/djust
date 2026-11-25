@@ -27,7 +27,11 @@ if TYPE_CHECKING:
 
 from djust._rust import extract_template_variables, serialize_queryset
 from djust.optimization.codegen import all_row_cap
-from djust.optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
+from djust.optimization.query_optimizer import (
+    analyze_queryset_optimization,
+    light_relation_parent_bound,
+    optimize_queryset,
+)
 from djust.serialization import normalize_django_value
 
 # Import from the true source module (re-exported via djust.live_view for
@@ -428,6 +432,7 @@ class DjustTemplate:
             # Extract variable paths from template
             from djust.mixins.jit import (
                 drop_callable_sort_keys,
+                mark_called_sort_keys,
                 resolve_variable_keys,
                 split_variable_keys,
                 whole_rows_without_callable_sort_keys,
@@ -465,7 +470,10 @@ class DjustTemplate:
             model_class = queryset.model
             template_hash = hashlib.sha256(source.encode()).hexdigest()[:8]
             model_hash = _get_model_hash(model_class) if _get_model_hash else ""
-            cache_key = (template_hash, variable_name, model_hash, sort_keys)
+            # A QuerySet sliced to a few rows reads a lightly-read relation per row
+            # instead of prefetching it (#4326): its own cache slot.
+            per_parent = light_relation_parent_bound(queryset)
+            cache_key = (template_hash, variable_name, model_hash, sort_keys, per_parent)
 
             # Check cache
             if cache_key in _jit_serializer_cache:
@@ -473,7 +481,9 @@ class DjustTemplate:
                 logger.debug("[JIT] Cache HIT for '%s' - paths: %s", variable_name, paths_for_var)
             else:
                 # Analyze and cache optimization
-                optimization = analyze_queryset_optimization(model_class, paths_for_var)
+                optimization = analyze_queryset_optimization(
+                    model_class, paths_for_var, per_parent_light_reads=per_parent
+                )
 
                 logger.debug(
                     "[JIT] Cache MISS for '%s' (%s) - paths: %s",
@@ -502,7 +512,12 @@ class DjustTemplate:
             logger.debug(
                 "[JIT] Serialized %s objects for '%s' using Rust", len(result), variable_name
             )
-            return result
+            return cast(
+                list,
+                mark_called_sort_keys(
+                    result, model_class, source, variable_name, key_variables, context
+                ),
+            )
 
         except Exception as e:
             # Graceful fallback

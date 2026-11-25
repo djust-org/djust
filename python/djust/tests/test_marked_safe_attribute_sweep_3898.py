@@ -80,6 +80,7 @@ import pytest
 from django.utils.functional import lazy
 from django.utils.safestring import SafeString, mark_safe
 from djust.components.base import LiveComponent
+from djust.tests.hybrid_template_standins_4002 import STAND_INS
 from scripts.lib.template_library_parity import harness, url_sweep
 from tests import sweep_sample
 
@@ -229,9 +230,12 @@ ALL_CLASSES = {
 #: The classes with a ``template``: what ``Component.render`` draws when the crate instance is
 #: absent (derived, not listed). A value the crate constructor refuses (a lazy string) leaves them
 #: to it, and the ones with no crate counterpart are drawn by it always (#3900).
-TEMPLATE_CLASSES = {
+SHIPPED_TEMPLATE_CLASSES = {
     key: cls for key, cls in ALL_CLASSES.items() if getattr(cls, "template", None) is not None
 }
+#: ... and the stand-ins for the two shipped slots #4002 took away (``Avatar``'s ``<img src>``,
+#: ``TextArea``'s ``<textarea>`` text): no shipped template has a judged URL or a raw-text slot.
+TEMPLATE_CLASSES = {**SHIPPED_TEMPLATE_CLASSES, **({} if ONLY else STAND_INS)}
 
 
 # --- tiers (#4074) ---------------------------------------------------------------------------
@@ -245,7 +249,6 @@ TEMPLATE_CLASSES = {
 SHARED_PATHS = (
     "python/djust/components/base.py",
     "python/djust/components/utils.py",
-    "crates/djust_components/src/html.rs",
     "scripts/lib/template_library_parity/url_sweep.py",
     "python/djust/tests/test_marked_safe_attribute_sweep_3898.py",
     "tests/sweep_sample.py",
@@ -261,13 +264,11 @@ _DRAWS: dict[frozenset[str], tuple[int, int]] = {}
 
 
 def _class_paths(key: str) -> list[str]:
-    """The class's module, and the crate source of the same name if it has one."""
-    cls = url_sweep.component_classes().get(key)
+    """The class's module (#4002 removed the crate the ``ui/*_simple`` classes also drew by)."""
+    cls = url_sweep.component_classes().get(key) or STAND_INS.get(key)
     if cls is None:
         return []
-    out = sweep_sample.module_paths(cls)
-    out.append("crates/djust_components/src/simple/%s.rs" % cls.__module__.rsplit(".", 1)[-1])
-    return out
+    return list(sweep_sample.module_paths(cls))
 
 
 @lru_cache(maxsize=None)
@@ -514,13 +515,24 @@ def _draws(cls: type, kwargs: dict) -> bool:
     try:
         with _framework("bootstrap5"):
             obj = cls(**kwargs)  # type: ignore[call-arg]
-            for attr in ("_rust_instance", "template"):
-                if hasattr(obj, attr):
-                    setattr(obj, attr, None)
+            _to_render_custom(obj)
             obj.render()
         return True
     except Exception:  # noqa: BLE001 - the answer is "no"
         return False
+
+
+def _to_render_custom(obj: object) -> None:
+    """Send ``obj`` down its ``_render_custom`` path, when it has one. A class whose one renderer
+    is its ``template`` (#4002: ``Checkbox``, ``Input``, ``ButtonGroup``, ``Offcanvas`` lost the
+    ``_render_custom`` no render reached) keeps it: the cell then draws what the class draws."""
+    from djust.components.base import Component
+
+    if hasattr(obj, "_rust_instance"):
+        obj._rust_instance = None  # type: ignore[attr-defined]
+    own = getattr(type(obj), "_render_custom", None)
+    if hasattr(obj, "template") and own is not None and own is not Component._render_custom:
+        obj.template = None  # type: ignore[attr-defined]
 
 
 def class_params(cls: type) -> tuple[list[str], dict[str, object]]:
@@ -634,9 +646,7 @@ def drive(
         with _framework(framework):
             obj = cls(**kwargs)  # type: ignore[call-arg]
             if force_python:
-                for attr in ("_rust_instance", "template"):
-                    if hasattr(obj, attr):
-                        setattr(obj, attr, None)
+                _to_render_custom(obj)
             elif hybrid:
                 obj._rust_instance = None  # type: ignore[attr-defined]
                 assert getattr(obj, "template", None) is not None, cls
@@ -816,7 +826,8 @@ class TestTheSweep:
         assert rendered > _floor(TEMPLATE_CLASSES, 2_000), (
             f"the sweep barely ran ({rendered} renders)"
         )
-        assert ONLY or len(TEMPLATE_CLASSES) >= 15, sorted(TEMPLATE_CLASSES)
+        # 19 shipped until #4002 gave fifteen ``ui/*_simple`` classes one renderer
+        assert ONLY or len(TEMPLATE_CLASSES) >= 6, sorted(TEMPLATE_CLASSES)
         assert not found, _report(found)
 
         assert item_rendered > _floor(TEMPLATE_CLASSES, 3_000), item_rendered
@@ -1911,7 +1922,9 @@ class TestRawTextCells:
 
     def test_the_pairs_are_derived_and_include_the_reported_one(self) -> None:
         pairs = raw_text_pairs()
-        assert ONLY or ("djust.components.ui.textarea_simple.TextArea", "value") in pairs, pairs
+        # ``ui.TextArea``'s template until #4002; its stand-in since
+        reported = ("djust.tests.hybrid_template_standins_4002.TemplateTextArea", "value")
+        assert ONLY or reported in pairs, pairs
 
     @pytest.mark.parametrize("claim", sorted(CLAIMS))
     def test_every_pair_is_driven_with_the_breakout_and_prints_it_as_text(self, claim: str) -> None:
@@ -1960,8 +1973,10 @@ class TestHybridCellsAreReached:
             for key, cls in ALL_CLASSES.items()
             if issubclass(cls, Component) and cls.template is not None
         }
-        assert set(TEMPLATE_CLASSES) == derived
-        assert ONLY or len(derived) >= 15, sorted(derived)
+        assert set(SHIPPED_TEMPLATE_CLASSES) == derived
+        assert set(TEMPLATE_CLASSES) == derived | (set() if ONLY else set(STAND_INS))
+        assert ONLY or len(derived) >= 4, sorted(derived)
+        derived = set(TEMPLATE_CLASSES)
         assert {key for key, _name in outcome} == derived
 
     def test_every_pair_is_drawn_by_some_cell_or_listed_with_its_reason(self, outcome) -> None:
@@ -1990,7 +2005,8 @@ class TestHybridCellsAreReached:
         by_claim = reach(hybrid=True, claim=claim)
         assert any(n["rendered"] for n in by_claim.values()), claim
         echoed = {pair for pair, n in by_claim.items() if n["echoed"]}
-        assert len(echoed) >= (1 if ONLY else 40), (claim, len(echoed))
+        # 40 with 19 shipped template classes; 31-32 since #4002 (4 shipped and 2 stand-ins)
+        assert len(echoed) >= (1 if ONLY else 30), (claim, len(echoed))
         # ... and a URL slot in particular: the parameter a judged URL group reads is drawn with
         # a value of this kind and printed (a kind the judge cannot handle makes the render
         # raise, which the sweep reads as "the component rejects this value": it must not hide
@@ -2019,16 +2035,13 @@ class TestHybridCellsAreReached:
         )
         assert not silent, silent
 
-    def test_a_lazy_string_takes_the_hybrid_path_on_a_class_with_a_crate_counterpart(self) -> None:
-        """The premise of the issue, measured: the crate constructor refuses a lazy string, so
-        ``Avatar`` is drawn by its template. If the crate ever takes it (or the class stops being
-        refused), this says the cells above no longer cover that route and must be re-derived."""
+    def test_a_lazy_string_takes_the_same_path_as_a_plain_one(self) -> None:
+        """#4002: the crate is gone and ``Avatar`` has one renderer (no template), so a lazy
+        string is drawn exactly like the plain string it stands for."""
         from djust.components.ui.avatar_simple import Avatar
 
-        if Avatar._rust_impl_class is None:
-            pytest.skip("the Rust extension is not built")
-        assert Avatar(src="/a.png")._rust_instance is not None
-        assert Avatar(src=_lazy_safe("/a.png"))._rust_instance is None
+        assert Avatar._rust_impl_class is None and Avatar.template is None
+        assert str(Avatar(src=_lazy_safe("/a.png")).render()) == str(Avatar(src="/a.png").render())
 
 
 # --- the tag parameters that take ITEMS and print them in an attribute (#3904) -----------------

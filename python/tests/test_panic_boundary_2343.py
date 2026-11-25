@@ -178,6 +178,7 @@ class TestGuardCoversTheRenderSurface:
             "serialize_context_py",
             "extract_template_variables_py",
             "extract_item_key_only_reads_py",
+            "extract_printed_item_key_reads_py",
             "extract_own_reads_py",
             "dj_model_fields_from_template",
             "compute_template_hash",

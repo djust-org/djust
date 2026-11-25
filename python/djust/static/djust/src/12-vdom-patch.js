@@ -477,6 +477,53 @@ function _childByDjId(node, host, id) {
     return Array.from(host.children).find((c) => c.getAttribute('dj-id') === id) || null;
 }
 
+// The containers of other views inside a view: their dj-ids are numbered by
+// that view's own renders, so the same id can name an unrelated element there.
+const _NESTED_VIEW_SELECTOR = '[dj-view], [data-djust-embedded], [dj-sticky-root]';
+
+/**
+ * The element with dj-id `id` that belongs to the view rooted at `scope`: the
+ * first in document order with no other view's container between it and
+ * `scope` (a `{% live_render %}` child or a sticky view numbers its ids
+ * independently). Null when there is none.
+ */
+function _ownDjIdElement(scope, id) {
+    if (!scope) return null;
+    const sel = `[dj-id="${CSS.escape(id)}"]`;
+    const owned = (el) => {
+        for (let a = el; a && a !== scope; a = a.parentElement) {
+            if (a.matches(_NESTED_VIEW_SELECTOR)) return false;
+        }
+        return true;
+    };
+    // The first match is the usual answer, and querySelector stops there.
+    const first = scope.querySelector(sel);
+    if (!first || owned(first)) return first;
+    for (const el of scope.querySelectorAll(sel)) if (owned(el)) return el;
+    return null;
+}
+
+/**
+ * The text node a `SetText` names by its parent's dj-id and its index among
+ * the parent's significant children (#4001), or null, and `path` resolves it.
+ * A text node has no dj-id of its own, so without these the client walked the
+ * child lists from the root. Counting stops at the index: no child array.
+ */
+function _textNodeByParent(patch, rootEl) {
+    if (patch.d || typeof patch.parent_d !== 'string' || !Number.isInteger(patch.index)) return null;
+    const parent = _ownDjIdElement(rootEl || getLiveViewRoot(), patch.parent_d);
+    // Inside a [dj-virtual] list dj-ids are positional and rows are detached
+    // (#2113): leave such a node to the path, which carries that guard.
+    if (!parent || parent.closest('[dj-virtual]')) return null;
+    const preserveWhitespace = isWhitespacePreserving(parent);
+    let remaining = patch.index;
+    for (let c = childHost(parent).firstChild; c; c = c.nextSibling) {
+        if (!isSignificantChild(c, preserveWhitespace)) continue;
+        if (remaining-- === 0) return c.nodeType === 3 || c.nodeType === 8 ? c : null;
+    }
+    return null;
+}
+
 function getNodeByPath(path, djustId = null, rootEl = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
@@ -1701,58 +1748,190 @@ const _SHAPE_SKIPPED = new Set(('class style dj-id open hidden disabled checked 
 const _SHAPE_SKIPPED_PREFIX = /^(aria-|data-djust-|data-dj-|data-upload-|data-stream-)/;
 const _shapeText = (text) => text.replace(/[ \t\n\r\f]+/g, ' ').replace(/^ | $/g, '');
 
+// #4001: the fallback computes the shape before every request and again before
+// it applies the answer, and walking a 6,000-element page costs ~10 ms each
+// time. So each element's piece of the text (its open tag, its children's
+// pieces, '>') is hashed once and kept with its CRC-32, its Adler-32 sums and
+// its length; a parent's piece combines its children's (zlib's crc32_combine
+// and adler32_combine), which gives the value of hashing the whole text in one
+// pass, byte for byte. A MutationObserver on the document forgets the pieces of
+// every element a change is in or under, and of every element (re)inserted (a
+// node changed while detached). The content of a <template> is not observed,
+// so nothing in or around one is kept. Work follows the change, not the page.
+const _SHAPE_POLY = 0xEDB88320;
+const _SHAPE_BASE = 65521;
+
+/** (a * b) mod the CRC-32 polynomial, reflected (zlib's multmodp). */
+function _shapeMulMod(a, b) {
+    let p = 0;
+    for (let m = 0x80000000; m; m >>>= 1) {
+        if (a & m) {
+            p ^= b;
+            if ((a & (m - 1)) === 0) break;
+        }
+        b = b & 1 ? (b >>> 1) ^ _SHAPE_POLY : b >>> 1;
+    }
+    return p >>> 0;
+}
+
+const _SHAPE_X2N = (() => {
+    const table = new Uint32Array(32);
+    let p = 0x40000000;
+    table[0] = p;
+    for (let n = 1; n < 32; n++) table[n] = p = _shapeMulMod(p, p); // eslint-disable-line security/detect-object-injection
+    return table;
+})();
+const _shapeX8n = new Map();
+
+/** x^(8 * len) mod the polynomial: what appending `len` bytes does to a CRC. */
+function _shapeShift(len) {
+    let p = _shapeX8n.get(len);
+    if (p !== undefined) return p;
+    p = 0x80000000;
+    for (let n = len, k = 3; n; n = Math.floor(n / 2), k++) {
+        if (n & 1) p = _shapeMulMod(_SHAPE_X2N[k & 31], p);
+    }
+    if (_shapeX8n.size > 4096) _shapeX8n.clear();
+    _shapeX8n.set(len, p);
+    return p;
+}
+
+/** A running hash of the shape text: bytes streamed in, kept pieces combined in. */
+class _ShapeHash {
+    constructor() {
+        this.crc = 0xFFFFFFFF; // the CRC register (pre-conditioned)
+        this.a = 1;
+        this.b = 0;
+        this.len = 0;
+        this.volatile = false; // holds a piece that cannot be kept
+    }
+    byte(code) {
+        this.crc = _SHAPE_CRC[(this.crc ^ code) & 0xFF] ^ (this.crc >>> 8);
+        this.a = (this.a + code) % _SHAPE_BASE;
+        this.b = (this.b + this.a) % _SHAPE_BASE;
+        this.len++;
+    }
+    /** The UTF-8 bytes of `text`. */
+    put(text) {
+        for (const char of text) {
+            const c = char.codePointAt(0);
+            if (c < 0x80) this.byte(c);
+            else if (c < 0x800) { this.byte(0xC0 | (c >> 6)); this.byte(0x80 | (c & 63)); }
+            else if (c < 0x10000) { this.byte(0xE0 | (c >> 12)); this.byte(0x80 | ((c >> 6) & 63)); this.byte(0x80 | (c & 63)); }
+            else { this.byte(0xF0 | (c >> 18)); this.byte(0x80 | ((c >> 12) & 63)); this.byte(0x80 | ((c >> 6) & 63)); this.byte(0x80 | (c & 63)); }
+        }
+    }
+    /** Append a finished piece, as if its bytes were streamed in. */
+    add(piece) {
+        if (piece.volatile) this.volatile = true;
+        if (!piece.len) return;
+        const crc = (_shapeMulMod(_shapeShift(piece.len), (this.crc ^ 0xFFFFFFFF) >>> 0) ^ piece.crc) >>> 0;
+        this.crc = (crc ^ 0xFFFFFFFF) >>> 0;
+        const rem = piece.len % _SHAPE_BASE;
+        let a = this.a + piece.a + _SHAPE_BASE - 1;
+        let b = (rem * this.a) % _SHAPE_BASE + this.b + piece.b + _SHAPE_BASE - rem;
+        if (a >= _SHAPE_BASE) a -= _SHAPE_BASE;
+        if (a >= _SHAPE_BASE) a -= _SHAPE_BASE;
+        if (b >= _SHAPE_BASE * 2) b -= _SHAPE_BASE * 2;
+        if (b >= _SHAPE_BASE) b -= _SHAPE_BASE;
+        this.a = a;
+        this.b = b;
+        this.len += piece.len;
+    }
+    piece() {
+        return {crc: (this.crc ^ 0xFFFFFFFF) >>> 0, a: this.a, b: this.b, len: this.len, volatile: this.volatile};
+    }
+}
+
+// The kept pieces, and the observer that forgets them. `var`: #1370.
+var _shapePieces = null; // eslint-disable-line no-var
+var _shapeObserver = null; // eslint-disable-line no-var
+
+function _shapeForget(records) {
+    for (const r of records) {
+        for (let n = r.target; n; n = n.parentNode) _shapePieces.delete(n);
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => {
+                if (n.nodeType !== 1) return;
+                _shapePieces.delete(n);
+                n.querySelectorAll('*').forEach((el) => _shapePieces.delete(el));
+            });
+        }
+    }
+}
+
+/** True when pieces may be kept: the observer that forgets them is running. */
+function _shapeWatch() {
+    if (!_shapeObserver && typeof MutationObserver === 'function') {
+        _shapePieces = new WeakMap();
+        _shapeObserver = new MutationObserver(_shapeForget);
+        _shapeObserver.observe(document,
+            { subtree: true, childList: true, attributes: true, characterData: true });
+    }
+    if (!_shapeObserver) return false;
+    _shapeForget(_shapeObserver.takeRecords());
+    return true;
+}
+
+/** Append the pieces of `node`'s significant children to `hash`. */
+function _shapeChildren(hash, node, keep) {
+    for (const child of getSignificantChildren(node)) {
+        if (child.nodeType === Node.COMMENT_NODE) {
+            hash.put('!');
+        } else if (child.nodeType === Node.TEXT_NODE) {
+            hash.put('"' + _shapeText(child.textContent) + '\0');
+        } else {
+            hash.add(_shapePiece(child, keep));
+        }
+    }
+}
+
+/** `el`'s piece: `<tag attrs`, its children (or its shown text), `>`. */
+function _shapePiece(el, keep) {
+    if (keep) {
+        const kept = _shapePieces.get(el);
+        if (kept) return kept;
+    }
+    const hash = new _ShapeHash();
+    // A template's content is another tree, which the observer does not see.
+    if (el.tagName === 'TEMPLATE') hash.volatile = true;
+    const csrf = el.getAttribute('name') === 'csrfmiddlewaretoken';
+    const attrs = [];
+    for (const name of el.getAttributeNames()) {
+        const lower = name.toLowerCase();
+        if (_SHAPE_SKIPPED.has(lower) || _SHAPE_SKIPPED_PREFIX.test(lower)) continue;
+        // Django masks the CSRF token again on every render.
+        if (csrf && lower === 'value') continue;
+        attrs.push(' ' + lower + '=' + el.getAttribute(name) + '\0');
+    }
+    hash.put('<' + el.tagName.toLowerCase() + attrs.sort().join(''));
+    // dj-disable-with shows other text while its request is out.
+    const shown = el.getAttribute('data-djust-original-text');
+    // A dj-update="ignore" subtree is the client's (#4283): not walked.
+    if (el.getAttribute('dj-update') !== 'ignore') {
+        if (shown === null) _shapeChildren(hash, el, keep && !hash.volatile);
+        else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) hash.put('"' + _shapeText(shown) + '\0');
+    }
+    hash.put('>');
+    const piece = hash.piece();
+    if (keep && !piece.volatile) _shapePieces.set(el, piece);
+    return piece;
+}
+
 /** The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed. */
 function domShape(root) {
     if (!root) return null;
-    let crc = 0xFFFFFFFF, a = 1, b = 0;
-    const byte = (code) => {
-        crc = _SHAPE_CRC[(crc ^ code) & 0xFF] ^ (crc >>> 8);
-        a = (a + code) % 65521;
-        b = (b + a) % 65521;
-    };
-    // The UTF-8 bytes of `text`.
-    const put = (text) => {
-        for (const char of text) {
-            const c = char.codePointAt(0);
-            if (c < 0x80) byte(c);
-            else if (c < 0x800) { byte(0xC0 | (c >> 6)); byte(0x80 | (c & 63)); }
-            else if (c < 0x10000) { byte(0xE0 | (c >> 12)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
-            else { byte(0xF0 | (c >> 18)); byte(0x80 | ((c >> 12) & 63)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
-        }
-    };
-    const walk = (node) => {
-        for (const child of getSignificantChildren(node)) {
-            if (child.nodeType === Node.COMMENT_NODE) {
-                put('!');
-            } else if (child.nodeType === Node.TEXT_NODE) {
-                put('"' + _shapeText(child.textContent) + '\0');
-            } else {
-                const csrf = child.getAttribute('name') === 'csrfmiddlewaretoken';
-                const attrs = [];
-                for (const name of child.getAttributeNames()) {
-                    const lower = name.toLowerCase();
-                    if (_SHAPE_SKIPPED.has(lower) || _SHAPE_SKIPPED_PREFIX.test(lower)) continue;
-                    // Django masks the CSRF token again on every render.
-                    if (csrf && lower === 'value') continue;
-                    attrs.push(' ' + lower + '=' + child.getAttribute(name) + '\0');
-                }
-                put('<' + child.tagName.toLowerCase() + attrs.sort().join(''));
-                // dj-disable-with shows other text while its request is out.
-                const shown = child.getAttribute('data-djust-original-text');
-                // A dj-update="ignore" subtree is the client's (#4283): not walked.
-                if (child.getAttribute('dj-update') !== 'ignore') {
-                    if (shown === null) walk(child);
-                    else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) put('"' + _shapeText(shown) + '\0');
-                }
-                put('>');
-            }
-        }
-    };
-    walk(root);
+    const hash = new _ShapeHash();
+    // The root's own children are walked every time: which of a <body> root's
+    // children count depends on the page (isForeignBodyChild), not on them.
+    _shapeChildren(hash, root, _shapeWatch() && root.tagName !== 'TEMPLATE');
+    const {crc, a, b} = hash.piece();
     const hex = (n) => (n >>> 0).toString(16).padStart(8, '0');
-    return hex(crc ^ 0xFFFFFFFF) + hex((b << 16) | a);
+    return hex(crc) + hex((b << 16) | a);
 }
 window.djust.domShape = domShape;
+// Tests: forget every kept piece, so the next shape is computed from scratch.
+window.djust._domShapeForgetAll = () => { if (_shapePieces) _shapePieces = new WeakMap(); };
 
 const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
 
@@ -2803,7 +2982,8 @@ function applySinglePatch(patch, rootEl = null) {
     // rootEl is threaded in by the scoped applier (Sticky LiveViews
     // Phase B) so child / sticky patches don't resolve against the
     // parent view's dj-id namespace.
-    const node = getNodeByPath(patch.path, patch.d, rootEl);
+    const node = (patch.type === 'SetText' && _textNodeByParent(patch, rootEl))
+        || getNodeByPath(patch.path, patch.d, rootEl);
     // v0.7.0 — {% dj_activity %} gate. If the target node lives inside
     // a HIDDEN activity wrapper that is NOT eager, we intentionally
     // skip the subtree patch so local DOM state (form values, scroll
@@ -3311,6 +3491,12 @@ function _shouldUseViewTransition() {
  * on full success, ``false`` if any patch failed (caller may trigger a
  * full re-render fallback).
  *
+ * ``changes`` (#4001): an object the call fills with what the patches changed
+ * — inserted and removed roots, changed attributes, text-only updates (see
+ * ``_summarizeMutations``). The response handler passes it on to
+ * ``reinitAfterDOMUpdate`` so the rescans cover the change, not the page. The
+ * boolean result stays the return value: every caller tests it.
+ *
  * **Two paths**:
  *
  * - **Direct (default)**: just runs the inner patch loop and resolves
@@ -3330,7 +3516,7 @@ function _shouldUseViewTransition() {
  * to abandon the animation and return false so the caller can trigger
  * a full re-render fallback. ADR-013.
  */
-async function applyPatches(patches, rootEl = null, applyIf = null) {
+async function applyPatches(patches, rootEl = null, applyIf = null, changes = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -3339,7 +3525,7 @@ async function applyPatches(patches, rootEl = null, applyIf = null) {
     // `applyIf` (#4108) is asked at the last moment, in the same synchronous
     // step as the first mutation: under a View Transition that is the update
     // callback, which runs later than this call. False applies nothing.
-    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl));
+    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl, changes));
 
     if (_shouldUseViewTransition()) {
         let innerResult = true;
@@ -3372,7 +3558,23 @@ async function applyPatches(patches, rootEl = null, applyIf = null) {
  * It runs INSIDE the View Transition callback, not after it — a render after
  * `updateCallbackDone` would land past the transition's snapshot.
  */
-function _applyPatchesInner(patches, rootEl) {
+function _applyPatchesInner(patches, rootEl, changes = null) {
+    // #4001: what this batch changed, for the caller to scope its rescans to.
+    // Recorded by a MutationObserver rather than by each patch op, so every
+    // path that inserts (placements, Replace, subtrees, virtual-list renders,
+    // a hook's beforeUpdate) is covered; takeRecords() reads it synchronously.
+    // It is the page's long-lived observer (_ambientStart): what was inserted
+    // or re-attributed since the last rescan, outside any patch, joins the
+    // record too.
+    const observer = changes ? _ambientStart() : null;
+    if (observer) {
+        _ambientCollect(observer.takeRecords());
+    } else if (patches && patches.length) {
+        // A batch nobody records (a child or sticky view's patches, a cached
+        // answer): nothing tells the next scoped rescan what it inserted, so
+        // the next reinitAfterDOMUpdate scans the page instead (#4001).
+        window.djust._fullRescanPending = true;
+    }
     try {
         if (!patches || patches.length === 0) return true;
         return _withBeforeUpdateHooks(rootEl || getLiveViewRoot(),
@@ -3381,7 +3583,130 @@ function _applyPatchesInner(patches, rootEl) {
         if (typeof window.djust._flushVirtualKeyedOps === 'function') {
             window.djust._flushVirtualKeyedOps();
         }
+        if (observer) {
+            _summarizeMutations(observer.takeRecords(), changes);
+            _ambientMergeInto(changes);
+        }
     }
+}
+
+// #4001 review: a scoped rescan must not see only the patch window. Before it,
+// every patch scanned the page, so an element inserted between patches (by a
+// hook's mounted(), app code, a virtual list's scroll render) was bound by the
+// next patch. One observer, started by the first scoped patch or full rescan
+// and kept for the page's life, collects those elements and dj-* changes
+// between patches; the next patch's record includes them. Cost follows the
+// mutations, not the page. Past _AMBIENT_LIMIT entries it gives up and asks
+// for one full rescan instead. `var`: read before this module runs (#1370).
+var _ambientObserver = null; // eslint-disable-line no-var
+var _ambientAdded = null; // eslint-disable-line no-var
+var _ambientAttrs = null; // eslint-disable-line no-var
+const _AMBIENT_LIMIT = 5000;
+
+function _ambientCollect(records) {
+    if (!_ambientAdded) return;
+    for (const r of records) {
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => { if (n.nodeType === 1) _ambientAdded.add(n); });
+        } else if (r.type === 'attributes') {
+            let names = _ambientAttrs.get(r.target);
+            if (!names) _ambientAttrs.set(r.target, names = new Set());
+            names.add(r.attributeName);
+        }
+    }
+    if (_ambientAdded.size + _ambientAttrs.size > _AMBIENT_LIMIT) {
+        window.djust._fullRescanPending = true;
+        _ambientAdded.clear();
+        _ambientAttrs.clear();
+    }
+}
+
+function _ambientStart() {
+    if (!_ambientObserver && typeof MutationObserver === 'function') {
+        _ambientAdded = new Set();
+        _ambientAttrs = new Map();
+        _ambientObserver = new MutationObserver(_ambientCollect);
+        _ambientObserver.observe(document,
+            { subtree: true, childList: true, attributes: true, characterData: true });
+    }
+    return _ambientObserver;
+}
+
+/** A full rescan is about to cover the page: start collecting afresh from here. */
+function _ambientReset() {
+    if (!_ambientStart()) return;
+    _ambientObserver.takeRecords();
+    _ambientAdded.clear();
+    _ambientAttrs.clear();
+}
+
+/** Add what was collected between patches to a patch's record, then forget it. */
+function _ambientMergeInto(changes) {
+    if (!_ambientAdded || (!_ambientAdded.size && !_ambientAttrs.size)) return;
+    const all = new Set(changes.inserted);
+    _ambientAdded.forEach((n) => { if (n.isConnected) all.add(n); });
+    changes.inserted = Array.from(all).filter((n) => {
+        for (let p = n.parentNode; p; p = p.parentNode) if (all.has(p)) return false;
+        return true;
+    });
+    _ambientAttrs.forEach((names, el) => {
+        if (!el.isConnected) return;
+        const mine = changes.attrs.get(el);
+        if (mine) names.forEach((n) => mine.add(n));
+        else changes.attrs.set(el, names);
+    });
+    _ambientAdded.clear();
+    _ambientAttrs = new Map();
+}
+
+/**
+ * Fill `out` with what `records` changed (#4001):
+ *
+ * - `inserted`: connected elements added, outermost only (a descendant of
+ *   another inserted element is covered by it). A moved element counts.
+ * - `removed`: nodes taken out and not put back.
+ * - `attrs`: Map of element to the Set of attribute names that changed.
+ * - `text`: how many text-only changes (character data, text nodes added).
+ * - `touched`: Set of the connected elements a record targeted (the element
+ *   whose attribute changed, the parent whose children changed, the parent of
+ *   changed character data). A hook's subtree changed iff one of these is the
+ *   hook element or inside it.
+ * - `scoped: true`: the record is complete, so a rescan may use it instead of
+ *   walking the page. A caller without it scans the page as before.
+ */
+function _summarizeMutations(records, out) {
+    const added = new Set();
+    const removed = [];
+    const attrs = new Map();
+    const touched = new Set();
+    let text = 0;
+    for (const r of records) {
+        const target = r.type === 'characterData' ? r.target.parentNode : r.target;
+        if (target && target.nodeType === 1 && target.isConnected) touched.add(target);
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => { if (n.nodeType === 1) added.add(n); else text++; });
+            r.removedNodes.forEach((n) => removed.push(n));
+        } else if (r.type === 'attributes') {
+            let names = attrs.get(r.target);
+            if (!names) attrs.set(r.target, names = new Set());
+            names.add(r.attributeName);
+        } else {
+            text++;
+        }
+    }
+    const inserted = [];
+    added.forEach((n) => {
+        if (!n.isConnected) return;
+        for (let p = n.parentNode; p; p = p.parentNode) if (added.has(p)) return;
+        inserted.push(n);
+    });
+    out.inserted = inserted;
+    out.removed = removed.filter((n) => !n.isConnected);
+    out.attrs = attrs;
+    out.text = text;
+    out.touched = touched;
+    out.scoped = true;
+    return out;
 }
 
 /**
@@ -3441,4 +3766,6 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
 if (typeof globalThis !== 'undefined') {
     globalThis.djust = globalThis.djust || {};
     globalThis.djust.applyPatches = applyPatches;
+    globalThis.djust._summarizeMutations = _summarizeMutations;
+    globalThis.djust._ambientReset = _ambientReset;
 }

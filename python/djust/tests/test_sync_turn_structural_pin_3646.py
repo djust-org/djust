@@ -31,7 +31,7 @@ What it cannot see: a hand-off built dynamically (``getattr(asgiref.sync, name)`
 ``partial(api_in_a_variable, ...)`` is not), and a hook reached through a call the exact
 resolver cannot follow (an attribute call to a method defined in several classes).
 
-What it asserts without checking: the ``outside`` (12), ``entry`` (4) and ``external`` (3)
+What it asserts without checking: the ``outside`` (13), ``entry`` (4) and ``external`` (3)
 entries of ``ALLOWED`` are named and carry a reason, and nothing more. They are threads of
 other subsystems (clocks, the worker pool, the dev server), the HTTP request entry, and
 calls into Django or the Rust extension; no test here proves they enter no hook. And an
@@ -636,6 +636,12 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("runtime.py", "ViewRuntime._render_async_result", "view._sync_state_to_rust"): plumbing(
         _RENDER
     ),
+    # #4123: the same sync, reporting whether the result has anything to render.
+    (
+        "runtime.py",
+        "ViewRuntime._render_async_result",
+        "sync_reports_render_needed",
+    ): plumbing(_RENDER),
     (
         "runtime.py",
         "ViewRuntime._dispatch_mount_body",
@@ -654,7 +660,14 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("runtime.py", "ViewRuntime._check_auth", "run_pre_mount_auth"): leaf(),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "snapshot_codec"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_and_send", "render_view_with_diff"): plumbing(_RENDER),
-    ("runtime.py", "ViewRuntime._dispatch_mount_body", "load_server_state"): plumbing(_SESSION),
+    # #4164 item 1: the restore, and the tab's flush group named in the same hop.
+    ("runtime.py", "ViewRuntime._dispatch_mount_body", "_load_and_name_flush_group"): plumbing(
+        _SESSION
+    ),
+    ("runtime.py", "ViewRuntime._join_flush_group", "flush_group"): plumbing(_SESSION),
+    ("_state_flush_request.py", "request_flush", "flush_group"): plumbing(_SESSION),
+    ("_state_flush_request.py", "request_flush", "stored_serial"): plumbing(_SESSION),
+    ("_state_flush_request.py", "request_flush", "_reload_session"): plumbing(_SESSION),
     # #4095: an over-limit turn goes back to the stored state.
     ("runtime.py", "ViewRuntime._refuse_over_limit_turn", "load_server_state"): plumbing(_SESSION),
     (
@@ -696,9 +709,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     # A deferred turn's identity check (design: save frequency): the binding
     # read the save makes, without the save.
     ("runtime.py", "ViewRuntime._defer_explicit_turn", "check"): plumbing(_SESSION),
-    # Over the size limit with saves deferred, the session writes of a turn
-    # whose own state could not be saved (option A): a session write only.
-    ("runtime.py", "ViewRuntime.commit_explicit_turn", "_save_session_writes"): plumbing(_SESSION),
     # Background work that failed: its session writes, under the result's
     # authorization, without saving the view (#4162).
     (
@@ -757,6 +767,11 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("websocket.py", "LiveViewConsumer._queue_on_lane", "consumer._run_lane_item"): outside(_LANE),
     ("websocket.py", "LiveViewConsumer.handle_unmount", "self._unmount_slot"): outside(_LANE),
     ("websocket.py", "LiveViewConsumer._handle_upload_frame", "owner._run_lane_item"): outside(
+        _LANE
+    ),
+    # #4312: an upload hook queued on the owner's lane; it runs as its own
+    # turn (_run_upload_hook_turn) when the lane reaches it.
+    ("websocket.py", "LiveViewConsumer._run_upload_hook", "self._run_queued_upload_hook"): outside(
         _LANE
     ),
     (
@@ -2068,4 +2083,4 @@ def test_the_unchecked_allowed_kinds_are_the_ones_the_module_docstring_names():
     """The docstring says which entries carry a reason and no mechanical check; keep that
     list from drifting (#3646 review)."""
     counts = collections.Counter(entry_.kind for entry_ in ALLOWED.values())
-    assert (counts["outside"], counts["entry"], counts["external"]) == (12, 4, 3), counts
+    assert (counts["outside"], counts["entry"], counts["external"]) == (13, 4, 3), counts

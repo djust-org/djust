@@ -210,11 +210,14 @@ function _installDraftListeners() {
  * counts as restored, so a saved value cannot land on it later). `atInit`
  * restores every field, as the page-load restore always did.
  */
-function syncDraftFields(atInit) {
-    if (!document.querySelector('[data-draft-enabled]')) return;
+function syncDraftFields(atInit, changes) {
+    // #4001: after a patch, only the fields it inserted or re-attributed (a
+    // rename makes a new field); a field it left alone was synced before.
+    const fields = changes ? _scanSet('[data-draft="true"]', changes) : null;
+    if (fields ? fields.length === 0 : !document.querySelector('[data-draft-enabled]')) return;
     _installDraftListeners();
     const savedByKey = new Map();
-    document.querySelectorAll('[data-draft="true"]').forEach(field => {
+    (fields || document.querySelectorAll('[data-draft="true"]')).forEach(field => {
         if (_draftRestored.get(field) === field.name) return;
         // Renamed since it was last seen: a new field, so what the user typed
         // under the old name says nothing about this one.
@@ -298,8 +301,10 @@ function initDraftMode() {
 // the page must not wipe a draft the user started after the submit.
 const _draftClearApplied = new WeakSet();
 
-function applyDraftClearFlag() {
-    document.querySelectorAll('[data-draft-enabled]').forEach(function (root) {
+function applyDraftClearFlag(changes) {
+    // #4001: data-draft-clear comes and goes with a patch, which inserts the
+    // draft root or changes its attributes: a change record names it.
+    _scanSet('[data-draft-enabled]', changes).forEach(function (root) {
         if (!root.hasAttribute('data-draft-clear')) {
             _draftClearApplied.delete(root);
             return;

@@ -924,6 +924,7 @@ Every replacement works on 1.3.x, so make the change there.
 | the `djust startproject` command | `djust new <name>` (or `uvx djust@latest init` beside an existing `manage.py`); `djust startapp` stays ([#4207](https://github.com/djust-org/djust/issues/4207)) |
 | the back-compat re-exports in `djust.theming.manager` (`COOKIE_NAMESPACE_RE`, `DEFAULT_CONFIG`, `_validate_cookie_namespace`), `djust.theming.presets` (`ColorScale`, `SurfaceTreatment`, `ThemeTokens`, `BLUE_THEME`, `GREEN_THEME`, `ORANGE_THEME`, `PURPLE_THEME`, `ROSE_THEME`, `SHADCN_THEME`, `NATURAL20_THEME`, `CATPPUCCIN_THEME`, `ROSE_PINE_THEME`, `TOKYO_NIGHT_THEME`, `NORD_THEME`, `SYNTHWAVE_THEME`, `CYBERPUNK_THEME`, `OUTRUN_THEME`, `FOREST_THEME`, `AMBER_THEME`, `SLATE_THEME`, `NEBULA_THEME`, `DJUST_THEME`, `DRACULA_THEME`, `GRUVBOX_THEME`, `SOLARIZED_THEME`, `HIGH_CONTRAST_THEME`, `MONO_THEME`, `EMBER_THEME`, `AURORA_THEME`, `INK_THEME`, `SOLARPUNK_THEME`, `BAUHAUS_THEME`, `CYBERDECK_THEME`, `PAPER_THEME`, `NEON_NOIR_THEME`, `OCEAN_THEME`, `STRIPE_THEME`, `LINEAR_THEME`, `NOTION_THEME`, `VERCEL_THEME`, `GITHUB_THEME`, `ART_DECO_THEME`, `HANDCRAFT_THEME`, `TERMINAL_THEME`, `MAGAZINE_THEME`, `DOCS_THEME`, `SWISS_THEME`, `CANDY_THEME`, `RETRO_COMPUTING_THEME`, `MEDICAL_THEME`, `LEGAL_THEME`, `MIDNIGHT_THEME`, `SUNRISE_THEME`, `FOREST_FLOOR_THEME`, `DASHBOARD_THEME`, `ONE_DARK_THEME`, `MONOKAI_THEME`, `AYU_THEME`, `KANAGAWA_THEME`, `EVERFOREST_THEME`, `POIMANDRES_THEME`, `TAILWIND_THEME`, `SUPABASE_THEME`, `RAYCAST_THEME`, `ADAPTIVE_THEME`, `SAKURA_THEME`, `OBSIDIAN_THEME`, `DUNE_THEME`, `MISSION_CONTROL_THEME`, `ART_NOUVEAU_THEME`), `djust.theming.theme_packs` (`AnimationStyle`, `IconStyle`, `IllustrationStyle`, `InteractionStyle`, `PatternStyle`, `PATTERN_GLASS`) | import the types from `djust.theming` and the rest from the module that defines it (`djust.theming._config`, `_constants`, `_builtin_presets`) ([#4207](https://github.com/djust-org/djust/issues/4207)) |
 | `LiveViewConsumer.handle_event`, `LiveViewConsumer.handle_url_change`, `LiveViewConsumer.handle_mount` (now the private `_mount_page`) and `PushEventMixin._flush_pending_push_events` | events and URL changes reach a view through the runtime (`_dispatch_runtime_owned`); call `flush_push_events` instead of `_flush_pending_push_events`. A `LiveViewConsumer` subclass overriding one of these is not called ([#4207](https://github.com/djust-org/djust/issues/4207)) |
+| `djust._rust.RustAlert`, `RustAvatar`, `RustBadge`, `RustButton`, `RustCard`, `RustDivider`, `RustIcon`, `RustModal`, `RustProgress`, `RustRange`, `RustSpinner`, `RustSwitch`, `RustTextArea`, `RustToast`, `RustTooltip` (the `djust_components` crate) | `djust.components.ui.Alert` ... `Tooltip`, which draw the same markup through `render()` ([#4002](https://github.com/djust-org/djust/issues/4002)) |
 
 <!-- END GENERATED removed-table:python -->
 
@@ -1140,6 +1141,52 @@ state the old value.
   becomes `@background(survive_disconnect=True)`. It then runs to completion
   and its result is discarded
   ([#4182](https://github.com/djust-org/djust/issues/4182)).
+- **WebSocket and SSE turns save their state after the reply, within 2
+  seconds.** In 1.3 every turn's state was in storage before its reply. In
+  2.0 `DJUST_STATE_SAVE_INTERVAL` defaults to 2: a turn answers first and its
+  state is saved no later than 2 seconds after the first unsaved change, when
+  the connection closes, before a navigation, and at the ASGI `lifespan`
+  shutdown. Turns that send the browser elsewhere, write `request.session`,
+  or ask (`@event_handler(save=True)`, `self.save_state()`) are still saved
+  before their reply, and views with `persist="server"` / `persist="client"`
+  fields, `DJUST_STATE_STORE_STRICT`, and the HTTP fallback are unchanged.
+  Measured, a turn with the save taken out of it costs 30 to 38 per cent less.
+  A killed process (SIGKILL, out of memory) can lose up to 2 seconds of
+  changes, and under daphne a graceful stop can too. For the 1.3 behaviour
+  set `DJUST_STATE_SAVE_INTERVAL = 0`, or `state_save_interval = 0` on one
+  view ([#4164](https://github.com/djust-org/djust/issues/4164); see
+  [How often view state is saved](../state/save-frequency.md)).
+
+### Markup that changed: the ui simple components
+
+Eight of the stateless classes in `djust.components.ui` now render through their
+ui `*Component` twin, so each widget has one renderer
+([#4002](https://github.com/djust-org/djust/issues/4002)). Their arguments still
+work; the class docstring gives each mapping. What a page sees:
+
+| Class | Draws | What changed |
+|---|---|---|
+| all eight | the twin's markup | An `id` on the outer element: the class's `id` (`alert`, `badge`, ..., or the explicit `id=` of `Modal` / `Dropdown`). The markup follows `css_framework` (Tailwind and plain variants), and the line breaks and indentation inside it changed. Text is still escaped whatever it is marked as. |
+| `Alert` | `AlertComponent` | The close button stays Bootstrap's `data-bs-dismiss="alert"` (the class renders the twin `standalone`); under Tailwind and plain, where nothing would receive its click, there is no close button. A variant other than info / success / warning / danger / error draws `alert-info` and warns. |
+| `Badge` | `BadgeComponent` | No size class: the default `md` badge loses `fs-6`, `lg` loses `fs-5`, and `size` other than `md` warns. An unknown variant draws `bg-primary` and warns. |
+| `Button` | `ButtonComponent` | An unknown variant (including `link`) draws `btn-primary` and warns. |
+| `Card` | `CardComponent` | `header` draws as `<h5 class="card-title">` inside `.card-body`, not a `.card-header`; the body is a `<p class="card-text">`; the footer gains `text-muted`. An empty header or footer draws no section. `variant` (`border` / `shadow`) is not drawn and warns. |
+| `Dropdown` | `DropdownComponent` | Items are `DropdownItem`s; `url` (checked and escaped, `javascript:` becomes `#`) and `disabled` (`disabled` class, `aria-disabled="true"`) carry over, and `action` / `icon` / `variant` / `data` now work too (a `data` value is escaped text; one with a `javascript:`, `vbscript:` or `data:` scheme becomes `#`). The markup is on one line. |
+| `Modal` | `ModalComponent` | Under Bootstrap `show=False`, the default, still draws the hidden `modal fade` (no backdrop) for `data-bs-toggle` to open, and both close buttons are `data-bs-dismiss="modal"` (the class renders the twin `standalone`); under Tailwind and plain a hidden modal renders nothing and raises a `UserWarning`, and a shown one has no close controls (nothing would receive them). A shown Bootstrap modal is `modal fade show d-block` followed by a `.modal-backdrop`. It always has a header with a close button (`dismissable=False` warns) and, without a `footer`, a "Close" button. `centered` is not drawn and warns; `aria-labelledby` is gone. |
+| `Progress` | `ProgressComponent` | The `.progress` element always carries a height (`1rem` by default), the inline width is a whole percent (`40%`, not `40.0%`) and the fill class truncates (`42.5` is `dj-progress-w-42`). An empty `label` counts as none. |
+| `Spinner` | `SpinnerComponent` | Wrapped in `<div id="spinner">`; `lg` / `xl` draw a size; the classes are single-spaced; an unknown `animation` draws `spinner-grow`. The screen-reader text is always "Loading...": `sr_text` warns. |
+
+`AlertComponent` and `ModalComponent` take `standalone=True` for this: their
+Bootstrap close controls become `data-bs-dismiss`, a hidden `ModalComponent` is
+drawn hidden instead of as nothing, and under Tailwind and plain they draw no close
+controls. A component registered with a view keeps the
+default, `dj-click="dismiss"` and an empty hidden modal. `DropdownItem` gained `url`
+and `disabled`. A deprecated argument warns from the constructor and from `update()`.
+
+The other simple classes (`Accordion`, `Avatar`, `Breadcrumb`, `ButtonGroup`,
+`Checkbox`, `Divider`, `Icon`, `Input`, `ListGroup`, `NavBar`, `Offcanvas`,
+`Pagination`, `Radio`, `Range`, `Select`, `Switch`, `Table`, `Tabs`, `TextArea`,
+`Toast`, `Tooltip`) have no twin in `djust.components.ui` and draw what they drew.
 
 ### State a legacy view no longer keeps
 
@@ -1480,4 +1527,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: 443311bd20b1 -->
+<!-- generated-doc prose-sha256: f57b6679be0e -->

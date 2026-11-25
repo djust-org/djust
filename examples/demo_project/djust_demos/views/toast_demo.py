@@ -8,14 +8,9 @@ def toast_demo(request):
     """Demonstrate Toast component with various configurations"""
     from djust.components.ui import Toast
 
-    # Import Rust version if available
-    try:
-        from djust._rust import RustToast
-        use_rust = True
-        ToastClass = RustToast
-    except ImportError:
-        use_rust = False
-        ToastClass = Toast
+    # One renderer since #4002 (the Rust ``RustToast`` was removed)
+    use_rust = False
+    ToastClass = Toast
 
     context = {
         'success_toast': ToastClass(

@@ -355,6 +355,8 @@ class Cluster:
         node_env: Optional[Dict[str, Dict[str, str]]] = None,
         store: Optional[str] = None,
         save_interval: float = 0,
+        server: str = "uvicorn",
+        lifespan: bool = False,
     ) -> None:
         self.node_env = node_env or {}
         self.dir = _short_tempdir("mnc")
@@ -368,6 +370,10 @@ class Cluster:
             "store": store,
             # DJUST_STATE_SAVE_INTERVAL of every node (0: save every turn).
             "save_interval": save_interval,
+            # The ASGI server of every node (uvicorn, daphne, hypercorn), and
+            # whether the application answers lifespan (djust.lifespan).
+            "server": server,
+            "lifespan": lifespan,
         }
         os.makedirs(self.config["cache_dir"])
         self.names = [chr(ord("A") + i) for i in range(n)]
@@ -548,6 +554,22 @@ class Socket:
             if predicate(frame):
                 return got
 
+    def drain(self, quiet: float) -> List[Dict[str, Any]]:
+        """Every frame that arrives until none has for ``quiet`` seconds."""
+        from websockets.exceptions import ConnectionClosed
+
+        got: List[Dict[str, Any]] = []
+        while True:
+            try:
+                raw = self.ws.recv(timeout=quiet)
+            except (TimeoutError, ConnectionClosed):
+                return got
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", "replace")
+            frame = json.loads(raw)
+            self.frames.append(frame)
+            got.append(frame)
+
     def send(self, frame: Dict[str, Any]) -> None:
         self.ws.send(json.dumps(frame))
 
@@ -574,6 +596,10 @@ class Socket:
             token = reconnect_from.snapshot_token
             if token:
                 frame["state_snapshot"] = {"view_slug": view, "state_json": token}
+            # The turn serial the page was last shown (#4164), as client.js sends it.
+            serial = reconnect_from.state_serial
+            if serial:
+                frame["state_serial"] = serial
         frame.update(extra)
         self.send(frame)
         return self.until(lambda f: f.get("type") in ("mount", "error"))
@@ -586,6 +612,15 @@ class Socket:
             if "state_snapshot_signed" in frame:
                 token = frame["state_snapshot_signed"]
         return token
+
+    @property
+    def state_serial(self) -> Optional[int]:
+        """The newest ``state_serial`` this socket received (#4164)."""
+        serial = None
+        for frame in self.frames:
+            if type(frame.get("state_serial")) is int:
+                serial = frame["state_serial"]
+        return serial
 
     def event(self, name: str, params=None, **extra) -> List[Dict[str, Any]]:
         """Send one event; frames until the answer to it (matched by ``ref``)."""

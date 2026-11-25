@@ -851,9 +851,13 @@ const __djScope = window.djust._chunkScope;
      * Bind upload-related event handlers.
      * Called after DOM updates (mount, patch, etc.)
      */
-    function bindUploadHandlers() {
+    // `changes` (#4001): a patch's change record; then only the elements it
+    // inserted or re-attributed are visited (window.djust._scanSet).
+    function bindUploadHandlers(_scope, changes) {
+        const scan = (sel) => (changes && window.djust._scanSet
+            ? window.djust._scanSet(sel, changes) : document.querySelectorAll(sel));
         // File inputs with dj-upload
-        document.querySelectorAll('[dj-upload]').forEach(input => {
+        scan('[dj-upload]').forEach(input => {
             const uploadName = input.getAttribute('dj-upload');
 
             // #2858 — the change closure captures `uploadName` at bind time,
@@ -887,7 +891,7 @@ const __djScope = window.djust._chunkScope;
         });
 
         // Drop zones with dj-upload-drop
-        document.querySelectorAll('[dj-upload-drop]').forEach(zone => {
+        scan('[dj-upload-drop]').forEach(zone => {
             const uploadName = zone.getAttribute('dj-upload-drop');
 
             // #2858 — same rebuild-or-skip rule as the [dj-upload] loop

@@ -119,9 +119,9 @@ fn a_timezone_aware_datetime_keeps_its_offset() {
     // discarded — decorative by the #1859 test ("would this go red if the thing
     // it pins actually drifted?"). With `+05:00` the two answers differ.
     //
-    // chrono's `parse_from_rfc3339` accepts a SPACE separator, so an
+    // The RFC3339 parser (chrono's grammar, kept by #4222) accepts a SPACE separator, so an
     // offset-bearing string never reaches the naive parsers; and if it did,
-    // `NaiveDateTime::parse_from_str` rejects the trailing offset as `TooLong`,
+    // the naive `strptime` rejects the trailing offset as trailing input,
     // so the failure mode is fail-soft rather than a silent wrong time.
     let ctx = ctx_with("v", Value::String("2026-08-22 14:30:00+05:00".into()));
     assert_eq!(render(r#"{{ v|time:"H:i" }}"#, &ctx), "14:30");

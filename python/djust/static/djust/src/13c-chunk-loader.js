@@ -159,7 +159,7 @@ function loadClientChunk(name) {
 }
 
 /** Names of the chunks `root` needs that are not loaded yet (core bundle only). */
-function _djustNeededChunks(root) {
+function _djustNeededChunks(root, changes) {
     if (!_djustIsCoreBundle()) return [];
     const scope = root || document;
     const needed = [];
@@ -168,7 +168,9 @@ function _djustNeededChunks(root) {
         if (_djustChunkLoaded[name] || _djustChunkFailed[name]) continue;
         // eslint-disable-next-line security/detect-object-injection
         const selector = _DJUST_CHUNK_SELECTORS[name];
-        if ((scope.matches && scope.matches(selector)) ||
+        // #4001: after a patch, only what it inserted or re-attributed.
+        if (changes ? _changedMatches(changes, selector).length > 0
+            : (scope.matches && scope.matches(selector)) ||
             (scope.querySelector && scope.querySelector(selector))) needed.push(name);
     }
     if (!_djustChunkLoaded['service-worker'] && !_djustChunkFailed['service-worker'] &&
@@ -241,8 +243,8 @@ function _djustBackgroundLoad(chunk) {
  * rendered by a patch or live_redirect). Each chunk's ready handler then runs
  * its init over the document. Called from reinitAfterDOMUpdate().
  */
-function _djustLoadChunksFor(scope) {
-    for (const name of _djustNeededChunks(scope)) _djustBackgroundLoad(name);
+function _djustLoadChunksFor(scope, changes) {
+    for (const name of _djustNeededChunks(scope, changes)) _djustBackgroundLoad(name);
 }
 
 // Upload push events (e.g. ``djust:upload_progress`` from the view's

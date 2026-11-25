@@ -20,7 +20,7 @@ took the tab and moved on, replacing newer state with older. The fence:
 
 Every view-level test is a real two-writer race: a late writer must not
 replace newer state. Each has a sibling with claims off (today's behaviour,
-``holder_claims`` is False with no interval set), where the late write does
+``holder_claims`` is False with the interval at 0), where the late write does
 land: that is the gate-off of the claim, and the proof that by default
 nothing changed.
 """
@@ -90,6 +90,9 @@ def _each(monkeypatch, settings, tmp_path):
 
     settings.DJUST_STATE_STORE_KEYS = [state_store.generate_key()]
     sf.one_tab(monkeypatch)
+    # The fence is observed on turns saved before their reply; the claims
+    # fixture turns the claim on alone (#4164: the default interval is 2).
+    settings.DJUST_STATE_SAVE_INTERVAL = 0
 
 
 @pytest.fixture

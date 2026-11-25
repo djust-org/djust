@@ -825,7 +825,20 @@ class ContextMixin:
                         code = generate_serializer_code(model_class.__name__, paths, func_name)
                         serializer = compile_serializer(code, func_name)
                         _jit_serializer_cache[cache_key] = (serializer, None)
-                    set_value(key, [serializer(item) for item in value])
+                    from ..mixins.jit import mark_called_sort_keys
+
+                    set_value(
+                        key,
+                        mark_called_sort_keys(
+                            [serializer(item) for item in value],
+                            model_class,
+                            template_content,
+                            key,
+                            key_variables,
+                            context,
+                            self,
+                        ),
+                    )
                     if all_methods_need_rows(model_class, paths):
                         keep_rows_for_all_methods(self, key, value)
                 else:

@@ -115,22 +115,16 @@ html = render_template("<h1>{{ title }}</h1>", {"title": "Hello"})
         assert "def extract_template_variables" in content
         assert "-> Dict[str, List[str]]:" in content
 
-    def test_stub_documents_all_component_classes(self):
-        """Test that all Rust component classes are documented."""
+    def test_stub_documents_no_component_classes(self):
+        """The Rust simple-component classes were removed (#4002); the stub lists none."""
         from pathlib import Path
 
         stub_file = Path(__file__).parent.parent / "djust" / "_rust.pyi"
         content = stub_file.read_text()
 
-        # All components should be in __all__
-        assert '"RustButton"' in content
-        assert '"RustAlert"' in content
-        assert '"RustCard"' in content
-
-        # All components should have class definitions
-        assert "class RustButton:" in content
-        assert "class RustAlert:" in content
-        assert "class RustCard:" in content
+        for name in ("RustButton", "RustAlert", "RustCard", "RustTooltip"):
+            assert f'"{name}"' not in content
+            assert f"class {name}:" not in content
 
 
 class TestStubFileQuality:

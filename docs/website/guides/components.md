@@ -60,45 +60,34 @@ In the template, `{{ status }}` calls `__str__()` which calls `render()`:
 </div>
 ```
 
-### Performance Waterfall
+### One renderer per component
 
-Every `Component` tries three rendering strategies in order:
+A `Component` draws through ONE renderer, the first it defines (#4002):
 
-1. **Pure Rust** (~1us) -- If `_rust_impl_class` is set and the Rust extension is built
-2. **Hybrid template** (~5-10us) -- If `template` is set, rendered by the Rust template engine with Django fallback
-3. **Python `_render_custom()`** (~50-100us) -- Full flexibility, you write the HTML string
-
-You don't pick one -- you define as many as you want and the fastest available wins:
+1. **`template`** -- an inline template, rendered by the Rust template engine with Django fallback
+2. **`_render_custom()`** -- Python that returns the HTML string, for framework-specific markup
+   (Bootstrap vs Tailwind) or a hot path: a plain f-string renders in a few microseconds
 
 ```python
 from djust.components.base import Component
 
-try:
-    from djust._rust import RustBadge
-except ImportError:
-    RustBadge = None
-
 class Badge(Component):
-    # Tier 1: Rust (if extension is built)
-    _rust_impl_class = RustBadge
-
-    # Tier 2: Hybrid template (Rust template engine + Django fallback)
     template = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
 
     def __init__(self, text: str, variant: str = "primary"):
         super().__init__(text=text, variant=variant)
-        self.text = text
-        self.variant = variant
 
     def get_context_data(self):
         return {"text": self.text, "variant": self.variant}
-
-    # Tier 3: Custom Python (used only when no `template` is set)
-    def _render_custom(self):
-        return f'<span class="badge bg-{self.variant}">{self.text}</span>'
 ```
 
-Most components only need a `template`. Use `_render_custom()` instead of a `template` when you need framework-specific HTML (Bootstrap vs Tailwind). `_render_custom()` is reached only when the class has no `template`: a template that fails in the Rust engine is re-rendered by Django's engine, not by `_render_custom()`, so in the `Badge` above it never runs. Add `_rust_impl_class` for hot-path components rendered hundreds of times per page.
+Define one of the two, not both: `_render_custom()` is reached only when the class has no
+`template` (a template that fails in the Rust engine is re-rendered by Django's engine, not by
+`_render_custom()`). The `djust.components.ui` simple components (`Alert`, `Badge`, `Button` ...)
+draw in `_render_custom()`; the Rust classes that used to back them (`RustBadge` ...) were removed
+in #4002, which measured the Python renderer faster per construct-and-render (see
+`docs/components/RUST_COMPONENTS.md`). A `_rust_impl_class` hook remains on `Component` for a
+project's own native renderer; no djust class uses it.
 
 **Attributes in a `template`.** A `{{ value }}` in the value of an attribute of a start tag (`class="btn-{{ variant }}"`, `<img src="{{ src }}">`) is escaped whatever the value is marked as and however it yields its text (a marked-safe string, a lazy one, an object whose text form is marked safe, a callable). In a URL attribute (`href`, `src`, `action` ...) the value is also judged with the scheme allowlist the Rust instance and `_render_custom()` use; a scheme outside it becomes `#`. That matters most for a lazy string (`gettext_lazy`, `format_lazy`): the Rust constructor takes plain text only, so such a value is drawn by the `template`.
 
@@ -1042,7 +1031,7 @@ engine (every socket render).
   The track is `role="progressbar"` with `aria-valuenow`, `aria-valuemin`, `aria-valuemax` and an
   `aria-label` (the `label=`; an unlabelled bar has no name, so give one). `value` is clamped to 0-100; the `Progress` class
   draws to the whole percent and keeps the exact value in `aria-valuenow`. The Bootstrap/Tailwind
-  `djust.components.ui.Progress` (and `Progress` / `RustProgress`) carry the same width class, and
+  `djust.components.ui.Progress` (and `Progress`) carry the same width class, and
   by default also their inline width; with `LIVEVIEW_CONFIG["csp_strict"]` only the class,
   and their height as a `data-dj-style-height` the client applies (see "Free-form style values
   under a strict CSP" in the security guide).

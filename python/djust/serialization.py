@@ -253,6 +253,22 @@ class ModelName(str):
     __slots__ = ()
 
 
+class CalledName(str):
+    """A row KEY whose value is a CALLED method's result (#4267).
+
+    ``{% for u in users|dictsort:'get_username' %}{{ u.get_username }}``: the row holds the
+    called value because the template prints it, while Django's ``dictsort`` never calls a
+    method key, compares bound methods and renders ``""``. The JIT files such a key as a
+    ``CalledName`` (``mixins.jit.mark_called_sort_keys``), only for a template that sorts by
+    a method it also prints, so no other row pays for it. A ``str`` subclass: it hashes,
+    compares and ``json.dumps`` exactly as the plain name, so the row reads the same
+    everywhere. Its TYPE is the marker: the Rust engine reads it as ``ObjectKey::Method``,
+    which only its ``dictsort`` treats differently. Nothing else constructs it.
+    """
+
+    __slots__ = ()
+
+
 def value_text(value: Any) -> str:
     """The text Django prints for a non-model value read whole (#4269 review).
 
@@ -1467,7 +1483,7 @@ def encode_state_value(
         kind = type(item)
         if item is None or kind is bool or kind is str:
             return item
-        if kind is ModelName:
+        if kind is ModelName or kind is CalledName:
             return str.__str__(item)
         if kind is int:
             return item if -(2**53) < item < 2**53 else _tag("int", str(item))

@@ -104,6 +104,9 @@ function _finalizeRemoval(el) {
     if (el.parentNode) {
         el.parentNode.removeChild(el);
     }
+    // A hook on or inside the element is destroyed now, not at the next
+    // update (#3656): no update follows the end of an exit transition.
+    if (typeof _destroyDetachedHooks === 'function') _destroyDetachedHooks();
 }
 
 // #4108: end every exit still playing under `root` now. A whole-page answer

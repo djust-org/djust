@@ -24,8 +24,12 @@ A turn is deferred only when ALL of these hold; otherwise it is immediate:
    nothing to ``request.session`` itself, and nothing asked for the save
    (``@event_handler(save=True)``, ``self.save_state()``).
 
-``DJUST_STATE_SAVE_INTERVAL`` defaults to ``0``: every turn is immediate, as
-before. A view's ``state_save_interval`` (seconds, ``0``, or ``None`` for the
+``DJUST_STATE_SAVE_INTERVAL`` defaults to :data:`DEFAULT_INTERVAL_S` (2
+seconds, #4164): measured, a turn with an interval costs about what a turn
+with no save costs, the save being 30 to 38 per cent of it, for any interval;
+the value bounds what a killed process can lose and how often a busy
+connection writes. ``0`` makes every turn immediate (the 1.x behaviour). A
+view's ``state_save_interval`` (seconds, ``0``, or ``None`` for the
 project's value) overrides it for that view. The HTTP fallback never asks: it rebuilds the view from storage on
 every request, so it always saves before it answers.
 """
@@ -55,6 +59,10 @@ SAVE_ASYNC_FLAG = "_djust_save_requested_async"
 #: What the setting may be, besides 0.
 MIN_INTERVAL_S = 0.5
 MAX_INTERVAL_S = 60.0
+#: The interval when the setting is not set (#4164). Read as 0, silently,
+#: where it exceeds half of ``DJUST_SERVER_STATE_MAX_AGE`` (a lifetime under
+#: 4 seconds): only a value someone set is reported (``djust.C040``).
+DEFAULT_INTERVAL_S = 2.0
 
 _WARNED: set = set()
 
@@ -96,17 +104,21 @@ def _usable(value: Any, where: str) -> float:
 
 
 def state_save_interval() -> float:
-    """The project's interval in seconds; 0 (the default) saves every turn.
+    """The project's interval in seconds; 0 saves every turn before its reply.
 
-    A value that is not 0 or a number from 0.5 to 60 is read as 0, with one
-    WARNING per process (system check ``djust.C040`` reports it at startup).
+    Unset: :data:`DEFAULT_INTERVAL_S`, or 0 where that exceeds half of
+    ``DJUST_SERVER_STATE_MAX_AGE``. A value that is not 0 or a number from
+    0.5 to 60 is read as 0, with one WARNING per process (system check
+    ``djust.C040`` reports it at startup).
     """
     try:
         from django.conf import settings
 
-        value = getattr(settings, SETTING, 0)
-    except Exception:  # noqa: BLE001 — settings unavailable: the default
+        value = getattr(settings, SETTING, None)
+    except Exception:  # noqa: BLE001 — settings unavailable: every turn saved
         return 0.0
+    if value is None:
+        return DEFAULT_INTERVAL_S if within_lifetime(DEFAULT_INTERVAL_S) else 0.0
     if type(value) is int and value == 0:
         return 0.0
     return _usable(value, SETTING)
@@ -232,12 +244,13 @@ def holder_claims(view: Any) -> bool:
     no longer write (``djust._automatic_state._hold``). Needed only where a
     holder can write after its last turn, which only a deferred save does, so
     only a view whose turns may be deferred claims: with the interval at 0
-    (the default) no restore pays the write.
+    no restore pays the write.
     """
     return deferrable(view)
 
 
 __all__ = [
+    "DEFAULT_INTERVAL_S",
     "DEFERRED",
     "IMMEDIATE",
     "MAX_INTERVAL_S",

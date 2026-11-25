@@ -266,8 +266,8 @@ def event_handler(
             ``expose_api`` is False.
         save: Save the view's state before this handler's reply, even when
             ``DJUST_STATE_SAVE_INTERVAL`` lets other turns be saved later (the
-            same as calling ``self.save_state()`` in it). Default False: with no
-            interval set every turn is saved before its reply anyway.
+            same as calling ``self.save_state()`` in it). Default False: with the
+            interval at 0 every turn is saved before its reply anyway.
 
     Usage:
         @event_handler

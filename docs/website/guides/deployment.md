@@ -349,6 +349,51 @@ async def stop_backend():
 
 The wrapper answers `lifespan` and passes every other scope to the application. Startup hooks run in order, shutdown hooks in reverse. An `async def` hook runs on the server's event loop (each worker process, and each `djust serve --loops` loop, runs its own); a sync hook runs through `sync_to_async`, so it may use the ORM. A startup hook that raises reports `lifespan.startup.failed` and the server does not start. Every shutdown hook runs even if one raises, and the failure is reported as `lifespan.shutdown.failed`. Run the server with lifespan enabled: uvicorn's default `--lifespan auto` uses it once the application answers it, and gunicorn's `UvicornWorker` and `djust serve` do the same.
 
+### What a graceful stop keeps, per server
+
+View state is saved on an interval ([`DJUST_STATE_SAVE_INTERVAL`](../state/save-frequency.md), 2 seconds by default):
+over a WebSocket a turn answers first and its state reaches storage later. What
+is unsaved when the process stops is written when the server closes the
+socket, or at the ASGI `lifespan` shutdown (wrap the application with
+`with_lifespan`, above). Whether a stop gets there depends on the server. Each
+row was recorded by `tests/integration/multinode/test_graceful_stop.py::test_what_a_graceful_stop_keeps_per_server`:
+SIGTERM to a process whose socket holds two unsaved changes, then a reconnect
+to another process.
+
+| Server (version recorded) | On SIGTERM with a socket open | `lifespan` shutdown | What the reconnect restores |
+|---|---|---|---|
+| uvicorn 0.42 | closes each socket (1012); the close saves | runs | everything |
+| gunicorn 27 + `UvicornWorker` | the arbiter forwards SIGTERM; the worker stops as uvicorn does | runs | everything |
+| hypercorn 0.18 | keeps the socket open: the process does not exit until the client leaves (its close saves) or the process is killed | runs, after the last socket | everything, if the client leaves first; the last save if the supervisor's SIGKILL comes first |
+| daphne 4.2 | cancels the application without delivering the close; logs "Killed N pending application instances" | not run | the last save: up to one interval lost |
+
+- **uvicorn and gunicorn+`UvicornWorker`**: a graceful stop loses nothing.
+  Give the stop longer than the flush needs: the `lifespan` flush has
+  `SHUTDOWN_FLUSH_DEADLINE_S` (5 seconds) for all views together, inside
+  gunicorn's `--graceful-timeout` and your orchestrator's grace period
+  (Kubernetes `terminationGracePeriodSeconds`, ECS `stopTimeout`).
+- **hypercorn**: a stop waits for open WebSockets. Under a supervisor that
+  kills after a grace period, a page still open then loses up to one interval.
+  A load balancer that drains connections before the stop closes the sockets
+  first, and every close saves.
+- **daphne**: a graceful stop is like a kill for unsaved changes: with the
+  default interval, up to 2 seconds of them. Run it with
+  `DJUST_STATE_SAVE_INTERVAL = 0` (every turn saved before its reply), or use
+  uvicorn.
+- **More than one process** (several workers, several hosts): use a channel
+  layer shared between them (`channels_redis`). A reconnect that reaches
+  another process asks the tab's old connection to save through it; with an
+  in-memory layer it cannot, and restores the last save, up to one interval
+  behind (system check `djust.C046`).
+- **A kill** (SIGKILL, an out-of-memory kill, a lost host) under any server
+  restores the last save, at most the interval behind
+  (`test_a_kill_between_saves_restores_the_last_save`).
+
+The recording runs uvicorn and daphne from the test environment; hypercorn and
+gunicorn are not dependencies, so their rows run only where they are installed
+(`DJUST_MN_SERVER_PATH` names a directory that holds them) and are skipped
+otherwise.
+
 ### Gunicorn + Uvicorn Workers
 
 For containerized production deployments (Fargate, GKE, Cloud Run, Fly.io machines, etc.), Gunicorn supervising Uvicorn workers gives you process-based supervision (worker recycling, graceful reloads, memory-based restarts) on top of Uvicorn's async event loop:

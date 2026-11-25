@@ -87,7 +87,8 @@ function _noteRenderDigest(data, sent) {
         _setRenderToken(data.render_digest);
     }
     if (!sent || !changed) return;
-    if (!whole) {
+    // A whole page chosen for its size (#4229) answered a token that matched.
+    if (!whole || data.whole_page === 'size') {
         _httpDigestMisses = 0;
     } else if (++_httpDigestMisses >= 2) {
         _httpDigestHold = _HTTP_DIGEST_HOLD;
@@ -623,6 +624,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
 
+        // A working page-POST fallback is a connection: hooks left offline by
+        // a socket that never came back get reconnected() (#3656).
+        if (!teardown) notifyHooksReconnected();
         // This response belongs to the outgoing view; never patch the new one.
         if (teardown || !ownsHttpResponse()) return;
         const data = await response.json();

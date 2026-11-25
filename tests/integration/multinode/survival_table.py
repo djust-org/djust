@@ -550,11 +550,53 @@ COST_CELLS: Dict[Tuple[str, str], Entry] = {
     ("http_event", "updates"): Cell("2", _T + "session_cost_per_event"),
 }
 
+# ---------------------------------------------------------------------------
+# 5. Save modes: what a stop keeps (#4164 item 7, #4159)
+# ---------------------------------------------------------------------------
+
+GRACEFUL, KILL = "graceful", "kill"
+
+SAVEMODE_COLUMNS = (
+    (GRACEFUL, "Graceful stop (SIGTERM under uvicorn), reconnect to another process"),
+    (KILL, "Process killed (SIGKILL), reconnect to another process"),
+)
+
+SAVEMODE_ROWS = (
+    Row(
+        "immediate",
+        "Saved before every reply: `DJUST_STATE_SAVE_INTERVAL = 0`, a view with a "
+        '`persist="server"` or `persist="client"` field, `DJUST_STATE_STORE_STRICT`, '
+        "a turn marked `save=True` or calling `save_state()`",
+        "Nothing: storage holds what the page showed before the page shows it.",
+    ),
+    Row(
+        "interval",
+        "Saved on an interval (the default): `DJUST_STATE_SAVE_INTERVAL` above 0, 2 seconds "
+        "unless set (WebSocket and SSE turns)",
+        "Stop with a server that closes its sockets or runs `lifespan` (see the deployment "
+        "guide's per-server table). Mark a turn that must survive a kill `save=True`.",
+    ),
+)
+
+SAVEMODE_CELLS: Dict[Tuple[str, str], Entry] = {
+    ("immediate", GRACEFUL): Cell("every change restored", _T + "save_mode_graceful_stop"),
+    ("immediate", KILL): Cell("every change restored", _T + "save_mode_kill"),
+    ("interval", GRACEFUL): Cell(
+        "every change restored: the socket's close saves", _T + "save_mode_graceful_stop"
+    ),
+    ("interval", KILL): Cell(
+        "the last save, at most the interval behind; the page is told its most recent "
+        "changes could not be restored",
+        _T + "save_mode_kill",
+    ),
+}
+
 TABLES = (
     Table("state", STATE_COLUMNS, STATE_ROWS, STATE_CELLS),
     Table("sessions", SESSION_COLUMNS, SESSION_ROWS, SESSION_CELLS),
     Table("engines", ENGINE_COLUMNS, ENGINE_ROWS, ENGINE_CELLS),
     Table("cost", COST_COLUMNS, COST_ROWS, COST_CELLS),
+    Table("savemode", SAVEMODE_COLUMNS, SAVEMODE_ROWS, SAVEMODE_CELLS),
 )
 
 ALL_CELLS: Dict[Tuple[str, str, str], Entry] = {

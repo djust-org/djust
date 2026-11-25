@@ -136,9 +136,8 @@ class SpinnerComponent(LiveComponent):
             else f'<div id="{attr_text(self.component_id)}">'
         )
 
-        html += (
-            f'<div class="{spinner_type} {size_class} {variant_class}" role="status"{custom_size}>'
-        )
+        spinner_class = " ".join(c for c in (spinner_type, size_class, variant_class) if c)
+        html += f'<div class="{spinner_class}" role="status"{custom_size}>'
         html += '<span class="visually-hidden">Loading...</span>'
         html += "</div>"
 

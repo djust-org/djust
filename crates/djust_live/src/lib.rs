@@ -210,7 +210,8 @@ const FAST_PATH_FRAGMENT: f64 = 1.0;
 /// the old VDOM's text nodes are patched in place. Two sites report it:
 /// `render_with_diff` (`try_text_region_fast_path`, after the fragment path
 /// could not fire — a single text span, resolved through the byte-offset
-/// `text_node_index`) and `render_binary_diff`
+/// `text_node_index`, then `try_multi_text_region_fast_path` for up to
+/// `MAX_TEXT_REGIONS` spans, #4325) and `render_binary_diff`
 /// (`djust_vdom::try_text_only_vdom_update_inplace`, its only text fast
 /// path — one or more text spans, resolved by walking the tree). A text
 /// change that `render_with_diff` would report as `FAST_PATH_FRAGMENT` is
@@ -638,6 +639,39 @@ impl RustLiveViewBackend {
         self.loop_render_cache.is_enabled()
     }
 
+    /// Enable or disable the index-keyed per-item loop store (#4325): a loop
+    /// whose item at an index hashes as it did reuses that item's output
+    /// from the previous render. On by default; `djust._per_turn`
+    /// `loop_item_render` switches it from the Python sync. Off drops what
+    /// it holds.
+    fn set_loop_item_store_enabled(&mut self, enabled: bool) {
+        self.loop_render_cache.item_store_mut().set_enabled(enabled);
+    }
+
+    /// Whether the per-item loop store is enabled (introspection).
+    fn loop_item_store_enabled(&self) -> bool {
+        self.loop_render_cache.item_store().is_enabled()
+    }
+
+    /// Items the per-item loop store served in the most recent render.
+    fn loop_item_store_hits(&self) -> u64 {
+        self.loop_render_cache.item_store().hits()
+    }
+
+    /// Items the per-item loop store looked up and rendered in the most
+    /// recent render.
+    fn loop_item_store_misses(&self) -> u64 {
+        self.loop_render_cache.item_store().misses()
+    }
+
+    /// Testing only: break the per-item loop store on purpose (1: serve a
+    /// stored item whatever its value, 2: ignore length and environment), so
+    /// the differential tests can prove they see a broken store. 0 restores.
+    #[pyo3(name = "_set_loop_item_store_sabotage")]
+    fn set_loop_item_store_sabotage(&mut self, mode: u8) {
+        self.loop_render_cache.item_store_mut().set_sabotage(mode);
+    }
+
     /// Snapshot the CALLING thread's render environment onto this view
     /// (ADR-029, #2741).
     ///
@@ -752,6 +786,34 @@ impl RustLiveViewBackend {
             snapshot_context_to_value_hashmap(updates.cast::<PyDict>()?)?;
         self.apply_state_update(updates);
         Ok(())
+    }
+
+    /// Replace items of the list held under `key` in place (#4325).
+    ///
+    /// The item-level form of `update_state` for a list of which only a few
+    /// rows changed: `values[n]` replaces item `indices[n]`, converted exactly
+    /// as `update_state` converts a list's items. Returns `false` and changes
+    /// NOTHING when the state does not hold a `list` under `key`, an index is
+    /// out of range, or the two sequences differ in length; the caller then
+    /// sends the whole value through `update_state`.
+    ///
+    /// Like `update_state`, it revokes every safe grant on `key` and its
+    /// descendants: the caller uses it only for plain data (no `SafeString`
+    /// anywhere in the list), which is what the full path would mark.
+    fn update_state_items(
+        &mut self,
+        key: String,
+        indices: Vec<usize>,
+        values: &Bound<'_, PyList>,
+    ) -> PyResult<bool> {
+        if indices.len() != values.len() {
+            return Ok(false);
+        }
+        let mut converted: Vec<Value> = Vec::with_capacity(indices.len());
+        for value in values.iter() {
+            converted.push(value.extract::<Value>()?);
+        }
+        Ok(self.replace_state_items(&key, indices, converted))
     }
 
     /// Drop every state key absent from `keys`, returning the removed keys
@@ -2604,6 +2666,9 @@ impl RustLiveViewBackend {
                                 if !node.is_text() {
                                     return None;
                                 }
+                                if text_change_needs_parse(old_raw, new_raw) {
+                                    return None;
+                                }
                                 let old_text = text_node_value(vdom, path, old_raw)?;
                                 let new_text = text_node_value(vdom, path, new_raw)?;
                                 if is_html_whitespace_only(&old_text)
@@ -2631,11 +2696,12 @@ impl RustLiveViewBackend {
                                 } else {
                                     Some(djust_id.clone())
                                 };
-                                patches.push(djust_vdom::Patch::SetText {
-                                    path: path.clone(),
+                                patches.push(djust_vdom::set_text_patch(
+                                    &vdom,
+                                    path.clone(),
                                     d,
-                                    text: new_text.clone(),
-                                });
+                                    new_text.clone(),
+                                ));
                             }
                             Some((vdom, patches))
                         } else {
@@ -2667,7 +2733,12 @@ impl RustLiveViewBackend {
                     self.last_html.as_ref(),
                     self.text_node_index.take(),
                 ) {
-                    let result = try_text_region_fast_path(old_html, &html, old_vdom, &mut index);
+                    let result = try_text_region_fast_path(old_html, &html, old_vdom, &mut index)
+                        .or_else(|| {
+                            // #4325: several text nodes changed (e.g. two
+                            // cells of one re-rendered row).
+                            try_multi_text_region_fast_path(old_html, &html, old_vdom, &mut index)
+                        });
                     self.text_node_index = Some(index);
                     result
                 } else {
@@ -2919,6 +2990,32 @@ impl RustLiveViewBackend {
         std::sync::Arc::make_mut(&mut self.state)
             .insert(component_id.clone(), Value::SafeString(html));
         self.safe_keys.insert(component_id);
+    }
+
+    /// Rust core of `update_state_items`: replace the rows at `indices` of
+    /// the list `key` with `values`, already converted. `false` (nothing
+    /// written) when `key` is not a list or an index is out of range.
+    /// Writes through `make_mut`, so a render holding the map keeps its copy.
+    fn replace_state_items(&mut self, key: &str, indices: Vec<usize>, values: Vec<Value>) -> bool {
+        let len = match self.state.get(key) {
+            Some(Value::List(items)) => items.len(),
+            _ => return false,
+        };
+        if indices.len() != values.len() || indices.iter().any(|&index| index >= len) {
+            return false;
+        }
+        self.pending_partial_page = None;
+        if !self.safe_keys.is_empty() {
+            self.safe_keys.remove(key);
+            let prefix = format!("{key}.");
+            self.safe_keys.retain(|k| !k.starts_with(&prefix));
+        }
+        if let Some(Value::List(items)) = std::sync::Arc::make_mut(&mut self.state).get_mut(key) {
+            for (index, value) in indices.into_iter().zip(values) {
+                items[index] = value;
+            }
+        }
+        true
     }
 
     /// Shared core of `update_state` (the Python entry point) and
@@ -4434,14 +4531,23 @@ fn strip_html_comments_and_whitespace(py: Python<'_>, html: &str) -> PyResult<Op
     })
 }
 
-/// Compute diff between two HTML strings
+/// Compute diff between two HTML strings.
+///
+/// `id_keys=True` opts in to keying every element that has no `dj-key` /
+/// `data-key` by its `id` (`djust_vdom::key_by_id`, #4228) — for HTML rendered
+/// without `dj-if` boundary markers. The default leaves the output unchanged.
 #[pyfunction]
-fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
+#[pyo3(signature = (old_html, new_html, *, id_keys = false))]
+fn diff_html(old_html: String, new_html: String, id_keys: bool) -> PyResult<String> {
     guard_panic("diff_html", move || {
-        let (old, _) = parse_html_with_namespace(&old_html)
+        let (mut old, _) = parse_html_with_namespace(&old_html)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        let (new, new_ns) = parse_html_with_namespace(&new_html)
+        let (mut new, new_ns) = parse_html_with_namespace(&new_html)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        if id_keys {
+            djust_vdom::key_by_id(&mut old);
+            djust_vdom::key_by_id(&mut new);
+        }
 
         let patches = diff_in(&old, &new, new_ns);
         serde_json::to_string(&patches)
@@ -4732,7 +4838,10 @@ impl RenderEnvPy {
 enum PathNode {
     Leaf,
     Object(std::collections::HashMap<String, PathNode>),
-    List(std::collections::HashMap<String, PathNode>),
+    /// The item paths, and one past the largest index any path names: a
+    /// related manager's `all` read only by index is read as `all()[:upto]`
+    /// (#3862 item 1).
+    List(std::collections::HashMap<String, PathNode>, usize),
 }
 
 /// Convert serde_json::Value to Python object using PyO3
@@ -5210,127 +5319,70 @@ fn serialize_model_gated(
 
 /// Build a tree structure from flat field paths for efficient nested traversal
 fn build_field_tree(paths: &[String]) -> std::collections::HashMap<String, PathNode> {
-    use std::collections::HashMap;
-
-    let mut root: HashMap<String, PathNode> = HashMap::new();
-
+    let mut root = std::collections::HashMap::new();
     for path in paths {
-        let parts: Vec<&str> = path.split('.').collect();
-        if parts.is_empty() {
-            continue;
-        }
-
-        let mut current = &mut root;
-        let mut i = 0;
-
-        while i < parts.len() {
-            let part = parts[i];
-
-            // Check if next part is numeric index (list access)
-            if i + 1 < parts.len() && parts[i + 1].parse::<usize>().is_ok() {
-                // This is a list attribute
-                let entry = current
-                    .entry(part.to_string())
-                    .or_insert_with(|| PathNode::List(HashMap::new()));
-
-                match entry {
-                    PathNode::List(nested_map) => {
-                        // Skip the numeric index and continue with remaining parts
-                        i += 2;
-                        if i < parts.len() {
-                            // Process remaining path within list items
-                            let remaining_parts: Vec<&str> = parts[i..].to_vec();
-                            let remaining_path = remaining_parts.join(".");
-
-                            // Recursively add remaining path to nested map
-                            let mut temp_map = std::mem::take(nested_map);
-                            add_path_to_tree(&mut temp_map, &remaining_path);
-                            *nested_map = temp_map;
-                        }
-                        break;
-                    }
-                    PathNode::Leaf => {
-                        // Convert Leaf to List (handles case where 'active_leases' was inserted before 'active_leases.0.property.name')
-                        *entry = PathNode::List(HashMap::new());
-                        if let PathNode::List(nested_map) = entry {
-                            // Skip the numeric index and continue with remaining parts
-                            i += 2;
-                            if i < parts.len() {
-                                // Process remaining path within list items
-                                let remaining_parts: Vec<&str> = parts[i..].to_vec();
-                                let remaining_path = remaining_parts.join(".");
-
-                                // Recursively add remaining path to nested map
-                                let mut temp_map = std::mem::take(nested_map);
-                                add_path_to_tree(&mut temp_map, &remaining_path);
-                                *nested_map = temp_map;
-                            }
-                        }
-                        break;
-                    }
-                    _ => {
-                        // Other type mismatch - skip this path and continue to next
-                        break;
-                    }
-                }
-            } else {
-                // Regular attribute
-                if i == parts.len() - 1 {
-                    // Leaf node
-                    current.entry(part.to_string()).or_insert(PathNode::Leaf);
-                } else {
-                    // Intermediate node
-                    let entry = current
-                        .entry(part.to_string())
-                        .or_insert_with(|| PathNode::Object(HashMap::new()));
-
-                    if matches!(entry, PathNode::Leaf) {
-                        *entry = PathNode::Object(HashMap::new());
-                    }
-                    match entry {
-                        PathNode::Object(nested_map) => {
-                            current = nested_map;
-                        }
-                        _ => {
-                            return root; // Type mismatch
-                        }
-                    }
-                }
-                i += 1;
-            }
-        }
+        add_path_to_tree(&mut root, path);
     }
-
     root
 }
 
 /// Helper to add a path to an existing tree
 fn add_path_to_tree(tree: &mut std::collections::HashMap<String, PathNode>, path: &str) {
+    let parts: Vec<&str> = path.split('.').collect();
+    add_parts_to_tree(tree, &parts);
+}
+
+/// Add `parts` under `tree`. A numeric segment after a name makes that name a
+/// list ([`PathNode::List`]) whose items take the rest, at ANY depth: the rest
+/// can hold another index (`all.0.permission_set.all.3.codename`, #3862).
+///
+/// A relation's `all` read both by index and otherwise (`all.0.name` beside
+/// `all.__len__` or `all.name`) is read as full rows: the index is dropped and
+/// the item paths merge into the `all` node, as the extractor does and as the
+/// Python codegen's `_build_path_tree` does (#3862). Any other shape mismatch
+/// skips the path.
+fn add_parts_to_tree(tree: &mut std::collections::HashMap<String, PathNode>, parts: &[&str]) {
     use std::collections::HashMap;
 
-    let parts: Vec<&str> = path.split('.').collect();
-    if parts.is_empty() {
+    let Some((part, rest)) = parts.split_first() else {
+        return;
+    };
+    let entry_name = (*part).to_string();
+    if let Some(index) = rest.first().and_then(|next| next.parse::<usize>().ok()) {
+        let upto = index.saturating_add(1);
+        let entry = tree
+            .entry(entry_name)
+            .or_insert_with(|| PathNode::List(HashMap::new(), upto));
+        if matches!(entry, PathNode::Leaf) {
+            *entry = PathNode::List(HashMap::new(), upto);
+        }
+        match entry {
+            PathNode::List(nested, bound) => {
+                *bound = (*bound).max(upto);
+                add_parts_to_tree(nested, &rest[1..]);
+            }
+            PathNode::Object(nested) if *part == "all" => add_parts_to_tree(nested, &rest[1..]),
+            _ => {}
+        }
         return;
     }
-
-    let mut current = tree;
-    for (i, part) in parts.iter().enumerate() {
-        if i == parts.len() - 1 {
-            current.entry(part.to_string()).or_insert(PathNode::Leaf);
-        } else {
-            let entry = current
-                .entry(part.to_string())
-                .or_insert_with(|| PathNode::Object(HashMap::new()));
-            if matches!(entry, PathNode::Leaf) {
-                *entry = PathNode::Object(HashMap::new());
-            }
-            match entry {
-                PathNode::Object(nested_map) => {
-                    current = nested_map;
-                }
-                _ => break,
-            }
+    if rest.is_empty() {
+        tree.entry(entry_name).or_insert(PathNode::Leaf);
+        return;
+    }
+    let entry = tree
+        .entry(entry_name)
+        .or_insert_with(|| PathNode::Object(HashMap::new()));
+    if matches!(entry, PathNode::Leaf) {
+        *entry = PathNode::Object(HashMap::new());
+    }
+    if *part == "all" {
+        if let PathNode::List(nested, _) = entry {
+            *entry = PathNode::Object(std::mem::take(nested));
         }
+    }
+    if let PathNode::Object(nested) = entry {
+        add_parts_to_tree(nested, rest);
     }
 }
 
@@ -5372,7 +5424,7 @@ fn gated_names(
     let names: Vec<&str> = tree
         .keys()
         .map(|k| k.as_str())
-        .filter(|k| *k != WHOLE_MARK && *k != ROW_TEXT_KEY)
+        .filter(|k| *k != WHOLE_MARK && *k != ROW_TEXT_KEY && *k != LENGTH_KEY)
         .collect();
     permitted_among(py, obj, &names, gate)
 }
@@ -5521,16 +5573,82 @@ fn warn_rows_capped(py: Python<'_>, cap: usize) {
     drop(logged);
 }
 
-/// `None` when the call guard refused; an empty list for a swallowed error.
-fn called_all_rows<'py>(
+/// The rows `all()[:upto]` yields, for an `all` the template reads only by
+/// index (`{{ u.groups.all.0.name }}`, #3862 item 1): a SQL `LIMIT` on an
+/// unevaluated QuerySet, a slice of the result cache on a prefetched one, so
+/// the cost is the index read, not the relation. Never past the row cap, and
+/// nothing is logged: the template reads no row past `upto`. `None` when the
+/// call guard refused; errors as in [`call_all`].
+fn called_all_rows_upto<'py>(
     value: &Bound<'py, PyAny>,
+    upto: usize,
     cap: Option<usize>,
 ) -> PyResult<Option<Vec<Bound<'py, PyAny>>>> {
-    match call_all(value)? {
-        CalledAll::Refused => Ok(None),
-        CalledAll::Empty => Ok(Some(Vec::new())),
-        CalledAll::Called(queryset) => capped_rows_or_empty(&queryset, cap).map(Some),
+    let queryset = match call_all(value)? {
+        CalledAll::Refused => return Ok(None),
+        CalledAll::Empty => return Ok(Some(Vec::new())),
+        CalledAll::Called(queryset) => queryset,
+    };
+    let py = queryset.py();
+    let bound = cap.map_or(upto, |cap| upto.min(cap));
+    let window = queryset
+        .get_item(pyo3::types::PySlice::new(
+            py,
+            0,
+            isize::try_from(bound).unwrap_or(isize::MAX),
+            1,
+        ))
+        .unwrap_or_else(|_| queryset.clone());
+    match window
+        .try_iter()
+        .and_then(|iterator| iterator.take(bound).collect::<PyResult<Vec<_>>>())
+    {
+        Err(err) if codegen_swallows(py, &err) => Ok(Some(Vec::new())),
+        other => other.map(Some),
     }
+}
+
+/// `[None] * n` for an `all` the template reads only for its length or
+/// truthiness (`{{ u.groups.all|length }}`, `{% if u.groups.all %}`; the
+/// extractor files `groups.all.__len__`, #3862 item 3). `n` is the QuerySet's
+/// `count()`, which a prefetched relation answers from its cache with no query,
+/// so no row is turned into text: `str(row)` per row was the cost before, and a
+/// `__str__` that reads a relation ran a query per row. Bounded by the row cap
+/// like every other `all` read (logged when it bites). An `all` that is not a
+/// QuerySet (a model method returning a list) is counted by its rows. Errors as
+/// in [`call_all`].
+fn all_length_placeholders(
+    py: Python,
+    queryset: &Bound<'_, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    let count = if is_django_queryset(queryset) {
+        match queryset
+            .call_method0("count")
+            .and_then(|count| count.extract::<usize>())
+        {
+            Ok(count) => count,
+            Err(err) if codegen_swallows(py, &err) => 0,
+            Err(err) => return Err(err),
+        }
+    } else {
+        capped_rows_or_empty(queryset, cap)?.len()
+    };
+    let shipped = match cap {
+        Some(cap) if count > cap => {
+            warn_rows_capped(py, cap);
+            cap
+        }
+        _ => count,
+    };
+    Ok(PyList::new(py, (0..shipped).map(|_| py.None()))?
+        .into_any()
+        .unbind())
+}
+
+/// Is the `all` node read for its length only (its one child is [`LENGTH_KEY`])?
+fn all_is_read_for_length(nested: &std::collections::HashMap<String, PathNode>) -> bool {
+    nested.len() == 1 && nested.contains_key(LENGTH_KEY)
 }
 
 /// The exceptions the Python codegen twin swallows around a `.all()` step.
@@ -5608,6 +5726,12 @@ const WHOLE_MARK: &str = "__djust_whole__";
 /// under it, the key the renderer prints a serialized object by. Never an
 /// attribute read: [`gated_names`] drops it.
 const ROW_TEXT_KEY: &str = djust_templates::parser::ROW_TEXT_PATH;
+
+/// The path a template reads only the LENGTH of a relation's `all` through
+/// (`groups.all.__len__`, #3862 item 3): the extractor files
+/// `djust_templates::parser::LENGTH_PATH`, and the `all` ships as that many
+/// `None`s ([`all_length_placeholders`]). Never an attribute read.
+const LENGTH_KEY: &str = djust_templates::parser::LENGTH_PATH;
 
 /// The QuerySet methods a template can chain after `.all`.
 const ALL_CHAIN_METHODS: [&str; 4] = ["count", "exists", "first", "last"];
@@ -5710,27 +5834,53 @@ fn serialize_all_methods(
         }
         let shipped = match node {
             PathNode::Object(row_tree) if name == "first" || name == "last" => {
-                let row = serialize_all_row(py, &value, row_tree, gate, cap)?;
-                // `{{ u.groups.all.first }}` beside `{{ u.groups.all.first.name }}`
-                // reads the row whole AND by field. A dict prints as its repr, so
-                // the row carries the text a serialized model carries for that:
-                // `__str__` (Display renders a dict that has one as that text).
-                if row_tree.contains_key(WHOLE_MARK)
-                    && !(value.is_instance_of::<PyDict>()
-                        || value.is_instance_of::<PyList>()
-                        || value.is_instance_of::<PyTuple>())
-                {
-                    if let Ok(dict) = row.bind(py).cast::<PyDict>() {
-                        dict.set_item("__str__", value.str()?.to_string())?;
-                    }
-                }
-                row
+                method_row_value(py, &value, row_tree, gate, cap)?
             }
             _ => queryset_template_value(&value, 0)?,
         };
         out.set_item(name, shipped)?;
     }
     Ok(out.into_any().unbind())
+}
+
+/// The row a `first` / `last` returned, taken by `row_tree` (#3788, #4326).
+///
+/// `{{ u.groups.all.first }}` beside `{{ u.groups.all.first.name }}` reads the
+/// row whole AND by field. A dict prints as its repr, so the row carries the
+/// text a serialized model carries for that: `__str__` (Display renders a dict
+/// that has one as that text). The codegen twin is `method_row_value`.
+fn method_row_value(
+    py: Python,
+    value: &Bound<'_, PyAny>,
+    row_tree: &std::collections::HashMap<String, PathNode>,
+    gate: &Bound<'_, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    let row = serialize_all_row(py, value, row_tree, gate, cap)?;
+    if row_tree.contains_key(WHOLE_MARK)
+        && !(value.is_instance_of::<PyDict>()
+            || value.is_instance_of::<PyList>()
+            || value.is_instance_of::<PyTuple>())
+    {
+        if let Ok(dict) = row.bind(py).cast::<PyDict>() {
+            dict.set_item("__str__", value.str()?.to_string())?;
+        }
+    }
+    Ok(row)
+}
+
+/// Is `value` a Django manager (a related manager included) or a QuerySet: an
+/// object whose `first` / `last` is the QuerySet method (#4326)?
+fn is_manager_or_queryset(value: &Bound<'_, PyAny>) -> bool {
+    if is_django_queryset(value) {
+        return true;
+    }
+    value
+        .py()
+        .import("django.db.models.manager")
+        .and_then(|m| m.getattr("BaseManager"))
+        .and_then(|cls| value.is_instance(&cls))
+        .unwrap_or(false)
 }
 
 /// `djust.serialization.model_identity`, resolved once per process (#3911).
@@ -5876,6 +6026,13 @@ fn serialize_object_with_paths(
                     let rows = match call_all(&attr_value)? {
                         CalledAll::Refused => continue,
                         CalledAll::Empty => Vec::new(),
+                        CalledAll::Called(queryset) if all_is_read_for_length(nested_tree) => {
+                            result.set_item(
+                                attr_name,
+                                all_length_placeholders(py, &queryset, cap)?,
+                            )?;
+                            continue;
+                        }
                         CalledAll::Called(queryset) => {
                             // `u.groups.all.count` / `.first.name` / `.exists`
                             // (#3788): the template asks the QuerySet, not its
@@ -5897,6 +6054,32 @@ fn serialize_object_with_paths(
                     result.set_item(attr_name, PyList::new(py, serialized)?)?;
                     continue;
                 }
+                // `u.groups.first.name` (#4326): the manager's (or QuerySet's)
+                // `first` / `last` is a method, as after `all`; it was walked as
+                // an object and shipped `{}`. Called under the one call guard,
+                // and the row it returns goes through the serialization gate.
+                if matches!(attr_name.as_str(), "first" | "last")
+                    && attr_value.is_callable()
+                    && is_manager_or_queryset(obj)
+                {
+                    if !djust_core::template_call_guard(&attr_value).may_call() {
+                        continue;
+                    }
+                    let value = match attr_value.call0() {
+                        Ok(value) => value,
+                        Err(err) if codegen_swallows(py, &err) => continue,
+                        Err(err) => return Err(err),
+                    };
+                    if value.is_none() {
+                        result.set_item(attr_name, py.None())?;
+                    } else {
+                        result.set_item(
+                            attr_name,
+                            method_row_value(py, &value, nested_tree, gate, cap)?,
+                        )?;
+                    }
+                    continue;
+                }
                 // JSONField and computed containers carry data keys, not model
                 // attributes. Preserve them just as the codegen root path does.
                 let nested_result = if attr_value.is_instance_of::<PyDict>()
@@ -5909,7 +6092,7 @@ fn serialize_object_with_paths(
                 };
                 result.set_item(attr_name, nested_result)?;
             }
-            PathNode::List(nested_tree) => {
+            PathNode::List(nested_tree, upto) => {
                 // Iterate over list and serialize each item
                 let mut list_results = Vec::new();
 
@@ -5926,7 +6109,9 @@ fn serialize_object_with_paths(
                 // index reads (#3777).
                 let rows_are_called_all = attr_name == "all" && attr_value.is_callable();
                 let iterable = if rows_are_called_all {
-                    let Some(rows) = called_all_rows(&attr_value, cap)? else {
+                    // The index read (`all.0.name`) is the whole read of this
+                    // `all`: the extractor keeps the index only then (#3862).
+                    let Some(rows) = called_all_rows_upto(&attr_value, *upto, cap)? else {
                         continue;
                     };
                     PyList::new(py, rows)?.into_any()
@@ -6087,6 +6272,17 @@ fn text_node_value(vdom: &VNode, path: &[usize], raw: &str) -> Option<String> {
         return if foreign { None } else { Some(raw.to_string()) };
     }
     decode_text_entities(raw).map(std::borrow::Cow::into_owned)
+}
+
+/// Whether swapping a text node's raw HTML `old_raw` for `new_raw` could
+/// parse to something other than `new_raw` decoded: the parser drops a newline
+/// that opens the first text of `<pre>`, `<listing>` and `<textarea>`, turns
+/// CR and CRLF into LF, and drops a NUL in body text (U+FFFD in RCDATA and
+/// raw text). The parse-skipping paths cannot see the parent, so they refuse
+/// a change in the leading newline, any CR and any NUL (#4325).
+fn text_change_needs_parse(old_raw: &str, new_raw: &str) -> bool {
+    old_raw.starts_with('\n') != new_raw.starts_with('\n')
+        || new_raw.bytes().any(|b| b == b'\r' || b == b'\0')
 }
 
 /// Decode the character references a text node's raw HTML may carry, the way
@@ -6309,6 +6505,9 @@ fn try_text_region_fast_path(
     new_raw.push_str(&old_raw[..offset_in_text]);
     new_raw.push_str(new_mid);
     new_raw.push_str(&old_raw[end_in_raw..]);
+    if text_change_needs_parse(old_raw, &new_raw) {
+        return None;
+    }
     let new_text = text_node_value(old_vdom, &path, &new_raw)?;
 
     // #2999: whether a whitespace-only text node survives the parse depends on
@@ -6350,12 +6549,184 @@ fn try_text_region_fast_path(
     } else {
         Some(djust_id)
     };
-    let patch = djust_vdom::Patch::SetText {
-        path,
-        d,
-        text: new_text,
-    };
+    let patch = djust_vdom::set_text_patch(&new_vdom, path, d, new_text);
     Some((new_vdom, vec![patch]))
+}
+
+/// Most text nodes [`try_multi_text_region_fast_path`] patches in one render
+/// (#4325). Past this the full parse + diff is the better bet anyway.
+const MAX_TEXT_REGIONS: usize = 8;
+
+/// The text-region fast path for a diff that touches SEVERAL text nodes
+/// (#4325), e.g. two cells of one row re-rendered by a list item delta.
+/// Called only when [`try_text_region_fast_path`] declined.
+///
+/// Walks the `text_node_index` from the text node holding the first
+/// differing byte. The index covers every non-blank text run inside the
+/// root, so between two consecutive entries there is only markup (and blank
+/// runs). Each step requires that markup to be byte-identical in the new
+/// HTML at the shifted offset, and takes the node's new text run as the
+/// bytes up to the next `<`. The walk stops once the rest of the old HTML is
+/// inside the common suffix at the final shift. So the new document is the
+/// old one with only text runs replaced by tag-free text, and the parse of it
+/// differs from the old tree only in those text nodes. Each changed node is
+/// then validated as the single-span path does (the old raw run decodes to
+/// the VDOM's text, the node is a text node, the new text is not blank),
+/// plus refusing `>`, CR, NUL and a change in a leading newline (which the
+/// parser drops after `<pre>`/`<textarea>`). Any doubt: `None`, full parse.
+/// The index is updated only when the path is taken.
+fn try_multi_text_region_fast_path(
+    old_html: &str,
+    new_html: &str,
+    old_vdom: &VNode,
+    text_node_index: &mut [TextNodeEntry],
+) -> Option<(VNode, Vec<djust_vdom::Patch>)> {
+    if text_node_index.is_empty() {
+        return None;
+    }
+    let old_bytes = old_html.as_bytes();
+    let new_bytes = new_html.as_bytes();
+    let old_len = old_bytes.len();
+    let new_len = new_bytes.len();
+    let min_len = old_len.min(new_len);
+    let mut pfx = 0;
+    while pfx < min_len && old_bytes[pfx] == new_bytes[pfx] {
+        pfx += 1;
+    }
+    if pfx == old_len && pfx == new_len {
+        return None;
+    }
+    let mut sfx = 0;
+    let max_sfx = min_len - pfx;
+    while sfx < max_sfx && old_bytes[old_len - 1 - sfx] == new_bytes[new_len - 1 - sfx] {
+        sfx += 1;
+    }
+    let tail_start = old_len - sfx;
+    let final_shift = new_len as isize - old_len as isize;
+
+    // The entry whose run holds (or ends right at) the first differing byte.
+    let mut i = text_node_index.partition_point(|e| e.html_start <= pfx);
+    if i == 0 {
+        return None;
+    }
+    i -= 1;
+    if pfx > text_node_index[i].html_end {
+        return None;
+    }
+    let first = i;
+
+    // (index entry, new run length, new decoded text)
+    let mut changes: Vec<(usize, usize, String)> = Vec::new();
+    let mut shift: isize = 0;
+    loop {
+        let entry = &text_node_index[i];
+        if old_bytes.get(entry.html_end) != Some(&b'<') {
+            return None;
+        }
+        let new_start = usize::try_from(entry.html_start as isize + shift).ok()?;
+        let new_end = new_start
+            + new_bytes
+                .get(new_start..)?
+                .iter()
+                .position(|&b| b == b'<')?;
+        let old_raw = old_html.get(entry.html_start..entry.html_end)?;
+        let new_raw = new_html.get(new_start..new_end)?;
+        if old_raw != new_raw {
+            if changes.len() == MAX_TEXT_REGIONS {
+                return None;
+            }
+            if new_raw.bytes().any(|b| b == b'>') || text_change_needs_parse(old_raw, new_raw) {
+                return None;
+            }
+            if !get_vdom_node(old_vdom, &entry.path).is_some_and(|n| n.is_text()) {
+                return None;
+            }
+            if text_node_value(old_vdom, &entry.path, old_raw).as_deref()
+                != Some(entry.text.as_str())
+            {
+                return None;
+            }
+            let new_text = text_node_value(old_vdom, &entry.path, new_raw)?;
+            if is_html_whitespace_only(&new_text) {
+                return None;
+            }
+            changes.push((i, new_raw.len(), new_text));
+            shift += new_raw.len() as isize - old_raw.len() as isize;
+        }
+        // Everything after this run is common suffix at the final shift.
+        if entry.html_end >= tail_start && shift == final_shift {
+            break;
+        }
+        let Some(next) = text_node_index.get(i + 1) else {
+            if old_bytes.get(entry.html_end..)? != new_bytes.get(new_end..)? {
+                return None;
+            }
+            break;
+        };
+        let next_new_start = usize::try_from(next.html_start as isize + shift).ok()?;
+        if next.html_start < entry.html_end
+            || next_new_start < new_end
+            || old_bytes.get(entry.html_end..next.html_start)?
+                != new_bytes.get(new_end..next_new_start)?
+        {
+            return None;
+        }
+        i += 1;
+    }
+    if changes.is_empty() {
+        return None;
+    }
+
+    let mut new_vdom = old_vdom.clone();
+    let mut patches = Vec::with_capacity(changes.len());
+    for (idx, _, new_text) in &changes {
+        let entry = &text_node_index[*idx];
+        let node = get_vdom_node_mut(&mut new_vdom, &entry.path)?;
+        node.text = Some(new_text.clone());
+        node.cached_html = None;
+        let d = if entry.djust_id.is_empty() {
+            None
+        } else {
+            Some(entry.djust_id.clone())
+        };
+        // The parent's dj-id plus this node's index in it (#4001), as the
+        // tree diff emits them; only together, and only when the parent has one.
+        let (parent_d, index) = match entry.path.split_last() {
+            Some((&index, parent_path)) => get_vdom_node_mut(&mut new_vdom, parent_path)
+                .and_then(|parent| parent.djust_id.clone())
+                .filter(|id| !id.is_empty())
+                .map_or((None, None), |id| (Some(id), Some(index))),
+            None => (None, None),
+        };
+        patches.push(djust_vdom::Patch::SetText {
+            path: entry.path.clone(),
+            d,
+            text: new_text.clone(),
+            parent_d,
+            index,
+        });
+    }
+
+    // Shift the index: each changed run takes its new length, and every
+    // later entry moves by the cumulative difference.
+    let mut delta: isize = 0;
+    let mut pending = changes.into_iter().peekable();
+    for (j, entry) in text_node_index.iter_mut().enumerate().skip(first) {
+        let start = (entry.html_start as isize + delta) as usize;
+        if pending.peek().is_some_and(|c| c.0 == j) {
+            let (_, new_run_len, new_text) = pending.next()?;
+            let old_run_len = entry.html_end - entry.html_start;
+            entry.html_start = start;
+            entry.html_end = start + new_run_len;
+            entry.text = new_text;
+            delta += new_run_len as isize - old_run_len as isize;
+        } else {
+            entry.html_end =
+                (entry.html_end as isize + (start as isize - entry.html_start as isize)) as usize;
+            entry.html_start = start;
+        }
+    }
+    Some((new_vdom, patches))
 }
 
 fn starts_with_ci(slice: &[u8], prefix: &[u8]) -> bool {
@@ -7478,6 +7849,18 @@ fn extract_item_key_only_reads_py(py: Python, template: String) -> PyResult<Py<P
     })
 }
 
+/// The item-key reads (`dictsort:'k'`) something else in the template also reads, per root
+/// (#4267). See `djust_templates::parser::extract_printed_item_key_reads`.
+#[pyfunction(name = "extract_printed_item_key_reads")]
+fn extract_printed_item_key_reads_py(py: Python, template: String) -> PyResult<Py<PyAny>> {
+    guard_panic("extract_printed_item_key_reads_py", move || {
+        paths_map_to_py(
+            py,
+            djust_templates::extract_printed_item_key_reads(&template),
+        )
+    })
+}
+
 /// The paths each context name reads itself, without a `{% for %}` loop
 /// variable's reads filed under its iterable (#4258). See
 /// `djust_templates::parser::extract_own_reads`.
@@ -7711,26 +8094,10 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Render environment (ADR-029)
     m.add_class::<RenderEnvPy>()?;
 
-    // Add pure Rust components (stateless, high-performance ~1μs rendering)
-    m.add_class::<djust_components::RustAlert>()?;
-    m.add_class::<djust_components::RustAvatar>()?;
-    m.add_class::<djust_components::RustBadge>()?;
-    m.add_class::<djust_components::RustButton>()?;
-    m.add_class::<djust_components::RustCard>()?;
-    m.add_class::<djust_components::RustDivider>()?;
-    m.add_class::<djust_components::RustIcon>()?;
-    m.add_class::<djust_components::RustModal>()?;
-    m.add_class::<djust_components::RustProgress>()?;
-    m.add_class::<djust_components::RustRange>()?;
-    m.add_class::<djust_components::RustSpinner>()?;
-    m.add_class::<djust_components::RustSwitch>()?;
-    m.add_class::<djust_components::RustTextArea>()?;
-    m.add_class::<djust_components::RustToast>()?;
-    m.add_class::<djust_components::RustTooltip>()?;
-
     // JIT auto-serialization
     m.add_function(wrap_pyfunction!(extract_template_variables_py, m)?)?;
     m.add_function(wrap_pyfunction!(extract_item_key_only_reads_py, m)?)?;
+    m.add_function(wrap_pyfunction!(extract_printed_item_key_reads_py, m)?)?;
     m.add_function(wrap_pyfunction!(extract_own_reads_py, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_queryset_py, m)?)?;
     m.add_function(wrap_pyfunction!(serialize_context_py, m)?)?;
@@ -9169,6 +9536,70 @@ mod fast_path_flag_tests {
         assert!(patches.contains("SetText"), "patches: {patches}");
     }
 
+    #[test]
+    fn text_changes_in_two_nodes_take_the_multi_region_fast_path() {
+        // #4325: the label and one loop cell change in the same render. The
+        // byte diff is two text spans with markup between them, so the
+        // single-span path declines and the multi-span path patches both.
+        let mut view = mounted();
+        view.update_state_rust(state("v1", 0, 1080));
+        view.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
+        let (html, patches, _v) = view.render_with_diff_detached().expect("re-render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
+        let patches: Vec<djust_vdom::Patch> =
+            serde_json::from_str(&patches.expect("patches")).expect("patch json");
+        let texts: Vec<&str> = patches
+            .iter()
+            .filter_map(|p| match p {
+                djust_vdom::Patch::SetText { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["v1", "1080"], "patches: {patches:?}");
+        assert!(html.contains(">1080</td>"), "html: {html}");
+
+        // #4001: each SetText carries the parent's dj-id and its index, the
+        // same as a full diff of the same change would emit.
+        let mut slow = mounted();
+        slow.update_state_rust(state("v1", 0, 1080));
+        slow.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
+        slow.fragment_text_map = None;
+        slow.node_html_cache = Vec::new(); // force a full render + diff
+        let (_html, full, _v) = slow.render_with_diff_detached().expect("full diff");
+        let full: Vec<djust_vdom::Patch> =
+            serde_json::from_str(&full.expect("patches")).expect("patch json");
+        let hints = |ps: &[djust_vdom::Patch]| -> Vec<(Vec<usize>, Option<String>, Option<usize>)> {
+            ps.iter()
+                .filter_map(|p| match p {
+                    djust_vdom::Patch::SetText {
+                        path,
+                        parent_d,
+                        index,
+                        ..
+                    } => Some((path.clone(), parent_d.clone(), *index)),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert!(
+            hints(&patches)
+                .iter()
+                .any(|h| h.1.is_some() && h.2.is_some()),
+            "patches: {patches:?}"
+        );
+        assert_eq!(
+            hints(&patches),
+            hints(&full),
+            "fast: {patches:?} full: {full:?}"
+        );
+
+        // The shifted index still serves the next render.
+        view.update_state_rust(state("v22", 0, 7));
+        view.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
+        view.render_with_diff_detached().expect("re-render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
+    }
+
     // ------------------------------------------------------------------
     // The second site that sets `fast_path`: `render_binary_diff` (#1104 —
     // two sites, two sets of tests). Its only text fast path is
@@ -9410,6 +9841,12 @@ mod state_is_shared_not_copied_2737 {
                 "set_component_html",
                 Box::new(|v: &mut RustLiveViewBackend| {
                     v.set_component_html("k".to_string(), "<i>k</i>".to_string())
+                }),
+            ),
+            (
+                "replace_state_items",
+                Box::new(|v: &mut RustLiveViewBackend| {
+                    assert!(v.replace_state_items("rows", vec![1], vec![Value::Integer(9)]));
                 }),
             ),
         ];

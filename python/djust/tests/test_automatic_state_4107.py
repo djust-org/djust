@@ -199,10 +199,13 @@ def _probe_of(markup: str) -> Dict[str, Any]:
 
 
 @pytest.fixture(autouse=True)
-def _one_tab(monkeypatch):
+def _one_tab(monkeypatch, settings):
     """Every page load in this module is the same tab unless a test says
-    otherwise: the GET mints the id the harness's client sends back."""
+    otherwise: the GET mints the id the harness's client sends back. Every
+    turn is saved before its reply: these tests read the store after each
+    turn, and pin the save's own rules (#4164: unset, the interval is 2)."""
     monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: harness.TAB)
+    settings.DJUST_STATE_SAVE_INTERVAL = 0
 
 
 def _request(

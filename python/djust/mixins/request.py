@@ -88,6 +88,45 @@ _WORKERS_RESERVED = 0  # in flight for a POST that is still waiting
 _ABANDONED_LOCK = threading.Lock()
 
 
+def _with_render_digest_meta(view: Any, request: Any, page: Any, committed_html: Any) -> Any:
+    """``page`` with the render-digest ``<meta>`` of ``committed_html`` in its ``<head>``.
+
+    For a page prepared in one evaluation: the digest of its committed render is
+    known only after the page is validated. A page without a real ``<head>``, or
+    a view that turned the patches off, is returned as it is; its first
+    fallback answer then carries the digest. Never raises.
+    """
+    try:
+        from .._http_fallback_baseline import patches_enabled
+        from .._render_digest import META_NAME, render_token
+        from .post_processing import _find_head_close, _mask_document_text
+
+        if not patches_enabled(view) or not isinstance(committed_html, str):
+            return page
+        token = render_token(view, request, committed_html)
+        if not token:
+            return page
+        text = str(page)
+        head_close = _find_head_close(_mask_document_text(text))
+        if head_close < 0:
+            return page
+        from django.utils.html import escape
+
+        meta = '<meta name="%s" content="%s">' % (META_NAME, escape(token))
+        return text[:head_close] + meta + text[head_close:]
+    except Exception as exc:  # noqa: BLE001 - a missing digest only costs one whole-page answer
+        from .._exposure_diagnostics import log_failure
+
+        log_failure(
+            logger,
+            exc,
+            "could not add the render digest to the page",
+            level="debug",
+            traceback=True,
+        )
+        return page
+
+
 def _reserve_worker_slot() -> Optional[int]:
     """Take a worker slot, or return how many are held when none is free.
 
@@ -1099,8 +1138,13 @@ class RequestMixin:
             # Commit exactly the VDOM captured with the delivered page; do not
             # execute stateful template selectors a second time.
             t0 = time.perf_counter()
-            self._rust_view.commit_authenticated_page()
+            committed_html, _, _ = self._rust_view.commit_authenticated_page()
             self._pending_authenticated_page = False
+            # #4108: this page had no separate diff render to take a digest
+            # from (Django 6 prepares every extending template this way), so
+            # the first fallback answer was the whole page. The committed
+            # render is the baseline the fallback diffs against: digest it.
+            html = _with_render_digest_meta(self, request, html, committed_html)
             self._record_dj_model_fields_from_rust(self._rust_view)
             request._djust_timing["vdom_ms"] = round((time.perf_counter() - t0) * 1000, 2)
             from .._exposure_child_persistence import save_child_states
@@ -2461,14 +2505,20 @@ class RequestMixin:
                 else:
                     # More patches than a whole page is worth: the whole page,
                     # numbered as every whole-page answer of this transport is
-                    # (v1; the client re-bases on it).
-                    self._rust_view.reset()
+                    # (v1; the client re-bases on it). The renderer keeps the
+                    # tree this HTML was serialized from (#4229): a reused
+                    # renderer's next answer diffs against the page just sent.
                     response_data = {
                         "html": html,
                         "version": version if reused_renderer else 1,
                         **contract_fields,
                         **response_fields,
                     }
+                    if baseline_matched and patch_count > PATCH_THRESHOLD:
+                        # The digest matched: the whole page was chosen for
+                        # its size, so the client does not count it as a
+                        # digest miss (#4229).
+                        response_data["whole_page"] = "size"
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
                     _inject_side_channels(response_data)

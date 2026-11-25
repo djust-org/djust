@@ -105,7 +105,9 @@ def test_native_render_and_update_keep_the_html5ever_root(template, tag):
     updated, patches, _ = view.render_with_diff()
     assert updated.startswith("<" + tag + " ")
     assert ">second</p>" in updated
-    assert json.loads(patches) == [{"type": "SetText", "path": [0, 0], "text": "second"}]
+    assert json.loads(patches) == [
+        {"type": "SetText", "path": [0, 0], "text": "second", "parent_d": "1", "index": 0}
+    ]
 
 
 @pytest.mark.django_db

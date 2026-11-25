@@ -26,10 +26,13 @@ from .._mapping import mapping_values
 from .._exposure_providers import (
     RUST_RENDER_PROVIDER,
     ExplicitRenderContext,
+    registered_components,
     require_no_provider_keys,
 )
 from .._accumulating_containers import view_accumulating_container_ids
 from ..change_detection import (
+    ChangedKeys,
+    SnapshotEntry,
     deep_fingerprint,
     fingerprints_by_content,
     retained_fingerprint,
@@ -448,6 +451,173 @@ def _collect_sub_ids(
     elif isinstance(value, (list, tuple)):
         for v in value:
             _collect_sub_ids(v, collected, visited, depth + 1)
+
+
+#: Every method of the view that runs between the post-event snapshot and
+#: the sync's fingerprints: the render entry point, the sync itself, and each
+#: method the explicit context is built through. The snapshot's walks are
+#: reused only while each one is the framework's own
+#: (``_snapshot_walks_for_sync``), so an override that writes into state before
+#: calling ``super()`` turns the reuse off. ``_get_context_processors`` is left
+#: out on purpose: it returns the processor paths (tests and apps override it
+#: to return a list) and the processors it names receive the request, not the
+#: view.
+_CONTEXT_HOOKS = (
+    "render_with_diff",
+    "_initialize_rust_view",
+    "_sync_state_to_rust",
+    "_sync_state_to_rust_body",
+    "_apply_render_env",
+    "_context_for_render",
+    "_settled_render_context",
+    "get_context_data",
+    "_get_explicit_context_data",
+    "reset_unique_ids",
+    "clear_context_providers",
+    "_get_streams_context",
+    "_get_upload_context",
+    "get_render_only_context",
+    "_apply_context_processors",
+    "_csrf_token_for_render",
+)
+
+_framework_hooks: Optional[Dict[str, Any]] = None
+
+
+def _framework_context_hooks() -> Dict[str, Any]:
+    """``{name: function}`` of the framework's own :data:`_CONTEXT_HOOKS`.
+
+    Resolved on ``LiveView`` itself (its MRO is the framework's mixins), then
+    on the opt-in mixins ``LiveView`` does not include.
+    """
+    global _framework_hooks
+    if _framework_hooks is None:
+        from ..live_view import LiveView
+        from ..uploads import UploadMixin
+        from .streams import StreamsMixin
+
+        hooks: Dict[str, Any] = {}
+        for name in _CONTEXT_HOOKS:
+            for owner in (LiveView, StreamsMixin, UploadMixin):
+                function = getattr(owner, name, None)
+                if function is not None:
+                    hooks[name] = function
+                    break
+        _framework_hooks = hooks
+    return _framework_hooks
+
+
+def _snapshot_walks_for_sync(
+    view: Any, changed_keys: Any, preloaded_context: Any
+) -> Optional[Dict[int, SnapshotEntry]]:
+    """The post-event snapshot's container walks, if this sync may take them (#3999).
+
+    A turn walks every container on the view in its post-event snapshot and,
+    until now, walked the context's containers again in the sync. The second
+    walk can be replaced by the first only if nothing changed the container
+    between the two, and in-place mutation leaves no trace on a ``list`` or
+    ``dict``. So the reuse is allowed only when no application code can run
+    in that window, and the sync walks as before otherwise:
+
+    * ``changed_keys`` is the :class:`~djust.change_detection.ChangedKeys` the
+      handler's turn computed from that snapshot, still the view's own
+      ``_changed_keys`` and computed in the turn that is running now (a
+      ``set_changed_keys()`` call builds a new set; a later turn has another
+      ``Turn``);
+    * the context is built here (no ``preloaded_context``) and every method
+      on the way from the render to the fingerprints is the framework's own
+      (:data:`_CONTEXT_HOOKS`), so no ``get_context_data`` override,
+      ``get_render_only_context``, ``reset_unique_ids`` or ``@computed``
+      called from one runs; the template is not a ``property``; no class-level component
+      (whose first binding may run its ``mount``); and no
+      ``sync_turn_wrapper`` is configured around the render step.
+
+    A value is reused per object: the entry holds the object, so
+    ``entry[0] is value`` proves it is the one the snapshot walked.
+    """
+    if type(changed_keys) is not ChangedKeys or preloaded_context is not None:
+        return None
+    walks = changed_keys.fingerprints
+    turn_ref = changed_keys.turn
+    if not walks or turn_ref is None or not _per_turn.on("snapshot_fingerprints"):
+        return None
+    from ..turns import current_turn
+
+    turn = turn_ref()
+    if turn is None or turn is not current_turn():
+        return None
+    cls = type(view)
+    for name, function in _framework_context_hooks().items():
+        if getattr(cls, name, function) is not function:
+            return None
+    from inspect import getattr_static
+
+    if isinstance(getattr_static(cls, "template", None), property):
+        return None
+    if registered_components(cls):
+        return None
+    from ..sync_turn import _wrapper
+
+    if _wrapper() is not None:
+        return None
+    return walks
+
+
+#: A list shorter than this is sent whole: the delta saves nothing there.
+_ITEM_DELTA_MIN_LEN = 16
+
+
+def _list_item_delta(
+    key: str, value: Any, post: Any, pre: Any, previous: Any
+) -> Optional[Tuple[List[int], List[Any]]]:
+    """The rows of *value* to send to Rust instead of the whole list, or None (#4325).
+
+    *post* and *pre* are the post- and pre-event snapshot's walks of this very
+    list (``SnapshotEntry``: the object, its fingerprint tree, plain or not);
+    *previous* is what the last sync kept of the key's fingerprint. The delta
+    is sound only when all of these hold, and None sends the list whole:
+
+    * both walks are of this object (it was changed in place, not rebound),
+      and both found it plain data, so each row converts alone exactly as it
+      does inside the list and no row holds a ``SafeString``;
+    * the pre-event fingerprint is the one the last sync kept: Rust holds the
+      list exactly as it was before the handler, so replacing the rows whose
+      fingerprints differ gives exactly the list as it is now;
+    * the length did not change, and at most a quarter of the rows did.
+    """
+    if (
+        post is None
+        or pre is None
+        or post[0] is not value
+        or pre[0] is not value
+        or not (post[2] and pre[2])
+    ):
+        return None
+    post_tree, pre_tree = post[1], pre[1]
+    if (
+        type(post_tree) is not tuple
+        or type(pre_tree) is not tuple
+        or len(post_tree) != 2
+        or len(pre_tree) != 2
+        or post_tree[0] != "L"
+        or pre_tree[0] != "L"
+    ):
+        return None
+    post_rows, pre_rows = post_tree[1], pre_tree[1]
+    if len(post_rows) != len(pre_rows) or len(post_rows) != len(value):
+        return None
+    if len(value) < _ITEM_DELTA_MIN_LEN or previous != retained_fingerprint(pre_tree):
+        return None
+    indices = [i for i, (a, b) in enumerate(zip(pre_rows, post_rows)) if a != b]
+    if not indices or 4 * len(indices) > len(value):
+        return None
+    rows: List[Any] = []
+    for i in indices:
+        converted = convert_for_render(value[i], "%s.%d" % (key, i))
+        if converted is None or converted[0]:
+            return None
+        rows.append(converted[1])
+    return indices, rows
 
 
 #: ``_request_scoped_fingerprint``'s answer for a value it does not fingerprint.
@@ -1104,7 +1274,7 @@ class RustBridgeMixin:
         recursive partial re-raises, as on legacy.
         """
         from .context import _jit_serialization_enabled
-        from .jit import _jit_template_content
+        from .jit import _jit_template_content, drop_nested_evaluated, nested_raw_twin
 
         if not _jit_serialization_enabled():
             return
@@ -1145,6 +1315,9 @@ class RustBridgeMixin:
                     else self._deep_serialize_sequence
                 )
                 dict.__setitem__(context, key, walk(value, template_content, key))
+                # #4326: a nested QuerySet whose own ``all`` / methods the template reads.
+                nested_raw_twin(self, key, value)
+            drop_nested_evaluated(self)
         except Exception as exc:  # noqa: BLE001 - the normalize pass serializes what is left
             if template_content and "djust:recursive-partial" in template_content:
                 raise
@@ -1161,7 +1334,7 @@ class RustBridgeMixin:
             )
 
     @recorded_render
-    def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
+    def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> bool:
         """Sync Python state to Rust backend.
 
         Phoenix-style change tracking: only sends values that actually changed
@@ -1183,16 +1356,35 @@ class RustBridgeMixin:
         sync makes after it (the explicit JIT serialization, the rows listed for
         the template's sidecar, the normalize pass). Inside a render step
         already (a ``render*`` method), it nests and enters nothing again.
+
+        Returns:
+            Whether the next ``render_with_diff()`` has anything to render
+            (#4123). ``False`` only when the sync found no changed and no
+            removed key since the previous sync, no render was requested
+            (``_force_full_html`` / ``set_changed_keys()``) and no context
+            value is an object compared only by ``id()`` (one an in-place
+            write can change unseen; it always renders): Rust then has no
+            changed keys and would render the whole template to send an empty
+            patch list. ``True`` on a first render and without a Rust view.
+            A server-originated render (an async result) may skip its render
+            on ``False``; an event turn already decided with its own snapshot.
         """
         from ..sync_turn import run_sync_step
 
-        run_sync_step(self, "render", self._sync_state_to_rust_body, preloaded_context)
+        return bool(run_sync_step(self, "render", self._sync_state_to_rust_body, preloaded_context))
 
-    def _sync_state_to_rust_body(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
+    def _sync_state_to_rust_body(self, preloaded_context: Optional[Dict[str, Any]] = None) -> bool:
         """:meth:`_sync_state_to_rust`, inside its ``"render"`` step."""
+        render_needed = True
         if self._rust_view:
             # Per-render, before anything is formatted (#2209, #2221).
             self._apply_render_env()
+
+            # The post-event snapshot's walks, taken before the context is
+            # built (#3999). None unless no application code runs from the
+            # snapshot to here (``_snapshot_walks_for_sync``).
+            turn_changed_keys = getattr(self, "_changed_keys", None)
+            snapshot_walks = _snapshot_walks_for_sync(self, turn_changed_keys, preloaded_context)
 
             # One place decides: preloaded, the GET's cached context, or a
             # fresh evaluation (#3725). Calling ``self.get_context_data`` here
@@ -1262,6 +1454,9 @@ class RustBridgeMixin:
             # and the sidecar keeps no evaluated rows for them.
             _explicit_plain_keys: Set[str] = set()
             _explicit = type(full_context) is ExplicitRenderContext
+            # Names whose DB values the JIT or the normalize pass rewrites: the
+            # snapshot's walk of them is never reused (#3999).
+            _rewritten_keys: Set[str] = set()
             _qs_roots: Optional[FrozenSet[str]] = None
             _walk_paths: Optional[Dict[str, FrozenSet[str]]] = None
             for _key, _val in full_context.items():
@@ -1345,6 +1540,11 @@ class RustBridgeMixin:
             # cache's item hash. A dict holding a QuerySet / Model goes through the
             # template-aware container walk (#3788). The captured rows above stay for
             # the method / alias shapes the JIT does not serialize.
+            # A container twin (#4326) from an earlier render: this render's walk
+            # holds its own again. Not reset with the rest on a preloaded context.
+            from .jit import drop_nested_twins
+
+            drop_nested_twins(self)
             if type(full_context) is ExplicitRenderContext:
                 # ``_all_method_rows`` is NOT reset here: ``serialize_for_template``
                 # in the view's own ``get_context_data`` already wrote it this render.
@@ -1357,6 +1557,7 @@ class RustBridgeMixin:
                     and not any(isinstance(_r, _DjModel) for _r in _val)
                     and _holds_db_value(_val)
                 ]
+                _rewritten_keys.update(_explicit_jit_keys, _explicit_plain_keys, _nested_db_keys)
                 if _explicit_jit_keys or _explicit_plain_keys or _nested_db_keys:
                     self._explicit_jit_serialize(
                         full_context,
@@ -1508,9 +1709,31 @@ class RustBridgeMixin:
                 """Did *key*'s fingerprint change since the last sync?"""
                 return bool(prev_fps.get(key, _MISSING) != _fp_of(key, value))
 
+            def _snapshot_walk(key: str, value: Any) -> Optional[SnapshotEntry]:
+                """The post-event snapshot's walk of this very object, if reusable."""
+                if snapshot_walks is None or key in _rewritten_keys:
+                    return None
+                entry = snapshot_walks.get(id(value))
+                if entry is None or entry[0] is not value:
+                    return None
+                return entry
+
             def _fp_of(key: str, value: Any, convert: bool = False) -> Any:
                 fp = new_fps.get(key, _MISSING)
                 if fp is _MISSING:
+                    entry = _snapshot_walk(key, value)
+                    if entry is not None:
+                        # The snapshot walked this object after the handler and
+                        # nothing ran since (#3999): its tree is this value's
+                        # fingerprint. Converting it for Rust, when it is sent,
+                        # is a walk that builds no fingerprint.
+                        fp = retained_fingerprint(entry[1])
+                        new_fps[key] = fp
+                        if convert:
+                            converted_walk = convert_for_render(value, key)
+                            if converted_walk is not None:
+                                converted_by_fp[key] = converted_walk
+                        return fp
                     if convert:
                         fp, truncated, converted = fingerprint_and_convert(value, key)
                         if converted is not None:
@@ -1575,6 +1798,12 @@ class RustBridgeMixin:
                     elif rs_converted is not None:
                         converted_by_fp[key] = rs_converted
 
+            # A value compared only by ``id()`` (an object the detector cannot
+            # fingerprint) may have changed in place without the sync seeing
+            # it. Such a value makes this sync report a render as needed, so
+            # a skippable render never drops it (#4123).
+            opaque_seen = False
+
             # Determine which context to send to Rust
             if prev_refs:
                 if changed_keys:
@@ -1596,11 +1825,28 @@ class RustBridgeMixin:
                     # this very object, and reused below as the key's
                     # fingerprint and rendered value: the key is being sent
                     # (its own id is still added), so that walk ran regardless.
+                    # When the post-event snapshot's walk of the attribute may
+                    # be reused (``snapshot_walks``), that walk already says
+                    # whether it is plain, for any changed attribute, whether
+                    # or not it is itself a context value, and nothing is
+                    # walked here at all.
                     plain_on = _per_turn.on("plain_sub_ids")
                     context_key_of: Optional[Dict[int, str]] = None
                     for key in changed_keys:
                         val = getattr(self, key, None) or full_context.get(key)
                         if val is None:
+                            continue
+                        # Plain data, by the post-event snapshot's own walk of
+                        # this object (#3999): nothing under it can be a context
+                        # value that only ``id()`` would find. Covers a changed
+                        # attribute that is not itself a context value too.
+                        walked = (
+                            snapshot_walks.get(id(val))
+                            if plain_on and snapshot_walks is not None
+                            else None
+                        )
+                        if walked is not None and walked[0] is val and walked[2]:
+                            changed_sub_ids.add(id(val))
                             continue
                         if plain_on and type(val) in (dict, list, tuple):
                             if context_key_of is None:
@@ -1667,8 +1913,10 @@ class RustBridgeMixin:
                             # that as "changed" since the type flipped).
                             if prev_immutables.get(key, _MISSING) != value:
                                 context[key] = value
-                        elif id(value) != prev_refs.get(key):
-                            context[key] = value  # derived value with new id()
+                        else:
+                            opaque_seen = True
+                            if id(value) != prev_refs.get(key):
+                                context[key] = value  # derived value with new id()
                 else:
                     # No explicit changed_keys — use id() comparison as fallback.
                     # This path runs on the internal sync from render_with_diff
@@ -1688,8 +1936,10 @@ class RustBridgeMixin:
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             if prev_immutables.get(key, _MISSING) != value:
                                 context[key] = value
-                        elif id(value) != prev_refs.get(key):
-                            context[key] = value  # different object reference
+                        else:
+                            opaque_seen = True
+                            if id(value) != prev_refs.get(key):
+                                context[key] = value  # different object reference
             else:
                 # First render: send everything
                 context = full_context
@@ -1724,11 +1974,44 @@ class RustBridgeMixin:
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and isinstance(v, _IMMUTABLE_TYPES_FOR_SYNC)
             }
+            # A list the handler changed in a few rows is sent to Rust as those
+            # rows (#4325), when the pre-event snapshot proves Rust holds the
+            # list as it was before the handler. ``item_deltas`` maps the key
+            # to ``(indices, converted rows)``; it is never converted whole.
+            item_deltas: Dict[str, Tuple[List[int], List[Any]]] = {}
+            # Rust's index-keyed per-item loop store (#4325) follows its
+            # switch; it is on by default in Rust.
+            set_item_store = getattr(self._rust_view, "set_loop_item_store_enabled", None)
+            if set_item_store is not None:
+                set_item_store(_per_turn.on("loop_item_render"))
+            if (
+                snapshot_walks is not None
+                and prev_refs
+                and not getattr(self, "_force_full_html", False)
+                and _per_turn.on("list_item_deltas")
+                and hasattr(self._rust_view, "update_state_items")
+            ):
+                pre_walks = getattr(turn_changed_keys, "pre_fingerprints", None) or {}
+                for key, value in context.items():
+                    if type(value) is not list or key in _request_scoped_keys:
+                        continue
+                    delta = _list_item_delta(
+                        key,
+                        value,
+                        _snapshot_walk(key, value),
+                        pre_walks.get(id(value)),
+                        prev_fps.get(key, _MISSING),
+                    )
+                    if delta is not None and self._rust_view.update_state_items(
+                        key, delta[0], delta[1]
+                    ):
+                        item_deltas[key] = delta
+
             # A key already known to be sent (first render, a new key, a
             # changed name, ...) has not been fingerprinted yet: take the
             # fingerprint, the SafeString paths and the Rust value in one walk.
             self._prev_context_fingerprints = {
-                k: _fp_of(k, v, convert=context.get(k, _MISSING) is v)
+                k: _fp_of(k, v, convert=context.get(k, _MISSING) is v and k not in item_deltas)
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and _is_structural(v)
             }
@@ -1758,6 +2041,8 @@ class RustBridgeMixin:
             converted_values: Dict[str, Any] = {}
             needs_normalize = False
             for key, value in context.items():
+                if key in item_deltas:
+                    continue  # its changed rows are already in the Rust state (#4325)
                 # #1786: request-scoped, framework-provided context values
                 # (the request, auth ``user`` / ``perms``, messages storage)
                 # that are NOT JSON-serializable must not flow into
@@ -2101,6 +2386,10 @@ class RustBridgeMixin:
 
             if user_changed is not None:
                 self._rust_view.set_changed_keys(user_changed)
+            # #4123: nothing to render when this was not a first (or forced)
+            # sync, no key changed, was removed or was named, and every value
+            # was compared by content (none only by ``id()``).
+            render_needed = not prev_refs or user_changed is not None or opaque_seen
 
             # The ``dj-update="append"|"prepend"`` containers whose rows come from
             # a ``temporary_assigns`` key must ACCUMULATE in the differ, as the
@@ -2119,3 +2408,4 @@ class RustBridgeMixin:
                 self, "_static_assigns_sent", False
             ):
                 self._static_assigns_sent = True
+        return render_needed

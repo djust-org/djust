@@ -37,11 +37,16 @@ from ._background_render import (
     _discard_baseline,
     render_background,
     render_background_sync,
+    snapshot_delivers_nothing,
 )
+from ._automatic_state import turn_serial
 from ._render_operation import settle_render_operation
 from ._child_rendering import reconcile_child_render
+from . import _per_turn
 from .change_detection import (
     CONTAINER_TYPES,
+    AssignsSnapshot,
+    changed_keys_after,
     deep_fingerprint,
     fingerprints_by_content,
     warn_fingerprint_truncated,
@@ -65,6 +70,7 @@ from .websocket_utils import (
 from .signals import full_html_update, liveview_server_error
 from ._view_lanes import ViewLane
 from ._view_slots import ViewSlot, valid_target_id
+from ._outbound_buffer import OutboundBuffer, outbound_buffer_limit
 from ._turn_ports import ConsumerTurnPort
 from .turns import Turn, run_turn
 
@@ -212,6 +218,11 @@ _IMMUTABLE_TYPES = (str, int, float, bool, type(None), bytes, tuple, frozenset)
 _SERVER_TURN_LOCK_WAIT_S = 0.1
 
 
+def _log_flush_answer_failure(task: "asyncio.Future[Any]") -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("djust: a state flush request could not be answered")
+
+
 async def _flush_states_of(consumers: List[Any], *, reason: str = "disconnect") -> None:
     """Flush the deferred save of each consumer's view, then forget it.
 
@@ -255,8 +266,43 @@ async def _acquire_render_lock(lock: asyncio.Lock, timeout: float) -> None:
     await asyncio.wait_for(lock.acquire(), timeout=timeout)
 
 
+#: The view's optional upload hooks (#4312).
+_UPLOAD_STARTED = "handle_upload_started"
+_UPLOAD_PROGRESS = "handle_upload_progress"
+_UPLOAD_FINISHED = "handle_upload_finished"
+_UPLOAD_FAILED = "handle_upload_failed"
+
+
+def _live_upload_entry(manager: Any, ref: Any) -> Any:
+    """The entry of upload ``ref`` when it is still running (not finished, not
+    failed), else None (#4312)."""
+    entries = getattr(manager, "_entries", None)
+    entry = entries.get(ref) if isinstance(entries, dict) else None
+    if entry is None or entry.error is not None or entry.complete:
+        return None
+    return entry
+
+
 #: Running upload-timeout tasks (#4118), held so none is collected mid-run.
 _UPLOAD_EXPIRY_TASKS: Set["asyncio.Task[None]"] = set()
+
+
+#: Close code for a client that cannot keep up with its outbound frames
+#: (RFC 6455 "Try Again Later"; #3658, decision D12). The client reconnects
+#: and resynchronises through the ordinary recovery path.
+WS_CLOSE_SLOW_CONSUMER = 1013
+
+#: How long ``close()`` waits for frames still queued in the outbound buffer
+#: to reach the ASGI server before it closes anyway (#3658).
+_CLOSE_FLUSH_TIMEOUT_S = 5.0
+
+
+def _frame_size(frame: Tuple[Optional[str], Optional[bytes]]) -> int:
+    """Bytes of an outbound ``(text, bytes)`` frame (#3658)."""
+    text_data, bytes_data = frame
+    if text_data is not None:
+        return len(text_data.encode("utf-8"))
+    return len(bytes_data or b"")
 
 
 def _real_consumer(consumer: Any) -> Any:
@@ -487,7 +533,10 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
 
     _static_skip = set(getattr(view_instance, "static_assigns", []))
     _fw_attrs: frozenset[str] = getattr(view_instance, "_framework_attrs", frozenset())
-    snapshot: Dict[str, Any] = {}
+    snapshot = AssignsSnapshot()
+    # The walks of exact dict / list / tuple attributes, for the sync of the
+    # same turn (#3999, ``ChangedKeys``). Off with the shortcut: none kept.
+    keep = snapshot.fingerprints if _per_turn.on("snapshot_fingerprints") else None
     items = list(view_instance.__dict__.items())
     # Interactive descriptors cache concrete instances in framework-owned
     # storage, but their state still participates under the public context key.
@@ -517,7 +566,13 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
             # ``_dirty_fingerprint`` and ``@computed`` walk (#2682 review). A
             # class-level component's slot (a ``BoundComponent``, #2900) is
             # walked as its State: the wrapper's id() never changes.
-            content_fp, truncated = deep_fingerprint(v)
+            if keep is not None and type(v) in (dict, list, tuple):
+                plain: List[bool] = []
+                content_fp, truncated = deep_fingerprint(v, plain=plain)
+                if not truncated:
+                    keep[vid] = (v, content_fp, plain[0])
+            else:
+                content_fp, truncated = deep_fingerprint(v)
             size = len(v) if isinstance(v, CONTAINER_TYPES) else None
             snapshot[k] = (vid, size, object() if truncated else content_fp)
             if truncated:
@@ -547,6 +602,8 @@ def _compute_changed_keys(pre: Dict[str, Any], post: Dict[str, Any]) -> set[str]
     """Return set of keys that differ between two snapshots.
 
     Detects added, removed, and modified keys (by identity or fingerprint).
+    The result carries *post*'s container walks for this turn's Rust sync
+    (``change_detection.ChangedKeys``, #3999); it compares as a plain set.
     """
     changed = set()
     for k in set(pre) | set(post):
@@ -554,7 +611,7 @@ def _compute_changed_keys(pre: Dict[str, Any], post: Dict[str, Any]) -> set[str]
             changed.add(k)
         elif pre[k] != post[k]:
             changed.add(k)
-    return changed
+    return changed_keys_after(changed, post, pre)
 
 
 class _OffloadedTurn(NamedTuple):
@@ -804,8 +861,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # SINGLE SOURCE OF TRUTH for the ``version`` field on every
         # client-checked outbound frame (patch / html_update / mount /
         # html_recovery). It is decoupled from the Rust view's internal
-        # ``self.version`` (which resets to 0 on baseline loss — e.g. a
-        # patch-compression ``_rust_view.reset()``). Stamping the consumer
+        # ``self.version`` (which ``_rust_view.reset()`` restarts at 0 on
+        # baseline loss — e.g. a contract-discovery failure or a background
+        # render's discarded baseline; the patch-compression fallback keeps
+        # its baseline since #4229). Stamping the consumer
         # counter keeps the wire sequence strictly monotonic per-CONNECTION,
         # so a post-baseline-loss ``html_update`` still satisfies the client's
         # ``clientVdomVersion === data.version - 1`` check
@@ -1542,9 +1601,14 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # tick / broadcast paths is documented on the error arm below.)
                     if self.view_instance is not view:
                         return
-                    # Re-render and send patches (mirrors the server_push path)
-                    rendered = await self._render_background(view)
+                    # Re-render and send patches (mirrors the server_push path).
+                    # A result that changed nothing renders and sends nothing
+                    # (#4123); its pending work is still flushed.
+                    rendered = await self._render_background(view, skip_unchanged=True)
                     if rendered is None:
+                        return
+                    if rendered.unchanged:
+                        await self._flush_all_pending()
                         return
                     html, patches = rendered.html, rendered.patches
 
@@ -1614,7 +1678,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # Error path: let handle_async_result (if defined) record the error,
             # then re-render. The frame is sent even without a handler: the turn
             # announced ``async_pending`` (#2963), and this frame is what ends
-            # the client's loading state.
+            # the client's loading state. Only when a handler ran may a result
+            # that changed nothing skip its render and frame (#4123): the
+            # handler had its chance to record the failure, and a work-less
+            # page then has nothing new to show.
             try:
                 # Re-render to show error state
                 # Same lock as the success arm, the event path and the tick
@@ -1659,7 +1726,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         # with old-view HTML.
                         if self.view_instance is not view:
                             return
-                        await self._send_async_render(view, event_name)
+                        await self._send_async_render(
+                            view,
+                            event_name,
+                            skip_unchanged=hasattr(view, "handle_async_result"),
+                        )
 
                     await self._async_result_turn(view, task_name, complete_error)
 
@@ -1672,15 +1743,22 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     traceback=True,
                 )
 
-    async def _send_async_render(self, view: Any, event_name: Optional[str]) -> None:
+    async def _send_async_render(
+        self, view: Any, event_name: Optional[str], *, skip_unchanged: bool = False
+    ) -> None:
         """Render ``view`` and send it as a ``source="async"`` frame.
 
         The caller holds ``_render_lock``. Shared by the error arm of
         :meth:`_run_async_work` and :meth:`_settle_cancelled_async`. Arms
         recovery so ``_recovery_version`` tracks this frame (#1817).
+
+        ``skip_unchanged`` (#4123): render and send nothing when nothing
+        changed since the last render. The error arm passes it only when a
+        ``handle_async_result`` ran; the cancelled settle never does, since
+        its frame is what ends the event's loading state.
         """
-        rendered = await self._render_background(view)
-        if rendered is None:
+        rendered = await self._render_background(view, skip_unchanged=skip_unchanged)
+        if rendered is None or rendered.unchanged:
             return
         html, patches = rendered.html, rendered.patches
         if patches is not None:
@@ -1734,8 +1812,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         """Single source of truth for the outbound VDOM wire version (#1788).
 
         Monotonic per-CONNECTION; decoupled from the Rust view's ``self.version``
-        (which resets to 0 on baseline loss — e.g. a patch-compression
-        ``_rust_view.reset()``). Every client-checked frame stamps THIS so the
+        (which ``_rust_view.reset()`` restarts at 0 on baseline loss — e.g. a
+        contract-discovery failure; the patch-compression fallback keeps its
+        baseline since #4229). Every client-checked frame stamps THIS so the
         wire sequence stays strictly monotonic across a Rust baseline reset, and
         a post-baseline-loss ``html_update`` still satisfies the client's
         ``clientVdomVersion === data.version - 1`` check — no ``request_html``
@@ -2614,6 +2693,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # The socket is gone — any frame a handler still tries to send from
         # here on would be rejected by the ASGI server (_send_frame drops it).
         self._ws_close_sent = True
+        # Frames still waiting in the outbound buffer have nobody to reach.
+        self._abandon_outbound()
         # Pushes deferred while the session was busy have nobody to reach
         # (#3001). First, so a later cleanup step that raises can't leave the
         # drain running.
@@ -2986,15 +3067,18 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             self._note_upload_owner(data.get("ref"), consumer)
         queued = self._queue_on_lane(consumer, handler, data)
         if queued is None:
-            self._finish_queued_upload(handler, data, consumer)
+            stopped = self._finish_queued_upload(handler, data, consumer)
             await self._refuse_busy_view(data)
+            await self._fail_stopped_upload(consumer, stopped)
             return
         if queued:
             return
+        stopped = None
         try:
             await getattr(consumer, handler)(data)
         finally:
-            self._finish_queued_upload(handler, data, consumer)
+            stopped = self._finish_queued_upload(handler, data, consumer)
+        await self._fail_stopped_upload(consumer, stopped)
 
     #: Uploads whose ``upload_register`` / ``upload_resume`` is queued on a view's
     #: lane remembered at most this many at a time (#3252).
@@ -3017,20 +3101,40 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         while len(pending) > self._MAX_PENDING_UPLOADS:
             pending.pop(next(iter(pending)))
 
-    def _finish_queued_upload(self, handler: str, data: Dict[str, Any], consumer: Any) -> None:
+    def _finish_queued_upload(self, handler: str, data: Dict[str, Any], consumer: Any) -> Any:
         """An ``upload_register`` / ``upload_resume`` has run (or was refused): its
         ref no longer needs the pending map, and an upload that was stopped while
-        its register waited is cancelled now that its entry exists."""
+        its register waited is cancelled now that its entry exists.
+
+        Returns the entry so cancelled when it was still live (its view's
+        ``handle_upload_failed`` is due, #4312; see :meth:`_fail_stopped_upload`),
+        else None.
+        """
         if handler not in ("_handle_upload_register", "_handle_upload_resume"):
-            return
+            return None
         ref = data.get("ref")
         if not isinstance(ref, str):
-            return
+            return None
         (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)
         if ref in (getattr(self, "_aborted_uploads", None) or {}):
             manager = getattr(getattr(consumer, "view_instance", None), "_upload_manager", None)
             if manager is not None:
+                entry = _live_upload_entry(manager, ref)
                 manager.cancel_upload(ref)
+                return entry
+        return None
+
+    async def _fail_stopped_upload(self, consumer: Any, entry: Any) -> None:
+        """Tell the view an upload the busy-view path stopped has failed (#4312).
+
+        The browser was told ``error`` ("The view is busy..."); the view hears
+        ``handle_upload_failed(name, entry, "error")``. Nothing for ``None``.
+        """
+        if entry is None:
+            return
+        manager = getattr(getattr(consumer, "view_instance", None), "_upload_manager", None)
+        if manager is not None:
+            await consumer._run_upload_hook(manager, _UPLOAD_FAILED, entry, "error")
 
     def _forget_upload(self, ref: Any) -> None:
         """An upload ended (complete, cancel, error): drop what is remembered of it."""
@@ -3112,10 +3216,12 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         handler, data = item
         try:
             if handler:
+                stopped = None
                 try:
                     await getattr(self, handler)(data)
                 finally:
-                    _real_consumer(self)._finish_queued_upload(handler, data, self)
+                    stopped = _real_consumer(self)._finish_queued_upload(handler, data, self)
+                await _real_consumer(self)._fail_stopped_upload(self, stopped)
             else:
                 await self._dispatch_runtime_owned(data)
         except Exception as e:
@@ -3639,6 +3745,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         mgr = self.view_instance._upload_manager
         # Uploads past their ``timeout=`` free their places first (#4118).
         await self._expire_overdue_uploads(mgr)
+        ref = data.get("ref", "")
+        replaced = _live_upload_entry(mgr, ref) if isinstance(ref, str) else None
         entry = mgr.register_entry(
             upload_name=data.get("upload_name", ""),
             ref=data.get("ref", ""),
@@ -3658,6 +3766,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     "upload_name": entry.upload_name,
                 }
             )
+            if replaced is not None and replaced is not entry:
+                # A second register of a ref replaced the started upload: that
+                # one ends here (#4312).
+                await self._run_upload_hook(mgr, _UPLOAD_FAILED, replaced, "error")
+            await self._run_upload_hook(mgr, _UPLOAD_STARTED, entry)
         else:
             await self.send_error("Upload rejected (check file type, size, or max entries)")
 
@@ -3690,6 +3803,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         if not upload_id or not isinstance(upload_id, str):
             await self.send_error("upload_resume requires a ref")
             return
+        resumed_entry = None
 
         session_key = self._scope_session_key()
         owner = self._upload_owner()
@@ -3754,6 +3868,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 logger.exception("upload_resume: re-attaching the upload failed")
             if resumed is not None:
                 self._arm_upload_deadline(mgr, upload_id)
+                resumed_entry = resumed
             else:
                 payload = {
                     "type": "upload_resumed",
@@ -3763,6 +3878,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     "chunks_received": [],
                 }
         await self.send_json(payload)
+        if resumed_entry is not None:
+            # A resumed upload starts again for the view too (#4312).
+            await self._run_upload_hook(mgr, _UPLOAD_STARTED, resumed_entry)
 
     async def _handle_upload_frame(self, data: bytes) -> None:
         """Handle binary upload frame (chunk, complete, cancel)."""
@@ -3825,11 +3943,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         (getattr(self, "_pending_uploads", None) or {}).pop(ref, None)
         manager = getattr(owner.view_instance, "_upload_manager", None)
         entries = getattr(manager, "_entries", None)
+        stopped = None
         if manager is not None and isinstance(entries, dict) and ref in entries:
+            stopped = _live_upload_entry(manager, ref)
             manager.cancel_upload(ref)
         message = build_progress_message(ref, 0, "error")
         message["error"] = "The view is busy and cannot take more of this upload; try again."
         await owner.send_json(message)
+        # Queued on the view's lane past its byte budget: a hook is not refused.
+        await self._fail_stopped_upload(owner, stopped)
 
     def _known_upload_owner(self, ref: Any) -> Any:
         """The consumer-like whose view registered the upload ``ref``, or None.
@@ -3851,8 +3973,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         return None
 
     async def _handle_upload_frame_for_view(self, frame: Dict[str, Any]) -> None:
-        """Apply a parsed upload frame to the upload manager of the view ``self`` runs."""
-        from .uploads import build_progress_message
+        """Apply a parsed upload frame to the upload manager of the view ``self`` runs.
+
+        Then runs the view's upload hooks the frame calls for (#4312):
+        progress, finished, or failed (``too_large``, ``refused``, ``error``,
+        ``cancelled``, ``timeout``).
+        """
+        from .uploads import build_progress_message, upload_failure_reason
 
         if not self.view_instance or not hasattr(self.view_instance, "_upload_manager"):
             return
@@ -3871,6 +3998,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             await self._expire_overdue_uploads(mgr)
             return
 
+        # The entry before the frame, and whether it was still live: a hook
+        # fires only for what this frame changed (#4312).
+        before = mgr._entries.get(ref)
+        was_live = before is not None and before.error is None and not before.complete
+
         if frame["type"] == "chunk":
             # add_chunk() internally dispatches to either the disk-buffer
             # path or (when the upload slot was configured with writer=)
@@ -3879,8 +4011,14 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if progress is not None:
                 # Send progress update (throttle to every 10%)
                 entry = mgr._entries.get(ref)
-                if entry and (progress % 10 == 0 or progress >= 100):
+                # Each 10% step once: a slow-moving upload (tiny chunks of a
+                # large file) or one past its announced size does not repeat
+                # a step on every chunk (#4312).
+                if entry and entry.next_progress_step():
                     await self.send_json(build_progress_message(ref, progress))
+                    config = mgr.get_config(entry.upload_name)
+                    if config is not None and config.progress_hook:
+                        await self._run_upload_hook(mgr, _UPLOAD_PROGRESS, entry)
             else:
                 _real_consumer(self)._forget_upload(ref)
                 # Surface error details (writer exception, size-limit, etc.)
@@ -3890,12 +4028,18 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 if error_msg:
                     msg["error"] = error_msg
                 await self.send_json(msg)
+                if was_live and before is not None and before.error is not None:
+                    await self._run_upload_hook(
+                        mgr, _UPLOAD_FAILED, before, upload_failure_reason(before)
+                    )
 
         elif frame["type"] == "complete":
             _real_consumer(self)._forget_upload(ref)
             entry = mgr.complete_upload(ref, owner=owner)
             if entry:
                 await self.send_json(build_progress_message(ref, 100, "complete"))
+                if was_live:
+                    await self._run_upload_hook(mgr, _UPLOAD_FINISHED, entry)
             else:
                 err_entry = mgr._entries.get(ref)
                 error_msg = err_entry.error if err_entry else "Unknown error"
@@ -3908,11 +4052,141 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         "error": error_msg,
                     }
                 )
+                if was_live and before is not None and before.error is not None:
+                    await self._run_upload_hook(
+                        mgr, _UPLOAD_FAILED, before, upload_failure_reason(before)
+                    )
 
         elif frame["type"] == "cancel":
             _real_consumer(self)._forget_upload(ref)
             mgr.cancel_upload(ref, owner=owner)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
+            if was_live and before is not None and ref not in mgr._entries:
+                await self._run_upload_hook(mgr, _UPLOAD_FAILED, before, "cancelled")
+
+    async def _run_upload_hook(self, mgr: Any, hook: str, entry: Any, *extra: Any) -> None:
+        """Run the view's upload hook ``hook`` for ``entry`` as a turn (#4312).
+
+        The hooks are optional methods on the view: ``handle_upload_started``,
+        ``handle_upload_progress`` (opt-in per slot, ``progress_hook=True``),
+        ``handle_upload_finished`` and ``handle_upload_failed``. A view that
+        defines none pays nothing: no lock, no turn, no render.
+
+        On a socket that hosts several views (or whose view has turns queued),
+        the hook is a turn on the view's lane (#3252): queued after the frame
+        that called for it, so it runs in order with the view's other frames
+        and a slow hook never holds up the receive loop or another view. Called
+        from the lane's own running turn, it runs there, before the frames
+        queued behind. A socket with one idle view runs it inline, as an event.
+        Either way it waits for the render lock as an event does, then runs as
+        a ``push``/``upload`` turn that renders and drains, like a server push.
+        """
+        view = self.view_instance
+        if view is None or getattr(view, "_upload_manager", None) is not mgr:
+            return
+        # A hook is a method the view's class defines.
+        if not callable(getattr(type(view), hook, None)):
+            return
+        lane = getattr(self, "_lane", None)
+        if not (lane is not None and lane.running_here()) and (
+            _real_consumer(self)._slot_map() or (lane is not None and lane.busy())
+        ):
+            if lane is None:
+                lane = self._lane = ViewLane()
+            # Always accepted (a hook is not refused like a frame): an upload
+            # calls at most started, eleven progress steps and one ending.
+            lane.submit(self._run_queued_upload_hook, (view, hook, entry, extra), size=0)
+            return
+        await self._render_lock.acquire()
+        await self._run_upload_hook_turn(view, hook, entry, extra)
+
+    @owned_diagnostic_scope
+    async def _run_queued_upload_hook(self, item: Tuple[Any, str, Any, Tuple[Any, ...]]) -> None:
+        """Run an upload hook queued on the view's lane (#4312)."""
+        view, hook, entry, extra = item
+        if self.view_instance is not view:
+            return  # the view was replaced while the hook waited
+        await self._render_lock.acquire()
+        await self._run_upload_hook_turn(view, hook, entry, extra)
+
+    @_binds_tenant_of(lambda self, view, *args: view)
+    @_consumer_turn("push", "upload", releases_lock=True)
+    async def _run_upload_hook_turn(
+        self, view: Any, hook: str, entry: Any, extra: Tuple[Any, ...]
+    ) -> None:
+        """Call one upload hook, render and send. Caller holds the lock (#4312).
+
+        Always releases ``_render_lock``. A hook that raises is logged and
+        renders nothing; the upload goes on as if the hook were absent. A
+        started, progress or finished hook does not run for an upload the view
+        has dropped meanwhile (cancelled or consumed by a turn that held the
+        lock).
+        """
+        from .worker_pool import offload_enabled
+
+        try:
+            dispatch_work = False
+            try:
+                if offload_enabled():
+                    # ``dispatch`` skipped Channels' per-message DB-connection
+                    # check (#3074): run it before the hook touches the DB.
+                    from channels.db import aclose_old_connections
+
+                    await aclose_old_connections()
+                if self.view_instance is not view:
+                    return
+                mgr = getattr(view, "_upload_manager", None)
+                if hook != _UPLOAD_FAILED and (
+                    mgr is None or mgr._entries.get(entry.ref) is not entry
+                ):
+                    return
+                if not await self._authorize_explicit_consumer_turn(view):
+                    return
+                fn = getattr(view, hook, None)
+                if fn is None or not callable(fn):
+                    return
+                try:
+                    await call_hook(fn, entry.upload_name, entry, *extra)
+                except Exception as exc:  # noqa: BLE001
+                    self._log_view_hook_failure(
+                        view,
+                        exc,
+                        "Upload hook %s raised on %s: %s",
+                        hook,
+                        view.__class__.__name__,
+                        exc,
+                        traceback=True,
+                    )
+                    return
+                # start_async work the hook queued runs once the lock is
+                # released (#2955).
+                dispatch_work = True
+                if self.view_instance is not view:
+                    return
+                from .push import sync_push_scope_groups
+
+                await sync_push_scope_groups(self, view)
+                if self.view_instance is not view:
+                    return
+                if _resolve_skip_render(view):
+                    # No frame of its own (#3034); queued side effects still
+                    # go out and session writes are stored (#4168).
+                    await self._store_no_frame_session_writes(view, "upload")
+                    await self._flush_all_pending()
+                    return
+                rendered = await self._render_background(view)
+                if rendered is None:
+                    return
+                await self._send_broadcast_render(rendered)
+            finally:
+                self._end_explicit_turn(view)
+                self._render_lock.release()
+                if dispatch_work and self.view_instance is view:
+                    await self._dispatch_async_work(event_name=None)
+        except Exception as e:  # noqa: BLE001
+            self._log_view_hook_failure(
+                view, e, "Error in upload hook %s: %s", hook, e, traceback=True
+            )
 
     #: Seconds before a deadline turn the view's full lane refused is tried again.
     _UPLOAD_DEADLINE_RETRY_S = 1.0
@@ -3967,21 +4241,39 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if left > 0:
                 self._arm_upload_deadline(mgr, ref, left)
                 return
-            await self._expire_overdue_uploads(mgr)
+            # The failed hooks are turns of their own: they take the render
+            # lock, so they run once this turn has released it.
+            expired = await self._expire_overdue_uploads(mgr, run_hooks=False)
+        for entry in expired:
+            await self._run_upload_hook(mgr, _UPLOAD_FAILED, entry, "timeout")
 
-    async def _expire_overdue_uploads(self, mgr: Any) -> None:
+    async def _expire_overdue_uploads(self, mgr: Any, run_hooks: bool = True) -> List[Any]:
         """Cancel the uploads of ``mgr`` past their ``timeout=`` and tell the
         browser: an ``upload_progress`` with status ``cancelled`` and the
-        reason in ``error`` (#4118)."""
+        reason in ``error`` (#4118).
+
+        Returns the expired entries. With ``run_hooks`` (the default) the
+        view's ``handle_upload_failed(name, entry, "timeout")`` runs for each
+        (#4312); a caller that holds the render lock passes False and runs
+        them after releasing it.
+        """
         from .uploads import build_progress_message
 
         if getattr(self.view_instance, "_upload_manager", None) is not mgr:
-            return  # the view was replaced or its uploads cleaned up
+            return []  # the view was replaced or its uploads cleaned up
+        held = dict(mgr._entries)
+        expired: List[Any] = []
         for ref, reason in mgr.expire_overdue():
             _real_consumer(self)._forget_upload(ref)
             message = build_progress_message(ref, 0, "cancelled")
             message["error"] = reason
             await self.send_json(message)
+            if ref in held:
+                expired.append(held[ref])
+        if run_hooks:
+            for entry in expired:
+                await self._run_upload_hook(mgr, _UPLOAD_FAILED, entry, "timeout")
+        return expired
 
     async def close(self, code: Optional[int] = None, reason: Optional[str] = None) -> None:
         """Close the socket and remember it, so later sends are dropped.
@@ -3993,6 +4285,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         transport, which uvicorn would reject with a RuntimeError.
         """
         self._ws_close_sent = True
+        buffer = getattr(self, "_outbound", None)
+        if buffer is not None:
+            # Frames sent before the close still go first (#3658); a client
+            # too slow to take them within the grace period loses them.
+            await buffer.flush(_CLOSE_FLUSH_TIMEOUT_S)
         try:
             if reason is None:
                 # channels<4.1 close() has no reason parameter.
@@ -4004,6 +4301,54 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # There is nothing left to close (#3000).
             logger.debug("WebSocket close skipped: peer already closed (%r)", exc)
 
+    def _outbound_buffer(self) -> OutboundBuffer[Tuple[Optional[str], Optional[bytes]]]:
+        """This socket's bounded outbound buffer (#3658), made on first use."""
+        owner = _real_consumer(self)
+        buffer = getattr(owner, "_outbound", None)
+        if buffer is None:
+            buffer = OutboundBuffer(
+                owner._transmit_frame,
+                _frame_size,
+                owner._on_outbound_overflow,
+                outbound_buffer_limit(),
+            )
+            owner._outbound = buffer
+        return buffer
+
+    def _abandon_outbound(self) -> None:
+        """Drop the frames still waiting for a socket that is gone (#3658)."""
+        buffer = getattr(_real_consumer(self), "_outbound", None)
+        if buffer is not None:
+            buffer.abandon()
+
+    def _on_outbound_overflow(self, pending: int, limit: int) -> None:
+        """The client cannot keep up: close with 1013 so it reconnects (#3658, D12).
+
+        Called by the buffer, which has already dropped its frames. Later sends
+        are dropped from here on; the close itself runs as its own task, so the
+        sender that hit the bound is not held up by a socket that is not
+        reading.
+        """
+        self._ws_close_sent = True
+        logger.warning(
+            "WebSocket client is not reading fast enough: %s bytes pending over the "
+            "%s-byte outbound limit; closing with %s so it reconnects and resyncs",
+            pending,
+            limit,
+            WS_CLOSE_SLOW_CONSUMER,
+        )
+        self._slow_consumer_close = asyncio.ensure_future(self._close_slow_consumer())
+
+    async def _close_slow_consumer(self) -> None:
+        try:
+            await self.close(code=WS_CLOSE_SLOW_CONSUMER)
+        except RuntimeError as exc:
+            if not _is_send_after_close_error(exc):
+                raise
+            logger.debug(
+                "WebSocket %s close skipped: socket already closed", WS_CLOSE_SLOW_CONSUMER
+            )
+
     async def _send_frame(
         self,
         text_data: Optional[str] = None,
@@ -4011,17 +4356,31 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     ) -> None:
         """Single outbound chokepoint: drop frames once the socket is closed.
 
-        Short-circuits when the connection is known-closed and downgrades the
-        ASGI server's send-after-close rejections to a debug log — the client
-        is gone, there is nobody to answer. Two shapes: the ``RuntimeError``
-        after the close handshake (see :func:`_is_send_after_close_error`),
-        and the ``OSError`` a send raises once the peer has closed (ASGI 2.4;
-        uvicorn's ``ClientDisconnected``, #3000). Any other ``RuntimeError``
-        propagates.
+        Short-circuits when the connection is known-closed. Otherwise the
+        frame goes through the socket's bounded outbound buffer (#3658), whose
+        drain task sends the socket's frames in order: on an idle socket this
+        call returns once the frame is sent, as before; behind a backlog it
+        hands the frame off, and a backlog over
+        ``LIVEVIEW_CONFIG["max_outbound_buffer_bytes"]`` closes the socket with
+        1013. See :meth:`_transmit_frame` for the send-after-close handling.
         """
-        if getattr(self, "_ws_close_sent", False):
+        owner = _real_consumer(self)
+        if getattr(owner, "_ws_close_sent", False):
             logger.debug("Dropping outbound frame: WebSocket already closed")
             return
+        await owner._outbound_buffer().send((text_data, bytes_data))
+
+    async def _transmit_frame(self, frame: Tuple[Optional[str], Optional[bytes]]) -> bool:
+        """Hand one frame to the ASGI server; ``False`` once the peer is gone.
+
+        Downgrades the ASGI server's send-after-close rejections to a debug
+        log — the client is gone, there is nobody to answer. Two shapes: the
+        ``RuntimeError`` after the close handshake (see
+        :func:`_is_send_after_close_error`), and the ``OSError`` a send raises
+        once the peer has closed (ASGI 2.4; uvicorn's ``ClientDisconnected``,
+        #3000). Any other ``RuntimeError`` propagates.
+        """
+        text_data, bytes_data = frame
         try:
             await self.send(text_data=text_data, bytes_data=bytes_data)
         except RuntimeError as exc:
@@ -4029,6 +4388,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 raise
             self._ws_close_sent = True
             logger.debug("Dropping outbound frame: WebSocket closed during send (%s)", exc)
+            return False
         except OSError as exc:
             # ASGI 2.4: a send on a connection the peer has closed raises a
             # server-specific OSError subclass (uvicorn: ClientDisconnected).
@@ -4037,6 +4397,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # that loop and the disconnect was never dispatched (#3000).
             self._ws_close_sent = True
             logger.debug("Dropping outbound frame: peer closed the WebSocket (%r)", exc)
+            return False
+        return True
 
     async def send_json(self, data: Dict[str, Any]) -> None:
         """Send JSON message to client with Django type support.
@@ -4642,6 +5004,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         from .push import leave_push_scope_groups
 
         await leave_push_scope_groups(consumer)
+
+        # Leave the tab's state flush groups (#4164 item 1).
+        for group in list(getattr(consumer, "_djust_state_flush_groups", None) or ()):
+            try:
+                await self.channel_layer.group_discard(group, self.channel_name)
+            except Exception:  # noqa: BLE001
+                logger.warning("Error leaving a state flush group")
+        if getattr(consumer, "_djust_state_flush_groups", None):
+            consumer._djust_state_flush_groups = set()
 
         # Leave db_notify groups registered by NotificationMixin.listen()
         db_notify_channels = getattr(consumer, "_db_notify_channels", None)
@@ -5370,6 +5741,22 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 "payload": event.get("payload", {}),
             }
         )
+
+    async def djust_state_flush(self, event: Dict[str, Any]) -> None:
+        """A reconnect of a tab this socket holds unsaved state for asks for it
+        to be saved now (#4164 item 1, :mod:`djust._state_flush_request`)."""
+        runtime = getattr(self, "_runtime", None)
+        answer = getattr(runtime, "answer_flush_request", None)
+        if not callable(answer):
+            return
+        # Not awaited here: Channels dispatches this socket's messages one at a
+        # time, and the flush waits for the turn locks and the save.
+        task = asyncio.ensure_future(answer())
+        answers: Set["asyncio.Future[Any]"] = getattr(self, "_djust_flush_answers", None) or set()
+        self._djust_flush_answers = answers
+        answers.add(task)
+        task.add_done_callback(answers.discard)
+        task.add_done_callback(_log_flush_answer_failure)
 
     async def server_push(self, event: Dict[str, Any]) -> None:
         """
@@ -6367,25 +6754,37 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if dispatch_work and self.view_instance is view:
                 await self._dispatch_async_work(event_name=None)
 
-    async def _render_background(self, view: Any) -> Optional[BackgroundRender]:
+    async def _render_background(
+        self, view: Any, *, skip_unchanged: bool = False
+    ) -> Optional[BackgroundRender]:
         """Capture one background render under the caller's existing render lock.
 
         The root's turn was authorized at its start; its declared state is
         committed here, before the frame, and a failed save withholds the
         render (ADR-038 E3).
+
+        ``skip_unchanged`` (async results, #4123): when nothing the template
+        reads changed since the last render and the frame's snapshot fields
+        would tell the page nothing new, nothing is rendered and the result is
+        ``unchanged``: the caller sends no frame. The client's loading state
+        ends with the batch's ``async_complete`` (#4309), not with this frame.
         """
         if self.view_instance is not view:
             return None
         runtime = getattr(self, "_runtime", None)
         snapshot_fields: Dict[str, Any] = {}
+        serial_before = turn_serial(view) if skip_unchanged else None
         committed = await self._commit_explicit_background_turn(view)
         if committed is None:
             return None
         snapshot_fields = committed
+        skip = skip_unchanged and snapshot_delivers_nothing(snapshot_fields, serial_before)
         with _tenant_context(getattr(view, "_tenant", None)):
-            rendered = await render_background(view, runtime)
+            rendered = await render_background(view, runtime, skip_unchanged=skip)
         if self.view_instance is not view:
             return None
+        if rendered is not None and rendered.unchanged:
+            return rendered
         if rendered is None:
             logger.warning("Background render parameter contracts unavailable")
             await self.send_error(

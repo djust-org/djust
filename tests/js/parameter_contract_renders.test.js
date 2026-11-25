@@ -8,7 +8,7 @@ const { readFileSync } = await vi.importActual('node:fs');
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 const seam = 'window.djust.collectDjValues = collectDjValues;';
-const reinit = 'function reinitAfterDOMUpdate(scope) {';
+const reinit = 'function reinitAfterDOMUpdate(scope, changes) {';
 for (const marker of [seam, reinit]) {
     if (source.split(marker).length !== 2) throw new Error('Missing render-contract test seam');
 }

@@ -27,11 +27,8 @@
 
 use djust_templates::filters::django_timesince_for_tests as timesince;
 
-fn at(y: i32, m: u32, d: u32, h: u32, mi: u32) -> chrono::NaiveDateTime {
-    chrono::NaiveDate::from_ymd_opt(y, m, d)
-        .unwrap()
-        .and_hms_opt(h, mi, 0)
-        .unwrap()
+fn at(y: i16, m: i8, d: i8, h: i8, mi: i8) -> jiff::civil::DateTime {
+    jiff::civil::DateTime::new(y, m, d, h, mi, 0, 0).unwrap()
 }
 
 const NBSP: char = '\u{a0}';
@@ -108,7 +105,7 @@ fn under_a_minute_is_zero_minutes_not_seconds() {
         timesince(at(2026, 1, 1, 0, 0), at(2026, 1, 1, 0, 0)),
         format!("0{NBSP}minutes")
     );
-    let thirty_seconds = at(2026, 1, 1, 0, 0) + chrono::Duration::seconds(30);
+    let thirty_seconds = at(2026, 1, 1, 0, 0) + jiff::SignedDuration::from_secs(30);
     assert_eq!(
         timesince(at(2026, 1, 1, 0, 0), thirty_seconds),
         format!("0{NBSP}minutes")

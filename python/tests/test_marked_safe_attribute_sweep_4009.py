@@ -63,7 +63,6 @@ CLASS_BUDGET = 12
 
 TAGS = tuple(safe_sweep.tag_units())
 CLASSES = tuple(safe_sweep.class_units())
-RUST_COMPONENTS = tuple(safe_sweep.rust_component_units())
 
 SWEEP_POPULATIONS = {
     "marked-safe-attr/tags": lambda: list(TAGS),
@@ -209,11 +208,13 @@ class TestEveryClass:
         assert {k[2] for k in found} >= {"variant"}
 
 
-class TestEveryRustComponent:
-    def test_no_argument_leaves_an_attribute(self):
-        found, rendered = safe_sweep.rust_component_findings()
-        assert found == {}
-        assert rendered == set(RUST_COMPONENTS) and len(RUST_COMPONENTS) >= 15
+class TestNoRustComponent:
+    def test_the_crate_classes_are_gone(self):
+        """#4002 removed the ``djust_components`` crate; ``djust.components.ui`` draws those
+        components, and the class sweep above covers them."""
+        from djust import _rust
+
+        assert [n for n in dir(_rust) if n.startswith("Rust") and n != "RustLiveView"] == []
 
 
 class TestEveryThemePack:

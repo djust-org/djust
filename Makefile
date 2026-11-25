@@ -694,6 +694,12 @@ benchmark-transports: ## Complete turns over WS, SSE and HTTP: 5 workloads, save
 	@PYTHONPATH=python nice -n 10 $(PYTHON) scripts/bench_turn_transports.py --rounds $${ROUNDS:-40} \
 		$${JSON:+--json $$JSON} $${COMPARE:+--compare $$COMPARE}
 
+.PHONY: benchmark-client-turns
+benchmark-client-turns: ## Browser side of a turn, same 5 workloads: input-to-send, apply, long tasks over WS, HTTP and the HTTP whole page (#4314); needs Playwright + Chromium. TURNS=30 JSON=out.json
+	@echo "$(GREEN)Running the browser turn benchmark (headless Chromium; release build required)...$(NC)"
+	@PYTHONPATH=python nice -n 10 $(PYTHON) scripts/bench_client_turns.py --turns $${TURNS:-30} \
+		$${JSON:+--json $$JSON}
+
 ##@ Database
 
 .PHONY: demo-tests

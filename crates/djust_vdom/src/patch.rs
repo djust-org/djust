@@ -239,7 +239,7 @@ pub fn apply_patches_in(root: &mut VNode, root_ns: Namespace, patches: &[Patch])
     //    to path-based traversal for text nodes (d=None).
     for patch in &non_child_patches {
         match patch {
-            Patch::SetText { path, d, text } => {
+            Patch::SetText { path, d, text, .. } => {
                 let target = resolve_node_mut(root, path, d.as_deref());
                 if let Some(target) = target {
                     target.text = Some(text.clone());
@@ -557,6 +557,8 @@ mod tests {
             path: vec![],
             d: None,
             text: "new".to_string(),
+            parent_d: None,
+            index: None,
         };
 
         apply_patch(&mut root, &patch);

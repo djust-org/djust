@@ -186,15 +186,18 @@ pub fn diff_nodes_in(
     ns: Option<Namespace>,
 ) -> Vec<Patch> {
     let mut patches = Vec::new();
-    diff_node_into(old, new, path, &mut patches, ns);
+    diff_node_into(old, new, path, None, &mut patches, ns);
     patches
 }
 
-/// `ns`: the namespace of `new` when it is an element, if known.
+/// `ns`: the namespace of `new` when it is an element, if known. `pid`: the
+/// djust_id of the parent `old` sits in, when known; a `SetText` carries it
+/// with the node's index so the client resolves the text node by id (#4001).
 fn diff_node_into(
     old: &VNode,
     new: &VNode,
     path: &[usize],
+    pid: Option<&str>,
     out: &mut Vec<Patch>,
     ns: Option<Namespace>,
 ) {
@@ -212,10 +215,18 @@ fn diff_node_into(
     // Text / comment nodes: compare text content.
     if new.is_text() || new.is_comment() {
         if old.text != new.text {
+            // The parent's dj-id plus this node's index in it (#4001); only
+            // together, and only when the parent has an id to look up.
+            let (parent_d, index) = match (pid, path.last()) {
+                (Some(pid), Some(&index)) => (Some(pid.to_string()), Some(index)),
+                _ => (None, None),
+            };
             out.push(Patch::SetText {
                 path: path.to_vec(),
                 d: old.djust_id.clone(),
                 text: new.text.clone().unwrap_or_default(),
+                parent_d,
+                index,
             });
         }
         return;
@@ -651,6 +662,7 @@ fn reconcile_virtual_keyed(
             old_node,
             new_node,
             &[],
+            None,
             &mut inner,
             child_ns(kids, new_node),
         );
@@ -719,6 +731,7 @@ fn reconcile_indexed(
                 old_node,
                 new_node,
                 &child_path,
+                pid,
                 out,
                 child_ns(kids, new_node),
             );
@@ -777,10 +790,15 @@ fn reconcile_keyed(
                 .as_deref()
                 .is_some_and(djust_core::html_whitespace::is_html_whitespace_only)
     };
+    // Keys derived from `id` by the opt-in `key_by_id` (#4228) do not count:
+    // with that opt-in most parents mix id-keyed and id-less children (a
+    // `<label>` beside an `<input id>`), which is expected, not a mistake.
     if new_nb
         .iter()
         .any(|(_, n)| n.key.is_none() && !is_separator(n))
-        && new_nb.iter().any(|(_, n)| n.key.is_some())
+        && new_nb
+            .iter()
+            .any(|(_, n)| n.key.is_some() && !crate::has_id_derived_key(n))
     {
         vdom_trace!("DJE-050: Mixed keyed/unkeyed siblings during keyed diff");
         tracing::warn!(
@@ -869,6 +887,7 @@ fn reconcile_keyed(
                 old_node,
                 new_node,
                 &child_path,
+                pid,
                 out,
                 child_ns(kids, new_node),
             );
@@ -895,6 +914,7 @@ fn reconcile_keyed(
             old_node,
             new_node,
             &child_path,
+            pid,
             out,
             child_ns(kids, new_node),
         );

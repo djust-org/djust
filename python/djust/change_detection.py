@@ -45,11 +45,17 @@ from __future__ import annotations
 
 import hashlib
 import marshal
-from typing import Any, Hashable, List, Tuple
+import weakref
+from math import copysign as _copysign
+from typing import Any, Dict, Hashable, List, Optional, Tuple
 
 from . import _per_turn
+from .turns import current_turn
 
 __all__ = [
+    "AssignsSnapshot",
+    "ChangedKeys",
+    "changed_keys_after",
     "deep_fingerprint",
     "fingerprint_digest",
     "retained_fingerprint",
@@ -149,7 +155,11 @@ def _tagged_scalar(value: Any) -> Hashable:
     """
     t = type(value)
     if t in _EXACT_SCALARS:
-        return (_TAG_VALUE, _TYPE_CODE[t], value)
+        return (
+            _TAG_VALUE,
+            _TYPE_CODE[t] if value or t is not float or _copysign(1.0, value) > 0 else _NEG_ZERO,
+            value,
+        )
     base: Any
     if issubclass(t, str):
         base = str.__str__(value)
@@ -157,6 +167,9 @@ def _tagged_scalar(value: Any) -> Hashable:
         base = bytes.__getitem__(value, slice(None))
     elif issubclass(t, float):
         base = float.__float__(value)
+        if not base and _copysign(1.0, base) < 0:
+            # Distinct from the same subclass's 0.0 (see ``_NEG_ZERO``).
+            return (_TAG_VALUE, "%s.%s-" % (t.__module__, t.__qualname__), base)
     elif issubclass(t, int):
         base = int.__int__(value)
     else:
@@ -182,23 +195,43 @@ def fingerprints_by_content(value: Any) -> bool:
     return isinstance(value, CONTAINER_TYPES) or bool(getattr(type(value), STATE_MARKER, False))
 
 
-def deep_fingerprint(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Hashable, bool]:
+def deep_fingerprint(
+    value: Any, budget: int = DEFAULT_BUDGET, *, plain: Optional[List[bool]] = None
+) -> Tuple[Hashable, bool]:
     """Return ``(fingerprint, truncated)`` for *value*.
 
     ``fingerprint`` is hashable and shares no reference with *value*;
     ``truncated`` is True when *budget* ran out and part of the structure was
     reduced to root identity. Callers must conservatively invalidate it.
+
+    With *plain* (a list), the walk also appends whether *value* is PLAIN
+    DATA: only exact ``dict`` / ``list`` / ``tuple`` nodes and exact builtin
+    scalar leaves, within the depth cap and without a cycle (#3999). Anything
+    the fast walk hands to :func:`_walk_general` (an object, a set, a
+    subclass, a component's state) makes it ``False``. Plain data cannot hold
+    a component, a form or a model, which is what lets the Rust sync skip
+    ``_collect_sub_ids`` over it.
     """
     t = type(value)
     if t in _EXACT_SCALARS:
         # A scalar ROOT keeps its tagged form in both encodings: a caller may
         # store the fingerprint beside a "nothing stored" default, and a bare
         # ``None`` or ``0`` must never be mistaken for one.
+        if plain is not None:
+            plain.append(True)
         if budget < 1:
             return (_TAG_TRUNCATED, id(value)), True
-        return (_TAG_VALUE, _TYPE_CODE[t], value), False
+        return (
+            _TAG_VALUE,
+            _TYPE_CODE[t] if value or t is not float or _copysign(1.0, value) > 0 else _NEG_ZERO,
+            value,
+        ), False
     counter: List[Any] = [budget, _BARE if _per_turn.on("compact_fingerprints") else _NO_BARE]
+    if plain is not None:
+        counter.append(True)
     fp = _walk(value, counter, 0, ())
+    if plain is not None:
+        plain.append(bool(counter[2]))
     return fp, counter[0] < 0
 
 
@@ -228,11 +261,11 @@ def fingerprint_digest(fp: Hashable) -> bytes:
     encodings, so equal digests mean equal fingerprints, but for a hash
     collision.
 
-    Two equal fingerprints can still have different digests, which costs one
-    extra sync and never a missed change: ``0.0`` / ``-0.0`` (equal as floats,
-    but they render differently, so the digest is the more exact of the two),
-    and two distinct NaN objects, which a tuple comparison calls unequal
-    (identity) and the digest calls equal; NaN renders the same either way.
+    A fingerprint comparison and a digest comparison can still disagree on
+    two distinct NaN objects (a tuple comparison calls them unequal, the
+    digest equal); NaN renders the same either way, so that costs at most one
+    extra sync, never a missed change. ``-0.0`` has its own leaf code
+    (``_NEG_ZERO``), so it differs from ``0.0`` in both.
     """
     return hashlib.blake2b(_encode(fp), digest_size=DIGEST_SIZE).digest()
 
@@ -267,6 +300,66 @@ def deep_digest(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Any, bool]:
     return retained_fingerprint(fp), False
 
 
+#: One container kept by an event snapshot for the sync of the same turn
+#: (#3999): ``(value, fingerprint tree, plain)``. ``value`` is the object
+#: itself, held so its ``id()`` cannot be reused while the entry lives.
+SnapshotEntry = Tuple[Any, Hashable, bool]
+
+
+class AssignsSnapshot(dict):  # type: ignore[type-arg]
+    """What ``websocket._snapshot_assigns`` returns: a plain dict, plus the walks.
+
+    It compares, iterates and copies as the dict it is. ``fingerprints`` maps
+    the ``id()`` of every exact ``dict`` / ``list`` / ``tuple`` attribute the
+    snapshot walked completely to a :data:`SnapshotEntry`, so the Rust sync of
+    the same turn can take the post-event snapshot's walk instead of walking
+    the container again (#3999). See :class:`ChangedKeys` for when the sync may.
+    """
+
+    __slots__ = ("fingerprints",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fingerprints: Dict[int, SnapshotEntry] = {}
+
+
+class ChangedKeys(set):  # type: ignore[type-arg]
+    """``_compute_changed_keys(pre, post)``: the changed names, plus the post walks.
+
+    The set a handler's turn assigns to ``view._changed_keys``. It carries the
+    post-event snapshot's :attr:`AssignsSnapshot.fingerprints` and the turn it
+    was computed in. ``_sync_state_to_rust`` reuses those walks only when the
+    view's ``_changed_keys`` is still this very object, in the same turn, and
+    no application code can have run between the snapshot and the sync
+    (``rust_bridge._snapshot_walks_for_sync``). Anything that replaces the set
+    (``set_changed_keys`` builds a new one) or ends the turn drops the reuse,
+    and the sync walks as before.
+    """
+
+    __slots__ = ("fingerprints", "pre_fingerprints", "turn")
+
+    def __init__(self, keys: Any = ()) -> None:
+        super().__init__(keys)
+        self.fingerprints: Optional[Dict[int, SnapshotEntry]] = None
+        #: The PRE-event snapshot's walks, for the item-level list delta
+        #: (#4325): which rows of a list the handler changed in place.
+        self.pre_fingerprints: Optional[Dict[int, SnapshotEntry]] = None
+        self.turn: Any = None
+
+
+def changed_keys_after(changed: Any, post: Any, pre: Any = None) -> ChangedKeys:
+    """*changed* as a :class:`ChangedKeys` carrying the snapshots' walks and the turn."""
+    out = ChangedKeys(changed)
+    if isinstance(post, AssignsSnapshot):
+        turn = current_turn()
+        if turn is not None:
+            out.fingerprints = post.fingerprints
+            if isinstance(pre, AssignsSnapshot):
+                out.pre_fingerprints = pre.fingerprints
+            out.turn = weakref.ref(turn)
+    return out
+
+
 #: Exact builtin scalar types: no subclass, so no ``STATE_MARKER`` either. The
 #: fast path in :func:`_walk` handles them inline; a subclass of one (Django's
 #: ``SafeString``, an ``IntEnum``) takes the general path, which fingerprints
@@ -278,6 +371,12 @@ _EXACT_SCALARS = frozenset(_IMMUTABLE_LEAVES)
 #: subclass is spelled ``"module.qualname"``, which always holds a dot and so
 #: never equals a code.
 _TYPE_CODE = {str: "s", int: "n", float: "f", bool: "b", bytes: "y", type(None): "0"}
+
+#: The code of a ``-0.0`` leaf (#4325). ``0.0 == -0.0``, but the two render
+#: differently, so a tree comparison must not call them equal: the per-row
+#: pick of a list delta compares row trees, and with one code for both it
+#: kept Rust's old ``0.0`` after a handler stored ``-0.0``.
+_NEG_ZERO = "f-"
 
 #: The compact encoding (#3998). A fingerprint tree is built several times per
 #: turn (the event snapshot, the Rust sync, dirty tracking), so its size is
@@ -326,7 +425,17 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
         counter[0] -= 1
         if counter[0] < 0:
             return (_TAG_TRUNCATED, id(value))
-        return value if t in bare else (_TAG_VALUE, _TYPE_CODE[t], value)
+        return (
+            value
+            if t in bare
+            else (
+                _TAG_VALUE,
+                _TYPE_CODE[t]
+                if value or t is not float or _copysign(1.0, value) > 0
+                else _NEG_ZERO,
+                value,
+            )
+        )
     if t is not dict and t is not list and t is not tuple:
         return _walk_general(value, counter, depth, path_ids)
     counter[0] -= 1
@@ -334,6 +443,8 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
         return (_TAG_TRUNCATED, id(value))
     vid = id(value)
     if depth >= _MAX_DEPTH or vid in path_ids:
+        if len(counter) > 2:
+            counter[2] = False  # not walked: not known to be plain
         return (_TAG_ID, vid)
     inner = path_ids + (vid,)
     child_depth = depth + 1
@@ -344,7 +455,17 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
             tk = type(k)
             if tk in _EXACT_SCALARS:
                 counter[0] -= 1
-                kf: Hashable = k if tk in bare else (_TAG_VALUE, _TYPE_CODE[tk], k)
+                kf: Hashable = (
+                    k
+                    if tk in bare
+                    else (
+                        _TAG_VALUE,
+                        _TYPE_CODE[tk]
+                        if k or tk is not float or _copysign(1.0, k) > 0
+                        else _NEG_ZERO,
+                        k,
+                    )
+                )
             else:
                 kf = _walk(k, counter, child_depth, inner)
             if counter[0] < 0:
@@ -352,7 +473,17 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
             tv = type(v)
             if tv in _EXACT_SCALARS:
                 counter[0] -= 1
-                vf: Hashable = v if tv in bare else (_TAG_VALUE, _TYPE_CODE[tv], v)
+                vf: Hashable = (
+                    v
+                    if tv in bare
+                    else (
+                        _TAG_VALUE,
+                        _TYPE_CODE[tv]
+                        if v or tv is not float or _copysign(1.0, v) > 0
+                        else _NEG_ZERO,
+                        v,
+                    )
+                )
             else:
                 vf = _walk(v, counter, child_depth, inner)
             if counter[0] < 0:
@@ -369,7 +500,15 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
             counter[0] -= 1
             if counter[0] < 0:
                 return (_TAG_TRUNCATED, vid)
-            append(v if tv in bare else (_TAG_VALUE, _TYPE_CODE[tv], v))
+            append(
+                v
+                if tv in bare
+                else (
+                    _TAG_VALUE,
+                    _TYPE_CODE[tv] if v or tv is not float or _copysign(1.0, v) > 0 else _NEG_ZERO,
+                    v,
+                )
+            )
         else:
             append(_walk(v, counter, child_depth, inner))
             if counter[0] < 0:
@@ -380,6 +519,11 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
 def _walk_general(
     value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...]
 ) -> Hashable:
+    if len(counter) > 2:
+        # The plain-data flag ``deep_fingerprint(plain=...)`` asked for: every
+        # shape that is not an exact dict / list / tuple or an exact scalar
+        # reaches this function.
+        counter[2] = False
     fields: Any = None
     if getattr(type(value), STATE_MARKER, False):
         fields = getattr(type(value), FINGERPRINT_FIELDS, None)

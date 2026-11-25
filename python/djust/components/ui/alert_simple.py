@@ -1,13 +1,7 @@
 """
-Alert Component - Notification messages with optional dismissal
+Alert Component - Notification messages with optional dismissal.
 
 A stateless alert component for displaying messages/notifications.
-Uses the automatic 3-tier performance waterfall.
-
-Features:
-- Variants (success, danger, warning, info, primary, secondary)
-- Dismissable option
-- Icon support
 
 Example:
     from djust.components.ui import Alert
@@ -22,44 +16,36 @@ Example:
         dismissable=True
     )
 
-Performance:
-    - Pure Rust: ~0.4 μs (if available)
-    - Hybrid: ~2-4 μs (template cached)
-    - Python: ~0.3 μs (f-string fallback)
+One renderer (#4002): ``_render_custom`` returns the markup of ``AlertComponent``, built from this
+class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
-from ..base import Component
 from typing import Any
 
-from django.utils.html import conditional_escape
-from djust.components.utils import attr_text
+from djust.components._alias_deprecation import warn_alias
 
-from djust._rust import RustAlert
+from ..base import Component
+from ._twin import plain_text, render_twin
+from .alert import AlertComponent
+
+#: The alert types ``AlertComponent`` draws; it draws any other as ``info``.
+_TYPES = frozenset({"info", "success", "warning", "danger", "error"})
 
 
 class Alert(Component):
     """
-    Simple stateless Alert component.
+    Simple stateless Alert component, drawn by ``AlertComponent``.
 
-    Automatic performance waterfall:
-    1. Pure Rust (RustAlert) - if available
-    2. Rust template engine - with caching
-    3. Python f-strings - fallback
+    Every value is HTML-escaped, whatever it is marked as.
 
     Args:
-        text: Alert message text
-        variant: Color variant (success, danger, warning, info, primary, secondary)
-        dismissable: Whether alert can be dismissed
+        text: Alert message text (``AlertComponent``'s ``message``)
+        variant: Alert type (``type``): info, success, warning, danger or error. Any other
+            value (primary, secondary, light, dark) draws as ``info`` and warns
+            (deprecated, #4002).
+        dismissable: Whether alert can be dismissed (``dismissible``). It is rendered
+            ``standalone``: under Bootstrap the close button is ``data-bs-dismiss="alert"``.
     """
-
-    _rust_impl_class = RustAlert
-
-    # Template for hybrid rendering
-    # Note: Using separate if blocks instead of elif (Rust template engine bug)
-    template = """<div class="alert alert-{{ variant }}{% if dismissable %} alert-dismissible fade show{% endif %}" role="alert">
-    {{ text }}{% if dismissable %}
-    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>{% endif %}
-</div>"""
 
     def __init__(
         self,
@@ -69,87 +55,38 @@ class Alert(Component):
     ):
         super().__init__(text=text, variant=variant, dismissable=dismissable)
 
+        # Declared for type checkers; the base class already set each from the kwargs.
         self.text = text
         self.variant = variant
         self.dismissable = dismissable
 
-    def get_context_data(self) -> dict[str, Any]:
-        return {
-            "text": self.text,
-            "variant": self.variant,
-            "dismissable": self.dismissable,
-        }
+        self._warn_unmapped()
+
+    def _warn_unmapped(self) -> None:
+        """Warn for an argument value the twin has no equivalent for (#4002).
+
+        ``stacklevel=5`` points at the caller of ``__init__`` / ``update``.
+        """
+        if self.variant not in _TYPES:
+            warn_alias(
+                "Alert",
+                "variant outside info/success/warning/danger/error",
+                "one of those types (any other draws as info)",
+                stacklevel=5,
+            )
+
+    def update(self, **kwargs: Any) -> Component:
+        """Update the properties, warning again for an argument the twin cannot draw."""
+        super().update(**kwargs)
+        self._warn_unmapped()
+        return self
 
     def _render_custom(self) -> str:
-        """Python f-string fallback"""
-        from djust.config import config
-
-        framework = config.get("css_framework", "bootstrap5")
-
-        if framework == "bootstrap5":
-            return self._render_bootstrap()
-        elif framework == "tailwind":
-            return self._render_tailwind()
-        else:
-            return self._render_plain()
-
-    def _render_bootstrap(self) -> str:
-        """Render Bootstrap 5 alert"""
-        classes = f"alert alert-{attr_text(self.variant)}"
-        if self.dismissable:
-            classes += " alert-dismissible fade show"
-
-        parts = [f'<div class="{classes}" role="alert">']
-        parts.append(f"    {conditional_escape(self.text)}")
-
-        if self.dismissable:
-            parts.append(
-                '    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>'
-            )
-
-        parts.append("</div>")
-        return "\n".join(parts)
-
-    def _render_tailwind(self) -> str:
-        """Render Tailwind CSS alert"""
-        # Map variants to Tailwind colors
-        variant_map = {
-            "success": "bg-green-50 border-green-200 text-green-800",
-            "danger": "bg-red-50 border-red-200 text-red-800",
-            "warning": "bg-yellow-50 border-yellow-200 text-yellow-800",
-            "info": "bg-blue-50 border-blue-200 text-blue-800",
-            "primary": "bg-blue-50 border-blue-200 text-blue-900",
-            "secondary": "bg-gray-50 border-gray-200 text-gray-800",
-        }
-        colors = variant_map.get(self.variant, variant_map["info"])
-
-        parts = [f'<div class="border rounded-lg p-4 {colors} relative" role="alert">']
-        parts.append(f"    <span>{conditional_escape(self.text)}</span>")
-
-        if self.dismissable:
-            parts.append(
-                '    <button type="button" class="absolute top-2 right-2 text-gray-400 hover:text-gray-600">'
-            )
-            parts.append('        <span class="sr-only">Close</span>')
-            parts.append('        <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">')
-            parts.append(
-                '            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd"/>'
-            )
-            parts.append("        </svg>")
-            parts.append("    </button>")
-
-        parts.append("</div>")
-        return "\n".join(parts)
-
-    def _render_plain(self) -> str:
-        """Render plain HTML alert"""
-        parts = [f'<div class="alert alert-{attr_text(self.variant)}" role="alert">']
-        parts.append(f"    {conditional_escape(self.text)}")
-
-        if self.dismissable:
-            parts.append(
-                '    <button type="button" class="close" aria-label="Close">&times;</button>'
-            )
-
-        parts.append("</div>")
-        return "\n".join(parts)
+        return render_twin(
+            AlertComponent,
+            self.id,
+            message=plain_text(self.text),
+            type=self.variant,
+            dismissible=bool(self.dismissable),
+            standalone=True,
+        )

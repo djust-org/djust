@@ -27,9 +27,13 @@ DEFAULT_MAX_FORM_DATA_SIZE = 2_621_440
 #: 100x Django's field limit; at the per-member cost of an event (~0.7 us in the state sync, measured
 #: in #3844) it keeps an event at the cap to ~70 ms where the size limit alone allowed ~1.8 s.
 DEFAULT_MAX_FORM_MEMBERS = 100_000
+#: ``max_outbound_buffer_bytes`` (#3658): 4 MiB of frames waiting for one slow client.
+DEFAULT_MAX_OUTBOUND_BUFFER_BYTES = 4 * 1024 * 1024
 #: The three form-data limits (#3834, #3844). Every one is a non-negative integer (``0`` = no limit),
 #: validated when the config loads AND when a value is written in code (``set`` / ``update``, #3858).
 _FORM_LIMIT_KEYS = ("max_form_fields", "max_form_data_size", "max_form_members")
+#: Non-negative integer limits validated like the form limits (``0`` = no limit).
+_INT_LIMIT_KEYS = _FORM_LIMIT_KEYS + ("max_outbound_buffer_bytes",)
 
 #: The project-wide default of ``LiveView.http_status_of_state`` (#3706): a mapping of a state name to
 #: the HTTP status the page answers for it. Validated like the form limits, on load and on every
@@ -41,7 +45,7 @@ _STATUS_MAP_KEY = "http_status_of_state"
 _BOOL_SWITCH_KEYS = ("state_models_as_handles", "log_exception_detail")
 _FALSE_SPELLINGS = frozenset({"false", "0", "no", "off"})
 _TRUE_SPELLINGS = frozenset({"true", "1", "yes", "on"})
-_SANITIZED_KEYS = _FORM_LIMIT_KEYS + (_STATUS_MAP_KEY,) + _BOOL_SWITCH_KEYS
+_SANITIZED_KEYS = _INT_LIMIT_KEYS + (_STATUS_MAP_KEY,) + _BOOL_SWITCH_KEYS
 
 
 def valid_http_status_map(value: Any) -> bool:
@@ -175,6 +179,11 @@ class LiveViewConfig:
         # How many views one WebSocket may host besides the page view: the
         # ``dj-lazy`` and ``mount_batch`` views, each a view of its own (#3252).
         "max_views_per_connection": 64,
+        # Bytes of outbound frames one connection may have waiting while the
+        # client reads slowly (#3658). Past it a WebSocket is closed with 1013
+        # and an SSE stream is ended, and the client reconnects and resyncs.
+        # The frame next in line is not counted, so one large frame is always sent. 0 = no limit.
+        "max_outbound_buffer_bytes": DEFAULT_MAX_OUTBOUND_BUFFER_BYTES,
         # ``event_security`` was removed in 2.0 (#4101): only @event_handler
         # methods are client events, on every transport. "open" / "warn" fail
         # startup (``djust._removed_settings``); "strict" is accepted and ignored.
@@ -293,6 +302,20 @@ class LiveViewConfig:
         # ``.count`` (never capped, one query), and one that needs one row
         # ``.first`` / ``.exists``.
         "queryset_all_row_cap": 100_000,
+        # A to-many relation the template reads only through a method
+        # (``.all.count``, ``.all.first.name``, ``.count``, ``.exists``), by index
+        # (``.all.0.name``) or for its length (``.all|length``, ``{% if %}``)
+        # needs at most a row of it, yet the JIT prefetched the WHOLE relation for
+        # every parent row (#4326). This is the most queries that may replace that
+        # one prefetch query: when the QuerySet is sliced and (parent rows) x
+        # (distinct light reads of the relation: ``count``, ``exists``,
+        # ``all.1`` ... each one query per row) is at most this, the relation is
+        # not prefetched and each parent row runs its own ``COUNT`` / ``LIMIT``.
+        # Otherwise (unsliced, more parents or reads) the prefetch stays. The
+        # default ``1`` never adds a query: it replaces one query with one; raise
+        # it to trade a few queries for not loading large relations, ``0`` always
+        # prefetches.
+        "queryset_light_relation_max_parents": 1,
         # Serialization behavior (issue #292)
         # When False (default): non-serializable values are converted via str() fallback with a warning log
         # When True: non-serializable values raise TypeError with actionable error message
@@ -632,7 +655,7 @@ class LiveViewConfig:
         Run when the config loads and again on every ``set`` / ``update`` that names one (#3858): a
         ``'abc'`` written in code made every form event raise ``TypeError``, ``-5`` refused everything,
         and ``3.7`` / ``True`` were accepted as limits. A bad value is the default, never "no limit"."""
-        for key in _FORM_LIMIT_KEYS:
+        for key in _INT_LIMIT_KEYS:
             val = target.get(key)
             if isinstance(val, bool) or not isinstance(val, int) or val < 0:
                 logger.warning(

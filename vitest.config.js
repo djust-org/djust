@@ -48,6 +48,8 @@ const SPLIT_BUILD_TESTS = [
   'tests/js/sw_advanced.test.js',
   'tests/js/cursor-overlay.test.js',
   'tests/js/tutorial-bubble.test.js',
+  // #3656: the hook lifecycle contract is core, but it must hold with chunks loaded too.
+  'tests/js/hook-lifecycle-contract-3656.test.js',
 ];
 
 export default defineConfig({

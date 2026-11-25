@@ -166,6 +166,9 @@ icon_tip = Tooltip(
 ```
 
 ### Rust Direct Usage
+> **Removed in #4002:** the `djust._rust.Rust*` component classes and the `djust_components`
+> crate no longer exist; the snippet below cannot run. See `docs/components/RUST_COMPONENTS.md`.
+
 ```python
 from djust._rust import RustTooltip
 

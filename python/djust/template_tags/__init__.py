@@ -166,6 +166,14 @@ class TagHandler:
     #: ``args[-2] == "as"`` on its resolved arguments (#2563 review).
     ACCEPTS_AS_VAR: ClassVar[bool] = False
 
+    #: With ``RETURNS_BINDINGS``, promise that the handler binds names ONLY
+    #: through an ``as <name>`` operand (#4124). The partial renderer then
+    #: treats a use without ``as`` as binding nothing: it re-renders the tag
+    #: itself but keeps the cached fragments of later siblings whose inputs
+    #: did not change. Leave it ``False`` for a handler that may write any
+    #: other name into the context — a wrong ``True`` serves stale HTML.
+    BINDS_ONLY_AS_VAR: ClassVar[bool] = False
+
     #: With ``RETURNS_BINDINGS``, receive the surrounding ``{% autoescape %}``
     #: policy as an ``autoescape=`` keyword: ``render(args, [content,]
     #: context, autoescape=bool)`` (#2556). Declare it ONLY when the handler

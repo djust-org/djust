@@ -174,7 +174,7 @@ flows (`detail = str(exc)` passed later) are not visible to it.
 `_find_sticky_slot_ids`, `_clear_live_handles` (teardown step names — confirm
 no application hook runs there), `_flush_accessibility` (two sites),
 `_attach_debug_payload`, the actor shutdown in `disconnect`,
-`_handle_upload_resume` (two sites), `_send_frame`, `_clear_template_caches`,
+`_handle_upload_resume` (two sites), `_transmit_frame`, `_clear_template_caches`,
 `disconnect`'s db_notify group leave, waiter cancellation (scheduling only)
 and child unregistration (nonlegacy children disposed, legacy hooks caught
 inside `_unregister_child`),

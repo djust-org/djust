@@ -65,8 +65,9 @@ Total run time on this machine: 3.5 minutes.
 
 The app does no database or API work of its own. Everything measured is
 framework cost, including the session save (one SQLite read and write per turn).
-Browser-side patch and input time is not measured here: that needs a real
-browser, and is follow-up #4314 (v2.1.0), which #4001 will measure against.
+The browser's side of the same turns (input to send, applying the answer, long
+tasks) is measured separately in a real browser: see
+[Browser side of a turn](#browser-side-of-a-turn-4314) below (#4314).
 
 ## Results at RTT 0 (server cost)
 
@@ -140,7 +141,7 @@ process caches the POSTs left behind.
 3. **A 1,000-row table costs 28 ms a turn without any save, to change one
    cell,** and stalls the loop up to 57 ms. That is the Python walks over the
    whole list (change detection, Rust sync): #3999. Risk: high (the shortcuts
-   must still see in-place mutation).
+   must still see in-place mutation). First slice measured below.
 4. **A 1,000-row table page holds 1.4 MB per socket without the save and
    3.0 MB with it**, against 0.1 to 0.2 MB for the small shapes: the
    retained fingerprint trees and copies that grow with the state, #3998. Risk: medium.
@@ -153,6 +154,197 @@ process caches the POSTs left behind.
 At any real-world RTT the first, third and fourth items matter more for
 capacity (CPU and memory per page) than for the latency one user sees.
 
+## #3999, first slice: one changed cell in a 1,000-row list
+
+Measured 2026-11-25 on the same machine, at the commit that added it, with
+`scripts/bench_turn_transports.py --shapes table --transports ws --modes nosave
+--rounds 100` and a timer around each phase of the turn (two runs each,
+interleaved; the shortcut switched off through `djust._per_turn` for "before").
+Milliseconds per turn, `nosave` over the socket:
+
+| | before | after |
+| --- | ---: | ---: |
+| turn p50 / p95 | 23.6-24.1 / 46-48 | 20.8 / 27-28 |
+| CPU per turn | 26.2-26.7 | 21.8-22.2 |
+| the two event snapshots (two walks) | 4.4 | 4.1 |
+| the Rust sync, in Python | 7.8 | 4.5 |
+| of which the sync's walk of the list | 3.8 (fingerprint + convert) | 0.5 (convert only) |
+| Rust render and diff | 9.4-10.0 | 9.2-9.3 |
+
+Walks of the list in Python per turn: four before #3999 (two snapshots, the
+sync's fingerprint-and-convert, `_collect_sub_ids`); three after its first
+shortcut (`plain_sub_ids`); now two fingerprint walks and one conversion walk
+that builds no fingerprint. The sync takes the post-event snapshot's walk of
+the list (its fingerprint, and whether it is plain data) when nothing but the
+framework runs between the two: no `get_context_data` or
+`get_render_only_context` override, no template property, no class-level
+component, no `sync_turn_wrapper`. Otherwise it walks again, as before.
+`test_per_turn_counts.py` pins the counts, `test_per_turn_invalidation.py` the
+cases where the walk must not be reused.
+
+The issue's provisional target, under 10 ms of server time for this turn, is
+not met: Python's share fell from about 12 ms to about 9 ms, and what is left
+is the two snapshot walks (4 ms), `update_state` converting the whole list in
+Rust (about 3 ms) and the Rust render and diff (about 9 ms). Item-level deltas
+for keyed lists, a Rust fast path for a turn that changes two text regions,
+and the per-render serialization on the state backend are the follow-up
+(v2.1.0).
+
+## Browser side of a turn (#4314)
+
+`make benchmark-client-turns` (`scripts/bench_client_turns.py`) serves the same
+Django project and the same five views as the server bench (it imports them),
+with uvicorn in-process and `LiveViewConsumer` on `/ws/live/`, and drives each
+page in headless Chromium through the shipped client with real DOM events: a
+typed value on a `dj-input` (form, editor), a click on a `dj-click` button
+(table, dashboard, push). Committed as
+[`client-turns-baseline.json`](client-turns-baseline.json).
+
+Measured 2026-11-25 on the machine above, Chromium 158.0.8127.36 headless,
+after #4001 / #4328 and the incremental shape below. 30 measured turns per cell after 3 warm-up
+turns, one cell at a time, under `nice -n 10`: p95 is the second-largest sample
+of 30, so read it as noisy. Total run time about one minute.
+
+Two changes to the server bench's pages, so a browser can drive them: the
+table, dashboard and push pages get one `<button dj-click>`, and the form and
+editor inputs carry `dj-debounce="0"`. The shipped default debounces a typed
+`dj-input` by 300 ms, a fixed timer by design: with it, "send" below is that
+300 ms plus the figure shown. The page loads the unminified `client-core.js`
+(the same source as `client-core.min.js`) with a timer inserted around the
+response handler.
+
+Columns, from `performance.now()` in the page, p50 / p95 ms:
+
+- **send**: input event dispatched to the event frame handed to
+  `WebSocket.send` / `fetch` (binding, rate-limit wrapper, parameters,
+  serialization, and for HTTP the render digest of the page).
+- **apply**: time inside the client's response handler: `applyPatches`, or the
+  whole-page morph, plus `reinitAfterDOMUpdate`; summed over a push turn's two
+  answers.
+- **total**: input to the last answer applied. It includes the server's turn
+  and the loopback network, so it is context, not a client figure.
+- **long**: main-thread long tasks (50 ms or more) during the 30 turns, with
+  the longest.
+- **down**: the answer's bytes (WebSocket message; `fetch` body).
+
+Cells: `ws` (the default, state saved), `http` (the page-POST fallback with the
+save: patches), `http-nosave` (`automatic_state = False`: each POST re-mounts
+and answers with the whole page).
+
+| Shape | Elements | Cell | send | apply | total | long | down bytes |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| form | 35 | ws | 0.4 / 2.7 | 0.5 / 1.0 | 8.1 / 15.7 | 0 | 404 |
+| form | 35 | http | 0.8 / 2.6 | 0.5 / 1.1 | 61.0 / 73.9 | 0 | 264 |
+| form | 35 | http-nosave | 0.7 / 2.0 | 0.9 / 1.2 | 15.3 / 20.7 | 0 | 1,277 |
+| table | 6,019 | ws | 0.2 / 0.3 | 1.0 / 1.8 | 35.1 / 71.8 | 0 | 407 |
+| table | 6,019 | http | 1.3 / 2.6 | 0.8 / 3.8 | 165.9 / 391.1 | 0 | 250 |
+| table | 6,019 | http-nosave | 0.8 / 1.3 | 32.6 / 54.3 | 112.8 / 200.2 | 3 (62 ms) | 192,807 |
+| dashboard | 66 | ws | 0.2 / 0.5 | 0.5 / 0.9 | 7.9 / 12.2 | 0 | 403 |
+| dashboard | 66 | http | 0.5 / 0.8 | 0.5 / 1.3 | 28.3 / 47.4 | 0 | 243 |
+| dashboard | 66 | http-nosave | 0.4 / 0.6 | 0.7 / 1.2 | 15.3 / 20.1 | 0 | 1,849 |
+| push | 18 | ws | 0.2 / 0.5 | 0.6 / 1.0 | 9.8 / 17.4 | 0 | 719 |
+| editor | 18 | ws | 0.6 / 2.7 | 0.4 / 1.0 | 9.6 / 13.5 | 0 | 4,642 |
+| editor | 18 | http | 0.9 / 3.2 | 0.5 / 1.3 | 29.2 / 71.2 | 0 | 4,456 |
+| editor | 18 | http-nosave | 0.7 / 2.5 | 0.6 / 1.1 | 14.6 / 20.2 | 0 | 4,925 |
+
+Before, p50 / p95 ms, from separate runs of the same command: the client
+from before #4001 (`--client` with `client-core.js` from `6c9526298`), and
+the one before the incremental shape (`88a801617`):
+
+| Table cell | before #4001 | before the incremental shape | now |
+| --- | ---: | ---: | ---: |
+| ws, apply | 3.6 / 6.3 | 1.1 / 2.0 | 1.0 / 1.8 |
+| http, send | 9.6 / 14.4 | 9.5 / 20.3 | 1.3 / 2.6 |
+| http, apply | 12.9 / 26.2 | 9.5 / 18.3 | 0.8 / 3.8 |
+| http-nosave, apply | 31.5 / 45.2 | 34.5 / 49.4 | 32.6 / 54.3 |
+
+Every other cell moved by under 0.3 ms between the three. The whole-page morph
+is not scoped, so its spread is run-to-run noise. #4001's own by-size bench
+(`scripts/bench_client_patch_turn.py`, an unrelated counter update with no
+server) went from 0.2 / 0.6 / 6.0 ms to 0.2 / 0.2 / 0.2 ms p50 at 100 / 1,000 /
+10,000 elements.
+
+What this says:
+
+1. **Over the socket the browser's part is about a millisecond** for every
+   shape, the 1,000-row table included (6,000 elements): the turn is the
+   server's (compare the server table above). Input to send is under 0.5 ms.
+2. **The HTTP fallback's render digest now follows the change.** It cost
+   about 10 ms each way on the table: the shape (`domShape`, #4108) was a walk
+   of the whole LiveView root, before the POST and again before the answer's
+   patches were applied. Each element's piece is now kept with its CRC-32 and
+   Adler-32 and combined (zlib's `crc32_combine` / `adler32_combine`), and a
+   MutationObserver forgets the pieces a change makes stale, so a turn
+   rehashes the changed path: send 9.5 → 1.3 ms, apply 9.5 → 0.8 ms p50. The
+   value is byte-identical to the server's: seeded random pages and edits
+   (`python/djust/tests/test_dom_shape_random_4001.py` writes the server's
+   shapes, `tests/js/dom_shape_incremental_4001.test.js` checks the client's,
+   kept and from scratch).
+3. **The whole-page answer** (`http-nosave`, 193 KB for the table) takes
+   33 ms p50 to morph, with three long tasks (up to 62 ms) in 30 turns. The small
+   shapes' whole-page answers cost under 1 ms more than their patches.
+
+The server's `total` figures here are not comparable with the server table's:
+uvicorn shares this process with the Playwright driver, and the server bench's
+HTTP figures do not pay the HTTP server.
+
+## #4325: item-level list deltas, multi-span text path, state backend
+
+Measured 2026-11-25 on the same machine, release build, same benchmark
+(`--shapes table --transports ws --modes nosave,save --rtt 0 --rounds 80`,
+two interleaved runs per side; "before" is the new `list_item_deltas`
+shortcut switched off through `djust._per_turn`). One changed cell in a
+1,000-row list, milliseconds per turn:
+
+| | before | after |
+| --- | ---: | ---: |
+| turn p50, `nosave` | 22.0-22.4 | 20.1-20.8 |
+| turn p50, `save` | 23.6-23.7 | 21.3-21.8 |
+| CPU per turn, `nosave` | 23.0-23.9 | 21.6-23.0 |
+| the Rust sync, in Python | 5.1 | 2.3 |
+| of which `update_state` (whole list) | 2.4 | 0.05 (`update_state_items`, one row) |
+| Rust render and diff | 11.6 | 9.6 |
+
+**Item-level deltas (`list_item_deltas`).** When the two event snapshots show
+that a handler changed only a few rows of a list in place (the same object, the
+same length, at least 16 rows, at most a quarter of them changed, and the
+fingerprint Rust's copy was built from equals the pre-event walk), the sync
+converts just those rows and replaces them in Rust's state with
+`RustLiveView.update_state_items`. Anything else, including a refusal from
+Rust, takes the whole-list path. The render still renders every row: a loop
+body that holds `{% if %}` carries index-numbered `dj-if` markers, so the loop
+render cache cannot reuse its rows, and rendering only the changed item needs a
+per-item fragment store in the renderer (not done; see below).
+
+**Multi-span text path.** A render whose HTML differs from the previous one
+only in the text of up to eight text nodes (two cells of one row, a heading and
+a footer) now skips the parse and diff like a one-span change does. A
+two-cell change in the same 1,000-row table, measured on `RustLiveView` alone
+(300 renders): `render_with_diff` p50 14.8-16.4 ms through the full parse,
+8.2-8.4 ms on the new path (parse plus diff 6.5-7.2 ms down to about 1 ms).
+The bench's own turn changes one cell, so its numbers above do not move with
+this.
+
+**State-backend serialization per render.** Not there any more: over 360 turns
+(table, form and dashboard; WebSocket, SSE and HTTP; `save` and `nosave`) the
+state backend's `set` and `refresh` ran 0 times, and `serialize_msgpack` is not
+called on a turn. `refresh()` has no production caller. The `save` mode's extra
+1-2 ms is the session handling, not the backend.
+
+**Still over the 10 ms target.** What is left for this turn, of about 20 ms:
+the Rust render of all 1,000 rows (about 6 ms), the text fast path itself
+(about 1 ms, most of it cloning the VDOM), and the two event snapshot walks
+(about 4 ms). Rendering only the changed loop item, and replacing the pre-event walk
+with the previous turn's fingerprints, are what remain.
+
+**Per-item loop render (follow-up).** Rust now keeps each item's HTML of an
+outermost `{% for %}` and reuses it when the item hashes the same at the same
+index (switch `loop_item_render`; conditions in `changelog.d/4325-loop-items.changed.md`).
+Same machine, table shape, WebSocket, RTT 0, 80 rounds, two runs each, on vs
+off: turn p50 14.8-15.5 ms vs 19.6 ms (`nosave`), 16.0-16.2 ms vs 20.8-21.2 ms
+(`save`). The two-cell microbenchmark above: `render_with_diff` p50 3.6-3.8 ms
+vs 8.1-8.4 ms. The pre-event walk is what remains of the large items.
+
 ## Reproduce
 
 ```sh
@@ -160,9 +352,14 @@ make benchmark-transports                       # full run, ~3.5 min here
 make benchmark-transports JSON=/tmp/run.json COMPARE=docs/performance/turn-transports-baseline.json
 python scripts/bench_turn_transports.py --shapes table --transports ws,http --rtt 0
 python scripts/bench_turn_transports.py --quick  # seconds; what the CI test runs
+make benchmark-client-turns                     # the browser side (#4314), ~1 min here
+python scripts/bench_client_turns.py --shapes table --cells ws,http-nosave --turns 10
 ```
 
 `--compare` prints the p50 and CPU ratio for every cell both runs have. The CI
 test `python/djust/tests/test_bench_turn_transports_3657.py` runs the script at
 `--quick` size and checks its output and that the committed JSON has every
-cell; it asserts nothing about durations (#2156).
+cell; it asserts nothing about durations (#2156). The browser bench needs Chromium
+and is not run in CI; `python/djust/tests/test_bench_client_turns_4314.py`
+checks what can rot without a browser (the hook it inserts into the client,
+the triggers it adds to the pages, every cell in the committed JSON).

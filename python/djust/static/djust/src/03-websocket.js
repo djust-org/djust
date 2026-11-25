@@ -264,6 +264,12 @@ function storeSignedSnapshot(data, primaryViewPath) {
     );
     if (!eligible || typeof data.view !== 'string' || !data.view ||
         ['__proto__', 'constructor', 'prototype'].includes(data.view)) return;
+    // #4164: the turn serial of the state this frame shows. A reconnect sends
+    // it back, so the server can tell when it restored an older state.
+    if (!revocation && Number.isInteger(data.state_serial) && data.state_serial >= 0) {
+        if (!window.djust._stateSerial) window.djust._stateSerial = Object.create(null);
+        window.djust._stateSerial[data.view] = data.state_serial;
+    }
     const token = data.state_snapshot_signed;
     // Cache invalidation sentinel, not a comparison of authentication secrets.
     // eslint-disable-next-line security/detect-possible-timing-attacks
@@ -285,6 +291,18 @@ function storeSignedSnapshot(data, primaryViewPath) {
 // echoed verbatim; the server validates its signature, age and binding, and
 // ignores one it does not accept. Shared by the WebSocket and SSE mounts (#1646).
 // Only a reconnect sends it: a first mount has no earlier state to bring back.
+// #4164: the turn serial a reconnecting page view sends with its mount frame
+// (the last one a frame showed it), or null on a first mount.
+function reconnectStateSerial(viewPath) {
+    if (!(window.djust && window.djust._isReconnect)) return null;
+    const serials = window.djust._stateSerial;
+    if (!serials || typeof viewPath !== 'string' || !viewPath ||
+        !Object.prototype.hasOwnProperty.call(serials, viewPath)) return null;
+    // eslint-disable-next-line security/detect-object-injection
+    const serial = serials[viewPath];
+    return Number.isInteger(serial) && serial > 0 ? serial : null;
+}
+
 function reconnectStateSnapshot(viewPath) {
     if (!(window.djust && window.djust._isReconnect)) return null;
     const bag = window.djust._clientState;
@@ -483,13 +501,17 @@ class LiveViewWebSocket {
             document.body.style.removeProperty('--dj-reconnect-attempt');
             this._removeReconnectBanner();
 
+            // Hooks that got disconnected() get reconnected() on ANY open, the
+            // first one included: a failed first handshake or a socket that
+            // dropped before a navigation reset connectedAt still left them
+            // offline (#3656). A no-op for hooks that are not offline.
+            notifyHooksReconnected();
+
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
                 // Set reconnect flag for dj-auto-recover
                 if (window.djust) window.djust._isReconnect = true;
-                // Notify hooks of reconnection
-                notifyHooksReconnected();
                 // Public CustomEvent consumed by dj-track-static (v0.6.0)
                 // and available to application code that wants to react
                 // to reconnect without patching internal WS state.
@@ -1496,6 +1518,8 @@ class LiveViewWebSocket {
         // Never for a view mounted beside it: the server ships no token for one.
         const snapshot = options.primary ? reconnectStateSnapshot(viewPath) : null;
         if (snapshot) frame.state_snapshot = snapshot;
+        const serial = options.primary ? reconnectStateSerial(viewPath) : null;
+        if (serial !== null) frame.state_serial = serial;
         this.sendMessage(frame);
         return true;
     }

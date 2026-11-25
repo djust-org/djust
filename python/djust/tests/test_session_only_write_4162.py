@@ -531,8 +531,8 @@ INTERVALS = [pytest.param(0, id="interval-0"), pytest.param(30, id="interval-30"
 
 
 def _settings(interval: int, **extra: Any) -> Any:
-    if interval:
-        extra["DJUST_STATE_SAVE_INTERVAL"] = interval
+    # 0 is stated: unset, the interval is 2 seconds (#4164).
+    extra["DJUST_STATE_SAVE_INTERVAL"] = interval
     return harness.ws_settings(MODULE, ROOT_URLCONF=MODULE, **extra)
 
 
@@ -658,15 +658,12 @@ async def _one_more(transport: str, client: Any, name: str) -> None:
 @pytest.mark.parametrize("transport", TRANSPORTS)
 async def test_a_turn_that_does_not_write_the_session_adds_no_save(transport, interval):
     """``nothing`` changes nothing; ``read_only`` reads a list from the session
-    without changing it. Neither adds a session save on any transport. The one
-    save of a fallback request with an interval set is the holder claim the
-    restore writes (``_save_policy.holder_claims``), which Django's
-    ``SessionMiddleware`` stores; it was there before #4162 and is the same
-    for both handlers."""
+    without changing it. Neither adds a session save on any transport. A
+    fallback request with an interval set claims its tab only with a save that
+    changes the stored state (#4164 item 2), so it adds none either."""
     with _settings(interval):
         _client, counts = await turns(transport, Plain, ["nothing", "read_only", "nothing"])
-    claim = 1 if transport == "http" and interval else 0
-    assert counts == [claim, claim, claim]
+    assert counts == [0, 0, 0]
 
 
 @pytest.mark.parametrize("interval", INTERVALS)
@@ -712,8 +709,11 @@ async def test_background_work_writes_the_session_after_the_reply(interval):
             await harness.event(comm, "later")
             await receive_until(
                 comm,
+                # No render frame when the result changed nothing the template
+                # reads (#4123): the batch's ``async_complete`` ends it then.
                 lambda frames: any(
-                    f.get("type") in ("patch", "noop", "html_update") for f in frames
+                    f.get("type") in ("patch", "noop", "html_update", "async_complete")
+                    for f in frames
                 ),
                 what="the background result",
             )
@@ -822,9 +822,14 @@ async def _ws_background(view: type, name: str) -> Any:
     comm = await _ws_mount(view, key)
     try:
         await harness.event(comm, name)
+        # A result that changed nothing the template reads sends no render
+        # frame (#4123); the batch's ``async_complete`` is then its outcome.
         frames = await receive_until(
             comm,
-            lambda got: any(f.get("source") == "async" or f.get("type") == "error" for f in got),
+            lambda got: any(
+                f.get("source") == "async" or f.get("type") in ("error", "async_complete")
+                for f in got
+            ),
             what="the background outcome",
             allow_close=True,
         )

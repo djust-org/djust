@@ -1,0 +1,1 @@
+- **An inline if's filter argument is now a dependency (#4325).** In `{{ a if c else b|add:x }}` the template analysis ignored `x`, so a partial render after only `x` changed kept the old text. It is now tracked like a `{{ b|add:x }}` argument (#787).
