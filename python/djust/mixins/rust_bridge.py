@@ -453,35 +453,56 @@ def _collect_sub_ids(
             _collect_sub_ids(v, collected, visited, depth + 1)
 
 
-#: The methods the explicit context is built through, between the post-event
-#: snapshot and the Rust sync. The snapshot's walks are reused only while each
-#: is the framework's own (``_snapshot_walks_for_sync``).
+#: Every method of the view that runs between the post-event snapshot and
+#: the sync's fingerprints: the render entry point, the sync itself, and each
+#: method the explicit context is built through. The snapshot's walks are
+#: reused only while each one is the framework's own
+#: (``_snapshot_walks_for_sync``), so an override that writes into state before
+#: calling ``super()`` turns the reuse off. ``_get_context_processors`` is left
+#: out on purpose: it returns the processor paths (tests and apps override it
+#: to return a list) and the processors it names receive the request, not the
+#: view.
 _CONTEXT_HOOKS = (
-    "get_context_data",
-    "get_render_only_context",
-    "_get_explicit_context_data",
+    "render_with_diff",
+    "_initialize_rust_view",
+    "_sync_state_to_rust",
+    "_sync_state_to_rust_body",
+    "_apply_render_env",
     "_context_for_render",
     "_settled_render_context",
+    "get_context_data",
+    "_get_explicit_context_data",
+    "reset_unique_ids",
+    "clear_context_providers",
     "_get_streams_context",
     "_get_upload_context",
+    "get_render_only_context",
+    "_apply_context_processors",
+    "_csrf_token_for_render",
 )
 
 _framework_hooks: Optional[Dict[str, Any]] = None
 
 
 def _framework_context_hooks() -> Dict[str, Any]:
-    """``{name: function}`` of the framework's own :data:`_CONTEXT_HOOKS`."""
+    """``{name: function}`` of the framework's own :data:`_CONTEXT_HOOKS`.
+
+    Resolved on ``LiveView`` itself (its MRO is the framework's mixins), then
+    on the opt-in mixins ``LiveView`` does not include.
+    """
     global _framework_hooks
     if _framework_hooks is None:
+        from ..live_view import LiveView
         from ..uploads import UploadMixin
-        from .context import ContextMixin
         from .streams import StreamsMixin
 
         hooks: Dict[str, Any] = {}
         for name in _CONTEXT_HOOKS:
-            for owner in (ContextMixin, StreamsMixin, UploadMixin):
-                if name in owner.__dict__:
-                    hooks[name] = owner.__dict__[name]
+            for owner in (LiveView, StreamsMixin, UploadMixin):
+                function = getattr(owner, name, None)
+                if function is not None:
+                    hooks[name] = function
+                    break
         _framework_hooks = hooks
     return _framework_hooks
 
@@ -503,10 +524,11 @@ def _snapshot_walks_for_sync(
       ``_changed_keys`` and computed in the turn that is running now (a
       ``set_changed_keys()`` call builds a new set; a later turn has another
       ``Turn``);
-    * the context is built here (no ``preloaded_context``) by the framework's
-      own context methods (:data:`_CONTEXT_HOOKS`), so no ``get_context_data``
-      override, ``get_render_only_context`` or ``@computed`` called from one
-      runs; the template is not a ``property``; no class-level component
+    * the context is built here (no ``preloaded_context``) and every method
+      on the way from the render to the fingerprints is the framework's own
+      (:data:`_CONTEXT_HOOKS`), so no ``get_context_data`` override,
+      ``get_render_only_context``, ``reset_unique_ids`` or ``@computed``
+      called from one runs; the template is not a ``property``; no class-level component
       (whose first binding may run its ``mount``); and no
       ``sync_turn_wrapper`` is configured around the render step.
 

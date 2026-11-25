@@ -1037,6 +1037,40 @@ class PropertyTemplateWriter(ShortList):
         return "<div dj-root><h1>{{ title }}</h1><p>{{ rows.0.label }}</p></div>"
 
 
+class ResetIdsWriter(ShortList):
+    """``reset_unique_ids`` (called while the explicit context is built) writes
+    into the list before ``super()`` (#3999 review)."""
+
+    title = state("a")
+    rows = state(default_factory=list)
+
+    def reset_unique_ids(self):
+        self.rows[0]["label"] = self.title.upper()
+        return super().reset_unique_ids()
+
+
+class ClearProvidersWriter(ShortList):
+    """``clear_context_providers``, the other method that context build calls."""
+
+    title = state("a")
+    rows = state(default_factory=list)
+
+    def clear_context_providers(self):
+        self.rows[0]["label"] = self.title.upper()
+        return super().clear_context_providers()
+
+
+class RenderWithDiffWriter(ShortList):
+    """The render entry point itself, overridden before the sync runs."""
+
+    title = state("a")
+    rows = state(default_factory=list)
+
+    def render_with_diff(self, *args, **kwargs):
+        self.rows[0]["label"] = self.title.upper()
+        return super().render_with_diff(*args, **kwargs)
+
+
 @contextmanager
 def writing_wrapper(view, step, turn):
     """A ``sync_turn_wrapper`` that writes into the list as the render step opens."""
@@ -1095,7 +1129,15 @@ class TestSnapshotWalksBothSides:
         assert counts.get("fingerprint.sync.calls", 0) == 0, "the walk was not reused"
 
     @pytest.mark.parametrize(
-        "view_class", [RenderOnlyWriter, PropertyTemplateWriter], ids=["render_only", "template"]
+        "view_class",
+        [
+            RenderOnlyWriter,
+            PropertyTemplateWriter,
+            ResetIdsWriter,
+            ClearProvidersWriter,
+            RenderWithDiffWriter,
+        ],
+        ids=["render_only", "template", "reset_unique_ids", "clear_providers", "render_with_diff"],
     )
     async def test_a_change_after_the_snapshot_is_sent(self, monkey, view_class):
         """Application code that runs between the snapshot and the sync writes
@@ -1199,8 +1241,19 @@ class TestSnapshotWalksWhen:
             {"get_render_only_context": lambda self: {}},
             {"_get_streams_context": lambda self: {}},
             {"_get_upload_context": lambda self: {}},
+            {"reset_unique_ids": lambda self: None},
+            {"clear_context_providers": lambda self: None},
+            {"render_with_diff": lambda self, *a, **kw: None},
         ],
-        ids=["get_context_data", "get_render_only_context", "streams", "uploads"],
+        ids=[
+            "get_context_data",
+            "get_render_only_context",
+            "streams",
+            "uploads",
+            "reset_unique_ids",
+            "clear_context_providers",
+            "render_with_diff",
+        ],
     )
     def test_an_application_override_in_the_window(self, override):
         turn = self._turn()
