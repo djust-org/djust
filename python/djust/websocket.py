@@ -40,8 +40,11 @@ from ._background_render import (
 )
 from ._render_operation import settle_render_operation
 from ._child_rendering import reconcile_child_render
+from . import _per_turn
 from .change_detection import (
     CONTAINER_TYPES,
+    AssignsSnapshot,
+    changed_keys_after,
     deep_fingerprint,
     fingerprints_by_content,
     warn_fingerprint_truncated,
@@ -492,7 +495,10 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
 
     _static_skip = set(getattr(view_instance, "static_assigns", []))
     _fw_attrs: frozenset[str] = getattr(view_instance, "_framework_attrs", frozenset())
-    snapshot: Dict[str, Any] = {}
+    snapshot = AssignsSnapshot()
+    # The walks of exact dict / list / tuple attributes, for the sync of the
+    # same turn (#3999, ``ChangedKeys``). Off with the shortcut: none kept.
+    keep = snapshot.fingerprints if _per_turn.on("snapshot_fingerprints") else None
     items = list(view_instance.__dict__.items())
     # Interactive descriptors cache concrete instances in framework-owned
     # storage, but their state still participates under the public context key.
@@ -522,7 +528,13 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
             # ``_dirty_fingerprint`` and ``@computed`` walk (#2682 review). A
             # class-level component's slot (a ``BoundComponent``, #2900) is
             # walked as its State: the wrapper's id() never changes.
-            content_fp, truncated = deep_fingerprint(v)
+            if keep is not None and type(v) in (dict, list, tuple):
+                plain: List[bool] = []
+                content_fp, truncated = deep_fingerprint(v, plain=plain)
+                if not truncated:
+                    keep[vid] = (v, content_fp, plain[0])
+            else:
+                content_fp, truncated = deep_fingerprint(v)
             size = len(v) if isinstance(v, CONTAINER_TYPES) else None
             snapshot[k] = (vid, size, object() if truncated else content_fp)
             if truncated:
@@ -552,6 +564,8 @@ def _compute_changed_keys(pre: Dict[str, Any], post: Dict[str, Any]) -> set[str]
     """Return set of keys that differ between two snapshots.
 
     Detects added, removed, and modified keys (by identity or fingerprint).
+    The result carries *post*'s container walks for this turn's Rust sync
+    (``change_detection.ChangedKeys``, #3999); it compares as a plain set.
     """
     changed = set()
     for k in set(pre) | set(post):
@@ -559,7 +573,7 @@ def _compute_changed_keys(pre: Dict[str, Any], post: Dict[str, Any]) -> set[str]
             changed.add(k)
         elif pre[k] != post[k]:
             changed.add(k)
-    return changed
+    return changed_keys_after(changed, post)
 
 
 class _OffloadedTurn(NamedTuple):

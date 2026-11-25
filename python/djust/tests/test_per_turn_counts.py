@@ -270,36 +270,69 @@ async def test_the_theme_preset_list_is_not_in_the_state(monkeypatch):
 
 
 async def test_one_changed_cell_walks_the_list_three_times_not_four(monkeypatch):
+    """Two snapshot walks and one conversion walk that builds no fingerprint.
+
+    The sync takes the post-event snapshot's walk of the list as its
+    fingerprint and as its "is this plain data" answer (``snapshot_fingerprints``),
+    so the only walk it makes is the conversion for Rust (``convert_for_render``).
+    """
     size = harness.nodes(make_rows(ROWS))
     now = await turn(monkeypatch, Table, "cell")
-    off = await turn(monkeypatch, Table, "cell", "plain_sub_ids")
+    off = await turn(monkeypatch, Table, "cell", "plain_sub_ids", "snapshot_fingerprints")
     assert now["reply"] == off["reply"] == "patch"
-    # Before and after the handler, and once to fingerprint + convert for Rust.
+    # Before and after the handler, and once to convert for Rust.
     assert now["snapshot_assigns.calls"] == 2
-    assert now["fingerprint_and_convert.nodes"] == size
-    walked = now["fingerprint.snapshot.nodes"] + now["fingerprint_and_convert.nodes"]
-    assert 3 * size <= walked < 3 * size + 500
-    # The fourth walk, collecting the id of every object under the list, is gone.
+    assert 2 * size <= now["fingerprint.snapshot.nodes"] < 2 * size + 500
+    assert now["convert_for_render.nodes"] == size
+    assert now.get("fingerprint_and_convert.calls", 0) == 0
+    assert now.get("fingerprint.sync.calls", 0) == 0
+    # No walk collects the id of every object under the list.
     assert now.get("collect_sub_ids.calls", 0) == 0
     assert off["collect_sub_ids.calls"] == 1
     assert off["collect_sub_ids.ids"] > ROWS
-    # Nothing else moved: the same key, the same bytes, the same fused walk.
+    # Nothing else moved: the same key, the same bytes.
     assert now["sent_keys"] == off["sent_keys"] == [["items"]]
     assert now["update_state.bytes"] == off["update_state.bytes"]
     assert off["fingerprint_and_convert.nodes"] == size
-    assert now.get("fingerprint.sync.calls", 0) == off.get("fingerprint.sync.calls", 0) == 0
+    assert off.get("convert_for_render.calls", 0) == 0
 
 
-async def test_an_unrelated_change_still_fingerprints_the_list(monkeypatch):
-    """Left as it is, on purpose: a turn that does not change the list walks it
-    three times (twice for the snapshots, once in the sync). The sync's walk is
-    not replaced by the post-event snapshot's fingerprint, because
-    ``get_context_data`` runs between the two and may change the list
+async def test_snapshot_fingerprints_gate_off(monkeypatch):
+    """Off, the sync fingerprints and converts the list in one fused walk again,
+    and still skips the id walk because the fused walk found it plain (#3999's
+    first shortcut, ``plain_sub_ids``)."""
+    size = harness.nodes(make_rows(ROWS))
+    now = await turn(monkeypatch, Table, "cell")
+    off = await turn(monkeypatch, Table, "cell", "snapshot_fingerprints")
+    assert off["fingerprint_and_convert.nodes"] == size
+    assert off.get("convert_for_render.calls", 0) == 0
+    assert off.get("collect_sub_ids.calls", 0) == now.get("collect_sub_ids.calls", 0) == 0
+    assert now["sent_keys"] == off["sent_keys"] == [["items"]]
+    assert now["update_state.bytes"] == off["update_state.bytes"]
+    assert now["snapshot_assigns.calls"] == off["snapshot_assigns.calls"] == 2
+
+
+async def test_plain_sub_ids_gate_off_with_the_snapshot_walk(monkeypatch):
+    """The snapshot's plain answer is used only under ``plain_sub_ids``: off,
+    the id walk comes back even though the snapshot walk is reused."""
+    off = await turn(monkeypatch, Table, "cell", "plain_sub_ids")
+    assert off["collect_sub_ids.calls"] == 1
+    assert off.get("fingerprint_and_convert.calls", 0) == 0
+    assert off["sent_keys"] == [["items"]]
+
+
+async def test_an_unrelated_change_does_not_walk_the_list_in_the_sync(monkeypatch):
+    """A turn that does not change the list walks it twice (the two snapshots).
+    The sync compares the post-event snapshot's fingerprint of the list with the
+    last render's instead of walking it a third time. A view whose
+    ``get_context_data`` runs between the two does not get this
     (``test_per_turn_invalidation.py`` pins that case)."""
     size = harness.nodes(make_rows(ROWS))
     now = await turn(monkeypatch, Table, "retitle")
-    assert now["sent_keys"] == [["title"]]
-    assert now["fingerprint.sync.nodes"] == size
+    off = await turn(monkeypatch, Table, "retitle", "snapshot_fingerprints")
+    assert now["sent_keys"] == off["sent_keys"] == [["title"]]
+    assert now.get("fingerprint.sync.calls", 0) == 0
+    assert off["fingerprint.sync.nodes"] == size
     assert now.get("collect_sub_ids.ids", 0) <= 1
 
 
@@ -307,11 +340,11 @@ async def test_the_walk_grows_with_the_list_and_no_faster(monkeypatch):
     """A quarter of the rows is a quarter of the walk: counted, not timed."""
     big = await turn(monkeypatch, Table, "cell")
     small = await turn(monkeypatch, SmallTable, "cell")
-    ratio = big["fingerprint_and_convert.nodes"] / small["fingerprint_and_convert.nodes"]
+    ratio = big["convert_for_render.nodes"] / small["convert_for_render.nodes"]
     assert 3.9 < ratio < 4.1
 
     def total(counts: Dict[str, Any]) -> int:
-        nodes: int = counts["fingerprint.snapshot.nodes"] + counts["fingerprint_and_convert.nodes"]
+        nodes: int = counts["fingerprint.snapshot.nodes"] + counts["convert_for_render.nodes"]
         return nodes
 
     assert 3.8 < total(big) / total(small) < 4.1
@@ -368,7 +401,7 @@ async def test_the_compact_fingerprint_is_a_third_of_the_wide_one(monkeypatch):
     wide = await turn(monkeypatch, Table, "cell", "compact_fingerprints")
     assert wide["reply"] == now["reply"] == "patch"
     # The walk itself is the same walk: no node more, none fewer.
-    assert wide["fingerprint_and_convert.nodes"] == now["fingerprint_and_convert.nodes"]
+    assert wide["convert_for_render.nodes"] == now["convert_for_render.nodes"]
     assert wide["fingerprint.snapshot.nodes"] == now["fingerprint.snapshot.nodes"]
     # What is kept is a digest either way.
     assert wide["fingerprints.retained_bytes"] == now["fingerprints.retained_bytes"]

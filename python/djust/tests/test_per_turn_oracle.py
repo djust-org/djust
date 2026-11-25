@@ -544,6 +544,92 @@ CHILD_SCRIPT = [
 ]
 
 
+# --- the post-event snapshot's walks, reused by the sync (#3999) -----------------------
+
+
+class LateWriter(_Base):
+    """``get_context_data`` writes into a declared list AFTER the post-event
+    snapshot, and ``grow`` changes it BEFORE: both must reach the browser. The
+    override is application code in the window, so the sync walks again."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1><p>{{ rows.0.label }}</p><i>{{ rows|length }}</i></div>"
+    )
+    title = state("a")
+    rows = state(default_factory=list)
+
+    def mount(self, request, **kwargs):
+        self.rows = [{"label": "a"}]
+
+    def get_context_data(self, **kwargs):
+        self.rows[0]["label"] = self.title.upper()
+        return super().get_context_data(**kwargs)
+
+    @event_handler()
+    def retitle(self, value: str = "b", **kwargs):
+        self.title = value
+
+    @event_handler()
+    def grow(self, **kwargs):
+        self.rows.append({"label": "x"})
+        self.title += "!"
+
+
+LATE_SCRIPT = [
+    ("event", "retitle", {"value": "b"}),
+    ("event", "grow"),
+    ("event", "retitle", {"value": "c"}),
+]
+
+
+class HeldThing(_Base):
+    """The framework's own context methods only, so the sync reuses the
+    snapshot's walks. An object's attribute write is found when, and only
+    when, a changed list holds the object (the ``_collect_sub_ids`` rule), and
+    the snapshot's "plain" answer decides whether the list is walked for ids."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><p>{{ held.label }}</p><b>{{ items|length }}</b>"
+        "{% for r in items %}<i>{{ r.v }}</i>{% endfor %}</div>"
+    )
+    items = state(default_factory=list)
+    held = state(None)
+
+    def mount(self, request, **kwargs):
+        self.items = [{"v": 1}]
+        self.held = Thing("a")
+
+    @event_handler()
+    def write(self, **kwargs):
+        self.held.label += "!"
+
+    @event_handler()
+    def cell(self, **kwargs):
+        self.items[0]["v"] += 1
+        self.held.label += "?"
+
+    @event_handler()
+    def adopt(self, **kwargs):
+        self.items.append(self.held)
+        self.held.label += "#"
+
+    @event_handler()
+    def again(self, **kwargs):
+        self.items[0]["v"] += 1
+        self.held.label += "%"
+
+
+HELD_SCRIPT = [
+    ("event", "write"),
+    ("event", "cell"),
+    ("event", "adopt"),
+    ("event", "again"),
+    ("event", "write"),
+]
+
+
 # --- state changed outside an event handler -------------------------------------------
 
 
@@ -905,6 +991,8 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("stream", StreamView, STREAM_SCRIPT),
     ("scalar_types", ScalarTypes, SCALAR_SCRIPT),
     ("dirty_tracking", Dirty, DIRTY_SCRIPT),
+    ("late_writer", LateWriter, LATE_SCRIPT),
+    ("held_thing", HeldThing, HELD_SCRIPT),
 ]
 
 
@@ -1609,6 +1697,18 @@ def _break_digest_fingerprints(patch: Any) -> None:
     patch.setattr(change_detection, "fingerprint_digest", lambda fp: b"\0" * 16)
 
 
+def _break_snapshot_fingerprints(patch: Any) -> None:
+    from djust.change_detection import ChangedKeys
+    from djust.mixins import rust_bridge
+
+    # As if the window check were missing: the post-event snapshot's walks are
+    # taken even when ``get_context_data`` ran in between and changed the list.
+    def trusting(view: Any, changed_keys: Any, preloaded_context: Any) -> Any:
+        return changed_keys.fingerprints if type(changed_keys) is ChangedKeys else None
+
+    patch.setattr(rust_bridge, "_snapshot_walks_for_sync", trusting)
+
+
 SABOTAGE = {
     "unchanged_save_skip": (_break_unchanged_save_skip, _reconnect_run),
     "contract_cache": (_break_contract_cache, _redeclared_run),
@@ -1625,6 +1725,10 @@ SABOTAGE = {
         lambda: run_ws(Processors, COUNTER_SCRIPT),
     ),
     "plain_sub_ids": (_break_plain_sub_ids, lambda: run_ws(Opaque, OPAQUE_SCRIPT)),
+    "snapshot_fingerprints": (
+        _break_snapshot_fingerprints,
+        lambda: run_ws(LateWriter, LATE_SCRIPT),
+    ),
     "compact_fingerprints": (
         _break_compact_fingerprints,
         lambda: run_ws(ScalarTypes, SCALAR_SCRIPT),

@@ -12,7 +12,8 @@ known to reach the case.
 * ``_is_json_serializable`` answering by type,
 * the event snapshot's skipped hops,
 * the ids ``_collect_sub_ids`` no longer collects,
-* and the reuse that was left out: the post-event snapshot's fingerprint.
+* and the post-event snapshot's walks the sync reuses (#3999), with a change
+  made on each side of the snapshot.
 """
 
 from __future__ import annotations
@@ -23,7 +24,9 @@ import json
 import logging
 import pathlib
 import uuid
+import weakref
 from collections import OrderedDict, defaultdict, namedtuple
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -886,11 +889,12 @@ class TestTheSnapshotFingerprintIsNotReused:
     pytestmark = ws
 
     async def test_a_list_written_by_get_context_data_after_the_snapshot_renders(self):
-        """Why #3999's "reuse the post-event snapshot's fingerprint in the sync"
-        was left out. The handler changes only ``title``; the list is then
-        changed by ``get_context_data``, between the snapshot and the sync. A
-        sync that took the snapshot's fingerprint for the list would find it
-        equal to the previous render's and never send the new label."""
+        """Why the sync reuses the post-event snapshot's walk only when no
+        application code runs in between (#3999). The handler changes only
+        ``title``; the list is then changed by ``get_context_data``, between
+        the snapshot and the sync. A sync that took the snapshot's fingerprint
+        for the list would find it equal to the previous render's and never
+        send the new label."""
         key = await harness.new_session_key_async()
         with harness.ws_settings(MODULE):
             comm, mount = await harness.mount_view(LateWriter, key)
@@ -974,3 +978,283 @@ class TestPlainSubIds:
         assert block.index("changed_sub_ids.add(id(val))") < skip
         assert block.index("full_context[ctx_key] is val") < skip
         assert block.rindex("_collect_sub_ids(val, changed_sub_ids)") > skip
+
+
+# =====================================================================================
+# The post-event snapshot's walks, reused by the Rust sync (#3999)
+# =====================================================================================
+#
+# Since #3999 the sync takes the post-event snapshot's walk of a container (its
+# fingerprint, and whether it is plain data) instead of walking it again, when
+# nothing but the framework runs between the two (``_snapshot_walks_for_sync``).
+# Each test changes a list on one side of the snapshot or the other and checks
+# that the browser hears about it, with the shortcut on and with it off.
+
+
+class ShortList(LiveView):
+    """The framework's own context methods only: the sync reuses the walks."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root><h1>{{ title }}</h1><p>{{ rows.0.label }}</p></div>"
+    title = state("a")
+    rows = state(default_factory=list)
+
+    def mount(self, request, **kwargs):
+        self.rows = [{"label": "a"}]
+
+    def _get_context_processors(self):
+        return []
+
+    @event_handler()
+    def relabel(self, value: str = "b", **kwargs):
+        self.rows[0]["label"] = value
+
+    @event_handler()
+    def retitle(self, value: str = "b", **kwargs):
+        self.title = value
+
+
+class RenderOnlyWriter(ShortList):
+    """``get_render_only_context`` writes into the list after the snapshot."""
+
+    title = state("a")
+    rows = state(default_factory=list)
+
+    def get_render_only_context(self):
+        self.rows[0]["label"] = self.title.upper()
+        return {}
+
+
+class PropertyTemplateWriter(ShortList):
+    """A ``template`` property runs during the render, after the snapshot."""
+
+    title = state("a")
+    rows = state(default_factory=list)
+
+    @property
+    def template(self):
+        self.rows[0]["label"] = self.title.upper()
+        return "<div dj-root><h1>{{ title }}</h1><p>{{ rows.0.label }}</p></div>"
+
+
+@contextmanager
+def writing_wrapper(view, step, turn):
+    """A ``sync_turn_wrapper`` that writes into the list as the render step opens."""
+    if step == "render" and isinstance(view, ShortList):
+        view.rows[0]["label"] = view.title.upper()
+    yield
+
+
+async def _relabel_frames(
+    view_class: type, events: List[Any], *off: str, wrapper: Any = None
+) -> List[Dict[str, Any]]:
+    from djust.config import config
+
+    key = await harness.new_session_key_async()
+    with harness.shortcuts(_MONKEY["patch"], *off), harness.ws_settings(MODULE):
+        if wrapper is not None:
+            config.set("sync_turn_wrapper", wrapper)  # ws_settings resets the config after
+        comm, _mount = await harness.mount_view(view_class, key)
+        try:
+            return [await harness.event(comm, name, params) for name, params in events]
+        finally:
+            await comm.disconnect()
+
+
+_MONKEY: Dict[str, Any] = {}
+
+
+@pytest.fixture
+def monkey(monkeypatch):
+    _MONKEY["patch"] = monkeypatch
+    yield monkeypatch
+    _MONKEY.clear()
+
+
+def _patched_texts(frames: List[Dict[str, Any]]) -> List[set]:
+    return [{p.get("text") for p in frame.get("patches", [])} for frame in frames]
+
+
+class TestSnapshotWalksBothSides:
+    pytestmark = ws
+
+    async def test_a_change_before_the_snapshot_is_sent(self, monkey):
+        """The handler changes the list in place: the snapshot sees it, the sync
+        takes the snapshot's fingerprint and sends the new label."""
+        events = [("relabel", {"value": "b"}), ("relabel", {"value": "c"})]
+        now = await _relabel_frames(ShortList, events)
+        off = await _relabel_frames(ShortList, events, "snapshot_fingerprints")
+        assert _patched_texts(now) == _patched_texts(off) == [{"b"}, {"c"}]
+
+    async def test_an_unchanged_list_is_not_sent_on_the_snapshot_s_word(self, monkey):
+        """The other half of the same rule: a turn that changes only the title
+        does not send the list, with or without the shortcut."""
+        counts = harness.counting(monkey)
+        await _relabel_frames(ShortList, [("retitle", {"value": "b"})])
+        assert counts.sent[-1] == ["title"]
+        assert counts.get("fingerprint.sync.calls", 0) == 0, "the walk was not reused"
+
+    @pytest.mark.parametrize(
+        "view_class", [RenderOnlyWriter, PropertyTemplateWriter], ids=["render_only", "template"]
+    )
+    async def test_a_change_after_the_snapshot_is_sent(self, monkey, view_class):
+        """Application code that runs between the snapshot and the sync writes
+        into the list. The sync walks it again and sends the new label."""
+        events = [("retitle", {"value": "b"}), ("retitle", {"value": "c"})]
+        now = await _relabel_frames(view_class, events)
+        off = await _relabel_frames(view_class, events, "snapshot_fingerprints")
+        assert _patched_texts(now) == _patched_texts(off)
+        assert {"b", "B"} <= _patched_texts(now)[0], now
+        assert {"c", "C"} <= _patched_texts(now)[1], now
+
+    async def test_a_change_made_by_the_sync_turn_wrapper_is_sent(self, monkey):
+        events = [("retitle", {"value": "b"}), ("retitle", {"value": "c"})]
+        now = await _relabel_frames(ShortList, events, wrapper=writing_wrapper)
+        off = await _relabel_frames(
+            ShortList, events, "snapshot_fingerprints", wrapper=writing_wrapper
+        )
+        assert _patched_texts(now) == _patched_texts(off)
+        assert {"b", "B"} <= _patched_texts(now)[0], now
+        assert {"c", "C"} <= _patched_texts(now)[1], now
+
+    async def test_the_stale_walk_is_served_when_the_window_check_is_skipped(self, monkey):
+        """The window check is what the test above relies on: without it, the
+        snapshot's fingerprint of the list (written after it) is served and
+        the label never changes in the browser."""
+        from djust.change_detection import ChangedKeys
+
+        def trusting(view: Any, changed_keys: Any, preloaded_context: Any) -> Any:
+            return changed_keys.fingerprints if type(changed_keys) is ChangedKeys else None
+
+        monkey.setattr(rust_bridge, "_snapshot_walks_for_sync", trusting)
+        frames = await _relabel_frames(RenderOnlyWriter, [("retitle", {"value": "b"})])
+        assert "B" not in _patched_texts(frames)[0]
+
+
+class TestSnapshotWalksWhen:
+    """``_snapshot_walks_for_sync`` answers None in every case it must."""
+
+    @staticmethod
+    def _keys(turn: Any = None) -> Any:
+        from djust.change_detection import ChangedKeys
+
+        keys = ChangedKeys({"rows"})
+        keys.fingerprints = {1: ([], ("L", ()), True)}
+        keys.turn = weakref.ref(turn) if turn is not None else None
+        return keys
+
+    @staticmethod
+    def _turn() -> Any:
+        from djust.turns import Turn
+
+        return Turn("event", "ws")
+
+    def _in_turn(self, turn: Any, call: Callable[[], Any]) -> Any:
+        from djust import turns
+
+        turn._open = True  # as ``run_turn`` leaves it while the turn runs
+        token = turns._current_turn.set(weakref.ref(turn))
+        try:
+            return call()
+        finally:
+            turns._current_turn.reset(token)
+
+    def test_the_same_turn_and_the_framework_s_methods(self):
+        turn = self._turn()
+        keys = self._keys(turn)
+        view = ShortList()
+        got = self._in_turn(turn, lambda: rust_bridge._snapshot_walks_for_sync(view, keys, None))
+        assert got is keys.fingerprints
+
+    def test_another_turn(self):
+        keys = self._keys(self._turn())
+        other = self._turn()
+        view = ShortList()
+        assert (
+            self._in_turn(other, lambda: rust_bridge._snapshot_walks_for_sync(view, keys, None))
+            is None
+        )
+        assert rust_bridge._snapshot_walks_for_sync(view, keys, None) is None  # no turn
+
+    def test_a_plain_set_a_preloaded_context_or_the_shortcut_off(self, monkeypatch):
+        turn = self._turn()
+        keys = self._keys(turn)
+        view = ShortList()
+
+        def ask(changed: Any, preloaded: Any = None) -> Any:
+            return self._in_turn(
+                turn, lambda: rust_bridge._snapshot_walks_for_sync(view, changed, preloaded)
+            )
+
+        assert ask(set(keys)) is None  # ``set_changed_keys`` builds a new set
+        assert ask(keys, {"rows": []}) is None
+        with harness.shortcuts(monkeypatch, "snapshot_fingerprints"):
+            assert ask(keys) is None
+        assert ask(keys) is keys.fingerprints
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"get_context_data": lambda self, **kw: super(type(self), self).get_context_data(**kw)},
+            {"get_render_only_context": lambda self: {}},
+            {"_get_streams_context": lambda self: {}},
+            {"_get_upload_context": lambda self: {}},
+        ],
+        ids=["get_context_data", "get_render_only_context", "streams", "uploads"],
+    )
+    def test_an_application_override_in_the_window(self, override):
+        turn = self._turn()
+        keys = self._keys(turn)
+        cls = type("Overriding", (ShortList,), {"__module__": MODULE, **override})
+        view = cls()
+        assert (
+            self._in_turn(turn, lambda: rust_bridge._snapshot_walks_for_sync(view, keys, None))
+            is None
+        )
+
+    def test_a_template_property(self):
+        turn = self._turn()
+        keys = self._keys(turn)
+        view = PropertyTemplateWriter()
+        assert (
+            self._in_turn(turn, lambda: rust_bridge._snapshot_walks_for_sync(view, keys, None))
+            is None
+        )
+
+
+class TestPlainByTheSnapshot:
+    pytestmark = ws
+
+    async def test_an_object_added_before_the_snapshot_is_walked_for_ids(self, monkeypatch):
+        """``adopt`` puts a live object into the list in the handler: the
+        snapshot's walk says the list is not plain, the ids under it are
+        collected, and the object's new label renders. ``cell`` changes a plain
+        list: no id walk, and the object's label (not under the list) is not
+        re-sent, exactly as with the shortcuts off."""
+        from djust.tests.test_per_turn_oracle import HELD_SCRIPT, HeldThing
+
+        async def run(*off: str) -> List[Dict[str, Any]]:
+            key = await harness.new_session_key_async()
+            with (
+                harness.shortcuts(monkeypatch, *off),
+                harness.ws_settings("djust.tests.test_per_turn_oracle"),
+            ):
+                comm, _mount = await harness.mount_view(HeldThing, key)
+                try:
+                    return [await harness.event(comm, step[1]) for step in HELD_SCRIPT]
+                finally:
+                    await comm.disconnect()
+
+        with monkeypatch.context() as spies:
+            counts = harness.counting(spies)
+            now = await run()
+            walked_now = counts.get("collect_sub_ids.calls", 0)
+        off = await run("snapshot_fingerprints", "plain_sub_ids")
+        strip = lambda frames: [{k: v for k, v in f.items() if k != "ref"} for f in frames]  # noqa: E731
+        assert strip(now) == strip(off)
+        write, cell, adopt, again, write_again = (text(frame) for frame in now)
+        assert "a!" not in write and "a!?" not in cell, "an object write was found unasked"
+        assert "a!?#" in adopt, "the object put into the list before the snapshot was missed"
+        assert "a!?#%" in again
+        # Only the turns whose list holds the object walk it for ids.
+        assert walked_now == 2

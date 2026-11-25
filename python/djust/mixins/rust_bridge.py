@@ -26,10 +26,13 @@ from .._mapping import mapping_values
 from .._exposure_providers import (
     RUST_RENDER_PROVIDER,
     ExplicitRenderContext,
+    registered_components,
     require_no_provider_keys,
 )
 from .._accumulating_containers import view_accumulating_container_ids
 from ..change_detection import (
+    ChangedKeys,
+    SnapshotEntry,
     deep_fingerprint,
     fingerprints_by_content,
     retained_fingerprint,
@@ -448,6 +451,94 @@ def _collect_sub_ids(
     elif isinstance(value, (list, tuple)):
         for v in value:
             _collect_sub_ids(v, collected, visited, depth + 1)
+
+
+#: The methods the explicit context is built through, between the post-event
+#: snapshot and the Rust sync. The snapshot's walks are reused only while each
+#: is the framework's own (``_snapshot_walks_for_sync``).
+_CONTEXT_HOOKS = (
+    "get_context_data",
+    "get_render_only_context",
+    "_get_explicit_context_data",
+    "_context_for_render",
+    "_settled_render_context",
+    "_get_streams_context",
+    "_get_upload_context",
+)
+
+_framework_hooks: Optional[Dict[str, Any]] = None
+
+
+def _framework_context_hooks() -> Dict[str, Any]:
+    """``{name: function}`` of the framework's own :data:`_CONTEXT_HOOKS`."""
+    global _framework_hooks
+    if _framework_hooks is None:
+        from ..uploads import UploadMixin
+        from .context import ContextMixin
+        from .streams import StreamsMixin
+
+        hooks: Dict[str, Any] = {}
+        for name in _CONTEXT_HOOKS:
+            for owner in (ContextMixin, StreamsMixin, UploadMixin):
+                if name in owner.__dict__:
+                    hooks[name] = owner.__dict__[name]
+        _framework_hooks = hooks
+    return _framework_hooks
+
+
+def _snapshot_walks_for_sync(
+    view: Any, changed_keys: Any, preloaded_context: Any
+) -> Optional[Dict[int, SnapshotEntry]]:
+    """The post-event snapshot's container walks, if this sync may take them (#3999).
+
+    A turn walks every container on the view in its post-event snapshot and,
+    until now, walked the context's containers again in the sync. The second
+    walk can be replaced by the first only if nothing changed the container
+    between the two, and in-place mutation leaves no trace on a ``list`` or
+    ``dict``. So the reuse is allowed only when no application code can run
+    in that window, and the sync walks as before otherwise:
+
+    * ``changed_keys`` is the :class:`~djust.change_detection.ChangedKeys` the
+      handler's turn computed from that snapshot, still the view's own
+      ``_changed_keys`` and computed in the turn that is running now (a
+      ``set_changed_keys()`` call builds a new set; a later turn has another
+      ``Turn``);
+    * the context is built here (no ``preloaded_context``) by the framework's
+      own context methods (:data:`_CONTEXT_HOOKS`), so no ``get_context_data``
+      override, ``get_render_only_context`` or ``@computed`` called from one
+      runs; the template is not a ``property``; no class-level component
+      (whose first binding may run its ``mount``); and no
+      ``sync_turn_wrapper`` is configured around the render step.
+
+    A value is reused per object: the entry holds the object, so
+    ``entry[0] is value`` proves it is the one the snapshot walked.
+    """
+    if type(changed_keys) is not ChangedKeys or preloaded_context is not None:
+        return None
+    walks = changed_keys.fingerprints
+    turn_ref = changed_keys.turn
+    if not walks or turn_ref is None or not _per_turn.on("snapshot_fingerprints"):
+        return None
+    from ..turns import current_turn
+
+    turn = turn_ref()
+    if turn is None or turn is not current_turn():
+        return None
+    cls = type(view)
+    for name, function in _framework_context_hooks().items():
+        if getattr(cls, name, function) is not function:
+            return None
+    from inspect import getattr_static
+
+    if isinstance(getattr_static(cls, "template", None), property):
+        return None
+    if registered_components(cls):
+        return None
+    from ..sync_turn import _wrapper
+
+    if _wrapper() is not None:
+        return None
+    return walks
 
 
 #: ``_request_scoped_fingerprint``'s answer for a value it does not fingerprint.
@@ -1194,6 +1285,13 @@ class RustBridgeMixin:
             # Per-render, before anything is formatted (#2209, #2221).
             self._apply_render_env()
 
+            # The post-event snapshot's walks, taken before the context is
+            # built (#3999). None unless no application code runs from the
+            # snapshot to here (``_snapshot_walks_for_sync``).
+            snapshot_walks = _snapshot_walks_for_sync(
+                self, getattr(self, "_changed_keys", None), preloaded_context
+            )
+
             # One place decides: preloaded, the GET's cached context, or a
             # fresh evaluation (#3725). Calling ``self.get_context_data`` here
             # ran an overriding view's body a second time on every GET.
@@ -1262,6 +1360,9 @@ class RustBridgeMixin:
             # and the sidecar keeps no evaluated rows for them.
             _explicit_plain_keys: Set[str] = set()
             _explicit = type(full_context) is ExplicitRenderContext
+            # Names whose DB values the JIT or the normalize pass rewrites: the
+            # snapshot's walk of them is never reused (#3999).
+            _rewritten_keys: Set[str] = set()
             _qs_roots: Optional[FrozenSet[str]] = None
             _walk_paths: Optional[Dict[str, FrozenSet[str]]] = None
             for _key, _val in full_context.items():
@@ -1357,6 +1458,7 @@ class RustBridgeMixin:
                     and not any(isinstance(_r, _DjModel) for _r in _val)
                     and _holds_db_value(_val)
                 ]
+                _rewritten_keys.update(_explicit_jit_keys, _explicit_plain_keys, _nested_db_keys)
                 if _explicit_jit_keys or _explicit_plain_keys or _nested_db_keys:
                     self._explicit_jit_serialize(
                         full_context,
@@ -1508,9 +1610,31 @@ class RustBridgeMixin:
                 """Did *key*'s fingerprint change since the last sync?"""
                 return bool(prev_fps.get(key, _MISSING) != _fp_of(key, value))
 
+            def _snapshot_walk(key: str, value: Any) -> Optional[SnapshotEntry]:
+                """The post-event snapshot's walk of this very object, if reusable."""
+                if snapshot_walks is None or key in _rewritten_keys:
+                    return None
+                entry = snapshot_walks.get(id(value))
+                if entry is None or entry[0] is not value:
+                    return None
+                return entry
+
             def _fp_of(key: str, value: Any, convert: bool = False) -> Any:
                 fp = new_fps.get(key, _MISSING)
                 if fp is _MISSING:
+                    entry = _snapshot_walk(key, value)
+                    if entry is not None:
+                        # The snapshot walked this object after the handler and
+                        # nothing ran since (#3999): its tree is this value's
+                        # fingerprint. Converting it for Rust, when it is sent,
+                        # is a walk that builds no fingerprint.
+                        fp = retained_fingerprint(entry[1])
+                        new_fps[key] = fp
+                        if convert:
+                            converted_walk = convert_for_render(value, key)
+                            if converted_walk is not None:
+                                converted_by_fp[key] = converted_walk
+                        return fp
                     if convert:
                         fp, truncated, converted = fingerprint_and_convert(value, key)
                         if converted is not None:
@@ -1596,11 +1720,28 @@ class RustBridgeMixin:
                     # this very object, and reused below as the key's
                     # fingerprint and rendered value: the key is being sent
                     # (its own id is still added), so that walk ran regardless.
+                    # When the post-event snapshot's walk of the attribute may
+                    # be reused (``snapshot_walks``), that walk already says
+                    # whether it is plain, for any changed attribute, whether
+                    # or not it is itself a context value, and nothing is
+                    # walked here at all.
                     plain_on = _per_turn.on("plain_sub_ids")
                     context_key_of: Optional[Dict[int, str]] = None
                     for key in changed_keys:
                         val = getattr(self, key, None) or full_context.get(key)
                         if val is None:
+                            continue
+                        # Plain data, by the post-event snapshot's own walk of
+                        # this object (#3999): nothing under it can be a context
+                        # value that only ``id()`` would find. Covers a changed
+                        # attribute that is not itself a context value too.
+                        walked = (
+                            snapshot_walks.get(id(val))
+                            if plain_on and snapshot_walks is not None
+                            else None
+                        )
+                        if walked is not None and walked[0] is val and walked[2]:
+                            changed_sub_ids.add(id(val))
                             continue
                         if plain_on and type(val) in (dict, list, tuple):
                             if context_key_of is None:

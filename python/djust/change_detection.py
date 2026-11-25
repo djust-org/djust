@@ -45,11 +45,16 @@ from __future__ import annotations
 
 import hashlib
 import marshal
-from typing import Any, Hashable, List, Tuple
+import weakref
+from typing import Any, Dict, Hashable, List, Optional, Tuple
 
 from . import _per_turn
+from .turns import current_turn
 
 __all__ = [
+    "AssignsSnapshot",
+    "ChangedKeys",
+    "changed_keys_after",
     "deep_fingerprint",
     "fingerprint_digest",
     "retained_fingerprint",
@@ -182,23 +187,39 @@ def fingerprints_by_content(value: Any) -> bool:
     return isinstance(value, CONTAINER_TYPES) or bool(getattr(type(value), STATE_MARKER, False))
 
 
-def deep_fingerprint(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Hashable, bool]:
+def deep_fingerprint(
+    value: Any, budget: int = DEFAULT_BUDGET, *, plain: Optional[List[bool]] = None
+) -> Tuple[Hashable, bool]:
     """Return ``(fingerprint, truncated)`` for *value*.
 
     ``fingerprint`` is hashable and shares no reference with *value*;
     ``truncated`` is True when *budget* ran out and part of the structure was
     reduced to root identity. Callers must conservatively invalidate it.
+
+    With *plain* (a list), the walk also appends whether *value* is PLAIN
+    DATA: only exact ``dict`` / ``list`` / ``tuple`` nodes and exact builtin
+    scalar leaves, within the depth cap and without a cycle (#3999). Anything
+    the fast walk hands to :func:`_walk_general` (an object, a set, a
+    subclass, a component's state) makes it ``False``. Plain data cannot hold
+    a component, a form or a model, which is what lets the Rust sync skip
+    ``_collect_sub_ids`` over it.
     """
     t = type(value)
     if t in _EXACT_SCALARS:
         # A scalar ROOT keeps its tagged form in both encodings: a caller may
         # store the fingerprint beside a "nothing stored" default, and a bare
         # ``None`` or ``0`` must never be mistaken for one.
+        if plain is not None:
+            plain.append(True)
         if budget < 1:
             return (_TAG_TRUNCATED, id(value)), True
         return (_TAG_VALUE, _TYPE_CODE[t], value), False
     counter: List[Any] = [budget, _BARE if _per_turn.on("compact_fingerprints") else _NO_BARE]
+    if plain is not None:
+        counter.append(True)
     fp = _walk(value, counter, 0, ())
+    if plain is not None:
+        plain.append(bool(counter[2]))
     return fp, counter[0] < 0
 
 
@@ -265,6 +286,61 @@ def deep_digest(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Any, bool]:
     if truncated:
         return object(), True
     return retained_fingerprint(fp), False
+
+
+#: One container kept by an event snapshot for the sync of the same turn
+#: (#3999): ``(value, fingerprint tree, plain)``. ``value`` is the object
+#: itself, held so its ``id()`` cannot be reused while the entry lives.
+SnapshotEntry = Tuple[Any, Hashable, bool]
+
+
+class AssignsSnapshot(dict):  # type: ignore[type-arg]
+    """What ``websocket._snapshot_assigns`` returns: a plain dict, plus the walks.
+
+    It compares, iterates and copies as the dict it is. ``fingerprints`` maps
+    the ``id()`` of every exact ``dict`` / ``list`` / ``tuple`` attribute the
+    snapshot walked completely to a :data:`SnapshotEntry`, so the Rust sync of
+    the same turn can take the post-event snapshot's walk instead of walking
+    the container again (#3999). See :class:`ChangedKeys` for when the sync may.
+    """
+
+    __slots__ = ("fingerprints",)
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fingerprints: Dict[int, SnapshotEntry] = {}
+
+
+class ChangedKeys(set):  # type: ignore[type-arg]
+    """``_compute_changed_keys(pre, post)``: the changed names, plus the post walks.
+
+    The set a handler's turn assigns to ``view._changed_keys``. It carries the
+    post-event snapshot's :attr:`AssignsSnapshot.fingerprints` and the turn it
+    was computed in. ``_sync_state_to_rust`` reuses those walks only when the
+    view's ``_changed_keys`` is still this very object, in the same turn, and
+    no application code can have run between the snapshot and the sync
+    (``rust_bridge._snapshot_walks_for_sync``). Anything that replaces the set
+    (``set_changed_keys`` builds a new one) or ends the turn drops the reuse,
+    and the sync walks as before.
+    """
+
+    __slots__ = ("fingerprints", "turn")
+
+    def __init__(self, keys: Any = ()) -> None:
+        super().__init__(keys)
+        self.fingerprints: Optional[Dict[int, SnapshotEntry]] = None
+        self.turn: Any = None
+
+
+def changed_keys_after(changed: Any, post: Any) -> ChangedKeys:
+    """*changed* as a :class:`ChangedKeys` carrying *post*'s walks and the turn."""
+    out = ChangedKeys(changed)
+    if isinstance(post, AssignsSnapshot):
+        turn = current_turn()
+        if turn is not None:
+            out.fingerprints = post.fingerprints
+            out.turn = weakref.ref(turn)
+    return out
 
 
 #: Exact builtin scalar types: no subclass, so no ``STATE_MARKER`` either. The
@@ -334,6 +410,8 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
         return (_TAG_TRUNCATED, id(value))
     vid = id(value)
     if depth >= _MAX_DEPTH or vid in path_ids:
+        if len(counter) > 2:
+            counter[2] = False  # not walked: not known to be plain
         return (_TAG_ID, vid)
     inner = path_ids + (vid,)
     child_depth = depth + 1
@@ -380,6 +458,11 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
 def _walk_general(
     value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...]
 ) -> Hashable:
+    if len(counter) > 2:
+        # The plain-data flag ``deep_fingerprint(plain=...)`` asked for: every
+        # shape that is not an exact dict / list / tuple or an exact scalar
+        # reaches this function.
+        counter[2] = False
     fields: Any = None
     if getattr(type(value), STATE_MARKER, False):
         fields = getattr(type(value), FINGERPRINT_FIELDS, None)

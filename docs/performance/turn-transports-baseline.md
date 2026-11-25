@@ -140,7 +140,7 @@ process caches the POSTs left behind.
 3. **A 1,000-row table costs 28 ms a turn without any save, to change one
    cell,** and stalls the loop up to 57 ms. That is the Python walks over the
    whole list (change detection, Rust sync): #3999. Risk: high (the shortcuts
-   must still see in-place mutation).
+   must still see in-place mutation). First slice measured below.
 4. **A 1,000-row table page holds 1.4 MB per socket without the save and
    3.0 MB with it**, against 0.1 to 0.2 MB for the small shapes: the
    retained fingerprint trees and copies that grow with the state, #3998. Risk: medium.
@@ -152,6 +152,42 @@ process caches the POSTs left behind.
 
 At any real-world RTT the first, third and fourth items matter more for
 capacity (CPU and memory per page) than for the latency one user sees.
+
+## #3999, first slice: one changed cell in a 1,000-row list
+
+Measured 2026-11-25 on the same machine, at the commit that added it, with
+`scripts/bench_turn_transports.py --shapes table --transports ws --modes nosave
+--rounds 100` and a timer around each phase of the turn (two runs each,
+interleaved; the shortcut switched off through `djust._per_turn` for "before").
+Milliseconds per turn, `nosave` over the socket:
+
+| | before | after |
+| --- | ---: | ---: |
+| turn p50 / p95 | 23.6-24.1 / 46-48 | 20.8 / 27-28 |
+| CPU per turn | 26.2-26.7 | 21.8-22.2 |
+| the two event snapshots (two walks) | 4.4 | 4.1 |
+| the Rust sync, in Python | 7.8 | 4.5 |
+| of which the sync's walk of the list | 3.8 (fingerprint + convert) | 0.5 (convert only) |
+| Rust render and diff | 9.4-10.0 | 9.2-9.3 |
+
+Walks of the list in Python per turn: four before #3999 (two snapshots, the
+sync's fingerprint-and-convert, `_collect_sub_ids`); three after its first
+shortcut (`plain_sub_ids`); now two fingerprint walks and one conversion walk
+that builds no fingerprint. The sync takes the post-event snapshot's walk of
+the list (its fingerprint, and whether it is plain data) when nothing but the
+framework runs between the two: no `get_context_data` or
+`get_render_only_context` override, no template property, no class-level
+component, no `sync_turn_wrapper`. Otherwise it walks again, as before.
+`test_per_turn_counts.py` pins the counts, `test_per_turn_invalidation.py` the
+cases where the walk must not be reused.
+
+The issue's provisional target, under 10 ms of server time for this turn, is
+not met: Python's share fell from about 12 ms to about 9 ms, and what is left
+is the two snapshot walks (4 ms), `update_state` converting the whole list in
+Rust (about 3 ms) and the Rust render and diff (about 9 ms). Item-level deltas
+for keyed lists, a Rust fast path for a turn that changes two text regions,
+and the per-render serialization on the state backend are the follow-up
+(v2.1.0).
 
 ## Reproduce
 
