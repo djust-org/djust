@@ -384,7 +384,7 @@ async def test_a_reconnect_behind_the_page_is_told_its_changes_were_not_restored
         _state_flush_request.WAIT_S, waited = 0.2, _state_flush_request.WAIT_S
         try:
             comm_b, mounted = await _mount(key, reconnect=True, state_serial=shown)
-            notice = await comm_b.receive_json_from(timeout=5)
+            notice = await comm_b.receive_json_from()
             assert await comm_b.receive_nothing(timeout=0.2)
             await comm_b.disconnect()
         finally:
@@ -446,7 +446,7 @@ async def test_the_page_is_told_once_when_its_saves_keep_failing(runtimes, monke
             monkeypatch.setattr(rt, "_save_explicit_root", broken)
             for _ in range(4):
                 assert not await rt.flush_state()
-            notice = await comm.receive_json_from(timeout=5)
+            notice = await comm.receive_json_from()
             assert await comm.receive_nothing(timeout=0.2)
             assert rt.state_unsaved
         finally:

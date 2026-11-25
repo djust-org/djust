@@ -88,6 +88,33 @@ def _both(source, context):
     return actual, expected
 
 
+_DST_FIELD = FORMAT.split("|").index("I")
+
+
+def _without_tzdata_dependent_dst(zone, actual, expected):
+    """Drop the ``I`` field for Europe/Dublin before comparing.
+
+    Django's ``I`` is ``tzinfo.dst() != 0``, read from whatever tz database
+    Python's ``zoneinfo`` loads. Ireland is the one zone whose tz source
+    gives a NEGATIVE save (winter GMT is "DST" at -1h): the "vanguard" build
+    (the ``tzdata`` package, some distros) reports winter as DST, the
+    "rearguard" build reports summer. So Django's own answer flips with the
+    host, and a differential against it cannot pin either value. djust's
+    rule (DST = clock ahead of the zone's standard offset) is pinned by
+    ``test_dublin_dst_flag_means_clock_ahead_of_standard`` instead.
+    """
+    if zone != "Europe/Dublin":
+        return actual, expected
+
+    def drop(text):
+        parts = text.split("|")
+        if len(parts) > _DST_FIELD:
+            del parts[_DST_FIELD]
+        return "|".join(parts)
+
+    return drop(actual), drop(expected)
+
+
 @pytest.fixture(autouse=True)
 def _reset_activation():
     dj_timezone.deactivate()
@@ -102,6 +129,8 @@ def test_aware_value_formats_like_django(zone, value, filter_name):
     source = "{{ v|" + filter_name + ':"' + fmt + '" }}'
     with override_settings(USE_TZ=True, TIME_ZONE=zone):
         actual, expected = _both(source, {"v": value})
+    if filter_name == "date":
+        actual, expected = _without_tzdata_dependent_dst(zone, actual, expected)
     assert actual == expected
 
 
@@ -110,7 +139,24 @@ def test_naive_value_formats_like_django(zone, value):
     source = '{{ v|date:"' + FORMAT + '" }}'
     with override_settings(USE_TZ=True, TIME_ZONE=zone):
         actual, expected = _both(source, {"v": value})
+    actual, expected = _without_tzdata_dependent_dst(zone, actual, expected)
     assert actual == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "dst_flag"),
+    [
+        (datetime(2026, 1, 15, 12, 0, tzinfo=UTC), "0"),
+        (datetime(2026, 7, 15, 12, 0, tzinfo=UTC), "1"),
+    ],
+)
+def test_dublin_dst_flag_means_clock_ahead_of_standard(value, dst_flag):
+    """djust's ``I`` for Europe/Dublin is pinned on its own, independent of the
+    host's tz database build: summer (IST, +0100) is DST, winter (GMT) is not.
+    See ``_without_tzdata_dependent_dst`` for why Django's answer varies."""
+    with override_settings(USE_TZ=True, TIME_ZONE="Europe/Dublin"):
+        actual = _backend().from_string('{{ v|date:"I" }}').render({"v": value})
+    assert actual == dst_flag
 
 
 @pytest.mark.parametrize(
