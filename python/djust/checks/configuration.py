@@ -898,7 +898,6 @@ def _views_saving_state(LiveView: type) -> tuple[list[str], list[str]]:
     """Project LiveViews whose state is saved between requests, and those whose
     ``automatic_state`` is not ``True``, ``False`` or ``None`` (C034 / C035)."""
     from djust import _automatic_state
-    from djust._exposure import uses_legacy_exposure
 
     saving, invalid = [], []
     for cls in _walk_subclasses(LiveView):
@@ -910,11 +909,7 @@ def _views_saving_state(LiveView: type) -> tuple[list[str], list[str]]:
             invalid.append(name)
             continue
         on = _automatic_state.project_saving_enabled() if value is None else value
-        try:
-            legacy = uses_legacy_exposure(cls)
-        except Exception:  # noqa: BLE001 — an unreadable policy is the V-checks' report
-            legacy = False
-        if on and not legacy:
+        if on:
             saving.append(name)
     return sorted(set(saving)), sorted(set(invalid))
 

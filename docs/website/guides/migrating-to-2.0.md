@@ -138,7 +138,6 @@ before the command runs: delete its line by hand, then run the command.
 | --- | --- | --- |
 | `ImproperlyConfigured` at class creation | a class states `exposure_policy = "legacy"` | [section 1](#step-4-delete-the-policy-line) |
 | `djust.T027` | a name the template reads that nothing supplies, or an `X_count` 1.x generated | [section 1](#step-2-supply-the-template) |
-| `djust.V026` | a legacy view declares a plain component in its class body | [section 1](#other-things-explicit-exposure-refuses) |
 | `djust.V016` | a strict handler declaration that dispatch refuses | [section 2](#2-make-event-handlers-strict) |
 | `djust.V033` | a legacy handler whose signature strict would refuse | [section 2](#2-make-event-handlers-strict) |
 | `djust.T020` | an event binding's arguments missing, unexpected or supplied twice | [section 2](#2-make-event-handlers-strict) |
@@ -175,7 +174,7 @@ Do this for one view at a time:
 | A generated `{{ items_count }}` | `{{ items\|length }}` | `djust.T027` | No: reported |
 | `_private` attributes kept between fallback requests | Rebuilt in `mount()`; `state(persist="server")` for what must survive | — | No |
 | `enable_state_snapshot`, `PersistentLiveView` | `state(..., persist=...)` on each field | A class creation error, or `ImportError` | No |
-| A plain component in the class body, or `self.x = Badge()` in `mount()` | A class-body `LiveComponent`, or `state(default_factory=...)` | `djust.V026` | No |
+| A plain component in the class body, or `self.x = Badge()` in `mount()` | A class-body `LiveComponent`, or `state(default_factory=...)` | `ImproperlyConfigured` when the class is created | No |
 | A legacy widget on an admin page | Migrate the widget like any view | `ImproperlyConfigured` when the widget class is created | Partly: the widget view is fixed like any view |
 | `{{ page_title }}` read from `self.page_title` | Supply it from `get_context_data()` | — | No |
 
@@ -622,9 +621,7 @@ object for every event, rebuilt from its saved state as in 1.3.
   renders it, or build it in `get_context_data()`.
   Do not give a component field `persist=`.
 - **A plain component in the class body** (`rating = Rating(...)`), for the
-  reason above. On a legacy view it is not refused, but `manage.py check`
-  warns about it (`djust.V026`), because a legacy view renders it to every
-  user.
+  reason above: it is refused when the class is created.
 - **Actors** (`use_actors = True`). See [What does not survive](#5-what-does-not-survive).
 - **A legacy widget on an admin page.** The admin change list and change
   form are explicit, and a widget class that states `"legacy"` is refused
@@ -1237,7 +1234,7 @@ the rows that need it.
 
 As a sticky child, an explicit view is remounted whenever a
 `{% live_render %}` input changes, so djust never calls `_on_sticky_update`
-(it ran only for legacy children; `djust.V035` reports it). Name the inputs
+(it ran only on djust 1.3; `djust.V035` reports it). Name the inputs
 the hook takes, or delete the hook and read the inputs in `mount()`.
 
 <!-- doc-snippet-check: before -->
@@ -1469,4 +1466,4 @@ never in production settings. The helpers are described in the
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: aedb1291833c -->
+<!-- generated-doc prose-sha256: 9d952cc843ad -->

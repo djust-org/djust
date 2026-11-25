@@ -161,7 +161,7 @@ def _v035(owner: type) -> CheckMessage:
     return DjustWarning(
         "%s overrides _on_sticky_update, but it is an explicit-exposure view: as a sticky "
         "child it is remounted whenever a {%% live_render %%} input changes, so djust never "
-        "calls the hook (it ran only for legacy children)." % label,
+        "calls the hook (it ran only on djust 1.3)." % label,
         hint=(
             'Name the inputs the hook takes: sticky_update_inputs = ("title",). A change to '
             "those reuses the child and calls the hook; a change to any other input remounts "
@@ -181,7 +181,6 @@ def check_sticky_update_hooks(app_configs: Any, **kwargs: Any) -> list[CheckMess
     if _is_check_suppressed("djust.V035"):
         return []
     try:
-        from djust._exposure import uses_legacy_exposure
         from djust.mixins.sticky import StickyChildRegistry
     except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
         return []
@@ -191,8 +190,6 @@ def check_sticky_update_hooks(app_configs: Any, **kwargs: Any) -> list[CheckMess
         hook = getattr(cls, "_on_sticky_update", None)
         if hook is None or hook is StickyChildRegistry._on_sticky_update:
             continue
-        if uses_legacy_exposure(cls):
-            continue  # legacy children still get the hook
         if getattr(cls, "sticky_update_inputs", None):
             continue  # the view names the inputs the hook takes (#4181)
         owner = next((k for k in cls.__mro__ if "_on_sticky_update" in vars(k)), None)

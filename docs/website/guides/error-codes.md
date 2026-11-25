@@ -950,15 +950,11 @@ A view that declares a `params_form` is also held to its `params_form_fallback`:
 
 **Fix**: Delete the override and set `self.state` to a state the map names. For a real special case, call `super().get_http_status()` first so the map still applies. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V025"]}`.
 
-### V026: plain component in a legacy view's class body
+### V026: plain component in a legacy view's class body (removed in 2.0)
 
-**Severity**: Warning
+Retired in 2.0 (#4204). Nothing reports it; the class statement itself is refused. Create the component per view in `mount()` or `get_context_data()`, or declare a class-body `LiveComponent`.
 
-**What causes it**: A view still on the deprecated 1.x exposure policy (`djust.V028` reports it), or a mixin it inherits, declares a plain `Component` instance in its class body, such as `badge = Badge("new")`. A plain component has no descriptor, so it is one object shared by every session of the worker process, and a legacy view renders it. A handler that writes to it (`self.badge.label = request.user.email`) shows that value on every other user's next render and on every later page load. Message: "<class> declares the plain component '<name>' in its class body. It is one object shared by every session of the worker, ..."
-
-**Fix**: Create the component per view: assign `self._badge = Badge(...)` in `mount()` and return it from `get_context_data()`, or build it in `get_context_data()`. Both also work after the view moves to explicit exposure ([Migrating to djust 2.0](migrating-to-2.0.md#1-move-each-view-to-explicit-exposure)). A component that no handler writes to can stay. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V026"]}`.
-
-On an explicit view the same declaration is refused when the class is created, with an `ExposureConfigurationError` that names the attribute and the working forms.
+---
 
 ### V027: declared `state()` field named `user` or `perms`
 
@@ -1024,7 +1020,7 @@ Retired in 2.0 (#4199). Nothing reports it; the widget's class statement itself 
 
 **Severity**: Warning
 
-**What causes it**: a `LiveView` that overrides `_on_sticky_update`, is explicit-exposure and does not name `sticky_update_inputs`. As a sticky child it is remounted whenever a `{% live_render %}` input changes, so the hook is never called (it ran only for legacy children). Reported once, under the class that defines the hook. Message: '<view> overrides _on_sticky_update, but it is an explicit-exposure view: as a sticky child it is remounted whenever a {% live_render %} input changes, so djust never calls the hook (it ran only for legacy children).'
+**What causes it**: a `LiveView` that overrides `_on_sticky_update` and does not name `sticky_update_inputs`. As a sticky child it is remounted whenever a `{% live_render %}` input changes, so the hook is never called (it ran only on djust 1.3). Reported once, under the class that defines the hook. Message: '<view> overrides _on_sticky_update, but it is an explicit-exposure view: as a sticky child it is remounted whenever a {% live_render %} input changes, so djust never calls the hook (it ran only for legacy children).'
 
 **Fix**: name the inputs the hook takes with `sticky_update_inputs = ("title",)` (a change to those reuses the child and calls the hook), or delete the hook and read the inputs in `mount()`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V035"]}`.
 

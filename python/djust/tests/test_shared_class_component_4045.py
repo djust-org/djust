@@ -2,7 +2,7 @@
 
 A plain ``Component`` has no descriptor, so ``self.badge`` on a view is the class
 attribute itself: one object for every session of the worker. On a view that
-renders it (legacy, or an explicit view that hands it to the template) one user's
+renders it (a view that hands it to the template) one user's
 handler write shows in every other user's render and in every later mount.
 
 * Explicit views refuse the declaration when the class is created, and again on
