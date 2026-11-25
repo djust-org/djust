@@ -5737,27 +5737,53 @@ fn serialize_all_methods(
         }
         let shipped = match node {
             PathNode::Object(row_tree) if name == "first" || name == "last" => {
-                let row = serialize_all_row(py, &value, row_tree, gate, cap)?;
-                // `{{ u.groups.all.first }}` beside `{{ u.groups.all.first.name }}`
-                // reads the row whole AND by field. A dict prints as its repr, so
-                // the row carries the text a serialized model carries for that:
-                // `__str__` (Display renders a dict that has one as that text).
-                if row_tree.contains_key(WHOLE_MARK)
-                    && !(value.is_instance_of::<PyDict>()
-                        || value.is_instance_of::<PyList>()
-                        || value.is_instance_of::<PyTuple>())
-                {
-                    if let Ok(dict) = row.bind(py).cast::<PyDict>() {
-                        dict.set_item("__str__", value.str()?.to_string())?;
-                    }
-                }
-                row
+                method_row_value(py, &value, row_tree, gate, cap)?
             }
             _ => queryset_template_value(&value, 0)?,
         };
         out.set_item(name, shipped)?;
     }
     Ok(out.into_any().unbind())
+}
+
+/// The row a `first` / `last` returned, taken by `row_tree` (#3788, #4326).
+///
+/// `{{ u.groups.all.first }}` beside `{{ u.groups.all.first.name }}` reads the
+/// row whole AND by field. A dict prints as its repr, so the row carries the
+/// text a serialized model carries for that: `__str__` (Display renders a dict
+/// that has one as that text). The codegen twin is `method_row_value`.
+fn method_row_value(
+    py: Python,
+    value: &Bound<'_, PyAny>,
+    row_tree: &std::collections::HashMap<String, PathNode>,
+    gate: &Bound<'_, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    let row = serialize_all_row(py, value, row_tree, gate, cap)?;
+    if row_tree.contains_key(WHOLE_MARK)
+        && !(value.is_instance_of::<PyDict>()
+            || value.is_instance_of::<PyList>()
+            || value.is_instance_of::<PyTuple>())
+    {
+        if let Ok(dict) = row.bind(py).cast::<PyDict>() {
+            dict.set_item("__str__", value.str()?.to_string())?;
+        }
+    }
+    Ok(row)
+}
+
+/// Is `value` a Django manager (a related manager included) or a QuerySet: an
+/// object whose `first` / `last` is the QuerySet method (#4326)?
+fn is_manager_or_queryset(value: &Bound<'_, PyAny>) -> bool {
+    if is_django_queryset(value) {
+        return true;
+    }
+    value
+        .py()
+        .import("django.db.models.manager")
+        .and_then(|m| m.getattr("BaseManager"))
+        .and_then(|cls| value.is_instance(&cls))
+        .unwrap_or(false)
 }
 
 /// `djust.serialization.model_identity`, resolved once per process (#3911).
@@ -5929,6 +5955,32 @@ fn serialize_object_with_paths(
                         serialized.push(serialize_all_row(py, row, nested_tree, gate, cap)?);
                     }
                     result.set_item(attr_name, PyList::new(py, serialized)?)?;
+                    continue;
+                }
+                // `u.groups.first.name` (#4326): the manager's (or QuerySet's)
+                // `first` / `last` is a method, as after `all`; it was walked as
+                // an object and shipped `{}`. Called under the one call guard,
+                // and the row it returns goes through the serialization gate.
+                if matches!(attr_name.as_str(), "first" | "last")
+                    && attr_value.is_callable()
+                    && is_manager_or_queryset(obj)
+                {
+                    if !djust_core::template_call_guard(&attr_value).may_call() {
+                        continue;
+                    }
+                    let value = match attr_value.call0() {
+                        Ok(value) => value,
+                        Err(err) if codegen_swallows(py, &err) => continue,
+                        Err(err) => return Err(err),
+                    };
+                    if value.is_none() {
+                        result.set_item(attr_name, py.None())?;
+                    } else {
+                        result.set_item(
+                            attr_name,
+                            method_row_value(py, &value, nested_tree, gate, cap)?,
+                        )?;
+                    }
                     continue;
                 }
                 // JSONField and computed containers carry data keys, not model

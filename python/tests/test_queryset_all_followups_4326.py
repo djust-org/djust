@@ -403,3 +403,89 @@ class TestNoStaleTwinOnAPreloadedRender:
         kept = view.__dict__["_all_method_rows"]
         assert "d" not in kept and "__djust_nested_twins__" not in kept, kept
         assert "[3]" not in html, html
+
+
+# ===========================================================================
+# #4326: a relation's MANAGER methods read without ``.all``
+# ===========================================================================
+MANAGER = {
+    "first-name": "[{{ u.groups.first.name }}]",
+    "last-name": "[{{ u.groups.last.name }}]",
+    "first-two-fields": "[{{ u.groups.first.name }}|{{ u.groups.first.id }}]",
+    "first-whole": "[{{ u.groups.first }}]",
+    "first-whole-and-field": "[{{ u.groups.first }}={{ u.groups.first.name }}]",
+    "first-if": "[{% if u.groups.first %}Y{% endif %}]",
+    "first-upper": "[{{ u.groups.first.name|upper }}]",
+    "count": "[{{ u.groups.count }}]",
+    "exists": "[{{ u.groups.exists }}]",
+    "all-four": "[{{ u.groups.count }}|{{ u.groups.exists }}|{{ u.groups.first.name }}"
+    "|{{ u.groups.last.name }}]",
+    "beside-the-rows": "[{{ u.groups.first.name }}:"
+    "{% for g in u.groups.all %}{{ g.name }},{% endfor %}]",
+    # A related manager is not subscriptable: Django renders the index empty.
+    "index": "[{{ u.groups.0.name }}]",
+}
+
+
+def _loop(body: str, over: str = "users") -> str:
+    return "{% for u in " + over + " %}" + body + "{% endfor %}"
+
+
+@pytest.mark.django_db
+class TestAManagerMethodWithoutAll:
+    @pytest.mark.parametrize("render", RENDERS)
+    @pytest.mark.parametrize("name", list(MANAGER))
+    @pytest.mark.parametrize("bound", [1, None], ids=["sliced-1", "unsliced"])
+    def test_over_a_top_level_queryset(self, world, render, name, bound) -> None:
+        def make_ctx():
+            return {"users": _users()[:bound] if bound else _users()}
+
+        _check(render, _loop(MANAGER[name]), make_ctx, name)
+
+    @pytest.mark.parametrize("render", RENDERS)
+    @pytest.mark.parametrize("name", list(MANAGER))
+    def test_over_a_nested_queryset(self, world, render, name) -> None:
+        _check(render, _loop(MANAGER[name], "d.users"), _in_dict, name)
+
+    @pytest.mark.parametrize("render", RENDERS)
+    @pytest.mark.parametrize("name", list(MANAGER))
+    def test_off_a_single_model(self, world, render, name) -> None:
+        _check(render, MANAGER[name], lambda: {"u": _users().first()}, name)
+
+    @pytest.mark.parametrize(
+        "paths",
+        [
+            ["groups.first.name"],
+            ["groups.last.name", "groups.first.id", "username"],
+            ["groups.first.__str__", "groups.first.name"],
+            ["groups.count", "groups.exists", "groups.first.name"],
+            ["groups.first.name", "groups.all", "groups.all.name"],
+        ],
+    )
+    def test_the_codegen_twin_agrees(self, world, paths) -> None:
+        users = list(_users())
+        rust = _rust.serialize_queryset(users, paths)
+        assert [_codegen(paths, "ser_manager_4326")(u) for u in users] == rust
+        if any(p.startswith("groups.first.name") for p in paths):
+            assert [r["groups"]["first"] for r in rust][2] is None  # u2 has no group
+            assert rust[0]["groups"]["first"]["name"] == "g00"
+
+    def test_a_refused_first_is_never_called(self, world, monkeypatch) -> None:
+        from django.db.models import Manager
+
+        def first(self):  # pragma: no cover - must not run
+            raise AssertionError("called")
+
+        first.alters_data = True
+        monkeypatch.setattr(Manager, "first", first, raising=False)
+        users = list(_users())
+        rust = _rust.serialize_queryset(users, ["groups.first.name"])
+        assert all("first" not in r["groups"] for r in rust), rust
+        assert [_codegen(["groups.first.name"], "ser_refused_4326")(u) for u in users] == rust
+
+
+def _check(render, source, make_ctx, name) -> None:
+    expected = _django_render(source, make_ctx())
+    if name != "index":
+        assert re.search(r"[1-9]|Y|True|g\d", expected, re.I), expected
+    assert _text(render(source, make_ctx())) == expected

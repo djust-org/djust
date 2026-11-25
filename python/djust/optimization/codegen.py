@@ -417,6 +417,51 @@ def all_methods_value(queryset: Any, subtree: Dict[str, Any]) -> Optional[Any]:
     return out
 
 
+def _is_manager_or_queryset(value: Any) -> bool:
+    from django.db.models import QuerySet
+    from django.db.models.manager import BaseManager
+
+    return isinstance(value, (QuerySet, BaseManager))
+
+
+#: :func:`manager_method_row`'s answer for a refused or failing call: omit the name.
+_OMITTED = object()
+
+#: :func:`manager_method_row`'s answer when ``owner.name`` is not a manager's /
+#: QuerySet's ``first`` / ``last``: walk it as an attribute, as before.
+NOT_A_METHOD_ROW = object()
+
+
+def manager_method_row(owner: Any, name: str, subtree: Dict[str, Any]) -> Any:
+    """``u.groups.first.name`` (#4326): a manager's (or QuerySet's) ``first`` / ``last``
+    is a METHOD, as after ``all``. It was walked as an object and shipped ``{}``.
+
+    Called under the one call guard; the row it returns is taken by ``subtree``
+    through the serialization gate (:func:`take_by_tree`), and a row also read whole
+    carries its ``__str__``, as :func:`all_methods_value` does. ``None`` for no row,
+    :data:`NOT_A_METHOD_ROW` when ``owner`` is not a manager / QuerySet. A refused
+    or failing call is :data:`_OMITTED` (the caller leaves the name out).
+    The Rust twin is ``serialize_object_with_paths``' ``first`` / ``last`` arm.
+    """
+    if name not in ("first", "last") or not _is_manager_or_queryset(owner):
+        return NOT_A_METHOD_ROW
+    method = getattr(owner, name, None)
+    if not callable(method):
+        return NOT_A_METHOD_ROW
+    if getattr(method, "alters_data", False) or getattr(method, "do_not_call_in_templates", False):
+        return _OMITTED
+    try:
+        row = method()
+    except (TypeError, AttributeError):
+        return _OMITTED
+    if row is None:
+        return None
+    value = take_by_tree(row, subtree)
+    if ALL_WHOLE_KEY in subtree and isinstance(value, dict):
+        value["__str__"] = str(row)
+    return value
+
+
 def _related_model(model: Any, name: str) -> Any:
     """The model a relation named ``name`` on ``model`` yields, or ``None``."""
     if model is None:
@@ -510,6 +555,13 @@ def take_by_tree(value: Any, tree: Dict[str, Any]) -> Any:
             continue
         if found is None:
             continue
+        if tree[name]:
+            row = manager_method_row(value, name, tree[name])
+            if row is _OMITTED:
+                continue
+            if row is not NOT_A_METHOD_ROW:
+                taken[name] = row
+                continue
         if callable(found) and (name.startswith("get_") or name in _CALLED_LEAF_NAMES):
             if getattr(found, "alters_data", False) or getattr(
                 found, "do_not_call_in_templates", False
@@ -1010,7 +1062,20 @@ def _generate_nested_access(
             else:
                 # Has nested attributes - create nested dict and recurse
                 dict_path = _build_dict_path(result_var, current_path)
-                lines.append(f"{ind}    if isinstance({obj_access}, dict):")
+                if attr_name in ("first", "last"):
+                    # ``u.groups.first.name`` (#4326): a manager's ``first`` is a
+                    # method; :func:`manager_method_row` calls it, or says to walk
+                    # the attribute as before (a model field named ``first``).
+                    lines.append(
+                        f"{ind}    _mrow = _djust_method_row({obj_var}, '{attr_name}', {subtree!r})"
+                    )
+                    lines.append(f"{ind}    if _mrow is _djust_omitted:")
+                    lines.append(f"{ind}        pass")
+                    lines.append(f"{ind}    elif _mrow is not _djust_not_a_method_row:")
+                    lines.append(f"{ind}        {dict_path}['{attr_name}'] = _mrow")
+                    lines.append(f"{ind}    elif isinstance({obj_access}, dict):")
+                else:
+                    lines.append(f"{ind}    if isinstance({obj_access}, dict):")
                 lines.append(f"{ind}        {dict_path}['{attr_name}'] = {obj_access}")
                 lines.append(f"{ind}    elif _djust_is_sequence({obj_access}):")
                 lines.append(
@@ -1114,6 +1179,9 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         "_djust_is_sequence": _is_sequence,
         "_djust_take": take_by_tree,
         "_djust_all_methods": all_methods_value,
+        "_djust_method_row": manager_method_row,
+        "_djust_not_a_method_row": NOT_A_METHOD_ROW,
+        "_djust_omitted": _OMITTED,
         "_djust_all_rows": capped_all_rows,
         "_djust_row_text": add_row_text,
         "_djust_leaf": leaf_value,
