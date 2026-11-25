@@ -1,6 +1,6 @@
 """Tests for push event flushing in @background tasks (#693).
 
-Verifies that ``_flush_pending_push_events()`` / ``flush_push_events()``
+Verifies that ``flush_push_events()``
 correctly flushes queued push events mid-task through the view's
 ``_ws_consumer``, and is a safe no-op otherwise.
 """
@@ -32,7 +32,7 @@ class _View(PushEventMixin):
 
 
 class TestFlushPushEvents:
-    """Tests for the flush_push_events / _flush_pending_push_events API."""
+    """Tests for the flush_push_events API."""
 
     @pytest.mark.asyncio
     async def test_flush_sends_queued_events_via_callback(self):
@@ -82,20 +82,6 @@ class TestFlushPushEvents:
         view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
         await view.flush_push_events()
         assert len(called) == 0
-
-    @pytest.mark.asyncio
-    async def test_private_alias_calls_public(self):
-        """_flush_pending_push_events delegates to flush_push_events."""
-        view = _View()
-        flushed = []
-
-        async def fake_flush():
-            flushed.extend(view._drain_push_events())
-
-        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
-        view.push_event("test", {})
-        await view._flush_pending_push_events()
-        assert len(flushed) == 1
 
     @pytest.mark.asyncio
     async def test_multiple_flushes_accumulate(self):
@@ -154,7 +140,7 @@ class TestTutorialMixinFlush:
 
     @pytest.mark.asyncio
     async def test_run_step_flushes_setup_commands(self):
-        """_run_step calls _flush_pending_push_events after the setup chain."""
+        """_run_step calls flush_push_events after the setup chain."""
         from djust.mixins.waiters import WaiterMixin
         from djust.tutorials import TutorialMixin, TutorialStep
 

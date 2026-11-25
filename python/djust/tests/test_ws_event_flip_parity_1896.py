@@ -885,7 +885,7 @@ class TestResidualFoldObservability:
     def test_dead_extract_methods_removed_from_consumer(self):
         """#1921: the bespoke ``LiveViewConsumer._extract_cache_config`` /
         ``_extract_optimistic_rules`` were dead post-mount-flip (#1920 deleted the
-        handle_mount body that called them; runtime.py owns the live copies). Pin
+        _mount_page body that called them; runtime.py owns the live copies). Pin
         that they are GONE from the consumer so they cannot silently return."""
         from djust.websocket import LiveViewConsumer
 

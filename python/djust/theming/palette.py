@@ -8,7 +8,8 @@ from 1-3 brand colors using HSL color math and WCAG contrast validation.
 from __future__ import annotations
 
 from .colors import hex_to_hsl
-from .presets import ColorScale, ThemePreset, ThemeTokens
+from .presets import ThemePreset
+from ._types import ColorScale, ThemeTokens
 
 
 # ---------------------------------------------------------------------------

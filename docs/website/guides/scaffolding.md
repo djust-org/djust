@@ -179,8 +179,7 @@ uvx djust@latest new myapp --bare
 # Add djust to an existing Django project (run beside manage.py)
 uvx djust@latest init
 
-# Legacy entrypoints, mirroring Django's own names
-python -m djust startproject myproject
+# Add an app to an existing project, mirroring Django's own name
 python -m djust startapp myapp
 ```
 
@@ -283,10 +282,10 @@ Exit status is `0` on success, `1` when `init` refused before writing, and
 [installation guide](../getting-started/installation.md#add-djust-to-an-existing-project)
 describes each change.
 
-### `startproject` and `startapp`
+### `startapp`
 
-`python -m djust startproject` is a deprecated alias for `djust new`.
-Use `djust new` for a complete project. `python -m djust startapp myapp`
+`python -m djust startproject` was removed in 2.0: use `djust new` for a
+complete project. `python -m djust startapp myapp`
 generates an app with a starter view and template inside an existing project;
 you still need to register the app and include its URLs.
 

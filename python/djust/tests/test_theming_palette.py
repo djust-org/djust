@@ -6,7 +6,8 @@ TDD: these tests are written before the implementation.
 
 import pytest
 
-from djust.theming.presets import ColorScale, ThemePreset, ThemeTokens
+from djust.theming.presets import ThemePreset
+from djust.theming import ColorScale, ThemeTokens
 from djust.theming.accessibility import AccessibilityValidator
 from djust.theming.palette import PaletteGenerator
 

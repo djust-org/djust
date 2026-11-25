@@ -208,7 +208,7 @@ class TestSseRuntime:
 
 
 async def _tick_consumer():
-    """A consumer that mounted ``TickFeed`` through ``handle_mount`` (its render
+    """A consumer that mounted ``TickFeed`` through ``_mount_page`` (its render
     is the baseline); its own tick loop is stopped, the tests drive the tick."""
     from djust.tests._live_session import amount_on_consumer
     from djust.websocket import LiveViewConsumer

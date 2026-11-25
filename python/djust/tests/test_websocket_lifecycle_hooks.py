@@ -1,5 +1,5 @@
 """
-Tests that handle_mount() calls lifecycle hooks before mount().
+Tests that _mount_page() calls lifecycle hooks before mount().
 
 Specifically verifies that _ensure_tenant() (and any similar hook) is called
 when a view is mounted over WebSocket, even though Django's dispatch/get/post
@@ -63,7 +63,7 @@ class _NoHookView(LiveView):
 
 
 class TestHandleMountLifecycleHooks:
-    """handle_mount() must call _ensure_tenant() before mount()."""
+    """_mount_page() must call _ensure_tenant() before mount()."""
 
     def _make_request(self):
         return RequestFactory().get("/")
@@ -73,7 +73,7 @@ class TestHandleMountLifecycleHooks:
         view = _HookView()
         request = self._make_request()
 
-        # Simulate what LiveViewConsumer.handle_mount() does
+        # Simulate what LiveViewConsumer._mount_page() does
         if hasattr(view, "_ensure_tenant"):
             view._ensure_tenant(request)
         view.mount(request)
@@ -98,13 +98,13 @@ class TestHandleMountLifecycleHooks:
         view = _NoHookView()
         request = self._make_request()
 
-        # This is what handle_mount() does — hasattr guard prevents AttributeError
+        # This is what _mount_page() does — hasattr guard prevents AttributeError
         if hasattr(view, "_ensure_tenant"):
             view._ensure_tenant(request)
         view.mount(request)  # should not raise
 
     def test_hasattr_guard_is_correct_approach(self):
-        """Verify the hasattr pattern used in handle_mount() is correct."""
+        """Verify the hasattr pattern used in _mount_page() is correct."""
         hook_view = _HookView()
         no_hook_view = _NoHookView()
 

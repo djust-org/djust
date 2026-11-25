@@ -1926,19 +1926,6 @@ pub fn try_text_only_vdom_update_inplace(vdom: &mut VNode, old_html: &str, new_h
     true
 }
 
-/// Legacy API: returns a cloned+updated VDOM, or None.
-/// Prefer `try_text_only_vdom_update_inplace` for large VDOMs.
-pub fn try_text_only_vdom_update(
-    old_vdom: &VNode,
-    old_html: &str,
-    new_html: &str,
-) -> Option<VNode> {
-    let changes = plan_text_only_update(old_vdom, old_html, new_html)?;
-    let mut updated = old_vdom.clone();
-    apply_text_changes(&mut updated, changes);
-    Some(updated)
-}
-
 /// Unescape basic HTML entities back to text.
 /// Inverse of html_escape() for the entities we produce.
 fn html_unescape(s: &str) -> String {
@@ -2089,6 +2076,17 @@ fn djust_vdom(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cloned-result form of [`try_text_only_vdom_update_inplace`], for
+    /// the tests that assert on the updated tree.
+    fn try_text_only_vdom_update(
+        old_vdom: &VNode,
+        old_html: &str,
+        new_html: &str,
+    ) -> Option<VNode> {
+        let mut updated = old_vdom.clone();
+        try_text_only_vdom_update_inplace(&mut updated, old_html, new_html).then_some(updated)
+    }
 
     #[test]
     fn serialization_preserves_escaping_order_and_raw_context() {

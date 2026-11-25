@@ -33,7 +33,8 @@ from djust.theming.a11y_exemptions import (
     SOLVED_PAIR_KEYS,
 )
 from djust.theming.checks import check_preset_contrast
-from djust.theming.presets import THEME_PRESETS, ColorScale, ThemePreset, ThemeTokens
+from djust.theming.presets import THEME_PRESETS, ThemePreset
+from djust.theming import ColorScale, ThemeTokens
 
 pytestmark = pytest.mark.theming
 

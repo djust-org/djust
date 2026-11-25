@@ -345,7 +345,7 @@ def test_http_result_sync_callable_returning_awaitable_is_completed(probe, monke
 
 
 async def _consumer_with_view():
-    """A consumer that mounted ProbeView through ``handle_mount`` (whose render
+    """A consumer that mounted ProbeView through ``_mount_page`` (whose render
     is the diff baseline): an explicit view's background work is authorized by
     the runtime that mounted it."""
     from djust.tests._live_session import amount_on_consumer

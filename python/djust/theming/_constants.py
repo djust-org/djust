@@ -4,8 +4,7 @@ Dependency-free shared style instances used across theme files.
 Lives alongside ``_types.py`` as the second half of the cyclic-import fix:
 instances previously defined in ``theme_packs.py`` and imported via
 ``themes/_base.py`` are now defined here and imported by both
-``theme_packs.py`` (for back-compat re-export) and ``themes/_base.py``
-(directly).
+``theme_packs.py`` (for its own use) and ``themes/_base.py``.
 
 IMPORTANT: this module may only import from ``_types`` and stdlib. Keep
 it dependency-free so ``themes/*`` can import without walking back

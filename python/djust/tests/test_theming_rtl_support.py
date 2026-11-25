@@ -79,7 +79,7 @@ def _strip_comments(css: str) -> str:
 
 
 class TestLogicalPropertiesBase:
-    """base.css should use CSS logical properties."""
+    """scaffold.css should use CSS logical properties."""
 
     def test_sidebar_uses_border_inline_end(self):
         css = _read_css("scaffold.css")
@@ -238,7 +238,7 @@ class TestDirectionConfig:
     """Direction configuration in DEFAULT_CONFIG and get_direction()."""
 
     def test_default_config_has_direction(self):
-        from djust.theming.manager import DEFAULT_CONFIG
+        from djust.theming._config import DEFAULT_CONFIG
 
         assert "direction" in DEFAULT_CONFIG
         assert DEFAULT_CONFIG["direction"] == "auto"
@@ -312,7 +312,7 @@ class TestDirectionConfigPytest:
     """Pytest-style direction config tests (no unittest.TestCase)."""
 
     def test_default_config_has_direction(self):
-        from djust.theming.manager import DEFAULT_CONFIG
+        from djust.theming._config import DEFAULT_CONFIG
 
         assert "direction" in DEFAULT_CONFIG
         assert DEFAULT_CONFIG["direction"] == "auto"
@@ -419,9 +419,9 @@ class TestThemeHeadDirection:
 class TestRTLAwareComponents:
     """CSS files should have [dir="rtl"] overrides for directional components."""
 
-    def test_base_css_has_rtl_section(self):
+    def test_scaffold_css_has_rtl_section(self):
         css = _read_css("scaffold.css")
-        assert '[dir="rtl"]' in css, "base.css should have RTL overrides"
+        assert '[dir="rtl"]' in css, "scaffold.css should have RTL overrides"
 
     def test_components_css_has_rtl_section(self):
         css = _read_css("components.css")

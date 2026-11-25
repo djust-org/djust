@@ -576,9 +576,7 @@ async def test_save_saves_the_values_it_carries(site_urls, django_user_model, tr
     "button, goes_to",
     [(None, "property/"), ("save_and_continue", None), ("save_and_add_another", "property/add/")],
 )
-async def test_each_button_goes_where_it_says(
-    site_urls, django_user_model, button, goes_to
-):
+async def test_each_button_goes_where_it_says(site_urls, django_user_model, button, goes_to):
     """The pressed button reaches ``save`` (its name=value)
     and the page goes where the button says."""
     row = await _seed()

@@ -98,7 +98,7 @@ class TestHasIdsFlag:
     def test_websocket_has_ids_check_now_correct(self):
         """The mount has_ids check uses 'dj-id=' (Rust renderer output), NOT the
         broken 'data-dj-id='. Post-#1919 (THE MOUNT FLIP) the WS mount routes
-        through ``ViewRuntime.dispatch_mount`` (the bespoke ``handle_mount`` body
+        through ``ViewRuntime.dispatch_mount`` (the bespoke ``_mount_page`` body
         that held the inline check was deleted), so the mount has_ids check now
         lives in the runtime — pinned by the companion runtime test above. Here we
         pin that websocket.py never reintroduces the BROKEN 'data-dj-id=' form

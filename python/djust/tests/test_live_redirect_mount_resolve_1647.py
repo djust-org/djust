@@ -67,14 +67,14 @@ async def test_handle_live_redirect_mount_overrides_source_view():
     async def _fake_handle_mount(data, **kwargs):
         captured["view"] = data.get("view")
 
-    with patch.object(consumer, "handle_mount", new=AsyncMock(side_effect=_fake_handle_mount)):
+    with patch.object(consumer, "_mount_page", new=AsyncMock(side_effect=_fake_handle_mount)):
         await consumer.handle_live_redirect_mount(
             {"view": SOURCE, "url": "/redirect-target/", "params": {}}
         )
 
     assert captured.get("view") == TARGET, (
         "handle_live_redirect_mount must override the client-supplied SOURCE view "
-        f"with the URL-resolved TARGET view; handle_mount received {captured.get('view')!r}"
+        f"with the URL-resolved TARGET view; _mount_page received {captured.get('view')!r}"
     )
 
 
@@ -94,7 +94,7 @@ async def test_handle_live_redirect_mount_keeps_client_view_when_url_unresolvabl
     async def _fake_handle_mount(data, **kwargs):
         captured["view"] = data.get("view")
 
-    with patch.object(consumer, "handle_mount", new=AsyncMock(side_effect=_fake_handle_mount)):
+    with patch.object(consumer, "_mount_page", new=AsyncMock(side_effect=_fake_handle_mount)):
         await consumer.handle_live_redirect_mount(
             {"view": SOURCE, "url": "/no-such-url/", "params": {}}
         )
@@ -122,7 +122,7 @@ async def test_back_nav_state_snapshot_view_not_overridden():
 
     # url="/redirect-target/" WOULD resolve to TARGET, but the snapshot's view
     # (SOURCE here) must win because a snapshot is present.
-    with patch.object(consumer, "handle_mount", new=AsyncMock(side_effect=_fake_handle_mount)):
+    with patch.object(consumer, "_mount_page", new=AsyncMock(side_effect=_fake_handle_mount)):
         await consumer.handle_live_redirect_mount(
             {
                 "view": SOURCE,
@@ -134,5 +134,5 @@ async def test_back_nav_state_snapshot_view_not_overridden():
 
     assert captured.get("view") == SOURCE, (
         "a live_redirect_mount carrying a state_snapshot must NOT have its view "
-        f"overridden from the URL; handle_mount received {captured.get('view')!r}"
+        f"overridden from the URL; _mount_page received {captured.get('view')!r}"
     )

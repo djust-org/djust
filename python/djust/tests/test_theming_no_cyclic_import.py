@@ -102,19 +102,17 @@ class TestThemingNoCyclicImport:
         assert "presets" not in top
         assert "manager" not in top
 
-    def test_back_compat_named_theme_constants_still_importable_from_presets(self):
-        """``presets.py`` re-exports the named ``*_THEME`` constants from
-        ``_builtin_presets`` via ``from ._builtin_presets import *``.
-        External user code that does ``from djust.theming.presets import
-        BLUE_THEME`` must keep working."""
-        from djust.theming.presets import (
+    def test_named_theme_constants_importable_from_builtin_presets(self):
+        """The named ``*_THEME`` constants live in ``_builtin_presets``;
+        ``presets`` no longer star-imports them (#4207)."""
+        from djust.theming.presets import THEME_PRESETS
+        from djust.theming._builtin_presets import (
             BLUE_THEME,
             DEFAULT_THEME,
             GREEN_THEME,
             ORANGE_THEME,
             PURPLE_THEME,
             ROSE_THEME,
-            THEME_PRESETS,
         )
 
         assert BLUE_THEME.name == "blue"

@@ -315,7 +315,7 @@ class TestOtherRebuildSites:
         async def _no_mount(*args, **kwargs):
             return None
 
-        consumer.handle_mount = _no_mount
+        consumer._mount_page = _no_mount
         await consumer.handle_live_redirect_mount(
             {"type": "live_redirect_mount", "url": "/csrf-2998/"}
         )

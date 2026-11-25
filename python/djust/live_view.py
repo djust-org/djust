@@ -449,14 +449,6 @@ class LiveView(
 
         Multiple concurrent tasks are supported with named tasks. Phoenix LiveView users
         will find this API familiar.
-
-    .. deprecated:: 1.3
-        Defining ``_drain_announcements`` or ``_drain_focus`` on a subclass is
-        deprecated and the WebSocket/SSE flush that drains them is removed no
-        earlier than djust 2.0.0. Render a ``role="status"`` live region and
-        call ``JS.focus()`` through ``push_commands()`` instead. A hook added
-        after the class exists (``setattr``, a decorator, an instance
-        attribute) is not detected and does not warn.
     """
 
     template_name: Optional[str] = None

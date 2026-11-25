@@ -204,7 +204,9 @@ class TestPositionalArgOverride:
         def handler(self, item_id: int = 0, action: str = "", **kwargs: Any):
             pass
 
-        result = validate_handler_params(_bound(handler), {}, "test", positional_args=[42, "delete"])
+        result = validate_handler_params(
+            _bound(handler), {}, "test", positional_args=[42, "delete"]
+        )
         assert result["valid"] is True
         assert result["coerced_params"]["item_id"] == 42
         assert result["coerced_params"]["action"] == "delete"
@@ -215,7 +217,9 @@ class TestPositionalArgOverride:
         def handler(self, item_id: int = 0, **kwargs: Any):
             pass
 
-        result = validate_handler_params(_bound(handler), {"item_id": "999"}, "test", positional_args=[1])
+        result = validate_handler_params(
+            _bound(handler), {"item_id": "999"}, "test", positional_args=[1]
+        )
         assert result["valid"] is False
 
     def test_excess_positional_args_are_refused(self):
@@ -235,7 +239,9 @@ class TestPositionalArgOverride:
         def handler(self, value: str = "", **kwargs: Any):
             pass
 
-        result = validate_handler_params(_bound(handler), {"value": "hello"}, "test", positional_args=[])
+        result = validate_handler_params(
+            _bound(handler), {"value": "hello"}, "test", positional_args=[]
+        )
         assert result["valid"] is True
         assert result["coerced_params"]["value"] == "hello"
 
@@ -254,7 +260,9 @@ class TestHandlerValidationSecurity:
         def handler(self, value: str = ""):
             pass
 
-        result = validate_handler_params(_bound(handler), {"value": "ok", "__class__": "object"}, "test")
+        result = validate_handler_params(
+            _bound(handler), {"value": "ok", "__class__": "object"}, "test"
+        )
         assert result["valid"] is False
         assert "undeclared argument" in result["error"]
 
@@ -264,7 +272,9 @@ class TestHandlerValidationSecurity:
         def handler(self, value: str = "", **kwargs: Any):
             pass
 
-        result = validate_handler_params(_bound(handler), {"value": "ok", "extra_key": "data"}, "test")
+        result = validate_handler_params(
+            _bound(handler), {"value": "ok", "extra_key": "data"}, "test"
+        )
         assert result["valid"] is True
 
     def test_missing_required_params_rejected(self):

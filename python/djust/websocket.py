@@ -349,7 +349,7 @@ def validated_host_from_scope(
     """Extract the validated client Host (and secure flag) from an ASGI scope.
 
     Finding #26 (WS/runtime reconstructed-request host omission): the WebSocket
-    ``handle_mount`` and ``ViewRuntime._build_request`` rebuild an ``HttpRequest``
+    ``_mount_page`` and ``ViewRuntime._build_request`` rebuild an ``HttpRequest``
     via ``RequestFactory().get(...)`` with NO ``HTTP_HOST``, so
     ``request.get_host()`` defaults to ``RequestFactory``'s ``"testserver"`` on
     the live path. Host/subdomain ``TenantResolver``\\ s then misresolve the
@@ -806,7 +806,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # The post-render slot-scan reads this set and skips the second
         # ``_register_child`` call (which would ``ValueError``) while still
         # including the ID in the ``sticky_hold`` survivor list. Reset at
-        # every ``handle_mount`` and ``handle_live_redirect_mount`` entry.
+        # every ``_mount_page`` and ``handle_live_redirect_mount`` entry.
         self._sticky_auto_reattached: set[str] = set()
         # Render lock: serializes tick and event render operations so they
         # cannot concurrently access view_instance state or increment the
@@ -1527,7 +1527,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         patch_list = fast_json_loads(patches) if patches else []
                         # Refresh the recovery baseline so a later request_html (e.g.
                         # an async-triggered patch that fails on the client) has fresh
-                        # HTML to serve. Mirrors handle_event and server_push (#1202).
+                        # HTML to serve. Mirrors ``dispatch_event`` and server_push (#1202).
                         # Without this, an html_recovery that already consumed
                         # _recovery_html leaves it None, the next request_html returns
                         # "Recovery HTML unavailable", and the client freezes at the
@@ -1729,7 +1729,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         Single source of truth for the ``request_html`` recovery state
         (``_recovery_html`` / ``_recovery_version``). Every render-send path —
-        ``handle_event``, ``server_push``, ``_run_async_work`` — calls this after
+        ``dispatch_event``, ``server_push``, ``_run_async_work`` — calls this after
         rendering so the baseline can never drift between paths. Hand-copying the
         two-line assignment is exactly how the async path was missed in #1639;
         centralizing it here (#1645) makes a new send path inherit correct arming
@@ -2184,7 +2184,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     ) -> None:
         """Minimal event dispatch used by the activity-deferral flush path.
 
-        Invariants vs :meth:`handle_event`:
+        Invariants vs ``ViewRuntime.dispatch_event``:
 
         * The caller MUST already hold ``self._render_lock``. This method
           does NOT acquire or release it — ``asyncio.Lock`` is non-reentrant
@@ -2203,7 +2203,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         permission check) so deferred events have the same auth posture
         as live events. After a successful handler call it re-renders
         the view and emits exactly one patch/HTML frame (matching the
-        main ``handle_event`` output shape), then flushes push events /
+        main ``dispatch_event`` output shape), then flushes push events /
         flash / metadata / layout so downstream side-effects reach the
         client in the same round-trip.
         """
@@ -2221,7 +2221,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         if not await self._authorize_released_explicit_event(target_view):
             return
 
-        # --- security / validation (shared with handle_event) -----------
+        # --- security / validation (shared with dispatch_event) -----------
         handler = await _validate_event_security(
             self, event_name, target_view, self._rate_limiter, root_view=self.view_instance
         )
@@ -2285,7 +2285,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         if view is None:  # pragma: no cover — caller guarantees a mounted view
             return
         # Auto-skip when no public assigns changed (same rule as
-        # handle_event). This keeps a deferred side-effect-only handler
+        # dispatch_event). This keeps a deferred side-effect-only handler
         # from triggering an unnecessary render frame on the client.
         # _resolve_skip_render owns the skip decision (#2834/#2847) — this
         # twin previously read the two flags inline and resolved the
@@ -2332,7 +2332,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             await self._dispatch_async_work()
             return
 
-        # Render + diff (mirrors the simpler arm of handle_event).
+        # Render + diff (mirrors the simpler arm of dispatch_event).
         from .sync_turn import run_sync_step
 
         _gcd = view.get_context_data
@@ -2661,7 +2661,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         # Sticky LiveViews (Phase C Fix F2): drain any sticky children that
         # were staged on the consumer during a live_redirect but for which
-        # ``handle_mount`` has not yet completed. Without this, a WS
+        # ``_mount_page`` has not yet completed. Without this, a WS
         # disconnect mid-redirect (rare but reachable) leaves the preserved
         # sticky instances alive with their background tasks still running
         # on a "zombie" consumer whose view is gone.
@@ -2820,7 +2820,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             #   * mount       — flipped onto the runtime in ADR-022 Iter 3 Phase
             #     3.3b (#1919, THE MOUNT FLIP). Phases 3.0-3.3a grew
             #     ``dispatch_mount`` into a functional SUPERSET of the (now
-            #     deleted) bespoke ``handle_mount`` body: the F22 view resolver,
+            #     deleted) bespoke ``_mount_page`` body: the F22 view resolver,
             #     pre-mount auth+tenant sequence (``run_pre_mount_auth`` via
             #     ``_check_auth``), ``on_mount`` hooks, session/signed-snapshot
             #     state restore (#1466/#1552), post-mount object-permission
@@ -2849,8 +2849,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 # (``TestRuntimeOwnedVerbsContract``) fails if the set and this
                 # arm ever drift. This is the FIRST arm, so ``event`` (#1907) AND
                 # ``mount`` (#1919, THE MOUNT FLIP) both land here — NOT the deleted
-                # ``elif`` arms that used to call the bespoke ``handle_event`` /
-                # ``handle_mount``.
+                # ``elif`` arms that used to call the bespoke event /
+                # mount handlers.
                 await self._route_runtime_owned(data)
             elif msg_type == "mount_batch":
                 await self.handle_mount_batch(data)
@@ -3100,37 +3100,21 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             )
             await self.send_json(response)
 
-    async def handle_mount(
+    async def _mount_page(
         self,
         data: Dict[str, Any],
         sticky_preserved: Optional[Dict[str, Any]] = None,
         state_snapshot: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Handle view mounting by routing through :class:`ViewRuntime`.
+        """Mount a view on this consumer through :class:`ViewRuntime`.
 
-        ADR-022 Iter 3 Phase 3.3b (#1919, THE MOUNT FLIP). Until this phase,
-        ``mount`` was handled by a ~870-line bespoke WS-only body (a twin of the
-        runtime's mount path). Phases 3.0-3.3a grew
-        :meth:`ViewRuntime.dispatch_mount` into a functional SUPERSET of that
-        bespoke handler (F22 view resolver, ``run_pre_mount_auth`` pre-mount
-        auth+tenant sequence via ``_check_auth``, ``on_mount`` hooks, session +
-        signed-snapshot state restore, post-mount object-permission, ``handle_params``,
-        render, the no-arm mount wire version, the ``sticky_hold``
-        pre-mount frame, the auth verdict→``close(4403)`` finalize, the WS
-        post-mount channel-layer wiring + tick + flags, and the 2-queue mount-time
-        drain), all wired through ``WSConsumerTransport`` hooks. Phase 3.3b adds
-        ``"mount"`` to :attr:`RUNTIME_OWNED_VERBS` so ``receive()`` now routes mount
-        frames through the single ``dispatch_message`` chokepoint (the #1646 mount
-        convergence — one mount path, not two). This method is therefore a THIN SHIM
-        mirroring :meth:`handle_url_change` / :meth:`handle_event`.
-
-        ``receive()`` no longer calls this directly for the ``mount`` verb (that
-        goes via :meth:`_dispatch_runtime_owned` → ``dispatch_message`` →
-        ``dispatch_mount``), but it is retained as a stable public entry point /
-        backward-compatible shim for the WS-only callers that invoke it directly
-        with the extra kwargs: :meth:`handle_live_redirect_mount` (passes
-        ``sticky_preserved`` so the ``sticky_hold`` frame precedes the mount frame)
-        and :meth:`_mount_one` (the ``mount_batch`` collector).
+        ``receive()`` routes a ``mount`` frame through
+        :meth:`_dispatch_runtime_owned` -> ``dispatch_message`` ->
+        ``dispatch_mount``; this is the entry point of the two WS-only callers that
+        pass the extra keyword arguments: :meth:`handle_live_redirect_mount` (its
+        ``sticky_preserved`` makes the ``sticky_hold`` frame precede the mount frame)
+        and :meth:`_mount_one` (the ``mount_batch`` collector). It releases the old
+        view, runs the mount, and reads the mounted view back.
 
         Three flip findings (ADR-022 Iter 3) handled here / by the runtime:
 
@@ -3190,7 +3174,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         """Mount + render a single view and return a payload WITHOUT sending.
 
         Collector seam for :meth:`handle_mount_batch`. Delegates to
-        ``handle_mount`` but replaces ``send_json`` on this consumer with
+        ``_mount_page`` but replaces ``send_json`` on this consumer with
         a capture list so no frames actually flow to the client. The
         caller aggregates captured frames into a single ``mount_batch``
         frame.
@@ -3204,7 +3188,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
           message; the caller stashes ``{target_id, view, error}`` in the
           batch frame's ``failed[]`` array.
         - ``navigate_frame`` (Fix #4): when the view's ``on_mount`` hook
-          or auth stage redirects, ``handle_mount`` emits a
+          or auth stage redirects, ``_mount_page`` emits a
           ``{"type":"navigate","to":...}`` frame instead of a ``mount``
           frame. The collector preserves it so
           ``handle_mount_batch`` can forward the redirect to the client
@@ -3553,47 +3537,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             failed = dict(payload)
             failed["error"] = err or "unknown"
             failures.append(failed)
-
-    async def handle_event(self, data: Dict[str, Any]) -> None:
-        """Handle a client event by routing through :class:`ViewRuntime`.
-
-        ADR-022 Iter 2 Phase 2.3b (#1907, THE FLIP). Until this phase, ``event``
-        was handled by the bespoke ``_handle_event_inner`` (a ~1170-line WS-only
-        twin of the runtime's event path). Phase 2.3a grew
-        :meth:`ViewRuntime.dispatch_event` into a functional SUPERSET of that
-        bespoke handler (event spine, component/sticky/embedded routing,
-        #1466 state-save, ``event_context`` render-lock + origin +
-        observability, ``dj_activity`` gate + flush, #1777 reauth,
-        async dispatch, wire-version stamping), and Phase 2.3b adds ``"event"`` to
-        :attr:`RUNTIME_OWNED_VERBS` so ``receive()`` now routes events through the
-        single ``dispatch_message`` chokepoint (the #1646 convergence — one event
-        path, not two). This method is therefore a THIN SHIM mirroring
-        :meth:`handle_url_change`: ``receive()`` no longer calls it directly for the
-        ``event`` verb (that goes via :meth:`_dispatch_runtime_owned` →
-        ``dispatch_message``), but it is retained as a stable public entry point /
-        backward-compatible shim for callers that invoke it directly. The runtime
-        owns the tenant context (``dispatch_event`` wraps the turn in
-        ``_tenant_context``), the render lock, state-save, and the
-        per-render observability (DJE-053 warning + handler timing + full-HTML-update
-        signal) via the ``on_render_emitted`` / ``on_handler_timing`` transport hooks.
-
-        Calls ``runtime.dispatch_event(data)`` DIRECTLY (mirroring
-        :meth:`handle_url_change`, which calls ``dispatch_url_change`` directly) —
-        NOT ``dispatch_message``. Direct callers of ``handle_event`` pass the EVENT
-        payload (``{"event": ..., "params": ...}``) and may omit the outer
-        ``{"type": "event"}`` wire envelope; ``dispatch_event`` reads ``event`` /
-        ``params`` and does not require ``type``, whereas ``dispatch_message`` keys
-        on ``type`` and would emit "Unknown message type" for a type-less payload.
-        The ``receive()`` wire path still routes through ``dispatch_message`` (the
-        frame there always carries ``type: event``).
-        """
-        if not self.view_instance:
-            await self.send_error("View not mounted. Please reload the page.")
-            return
-
-        runtime = self._get_runtime()
-        runtime.view_instance = self.view_instance
-        await runtime.dispatch_event(data)
 
     # ========================================================================
     # Embedded LiveView Rendering
@@ -4306,7 +4249,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         Returns the same runtime instance across calls so per-runtime state
         (e.g., ``view_instance``) survives. Introduced in #1237 for the
-        ``handle_url_change`` migration; subsequent PRs will route more WS
+        ``url_change`` migration; subsequent PRs will route more WS
         verbs through the runtime.
         """
         if getattr(self, "_runtime", None) is None:
@@ -4348,7 +4291,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     #:
     #: ``mount`` was added in ADR-022 Iter 3 Phase 3.3b (#1919, THE MOUNT FLIP):
     #: Phases 3.0-3.3a grew ``dispatch_mount`` into a functional superset of the
-    #: deleted bespoke ``handle_mount`` body (F22 resolver, ``run_pre_mount_auth``
+    #: deleted bespoke ``_mount_page`` body (F22 resolver, ``run_pre_mount_auth``
     #: pre-mount auth+tenant via ``_check_auth``, ``on_mount`` hooks, session +
     #: signed-snapshot restore, post-mount object-perm, ``handle_params``,
     #: the no-arm mount wire version, the sticky_hold pre-mount frame, the
@@ -4375,7 +4318,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         a ``mount`` frame we NULL the runtime's view first — otherwise a
         reconnect / re-mount on a runtime that already mounted once would silently
         no-op (the #560-class idempotency landmine, Finding A). The shim path
-        (``handle_mount`` / ``handle_live_redirect_mount`` / ``_mount_one``) does
+        (``_mount_page`` / ``handle_live_redirect_mount`` / ``_mount_one``) does
         the same null+readback; this is the wire-frame twin.
         """
         if data.get("type") == "mount":
@@ -4396,30 +4339,6 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # this reads back ``None`` — matching the bespoke "clear on auth fail".
         if data.get("type") == "mount":
             self.view_instance = runtime.view_instance
-
-    async def handle_url_change(self, data: Dict[str, Any]) -> None:
-        """
-        Handle URL change from browser back/forward (popstate) or dj-patch clicks.
-
-        #1237: this is now a thin shim over :meth:`ViewRuntime.dispatch_url_change`
-        so the WS and SSE transports share one code path. The runtime owns the
-        handle_params + re-render + send_update orchestration.
-
-        #1852: ``receive()`` no longer calls this directly — it routes
-        ``url_change`` through :meth:`_dispatch_runtime_owned` →
-        :meth:`ViewRuntime.dispatch_message` so the verb passes the shared
-        chokepoint. This method is retained as a stable public entry point /
-        backward-compatible shim for callers that dispatch ``url_change``
-        directly; it remains behaviorally identical (``dispatch_message`` routes
-        ``url_change`` straight to ``dispatch_url_change``).
-        """
-        if not self.view_instance:
-            await self.send_error("View not mounted")
-            return
-
-        runtime = self._get_runtime()
-        runtime.view_instance = self.view_instance
-        await runtime.dispatch_url_change(data)
 
     # ------------------------------------------------------------------ #
     # Views on the socket (#3252)
@@ -4715,7 +4634,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         consumer.view_instance = None
         # (#1919, Finding A) Null the shared runtime's view too BEFORE the
-        # re-mount. ``handle_mount`` (the shim) also nulls it, but doing it
+        # re-mount. ``_mount_page`` also nulls it, but doing it
         # here keeps the teardown self-consistent: a re-mount on this connection
         # must never be no-op'd by ``dispatch_mount``'s idempotency early-return —
         # this is the live_redirect re-mount landmine the Finding-A net guards.
@@ -4788,7 +4707,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         from ._child_lifecycle import discard_sticky_child
 
         self._sticky_auto_reattached = set()
-        # Reuse handle_mount — it already handles everything
+        # Reuse _mount_page — it already handles everything
         # But first, stage the old view's sticky children (Phase B).
         old_view = self.view_instance
         sticky_preserved: Dict[str, Any] = {}
@@ -4831,7 +4750,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         await self._release_mounted_views(reason="view_navigation", keep=sticky_preserved)
 
         # Parse state_snapshot if the client sent one so it can be forwarded
-        # to handle_mount for back-nav state restoration. The mount restores
+        # to _mount_page for back-nav state restoration. The mount restores
         # it only for an explicit view's ``persist="client"`` fields, after
         # verifying the token.
         state_snapshot = data.get("state_snapshot")
@@ -4841,9 +4760,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             state_snapshot = None
 
         # Now mount the new view using the standard mount flow. We pass
-        # ``sticky_preserved`` so ``handle_mount`` can emit the
+        # ``sticky_preserved`` so ``_mount_page`` can emit the
         # ``sticky_hold`` frame BEFORE its ``mount`` frame — ordering
-        # is load-bearing (see Fix #1 / issue tag). ``handle_mount``
+        # is load-bearing (see Fix #1 / issue tag). ``_mount_page``
         # mutates ``self._sticky_preserved`` to the final survivor set
         # after the slot scan; if it raises mid-flight we drain any
         # staged children so their background tasks don't leak.
@@ -4875,7 +4794,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         self._live_redirect_mounting = True
         try:
             try:
-                await self.handle_mount(
+                await self._mount_page(
                     data,
                     sticky_preserved=sticky_preserved,
                     state_snapshot=state_snapshot,
@@ -4968,9 +4887,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         Used to re-check sticky children's auth against the destination
         URL. Mirrors the request-construction block inside
-        :meth:`handle_mount` — session + user come from the WS scope,
+        :meth:`_mount_page` — session + user come from the WS scope,
         path from the client message. Kept as a distinct helper so the
-        sticky staging step can run BEFORE handle_mount destroys the
+        sticky staging step can run BEFORE _mount_page destroys the
         old view.
 
         Returns ``None`` when the destination URL fails to resolve (no
@@ -4991,7 +4910,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # RequestFactory.get(), resolve(), and the log statements below (#1819).
         page_url = _validate_mount_url(data.get("url", "/"))
         request = factory.get(page_url)
-        # Session — same source as handle_mount.
+        # Session — same source as _mount_page.
         from .utils import build_session_for_request, presented_session_key
 
         # The presented key, as the runtime's twin reads it (#4102).
@@ -5522,7 +5441,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     return
 
                 # Sync state and re-render
-                # TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching handle_event
+                # TODO: add patch compression (PATCH_COUNT_THRESHOLD) matching dispatch_event
                 rendered = await self._render_background(view)
                 if rendered is None:
                     return
@@ -5532,7 +5451,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     if isinstance(patches, str):
                         patches = fast_json_loads(patches)
                     # Store rendered HTML for on-demand recovery, mirroring
-                    # handle_event. Without this, request_html after a failed
+                    # dispatch_event. Without this, request_html after a failed
                     # broadcast-triggered patch finds _recovery_html=None and
                     # forces a page reload. See #1202.
                     # Consumer-owned wire version + recovery arm in one step
@@ -6535,7 +6454,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
             # Skip render if tick handler didn't change any state.
             # Honor _force_full_html (set by set_changed_keys(), #1981)
-            # like the event paths do (runtime.py / handle_event) — an
+            # like the event paths do (runtime.py) — an
             # in-place mutation inside handle_tick is invisible to the
             # snapshot, so without this guard the hatch would be
             # silently dropped on the tick path (#1646 parallel-path).

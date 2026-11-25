@@ -461,7 +461,7 @@ async def _validate_event_security(
 
         try:
             # Wrap in sync_to_async to mirror the mount path
-            # (websocket.py handle_mount). check_object_permission calls the
+            # (websocket.py _mount_page). check_object_permission calls the
             # developer's sync get_object(), which per the canonical ADR-017
             # pattern does a sync ORM read; calling it bare from this async def
             # raised SynchronousOnlyOperation, which the fail-closed catch below

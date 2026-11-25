@@ -8,22 +8,20 @@ Note: the dataclass types (``ColorScale``, ``ThemeTokens``, ``SurfaceTreatment``
 ``ThemePreset``) live in ``_types.py`` so that ``themes/_base.py`` can
 import them without going back through this module — avoiding the cyclic
 import that CodeQL's ``py/unsafe-cyclic-import`` flagged across ~55 theme
-files. They are re-exported from this module for backward compatibility so
-existing consumers like ``from djust.theming.presets import ColorScale``
-keep working unchanged.
+files. Import them from ``djust.theming``; this module no longer re-exports
+them or the built-in ``*_THEME`` presets (#4207).
 
 The built-in ``*_THEME`` PRESET imports and the ``THEME_PRESETS`` dict
-live in ``_builtin_presets.py``. That extraction (PR #TBD, alerts
-#2352/#2351/#1900/#1883) breaks the ``presets ↔ registry`` cyclic
-import — ``registry.py`` now imports ``THEME_PRESETS`` from
-``_builtin_presets`` directly instead of through this module. We
-re-export ``THEME_PRESETS`` from here so existing user code (and the
-~10 internal consumers listed in ``__all__``) keeps working.
+live in ``_builtin_presets.py``, which breaks the ``presets ↔ registry``
+cyclic import (alerts #2352/#2351/#1900/#1883): ``registry.py`` imports
+``THEME_PRESETS`` from there directly. ``THEME_PRESETS`` is read from here by
+``get_preset`` / ``list_presets``, so it stays an attribute of this module.
 """
 
-from ._builtin_presets import *  # noqa: F401, F403 — back-compat re-export of *_THEME names
+from typing import Any
+
 from ._builtin_presets import DEFAULT_THEME, THEME_PRESETS
-from ._types import ColorScale, SurfaceTreatment, ThemePreset, ThemeTokens
+from ._types import ThemePreset
 
 
 def get_preset(name: str) -> ThemePreset:
@@ -57,13 +55,17 @@ def list_presets() -> list[dict]:
 
 
 __all__ = [
-    # Re-exported types (back-compat)
-    "ColorScale",
-    "ThemeTokens",
-    "SurfaceTreatment",
     "ThemePreset",
     # Registry / helpers
     "THEME_PRESETS",
     "get_preset",
     "list_presets",
 ]
+
+
+def __getattr__(name: str) -> Any:  # PEP 562
+    """Name the replacement for a re-export djust 2.0 removed (#4207)."""
+    from .._removed_settings import refuse_removed_name
+
+    refuse_removed_name(__name__, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

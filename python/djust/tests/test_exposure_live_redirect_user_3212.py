@@ -138,7 +138,7 @@ async def test_login_required_sticky_child_does_not_survive_a_vanished_session(s
     async def mount(*args, **kwargs):
         consumer.view_instance = Page()
 
-    consumer.handle_mount = mount
+    consumer._mount_page = mount
     await consumer.handle_live_redirect_mount({"url": "/next/", "view": __name__ + ".Page"})
 
     assert not consumer._sticky_preserved
@@ -172,7 +172,7 @@ async def test_back_navigation_rechecks_as_the_user_of_the_view_actually_mounted
         mounted.append(data["view"])
         consumer.view_instance = Page()
 
-    consumer.handle_mount = mount
+    consumer._mount_page = mount
     await consumer.handle_live_redirect_mount(
         {"url": "/page/", "view": __name__ + ".Page", "state_snapshot": {"view_slug": "x"}}
     )

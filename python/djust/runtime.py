@@ -29,7 +29,7 @@ Phasing
 -------
 
 In this PR (v0.9.2-1) only WebSocket's ``handle_url_change`` migrates to
-the runtime. ``handle_event``/``handle_mount`` remain on the existing
+the runtime. ``handle_event``/``_mount_page`` remain on the existing
 WS-specific paths until follow-up PRs migrate them. SSE uses the runtime
 for all three verbs (mount / event / url_change).
 """
@@ -1272,7 +1272,7 @@ class Transport(Protocol):
         parallel-path twin).
 
         - WS: returns ``consumer._next_version_armed(html)`` — the per-connection
-          counter that ``handle_mount`` / ``handle_event`` use, AND arms
+          counter that ``_mount_page`` / ``handle_event`` use, AND arms
           ``request_html`` recovery to that version (#1788 / #1817).
         - SSE: returns ``rust_version`` unchanged (SSE has no consumer counter;
           its existing behavior is preserved).
@@ -1469,7 +1469,7 @@ class Transport(Protocol):
     #
     # Phase 3.3a (#1917) wired these hooks into ``dispatch_mount``; Phase 3.3b
     # (#1919) routed WS mounts through it. ``LiveViewConsumer.RUNTIME_OWNED_VERBS``
-    # includes "mount", and ``handle_mount`` delegates direct callers to the
+    # includes "mount", and ``_mount_page`` delegates direct callers to the
     # same runtime path. WS implements consumer-specific behavior; SSE keeps
     # its no-op / raw-version behavior.
     # ------------------------------------------------------------------ #
@@ -1480,7 +1480,7 @@ class Transport(Protocol):
         ADR-022 Iter 3 Phase 3.2 (#1915, Finding B — ``view_instance``
         ownership INVERTS at mount: url_change/event mirror consumer→runtime,
         but mount CREATES the view, so every WS-only consumer attr that the
-        bespoke ``handle_mount`` stamped right after instantiation must move
+        bespoke ``_mount_page`` stamped right after instantiation must move
         into a transport hook that writes onto the consumer during the runtime
         mount). Called by ``dispatch_mount`` (Phase 3.3a) immediately after the
         view is instantiated, BEFORE auth / mount / render.
@@ -1696,7 +1696,7 @@ class WSConsumerTransport:
     async def on_view_mounted(self, view_instance: Any) -> None:
         """WS post-mount channel-layer wiring + tick + flags (#1919, Finding B residual).
 
-        Verbatim fold of the WS bespoke ``handle_mount`` post-instantiation setup
+        Verbatim fold of the WS bespoke ``_mount_page`` post-instantiation setup
         block (websocket.py:2148-2217 + the per-mount ``_sticky_auto_reattached``
         reset at websocket.py:2082) that ``dispatch_mount`` did NOT carry pre-flip.
         The runtime calls this hook AFTER instantiation + back-refs AND after the
@@ -2135,7 +2135,7 @@ class WSConsumerTransport:
 
     # ------------------------------------------------------------------ #
     # Mount hooks (ADR-022 Iter 3 Phase 3.2, #1915)
-    # WS implementations extracted from the former bespoke ``handle_mount``.
+    # WS implementations extracted from the former bespoke ``_mount_page``.
     # Wired into ``dispatch_mount`` in Phase 3.3a (#1917), and live for WS
     # mounts since Phase 3.3b (#1919).
     # ------------------------------------------------------------------ #
@@ -2143,7 +2143,7 @@ class WSConsumerTransport:
     def on_view_instantiated(self, view: Any) -> None:
         """Stamp WS consumer back-references on the freshly-instantiated view.
 
-        Verbatim fold of the WS bespoke ``handle_mount`` post-instantiation
+        Verbatim fold of the WS bespoke ``_mount_page`` post-instantiation
         stamps (#1915, Finding B):
 
           * ``view._ws_consumer = consumer`` (streaming support, and the
@@ -2188,7 +2188,7 @@ class WSConsumerTransport:
         """Stamp the consumer-owned NO-ARM wire version for the mount frame (#1915, Finding C).
 
         Returns ``consumer._next_version()`` — the SAME monotonic per-connection
-        counter the bespoke ``handle_mount`` uses (websocket.py:2746). Crucially
+        counter the bespoke ``_mount_page`` uses (websocket.py:2746). Crucially
         this is NOT ``_next_version_armed`` / ``_arm_recovery``: a mount
         ESTABLISHES the client VDOM baseline and has no prior frame to recover to,
         so ``_recovery_html`` MUST stay unset after a mount (distinct from
@@ -2263,7 +2263,7 @@ class WSConsumerTransport:
 
         The runtime path already SENT the verdict frame (error / navigate) and
         cleared ``view_instance``; this adds the transport-level
-        ``close(code=4403)`` the WS bespoke ``handle_mount`` performed
+        ``close(code=4403)`` the WS bespoke ``_mount_page`` performed
         (websocket.py:2344-2399).
 
         ``verdict`` is a marker string describing the block kind. ALL verdicts
@@ -3567,7 +3567,7 @@ class ViewRuntime(RuntimeTurnPort):
                     logger.error("Protected transport could not be closed")
 
     # ------------------------------------------------------------------ #
-    # Mount dispatch (used by SSE in this PR; WS still uses handle_mount)
+    # Mount dispatch (used by SSE in this PR; WS still uses _mount_page)
     # ------------------------------------------------------------------ #
 
     async def dispatch_mount(
@@ -3641,7 +3641,7 @@ class ViewRuntime(RuntimeTurnPort):
         This protects against the legacy ``?view=`` GET-mount + new POST
         mount-frame double-fire (Risk #1 in the plan).
 
-        Frame schema (matches WebSocket ``handle_mount`` at
+        Frame schema (matches WebSocket ``_mount_page`` at
         ``websocket.py:1657-1660``)::
 
             {
@@ -3662,7 +3662,7 @@ class ViewRuntime(RuntimeTurnPort):
         # F23 (#1819 traversal fix, parallel-path-drift #1646): the client URL is
         # attacker-controlled and is fed to RequestFactory.get() / resolve() /
         # logs / build_absolute_uri below. Validate it through the SAME shared
-        # validator the WebSocket path uses (websocket.handle_mount), so the SSE
+        # validator the WebSocket path uses (websocket._mount_page), so the SSE
         # / runtime path neutralises "/%2e%2e/admin/" identically. _build_request
         # validates again defensively.
         from .security.mount import is_view_path_allowed, validate_mount_url
@@ -3715,7 +3715,7 @@ class ViewRuntime(RuntimeTurnPort):
         # ---- Transport back-references on the freshly-instantiated view ----
         # ADR-022 Iter 3 Phase 3.3a (#1917, Finding B). Wire the
         # ``on_view_instantiated`` hook at the SAME point the bespoke WS
-        # ``handle_mount`` stamps its consumer back-refs (websocket.py:2128 ff):
+        # ``_mount_page`` stamps its consumer back-refs (websocket.py:2128 ff):
         # IMMEDIATELY after instantiation, BEFORE auth / mount /
         # render. WS: stamps ``_ws_consumer`` /
         # observability ``register_view`` / validated handshake host. SSE: no-op.
@@ -3834,7 +3834,7 @@ class ViewRuntime(RuntimeTurnPort):
             return
 
         # ---- on_mount hooks (after auth, before mount) ----
-        # Ported from WS handle_mount (websocket.py:2383-2401), placed at the
+        # Ported from WS _mount_page (websocket.py:2383-2401), placed at the
         # SAME point: AFTER the pre-mount auth sequence, BEFORE mount(). The
         # registered ``on_mount`` hooks (djust.hooks.run_on_mount_hooks) run
         # against the live view + request and may return a redirect URL.
@@ -3981,7 +3981,7 @@ class ViewRuntime(RuntimeTurnPort):
 
         # ---- Mount-request stash + dirty/private baselines (ADR-022 Iter 3
         # Phase 3.0 transport-agnostic grows) ----
-        # Ported from WS handle_mount (websocket.py:2596-2603), placed at the
+        # Ported from WS _mount_page (websocket.py:2596-2603), placed at the
         # SAME point: AFTER mount(), BEFORE handle_params. The object-permission
         # check runs after handle_params (below); a denial there clears the
         # explicit binding set here along with the view.
@@ -4063,7 +4063,7 @@ class ViewRuntime(RuntimeTurnPort):
                 )
             # ADR-022 Iter 3 Phase 3.3b (#1919, Finding E): the runtime sent the
             # error frame; finalize_mount_auth adds the transport-level
-            # ``close(4403)`` the bespoke WS handle_mount performed UNCONDITIONALLY
+            # ``close(4403)`` the bespoke WS _mount_page performed UNCONDITIONALLY
             # on an object-perm denial (websocket.py:2622 — matching the
             # PermissionDenied verdict, NOT the batch-gated redirect verdicts). SSE
             # no-op. Without this the WS socket stayed open after a denied mount
@@ -5769,8 +5769,8 @@ class ViewRuntime(RuntimeTurnPort):
         """Handle a URL change frame (popstate or dj-patch click): a ``params`` turn.
 
         Calls ``handle_params(params, uri)`` then re-renders + sends patches,
-        inside the turn-middleware chain (ADR-044). Mirrors the legacy
-        ``LiveViewConsumer.handle_url_change`` (now a thin shim over this method).
+        inside the turn-middleware chain (ADR-044). The WebSocket and SSE
+        transports both reach it through ``dispatch_message``.
 
         Wrapped in the tenant context (Finding #6) so handle_params + the
         object-permission re-check + render see the correct tenant.
@@ -5955,7 +5955,7 @@ class ViewRuntime(RuntimeTurnPort):
         deferred send from a FAILED view leaked into the NEXT view's collector — a
         bad view's error frame surfaced in a survivor's ``captured[]`` and flipped
         the survivor to ``failed[]``. Stashing the frame and letting the async
-        ``dispatch_mount`` AWAIT it (mirroring the bespoke ``handle_mount``, which
+        ``dispatch_mount`` AWAIT it (mirroring the bespoke ``_mount_page``, which
         ``await self.send_json(...)``-ed the error inline) keeps the send inside the
         correct ``_mount_one`` window — no cross-entry contamination.
         """
@@ -6042,7 +6042,7 @@ class ViewRuntime(RuntimeTurnPort):
         # HTTP_HOST the request defaults to RequestFactory's "testserver",
         # misresolving the tenant to None on runtime-rebuilt requests (url_change
         # etc.). Sourced from ``self.scope`` (set for WS-backed runtimes), routed
-        # through the SAME shared helper the WS handle_mount path uses
+        # through the SAME shared helper the WS _mount_page path uses
         # (``websocket.validated_host_from_scope``) so the two reconstructed-
         # request paths cannot drift (#1646). SSE-backed runtimes have
         # ``scope=None`` and use the real HTTP request, so they are unaffected.

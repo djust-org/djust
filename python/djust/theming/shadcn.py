@@ -10,7 +10,8 @@ Provides utilities to:
 from typing import Dict, Any
 import json
 import re
-from .presets import ThemePreset, ThemeTokens, ColorScale, THEME_PRESETS
+from .presets import ThemePreset, THEME_PRESETS
+from ._types import ThemeTokens, ColorScale
 
 
 def parse_shadcn_theme(theme_json: Dict[str, Any]) -> ThemePreset:

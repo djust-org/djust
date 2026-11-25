@@ -1,6 +1,6 @@
 """Finding #26 — WS/runtime reconstructed request omits client Host.
 
-The WebSocket ``handle_mount`` and ``ViewRuntime._build_request`` rebuild an
+The WebSocket ``_mount_page`` and ``ViewRuntime._build_request`` rebuild an
 ``HttpRequest`` via ``RequestFactory().get(...)`` with NO ``HTTP_HOST``, so
 ``request.get_host()`` defaulted to RequestFactory's ``"testserver"`` on the
 live (WS) path. Host/subdomain ``TenantResolver``\\ s read ``request.get_host()``
@@ -65,7 +65,7 @@ class _TenantDocView(TenantMixin, LiveView):
     )
 
     def mount(self, request, **kwargs):
-        # _ensure_tenant has already run in handle_mount before mount(); record
+        # _ensure_tenant has already run in _mount_page before mount(); record
         # the resolved tenant id (or None) for the test to assert on.
         global _RESOLVED_TENANT_ID
         _RESOLVED_TENANT_ID = self._tenant.id if self._tenant else None

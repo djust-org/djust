@@ -1868,7 +1868,7 @@ def _has_custom_get_object(view_instance: Any) -> bool:
 def check_object_permission(view_instance: Any, request: Any) -> None:
     """Step 4 of ADR-017's auth onion — post-mount object-permission check.
 
-    Called by ``websocket.py:handle_mount`` AFTER ``mount()`` has executed
+    Called by ``websocket.py:_mount_page`` AFTER ``mount()`` has executed
     and URL-derived attrs (e.g. ``self.document_id``) are populated on the
     view. The pre-mount steps (login → role → ``check_permissions``) live
     inside :func:`check_view_auth`; this fourth step is split into a
@@ -1898,7 +1898,7 @@ def check_object_permission(view_instance: Any, request: Any) -> None:
     ``ObjectDoesNotExist`` (its parent is ``Exception``), so both must
     be listed explicitly. Without this, a ``DoesNotExist`` from a naive
     ``Model.objects.get(pk=self.<x>_id)`` in ``get_object()`` would fall
-    through to the outer ``except Exception`` in ``websocket.handle_mount``,
+    through to the outer ``except Exception`` in ``websocket._mount_page``,
     where ``DEBUG=True`` would expose the exception class name and a
     traceback — confirming the object's nonexistence (information leak).
     Catching here makes the 404-shape pattern the default rather than
@@ -2140,7 +2140,7 @@ def run_pre_mount_auth(view_instance: Any, request: Any) -> Optional[str]:
     """Run the canonical pre-mount security sequence and return the auth verdict.
 
     Single-sources the ORDER in which every live mount path (WebSocket
-    ``handle_mount``, generic ``ViewRuntime.dispatch_mount``) authorises and
+    ``_mount_page``, generic ``ViewRuntime.dispatch_mount``) authorises and
     resolves tenancy BEFORE calling ``mount()``. The transports already call
     the same leaf chokepoints (:func:`check_view_auth`, the view's
     ``_ensure_tenant`` hook, and the tenant ContextVar bind); this helper pins

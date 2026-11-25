@@ -7,7 +7,7 @@ and the tenant ContextVar bind — into ONE helper,
 ``djust.auth.core.run_pre_mount_auth``. Every live mount path now routes through
 it:
 
-* WebSocket ``LiveViewConsumer.handle_mount`` (``websocket.py``),
+* WebSocket ``LiveViewConsumer._mount_page`` (``websocket.py``),
 * the generic ``ViewRuntime.dispatch_mount`` → ``_check_auth`` (``runtime.py``),
 * the legacy SSE ``_sse_mount_view`` (``sse.py``).
 
@@ -386,7 +386,7 @@ class TestRunPreMountAuthHelper:
 
 
 # --------------------------------------------------------------------------- #
-# WebSocket mount path (LiveViewConsumer.handle_mount).
+# WebSocket mount path (LiveViewConsumer._mount_page).
 # --------------------------------------------------------------------------- #
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio

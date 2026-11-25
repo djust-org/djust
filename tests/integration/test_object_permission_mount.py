@@ -227,7 +227,7 @@ class _FalsyObjectView(LiveView):
 
 
 def _make_view(view_class, request, **mount_kwargs):
-    """Instantiate + run mount, mirroring what handle_mount does."""
+    """Instantiate + run mount, mirroring what _mount_page does."""
     view = view_class()
     view.request = request
     view.mount(request, **mount_kwargs)
@@ -349,7 +349,7 @@ def test_get_object_raising_does_not_exist_treated_as_none(rf):
 
     Without this, a naive `Model.objects.get(pk=self.<x>_id)` in get_object
     would let DoesNotExist propagate to the outer Exception handler in
-    websocket.handle_mount, where DEBUG=True mode would emit a traceback
+    websocket._mount_page, where DEBUG=True mode would emit a traceback
     confirming the object's nonexistence.
     """
     from djust.auth.core import check_object_permission

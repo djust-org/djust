@@ -94,7 +94,7 @@ class TutorialMixin:
         # WaitersMixin); declared here so the type checker can see the
         # composed surface without a runtime import cycle.
         def push_commands(self, chain: JSChain) -> None: ...
-        async def _flush_pending_push_events(self) -> None: ...
+        async def flush_push_events(self) -> None: ...
         async def wait_for_event(
             self, name: str, *, timeout: Optional[float] = None
         ) -> dict[str, Any]: ...
@@ -257,7 +257,7 @@ class TutorialMixin:
             # cancelled, or errored). The bubble listens for tour:hide.
             try:
                 self.push_commands(JS.dispatch("tour:hide"))
-                await self._flush_pending_push_events()
+                await self.flush_push_events()
             except Exception as exc:
                 from .._exposure_diagnostics import log_failure_for
 
@@ -355,7 +355,7 @@ class TutorialMixin:
         # highlight + narrate before we block on the wait phase.
         # Without this, push_commands inside a @background task queue
         # up but never reach the client until the entire tour finishes.
-        await self._flush_pending_push_events()
+        await self.flush_push_events()
 
         # 3. Wait phase
         await self._wait_for_step(step)
@@ -369,7 +369,7 @@ class TutorialMixin:
         self.push_commands(cleanup)
 
         # Flush cleanup commands before advancing to the next step
-        await self._flush_pending_push_events()
+        await self.flush_push_events()
 
         self._tutorial_active_target = None
         self._tutorial_active_class = None

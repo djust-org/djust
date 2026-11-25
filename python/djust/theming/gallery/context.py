@@ -12,7 +12,8 @@ from django.utils.html import format_html
 from django.utils.safestring import mark_safe
 
 from djust.theming.contracts import COMPONENT_CONTRACTS
-from djust.theming.presets import ColorScale, ThemePreset, ThemeTokens, list_presets
+from djust.theming.presets import ThemePreset, list_presets
+from djust.theming import ColorScale, ThemeTokens
 from djust.theming.theme_packs import DESIGN_SYSTEMS, DesignSystem
 
 

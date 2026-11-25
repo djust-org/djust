@@ -908,6 +908,8 @@ Every replacement works on 1.3.x, so make the change there.
 | `exposure_policy = "legacy"` | Supply the names the template reads from `get_context_data()`, declare the state a later event or a reconnect needs with `state()`, then delete the line; `python manage.py djust_exposure_inventory --fix` does the mechanical part. Refused with `ImproperlyConfigured` when the class is created and on construction. `exposure_policy = "explicit"` is accepted and does nothing; any other value is refused. System check `djust.V028` is retired. |
 | `@event_handler(parameter_policy="legacy")` and `@server_function(parameter_policy="legacy")` | Annotate the handler's parameters (`Any` accepts a value unchecked), send `dj-value-*` from the template instead of `data-*`, and delete the argument. Refused with `ImproperlyConfigured` when the decorator applies. `parameter_policy="strict"` is accepted and does nothing. System check `djust.V036` is retired. |
 | `cancel_async_on_disconnect = True` on a view | Delete the attribute: a view's background work is always cancelled when its connection closes. Work that must finish says so with `start_async(fn, survive_disconnect=True)` or `@background(survive_disconnect=True)`. Refused with `ImproperlyConfigured` when the class is created and on the mount path; `False` is accepted. |
+| the `djust startproject` command | `djust new <name>` (or `uvx djust@latest init` beside an existing `manage.py`); `djust startapp` stays ([#4207](https://github.com/djust-org/djust/issues/4207)) |
+| the back-compat re-exports in `djust.theming.manager`, `.presets` and `.theme_packs` (`DEFAULT_CONFIG`, `ColorScale`, `ThemeTokens`, `BLUE_THEME` and the other `*_THEME` names, the style types) | import the types from `djust.theming` and the rest from the module that defines it (`djust.theming._config`, `_constants`, `_builtin_presets`) ([#4207](https://github.com/djust-org/djust/issues/4207)) |
 
 <!-- END GENERATED removed-table:python -->
 
@@ -1049,6 +1051,7 @@ To open or close from your own handler, set the state:
 | System checks `djust.C018` and `djust.T015` | Remove them from `SILENCED_SYSTEM_CHECKS`; nothing reports them. |
 | The `djust_components/table.html` override point and the filters `table_cell`, `table_href`, `table_has_href`, `table_width`, `table_width_attrs` | Read the row in your own template. `{% data_table %}` is drawn by the native handler on both engines; the row-click script is `/static/djust_components/data-table-row-click.js` (serve it from `/static/` or load it yourself). |
 | `window.djust.extractTypedParams` and `data-*` attributes as event arguments | `dj-value-*` attributes (`dj-value-item-id:int="4"`); the browser sends only what the handler's signature declares ([#4205](https://github.com/djust-org/djust/issues/4205)) |
+| `{% static 'djust_theming/css/base.css' %}`, a one-line `@import` of `scaffold.css` | `{% static 'djust_theming/css/scaffold.css' %}` ([#4207](https://github.com/djust-org/djust/issues/4207)) |
 
 <!-- END GENERATED removed-table:templates -->
 

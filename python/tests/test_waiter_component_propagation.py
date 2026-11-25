@@ -3,7 +3,7 @@
 Follow-up to ADR-002 Phase 1b/1c. The Phase 1b ``wait_for_event``
 primitive and the Phase 1c ``TutorialMixin`` both resolve waiters via
 ``_notify_waiters`` in ``WaiterMixin``. The notification is triggered
-from the WebSocket consumer's ``handle_event`` dispatch path after a
+from the WebSocket consumer's event dispatch path after a
 successful handler call.
 
 Originally, the notification was only wired to the **main LiveView**
@@ -98,7 +98,7 @@ class _ClickComponent(LiveComponent):
 
 async def _make_consumer(view: _WaitingView) -> LiveViewConsumer:
     """A LiveViewConsumer that mounted ``view`` through the real
-    ``handle_mount`` (an explicit view's events are authorized against the
+    ``_mount_page`` (an explicit view's events are authorized against the
     session it was mounted on). Only ``send_json`` / ``send_error`` /
     ``_send_update`` are stubbed, so a failure shows the real assertion."""
     from djust.tests._live_session import amount_on_consumer
@@ -120,7 +120,7 @@ async def _make_consumer(view: _WaitingView) -> LiveViewConsumer:
 
 
 class TestComponentEventPropagation:
-    """``handle_event`` must call ``_notify_waiters`` on the parent
+    """The event dispatch must call ``_notify_waiters`` on the parent
     view after a successful component event handler call, so
     ``wait_for_event`` on the parent resolves."""
 
@@ -139,8 +139,9 @@ class TestComponentEventPropagation:
         waiter_task = asyncio.create_task(wait_for_click())
         await asyncio.sleep(0.01)  # Let the waiter register.
 
-        await consumer.handle_event(
+        await consumer._dispatch_runtime_owned(
             {
+                "type": "event",
                 "event": "item_clicked",
                 "params": {"component_id": "click-42", "item_id": 42},
             }
@@ -176,8 +177,9 @@ class TestComponentEventPropagation:
         await asyncio.sleep(0.01)
 
         # Click on c-a first — predicate should NOT match
-        await consumer.handle_event(
+        await consumer._dispatch_runtime_owned(
             {
+                "type": "event",
                 "event": "item_clicked",
                 "params": {"component_id": "c-a", "item_id": 1},
             }
@@ -186,8 +188,9 @@ class TestComponentEventPropagation:
         assert not waiter_task.done()
 
         # Click on c-b — predicate matches, waiter resolves
-        await consumer.handle_event(
+        await consumer._dispatch_runtime_owned(
             {
+                "type": "event",
                 "event": "item_clicked",
                 "params": {"component_id": "c-b", "item_id": 2},
             }
@@ -220,8 +223,9 @@ class TestComponentEventPropagation:
         task3 = asyncio.create_task(collect())
         await asyncio.sleep(0.01)
 
-        await consumer.handle_event(
+        await consumer._dispatch_runtime_owned(
             {
+                "type": "event",
                 "event": "item_clicked",
                 "params": {"component_id": "c1", "item_id": 99},
             }
@@ -264,8 +268,9 @@ class TestComponentEventPropagation:
         task = asyncio.create_task(wait_for_save())
         await asyncio.sleep(0.01)
 
-        await consumer.handle_event(
+        await consumer._dispatch_runtime_owned(
             {
+                "type": "event",
                 "event": "save",
                 "params": {"name": "Q3 Planning"},
             }
@@ -302,8 +307,9 @@ class TestComponentEventPropagation:
         # best-effort warning on failure) moved to ViewRuntime._dispatch_component_event,
         # so the warning is now logged on the ``djust.runtime`` logger.
         with caplog.at_level("WARNING", logger="djust.runtime"):
-            await consumer.handle_event(
+            await consumer._dispatch_runtime_owned(
                 {
+                    "type": "event",
                     "event": "item_clicked",
                     "params": {"component_id": "c1", "item_id": 7},
                 }

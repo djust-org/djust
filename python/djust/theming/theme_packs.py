@@ -12,11 +12,11 @@ Note: the dataclass types and the shared style instances
 (``PATTERN_*``, ``ILLUST_*``, pack-level ``ICON_*``, ``ANIM_*``, and
 ``INTERACT_*``) live in ``_types.py`` and ``_constants.py`` respectively.
 Keeping them out of this module lets ``themes/_base.py`` import them
-without forming a cycle back through this module. They are re-exported
-from here for backward compatibility.
+without forming a cycle back through this module. Import them from
+``djust.theming`` (or those modules); this module imports only what it uses.
 """
 
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from ._constants import (
     # Design-system-level (used by DESIGN_* below)
@@ -75,7 +75,6 @@ from ._constants import (
     INTERACT_PLAYFUL,
     INTERACT_SUBTLE,
     PATTERN_DOTS,
-    PATTERN_GLASS,
     PATTERN_GRADIENT,
     PATTERN_GRID,
     PATTERN_MINIMAL,
@@ -86,13 +85,8 @@ from ._constants import (
     _INTERACT_PLAYFUL_DS,
 )
 from ._types import (
-    AnimationStyle,
     DesignSystem,
-    IconStyle,
-    IllustrationStyle,
-    InteractionStyle,
     LayoutStyle,
-    PatternStyle,
     SurfaceStyle,
     ThemePack,
     TypographyStyle,
@@ -1254,84 +1248,7 @@ def get_all_theme_packs() -> Dict[str, ThemePack]:
     return result
 
 
-# Backward-compat re-exports. These names used to be defined in this module;
-# they now live in ``_types.py`` / ``_constants.py`` but must remain importable
-# from ``djust.theming.theme_packs`` for third-party code. Listing them in
-# ``__all__`` also silences ruff's F401 on the top-level re-export imports.
 __all__ = [
-    # Types
-    "AnimationStyle",
-    "DesignSystem",
-    "IconStyle",
-    "IllustrationStyle",
-    "InteractionStyle",
-    "LayoutStyle",
-    "PatternStyle",
-    "SurfaceStyle",
-    "ThemePack",
-    "TypographyStyle",
-    # Pack-level shared instances
-    "ANIM_BOUNCY",
-    "ANIM_GENTLE",
-    "ANIM_INSTANT",
-    "ANIM_SMOOTH",
-    "ANIM_SNAPPY",
-    "ICON_FILLED",
-    "ICON_OUTLINED",
-    "ICON_ROUNDED",
-    "ICON_SHARP",
-    "ICON_THIN",
-    "ILLUST_3D",
-    "ILLUST_FLAT",
-    "ILLUST_HAND_DRAWN",
-    "ILLUST_LINE",
-    "ILLUST_RETRO",
-    "INTERACT_BOLD",
-    "INTERACT_MINIMAL",
-    "INTERACT_PLAYFUL",
-    "INTERACT_SUBTLE",
-    "PATTERN_DOTS",
-    "PATTERN_GLASS",
-    "PATTERN_GRADIENT",
-    "PATTERN_GRID",
-    "PATTERN_MINIMAL",
-    "PATTERN_NOISE",
-    # Design-system-level shared instances
-    "ANIM_BRUTALIST",
-    "ANIM_CORPORATE",
-    "ANIM_DENSE",
-    "ANIM_DJUST",
-    "ANIM_ELEGANT",
-    "ANIM_FLUENT",
-    "ANIM_IOS",
-    "ANIM_MATERIAL",
-    "ANIM_MINIMAL",
-    "ANIM_ORGANIC",
-    "ANIM_PLAYFUL",
-    "ANIM_RETRO",
-    "ICON_BRUTALIST",
-    "ICON_CORPORATE",
-    "ICON_DENSE",
-    "ICON_DJUST",
-    "ICON_ELEGANT",
-    "ICON_FLUENT",
-    "ICON_IOS",
-    "ICON_MATERIAL",
-    "ICON_MINIMAL",
-    "ICON_ORGANIC",
-    "ICON_PLAYFUL",
-    "ICON_RETRO",
-    "INTERACT_BRUTALIST",
-    "INTERACT_CORPORATE",
-    "INTERACT_DENSE",
-    "INTERACT_DJUST",
-    "INTERACT_ELEGANT",
-    "INTERACT_FLUENT",
-    "INTERACT_IOS",
-    "INTERACT_MATERIAL",
-    "INTERACT_ORGANIC",
-    "INTERACT_RETRO",
-    # Design systems and packs
     "DESIGN_BRUTALIST",
     "DESIGN_CORPORATE",
     "DESIGN_DENSE",
@@ -1344,7 +1261,6 @@ __all__ = [
     "DESIGN_ORGANIC",
     "DESIGN_PLAYFUL",
     "DESIGN_RETRO",
-    "DESIGN_SYSTEMS",
     "PACK_BRUTALIST",
     "PACK_CORPORATE",
     "PACK_ELEGANT",
@@ -1354,10 +1270,16 @@ __all__ = [
     "PACK_PLAYFUL",
     "PACK_RETRO",
     "PACK_SUNSET",
-    "THEME_PACKS",
-    # Registry helpers
     "get_all_design_systems",
     "get_all_theme_packs",
     "get_design_system",
     "get_theme_pack",
 ]
+
+
+def __getattr__(name: str) -> Any:  # PEP 562
+    """Name the replacement for a re-export djust 2.0 removed (#4207)."""
+    from .._removed_settings import refuse_removed_name
+
+    refuse_removed_name(__name__, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -86,7 +86,7 @@ class _RedirectAndChangeView(LiveView):
 
 async def _drive_event(view_cls, event_name):
     """Mount ``view_cls`` and dispatch one event through the REAL
-    ``LiveViewConsumer.handle_event``; return the list of frames the consumer
+    the consumer's ``_dispatch_runtime_owned``; return the list of frames the consumer
     sent. Only ``send_json`` (frame capture) and ``_rate_limiter`` (infra) are
     stubbed — the skip-render branch and ``_flush_navigation`` run for real."""
     from djust.tests._live_session import amount_on_consumer
@@ -106,7 +106,7 @@ async def _drive_event(view_cls, event_name):
     rl = MagicMock()
     rl.check.return_value = True
     consumer._rate_limiter = rl
-    await consumer.handle_event({"type": "event", "event": event_name, "params": {}})
+    await consumer._dispatch_runtime_owned({"type": "event", "event": event_name, "params": {}})
     return view, sent
 
 

@@ -10,13 +10,10 @@ Tests cover:
 - Edge cases
 """
 
-from decimal import Decimal
-from typing import List, Optional, Union
-from uuid import UUID
+from typing import Optional
 
 import types
 
-import pytest
 from djust.validation import (
     validate_handler_params,
     get_handler_signature_info,
@@ -224,7 +221,6 @@ class TestGetHandlerSignatureInfo:
 
     def test_signature_info_optional_type(self):
         """Test signature info for handler with typing.Optional (same as X | None)."""
-        from typing import Optional
 
         def handler_with_optional(self, value: Optional[int] = None, **kwargs):
             pass
@@ -414,7 +410,9 @@ class TestCoercionIntegration:
         def handler(self, count: int):
             pass
 
-        result = validate_handler_params(_bound(handler), {"count": "42"}, "test_event", coerce=False)
+        result = validate_handler_params(
+            _bound(handler), {"count": "42"}, "test_event", coerce=False
+        )
         assert result["valid"] is False  # String "42" doesn't match int
 
     def test_real_world_toggle_sender_scenario(self):
@@ -528,7 +526,9 @@ class TestPositionalArgsMapping:
 
         # Note: In practice, parseEventHandler already parses to typed values
         # but if strings are passed, coercion should still work
-        result = validate_handler_params(_bound(handler), {}, "handler", positional_args=[42, 19.99])
+        result = validate_handler_params(
+            _bound(handler), {}, "handler", positional_args=[42, 19.99]
+        )
         assert result["valid"] is True
         assert result["coerced_params"]["count"] == 42
         assert result["coerced_params"]["price"] == 19.99
@@ -557,7 +557,9 @@ class TestPositionalArgsMapping:
         assert "required argument is missing" in result["error"]
 
         # With positional args, validation passes
-        result = validate_handler_params(_bound(handler), {}, "handler", positional_args=["provided"])
+        result = validate_handler_params(
+            _bound(handler), {}, "handler", positional_args=["provided"]
+        )
         assert result["valid"] is True
         assert result["coerced_params"]["required_value"] == "provided"
 
@@ -619,5 +621,3 @@ class TestPositionalArgsMapping:
         assert result["coerced_params"]["action"] == "delete"
         assert result["coerced_params"]["item_id"] == 123  # Coerced from string
         assert result["coerced_params"]["confirm"] is True
-
-

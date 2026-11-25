@@ -802,9 +802,7 @@ def _emit(
 def check_event_bindings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """``djust.T019``-``T022``: template event bindings against their owners;
     ``djust.T024``: floor-excluded user fields in those templates."""
-    if all(
-        _is_check_suppressed("djust.%s" % check_id) for check_id in (*BINDING_IDS, "T024")
-    ):
+    if all(_is_check_suppressed("djust.%s" % check_id) for check_id in (*BINDING_IDS, "T024")):
         return []
     try:
         from djust.live_view import LiveView  # noqa: F401

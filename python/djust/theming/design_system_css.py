@@ -7,15 +7,16 @@ of design system + color preset combinations.
 
 from functools import lru_cache
 from typing import Dict
-from .presets import ThemeTokens, get_preset
+from .presets import get_preset
+from ._types import ThemeTokens
 from .theme_packs import (
     get_design_system,
     get_all_design_systems,
     TypographyStyle,
     LayoutStyle,
     SurfaceStyle,
-    AnimationStyle,
 )
+from ._types import AnimationStyle
 from .css_generator import ThemeCSSGenerator
 from ._config import _validate_css_prefix
 

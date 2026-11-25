@@ -192,11 +192,6 @@ class PushEventMixin:
         for name, payload in self._drain_push_events():
             await send({"type": "push_event", "event": name, "payload": payload})
 
-    # Backward-compatible private alias used by TutorialMixin and tests.
-    async def _flush_pending_push_events(self) -> None:
-        """Alias for :meth:`flush_push_events` — kept for internal use."""
-        await self.flush_push_events()
-
     def clear_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
         """Drop the push events queued so far in this turn, and return them.
 

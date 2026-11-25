@@ -12,7 +12,7 @@ through ``dispatch_message`` so the verb passes the chokepoint.
 SCOPE (see the routing comment in ``websocket.receive``): ONLY ``url_change`` is
 routed through the chokepoint today.
 
-* ``mount`` stays on the WS ``handle_mount`` (sticky-child preservation, signed
+* ``mount`` stays on the WS ``_mount_page`` (sticky-child preservation, signed
   ``state_snapshot`` restore) — folded into runtime hooks
   by T1-A (#1853).
 * ``event`` stays on the WS ``handle_event`` (~16 WS-only behaviors the runtime
@@ -211,11 +211,9 @@ class TestUrlChangeRoutedThroughChokepoint:
         assert "_dispatch_runtime_owned(data)" in inspect.getsource(
             LiveViewConsumer._route_runtime_owned
         ), "_route_runtime_owned must hand the frame to _dispatch_runtime_owned (#1852)."
-        # And must NOT call the old direct shim from receive().
-        assert "self.handle_url_change(" not in src, (
-            "receive() must NOT call handle_url_change directly — that bypassed "
-            "the dispatch_message chokepoint (#1852)."
-        )
+        # The direct per-verb methods are gone (#4207): nothing to call around it.
+        assert not hasattr(LiveViewConsumer, "handle_url_change")
+        assert not hasattr(LiveViewConsumer, "handle_event")
 
     def test_dispatch_runtime_owned_calls_dispatch_message_not_dispatch_url_change(self):
         """Source-pin: the seam helper goes through ``dispatch_message``."""
@@ -434,7 +432,7 @@ class TestWSOnlyFramesPreserved:
     async def test_mount_routes_through_runtime_dispatch_message(self, monkeypatch):
         """``mount`` NOW routes through ``ViewRuntime.dispatch_message`` (ADR-022
         Iter 3 Phase 3.3b, #1919, THE MOUNT FLIP). Pre-flip mount stayed on the
-        bespoke WS ``handle_mount``; post-flip it joins ``url_change`` / ``event``
+        bespoke WS ``_mount_page``; post-flip it joins ``url_change`` / ``event``
         in ``RUNTIME_OWNED_VERBS`` and flows through the single chokepoint — the
         #1646 mount convergence COMPLETE. Pin the post-flip routing so a revert
         that drops ``mount`` from the set trips here.
@@ -547,7 +545,7 @@ class TestRuntimeOwnedVerbsContract:
         """Build a ``LiveViewConsumer`` whose ``receive()`` switch can be driven
         in isolation: a permissive rate limiter so dispatch is always reached,
         and async spies replacing the three routing targets exercised here
-        (``_dispatch_runtime_owned``, ``handle_event``, ``handle_mount``).
+        (``_dispatch_runtime_owned``, ``handle_event``, ``_mount_page``).
 
         Returns ``(consumer, routed)`` where ``routed`` is a dict mapping
         ``"runtime"|"event"|"mount"`` → list-of-call-args, so each test asserts
@@ -584,14 +582,14 @@ class TestRuntimeOwnedVerbsContract:
 
         consumer._dispatch_runtime_owned = _spy_runtime
         consumer.handle_event = _spy_event
-        consumer.handle_mount = _spy_mount
+        consumer._mount_page = _spy_mount
         return consumer, routed
 
     @pytest.mark.asyncio
     async def test_every_runtime_owned_verb_routes_through_dispatch_helper(self):
         """(a) EVERY verb in ``RUNTIME_OWNED_VERBS`` is dispatched via
         ``_dispatch_runtime_owned`` by ``receive()`` — and lands in NO sibling
-        handler (``handle_event``/``handle_mount``).
+        handler (``handle_event``/``_mount_page``).
 
         This makes the set LOAD-BEARING: adding a verb to ``RUNTIME_OWNED_VERBS``
         WITHOUT a routed arm (e.g. reverting the membership check to a hardcoded
@@ -613,7 +611,7 @@ class TestRuntimeOwnedVerbsContract:
             )
             assert routed["event"] == [] and routed["mount"] == [], (
                 f"runtime-owned verb {verb!r} must NOT land in handle_event/"
-                f"handle_mount; routed={routed!r}"
+                f"_mount_page; routed={routed!r}"
             )
 
     @pytest.mark.asyncio
@@ -653,7 +651,7 @@ class TestRuntimeOwnedVerbsContract:
         assert [c.get("type") for c in routed["runtime"]] == ["mount"], routed
         assert routed["mount"] == [], (
             "'mount' must route to _dispatch_runtime_owned (the runtime chokepoint) "
-            f"post-#1919, NOT the bespoke handle_mount shim; routed={routed!r}"
+            f"post-#1919, NOT the bespoke _mount_page shim; routed={routed!r}"
         )
 
         # mount_batch → its bespoke WS handler, NOT the runtime helper.
