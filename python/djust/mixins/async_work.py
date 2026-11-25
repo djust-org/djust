@@ -30,8 +30,21 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
 from asgiref.sync import iscoroutinefunction, sync_to_async
 
 from .._removed_settings import removed_instance_attribute
+from .._surviving_work import (
+    SURVIVING_OWNER,
+    ViewDisposedError as ViewDisposedError,  # re-exported (#4182)
+    is_surviving,
+    mark_surviving,
+    refuse_if_disposed,
+)
 
 logger = logging.getLogger(__name__)
+
+#: Running ``survive_disconnect=True`` tasks (#4182). asyncio keeps only weak
+#: references to tasks, and a survivor is not in its view's
+#: ``_async_task_handles`` (so disposal does not cancel it); this set keeps it
+#: alive until it finishes. It holds only running tasks and empties itself.
+_SURVIVING_TASKS: Set["asyncio.Future[Any]"] = set()
 
 _TaskT = TypeVar("_TaskT", bound="asyncio.Future[Any]")
 
@@ -51,8 +64,19 @@ def cancel_on_owner_loop(future: asyncio.Future[Any]) -> None:
         future.cancel()
 
 
-def track_async_task(view: Any, task: asyncio.Future[Any]) -> None:
-    """Keep framework-dispatched work owned by its view until completion."""
+def track_async_task(
+    view: Any, task: asyncio.Future[Any], callback: Optional[Callable[..., Any]] = None
+) -> None:
+    """Keep framework-dispatched work owned by its view until completion.
+
+    A ``survive_disconnect=True`` callback (#4182) is kept alive in a module
+    set instead, so the view's disposal does not cancel it. One tracked on an
+    already-disposed view never started, and is cancelled like any other.
+    """
+    if is_surviving(callback) and not getattr(view, "_djust_child_disposed", False):
+        _SURVIVING_TASKS.add(task)
+        task.add_done_callback(_SURVIVING_TASKS.discard)
+        return
     handles = getattr(view, "_async_task_handles", None)
     if handles is None:
         handles = view._async_task_handles = set()
@@ -95,6 +119,7 @@ async def run_async_callback(
       too — preserving the pre-v0.4.2 ``@background`` contract.
     """
     generation = getattr(owner, "_async_work_generation", 0)
+    survives = is_surviving(callback)
 
     def cancelled() -> bool:
         return owner is not None and (
@@ -103,7 +128,17 @@ async def run_async_callback(
         )
 
     if cancelled():
+        if survives:
+            # Decision 4 (#4182): a disposed view cannot be re-authorized, so a
+            # survivor that had not started yet is not started.
+            logger.warning(
+                "survive_disconnect task on %s did not start: its view was disposed first",
+                type(owner).__name__,
+            )
         raise asyncio.CancelledError
+    # ``sync_to_async`` copies the context into the worker thread, so the
+    # disposed-view guard sees the owner on both paths.
+    token = SURVIVING_OWNER.set(owner) if survives else None
     try:
         if iscoroutinefunction(callback):
             from .._held_rows import writes_by
@@ -119,15 +154,47 @@ async def run_async_callback(
             )
             if inspect.iscoroutine(result):
                 result = await result
-    except Exception:
+    except Exception as exc:
         if cancelled():
+            if survives:
+                _log_survivor_failure(owner, exc)
             raise asyncio.CancelledError from None
         raise
+    finally:
+        if token is not None:
+            SURVIVING_OWNER.reset(token)
     # A coroutine may swallow cancellation. Its stale result/error must still
     # not enter application completion handlers or produce a render.
     if cancelled():
+        if survives:
+            logger.debug(
+                "survive_disconnect task on %s finished after its view was disposed; "
+                "result discarded",
+                type(owner).__name__,
+            )
         raise asyncio.CancelledError
     return result
+
+
+def _log_survivor_failure(owner: Any, exc: BaseException) -> None:
+    """Log a ``survive_disconnect=True`` task's failure after its view was
+    disposed: nothing else will report it (#4182)."""
+    if isinstance(exc, ViewDisposedError):
+        # Framework-authored and value-free: names the class and the operation.
+        logger.error("%s", exc)
+        return
+    from .._exposure_diagnostics import log_failure_for
+
+    log_failure_for(
+        logger,
+        (owner,),
+        exc,
+        "survive_disconnect task on %s raised after its view was disposed: %s",
+        type(owner).__name__,
+        exc,
+        level="error",
+        traceback=True,
+    )
 
 
 def track_running_async_task(view: Any, task_name: str, future: "asyncio.Future[Any]") -> None:
@@ -186,7 +253,8 @@ class AsyncWorkMixin:
     tracking and cancellation.
 
     When the socket closes, an explicit-exposure root's ``start_async`` work
-    is cancelled with the view. A legacy-exposure root's work runs
+    is cancelled with the view, unless it was started with
+    ``survive_disconnect=True`` (#4182). A legacy-exposure root's work runs
     to completion and its late result is discarded (#3234); a view whose work
     only serves the open page (a follower, a live feed) sets
     ``cancel_async_on_disconnect = True`` to have it cancelled
@@ -195,7 +263,9 @@ class AsyncWorkMixin:
 
     #: Cancel this legacy root's ``start_async`` work when its socket or SSE
     #: stream closes, instead of letting it run to completion. An
-    #: explicit-exposure root is always disposed with its work.
+    #: explicit-exposure root is always disposed with its work. Work that must
+    #: finish uses ``start_async(..., survive_disconnect=True)`` /
+    #: ``@background(survive_disconnect=True)`` instead (#4182).
     cancel_async_on_disconnect: bool = False
 
     #: The 1.x single-task queue, ``self._async_pending = (fn, args, kwargs)``.
@@ -208,6 +278,7 @@ class AsyncWorkMixin:
         callback: Callable[..., Any],
         *args: Any,
         name: Optional[str] = None,
+        survive_disconnect: bool = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -227,7 +298,20 @@ class AsyncWorkMixin:
             *args: Positional arguments passed to the callback.
             name: Optional task name for tracking/cancellation.
                   If not provided, an auto-generated name is used.
-            **kwargs: Keyword arguments passed to the callback.
+            survive_disconnect: ``True`` lets the task run to completion when
+                  the view is disposed (the connection closed, the user
+                  navigated away; #4182). Its result is then discarded: no
+                  ``handle_async_result``, no render, no session write
+                  (#4211). After disposal, setting a declared ``state()``
+                  field, ``push_event``, ``start_async`` or ``defer`` on the
+                  view raises :class:`ViewDisposedError`; other attribute
+                  writes are discarded with the view. ``cancel_async`` /
+                  ``cancel_async_all`` cannot interrupt a running survivor and
+                  only discard its result. While the view is still connected
+                  the result renders as usual. A survivor disposed before it
+                  started is not started.
+            **kwargs: Keyword arguments passed to the callback. ``name`` and
+                  ``survive_disconnect`` are reserved and never forwarded.
 
         Example::
 
@@ -246,6 +330,9 @@ class AsyncWorkMixin:
                     self.error_message = f"Export failed: {error}"
                     self.exporting = False
         """
+        if type(survive_disconnect) is not bool:
+            raise TypeError("start_async(survive_disconnect=...) must be True or False")
+        refuse_if_disposed(self, "schedule more work")
         if getattr(self, "_djust_child_disposed", False):
             raise RuntimeError("Cannot schedule work on a disposed view")
         if not hasattr(self, "_async_tasks"):
@@ -257,6 +344,8 @@ class AsyncWorkMixin:
             name = f"_task_{self._async_task_counter}"
             self._async_task_counter += 1
 
+        if survive_disconnect:
+            callback = mark_surviving(callback)
         self._async_tasks[name] = (callback, args, kwargs)
 
     def cancel_async(self, name: str) -> None:
@@ -446,6 +535,7 @@ class AsyncWorkMixin:
                 # Fires after the patch reaches the client.
                 metrics.increment(f"liveview.{action}", count=self.count)
         """
+        refuse_if_disposed(self, "schedule more work")
         if getattr(self, "_djust_child_disposed", False):
             raise RuntimeError("Cannot defer work on a disposed view")
         if not hasattr(self, "_deferred_callbacks"):

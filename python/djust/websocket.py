@@ -1389,7 +1389,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 future = asyncio.ensure_future(
                     self._run_async_work(task_name, callback, args, kwargs, event_name=event_name)
                 )
-                track_async_task(self.view_instance, future)
+                track_async_task(self.view_instance, future, callback)
                 track_running_async_task(self.view_instance, task_name, future)
             # Clear all scheduled tasks
             self.view_instance._async_tasks = {}

@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any, Generic, TypeVar, cast, overload
 
 from ._exposure import FieldExposure, Persistence, reserved_state_names
+from ._surviving_work import refuse_if_disposed
 
 T = TypeVar("T")
 
@@ -92,6 +93,9 @@ class StateProperty(Generic[T]):
             return value
 
     def __set__(self, obj: Any, value: T) -> None:
+        if getattr(obj, "_djust_child_disposed", False) is True:
+            # A survive_disconnect=True task writing to its disposed view (#4182).
+            refuse_if_disposed(obj, "set the state field %r" % self.public_name)
         assert self.attr_name is not None
         setattr(obj, self.attr_name, value)
         if not hasattr(obj, "_reactive_state"):

@@ -194,15 +194,20 @@ class _BackgroundRun:
         self.result: Any = None
         self.error: Optional[BaseException] = None
         self.abandoned = False
+        self.cancel_requested = False
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.task: Optional["asyncio.Future[Any]"] = None
         self.thread: Optional[threading.Thread] = None
 
-    def abandon(self) -> None:
-        """Ask the task to stop (an ``async def`` callback honours it) and stop waiting."""
+    def abandon(self, cancel: bool = True) -> None:
+        """Stop waiting and, with ``cancel``, ask the task to stop (an
+        ``async def`` callback honours it). A ``survive_disconnect=True``
+        task is abandoned without ``cancel`` (#4182): it runs to completion
+        and its result is discarded."""
         with self.lock:
             self.abandoned = True
-            if self.task is not None and self.loop is not None:
+            self.cancel_requested = cancel
+            if cancel and self.task is not None and self.loop is not None:
                 try:
                     self.loop.call_soon_threadsafe(self.task.cancel)
                 except RuntimeError:
@@ -232,7 +237,7 @@ def _start_background_run(
         with run.lock:
             run.loop = asyncio.get_running_loop()
             run.task = task
-            if run.abandoned:
+            if run.abandoned and run.cancel_requested:
                 task.cancel()
         return await task
 
@@ -303,6 +308,7 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
     from asgiref.sync import async_to_sync
 
     from .._exposure_diagnostics import log_failure_for
+    from .._surviving_work import is_surviving
     from ..mixins.async_work import run_async_callback
     from ..runtime import _consume_async_cancel
 
@@ -349,7 +355,7 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
                             run = _start_background_run(view, name, callback, args, kwargs)
                             finished = run.done.wait(budget.remaining())
                             if not finished:
-                                run.abandon()
+                                run.abandon(cancel=not is_surviving(callback))
                                 abandoned_thread = run.thread
                         finally:
                             _release_worker_slot(abandoned_thread)

@@ -964,8 +964,12 @@ state the old value.
   and the tasks it starts with `self.create_task()`, are cancelled when the
   view is disposed: when the connection closes and when the user navigates to
   another view. `cancel_async_on_disconnect` changes nothing on an explicit
-  view, so there is no old value to state: work that must finish (a payment,
-  an import) belongs in a task queue, not on the view.
+  view. Work that must finish (a payment, an import) states
+  `survive_disconnect=True`: `self.start_async(self._import)` becomes
+  `self.start_async(self._import, survive_disconnect=True)`, and `@background`
+  becomes `@background(survive_disconnect=True)`. It then runs to completion
+  and its result is discarded
+  ([#4182](https://github.com/djust-org/djust/issues/4182)).
 
 ### State a legacy view no longer keeps
 
@@ -1116,4 +1120,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 3e07aaabaabf -->
+<!-- generated-doc prose-sha256: c2644761751d -->

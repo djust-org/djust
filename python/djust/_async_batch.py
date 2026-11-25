@@ -51,10 +51,10 @@ class AsyncBatch:
         if not self.queued:
             return
         named = [
-            (name, asyncio.ensure_future(runner(name, callback, args, kwargs)))
+            (name, callback, asyncio.ensure_future(runner(name, callback, args, kwargs)))
             for name, (callback, args, kwargs) in self.queued
         ]
-        tasks = {task for _name, task in named}
+        tasks = {task for _name, _callback, task in named}
         self.queued = []
 
         def settled(task: asyncio.Future[None]) -> None:
@@ -66,8 +66,9 @@ class AsyncBatch:
                 # removed. No rendering or state mutation occurs here.
                 self._finish(transport)
 
-        for name, task in named:
-            track_async_task(self.owner, task)
+        for name, callback, task in named:
+            # A survive_disconnect=True callback is not cancelled with its view (#4182).
+            track_async_task(self.owner, task, callback)
             # cancel_async_all() marks running names cancelled (#2969).
             track_running_async_task(self.owner, name, task)
             task.add_done_callback(settled)

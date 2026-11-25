@@ -8427,7 +8427,7 @@ class ViewRuntime(RuntimeTurnPort):
                 future = asyncio.ensure_future(
                     self._execute_async_task(task_name, callback, args, kwargs, event_name)
                 )
-                track_async_task(view, future)
+                track_async_task(view, future, callback)
                 track_running_async_task(view, task_name, future)
             view._async_tasks = {}
 
@@ -8707,6 +8707,7 @@ class ViewRuntime(RuntimeTurnPort):
         exception values; application result handlers still get their own
         exception object.
         """
+        from ._surviving_work import is_surviving
         from .mixins.async_work import run_async_callback
 
         # cancel_async() / cancel_async_all() before the task started (#2969).
@@ -8733,6 +8734,13 @@ class ViewRuntime(RuntimeTurnPort):
             try:
                 await self.authorize_explicit_turn(view)
             except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
+                if is_surviving(callback):
+                    # Decision 4 (#4182): a disposed view cannot be re-authorized.
+                    logger.warning(
+                        "survive_disconnect task %s did not start: its view could not be "
+                        "re-authorized",
+                        sanitize_for_log(task_name),
+                    )
                 if self.view_instance is view:
                     await self.deny_explicit_turn()
                 return

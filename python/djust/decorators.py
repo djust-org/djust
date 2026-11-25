@@ -1200,7 +1200,15 @@ def permission_required(perm: "PermissionRequired") -> Callable[[F], F]:
     return _make_metadata_decorator("permission_required", perm)
 
 
-def background(func: F) -> F:
+@overload
+def background(func: F) -> F: ...
+
+
+@overload
+def background(func: None = None, *, survive_disconnect: bool = False) -> Callable[[F], F]: ...
+
+
+def background(func: Optional[F] = None, *, survive_disconnect: bool = False) -> Any:
     """
     Run event handler in background after flushing current state.
 
@@ -1271,8 +1279,32 @@ def background(func: F) -> F:
     ``handle_async_result``'s ``error`` parameter.  Checks that only
     inspect ``handle_async_result`` for errors will miss ``@action``
     failures.
+
+    ``@background(survive_disconnect=True)`` lets the work finish after the
+    user disconnects or navigates away (#4182); see
+    :meth:`~djust.mixins.async_work.AsyncWorkMixin.start_async`. Its result is
+    then discarded, and setting declared state, pushing or scheduling on the
+    disposed view raises ``ViewDisposedError``:
+
+        @event_handler
+        @background(survive_disconnect=True)
+        def charge(self, order_id: int = 0):
+            Payment.objects.charge(order_id)  # keeps running after a disconnect
+            self.status = "charged"  # renders only while still connected
     """
 
+    if type(survive_disconnect) is not bool:
+        raise TypeError("@background(survive_disconnect=...) must be True or False")
+    if func is None:
+        return functools.partial(background, survive_disconnect=survive_disconnect)
+    return _background(func, survive_disconnect)
+
+
+def _background(func: F, survive_disconnect: bool) -> F:
+    """Build the ``@background`` wrapper of ``func``."""
+    # Only a survivor passes the keyword, so a ``start_async`` override that
+    # predates it (a test double, an app's own) keeps working (#4182).
+    options = {"survive_disconnect": True} if survive_disconnect else {}
     if iscoroutinefunction(func):
         # Async handler: closure is itself async so _run_async_work can
         # detect it via iscoroutinefunction and await it directly.
@@ -1282,7 +1314,7 @@ def background(func: F) -> F:
                 return await func(self, *args, **kwargs)
 
             task_name = func.__name__
-            self.start_async(_async_callback, name=task_name)
+            self.start_async(_async_callback, name=task_name, **options)
 
     else:
         # Sync handler: plain closure, run in thread via sync_to_async.
@@ -1292,7 +1324,7 @@ def background(func: F) -> F:
                 return func(self, *args, **kwargs)
 
             task_name = func.__name__
-            self.start_async(_async_callback, name=task_name)
+            self.start_async(_async_callback, name=task_name, **options)
 
     # Add metadata for introspection
     _add_decorator_metadata(wrapper, "background", True)
