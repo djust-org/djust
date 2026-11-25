@@ -1217,7 +1217,7 @@ class RustBridgeMixin:
         recursive partial re-raises, as on legacy.
         """
         from .context import _jit_serialization_enabled
-        from .jit import _jit_template_content, nested_raw_twin
+        from .jit import _jit_template_content, drop_nested_evaluated, nested_raw_twin
 
         if not _jit_serialization_enabled():
             return
@@ -1260,6 +1260,7 @@ class RustBridgeMixin:
                 dict.__setitem__(context, key, walk(value, template_content, key))
                 # #4326: a nested QuerySet whose own ``all`` / methods the template reads.
                 nested_raw_twin(self, key, value)
+            drop_nested_evaluated(self)
         except Exception as exc:  # noqa: BLE001 - the normalize pass serializes what is left
             if template_content and "djust:recursive-partial" in template_content:
                 raise
@@ -1483,6 +1484,11 @@ class RustBridgeMixin:
             # cache's item hash. A dict holding a QuerySet / Model goes through the
             # template-aware container walk (#3788). The captured rows above stay for
             # the method / alias shapes the JIT does not serialize.
+            # A container twin (#4326) from an earlier render: this render's walk
+            # holds its own again. Not reset with the rest on a preloaded context.
+            from .jit import drop_nested_twins
+
+            drop_nested_twins(self)
             if type(full_context) is ExplicitRenderContext:
                 # ``_all_method_rows`` is NOT reset here: ``serialize_for_template``
                 # in the view's own ``get_context_data`` already wrote it this render.

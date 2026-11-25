@@ -297,12 +297,15 @@ class LiveViewConfig:
         # (``.all.count``, ``.all.first.name``, ``.count``, ``.exists``), by index
         # (``.all.0.name``) or for its length (``.all|length``, ``{% if %}``)
         # needs at most a row of it, yet the JIT prefetched the WHOLE relation for
-        # every parent row (#4326). When the QuerySet is sliced to at most this
-        # many rows, such a relation is not prefetched: each parent row runs its
-        # own ``COUNT`` / ``LIMIT`` query instead. Unsliced (or sliced past this),
-        # the one prefetch query stays. The default ``1`` never adds a query (one
-        # parent, one query either way) while reading only the rows asked for;
-        # raise it when a few parents hold large relations, ``0`` always prefetches.
+        # every parent row (#4326). This is the most queries that may replace that
+        # one prefetch query: when the QuerySet is sliced and (parent rows) x
+        # (distinct light reads of the relation: ``count``, ``exists``,
+        # ``all.1`` ... each one query per row) is at most this, the relation is
+        # not prefetched and each parent row runs its own ``COUNT`` / ``LIMIT``.
+        # Otherwise (unsliced, more parents or reads) the prefetch stays. The
+        # default ``1`` never adds a query: it replaces one query with one; raise
+        # it to trade a few queries for not loading large relations, ``0`` always
+        # prefetches.
         "queryset_light_relation_max_parents": 1,
         # Serialization behavior (issue #292)
         # When False (default): non-serializable values are converted via str() fallback with a warning log

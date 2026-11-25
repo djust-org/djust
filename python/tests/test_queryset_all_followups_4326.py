@@ -293,3 +293,113 @@ class TestTheWithLengthAndTheWholeIndexedRow:
         assert [_codegen(paths, "ser_row_whole_4326")(u) for u in users] == (
             _rust.serialize_queryset(users, paths)
         )
+
+
+# ===========================================================================
+# #4326 review: never more queries at the default; count / exists fetch no rows;
+# no stale twin on a preloaded-context render
+# ===========================================================================
+NEVER_WORSE = {
+    # Two or three light reads of one relation: per-row they are two or three queries
+    # per parent, so the one prefetch stays (review item 1).
+    "count-exists": "{% for u in users %}{{ u.groups.count }}{{ u.groups.exists }}{% endfor %}",
+    "count-index-exists": "{% for u in users %}[{{ u.groups.count }}|{{ u.groups.all.1.name }}"
+    "|{{ u.groups.exists }}]{% endfor %}",
+    # One read, two fields off it: one query.
+    "one-index-two-fields": "{% for u in users %}[{{ u.groups.all.1.name }}"
+    "|{{ u.groups.all.1.id }}]{% endfor %}",
+    "length-and-if": "{% for u in users %}[{% if u.groups.all %}Y{% endif %}"
+    "{{ u.groups.all|length }}]{% endfor %}",
+    **LIGHT,
+}
+
+
+def _queries(render, source, setting, bound):
+    with _Cap(setting):
+        with CaptureQueriesContext(connection) as queries:
+            got = _text(render(source, {"users": _users()[:bound]}))
+    assert got == _django_render(source, {"users": _users()[:bound]})
+    return len(queries.captured_queries)
+
+
+@pytest.mark.django_db
+class TestTheDefaultNeverAddsAQuery:
+    @pytest.mark.parametrize("render", RENDERS)
+    @pytest.mark.parametrize("name", list(NEVER_WORSE))
+    def test_no_more_queries_than_the_prefetch(self, world, render, name) -> None:
+        source = NEVER_WORSE[name]
+        assert _queries(render, source, 1, 1) <= _queries(render, source, 0, 1)
+
+    @pytest.mark.parametrize("render", RENDERS)
+    @pytest.mark.parametrize("name", ["count-exists", "count-index-exists"])
+    def test_the_reviewed_shapes_keep_the_prefetch(self, world, render, name) -> None:
+        assert _queries(render, NEVER_WORSE[name], 1, 1) == 2
+
+    def test_the_budget_counts_distinct_reads(self) -> None:
+        two = ["groups.count", "groups.exists"]
+        assert analyze_queryset_optimization(User, two, 1).prefetch_related == {"groups"}
+        with _Cap(2):
+            assert analyze_queryset_optimization(User, two, 1).prefetch_related == set()
+            assert analyze_queryset_optimization(User, two, 2).prefetch_related == {"groups"}
+        # One read with two fields off it is one query.
+        same = ["groups.all.1.name", "groups.all.1.id"]
+        assert analyze_queryset_optimization(User, same, 1).prefetch_related == set()
+
+
+@pytest.mark.django_db
+class TestANestedCountReadsNoRows:
+    @pytest.mark.parametrize(
+        "source, expected_sql",
+        [
+            ("[{{ d.users.count }}]", ["COUNT("]),
+            ("[{{ d.users.all.count }}]", ["COUNT("]),
+            ("[{{ d.users.exists }}{{ d.users.count }}]", ["SELECT 1 AS", "COUNT("]),
+        ],
+    )
+    def test_one_query_per_method_like_django(self, world, source, expected_sql) -> None:
+        with CaptureQueriesContext(connection) as queries:
+            got = _text(_liveview_render(source, _in_dict()))
+        assert got == _django_render(source, _in_dict())
+        sql = sorted(q["sql"] for q in queries.captured_queries if "auth_user" in q["sql"])
+        assert len(sql) == len(expected_sql), sql
+        for fragment in expected_sql:
+            assert any(fragment in s for s in sql), sql
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "[{{ d.users.count }}{% if d.users %}Y{% endif %}]",
+            "[{{ d.users.count }}{{ d.users|length }}]",
+            "[{{ d.users.count }}{% for u in d.users %}{{ u.username }}{% endfor %}]",
+        ],
+    )
+    def test_beside_a_read_of_the_rows_they_are_fetched(self, world, source) -> None:
+        _agrees(_liveview_render, source, _in_dict)
+
+
+@pytest.mark.django_db
+class TestNoStaleTwinOnAPreloadedRender:
+    def test_a_preloaded_render_drops_the_last_renders_twin(self, world) -> None:
+        from djust.testing import LiveViewTestClient
+
+        class _V(LiveView):
+            template = "<div dj-root>[{{ d.users.all|length }}]</div>"
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["d"] = {"users": _users()}
+                return ctx
+
+        client = LiveViewTestClient(_V)
+        client.mount()
+        client.render()
+        view = client.view_instance
+        assert "d" in view.__dict__["_all_method_rows"]  # control: the twin is held
+
+        preloaded = view.get_context_data()
+        preloaded["d"] = {"users": ["only"]}  # no QuerySet any more
+        view._sync_done_this_cycle = False  # a new cycle, as the async websocket path starts one
+        html, _patches, _version = view.render_with_diff(preloaded_context=preloaded)
+        kept = view.__dict__["_all_method_rows"]
+        assert "d" not in kept and "__djust_nested_twins__" not in kept, kept
+        assert "[3]" not in html, html

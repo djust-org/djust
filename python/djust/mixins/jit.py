@@ -827,20 +827,43 @@ def keep_rows_for_all_methods(view: Any, name: str, rows: Any) -> None:
     view.__dict__.setdefault("_all_method_rows", {})[name] = rows
 
 
-def _keep_nested_evaluated(view: Any, original: Any, evaluated: Any) -> None:
+def _keep_nested_evaluated(view: Any, original: Any, evaluated: Any, fetch: bool = True) -> None:
     """Remember the evaluated twin of a QuerySet inside a container (#4326), by the
-    identity of the caller's QuerySet, for :func:`nested_raw_twin`. Reset per render
-    with ``_all_method_rows``."""
-    if not _answers_all_from_its_rows(evaluated):
-        list(evaluated)
+    identity of the caller's QuerySet, for :func:`nested_raw_twin`. Dropped once the
+    twins are built (:func:`drop_nested_evaluated`). ``fetch=False``: the template reads
+    only ``count`` / ``exists`` off it (:func:`_reads_no_rows`), so the twin is the
+    QuerySet itself and the sidecar runs the one ``COUNT`` / ``EXISTS`` Django would."""
+    if not fetch:
+        twin = evaluated
+    else:
+        if not _answers_all_from_its_rows(evaluated):
+            list(evaluated)
+        twin = held_evaluated_queryset(evaluated)
     view.__dict__.setdefault("_all_method_rows", {}).setdefault(_NESTED_EVALUATED, {})[
         id(original)
-    ] = (original, held_evaluated_queryset(evaluated))
+    ] = (original, twin)
+
+
+#: QuerySet methods (on the QuerySet or on its ``all``) answered by one query that
+#: reads no rows: ``{{ d.users.count }}`` is a ``COUNT``, not a fetch of every row.
+_NO_ROW_METHODS = frozenset({"count", "exists", "all.count", "all.exists"})
+
+
+def _reads_no_rows(model_class: Any, paths: List[str]) -> bool:
+    """Is every one of ``paths`` a no-row method read (:data:`_NO_ROW_METHODS`), not a
+    model attribute of the same name (#4326 review)?"""
+    return bool(paths) and all(
+        path in _NO_ROW_METHODS and not hasattr(model_class, path.split(".", 1)[0])
+        for path in paths
+    )
 
 
 #: The ``_all_method_rows`` slot that holds :func:`_keep_nested_evaluated`'s twins. Not a
 #: context name (a template name cannot start with ``_``), so the sidecar never ships it.
 _NESTED_EVALUATED = "__djust_nested_evaluated__"
+#: The ``_all_method_rows`` slot naming the containers :func:`nested_raw_twin` held, so
+#: :func:`drop_nested_twins` can clear them on a render that skips the per-render reset.
+_NESTED_TWINS = "__djust_nested_twins__"
 
 
 def nested_raw_twin(view: Any, name: str, container: Any) -> None:
@@ -855,7 +878,12 @@ def nested_raw_twin(view: Any, name: str, container: Any) -> None:
     rows the JIT already fetched, with no second query. Only a container that holds
     one is kept; the eager value still wins every path it can answer.
     """
-    held = (getattr(view, "_all_method_rows", None) or {}).get(_NESTED_EVALUATED) or {}
+    kept = view.__dict__.get("_all_method_rows")
+    if kept is None:
+        return
+    # ``name`` holds a container this render, so any rows under it are stale.
+    kept.pop(name, None)
+    held = kept.get(_NESTED_EVALUATED) or {}
     if not held:
         return
     found = [False]
@@ -873,7 +901,29 @@ def nested_raw_twin(view: Any, name: str, container: Any) -> None:
 
     copied = twin(container)
     if found[0]:
-        view.__dict__["_all_method_rows"][name] = copied
+        kept[name] = copied
+        kept.setdefault(_NESTED_TWINS, set()).add(name)
+
+
+def drop_nested_twins(view: Any) -> None:
+    """Drop the container twins an earlier render held (#4326 review). A render on a
+    ``preloaded_context`` skips the per-render reset of ``_all_method_rows``, so a twin
+    for a name that no longer holds a method-read QuerySet would answer from stale rows.
+    Called before this render's container walk, which holds this render's twins again."""
+    kept = view.__dict__.get("_all_method_rows")
+    if not kept:
+        return
+    for name in kept.pop(_NESTED_TWINS, ()):
+        kept.pop(name, None)
+    kept.pop(_NESTED_EVALUATED, None)
+
+
+def drop_nested_evaluated(view: Any) -> None:
+    """Forget :func:`_keep_nested_evaluated`'s QuerySets once every container's twin is
+    built (#4326), so none outlives its render, even one on a ``preloaded_context``."""
+    kept = view.__dict__.get("_all_method_rows")
+    if kept:
+        kept.pop(_NESTED_EVALUATED, None)
 
 
 def _method_read_identity_rows(view: Any, queryset: Any, name: str) -> List[Any]:
@@ -1577,6 +1627,13 @@ class JITMixin:
                     queryset.model, row_paths
                 )
                 if paths_for_var and not row_paths and not key_variables and not recursive_relation:
+                    root, _, rest = variable_name.partition(".")
+                    if _reads_no_rows(queryset.model, paths_for_var) and rest not in (
+                        (variable_paths_map or {}).get(root) or ()
+                    ):
+                        # Only ``count`` / ``exists``: no row is fetched (#4326 review).
+                        _keep_nested_evaluated(self, original_queryset, queryset, fetch=False)
+                        return []
                     items = list(queryset)
                     _keep_nested_evaluated(self, original_queryset, queryset)
                     return [model_identity(item) for item in items]

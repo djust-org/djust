@@ -127,6 +127,6 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
         nested = MIXED[name].replace("in users", "in ctx.users")
         assert nested != MIXED[name]
         twin = kept(nested, "ctx", lambda: {"users": _users()})
-        assert set(twin) == {"ctx", "__djust_nested_evaluated__"}, twin
+        assert set(twin) == {"ctx", "__djust_nested_twins__"}, twin
         assert list(twin["ctx"]["users"]) == list(_users())
         assert "users" in kept(MIXED[name], "users", _users)  # control: a top-level name is kept
