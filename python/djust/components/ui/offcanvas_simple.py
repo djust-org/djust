@@ -8,7 +8,6 @@ from typing import Any, Optional
 from ..base import Component
 
 from django.utils.html import conditional_escape
-from djust.components.utils import attr_text
 
 
 class Offcanvas(Component):
@@ -54,6 +53,10 @@ class Offcanvas(Component):
         ... )
     """
 
+    # #3932: parameters the constructor already ``conditional_escape``s (a plain string is
+    # escaped, a marked-safe one is developer markup): the template prints them as given.
+    markup_slots = frozenset({"body"})
+
     template = """<div class="offcanvas offcanvas-{{ placement }}{% if show %} show{% endif %}" tabindex="-1" id="{{ id }}" aria-labelledby="{{ id }}Label"{% if not backdrop %} data-bs-backdrop="false"{% endif %}>{% if title %}
     <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="{{ id }}Label">{{ title }}</h5>{% if dismissable %}
@@ -80,6 +83,9 @@ class Offcanvas(Component):
             raise ValueError(
                 f"Invalid placement: {placement}. Must be 'start', 'end', 'top', or 'bottom'"
             )
+
+        # a plain string is escaped here, a marked-safe one is developer markup (as for Modal)
+        body = conditional_escape(body)
 
         # Pass kwargs to the parent Component
         super().__init__(
@@ -112,42 +118,3 @@ class Offcanvas(Component):
             "show": self.show,
             "show_backdrop": self.backdrop and self.show,
         }
-
-    def _render_custom(self) -> str:
-        """Pure Python fallback (f-string rendering)."""
-        # Build offcanvas classes
-        offcanvas_classes = ["offcanvas", f"offcanvas-{attr_text(self.placement)}"]
-        if self.show:
-            offcanvas_classes.append("show")
-
-        # Build backdrop data attribute
-        backdrop_attr = "" if self.backdrop else ' data-bs-backdrop="false"'
-
-        parts = [
-            f'<div class="{" ".join(offcanvas_classes)}" tabindex="-1" id="{attr_text(self.id)}" aria-labelledby="{attr_text(self.id)}Label"{backdrop_attr}>',
-        ]
-
-        # Add header if title exists
-        if self.title:
-            parts.append('    <div class="offcanvas-header">')
-            parts.append(
-                f'        <h5 class="offcanvas-title" id="{attr_text(self.id)}Label">{conditional_escape(self.title)}</h5>'
-            )
-            if self.dismissable:
-                parts.append(
-                    '        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>'
-                )
-            parts.append("    </div>")
-
-        # Body
-        parts.append('    <div class="offcanvas-body">')
-        parts.append(f"        {conditional_escape(self.body)}")
-        parts.append("    </div>")
-
-        parts.append("</div>")
-
-        # Add backdrop if needed and shown
-        if self.backdrop and self.show:
-            parts.append('<div class="offcanvas-backdrop fade show"></div>')
-
-        return "\n".join(parts)

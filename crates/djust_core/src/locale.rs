@@ -23,7 +23,7 @@
 //! ## Why the parameters come FROM Python
 //!
 //! The opposite of the timezone fix (#2209), deliberately. Timezone needed a
-//! self-contained database (`chrono-tz`) and nothing from Python but a zone
+//! self-contained database (`chrono-tz`, `jiff` since #4222) and nothing from Python but a zone
 //! name, so the work happens in Rust. Locale needs **Django's own data** —
 //! `django/conf/locale/*/formats.py` — and reimplementing that here would be a
 //! fork of it rather than a use of it. So Python resolves three values per

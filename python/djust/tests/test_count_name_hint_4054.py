@@ -71,16 +71,6 @@ class NotACollection(LiveView):
     word = state("hello")
 
 
-class LegacyCount(LiveView):
-    """The legacy policy still generates the count: no notice."""
-
-    exposure_policy = "legacy"
-    template = "<div dj-root>count={{ tags_count }}</div>"
-
-    def mount(self, request, **kwargs):
-        self.tags = ["a", "b"]
-
-
 def _get(view_class):
     response = view_class().get(make_request())
     assert response.status_code == 200
@@ -157,13 +147,12 @@ def test_debug_names_the_count_and_points_at_length_once(caplog, fresh_reports, 
 
 @pytest.mark.django_db
 @override_settings(DEBUG=True)
-def test_debug_is_quiet_when_the_count_is_supplied_or_not_a_legacy_count(caplog, fresh_reports):
+def test_debug_is_quiet_when_the_count_is_supplied_or_not_a_collection(caplog, fresh_reports):
     with caplog.at_level(logging.WARNING, logger=LOGGER):
         assert "count=2" in _get(LengthFilter)
         assert "count=2" in _get(SuppliesTheCount)
         _get(NotACollection)
-        assert "count=2" in _get(LegacyCount)
-    for view_class in (LengthFilter, SuppliesTheCount, NotACollection, LegacyCount):
+    for view_class in (LengthFilter, SuppliesTheCount, NotACollection):
         assert _count_records(caplog, view_class) == [], view_class
 
 
@@ -236,6 +225,5 @@ def test_t027_is_quiet_when_the_count_is_supplied_or_the_stem_is_not(settings):
     # named; missing_count: nothing supplies the stem, so it is not.
     names = [m.msg.split("reads '")[1].split("'")[0] for m in _t027(NotACollection)]
     assert names == ["word_count"]
-    assert _t027(LegacyCount) == []
     settings.DJUST_CONFIG = {"suppress_checks": ["T027"]}
     assert _t027(SuppliedQuerySet) == []

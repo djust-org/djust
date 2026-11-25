@@ -1,7 +1,7 @@
 {
  "context|dj-": {
-  "len": 91837,
-  "sha256": "7553dcc58b28fa89d0da176b2676a61eb2cf1a14a40479e094e01c5f6e7f0b8e"
+  "len": 91728,
+  "sha256": "1b3548ca948442c2ea14f3b2aa1c6a0f66db48f12419eed8d3754d04729ad593"
  },
  "django|dj-|get_css_prefix": {
   "len": 5,
@@ -12,20 +12,20 @@
   "sha256": "453bd99cd9d382d0be88e9c401fdfe4a98d29c6e07a1830e7ce949d6add155b0"
  },
  "django|dj-|theme_css": {
-  "len": 28095,
-  "sha256": "789ff4aef91004eb925acd56c44c5fa86836d54c4698b7f4f1cee4428a6cdf5b"
+  "len": 27986,
+  "sha256": "0bf787e3d30c1c1fceb93bb30688bc66ba046aaedf31a6c367970e23aaa313a0"
  },
  "django|dj-|theme_form": {
   "len": 660,
   "sha256": "e68b522c7d0ef01680825fd2de0e2a334b80d6ebd9f170eff347f6b67799dc0d"
  },
  "django|dj-|theme_head": {
-  "len": 91837,
-  "sha256": "7553dcc58b28fa89d0da176b2676a61eb2cf1a14a40479e094e01c5f6e7f0b8e"
+  "len": 91728,
+  "sha256": "1b3548ca948442c2ea14f3b2aa1c6a0f66db48f12419eed8d3754d04729ad593"
  },
  "django|dj-|theme_head-link": {
-  "len": 91837,
-  "sha256": "7553dcc58b28fa89d0da176b2676a61eb2cf1a14a40479e094e01c5f6e7f0b8e"
+  "len": 91728,
+  "sha256": "1b3548ca948442c2ea14f3b2aa1c6a0f66db48f12419eed8d3754d04729ad593"
  },
  "django|dj-|theme_login_page": {
   "len": 1407,
@@ -40,20 +40,20 @@
   "sha256": "f4d9ad1e5bbf13e716fd55df35c4e5479a361330b944f317c80f1e5db6718042"
  },
  "django|dj|theme_css": {
-  "len": 28090,
-  "sha256": "63c4dd635a9fa231239bceb62dafdf8cff3289b4de4f6dbb738e017fda324a57"
+  "len": 27981,
+  "sha256": "fd0c609eafe72e7cc1651b2d5e98c2256d19c62e43f72d38634352c72ce40de2"
  },
  "django|dj|theme_form": {
   "len": 648,
   "sha256": "f662940de76800a0dd9c27fdc79913016877ef0f15ce66c3c45092fbcbd0dd1f"
  },
  "django|dj|theme_head": {
-  "len": 91290,
-  "sha256": "b56b86b85183bd527b9ea430fcd745fb079a23ba550e9247a6a345460e3a2175"
+  "len": 91181,
+  "sha256": "95b58d45d3823de49cd4fadc644e38a4195d5e5477a4c7de823db335e0544539"
  },
  "django|dj|theme_head-link": {
-  "len": 91290,
-  "sha256": "b56b86b85183bd527b9ea430fcd745fb079a23ba550e9247a6a345460e3a2175"
+  "len": 91181,
+  "sha256": "95b58d45d3823de49cd4fadc644e38a4195d5e5477a4c7de823db335e0544539"
  },
  "django|dj|theme_login_page": {
   "len": 1385,
@@ -68,20 +68,20 @@
   "sha256": "1713d2564003a0c9057a7ee274130013e9e6942430b1b9098f9dc9303559b5e8"
  },
  "django||theme_css": {
-  "len": 28080,
-  "sha256": "03032fbc2ea72090ff4300742a609457f2645939f1f0f8fc4a54615fa766887b"
+  "len": 27971,
+  "sha256": "040839ce6d8544671047490d0aa0d2c65b04c8299080aaf7a4fff31cd0a69eeb"
  },
  "django||theme_form": {
   "len": 624,
   "sha256": "5f1981a9b0a2df47bf17f9a1b5db3974bfd4cfd607edd2444bdf64a54894e310"
  },
  "django||theme_head": {
-  "len": 30124,
-  "sha256": "59be5d8d80ff11e6a972db3f6965b522af4a1b4facf230e58b5057158ee9fe2b"
+  "len": 30015,
+  "sha256": "0e7d25293397c8c7598ca479092688a6dc5a7ad2b86f095b0d4455ba7ad93c3b"
  },
  "django||theme_head-link": {
-  "len": 30124,
-  "sha256": "59be5d8d80ff11e6a972db3f6965b522af4a1b4facf230e58b5057158ee9fe2b"
+  "len": 30015,
+  "sha256": "0e7d25293397c8c7598ca479092688a6dc5a7ad2b86f095b0d4455ba7ad93c3b"
  },
  "django||theme_login_page": {
   "len": 1341,
@@ -96,20 +96,20 @@
   "sha256": "453bd99cd9d382d0be88e9c401fdfe4a98d29c6e07a1830e7ce949d6add155b0"
  },
  "djust|dj-|theme_css": {
-  "len": 28095,
-  "sha256": "789ff4aef91004eb925acd56c44c5fa86836d54c4698b7f4f1cee4428a6cdf5b"
+  "len": 27986,
+  "sha256": "0bf787e3d30c1c1fceb93bb30688bc66ba046aaedf31a6c367970e23aaa313a0"
  },
  "djust|dj-|theme_form": {
   "len": 660,
   "sha256": "e68b522c7d0ef01680825fd2de0e2a334b80d6ebd9f170eff347f6b67799dc0d"
  },
  "djust|dj-|theme_head": {
-  "len": 91837,
-  "sha256": "7553dcc58b28fa89d0da176b2676a61eb2cf1a14a40479e094e01c5f6e7f0b8e"
+  "len": 91728,
+  "sha256": "1b3548ca948442c2ea14f3b2aa1c6a0f66db48f12419eed8d3754d04729ad593"
  },
  "djust|dj-|theme_head-link": {
-  "len": 91837,
-  "sha256": "7553dcc58b28fa89d0da176b2676a61eb2cf1a14a40479e094e01c5f6e7f0b8e"
+  "len": 91728,
+  "sha256": "1b3548ca948442c2ea14f3b2aa1c6a0f66db48f12419eed8d3754d04729ad593"
  },
  "djust|dj-|theme_login_page": {
   "len": 1407,
@@ -124,20 +124,20 @@
   "sha256": "f4d9ad1e5bbf13e716fd55df35c4e5479a361330b944f317c80f1e5db6718042"
  },
  "djust|dj|theme_css": {
-  "len": 28090,
-  "sha256": "63c4dd635a9fa231239bceb62dafdf8cff3289b4de4f6dbb738e017fda324a57"
+  "len": 27981,
+  "sha256": "fd0c609eafe72e7cc1651b2d5e98c2256d19c62e43f72d38634352c72ce40de2"
  },
  "djust|dj|theme_form": {
   "len": 648,
   "sha256": "f662940de76800a0dd9c27fdc79913016877ef0f15ce66c3c45092fbcbd0dd1f"
  },
  "djust|dj|theme_head": {
-  "len": 91290,
-  "sha256": "b56b86b85183bd527b9ea430fcd745fb079a23ba550e9247a6a345460e3a2175"
+  "len": 91181,
+  "sha256": "95b58d45d3823de49cd4fadc644e38a4195d5e5477a4c7de823db335e0544539"
  },
  "djust|dj|theme_head-link": {
-  "len": 91290,
-  "sha256": "b56b86b85183bd527b9ea430fcd745fb079a23ba550e9247a6a345460e3a2175"
+  "len": 91181,
+  "sha256": "95b58d45d3823de49cd4fadc644e38a4195d5e5477a4c7de823db335e0544539"
  },
  "djust|dj|theme_login_page": {
   "len": 1385,
@@ -152,20 +152,20 @@
   "sha256": "1713d2564003a0c9057a7ee274130013e9e6942430b1b9098f9dc9303559b5e8"
  },
  "djust||theme_css": {
-  "len": 28080,
-  "sha256": "03032fbc2ea72090ff4300742a609457f2645939f1f0f8fc4a54615fa766887b"
+  "len": 27971,
+  "sha256": "040839ce6d8544671047490d0aa0d2c65b04c8299080aaf7a4fff31cd0a69eeb"
  },
  "djust||theme_form": {
   "len": 624,
   "sha256": "5f1981a9b0a2df47bf17f9a1b5db3974bfd4cfd607edd2444bdf64a54894e310"
  },
  "djust||theme_head": {
-  "len": 30124,
-  "sha256": "59be5d8d80ff11e6a972db3f6965b522af4a1b4facf230e58b5057158ee9fe2b"
+  "len": 30015,
+  "sha256": "0e7d25293397c8c7598ca479092688a6dc5a7ad2b86f095b0d4455ba7ad93c3b"
  },
  "djust||theme_head-link": {
-  "len": 30124,
-  "sha256": "59be5d8d80ff11e6a972db3f6965b522af4a1b4facf230e58b5057158ee9fe2b"
+  "len": 30015,
+  "sha256": "0e7d25293397c8c7598ca479092688a6dc5a7ad2b86f095b0d4455ba7ad93c3b"
  },
  "djust||theme_login_page": {
   "len": 1341,

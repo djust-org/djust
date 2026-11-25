@@ -20,8 +20,6 @@ def mock_view_instance():
     # Configure drain methods to return empty iterables so flush methods work
     view._drain_push_events = Mock(return_value=[])
     view._drain_navigation = Mock(return_value=[])
-    view._drain_announcements = Mock(return_value=[])
-    view._drain_focus = Mock(return_value=None)
     return view
 
 

@@ -1,7 +1,9 @@
 //! Django-compatible template filters
 
-use chrono::{DateTime, Datelike, Timelike, Utc};
 use djust_core::{Context, DjangoRustError, Result, Value};
+use jiff::civil;
+use jiff::tz::{AmbiguousOffset, Offset, TimeZone};
+use jiff::{SignedDuration, Timestamp, Zoned};
 
 use crate::filter_registry;
 
@@ -224,7 +226,7 @@ pub struct InputSafety {
 /// grapheme-cluster count would be a different, wronger one.
 pub fn python_len(value: &Value) -> Option<usize> {
     match value {
-        Value::String(s) | Value::SafeString(s) => Some(s.chars().count()),
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => Some(s.chars().count()),
         Value::List(l) | Value::Tuple(l) | Value::NamedTuple { items: l, .. } => Some(l.len()),
         // `len(d.keys())` is the entry count, not the repr's length.
         Value::DictView { items, .. } => Some(items.len()),
@@ -295,7 +297,7 @@ pub fn python_len(value: &Value) -> Option<usize> {
 /// [`Encoded::consume_live_items`]: djust_core::Encoded::consume_live_items
 pub fn iter_values(value: &Value) -> Result<Option<Vec<Value>>> {
     Ok(match value {
-        Value::String(s) | Value::SafeString(s) => {
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
             Some(s.chars().map(|c| Value::String(c.to_string())).collect())
         }
         Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
@@ -522,7 +524,10 @@ fn builtin_produced_safe(
         "add" => {
             input_safety.container
                 && (arg_was_quoted || arg_type.is_safe)
-                && matches!(result, Value::String(_) | Value::SafeString(_))
+                && matches!(
+                    result,
+                    Value::String(_) | Value::SafeString(_) | Value::ModelName(_)
+                )
         }
         // The three EXTRACTORS, and the THIRD consumer of the item grant
         // (#2299). Django's bodies are `value[0]`, `value[-1]` and
@@ -1878,7 +1883,9 @@ fn apply_builtin_filter(
                 context
                     .and_then(|ctx| ctx.get("DATE_FORMAT"))
                     .and_then(|v| match v {
-                        Value::String(s) | Value::SafeString(s) => Some(s.as_str()),
+                        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
+                            Some(s.as_str())
+                        }
                         _ => None,
                     })
             } else {
@@ -1914,7 +1921,7 @@ fn apply_builtin_filter(
                     // can diagnose without instrumentation. Common cause:
                     // upstream JSON-encoding of datetime objects produces
                     // strings with embedded literal `\"` chars that don't
-                    // round-trip through chrono's parsers.
+                    // round-trip through the datetime parsers.
                     tracing::debug!(
                         target: "djust.templates.filters",
                         value = %datetime_str,
@@ -1943,7 +1950,9 @@ fn apply_builtin_filter(
                 context
                     .and_then(|ctx| ctx.get("TIME_FORMAT"))
                     .and_then(|v| match v {
-                        Value::String(s) | Value::SafeString(s) => Some(s.as_str()),
+                        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
+                            Some(s.as_str())
+                        }
                         _ => None,
                     })
             } else {
@@ -2632,8 +2641,8 @@ fn add_values(value: &Value, arg: &Value) -> Result<Value> {
             Value::SafeString(format!("{lhs}{rhs}"))
         }
         (
-            Value::String(lhs) | Value::SafeString(lhs),
-            Value::String(rhs) | Value::SafeString(rhs),
+            Value::String(lhs) | Value::SafeString(lhs) | Value::ModelName(lhs),
+            Value::String(rhs) | Value::SafeString(rhs) | Value::ModelName(rhs),
         ) => Value::String(format!("{lhs}{rhs}")),
         (Value::List(lhs), Value::List(rhs)) => {
             Value::List(lhs.iter().chain(rhs).cloned().collect())
@@ -2954,7 +2963,7 @@ fn apply_slice(value: &Value, slice_str: &str) -> Result<Value> {
     };
 
     match value {
-        Value::String(s) | Value::SafeString(s) => {
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
             let chars: Vec<char> = s.chars().collect();
             let picked: String = slice_positions(start, stop, step, chars.len())
                 .into_iter()
@@ -3148,8 +3157,8 @@ fn slice_positions(
 fn parse_serialized_datetime(
     datetime_str: &str,
     allow_time_only: bool,
-) -> Option<(DateTime<chrono::FixedOffset>, bool, bool)> {
-    if let Ok(dt) = DateTime::parse_from_rfc3339(datetime_str) {
+) -> Option<(Stamp, bool, bool)> {
+    if let Some(dt) = parse_rfc3339(datetime_str) {
         return Some((dt, true, false));
     }
     // Naive datetime: "2026-08-22 14:30:00" -> that instant, UTC (#2203).
@@ -3168,41 +3177,50 @@ fn parse_serialized_datetime(
     //
     // `%.f` makes the fractional part OPTIONAL, so each covers both "...:00"
     // and "...:00.123456".
+    //
+    // `jiff`'s `strptime` was measured against the chrono `parse_from_str` it
+    // replaced (#4222) over a corpus of odd shapes: both take one-digit fields
+    // (`2026-1-1 1:2`), a space before a number and a doubled separator, and
+    // both refuse `24:00`, `2026-02-29` and a bare trailing dot. They differ
+    // in three places, each settled here: more than nine fractional digits
+    // (chrono kept the first nine; [`clip_fraction`] does the same), a year
+    // outside 1..=9999 (chrono took `+12026` and `0000`; [`naive_as_utc`]
+    // refuses what no Python `datetime` can hold), and a `:60` leap second
+    // (chrono kept it as a 1-second fraction that printed as `:60` with
+    // `u` = `1000000`; jiff reads `:59`, which Python, with no leap seconds,
+    // never emits).
+    let clipped = clip_fraction(datetime_str.trim());
+    let trimmed = clipped.as_str();
     for fmt in [
         "%Y-%m-%dT%H:%M:%S%.f",
         "%Y-%m-%d %H:%M:%S%.f",
         "%Y-%m-%dT%H:%M",
         "%Y-%m-%d %H:%M",
     ] {
-        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(datetime_str.trim(), fmt) {
-            return Some((ndt.and_utc().fixed_offset(), false, false));
+        if let Ok(ndt) = civil::DateTime::strptime(fmt, trimmed) {
+            return Some((naive_as_utc(ndt)?, false, false));
         }
     }
     // Date-only: "2026-03-15" -> midnight UTC (#719).
-    if let Ok(d) = chrono::NaiveDate::parse_from_str(datetime_str.trim(), "%Y-%m-%d") {
+    if let Ok(d) = civil::Date::strptime("%Y-%m-%d", trimmed) {
         return Some((
-            d.and_hms_opt(0, 0, 0).unwrap().and_utc().fixed_offset(),
+            naive_as_utc(d.to_datetime(civil::Time::midnight()))?,
             false,
             false,
         ));
     }
     if allow_time_only {
-        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("1970-01-01T{}", datetime_str.trim()))
-        {
+        if let Some(dt) = parse_rfc3339(&format!("1970-01-01T{trimmed}")) {
             return Some((dt, true, true));
         }
         // Time-only (#2216). Anchored on an arbitrary epoch date so the
-        // `Timelike` accessors work unchanged; `time_only` is what stops that
+        // wall-clock accessors work unchanged; `time_only` is what stops that
         // borrowed date from ever being rendered -- and why the duration
         // filters must not reach this branch at all.
         for fmt in ["%H:%M:%S%.f", "%H:%M"] {
-            if let Ok(t) = chrono::NaiveTime::parse_from_str(datetime_str.trim(), fmt) {
+            if let Ok(t) = civil::Time::strptime(fmt, trimmed) {
                 return Some((
-                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                        .unwrap()
-                        .and_time(t)
-                        .and_utc()
-                        .fixed_offset(),
+                    naive_as_utc(civil::date(1970, 1, 1).to_datetime(t))?,
                     false,
                     true,
                 ));
@@ -3210,6 +3228,210 @@ fn parse_serialized_datetime(
         }
     }
     None
+}
+
+/// A wall clock plus the UTC offset it is expressed in — what chrono's
+/// `DateTime<FixedOffset>` was before #4222.
+///
+/// Not `jiff::Zoned`, for a range reason found by the Django differential:
+/// `jiff::Timestamp` stops at `9999-12-30T22:00:00Z` (so that every offset
+/// still lands on a valid civil date), while Python's `datetime` — and chrono —
+/// reach `9999-12-31T23:59:59.999999`. A `Zoned` could not hold
+/// `datetime(9999, 12, 31, 23, 59)` at all, and the filters rendered `""` for
+/// the last 26 hours of the calendar. A civil wall clock has Python's range, and
+/// the instant is computed from it arithmetically ([`Stamp::unix_seconds`]).
+///
+/// Derefs to the wall clock, so the format codes read `dt.year()`,
+/// `dt.weekday()` etc. directly.
+#[derive(Clone, Copy, Debug)]
+struct Stamp {
+    local: civil::DateTime,
+    offset: Offset,
+}
+
+/// 1970-01-01T00:00:00, the civil anchor the instant arithmetic counts from.
+const UNIX_EPOCH_CIVIL: civil::DateTime = civil::DateTime::constant(1970, 1, 1, 0, 0, 0, 0);
+
+impl std::ops::Deref for Stamp {
+    type Target = civil::DateTime;
+    fn deref(&self) -> &civil::DateTime {
+        &self.local
+    }
+}
+
+impl Stamp {
+    fn offset(&self) -> Offset {
+        self.offset
+    }
+
+    /// Whole seconds since the Unix epoch (chrono's `timestamp()`), floored.
+    fn unix_seconds(&self) -> i64 {
+        let since = self.local.duration_since(UNIX_EPOCH_CIVIL);
+        since.as_secs() - i64::from(since.subsec_nanos() < 0) - i64::from(self.offset.seconds())
+    }
+
+    /// The wall clock of the same instant at another offset, keeping the
+    /// sub-second part. `None` only past the ends of the civil range.
+    fn at_offset(&self, offset: Offset) -> Option<Stamp> {
+        let shift = i64::from(offset.seconds()) - i64::from(self.offset.seconds());
+        let local = self
+            .local
+            .checked_add(SignedDuration::from_secs(shift))
+            .ok()?;
+        Some(Stamp { local, offset })
+    }
+
+    /// The wall clock read in UTC — chrono's `naive_utc()`. Falls back to the
+    /// wall clock itself at the very end of the range, where UTC would be in
+    /// year 10000; Python would overflow there too.
+    fn naive_utc(&self) -> civil::DateTime {
+        self.at_offset(Offset::UTC)
+            .map_or(self.local, |utc| utc.local)
+    }
+
+    /// The instant in `tz`, plus that zone's abbreviation there.
+    ///
+    /// The zone lookup clamps to `jiff`'s `Timestamp` range, which ends ~26
+    /// hours before Python's. No zone has a transition in those hours (the tz
+    /// database's far future is a repeating yearly rule, and no rule fires on
+    /// 30/31 December), so the clamped offset is the real one.
+    fn in_zone(&self, tz: &TimeZone) -> Option<(Stamp, String)> {
+        let lookup = Timestamp::from_second(
+            self.unix_seconds()
+                .clamp(Timestamp::MIN.as_second(), Timestamp::MAX.as_second()),
+        )
+        .ok()?;
+        let info = tz.to_offset_info(lookup);
+        let stamp = self.at_offset(info.offset())?;
+        Some((stamp, info.abbreviation().to_string()))
+    }
+}
+
+/// `datetime.MINYEAR..=datetime.MAXYEAR`. A serialized Python value is always
+/// inside it; a string outside it never came from Python (#4222).
+const PYTHON_YEARS: std::ops::RangeInclusive<i16> = 1..=9999;
+
+/// Keep at most nine fractional-second digits, dropping the rest — what
+/// chrono's `%.f` did and `jiff`'s refuses (#4222). Only a trailing
+/// `.digits` run is touched; anything else is returned as it was.
+fn clip_fraction(s: &str) -> String {
+    let digits = s.bytes().rev().take_while(u8::is_ascii_digit).count();
+    let dot = s.len() - digits;
+    if digits > 9 && dot > 0 && s.as_bytes()[dot - 1] == b'.' {
+        return s[..dot + 9].to_string();
+    }
+    s.to_string()
+}
+
+/// A naive wall clock read as UTC: the `+00:00` stamp every naive branch of
+/// [`parse_serialized_datetime`] produces (#2203).
+fn naive_as_utc(ndt: civil::DateTime) -> Option<Stamp> {
+    if !PYTHON_YEARS.contains(&ndt.year()) {
+        return None;
+    }
+    Some(Stamp {
+        local: ndt,
+        offset: Offset::UTC,
+    })
+}
+
+/// RFC 3339, with exactly the grammar `chrono::DateTime::parse_from_rfc3339`
+/// accepted before #4222, so swapping the date library widens nothing.
+///
+/// `jiff`'s own ISO 8601 parser is deliberately more liberal — it takes a
+/// missing seconds field, `+0500` and `+05` offsets, and a bracketed
+/// `[America/New_York]` annotation — and each of those would turn a value this
+/// filter used to refuse into a rendered date. So the shape is checked here and
+/// only the range checks are left to `jiff`:
+///
+/// `YYYY-MM-DD` `T`|`t`|space `HH:MM:SS` [`.` 1+ digits] `Z`|`z`|`±HH:MM`
+///
+/// A leap second (`:60`) is read as `:59`, which is what chrono's formatter
+/// printed for one and what Python, which has no leap seconds, never emits.
+/// Fractional digits past the ninth are accepted and dropped, as chrono did.
+fn parse_rfc3339(s: &str) -> Option<Stamp> {
+    let b = s.as_bytes();
+    let digits = |range: std::ops::Range<usize>| -> Option<i32> {
+        let part = b.get(range)?;
+        if !part.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        Some(
+            part.iter()
+                .fold(0i32, |acc, d| acc * 10 + i32::from(d - b'0')),
+        )
+    };
+    if b.len() < 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || !matches!(b[10], b'T' | b't' | b' ')
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return None;
+    }
+    let year = digits(0..4)?;
+    // Python's range: chrono took `0000`, which no `datetime` can hold.
+    if year == 0 {
+        return None;
+    }
+    let month = digits(5..7)?;
+    let day = digits(8..10)?;
+    let hour = digits(11..13)?;
+    let minute = digits(14..16)?;
+    let second = digits(17..19)?.min(59);
+    let mut i = 19;
+    let mut nanos = 0i32;
+    if b[i] == b'.' {
+        let start = i + 1;
+        let mut end = start;
+        while end < b.len() && b[end].is_ascii_digit() {
+            end += 1;
+        }
+        if end == start {
+            return None;
+        }
+        let kept = &b[start..end.min(start + 9)];
+        nanos = kept
+            .iter()
+            .fold(0i32, |acc, d| acc * 10 + i32::from(d - b'0'));
+        for _ in kept.len()..9 {
+            nanos *= 10;
+        }
+        i = end;
+    }
+    let offset_secs = match b.get(i..)? {
+        [b'Z' | b'z'] => 0,
+        [sign @ (b'+' | b'-'), h1, h2, b':', m1, m2] => {
+            let field = |hi: u8, lo: u8| -> Option<i32> {
+                (hi.is_ascii_digit() && lo.is_ascii_digit())
+                    .then(|| i32::from(hi - b'0') * 10 + i32::from(lo - b'0'))
+            };
+            let (h, m) = (field(*h1, *h2)?, field(*m1, *m2)?);
+            if h > 23 || m > 59 {
+                return None;
+            }
+            let secs = h * 3600 + m * 60;
+            if *sign == b'-' {
+                -secs
+            } else {
+                secs
+            }
+        }
+        _ => return None,
+    };
+    let ndt = civil::DateTime::new(
+        i16::try_from(year).ok()?,
+        i8::try_from(month).ok()?,
+        i8::try_from(day).ok()?,
+        i8::try_from(hour).ok()?,
+        i8::try_from(minute).ok()?,
+        i8::try_from(second).ok()?,
+        nanos,
+    )
+    .ok()?;
+    let offset = Offset::from_seconds(offset_secs).ok()?;
+    Some(Stamp { local: ndt, offset })
 }
 
 /// Django's `timesince` / `timeuntil`, ported from `django/utils/timesince.py`
@@ -3284,25 +3506,24 @@ fn zero_minutes() -> String {
 /// coarse buckets and would be a coin flip near a boundary (#1795). Exposing
 /// the pure two-argument function lets the parity suite pin exact strings —
 /// including the calendar cases, which a "now"-relative test could never reach.
-pub fn django_timesince_for_tests(d: chrono::NaiveDateTime, now: chrono::NaiveDateTime) -> String {
+pub fn django_timesince_for_tests(d: civil::DateTime, now: civil::DateTime) -> String {
     django_timesince(d, now)
 }
 
-fn django_timesince(d: chrono::NaiveDateTime, now: chrono::NaiveDateTime) -> String {
-    use chrono::{Datelike, Timelike};
-
+fn django_timesince(d: civil::DateTime, now: civil::DateTime) -> String {
     // No swap here, deliberately. A first pass added one so both filters could
     // share the body, and it silently broke `timesince` on a FUTURE value:
     // Django returns `0 minutes` there, and a swap turns it into the elapsed
     // time in the wrong direction. `timeuntil` swaps at its own call site,
     // which is exactly what Django's `reversed=True` does.
-    if (now - d).num_seconds() <= 0 {
+    if now.duration_since(d).as_secs() <= 0 {
         return zero_minutes();
     }
 
     // Calendar months between the two dates, backed off by one when the
     // day-of-month (or the time within that day) has not yet come round.
-    let mut total_months = (now.year() - d.year()) * 12 + (now.month() as i32 - d.month() as i32);
+    let mut total_months = (i32::from(now.year()) - i32::from(d.year())) * 12
+        + (i32::from(now.month()) - i32::from(d.month()));
     if d.day() > now.day() || (d.day() == now.day() && d.time() > now.time()) {
         total_months -= 1;
     }
@@ -3313,21 +3534,35 @@ fn django_timesince(d: chrono::NaiveDateTime, now: chrono::NaiveDateTime) -> Str
     // below is measured from a real calendar date rather than from a fixed
     // number of seconds.
     let pivot = if years != 0 || months != 0 {
-        let mut pivot_year = d.year() + years;
-        let mut pivot_month = d.month() as i32 + months;
+        let mut pivot_year = i32::from(d.year()) + years;
+        let mut pivot_month = i32::from(d.month()) + months;
         if pivot_month > 12 {
             pivot_month -= 12;
             pivot_year += 1;
         }
-        let day = MONTHS_DAYS[(pivot_month - 1) as usize].min(d.day());
-        chrono::NaiveDate::from_ymd_opt(pivot_year, pivot_month as u32, day)
-            .and_then(|date| date.and_hms_opt(d.hour(), d.minute(), d.second()))
+        let day = MONTHS_DAYS[(pivot_month - 1) as usize].min(d.day() as u32);
+        // Whole seconds only: the pivot drops `d`'s fraction, as chrono's
+        // `and_hms_opt` did, so the remainder truncates the same way.
+        i16::try_from(pivot_year)
+            .ok()
+            .and_then(|y| {
+                civil::DateTime::new(
+                    y,
+                    pivot_month as i8,
+                    day as i8,
+                    d.hour(),
+                    d.minute(),
+                    d.second(),
+                    0,
+                )
+                .ok()
+            })
             .unwrap_or(d)
     } else {
         d
     };
 
-    let mut remaining = (now - pivot).num_seconds();
+    let mut remaining = now.duration_since(pivot).as_secs();
     let mut partials = vec![years as i64, months as i64];
     for chunk in TIME_CHUNKS {
         let count = remaining.div_euclid(chunk);
@@ -3363,18 +3598,13 @@ fn django_timesince(d: chrono::NaiveDateTime, now: chrono::NaiveDateTime) -> Str
 /// Getting this wrong gives a plausible answer rather than an obvious one:
 /// pre-#2227 a naive datetime two hours old reported six hours in a UTC-4 zone,
 /// because it was compared against UTC.
-fn now_and_then(
-    dt: DateTime<chrono::FixedOffset>,
-    aware: bool,
-) -> (chrono::NaiveDateTime, chrono::NaiveDateTime) {
+fn now_and_then(dt: &Stamp, aware: bool) -> (civil::DateTime, civil::DateTime) {
     if aware {
-        let offset = *dt.offset();
-        (
-            dt.naive_local(),
-            Utc::now().with_timezone(&offset).naive_local(),
-        )
+        (dt.local, dt.offset().to_datetime(Timestamp::now()))
     } else {
-        (dt.naive_utc(), chrono::Local::now().naive_local())
+        // `datetime.now()`: the process-local wall clock, which Django pins
+        // to `TIME_ZONE` via the `TZ` environment variable.
+        (dt.naive_utc(), Zoned::now().datetime())
     }
 }
 
@@ -3402,7 +3632,7 @@ enum ComparisonInstant {
     /// both fall through to the wall clock.
     Now,
     /// A parsed instant, already in the value's own frame.
-    At(chrono::NaiveDateTime),
+    At(civil::DateTime),
     /// One side aware and the other naive. `now - d` is a **TypeError**, which
     /// the filter DOES catch, so Django renders the empty string.
     Incomparable,
@@ -3448,7 +3678,7 @@ fn timesince_comparison_instant(
     arg: Option<&str>,
     arg_was_quoted: bool,
     arg_is_falsy: bool,
-    value_dt: DateTime<chrono::FixedOffset>,
+    value_dt: &Stamp,
     value_aware: bool,
 ) -> Result<ComparisonInstant> {
     let Some(raw) = arg else {
@@ -3488,7 +3718,9 @@ fn timesince_comparison_instant(
         return Ok(ComparisonInstant::Incomparable);
     }
     Ok(ComparisonInstant::At(if value_aware {
-        arg_dt.with_timezone(value_dt.offset()).naive_local()
+        arg_dt
+            .at_offset(value_dt.offset())
+            .map_or(arg_dt.local, |stamp| stamp.local)
     } else {
         arg_dt.naive_utc()
     }))
@@ -3565,18 +3797,11 @@ fn timesince_or_until(
         arg,
         arg_was_quoted,
         arg_is_falsy,
-        dt,
+        &dt,
         aware,
     )? {
-        ComparisonInstant::Now => now_and_then(dt, aware),
-        ComparisonInstant::At(instant) => (
-            if aware {
-                dt.naive_local()
-            } else {
-                dt.naive_utc()
-            },
-            instant,
-        ),
+        ComparisonInstant::Now => now_and_then(&dt, aware),
+        ComparisonInstant::At(instant) => (if aware { dt.local } else { dt.naive_utc() }, instant),
         // Django's caught TypeError: the filter renders "".
         ComparisonInstant::Incomparable => return Ok(Value::String(String::new())),
     };
@@ -3623,7 +3848,7 @@ fn python_int_from_str(raw: &str) -> Option<i128> {
 /// that wall clock is expressed IN.
 struct Stamped {
     /// Wall clock in the zone the value should DISPLAY in.
-    dt: DateTime<chrono::FixedOffset>,
+    dt: Stamp,
     /// Zone abbreviation (`EDT`) when one is known, for `T`/`e`.
     abbrev: Option<String>,
     /// Whether the input carried an offset. Django treats the two differently
@@ -3640,6 +3865,12 @@ struct Stamped {
     /// zone (`T` gives `EDT`), while for a bare TIME they render empty, because
     /// `TimeFormat` has no date to resolve an offset against.
     time_only: bool,
+    /// The wall clock is ambiguous (a DST fold) or imaginary (a DST gap) in
+    /// the zone it is read in. Django's `TimeFormat.__init__` then leaves
+    /// `self.timezone = None` (`_datetime_ambiguous_or_imaginary`), so `e`,
+    /// `T`, `O`, `Z` and `I` all render empty, while `U`, `c` and `r` still
+    /// use the value's own offset. Measured against Django 5.2 (#4222).
+    zone_unknown: bool,
 }
 
 /// Apply the active render timezone (#2209).
@@ -3658,8 +3889,8 @@ struct Stamped {
 /// where naive datetimes are the norm.
 /// `datetime.timezone(offset).tzname(None)`: `UTC` for zero, else
 /// `UTC±HH:MM` (Python's own `_name_from_offset`; seconds never on the wire).
-fn fixed_offset_name(offset: &chrono::FixedOffset) -> String {
-    let secs = offset.local_minus_utc();
+fn fixed_offset_name(offset: Offset) -> String {
+    let secs = offset.seconds();
     if secs == 0 {
         return "UTC".to_string();
     }
@@ -3668,30 +3899,26 @@ fn fixed_offset_name(offset: &chrono::FixedOffset) -> String {
     format!("UTC{sign}{:02}:{:02}", abs / 3600, (abs % 3600) / 60)
 }
 
-fn apply_active_timezone(
-    dt: DateTime<chrono::FixedOffset>,
-    aware: bool,
-    time_only: bool,
-) -> Stamped {
-    use chrono::TimeZone;
-
+fn apply_active_timezone(dt: Stamp, aware: bool, time_only: bool) -> Stamped {
+    let unchanged = |abbrev: Option<String>, aware: bool| Stamped {
+        dt,
+        abbrev,
+        aware,
+        timestamp: dt.unix_seconds(),
+        time_only,
+        zone_unknown: false,
+    };
     // A time has no date on which to determine timezone offsets or DST.
     // Django leaves its wall clock unchanged and its zone fields empty.
     if time_only {
-        return Stamped {
-            dt,
-            abbrev: None,
-            aware: false,
-            timestamp: dt.timestamp(),
-            time_only,
-        };
+        return unchanged(None, false);
     }
 
     let zone = if aware {
         crate::timezone::active_timezone()
     } else {
         crate::registry::resolve_default_timezone()
-            .and_then(|name| name.parse::<chrono_tz::Tz>().ok())
+            .and_then(|name| crate::timezone::parse_zone(&name))
             .or_else(crate::timezone::active_timezone)
     };
     let Some(tz) = zone else {
@@ -3702,60 +3929,80 @@ fn apply_active_timezone(
         // conversion happens. Serialized strings use the fixed-offset name;
         // format_date restores an encoded Python object's original tzname.
         // A naive value keeps reporting nothing, as before.
-        return Stamped {
-            dt,
-            abbrev: if aware {
-                Some(fixed_offset_name(dt.offset()))
-            } else {
-                None
-            },
-            aware,
-            timestamp: dt.timestamp(),
-            time_only,
-        };
+        return unchanged(aware.then(|| fixed_offset_name(dt.offset())), aware);
     };
 
     if aware {
-        let local = dt.with_timezone(&tz);
-        return Stamped {
-            dt: local.fixed_offset(),
-            abbrev: Some(local.format("%Z").to_string()),
-            aware,
-            timestamp: dt.timestamp(),
-            time_only,
+        return match dt.in_zone(&tz) {
+            Some((local, abbrev)) => Stamped {
+                dt: local,
+                abbrev: Some(abbrev),
+                aware,
+                timestamp: dt.unix_seconds(),
+                time_only,
+                // An instant is never in a gap, but its wall clock can be in a
+                // fold: 05:30Z and 06:30Z are both 01:30 in New York on the
+                // fall-back night, and Django blanks the zone codes for both.
+                zone_unknown: !matches!(
+                    tz.to_ambiguous_timestamp(local.local).offset(),
+                    AmbiguousOffset::Unambiguous { .. }
+                ),
+            },
+            None => unchanged(Some(fixed_offset_name(dt.offset())), aware),
         };
     }
 
     // Naive: keep the wall clock, and read the zone metadata off that same wall
-    // clock interpreted in the default zone. `from_local_datetime` is not total —
-    // a local time inside a DST gap does not exist, and one inside a fold is
-    // ambiguous. `.earliest()` picks the pre-transition offset for a fold, which
-    // is what Django's `_datetime_ambiguous_or_imaginary` guard effectively
-    // yields; a gap falls back to leaving the metadata unknown rather than
-    // inventing an offset.
-    let naive = dt.naive_local();
-    match tz.from_local_datetime(&naive).earliest() {
-        Some(local) => Stamped {
-            // Re-stamp the SAME wall clock with the zone's offset at that
-            // local time. The wall clock is untouched — this only replaces the
-            // meaningless "+0000" the parse produced with the offset the value
-            // is actually understood to be in, which is what `O` and `Z` read.
-            // Leaving `dt` alone rendered `-0400` as `+0000` for every naive
-            // value; caught by the differential against Django, not by
-            // inspection.
-            dt: local.fixed_offset(),
-            abbrev: Some(local.format("%Z").to_string()),
-            aware,
-            timestamp: local.timestamp(),
-            time_only,
-        },
-        None => Stamped {
-            dt,
-            abbrev: None,
-            aware,
-            timestamp: dt.timestamp(),
-            time_only,
-        },
+    // clock interpreted in the default zone. The local-to-instant mapping is
+    // not total — a local time inside a DST gap does not exist, and one inside
+    // a fold is ambiguous. Django's `make_aware` reads both with `fold=0`, the
+    // PRE-transition offset, and that is what `U` and `r` print; the zone codes
+    // render empty (`zone_unknown`). Measured against Django 5.2 (#4222): the
+    // earlier `.earliest()` port reported `EDT`/`-0400` for a fold and
+    // `+0000` for a gap.
+    let (offset, zone_unknown) = match tz.to_ambiguous_timestamp(dt.local).offset() {
+        AmbiguousOffset::Unambiguous { offset } => (offset, false),
+        AmbiguousOffset::Fold { before, .. } | AmbiguousOffset::Gap { before, .. } => {
+            (before, true)
+        }
+    };
+    // Re-stamp the SAME wall clock with the zone's offset at that local time.
+    // The wall clock is untouched — this only replaces the meaningless "+0000"
+    // the parse produced with the offset the value is actually understood to
+    // be in, which is what `O` and `Z` read. Leaving `dt` alone rendered
+    // `-0400` as `+0000` for every naive value; caught by the differential
+    // against Django, not by inspection.
+    let local = Stamp {
+        local: dt.local,
+        offset,
+    };
+    let abbrev = if zone_unknown {
+        None
+    } else {
+        local.in_zone(&tz).map(|(_, abbrev)| abbrev)
+    };
+    Stamped {
+        dt: local,
+        abbrev,
+        aware,
+        timestamp: local.unix_seconds(),
+        time_only,
+        zone_unknown,
+    }
+}
+
+/// The offset `tz` gives the local wall clock `naive`, choosing the EARLIER
+/// instant of a fold and refusing a gap — chrono's
+/// `from_local_datetime(..).earliest()`, which is what this replaced (#4222).
+///
+/// Spelled out because `jiff`'s nearest one-liner, `AmbiguousZoned::earlier`,
+/// is total: for a gap it answers with the instant just before the jump, which
+/// would invent an offset for a wall clock that never existed.
+fn earliest_offset(tz: &TimeZone, naive: civil::DateTime) -> Option<Offset> {
+    match tz.to_ambiguous_timestamp(naive).offset() {
+        AmbiguousOffset::Unambiguous { offset } => Some(offset),
+        AmbiguousOffset::Fold { before, .. } => Some(before),
+        AmbiguousOffset::Gap { .. } => None,
     }
 }
 
@@ -3768,21 +4015,19 @@ fn apply_active_timezone(
 /// July (standard), so anchoring on January would report every winter instant
 /// as DST and every summer one as not.
 fn is_dst(stamped: &Stamped) -> bool {
-    use chrono::{Datelike, TimeZone};
-
     let Some(tz) = crate::timezone::active_timezone() else {
         return false;
     };
-    let here = stamped.dt.offset().local_minus_utc();
+    let here = stamped.dt.offset().seconds();
     // The zone's standard offset is the MINIMUM it takes across the year: DST
     // only ever moves a clock forward. Two probes six months apart bracket any
     // real transition rule.
     let year = stamped.dt.year();
-    let probe = |month: u32| {
-        chrono::NaiveDate::from_ymd_opt(year, month, 15)
-            .and_then(|d| d.and_hms_opt(12, 0, 0))
-            .and_then(|ndt| tz.from_local_datetime(&ndt).earliest())
-            .map(|d| d.fixed_offset().offset().local_minus_utc())
+    let probe = |month: i8| {
+        civil::DateTime::new(year, month, 15, 12, 0, 0, 0)
+            .ok()
+            .and_then(|ndt| earliest_offset(&tz, ndt))
+            .map(Offset::seconds)
     };
     match (probe(1), probe(7)) {
         (Some(jan), Some(jul)) => here > jan.min(jul),
@@ -3849,20 +4094,97 @@ fn twelve_hour(hour: u32) -> u32 {
 ///
 /// A bare time renders just the time part — Django's `TimeFormat` has no date
 /// to emit, and a borrowed epoch anchor must not leak (#2216).
-fn iso_8601(dt: &DateTime<chrono::FixedOffset>, time_only: bool) -> String {
-    let micros = dt.timestamp_subsec_micros();
+fn iso_8601(dt: &Stamp, time_only: bool) -> String {
+    let clock = format!("{:02}:{:02}:{:02}", dt.hour(), dt.minute(), dt.second());
+    let fraction = match subsec_micros(dt) {
+        0 => String::new(),
+        micros => format!(".{micros:06}"),
+    };
     if time_only {
-        return if micros == 0 {
-            dt.format("%H:%M:%S").to_string()
-        } else {
-            dt.format("%H:%M:%S%.6f").to_string()
-        };
+        return format!("{clock}{fraction}");
     }
-    if micros == 0 {
-        dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()
-    } else {
-        dt.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string()
+    format!(
+        "{}T{clock}{fraction}{}",
+        ymd(dt),
+        format_offset(dt.offset(), true)
+    )
+}
+
+/// `YYYY-MM-DD`, the year zero-padded to four digits (chrono's `%Y-%m-%d`).
+fn ymd(dt: &Stamp) -> String {
+    format!("{:04}-{:02}-{:02}", dt.year(), dt.month(), dt.day())
+}
+
+/// Microseconds within the second — chrono's `timestamp_subsec_micros`.
+fn subsec_micros(dt: &Stamp) -> i32 {
+    dt.subsec_nanosecond() / 1_000
+}
+
+/// `+HHMM` (or `+HH:MM` with `colon`), with `SS` / `:SS` appended when the
+/// offset has a seconds component — Python's `strftime("%z")` and
+/// `isoformat()`, which is what Django's `r` and `c` print.
+///
+/// Only a local-mean-time offset has seconds (`-04:56:02` for New York before
+/// 1883). chrono rounded those to the minute; Django prints them (#4222).
+pub(crate) fn format_offset(offset: Offset, colon: bool) -> String {
+    let secs = offset.seconds();
+    let sign = if secs < 0 { '-' } else { '+' };
+    let abs = secs.unsigned_abs();
+    let sep = if colon { ":" } else { "" };
+    let mut out = format!("{sign}{:02}{sep}{:02}", abs / 3600, (abs / 60) % 60);
+    if !abs.is_multiple_of(60) {
+        out.push_str(&format!("{sep}{:02}", abs % 60));
     }
+    out
+}
+
+/// Python's `int(dt.timestamp())` for an instant `floor_secs + micros / 1e6`
+/// (`micros` in `0..1_000_000`).
+///
+/// `timestamp()` is `total_microseconds / 10**6`, an int/int TRUE division —
+/// the exact quotient correctly rounded to the nearest `f64` — and `int()`
+/// then truncates toward zero. Two consequences show in `U` (#4222):
+///
+/// * truncation: a pre-1970 instant with a fraction is the LATER second
+///   (`1969-12-31T23:59:59.5Z` is `0`, not `-1`);
+/// * rounding: past 2^33 seconds an `f64` is coarser than a microsecond, so a
+///   fraction within half an ulp of the next whole second rounds up to it
+///   (`9998-09-28T10:10:25.999999Z` is `...426`).
+///
+/// Done in integers so the one rounding is the correctly rounded one; an
+/// `as f64` followed by a float division would round twice.
+fn python_int_timestamp(floor_secs: i64, micros: i32) -> i64 {
+    const MICROS: i128 = 1_000_000;
+    let total = i128::from(floor_secs) * MICROS + i128::from(micros);
+    let whole = total / MICROS; // toward zero, as `int()` will
+    let rest = (total % MICROS).abs();
+    if rest == 0 || whole == 0 {
+        return whole as i64;
+    }
+    // |x| lies in [|whole|, |whole| + 1), so its binade is |whole|'s:
+    // 2^e <= |x| < 2^(e+1), with an f64 spacing (ulp) of 2^(e-52). The exact
+    // value rounds AWAY from `whole` to the next integer when its distance to
+    // it, `(1e6 - rest) / 1e6`, is at most half an ulp — a tie goes there
+    // too, since that integer's mantissa is the even one. Below 2^20 half an
+    // ulp is under a microsecond and nothing can round.
+    let e = 127 - whole.unsigned_abs().leading_zeros();
+    let away = e >= 20 && (MICROS - rest) << (53 - e) <= MICROS;
+    (whole + if away { total.signum() } else { 0 }) as i64
+}
+
+/// Django's `O`: `"%s%02d%02d" % (sign, seconds // 3600, (seconds // 60) % 60)`
+/// — the seconds component is TRUNCATED, never printed or rounded.
+fn django_o(offset: Offset) -> String {
+    let secs = offset.seconds();
+    let sign = if secs < 0 { '-' } else { '+' };
+    let abs = secs.unsigned_abs();
+    format!("{sign}{:02}{:02}", abs / 3600, (abs / 60) % 60)
+}
+
+/// English day and month names, as chrono's `%a`/`%A`/`%b`/`%B` gave them.
+/// `jiff`'s `strftime` prints the same English names for the same specifiers.
+fn english_name(dt: &Stamp, spec: &str) -> String {
+    dt.strftime(spec).to_string()
 }
 
 /// Does this format string use a code a bare `datetime.time` cannot answer?
@@ -3930,7 +4252,7 @@ fn iso_8601(dt: &DateTime<chrono::FixedOffset>, time_only: bool) -> String {
 /// is the filter's first line — so they answer `""` whatever the format says.
 fn django_literal_only_format(value: &Value, format_str: &str) -> String {
     if matches!(value, Value::None | Value::Missing)
-        || matches!(value, Value::String(s) | Value::SafeString(s) if s.is_empty())
+        || matches!(value, Value::String(s) | Value::SafeString(s) | Value::ModelName(s) if s.is_empty())
     {
         return String::new();
     }
@@ -4023,11 +4345,12 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
     // Django would have run `timezone.localtime()` by now.
     let mut stamped = if pinned_by_tz_filter && aware && !time_only {
         Stamped {
-            dt,
             abbrev: Some(fixed_offset_name(dt.offset())),
+            timestamp: dt.unix_seconds(),
+            dt,
             aware,
-            timestamp: dt.timestamp(),
             time_only,
+            zone_unknown: false,
         }
     } else {
         apply_active_timezone(dt, aware, time_only)
@@ -4041,6 +4364,22 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
                 encoded.attrs.get(&djust_core::ObjectKey::from("tzname"))
             {
                 stamped.abbrev = Some(name.clone());
+            }
+            // Django's ambiguity guard runs against the value's OWN tzinfo
+            // here (`timezone = obj.tzinfo`), not the active zone: a fold
+            // value through `|timezone:"America/New_York"` renders the zone
+            // codes empty. The zone crosses as `str(tz)` (#2770), which is the
+            // IANA key for a `ZoneInfo`; a fixed offset (`UTC+09:00`) is not a
+            // zone name and can never be ambiguous.
+            if let Some(Value::String(key)) =
+                encoded.attrs.get(&djust_core::ObjectKey::from("tzinfo"))
+            {
+                if let Some(zone) = crate::timezone::parse_zone(key) {
+                    stamped.zone_unknown = !matches!(
+                        zone.to_ambiguous_timestamp(stamped.dt.local).offset(),
+                        AmbiguousOffset::Unambiguous { .. }
+                    );
+                }
             }
         }
     }
@@ -4070,25 +4409,26 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
     while let Some(ch) = chars.next() {
         match ch {
             // Common date format codes
-            'Y' => result.push_str(&dt.year().to_string()), // 2025
-            'y' => result.push_str(&format!("{:02}", dt.year() % 100)), // 25
+            // Django: `"%04d" % year`, so year 1 is `0001` (#4222).
+            'Y' => result.push_str(&format!("{:04}", dt.year())), // 2025
+            'y' => result.push_str(&format!("{:02}", i32::from(dt.year()) % 100)), // 25
             'm' => result.push_str(&format!("{:02}", dt.month())), // 01-12
-            'n' => result.push_str(&dt.month().to_string()), // 1-12
-            'd' => result.push_str(&format!("{:02}", dt.day())), // 01-31
-            'j' => result.push_str(&dt.day().to_string()),  // 1-31
+            'n' => result.push_str(&dt.month().to_string()),      // 1-12
+            'd' => result.push_str(&format!("{:02}", dt.day())),  // 01-31
+            'j' => result.push_str(&dt.day().to_string()),        // 1-31
             'b' | 'D' | 'l' | 'F' | 'E' | 'M' | 'N' => {
                 let index = if matches!(ch, 'D' | 'l') {
-                    dt.weekday().num_days_from_monday()
+                    dt.weekday().to_monday_zero_offset() as u32
                 } else {
-                    dt.month()
+                    dt.month() as u32
                 };
                 let localized = crate::registry::resolve_date_part(&ch.to_string(), index)
                     .unwrap_or_else(|| match ch {
-                        'b' => dt.format("%b").to_string().to_lowercase(),
-                        'D' => translate(&dt.format("%a").to_string()),
-                        'l' => translate(&dt.format("%A").to_string()),
-                        'F' | 'E' => translate(&dt.format("%B").to_string()),
-                        'M' => translate(&dt.format("%b").to_string()),
+                        'b' => english_name(&dt, "%b").to_lowercase(),
+                        'D' => translate(&english_name(&dt, "%a")),
+                        'l' => translate(&english_name(&dt, "%A")),
+                        'F' | 'E' => translate(&english_name(&dt, "%B")),
+                        'M' => translate(&english_name(&dt, "%b")),
                         _ => translate(MONTHS_AP[(dt.month() - 1) as usize]),
                     });
                 result.push_str(&localized);
@@ -4180,26 +4520,28 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
             // unimplemented code is indistinguishable from an intentional one
             // without a differential against Django. Every expectation below
             // came from running all 38 characters through Django's own engine.
-            'S' => result.push_str(ordinal_suffix(dt.day())), // nd
-            'w' => result.push_str(&dt.weekday().num_days_from_sunday().to_string()), // 0=Sun
-            'z' => result.push_str(&dt.ordinal().to_string()), // day of year, 1-based
-            't' => result.push_str(&days_in_month(dt.year(), dt.month()).to_string()),
+            'S' => result.push_str(ordinal_suffix(dt.day() as u32)), // nd
+            'w' => result.push_str(&dt.weekday().to_sunday_zero_offset().to_string()), // 0=Sun
+            'z' => result.push_str(&dt.day_of_year().to_string()),   // day of year, 1-based
+            't' => {
+                result.push_str(&days_in_month(i32::from(dt.year()), dt.month() as u32).to_string())
+            }
             'L' => {
                 // Python's `bool` repr, not `true`/`false` — Django renders the
                 // object, so the template shows `True`/`False`.
-                result.push_str(if is_leap_year(dt.year()) {
+                result.push_str(if is_leap_year(i32::from(dt.year())) {
                     "True"
                 } else {
                     "False"
                 });
             }
-            'o' => result.push_str(&dt.iso_week().year().to_string()), // ISO week-year
-            'W' => result.push_str(&dt.iso_week().week().to_string()), // ISO week number
-            'u' => result.push_str(&format!("{:06}", dt.timestamp_subsec_micros())),
+            'o' => result.push_str(&dt.date().iso_week_date().year().to_string()), // ISO week-year
+            'W' => result.push_str(&dt.date().iso_week_date().week().to_string()), // ISO week number
+            'u' => result.push_str(&format!("{:06}", subsec_micros(&dt))),
             'f' => {
                 // 12-hour time, minutes elided when zero: `7:30`, but plain `7`
                 // on the hour. Django's own shorthand for "time, tersely".
-                let hour = twelve_hour(dt.hour());
+                let hour = twelve_hour(dt.hour() as u32);
                 if dt.minute() == 0 {
                     result.push_str(&hour.to_string());
                 } else {
@@ -4212,21 +4554,30 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
                     _ => None,
                 };
                 if domain == Some(djust_core::CMP_DOMAIN_DATE) {
-                    result.push_str(&dt.format("%Y-%m-%d").to_string());
+                    result.push_str(&ymd(&dt));
                 } else if domain == Some(djust_core::CMP_DOMAIN_DATETIME_NAIVE) {
-                    let pattern = if dt.timestamp_subsec_micros() == 0 {
-                        "%Y-%m-%dT%H:%M:%S"
-                    } else {
-                        "%Y-%m-%dT%H:%M:%S%.6f"
-                    };
-                    result.push_str(&dt.format(pattern).to_string());
+                    // The ISO form with the offset cut off: a naive value
+                    // has none to print.
+                    let full = iso_8601(&dt, false);
+                    let cut = full.len() - format_offset(dt.offset(), true).len();
+                    result.push_str(&full[..cut]);
                 } else {
                     result.push_str(&iso_8601(&dt, stamped.time_only));
                 }
             }
             'r' => {
                 // RFC 5322, e.g. `Sat, 22 Aug 2026 19:30:45 -0400`.
-                result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string());
+                result.push_str(&format!(
+                    "{}, {:02} {} {:04} {:02}:{:02}:{:02} {}",
+                    english_name(&dt, "%a"),
+                    dt.day(),
+                    english_name(&dt, "%b"),
+                    dt.year(),
+                    dt.hour(),
+                    dt.minute(),
+                    dt.second(),
+                    format_offset(dt.offset(), false)
+                ));
             }
             // Timezone codes (#2209). Before the active-zone plumbing existed
             // these had no answer to give, so they fell through to the
@@ -4241,6 +4592,7 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
             // uniform, which is why each is handled rather than sharing one
             // branch: `e` is "" for a naive value, while `T`/`O`/`Z` report the
             // DEFAULT zone's abbreviation and offset for that local time.
+            'e' | 'T' | 'O' | 'Z' | 'I' if stamped.zone_unknown => {}
             'e' => {
                 // Timezone name — empty for a naive value.
                 if stamped.aware {
@@ -4264,12 +4616,15 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
             }
             // Same rule as `T`: a bare time reports no offset, and the borrowed
             // anchor date must not leak one.
-            'O' if !stamped.time_only => result.push_str(&dt.format("%z").to_string()),
-            'Z' if !stamped.time_only => {
-                result.push_str(&dt.offset().local_minus_utc().to_string())
-            }
+            'O' if !stamped.time_only => result.push_str(&django_o(dt.offset())),
+            'Z' if !stamped.time_only => result.push_str(&dt.offset().seconds().to_string()),
             'O' | 'Z' => {}
-            'U' => result.push_str(&stamped.timestamp.to_string()), // seconds since epoch
+            'U' => {
+                // Seconds since epoch: Django's `int(dt.timestamp())`.
+                result.push_str(
+                    &python_int_timestamp(stamped.timestamp, subsec_micros(&dt)).to_string(),
+                );
+            }
             'I' => {
                 // '1' during DST, '0' otherwise. Django reads `dst()`; the
                 // equivalent here is whether this zone's offset at this instant
@@ -4623,7 +4978,9 @@ fn value_to_json(value: &Value) -> String {
         Value::BigInt(d) if is_json_int_literal(d) => d.clone(),
         Value::BigInt(d) => format!("\"{}\"", json_string_body(d)),
         Value::Decimal(d) => format!("\"{}\"", json_string_body(d)),
-        Value::String(s) | Value::SafeString(s) => format!("\"{}\"", json_string_body(s)),
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
+            format!("\"{}\"", json_string_body(s))
+        }
         // THE #2448 fix, and the only place in the engine that reads the
         // encoder spelling. `DjangoJSONEncoder.default` is not `str()`: it is
         // `isoformat()` with the microseconds truncated to milliseconds and a
@@ -5753,7 +6110,7 @@ fn pluralize(value: &Value, arg: &str) -> String {
         // A STRING is `float(s)`, and on failure it is the `ValueError` arm —
         // which does NOT fall through to `len()`. `float` accepts surrounding
         // whitespace, `inf` and `nan`, and so does Rust's parse.
-        Value::String(s) | Value::SafeString(s) => {
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
             return match s.trim().parse::<f64>() {
                 Ok(f) => pick(f == 1.0),
                 Err(_) => String::new(),
@@ -5798,12 +6155,14 @@ fn int_digits_of(value: &Value, string_float_ok: bool) -> Option<String> {
         Value::BigInt(d) => Some(d.clone()),
         // `int(True)` is 1 in Python.
         Value::Bool(b) => Some(if *b { "1" } else { "0" }.to_string()),
-        Value::String(s) | Value::SafeString(s) => python_int_str(s).or_else(|| {
-            string_float_ok
-                .then(|| s.trim().parse::<f64>().ok())
-                .flatten()
-                .and_then(djust_core::decimal::python_float_trunc_digits)
-        }),
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
+            python_int_str(s).or_else(|| {
+                string_float_ok
+                    .then(|| s.trim().parse::<f64>().ok())
+                    .flatten()
+                    .and_then(djust_core::decimal::python_float_trunc_digits)
+            })
+        }
         // `int(None)`, `int([1])`, `int({})` all raise.
         _ => None,
     }
@@ -5994,14 +6353,18 @@ pub(crate) fn python_type_name(value: &Value) -> &str {
         Value::Decimal(_) => djust_core::decimal_type_name(),
         Value::None => "NoneType",
         // Django's `string_if_invalid`, which is a `str`. See the doc above.
-        Value::String(_) | Value::SafeString(_) | Value::Missing => "str",
+        Value::String(_) | Value::SafeString(_) | Value::ModelName(_) | Value::Missing => "str",
         Value::List(_) => "list",
         Value::Tuple(_) => "tuple",
         Value::NamedTuple { name, .. } => name,
         Value::Object(map) => {
             if value.object_str().is_some() {
+                // Only the #3947 marker names a class: a user map carrying `__model__`
+                // as text is not a model, so it never spells a type name of its own
+                // choosing in an error (review N2). It keeps `object`, the name every
+                // other `object_str` map takes, so `python_len` and this agree.
                 match map.get(&djust_core::object_key::ObjectKey::Str("__model__".into())) {
-                    Some(Value::String(name)) => name,
+                    Some(Value::ModelName(name)) if value.model_str().is_some() => name,
                     _ => "object",
                 }
             } else {
@@ -6174,7 +6537,7 @@ pub(crate) fn python_getitem(
         items.get(usize::try_from(at).ok()?).cloned()
     }
     match value {
-        Value::String(s) | Value::SafeString(s) => {
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
             let chars: Vec<char> = s.chars().collect();
             Ok(nth(&chars, index).map(|c| Value::String(c.to_string())))
         }
@@ -6443,23 +6806,23 @@ mod tests {
     use super::*;
     use indexmap::IndexMap;
 
+    /// The string chrono's `Utc.with_ymd_and_hms(..).to_rfc3339()` produced,
+    /// which these tests were written against before #4222.
+    fn utc_rfc3339(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> String {
+        format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}+00:00")
+    }
+
     // ---- #2558: the zone name of an unconverted aware value ---------------
 
     #[test]
     fn a_fixed_offset_names_itself_the_way_python_does() {
-        use chrono::FixedOffset;
+        let east = |secs: i32| Offset::from_seconds(secs).unwrap();
         // `datetime.timezone(offset).tzname(None)` — what Django's `T`/`e`
         // read for an aware value that was NOT converted (inside
         // `{% localtime off %}`, or under `USE_TZ = False`).
-        assert_eq!(fixed_offset_name(&FixedOffset::east_opt(0).unwrap()), "UTC");
-        assert_eq!(
-            fixed_offset_name(&FixedOffset::east_opt(2 * 3600).unwrap()),
-            "UTC+02:00"
-        );
-        assert_eq!(
-            fixed_offset_name(&FixedOffset::west_opt(5 * 3600 + 30 * 60).unwrap()),
-            "UTC-05:30"
-        );
+        assert_eq!(fixed_offset_name(east(0)), "UTC");
+        assert_eq!(fixed_offset_name(east(2 * 3600)), "UTC+02:00");
+        assert_eq!(fixed_offset_name(east(-(5 * 3600 + 30 * 60))), "UTC-05:30");
     }
 
     /// Every `Value` variant, so a new one cannot be added without a decision.
@@ -6835,6 +7198,28 @@ mod tests {
     /// claim is that a `Missing` behaves as the EMPTY STRING, so the empty
     /// string is the reference. A future arm that changes one probe without
     /// the others fails here rather than in one filter's output.
+    /// Review N2 (#3947): only the `ModelName` marker names a class in a type error; a forged
+    /// map with `__model__` as plain text is `object`, like any other `__str__` map.
+    #[test]
+    fn python_type_name_takes_a_class_name_from_the_marker_only() {
+        let row = |marker: Value| {
+            let mut m: indexmap::IndexMap<djust_core::object_key::ObjectKey, Value> =
+                indexmap::IndexMap::new();
+            m.insert("__str__".into(), Value::String("x".into()));
+            m.insert("__model__".into(), marker);
+            m.insert("pk".into(), Value::Integer(1));
+            Value::Object(m)
+        };
+        assert_eq!(
+            python_type_name(&row(Value::ModelName("User".into()))),
+            "User"
+        );
+        assert_eq!(
+            python_type_name(&row(Value::String("Spoofed".into()))),
+            "object"
+        );
+    }
+
     #[test]
     fn python_len_agrees_with_the_other_two_probes_about_missing() {
         let empty = Value::String(String::new());
@@ -7041,6 +7426,7 @@ mod tests {
             Value::Float(_) => "Float",
             Value::String(_) => "String",
             Value::SafeString(_) => "SafeString",
+            Value::ModelName(_) => "ModelName",
             Value::List(_) => "List",
             Value::Tuple(_) => "Tuple",
             Value::NamedTuple { .. } => "NamedTuple",
@@ -7065,6 +7451,7 @@ mod tests {
             Value::Float(1.5),
             Value::String("<b>".to_string()),
             Value::SafeString("<b>".to_string()),
+            Value::ModelName("<b>".to_string()),
             Value::List(vec![Value::String("<b>".to_string())]),
             Value::Tuple(vec![Value::String("<b>".to_string())]),
             Value::Object(Default::default()),
@@ -7177,9 +7564,9 @@ mod tests {
             }
         }
         assert_eq!(
-            iterating, 8,
-            "the iterating set is exactly String / SafeString / List / Tuple / Object / \
-             Missing / DictView, plus an iterating Encoded (#2466) — a \
+            iterating, 9,
+            "the iterating set is exactly String / SafeString / ModelName (#3947) / List / \
+             Tuple / Object / Missing / DictView, plus an iterating Encoded (#2466) — a \
              change here is a change to what #2283 and #2466 fixed",
         );
         // The half that makes "exhaustive" true rather than aspirational: every
@@ -7189,7 +7576,7 @@ mod tests {
         let seen: std::collections::BTreeSet<&str> = variants.iter().map(variant_name).collect();
         assert_eq!(
             seen.len(),
-            14,
+            15,
             "every `Value` variant needs a sample above; saw {seen:?}",
         );
     }
@@ -7713,9 +8100,8 @@ mod tests {
     #[test]
     fn test_timeuntil_filter() {
         // Create a future datetime (1 day from now)
-        use chrono::Duration;
-        let future = Utc::now() + Duration::days(1);
-        let future_str = future.to_rfc3339();
+        let future = Timestamp::now() + jiff::SignedDuration::from_hours(24);
+        let future_str = future.to_string();
         let value = Value::String(future_str);
         let result = apply_filter("timeuntil", &value, None).unwrap();
         // Should contain "day" or "hour" (depending on exact timing)
@@ -7728,10 +8114,9 @@ mod tests {
 
     #[test]
     fn test_date_filter() {
-        use chrono::TimeZone;
         // Create a specific datetime for testing
-        let dt = Utc.with_ymd_and_hms(2025, 11, 13, 14, 30, 0).unwrap();
-        let dt_str = dt.to_rfc3339();
+        let dt = utc_rfc3339(2025, 11, 13, 14, 30, 0);
+        let dt_str = dt.clone();
         let value = Value::String(dt_str);
 
         // Test Y-m-d format
@@ -7758,8 +8143,8 @@ mod tests {
         assert_eq!(result.to_string(), "14:30");
 
         // Test morning time for 12-hour formats
-        let morning = Utc.with_ymd_and_hms(2025, 11, 13, 9, 5, 0).unwrap();
-        let morning_str = morning.to_rfc3339();
+        let morning = utc_rfc3339(2025, 11, 13, 9, 5, 0);
+        let morning_str = morning.clone();
         let morning_value = Value::String(morning_str);
 
         let result = apply_filter("date", &morning_value, Some("g:i A")).unwrap();
@@ -7769,16 +8154,16 @@ mod tests {
         assert_eq!(result.to_string(), "09:05 AM");
 
         // Test midnight (00:00 should be 12:xx AM)
-        let midnight = Utc.with_ymd_and_hms(2025, 11, 13, 0, 30, 0).unwrap();
-        let midnight_str = midnight.to_rfc3339();
+        let midnight = utc_rfc3339(2025, 11, 13, 0, 30, 0);
+        let midnight_str = midnight.clone();
         let midnight_value = Value::String(midnight_str);
 
         let result = apply_filter("date", &midnight_value, Some("g:i A")).unwrap();
         assert_eq!(result.to_string(), "12:30 AM");
 
         // Test noon (12:00 should be 12:xx PM)
-        let noon = Utc.with_ymd_and_hms(2025, 11, 13, 12, 30, 0).unwrap();
-        let noon_str = noon.to_rfc3339();
+        let noon = utc_rfc3339(2025, 11, 13, 12, 30, 0);
+        let noon_str = noon.clone();
         let noon_value = Value::String(noon_str);
 
         let result = apply_filter("date", &noon_value, Some("g:i A")).unwrap();
@@ -7787,10 +8172,9 @@ mod tests {
 
     #[test]
     fn test_time_filter() {
-        use chrono::TimeZone;
         // Test afternoon time
-        let dt = Utc.with_ymd_and_hms(2025, 11, 13, 14, 30, 0).unwrap();
-        let dt_str = dt.to_rfc3339();
+        let dt = utc_rfc3339(2025, 11, 13, 14, 30, 0);
+        let dt_str = dt.clone();
         let value = Value::String(dt_str);
 
         let result = apply_filter("time", &value, Some("H:i")).unwrap();
@@ -7801,15 +8185,15 @@ mod tests {
         assert_eq!(result.to_string(), "2:30 p.m.");
 
         // Test midnight
-        let midnight = Utc.with_ymd_and_hms(2025, 11, 13, 0, 0, 0).unwrap();
-        let midnight_str = midnight.to_rfc3339();
+        let midnight = utc_rfc3339(2025, 11, 13, 0, 0, 0);
+        let midnight_str = midnight.clone();
         let value = Value::String(midnight_str);
         let result = apply_filter("time", &value, Some("P")).unwrap();
         assert_eq!(result.to_string(), "midnight");
 
         // Test noon
-        let noon = Utc.with_ymd_and_hms(2025, 11, 13, 12, 0, 0).unwrap();
-        let noon_str = noon.to_rfc3339();
+        let noon = utc_rfc3339(2025, 11, 13, 12, 0, 0);
+        let noon_str = noon.clone();
         let value = Value::String(noon_str);
         let result = apply_filter("time", &value, Some("P")).unwrap();
         assert_eq!(result.to_string(), "noon");
@@ -7868,10 +8252,8 @@ mod tests {
 
     #[test]
     fn test_date_filter_uses_context_date_format() {
-        use chrono::TimeZone;
-
-        let dt = Utc.with_ymd_and_hms(2025, 11, 13, 14, 30, 0).unwrap();
-        let value = Value::String(dt.to_rfc3339());
+        let dt = utc_rfc3339(2025, 11, 13, 14, 30, 0);
+        let value = Value::String(dt.clone());
 
         // With DATE_FORMAT in context and no explicit arg, should use context format
         let ctx = Context::from_dict(IndexMap::from([(
@@ -7892,10 +8274,8 @@ mod tests {
 
     #[test]
     fn test_time_filter_uses_context_time_format() {
-        use chrono::TimeZone;
-
-        let dt = Utc.with_ymd_and_hms(2025, 11, 13, 14, 30, 0).unwrap();
-        let value = Value::String(dt.to_rfc3339());
+        let dt = utc_rfc3339(2025, 11, 13, 14, 30, 0);
+        let value = Value::String(dt.clone());
 
         // With TIME_FORMAT in context and no explicit arg, should use context format
         let ctx = Context::from_dict(IndexMap::from([(
@@ -8166,7 +8546,7 @@ mod tests {
             ("id", Value::Integer(1)),
             ("pk", Value::Integer(1)),
             ("__str__", Value::String(text.to_string())),
-            ("__model__", Value::String("Account".to_string())),
+            ("__model__", Value::ModelName("Account".to_string())),
             ("owner_code", Value::String("SENTINEL-A".to_string())),
             ("get_note_text", Value::String("SENTINEL-B".to_string())),
         ] {
@@ -8212,7 +8592,7 @@ mod tests {
         for (k, v) in [
             ("pk", Value::Integer(1)),
             ("__str__", Value::SafeString(text.to_string())),
-            ("__model__", Value::String("Account".to_string())),
+            ("__model__", Value::ModelName("Account".to_string())),
             ("owner_code", Value::String("SENTINEL-A".to_string())),
         ] {
             m.insert(djust_core::ObjectKey::Str(k.to_string()), v);

@@ -36,7 +36,7 @@ class Counter(LiveView):
         self.count = 0
 
     @event_handler
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
 ```
 

@@ -17,7 +17,7 @@ class TodoView(LiveView):
     items = state(default_factory=list)
 
     @event_handler()
-    def add_item(self, title="", **kwargs):
+    def add_item(self, title: str):
         if title.strip():
             self.items.append(title.strip())
 ```

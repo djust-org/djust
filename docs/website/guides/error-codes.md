@@ -298,16 +298,6 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
-### C022: Invalid event_parameter_policy
-
-**Severity**: Error
-
-**What causes it**: `LIVEVIEW_CONFIG['event_parameter_policy']` is set to something other than `'legacy'` or `'strict'`. Every event handler without its own `parameter_policy` inherits this value, and dispatch rejects each of their events until it is fixed. The strict policy (ADR-036) is opt-in; `'legacy'` is the default.
-
-**Fix**: Set the key to `'legacy'` or `'strict'`, or remove it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C022"]}` (the runtime still rejects the events).
-
----
-
 ### C023: channels_redis socket timeout at redis-py 8's default
 
 **Severity**: Warning
@@ -496,6 +486,40 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 **Fix**: Set `DJUST_REFRESH_ON_ANY_WRITE = True` (every write a view's step makes re-reads everything it holds), or call `self.rows_changed(Model)` after the write. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C042"]}` when those tables only change through your own statements.
 
+### C043: Invalid DJUST_UNSUPPLIED_NAMES
+
+**Severity**: Error
+
+**What causes it**: `DJUST_UNSUPPLIED_NAMES` is set to a value that is not `"debug"`, `"warn"` or `"error"`. The setting chooses how a template name a view holds but does not supply is reported (#4279). A bad value does not break rendering; it behaves as `"debug"`, which is why the check fails at startup instead.
+
+**Fix**: Set it to `"debug"`, `"warn"` or `"error"`, or remove it.
+
+---
+
+### C044: Inclusion tag in a djust_childless library
+
+**Severity**: Warning
+
+**What causes it**: A library vouches that none of its tags mount a child view with `register.djust_childless = True`, but one of its tags is an `inclusion_tag`. djust does not read inclusion templates when deciding whether a page can skip the full page-shell render (#4295), so a `{% live_render %}` in one would leave its child unregistered.
+
+**Fix**: Drop the marker, or make sure the inclusion template never mounts a child view and suppress this check.
+
+---
+
+### C045: a setting djust 2.0.0 removes is still set (removed in 2.0)
+
+Retired in 2.0 (#4199). Nothing reports it; djust refuses the keys at startup. Delete them; see the [2.0 migration guide](migrating-to-2.0.md).
+
+---
+
+### C046: A reconnect cannot ask another process to save
+
+**Severity**: Info
+
+**What causes it**: `DEBUG = False`, the state save interval on (it is by default), and no `CHANNEL_LAYERS` or `channels.layers.InMemoryChannelLayer` (or djust's in-memory layers).
+
+**Fix**: With more than one process (several uvicorn or gunicorn workers, several hosts), use a shared channel layer such as `channels_redis.core.RedisChannelLayer`. With one process, suppress the check. To save every turn before its reply instead, set `DJUST_STATE_SAVE_INTERVAL = 0`.
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error
@@ -598,7 +622,7 @@ DJUST_CONFIG = {"suppress_checks": ["V001"]}  # honored as of #1604
 
 **Severity**: Info
 
-**What causes it**: A LiveView subclass does not define a `mount()` method. While not strictly required, `mount()` is where you initialize state.
+**What causes it**: A LiveView subclass does not define a `mount()` method and declares no `state()` fields. While not strictly required, `mount()` is where you initialize state. A view whose state is all `state()` fields needs no `mount()` and is not reported (#4233).
 
 **Fix**:
 
@@ -651,7 +675,7 @@ class MyView(LiveView):
     sidebar_open = state(False)
 
     @event_handler()
-    def toggle_sidebar(self, **kwargs):
+    def toggle_sidebar(self):
         self.sidebar_open = not self.sidebar_open
 ```
 
@@ -839,9 +863,9 @@ Retired in 2.0 with time-travel debugging (#4184). Nothing reports it; remove it
 
 **Severity**: Error
 
-**What causes it**: An event handler or server function uses the strict parameter policy (ADR-036), and strict dispatch would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, `dict[str, T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
+**What causes it**: An event handler or server function declares parameters that strict dispatch (ADR-036) would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, `dict[str, T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
 
-**Fix**: Correct the named parameter's declaration, use `Any` for input you validate yourself, or keep the handler on `parameter_policy="legacy"`. Legacy handlers are never reported.
+**Fix**: Correct the named parameter's declaration, or use `Any` for input you validate yourself. Converting a 1.x handler is covered in [Migrating to djust 2.0](migrating-to-2.0.md#2-make-event-handlers-strict).
 
 ---
 
@@ -924,15 +948,11 @@ A view that declares a `params_form` is also held to its `params_form_fallback`:
 
 **Fix**: Delete the override and set `self.state` to a state the map names. For a real special case, call `super().get_http_status()` first so the map still applies. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V025"]}`.
 
-### V026: plain component in a legacy view's class body
+### V026: plain component in a legacy view's class body (removed in 2.0)
 
-**Severity**: Warning
+Retired in 2.0 (#4204). Nothing reports it; the class statement itself is refused. Create the component per view in `mount()` or `get_context_data()`, or declare a class-body `LiveComponent`.
 
-**What causes it**: A view with `exposure_policy = "legacy"` (or a mixin it inherits) declares a plain `Component` instance in its class body, such as `badge = Badge("new")`. A plain component has no descriptor, so it is one object shared by every session of the worker process, and a legacy view renders it. A handler that writes to it (`self.badge.label = request.user.email`) shows that value on every other user's next render and on every later page load. Message: "<class> declares the plain component '<name>' in its class body. It is one object shared by every session of the worker, ..."
-
-**Fix**: Create the component per view: assign `self._badge = Badge(...)` in `mount()` and return it from `get_context_data()`, or build it in `get_context_data()`. A component that no handler writes to can stay. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V026"]}`.
-
-On an explicit view the same declaration is refused when the class is created, with an `ExposureConfigurationError` that names the attribute and the working forms.
+---
 
 ### V027: declared `state()` field named `user` or `perms`
 
@@ -942,13 +962,11 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Rename the field (for example `selected_user`), or declare it `state(..., render=False)` if no template reads it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V027"]}`.
 
-### V028: A class states `exposure_policy = "legacy"`
+### V028: A class states `exposure_policy = "legacy"` (removed in 2.0)
 
-**Severity**: Warning
+Retired in 2.0 (#4199). Nothing reports it; the class statement itself is refused. See the [2.0 migration guide](migrating-to-2.0.md).
 
-**What causes it**: an application class states `exposure_policy = "legacy"` in its own body. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0 ([#4047](https://github.com/djust-org/djust/issues/4047)). Reported once per stating class; the message names the views that inherit it. Message: '<class> states exposure_policy = "legacy", which is deprecated and is removed before djust 2.0.0: ...'
-
-**Fix**: Move the view to explicit exposure and delete the line; `python manage.py djust_exposure_inventory` lists what each view exposes today. See the [2.0 migration guide](migrating-to-2.0.md#1-move-each-view-to-explicit-exposure). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V028"]}`.
+---
 
 ### V029: a handler changes a `persist=False` field a later event reads
 
@@ -968,19 +986,47 @@ On an explicit view the same declaration is refused when the class is created, w
 
 ### V031: a dj-auto-recover handler that cannot receive its values
 
-**Severity**: Error under the strict parameter policy; Warning for the 1.x names under the legacy policy
-
-**What causes it**: A handler named by `dj-auto-recover` takes the 1.x `_form_values` / `_data_attrs` names (as parameters or from `**kwargs`), which strict dispatch never delivers; or it declares the 2.0 `form_values` / `data_attrs` parameters positional-only, or under the legacy policy, which sends only the `_` names. Message: "<view>.restore(): this dj-auto-recover handler declares _form_values / _data_attrs, which strict dispatch never delivers, so the event is refused."
-
-**Fix**: Declare `form_values: dict[str, Any]` and `data_attrs: dict[str, str]` and run the handler under the strict policy. See the [reconnection guide](reconnection.md#custom-recovery-with-dj-auto-recover). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V031"]}`.
-
-### V032: an admin widget states `exposure_policy = "legacy"`
-
 **Severity**: Error
 
-**What causes it**: A `DjustModelAdmin`'s `change_list_widgets` or `change_form_widgets` lists a widget class that states `exposure_policy = "legacy"`. The admin pages are explicit and cannot embed a legacy view, so the page fails to render. Message: '<admin>.change_form_widgets lists <widget>, which states exposure_policy = "legacy". The djust admin change form uses explicit exposure and cannot embed a legacy view, so that admin page fails to render (HTTP 500).'
+**What causes it**: A handler named by `dj-auto-recover` takes the 1.x `_form_values` / `_data_attrs` names (as parameters or from `**kwargs`), which strict dispatch never delivers; or it declares the 2.0 `form_values` / `data_attrs` parameters positional-only. Message: "<view>.restore(): this dj-auto-recover handler declares _form_values / _data_attrs, which strict dispatch never delivers, so the event is refused."
 
-**Fix**: Set `exposure_policy = "explicit"` on the widget and return what its template reads from `get_context_data()`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V032"]}`.
+**Fix**: Declare `form_values: dict[str, Any]` and `data_attrs: dict[str, str]`. See the [reconnection guide](reconnection.md#custom-recovery-with-dj-auto-recover). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V031"]}`.
+
+### V032: an admin widget states `exposure_policy = "legacy"` (removed in 2.0)
+
+Retired in 2.0 (#4199). Nothing reports it; the widget's class statement itself is refused. See the [admin widgets guide](admin-widgets.md).
+
+---
+
+### V034: a handler reads `_target`
+
+**Severity**: Warning
+
+**What causes it**: a handler that reads the string `"_target"` from its source (`kwargs.get("_target")`). Only the removed 1.x legacy parameter policy sent `_target`; the client sends `field` for `dj-input`, `dj-change`, `dj-blur` and `dj-focus`. A `_target` parameter is a `djust.V016` error and is not repeated here. Message: '<handler>: reads _target, which a strict client never sends; djust 2.0.0 removes the legacy parameter policy that sent it.'
+
+**Fix**: declare `field: str = ""` instead. A `dj-submit` handler receives the pressed submit button as one of its form fields (its `name=value`). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V034"]}`.
+
+### V035: an explicit sticky child overrides `_on_sticky_update`
+
+**Severity**: Warning
+
+**What causes it**: a `LiveView` that overrides `_on_sticky_update` and does not name `sticky_update_inputs`. As a sticky child it is remounted whenever a `{% live_render %}` input changes, so the hook is never called (it ran only on djust 1.3). Reported once, under the class that defines the hook. Message: '<view> overrides _on_sticky_update, but it is an explicit-exposure view: as a sticky child it is remounted whenever a {% live_render %} input changes, so djust never calls the hook (it ran only for legacy children).'
+
+**Fix**: name the inputs the hook takes with `sticky_update_inputs = ("title",)` (a change to those reuses the child and calls the hook), or delete the hook and read the inputs in `mount()`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V035"]}`.
+
+### V036: a view or handler uses an attribute or decorator argument djust 2.0.0 removes (removed in 2.0)
+
+Retired in 2.0 (#4199). Nothing reports it; the class or decorator is refused. See the [2.0 migration guide](migrating-to-2.0.md).
+
+---
+
+### V037: `sw_cacheable = True` on a per-visitor page
+
+**Severity**: Warning
+
+**What causes it**: A view opts its page into service-worker caching with `sw_cacheable = True`, but it reads the user, the session or persisted state, so its HTML differs per visitor. Message: '<view> sets sw_cacheable = True, but its code reads request.user; the service worker would keep this page's HTML for anyone who opens the URL in that browser.'
+
+**Fix**: Remove `sw_cacheable = True`, or render the same HTML for every visitor. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V037"]}` if the read cannot change the HTML.
 
 <!-- END GENERATED check-sections:V -->
 
@@ -1203,6 +1249,14 @@ not trigger it.
 
 **Fix**: Declare the form field `disabled=True` (Django then ignores the posted value and keeps the stored one; a `FormMixin` view that edits an existing row sets it for you), leave the field out of `Meta.fields`, or opt the model field out of the floor with `djust_serialize_sensitive_fields`. HTML `disabled` / `readonly` does not protect the column. Suppress one form with `# noqa: S014` on its class line, or all with `DJUST_CONFIG = {"suppress_checks": ["S014"]}`.
 
+### S015: Computed member reads an excluded field
+
+**Severity**: Warning
+
+**What causes it**: A model lists a field in `djust_exclude_fields`, and one of its explicit `get_*()` methods or `@property` values (its own or inherited, such as `AbstractUser.get_full_name`), or another public zero-argument method of its own (`{{ obj.label }}`), reads that field. djust hides the field but still serializes the computed value, so the excluded data reaches the template. Message: "<model>.<member> reads <fields>, which <Model>.djust_exclude_fields hides: djust still serializes the computed value, so the excluded data reaches the template."
+
+**Fix**: Add the member to `djust_exclude_fields` as well, or switch the model to an allowlist with `djust_serializable_fields`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["S015"]}`.
+
 <!-- END GENERATED check-sections:S -->
 
 ---
@@ -1324,15 +1378,19 @@ document.addEventListener('djust:navigate-end', (e) => { ... });
 
 **Severity**: Warning
 
-**What causes it**: A template element uses `dj-click` together with navigation-related data attributes (`data-view`, `data-tab`, `data-page`, or `data-section`). This pattern suggests you're implementing navigation, which should use `dj-patch` instead for proper URL updates and browser history support.
+**What causes it**: A template element uses `dj-click` together with navigation-related data attributes (`data-view`, `data-tab`, `data-page`, or `data-section`, or the `dj-value-*` form of each such as `dj-value-tab`). This pattern suggests you're implementing navigation, which should use `dj-patch` instead for proper URL updates and browser history support.
 
 **What you see**: Navigation works but the browser URL doesn't update, and the back button doesn't work as expected. Users cannot bookmark or share specific views.
 
 **Fix**:
 
+<!-- doc-snippet-check: anti-pattern -->
 ```html
 <!-- WRONG -- dj-click for navigation -->
 <button dj-click="show_settings" data-view="settings">Settings</button>
+
+<!-- WRONG -- the same navigation sent as an event param -->
+<button dj-click="show" dj-value-tab="settings">Settings</button>
 
 <!-- CORRECT -- use dj-patch for navigation -->
 <a href="?view=settings" dj-patch>Settings</a>
@@ -1451,13 +1509,17 @@ own markup send its actions. Suppress one binding with
 
 **What causes it**: The binding never sends a required argument, sends one the
 handler does not accept, passes extra positional arguments, or sends one name
-twice. Under the legacy policy, `dj-input`, `dj-change` and `dj-submit` also
-send `field` and `_target`, which a closed legacy signature rejects. Under the
-strict policy, only `dj-value-*` attributes are sent, never `data-*`.
+twice. Only `dj-value-*` attributes are sent, never `data-*`: a `data-*`
+attribute that names a declared parameter is reported whether the parameter is
+required or has a default (with a default the handler would run with it and no
+error, #4033). `dj-input`, `dj-change` and `dj-submit` send only what the
+handler declares; `_target` is never sent.
 
-**Fix**: Send the argument (for example `data-item-id` or `dj-value-item-id`),
-accept the generated names with a catch-all, or move the handler to the strict
-policy. Suppress with `{# noqa: T020 -- <reason> #}`.
+**Fix**: Send the argument as `dj-value-*` (`data-item-id` becomes
+`dj-value-item-id`), or accept the names with a `**` catch-all.
+`python manage.py djust_exposure_inventory --fix` renames a `data-*` argument
+in a template when the handler declares it. Suppress with
+`{# noqa: T020 -- <reason> #}`.
 
 ---
 
@@ -1616,14 +1678,25 @@ supplied (#4054): djust 1.x generated `items_count` from a QuerySet or list
 `items`, and explicit exposure does not. Write `{{ items|length }}`, or return
 `items_count` from `get_context_data()`.
 
-To keep the 1.x
-behaviour while you migrate, set `exposure_policy = "legacy"` on the view
-([Migrating to djust 2.0](migrating-to-2.0.md)). The check skips a view whose
-`get_context_data()` it cannot read statically and a template that uses
-`{% extends %}`; with `DEBUG = True` djust logs the same condition at render
-time for those too. Suppress with
+Moving a whole 1.x view is covered in
+[Migrating to djust 2.0](migrating-to-2.0.md). The check skips a view whose
+`get_context_data()` it cannot follow (for example one that passes the
+context to a helper function) and an inline `template` that uses
+`{% extends %}`, and reports how many it skipped in one Info message. A
+`template_name` view is read through its `{% extends %}` chain and its
+`{% include %}` partials. With `DEBUG = True` djust logs the same condition at
+render time for those too, and `DJUST_UNSUPPLIED_NAMES = "error"` in your test
+settings turns it into an error that fails the test that renders it. Suppress with
 `DJUST_CONFIG = {"suppress_checks": ["T027"]}` or a
 `{# djust_typecheck: noqa count #}` template comment.
+
+### T029: Python code emits a `data-*` event argument
+
+**Severity**: Warning
+
+**What causes it**: a string literal or f-string in a `LiveView`, `LiveComponent` or `Component` class, or in a template-tag module, that builds an element with a `dj-*` event binding and a `data-*` attribute naming an argument of the bound handler. A strict handler never receives `data-*` arguments. Markup assembled by concatenation across literals, built by helper functions outside the scanned classes and libraries, or with dynamic attribute names is not seen. Message: '<file>:<line>: Python code emits data-item-id on an element bound by dj-click="pick"; under the strict policy, the only one in djust 2.0.0, a handler never receives data-* arguments.'
+
+**Fix**: emit `dj-value-<name>` instead (`format_html('... dj-value-item-id="{}"', value)`). A `data-*` attribute that only styles or scripts the element can stay. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T029"]}`.
 
 <!-- END GENERATED check-sections:T -->
 
@@ -2959,7 +3032,7 @@ class ProjectView(LiveView):
     permission_required = "projects.manage_projects"
 
     @event_handler
-    def delete_project(self, project_id: int = 0, **kwargs):
+    def delete_project(self, project_id: int = 0):
         Project.objects.filter(pk=project_id).delete()
 ```
 
@@ -2968,7 +3041,7 @@ Or the more granular form:
 ```python
 @permission_required("projects.delete_project")
 @event_handler
-def delete_project(self, project_id: int = 0, **kwargs):
+def delete_project(self, project_id: int = 0):
     Project.objects.filter(pk=project_id).delete()
 ```
 
@@ -3574,4 +3647,4 @@ some_code()  # noqa: Q001,S003
 - [Security Guide](../advanced/security.md) -- Authentication and authorization
 - [Best Practices](BEST_PRACTICES.md) -- State management patterns
 
-<!-- generated-doc prose-sha256: 30d3dc4b5244 -->
+<!-- generated-doc prose-sha256: 3a677a417a34 -->

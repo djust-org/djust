@@ -578,9 +578,6 @@ _PKG = pathlib.Path(__file__).resolve().parents[1] / "djust"
 #: being such a boundary will fail too. Either way the author has to decide
 #: deliberately rather than by default.
 EXPECTED_ROUNDTRIP_SITES = {
-    # #3252: legacy lazy-child public/private state is written to the Django
-    # session and restored onto the child by mount_http_lazy.
-    ("_lazy_containers.py", "save_http_lazy"),
     # #4107: a model instance in a view's saved state, as its field dict.
     ("_automatic_state.py", "_model_as_dict"),
     # 2.0 removed the page GET / POST session saves and the component session
@@ -601,6 +598,10 @@ EXPECTED_TEMPLATE_BOUND_MODULES = {
     # #3895: ``table_row`` reads a model-instance ``data_table`` row as the dict both engines
     # draw its cells from — template-bound, so the Decimal stays exact (no flag).
     "components/utils.py",
+    # #3869: the Django ``{% data_table %}`` hands each non-scalar operand to the native
+    # handler as the engine's JSON text decodes (``_python_operand``) — template-bound, and a
+    # ``Decimal`` takes its exact ``str`` there, as in the engine's text (no flag).
+    "components/rust_handlers.py",
     "mixins/context.py",
     "mixins/jit.py",
     "mixins/request.py",
@@ -763,25 +764,3 @@ class TestBoundaryInventory:
         and silently not to nested values."""
         forwarded = {m for m, _f, flag in _normalizer_calls() if flag == "forwarded"}
         assert forwarded == {"serialization.py"}
-
-    def test_the_serializability_probes_keep_the_plain_encoder(self) -> None:
-        """The snapshot captures that round-tripped through the state encoder
-        went with time-travel debugging in 2.0 (#4184); the probes that remain
-        discard their output, so they keep the plain encoder."""
-        src = (_PKG / "live_view.py").read_text()
-        tree = ast.parse(src)
-        by_function: dict[str, set[str]] = {}
-        for node in ast.walk(tree):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
-                continue
-            if node.func.attr != "dumps":
-                continue
-            for kw in node.keywords:
-                if kw.arg == "cls" and isinstance(kw.value, ast.Name):
-                    fn = _enclosing_function(tree, node.lineno)
-                    by_function.setdefault(fn, set()).add(kw.value.id)
-
-        # The serializability PROBES keep the plain encoder on purpose — they
-        # discard the output, so the representation is irrelevant there.
-        assert by_function.get("_get_private_state") == {"DjangoJSONEncoder"}
-        assert by_function.get("_is_serializable") == {"DjangoJSONEncoder"}

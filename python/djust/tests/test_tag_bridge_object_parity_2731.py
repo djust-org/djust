@@ -239,13 +239,18 @@ def _live_view(source: str, rows: list, directory: str) -> str:
     with open(os.path.join(directory, name), "w") as handle:
         handle.write("<div>" + source + "</div>")
 
+    def get_context_data(self, **kwargs):
+        context = LiveView.get_context_data(self, **kwargs)
+        context["rows"] = rows  # plain objects: an explicit view's context supplies them
+        return context
+
     view_cls = type(
         "ParityView",
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template_name": name,
-            "mount": lambda self, request, **kwargs: setattr(self, "rows", rows),
+            "get_context_data": get_context_data,
         },
     )
     original_dirs = settings.TEMPLATES[0]["DIRS"]

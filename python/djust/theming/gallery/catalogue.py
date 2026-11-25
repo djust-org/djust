@@ -650,6 +650,10 @@ def usage_with_events(
     if others:
         if "from djust.decorators import event_handler" not in lines:
             lines.insert(2, "from djust.decorators import event_handler")
+        # The strict parameter policy (the default since 2.0) requires every
+        # handler parameter to be annotated; ``Any`` is the unchecked form.
+        if "from typing import Any" not in lines:
+            lines.insert(2, "from typing import Any")
         stubs = {e: (demo_stubs or {}).get(e) or [] for e in others}
         # Every kwarg some event drives, with the value it starts from.
         initial: dict = {}
@@ -682,7 +686,7 @@ def usage_with_events(
                 template_part = "\n".join(template_lines)
             for event in others:
                 uses_value = any("value" in expr for _k, expr, _s in stubs[event])
-                params = "self, value, **kwargs" if uses_value else "self, **kwargs"
+                params = "self, value: Any, **kwargs: Any" if uses_value else "self, **kwargs: Any"
                 lines += ["", "    @event_handler()", f"    def {event}({params}):"]
                 if stubs[event]:
                     for key, expr, _start in stubs[event]:
@@ -697,7 +701,7 @@ def usage_with_events(
                 lines += [
                     "",
                     "    @event_handler()",
-                    f"    def {event}(self, value=None, **kwargs):",
+                    f"    def {event}(self, value: Any = None, **kwargs: Any):",
                     f"        pass  # your app acts on {event!r}; no component state moves",
                 ]
     return "\n".join(lines) + sep + template_part

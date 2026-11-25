@@ -107,7 +107,7 @@ class ReportView(LiveView):
     error = state("")
 
     @event_handler()
-    def generate_report(self, **kwargs):
+    def generate_report(self):
         self.generating = True        # Shows spinner immediately
         self.error = ""
         self.start_async(self._do_generate)
@@ -166,10 +166,9 @@ The first response carries `async_pending: true` whenever the handler queued bac
 
 ```python
 @event_handler()
-def start_export(self, **kwargs):
-    fmt = kwargs.get("format", "csv")
+def start_export(self, format: str = "csv"):
     self.exporting = True
-    self.start_async(self._run_export, format=fmt)
+    self.start_async(self._run_export, format=format)
 
 def _run_export(self, format="csv"):
     self.data = expensive_export(format)
@@ -211,7 +210,7 @@ class ContentView(LiveView):
 
     @event_handler
     @background
-    def generate_content(self, prompt: str = "", **kwargs):
+    def generate_content(self, prompt: str = ""):
         """Entire method runs in background thread."""
         self.generating = True
         try:
@@ -231,7 +230,7 @@ The `@background` decorator:
 @event_handler
 @debounce(wait=0.5)
 @background
-def auto_save(self, **kwargs):
+def auto_save(self):
     # Debounced and runs in background
     self.save_draft()
 ```
@@ -247,7 +246,7 @@ Both `start_async()` and `@background` support named tasks for tracking and canc
 
 ```python
 @event_handler
-def start_export(self, **kwargs):
+def start_export(self):
     self.exporting = True
     self.start_async(self._run_export, format="csv", name="export")
 
@@ -256,7 +255,7 @@ def _run_export(self, format="csv"):
     self.exporting = False
 
 @event_handler
-def cancel_export(self, **kwargs):
+def cancel_export(self):
     self.cancel_async("export")  # Cancel the named task
     self.exporting = False
     self.status = "Cancelled"
@@ -267,12 +266,12 @@ With `@background`, the task name is automatically set to the handler's function
 ```python
 @event_handler
 @background
-def generate_report(self, **kwargs):
+def generate_report(self):
     # Task name is "generate_report"
     ...
 
 @event_handler
-def cancel_report(self, **kwargs):
+def cancel_report(self):
     self.cancel_async("generate_report")
 ```
 
@@ -293,17 +292,15 @@ Async code in a view sometimes starts a task of its own: a follower launched
 from an `async def mount`, a loop started by an async push handler. Start it with
 `self.create_task(coro)` (or register a task made elsewhere with
 `self.track_task(task)`) and it lives as long as the view's `start_async` work:
-`cancel_async_all()` cancels it, an explicit-exposure view's disposal on
-disconnect or navigation cancels it, and so does a legacy view's close when the
-view sets `cancel_async_on_disconnect = True`. A task created with plain
-`asyncio.create_task()` is not tracked and keeps running.
+`cancel_async_all()` cancels it, and so does the view's disposal when its
+socket or SSE stream closes or it is navigated away from. A task created with
+plain `asyncio.create_task()` is not tracked and keeps running.
 
 ```python
 from djust import LiveView, apush_to_view, state
 
 
 class RunView(LiveView):
-    cancel_async_on_disconnect = True
     events = state(default_factory=list)
 
     async def mount(self, request, run_id=None, **kwargs):
@@ -340,6 +337,48 @@ This method is optional. If it is not implemented, tasks still re-render when th
 
 A job started with `start_async()` or `@background` belongs to the connection that started it. If the browser reconnects, or the worker restarts, the job's result is not delivered to the new connection.
 
+A disconnect cancels the work, and cancelled work keeps nothing (#4211): a result that had not been stored before the connection's teardown stores no `request.session` write, no view state and sends no frame, whether the work succeeded or failed, over the WebSocket and SSE alike. Results stored before the teardown stand. Side effects outside djust (database rows, API calls) are not rolled back. Work that must finish after the user leaves opts in with `survive_disconnect=True` (below), or belongs in a task queue.
+
+#### Work that must finish: `survive_disconnect=True`
+
+A payment, an import or an email batch must not stop half-way because the user closed the tab. Pass `survive_disconnect=True` to `start_async()`, or use `@background(survive_disconnect=True)` (#4182):
+
+```python
+# Before: cancelled when the connection closes
+@event_handler
+def charge(self, order_id: int = 0):
+    self.status = "charging"
+    self.start_async(self._charge, order_id)
+
+# After: runs to completion even if the user leaves
+@event_handler
+def charge(self, order_id: int = 0):
+    self.status = "charging"
+    self.start_async(self._charge, order_id, survive_disconnect=True)
+
+def _charge(self, order_id):
+    Payment.objects.charge(order_id)  # the result lives in the database
+    self.status = "charged"  # renders only while the page is still connected
+
+# The same, for a whole handler
+@event_handler
+@background(survive_disconnect=True)
+def import_rows(self):
+    run_import()
+```
+
+While the page is still connected nothing changes: the result renders and `handle_async_result` runs as usual. Once the view is disposed (the connection closed, the user navigated to another view):
+
+- The task keeps running, and its result is discarded: no `handle_async_result`, no render, no frame.
+- What it writes to `request.session` is not stored (#4211).
+- Setting a declared `state()` field, `push_event()`, `start_async()` or `defer()` on the disposed view raises `ViewDisposedError` (`from djust.mixins.async_work import ViewDisposedError`), which is logged with the view class and the refused operation. Other attribute writes are discarded with the view. Keep the work's results outside the view (the database, a cache, a channel group) and let the next page read them.
+- `cancel_async()` / `cancel_async_all()` cannot interrupt a running survivor; they only discard its result.
+- A survivor the view was disposed before it started (the window is the few milliseconds between the event's answer and the task's dispatch) is not started, and a warning is logged.
+- It survives in this process only. A server restart or a deploy still loses it; work that must survive those belongs in a task queue.
+- Prefer an `async def` callback. A sync one runs on Django's shared sync thread, as every sync callback does, so on the WebSocket the connection's teardown (which saves state on that same thread) waits until the callback returns; the view is disposed only then.
+
+On the HTTP fallback, a survivor still running when `http_fallback_background_timeout` is spent is not cancelled: the answer goes out without its result and the task finishes on its worker. From then on its view is treated as disposed: setting declared state, pushing or scheduling on it raises `ViewDisposedError`, which is logged.
+
 That matters because the loading flag is saved with the rest of the view's state, so it comes back with it, so the page shows a job as running that no longer exists. `mount()` cannot fix it, because restored state is applied after `mount()` returns. Clear the flag in `handle_restore()`, which runs once the restored values are in place:
 
 ```python
@@ -368,7 +407,7 @@ class ReportView(LiveView):
         return super().get_context_data(status=status, **kwargs)
 
     @event_handler
-    def generate(self, **kwargs):
+    def generate(self):
         self.generating = True
         self.start_async(self._do_generate)
 
@@ -443,7 +482,7 @@ from asgiref.sync import sync_to_async
 
 class ImportView(LiveView):  # AsyncWorkMixin + StreamingMixin are built in
     @event_handler()
-    def start_import(self, **kwargs):
+    def start_import(self):
         self.importing = True
         self.start_async(self._do_import)
 

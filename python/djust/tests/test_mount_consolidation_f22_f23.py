@@ -1,7 +1,7 @@
 """Mount-path consolidation: F22 (unsafe reflection) + F23 (URL traversal).
 
 These findings are two facets of the SAME mount surface, reached over THREE
-transports (WebSocket ``handle_mount``, SSE ``_sse_mount_view``, generic
+transports (WebSocket ``_mount_page``, SSE ``_sse_mount_view``, generic
 ``ViewRuntime.dispatch_mount``):
 
 * **F22** — the client-supplied ``view`` dotted path was ``__import__``-ed

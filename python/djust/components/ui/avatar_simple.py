@@ -1,14 +1,13 @@
 """
-Avatar Component - User profile images with size variants
+Avatar Component - User profile images with size variants.
 
 A stateless avatar component for displaying user profile images.
-Uses the automatic 3-tier performance waterfall.
 
 Features:
 - Size variants (xs, sm, md, lg, xl)
 - Initials fallback (if no image)
 - Round or square shapes
-- Status indicator (online, offline, busy)
+- Status indicator (online, offline, busy, away)
 
 Example:
     from djust.components.ui import Avatar
@@ -22,48 +21,46 @@ Example:
     # With status indicator
     avatar = Avatar(src="/static/img/user.jpg", status="online")
 
-Performance:
-    - Pure Rust: ~0.4 μs (if available)
-    - Hybrid: ~2-3 μs (template cached)
-    - Python: ~0.2 μs (f-string fallback)
+One renderer (#4002): ``_render_custom`` draws the Bootstrap 5 markup the retired Rust
+``RustAvatar`` drew, pinned byte for byte by ``python/tests/test_ui_simple_golden_4002.py``.
 """
 
 from typing import Any, Optional
+
 from ..base import Component
 
-from django.utils.html import conditional_escape
+from djust.components.utils import attr_text, csp_strict, data_url_attr
 
-from djust.components.utils import data_url_attr, attr_text, csp_strict, style_attrs
+_SIZE = {"xs": "1.5rem", "sm": "2rem", "lg": "4rem", "xl": "6rem"}
+_STATUS_CLASS = {
+    "online": "bg-success",
+    "offline": "bg-secondary",
+    "busy": "bg-danger",
+    "away": "bg-warning",
+}
 
-from djust._rust import RustAvatar
+
+def _image_src(value: Any) -> str:
+    """The ``<img src>`` value: trimmed, a non-navigation scheme as ``#``, escaped (#3748)."""
+    text = str(value).strip()
+    return data_url_attr(text, image=True) if text else ""
 
 
 class Avatar(Component):
     """
-    Simple stateless Avatar component.
-
-    Automatic performance waterfall:
-    1. Pure Rust (RustAvatar) - if available
-    2. Rust template engine - with caching
-    3. Python f-strings - fallback
+    Simple stateless Avatar component (Bootstrap 5).
 
     Args:
-        src: Image URL (optional if initials provided)
+        src: Image URL (optional if initials provided); a non-navigation scheme becomes ``#``
         alt: Alt text for image
         initials: Initials to display if no image (max 2 chars)
         size: Size variant (xs, sm, md, lg, xl)
         shape: Shape (circle, square)
         status: Status indicator (online, offline, busy, away)
+
+    With ``LIVEVIEW_CONFIG["csp_strict"]`` the size is written as ``data-dj-style-*``
+    attributes instead of an inline ``style`` (#3979).
     """
-
-    _rust_impl_class = RustAvatar
-
-    # Template for hybrid rendering
-    template = """<div class="avatar avatar-{{ size }}{% if shape == "square" %} avatar-square{% endif %}{% if status %} avatar-{{ status }}{% endif %}">{% if src %}
-    <img src="{{ src }}" alt="{{ alt }}" class="avatar-img">{% endif %}{% if initials %}
-    <span class="avatar-initials">{{ initials }}</span>{% endif %}{% if status %}
-    <span class="avatar-status"></span>{% endif %}
-</div>"""
 
     def __init__(
         self,
@@ -83,146 +80,40 @@ class Avatar(Component):
             status=status,
         )
 
+        # Declared for type checkers; the base class already set each from the kwargs.
         self.src = src
         self.alt = alt
-        self.initials = initials[:2].upper() if initials else None
         self.size = size
         self.shape = shape
         self.status = status
-
-    def _create_rust_instance(self, **props: Any) -> None:
-        """The Rust instance writes the project's style mode too (#3979)."""
-        super()._create_rust_instance(**props, strict_styles=csp_strict())
-
-    def get_context_data(self) -> dict[str, Any]:
-        return {
-            "src": self.src,
-            "alt": self.alt,
-            "initials": self.initials,
-            "size": self.size,
-            "shape": self.shape,
-            "status": self.status,
-        }
+        self.initials = initials[:2].upper() if initials else None
 
     def _render_custom(self) -> str:
-        """Python f-string fallback"""
-        from djust.config import config
-
-        framework = config.get("css_framework", "bootstrap5")
-
-        if framework == "bootstrap5":
-            return self._render_bootstrap()
-        elif framework == "tailwind":
-            return self._render_tailwind()
-        else:
-            return self._render_plain()
-
-    def _render_bootstrap(self) -> str:
-        """Render Bootstrap 5 avatar"""
-        # Size mapping (Bootstrap uses rem)
-        size_map = {"xs": "1.5rem", "sm": "2rem", "md": "3rem", "lg": "4rem", "xl": "6rem"}
-        size = size_map.get(self.size, size_map["md"])
-        # Applied by the client, not a `style=` a strict CSP refuses (#3979).
-        size_style = style_attrs(width=size, height=size, css="width: {}; height: {};")
-
-        # Shape
+        size = _SIZE.get(str(self.size), "3rem")
         shape_class = "rounded-circle" if self.shape == "circle" else "rounded"
-
-        parts = [f'<div class="position-relative d-inline-block"{size_style}>']
-
-        if self.src:
-            parts.append(
-                f'    <img src="{data_url_attr(self.src, image=True)}" alt="{attr_text(self.alt)}" class="w-100 h-100 object-fit-cover {shape_class}">'
+        if csp_strict():
+            size_attrs = (
+                f' data-dj-style data-dj-style-width="{size}" data-dj-style-height="{size}"'
             )
-        elif self.initials:
-            # Initials fallback
-            parts.append(
-                f'    <div class="w-100 h-100 bg-primary text-white d-flex align-items-center justify-content-center {shape_class}">'
+        else:
+            size_attrs = f' style="width: {size}; height: {size};"'
+        html = f'<div class="position-relative d-inline-block"{size_attrs}>'
+        if self.src is not None:
+            html += (
+                f'\n    <img src="{_image_src(self.src)}" alt="{attr_text(self.alt)}"'
+                f' class="w-100 h-100 object-fit-cover {shape_class}">'
             )
-            parts.append(
-                f'        <span class="fw-bold">{conditional_escape(self.initials)}</span>'
+        elif self.initials is not None:
+            html += (
+                '\n    <div class="w-100 h-100 bg-primary text-white d-flex align-items-center'
+                f' justify-content-center {shape_class}">'
+                f'\n        <span class="fw-bold">{attr_text(self.initials)}</span>'
+                "\n    </div>"
             )
-            parts.append("    </div>")
-
-        # Status indicator
-        if self.status:
-            status_colors = {
-                "online": "bg-success",
-                "offline": "bg-secondary",
-                "busy": "bg-danger",
-                "away": "bg-warning",
-            }
-            status_class = status_colors.get(self.status, "bg-secondary")
-            parts.append(
-                f'    <span class="position-absolute bottom-0 end-0 p-1 {status_class} border border-white rounded-circle"></span>'
+        if self.status is not None:
+            status_class = _STATUS_CLASS.get(str(self.status), "bg-secondary")
+            html += (
+                f'\n    <span class="position-absolute bottom-0 end-0 p-1 {status_class}'
+                ' border border-white rounded-circle"></span>'
             )
-
-        parts.append("</div>")
-        return "\n".join(parts)
-
-    def _render_tailwind(self) -> str:
-        """Render Tailwind CSS avatar"""
-        # Size mapping
-        size_map = {
-            "xs": "w-6 h-6",
-            "sm": "w-8 h-8",
-            "md": "w-12 h-12",
-            "lg": "w-16 h-16",
-            "xl": "w-24 h-24",
-        }
-        size_class = size_map.get(self.size, size_map["md"])
-
-        # Shape
-        shape_class = "rounded-full" if self.shape == "circle" else "rounded-lg"
-
-        parts = [f'<div class="relative inline-block {size_class}">']
-
-        if self.src:
-            parts.append(
-                f'    <img src="{data_url_attr(self.src, image=True)}" alt="{attr_text(self.alt)}" class="w-full h-full object-cover {shape_class}">'
-            )
-        elif self.initials:
-            parts.append(
-                f'    <div class="w-full h-full bg-blue-600 text-white flex items-center justify-center {shape_class}">'
-            )
-            parts.append(
-                f'        <span class="font-bold text-sm">{conditional_escape(self.initials)}</span>'
-            )
-            parts.append("    </div>")
-
-        # Status indicator
-        if self.status:
-            status_colors = {
-                "online": "bg-green-500",
-                "offline": "bg-gray-400",
-                "busy": "bg-red-500",
-                "away": "bg-yellow-500",
-            }
-            status_class = status_colors.get(self.status, "bg-gray-400")
-            parts.append(
-                f'    <span class="absolute bottom-0 right-0 block h-3 w-3 {status_class} ring-2 ring-white rounded-full"></span>'
-            )
-
-        parts.append("</div>")
-        return "\n".join(parts)
-
-    def _render_plain(self) -> str:
-        """Render plain HTML avatar"""
-        parts = [f'<div class="avatar avatar-{attr_text(self.size)}">']
-
-        if self.src:
-            parts.append(
-                f'    <img src="{data_url_attr(self.src, image=True)}" alt="{attr_text(self.alt)}">'
-            )
-        elif self.initials:
-            parts.append(
-                f'    <span class="avatar-initials">{conditional_escape(self.initials)}</span>'
-            )
-
-        if self.status:
-            parts.append(
-                f'    <span class="avatar-status avatar-status-{attr_text(self.status)}"></span>'
-            )
-
-        parts.append("</div>")
-        return "\n".join(parts)
+        return html + "\n</div>"

@@ -432,7 +432,6 @@ MERGE_GATES := \
 	tests/test_merge_gates_3757.py \
 	tests/test_promotion_ledger.py \
 	tests/test_reset_fixture_hygiene_2234.py \
-	tests/unit/test_legacy_exposure_ledger.py \
 	python/djust/tests/test_communicator_timeouts_ratchet_3709.py \
 	python/djust/tests/test_marked_safe_attribute_sweep_3898.py \
 	python/djust/tests/test_no_absolute_time_bounds_3711.py \
@@ -453,7 +452,7 @@ test-harness: ## Validate and time doctor scenarios and CI shard collection
 		tests/test_ci_python_test_shards.py tests/test_collect_test_shards.py \
 		tests/test_corpus_shards.py tests/test_corpus_shards_url_sweep_3781.py -q --durations=10
 
-# CI runs python-tests as four pytest-split shards balanced by the durations
+# CI runs python-tests as eight pytest-split shards balanced by the durations
 # recorded in .test_durations (committed). pytest-split falls back to
 # splitting by test COUNT when an entry is missing, so a stale file only
 # unbalances the shards — it never drops a test. Refresh it when the suite
@@ -469,13 +468,13 @@ test-durations: ## Regenerate .test_durations for the CI pytest-split shards (on
 	@echo "$(YELLOW)NOTE: these are THIS machine's times. CI balances on the runner's —$(NC)"
 	@echo "$(YELLOW)prefer 'make test-durations-from-ci RUN=<id>' (#2584).$(NC)"
 
-# Rebuild .test_durations from a CI run's four shard artifacts (#2584).
+# Rebuild .test_durations from a CI run's shard artifacts (#2584).
 #
 # The committed file decides how CI deals its shards, so it has to be measured
 # on the runner: recorded locally, the py3.12 shards took 182/235/584/204s of
 # pytest against 280/278/328/193s recorded — per-shard factors of 2.6x to 7.1x,
 # so no local run can balance this runner. Every python-tests shard uploads
-# what it measured; this unions the four.
+# what it measured; this unions them.
 #
 # RUN defaults to the newest completed test.yml run on main.
 RUN ?=
@@ -511,13 +510,13 @@ test-collected-floor: ## Regenerate .test_collected_floor from a real collection
 		| tail -2
 	@echo "$(GREEN)Wrote .test_collected_floor — commit it.$(NC)"
 
-# Run one CI shard exactly as the workflow does (default: shard 1 of 4).
+# Run one CI shard exactly as the workflow does (default: shard 1 of 8).
 # `make test-shard GROUP=3` for another shard.
 GROUP ?= 1
 .PHONY: test-shard
-test-shard: ## Run one of the 4 CI pytest-split shards locally (GROUP=N)
+test-shard: ## Run one of the 8 CI pytest-split shards locally (GROUP=N)
 	@DJUST_FULL_LOCAL=1 PYTHONPATH=. $(PYTHON) -m pytest tests/ python/tests/ python/djust/tests/ -n auto \
-		--splits 4 --group $(GROUP) --splitting-algorithm least_duration \
+		--splits 8 --group $(GROUP) --splitting-algorithm least_duration \
 		--durations-path .test_durations
 
 .PHONY: test-js
@@ -689,12 +688,29 @@ benchmark-model: ## Model-backed render benchmark — the five-bucket boundary p
 		--benchmark-only -p no:cacheprovider
 
 .PHONY: benchmark-turn
-benchmark-turn: ## Complete event turns, explicit vs legacy exposure, 3 shapes (#3997); needs a RELEASE build. ROUNDS=40
+benchmark-turn: ## Complete event turns, explicit exposure with and without the save, 3 shapes (#3997); needs a RELEASE build. ROUNDS=40
 	@echo "$(GREEN)Running the explicit-exposure turn benchmark (serial; release build required)...$(NC)"
 	@DJUST_TURN_BENCH_ROUNDS=$${ROUNDS:-40} PYTHONPATH=. nice -n 10 $(PYTHON) -m pytest \
 		tests/benchmarks/test_explicit_turn_cost_3997.py -q -s -p no:cacheprovider
 
+.PHONY: benchmark-transports
+benchmark-transports: ## Complete turns over WS, SSE and HTTP: 5 workloads, save/nosave, RTT 0/20/100/250 ms (#3657); RELEASE build. ROUNDS=40 JSON=out.json COMPARE=docs/performance/turn-transports-baseline.json
+	@echo "$(GREEN)Running the transport turn benchmark (serial; release build required)...$(NC)"
+	@PYTHONPATH=python nice -n 10 $(PYTHON) scripts/bench_turn_transports.py --rounds $${ROUNDS:-40} \
+		$${JSON:+--json $$JSON} $${COMPARE:+--compare $$COMPARE}
+
+.PHONY: benchmark-client-turns
+benchmark-client-turns: ## Browser side of a turn, same 5 workloads: input-to-send, apply, long tasks over WS, HTTP and the HTTP whole page (#4314); needs Playwright + Chromium. TURNS=30 JSON=out.json
+	@echo "$(GREEN)Running the browser turn benchmark (headless Chromium; release build required)...$(NC)"
+	@PYTHONPATH=python nice -n 10 $(PYTHON) scripts/bench_client_turns.py --turns $${TURNS:-30} \
+		$${JSON:+--json $$JSON}
+
 ##@ Database
+
+.PHONY: demo-tests
+demo-tests: ## Run the demo project's own tests (rentals views, rentals and shared components); CI's demo-checks job runs it
+	@cd examples/demo_project && PYTHONPATH=../..:../../python $(PYTHON) -m pytest -p no:cacheprovider -o addopts= \
+		--rootdir=. --ds=demo_project.settings djust_rentals/tests djust_rentals/components/tests djust_shared/tests.py -q
 
 .PHONY: migrate
 migrate: ## Run Django migrations

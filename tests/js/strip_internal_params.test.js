@@ -50,7 +50,6 @@ describe('handleEvent strips internal params before sending', () => {
 
             // VDOM stubs
             applyPatches: () => {},
-            initReactCounters: () => {},
             bindLiveViewEvents: () => {},
 
             // Mock WebSocket that captures what's sent

@@ -12,6 +12,8 @@ in jsdom and checks both the significant-child tree and the rendered text.
 Not shipped — lives under ``tests/`` purely to generate committed fixtures.
 """
 
+from typing import Any
+
 from djust import LiveView
 from djust.decorators import event_handler
 from djust import state as djust_state
@@ -73,15 +75,15 @@ class InlineWhitespaceView(LiveView):
     # --- event handlers (immutable updates so change detection fires) ---
 
     @event_handler
-    def set_texts(self, label, code, tail):
+    def set_texts(self, label: str, code: str, tail: str):
         self.label, self.code, self.tail = label, code, tail
 
     @event_handler
-    def set_tags(self, tags):
+    def set_tags(self, tags: list[str]):
         self.tags = list(tags)
 
     @event_handler
-    def set_chips(self, chips):
+    def set_chips(self, chips: list[str]):
         self.chips = list(chips)
 
     @event_handler
@@ -89,7 +91,7 @@ class InlineWhitespaceView(LiveView):
         self.show = not self.show
 
     @event_handler
-    def set_md(self, md):
+    def set_md(self, md: str):
         self.md = md
 
 
@@ -131,7 +133,7 @@ def keyed_list_view(shape):
             return ctx
 
         @event_handler
-        def set_items(self, items):
+        def set_items(self, items: list[Any]):
             self.items = list(items)
 
     _KeyedListView.__name__ = f"KeyedListView_{shape}"

@@ -18,7 +18,7 @@ class MultiSelect(Component):
             ``value`` (whether it is now ticked)::
 
                 @event_handler()
-                def set_frameworks(self, option, value, **kwargs):
+                def set_frameworks(self, option: Any, value: Any, **kwargs):
                     picked = [s for s in self.picker.selected if s != option]
                     self.picker.selected = picked + [option] if value else picked"""
 

@@ -128,7 +128,7 @@ class SignupWizardView(LiveView):
         return {f: getattr(self, f) for fields in STEP_FIELDS.values() for f in fields}
 
     @event_handler
-    def next_step(self, **kwargs):
+    def next_step(self, **kwargs: str):
         # Accept only the fields the CURRENT step owns. A crafted event
         # sent at step 2 can't overwrite the email validated at step 1.
         for field in STEP_FIELDS.get(self.step, ()):
@@ -142,13 +142,13 @@ class SignupWizardView(LiveView):
             self.step += 1
 
     @event_handler
-    def back_step(self, **kwargs):
+    def back_step(self):
         self.errors = {}
         if self.step > 1:
             self.step -= 1
 
     @action
-    def submit(self, **kwargs):
+    def submit(self):
         if self.step != 3:
             raise ValueError("Wizard incomplete.")
         # Re-run EVERY step's validator on the final values. Don't trust
@@ -295,7 +295,7 @@ common-case linear or branching wizard, a `state(int)` cursor plus
   that hydrates `step`, `name`, etc. from a saved draft (Django
   session or DB row). Save on every transition.
 - **Skip-to-step navigation:** add `<button dj-click="goto_step"
-  data-step="2">2. Plan</button>` and a `goto_step` handler that
+  dj-value-step="2">2. Plan</button>` and a `goto_step` handler that
   validates every step ≤ N before jumping.
 - **Branching wizards:** if step 2's plan choice changes step 3's
   questions, just check `self.plan` inside the step-3 template

@@ -74,7 +74,7 @@ from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
 
-from ._exposure import ProviderContract, uses_legacy_exposure
+from ._exposure import ProviderContract
 from ._exposure_providers import provide_context
 from .decorators import event_handler
 from .push import push_to_presence_scope, push_to_view, view_push_scopes
@@ -268,7 +268,7 @@ class PresenceManager:
 
 #: ``PresenceMixin``'s render-only context under explicit exposure (ADR-038
 #: Step R, PR 0c). ``online_count`` is an ordinary view attribute the mixin
-#: refreshes; the legacy attribute walk rendered it, and nothing else does.
+#: refreshes; nothing else renders it.
 PRESENCE_PROVIDER = ProviderContract("djust.presence", rendered=frozenset({"online_count"}))
 
 _UNSET: Any = object()
@@ -386,12 +386,10 @@ class PresenceMixin:
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         """Render ``online_count`` for a view with explicit exposure.
 
-        A legacy view is untouched: its attribute walk already renders the
-        attribute. An explicit view renders nothing it is not given, so the
-        mixin provides the one name it publishes. It is provided once the
-        view has it (the mixin sets it in ``track_presence`` and on a presence
-        change; a view may also declare it), which is when the walk rendered
-        it. Render-only: it is neither persisted nor sent to the browser as
+        A view renders nothing it is not given, so the mixin provides the one
+        name it publishes. It is provided once the view has it (the mixin sets
+        it in ``track_presence`` and on a presence change; a view may also
+        declare it). Render-only: it is neither persisted nor sent to the browser as
         data.
         """
         # PresenceMixin is mixed into a LiveView at runtime; the MRO supplies
@@ -401,12 +399,11 @@ class PresenceMixin:
             if hasattr(super(), "get_context_data")
             else {}
         )
-        if not uses_legacy_exposure(self):
-            # ``getattr``, not ``__dict__``: a view may declare the name
-            # (``online_count = state(0)``), and that value lives on the class.
-            count = getattr(self, "online_count", _UNSET)
-            if count is not _UNSET:
-                provide_context(self, context, PRESENCE_PROVIDER.name, "online_count", count)
+        # ``getattr``, not ``__dict__``: a view may declare the name
+        # (``online_count = state(0)``), and that value lives on the class.
+        count = getattr(self, "online_count", _UNSET)
+        if count is not _UNSET:
+            provide_context(self, context, PRESENCE_PROVIDER.name, "online_count", count)
         return context
 
     def _presence_broadcast_is_scoped(self) -> bool:
@@ -589,17 +586,8 @@ class PresenceMixin:
         if meta is None:
             meta = {}
 
-        # Add default metadata (legacy only; ADR-038 D-c: peers see meta, so
-        # explicit views track exactly what the application passed).
-        if (
-            uses_legacy_exposure(self)
-            and hasattr(self, "request")
-            and hasattr(self.request, "user")
-            and self.request.user.is_authenticated
-        ):
-            meta.setdefault("name", self.request.user.username)
-            meta.setdefault("user_id", user_id)
-
+        # ADR-038 D-c: peers see meta, so a view tracks exactly what the
+        # application passed.
         self._presence_user_id = user_id
         self._presence_meta = meta
         self._presence_scope_key = presence_key

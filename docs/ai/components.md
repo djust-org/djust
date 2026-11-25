@@ -21,10 +21,10 @@ class StatusDot(Component):
         return {"color": self.color}
 ```
 
-### Rendering Waterfall
-1. `_rust_impl_class` — Pure Rust (~1us)
-2. `template` — Rust template engine with Django fallback (~5-10us)
-3. `_render_custom()` — Python method (~50-100us)
+### One renderer (#4002)
+- `template` — Rust template engine with Django fallback, if the class has one
+- else `_render_custom()` — Python method returning the HTML (the `djust.components.ui` simple
+  components; a few microseconds)
 
 ### Usage in LiveView
 ```python

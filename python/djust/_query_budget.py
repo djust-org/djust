@@ -6,8 +6,10 @@ A view declares what its phases may spend on the database::
         query_budget = {"mount": 3, "render": 1, "events": {"refresh": 2}}
 
 * ``query_budget = 5``: ``mount()`` plus the first render, together.
-* ``"mount"``: ``mount()`` and ``handle_params()``. ``"render"``: one
-  ``get_context_data()`` pass (where the JIT evaluates the view's QuerySets).
+* ``"mount"``: ``mount()`` and ``handle_params()``. ``"render"``: one render
+  pass: ``get_context_data()`` and, since #4276, the queries the render makes
+  after it (the explicit JIT evaluating the context's QuerySets, the rows
+  serialized for the template, the relations the template walks on a model).
 * ``"event"``: every ``@event_handler`` of the view; ``"events": {name: n}``
   names a handler's own number, which wins over ``"event"``.
 

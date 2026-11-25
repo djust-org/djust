@@ -2,10 +2,10 @@
 
 ADR-022 Iter 3 converges the WS ``mount`` verb onto ``ViewRuntime.dispatch_mount``
 over zero-WS-routing-risk PRs (Phase 3.0-3.3a build-up), then ONE atomic flip
-(Phase 3.3b: ``mount`` into ``RUNTIME_OWNED_VERBS`` + a thin ``handle_mount``
+(Phase 3.3b: ``mount`` into ``RUNTIME_OWNED_VERBS`` + a thin ``_mount_page``
 shim). This file — the FIRST PR of the mount convergence (Phase 3.0) —
 CHARACTERIZES the six mount behaviors the flip must preserve, driving each
-against the CURRENT bespoke ``handle_mount`` path over a real channels
+against the CURRENT bespoke ``_mount_page`` path over a real channels
 ``WebsocketCommunicator``.
 
 Every test here:
@@ -102,7 +102,7 @@ async def _consumer_with_view(view_class):
     tests drive ``_tick_once`` explicitly — there is no timer to wait on and no
     wire to read. Follows the established pattern in
     ``test_live_redirect_mount_resolve_1647.py``. The view is mounted through
-    the real ``handle_mount`` (its render establishes the diff baseline, so the
+    the real ``_mount_page`` (its render establishes the diff baseline, so the
     patch branch is exercised) because an explicit view's tick is authorized
     by the runtime that mounted it; the tick loop that mount starts is stopped.
     """

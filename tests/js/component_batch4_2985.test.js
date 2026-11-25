@@ -9,6 +9,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { openContracts } from './_open_contracts.js';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
@@ -18,7 +19,7 @@ const read = (f) => fs.readFileSync(DIR + f, 'utf-8');
 
 function createEnv(bodyHtml, { preRegister, matchMedia } = {}) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body><div dj-root>${bodyHtml}</div></body></html>`,
+        `<!DOCTYPE html><html><body><div dj-root dj-view="test.V">${bodyHtml}</div>${openContracts(bodyHtml)}</body></html>`,
         { url: 'http://localhost:8000/test/', runScripts: 'dangerously', pretendToBeVisual: true },
     );
     const { window } = dom;
@@ -34,6 +35,8 @@ function createEnv(bodyHtml, { preRegister, matchMedia } = {}) {
     } catch (_e) {
         // client.js may throw on DOM APIs jsdom lacks; hooks still load.
     }
+    // The page's contract block is read at init, which this env does not fire.
+    try { window.djust._installPageParameterContracts(); } catch (_e) { /* no page */ }
     if (preRegister) preRegister(window);
     return { window, warnings };
 }
@@ -1132,12 +1135,19 @@ describe('MentionsInput', () => {
             expect(env.sent).toEqual([['send_message', { text: 'hello', mentions: [] }]]);
         });
 
-        it('carries the input\'s dj-value-* attributes, which the plain binding sends, without overriding the payload', () => {
-            const env = setup(MENTIONS(USERS, { attrs: 'dj-keydown.enter="send_message" dj-value-room="lobby" dj-value-text="nope"' }));
+        it('carries the input\'s dj-value-* attributes, which the plain binding sends', () => {
+            const env = setup(MENTIONS(USERS, { attrs: 'dj-keydown.enter="send_message" dj-value-room="lobby"' }));
             env.type('hello');
             submit(env);
             expect(env.sent[0][1].room).toBe('lobby');
             expect(env.sent[0][1].text).toBe('hello');
+        });
+
+        it('refuses a dj-value-* that reuses a name of the payload, rather than overriding it', () => {
+            const env = setup(MENTIONS(USERS, { attrs: 'dj-keydown.enter="send_message" dj-value-text="nope"' }));
+            env.type('hello');
+            submit(env);
+            expect(env.sent).toEqual([]);
         });
 
         it('with no client API it falls back to the hook\'s own pushEvent', () => {

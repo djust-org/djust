@@ -3,7 +3,19 @@ RustBridgeMixin - Rust backend integration for LiveView.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, Iterable, List, Optional, Set, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
 
 from django.utils.datastructures import MultiValueDict
 from django.utils.safestring import SafeData
@@ -14,13 +26,16 @@ from .._mapping import mapping_values
 from .._exposure_providers import (
     RUST_RENDER_PROVIDER,
     ExplicitRenderContext,
+    registered_components,
     require_no_provider_keys,
 )
 from .._accumulating_containers import view_accumulating_container_ids
 from ..change_detection import (
+    ChangedKeys,
+    SnapshotEntry,
     deep_fingerprint,
     fingerprints_by_content,
-    share_structure,
+    retained_fingerprint,
     warn_fingerprint_truncated,
 )
 from ..serialization import holds_form, normalize_django_value
@@ -31,6 +46,7 @@ from ..render_env import apply_render_env
 from ..request_scoped import is_request_scoped_data
 from .. import _per_turn
 from .context import PROCESSOR_RECORD_ATTR, PROCESSOR_REPLAY_ATTR, _keeps_out_of_state
+from .context import _holds_db_value, _state_model_values
 from .context import _request_scoped_keys as request_scoped_keys
 
 logger = logging.getLogger(__name__)
@@ -89,6 +105,202 @@ _MISSING = object()
 # that should hit the existing ``_deep_serialize_dict`` path or the user's
 # own override, not the framework's defensive normalize pass.
 _NORMALIZE_DEPTH_LIMIT = 3
+
+
+def _queryset_method_roots_for(view: Any) -> FrozenSet[str]:
+    """Context names the view's template reads ``count`` / ``exists`` /
+    ``first`` / ``last`` / ``all`` directly off (#4241, #4258, #4270).
+
+    The JIT keeps an evaluated QuerySet for the render sidecar on exactly this
+    condition (``queryset_method_roots``); the native render's capture of a
+    context QuerySet uses it too, so no other QuerySet attribute (``.query``)
+    becomes reachable. An unreadable template reads nothing.
+    """
+    from .jit import _jit_template_content, queryset_method_roots
+
+    try:
+        content = _jit_template_content(view)
+    except Exception:  # noqa: BLE001 -- no template source means no capture
+        return frozenset()
+    return queryset_method_roots(content)
+
+
+def _queryset_row_walk_paths_for(view: Any) -> Dict[str, FrozenSet[str]]:
+    """The paths the view's template reads off each name, loop-row reads
+    included (#4069). An unreadable template reads nothing."""
+    from .jit import _jit_template_content, queryset_row_walk_paths
+
+    try:
+        content = _jit_template_content(view)
+    except Exception:  # noqa: BLE001 -- no template source means no capture
+        return {}
+    return queryset_row_walk_paths(content)
+
+
+def _overlay_floor(value: Any, memo: Dict[Any, Any], text_memo: Dict[int, Any]) -> Any:
+    """The floor the overlay applies to one state value (#3936): the sidecar's tree floor, with
+    each model handle's text kept plain (LiveView's escaping, train/2.0-ai)."""
+    from ..serialization import _overlay_plain_text_handles, _protect_sidecar_tree
+
+    floored = _protect_sidecar_tree(value, 0, memo, set())
+    return _overlay_plain_text_handles(floored, text_memo)
+
+
+def _method_read_rows_take_the_jit(full_context: Any) -> bool:
+    """Does a method-read QuerySet (``{{ qs.count }}``) still go on to the row-walk check (review
+    S1)? On an explicit context, yes: its walked rows are JIT-serialized as legacy's are. Legacy's
+    JIT already ran before the sync. A function so the gate-off test can turn it off."""
+    return type(full_context) is ExplicitRenderContext
+
+
+def _explicit_fk_rows_take_the_jit(model_class: Any, paths: FrozenSet[str]) -> bool:
+    """Does an explicit view's QuerySet go through the JIT because its rows' forward relation is read
+    as one segment (review N4)? A function so the gate-off test can turn it off."""
+    return _paths_read_a_relation(model_class, paths)
+
+
+def _plain_rows_take_the_jit(
+    value: Any, model_class: Any, paths: FrozenSet[str], context: Any
+) -> bool:
+    """Does an explicit view's Model, or model list / QuerySet whose rows the template reads
+    only columns off, go through the JIT, reduced to the paths the template reads (#4290)?
+
+    Yes, as on 1.x, unless:
+
+    - it is a ``.values()`` / ``.values_list()`` QuerySet: its rows are dicts / tuples, which
+      the JIT's model serializer reads empty (#4271), and they hold only the columns asked for;
+    - a ``dictsort:<variable>`` names something that is not one of the row model's columns this
+      render (a property, a ``get_*`` method): the JIT row carries a column only (#3910), so
+      such a list keeps the normalized rows it sorted by before.
+
+    A function so the gate-off test can turn it off.
+    """
+    from django.db.models import QuerySet
+    from django.db.models.query import ModelIterable
+
+    from .jit import resolve_variable_keys, split_variable_keys
+
+    if isinstance(value, QuerySet) and not issubclass(value._iterable_class, ModelIterable):
+        return False
+    _, variables = split_variable_keys(sorted(paths))
+    if not variables:
+        return True
+    return len(resolve_variable_keys(variables, context, model_class)) == len(set(variables))
+
+
+def _overlay_model_class(value: Any) -> Any:
+    """The model class behind one overlay value (a ``Model``, a ``QuerySet``, a model list)."""
+    from django.db.models import Model, QuerySet
+
+    if isinstance(value, QuerySet):
+        return value.model
+    if isinstance(value, Model):
+        return type(value)
+    return next((type(v) for v in value if isinstance(v, Model)), None)
+
+
+def _overlay_skip_keys(
+    view: Any,
+    raw: Dict[str, Any],
+    full_context: Any,
+    walked_keys: Any = (),
+    qs_roots: Optional[FrozenSet[str]] = None,
+    plain_keys: Any = (),
+) -> FrozenSet[str]:
+    """The state keys the flag-off path already answers with Django's semantics (#3936, B-H1).
+
+    The overlay binds a handle ABOVE the state, so it shadows every answer the JIT and the
+    render sidecar give for that name. For these keys the shadow loses an answer or adds a query,
+    so they keep the flag-off path (capped, prefetched rows; method answers):
+
+    - a QuerySet the template reads ``count`` / ``exists`` / ``first`` / ``last`` off (#4241,
+      #4258): the handle is a LIST of rows, which has no ``count``;
+    - a name whose rows the template reads through a QuerySet method (``_all_method_rows``,
+      #3801);
+    - a name whose rows the JIT serialized WITH the relation paths the template walks
+      (``walked_keys`` on an explicit view, #4069 S1; ``_jit_serialized_keys`` plus a live walk
+      on a legacy one): the JIT prefetched them and applied ``queryset_all_row_cap`` (#3788),
+      and a handle would walk each row again, one query per row.
+
+    Every other key still gets its handle: a single model on an explicit view, a model list or
+    QuerySet the template reads only columns off, and every value a filtered rebinding or a
+    custom filter / tag is handed. ``plain_keys`` are those names on an explicit view: the JIT
+    reduced them to the paths the template reads (#4290), but did not walk their rows, so they
+    keep their handle whatever the template reads off them.
+    """
+    from django.db.models import QuerySet
+
+    from .jit import rows_need_live_walk
+
+    if not raw:
+        return frozenset()
+    skip = {k for k in walked_keys if k in raw}
+    skip.update(k for k in (getattr(view, "_all_method_rows", None) or {}) if k in raw)
+    if any(isinstance(v, QuerySet) for v in raw.values()):
+        # The sync's own lookup when it made one: one per sync (#4258).
+        roots = _queryset_method_roots_for(view) if qs_roots is None else qs_roots
+        skip.update(k for k, v in raw.items() if isinstance(v, QuerySet) and k in roots)
+    jit_keys = getattr(view, "_jit_serialized_keys", None) or ()
+    pending = [k for k in raw if k in jit_keys and k not in skip and k not in plain_keys]
+    if pending:
+        walk_paths = _queryset_row_walk_paths_for(view)
+        for key in pending:
+            paths = walk_paths.get(key)
+            if not paths:
+                continue
+            model_cls = _overlay_model_class(raw[key])
+            if rows_need_live_walk(model_cls, paths, full_context) or (
+                # Review B2: a legacy JIT re-queries a QuerySet WITH ``select_related`` for a
+                # forward relation read as one segment (``{{ o.customer }}``), which
+                # ``rows_need_live_walk`` calls a value. The handles would iterate the state
+                # QuerySet again and load each row's relation lazily (N+1).
+                isinstance(raw[key], QuerySet) and _paths_read_a_relation(model_cls, paths)
+            ):
+                skip.add(key)
+    return frozenset(skip)
+
+
+def _paths_read_a_relation(model_class: Any, paths: FrozenSet[str]) -> bool:
+    """Does any template path start at a relation field of the row model (review B2)?"""
+    from .jit import VARIABLE_KEY_PREFIX
+
+    if model_class is None:
+        return False
+    for path in paths:
+        if path.startswith(VARIABLE_KEY_PREFIX):
+            continue
+        try:
+            field = model_class._meta.get_field(path.split(".", 1)[0])
+        except Exception:  # noqa: BLE001 -- not a field (a property, a method, a column alias)
+            continue
+        if field.is_relation:
+            return True
+    return False
+
+
+def _render_handles(raw: Dict[str, Any], full_context: Any, skip_keys: Any = ()) -> Dict[str, Any]:
+    """Floored handles for the render-time overlay (#3936).
+
+    Every value goes through ``_protect_sidecar_tree`` (one shared memo, so one
+    object is one proxy); a key whose floor raises is DROPPED, so it renders
+    from its serialized dict (fail closed). Only keys the context still
+    carries, and never a sidecar-only key.
+    """
+    if not raw:
+        return {}
+    memo: Dict[Any, Any] = {}
+    text_memo: Dict[int, Any] = {}
+    handles: Dict[str, Any] = {}
+    for key, value in raw.items():
+        if key not in full_context or key in skip_keys:
+            continue
+        try:
+            handles[key] = _overlay_floor(value, memo, text_memo)
+        except Exception:  # noqa: BLE001 -- fail closed: the key keeps its dict
+            logging.getLogger("djust.rust_bridge").warning(
+                "state_models_as_handles: the floor refused %r; it renders from its dict", key
+            )
+    return handles
 
 
 def _normalize_db_values(value: Any, depth: int = 0) -> Any:
@@ -241,6 +453,173 @@ def _collect_sub_ids(
             _collect_sub_ids(v, collected, visited, depth + 1)
 
 
+#: Every method of the view that runs between the post-event snapshot and
+#: the sync's fingerprints: the render entry point, the sync itself, and each
+#: method the explicit context is built through. The snapshot's walks are
+#: reused only while each one is the framework's own
+#: (``_snapshot_walks_for_sync``), so an override that writes into state before
+#: calling ``super()`` turns the reuse off. ``_get_context_processors`` is left
+#: out on purpose: it returns the processor paths (tests and apps override it
+#: to return a list) and the processors it names receive the request, not the
+#: view.
+_CONTEXT_HOOKS = (
+    "render_with_diff",
+    "_initialize_rust_view",
+    "_sync_state_to_rust",
+    "_sync_state_to_rust_body",
+    "_apply_render_env",
+    "_context_for_render",
+    "_settled_render_context",
+    "get_context_data",
+    "_get_explicit_context_data",
+    "reset_unique_ids",
+    "clear_context_providers",
+    "_get_streams_context",
+    "_get_upload_context",
+    "get_render_only_context",
+    "_apply_context_processors",
+    "_csrf_token_for_render",
+)
+
+_framework_hooks: Optional[Dict[str, Any]] = None
+
+
+def _framework_context_hooks() -> Dict[str, Any]:
+    """``{name: function}`` of the framework's own :data:`_CONTEXT_HOOKS`.
+
+    Resolved on ``LiveView`` itself (its MRO is the framework's mixins), then
+    on the opt-in mixins ``LiveView`` does not include.
+    """
+    global _framework_hooks
+    if _framework_hooks is None:
+        from ..live_view import LiveView
+        from ..uploads import UploadMixin
+        from .streams import StreamsMixin
+
+        hooks: Dict[str, Any] = {}
+        for name in _CONTEXT_HOOKS:
+            for owner in (LiveView, StreamsMixin, UploadMixin):
+                function = getattr(owner, name, None)
+                if function is not None:
+                    hooks[name] = function
+                    break
+        _framework_hooks = hooks
+    return _framework_hooks
+
+
+def _snapshot_walks_for_sync(
+    view: Any, changed_keys: Any, preloaded_context: Any
+) -> Optional[Dict[int, SnapshotEntry]]:
+    """The post-event snapshot's container walks, if this sync may take them (#3999).
+
+    A turn walks every container on the view in its post-event snapshot and,
+    until now, walked the context's containers again in the sync. The second
+    walk can be replaced by the first only if nothing changed the container
+    between the two, and in-place mutation leaves no trace on a ``list`` or
+    ``dict``. So the reuse is allowed only when no application code can run
+    in that window, and the sync walks as before otherwise:
+
+    * ``changed_keys`` is the :class:`~djust.change_detection.ChangedKeys` the
+      handler's turn computed from that snapshot, still the view's own
+      ``_changed_keys`` and computed in the turn that is running now (a
+      ``set_changed_keys()`` call builds a new set; a later turn has another
+      ``Turn``);
+    * the context is built here (no ``preloaded_context``) and every method
+      on the way from the render to the fingerprints is the framework's own
+      (:data:`_CONTEXT_HOOKS`), so no ``get_context_data`` override,
+      ``get_render_only_context``, ``reset_unique_ids`` or ``@computed``
+      called from one runs; the template is not a ``property``; no class-level component
+      (whose first binding may run its ``mount``); and no
+      ``sync_turn_wrapper`` is configured around the render step.
+
+    A value is reused per object: the entry holds the object, so
+    ``entry[0] is value`` proves it is the one the snapshot walked.
+    """
+    if type(changed_keys) is not ChangedKeys or preloaded_context is not None:
+        return None
+    walks = changed_keys.fingerprints
+    turn_ref = changed_keys.turn
+    if not walks or turn_ref is None or not _per_turn.on("snapshot_fingerprints"):
+        return None
+    from ..turns import current_turn
+
+    turn = turn_ref()
+    if turn is None or turn is not current_turn():
+        return None
+    cls = type(view)
+    for name, function in _framework_context_hooks().items():
+        if getattr(cls, name, function) is not function:
+            return None
+    from inspect import getattr_static
+
+    if isinstance(getattr_static(cls, "template", None), property):
+        return None
+    if registered_components(cls):
+        return None
+    from ..sync_turn import _wrapper
+
+    if _wrapper() is not None:
+        return None
+    return walks
+
+
+#: A list shorter than this is sent whole: the delta saves nothing there.
+_ITEM_DELTA_MIN_LEN = 16
+
+
+def _list_item_delta(
+    key: str, value: Any, post: Any, pre: Any, previous: Any
+) -> Optional[Tuple[List[int], List[Any]]]:
+    """The rows of *value* to send to Rust instead of the whole list, or None (#4325).
+
+    *post* and *pre* are the post- and pre-event snapshot's walks of this very
+    list (``SnapshotEntry``: the object, its fingerprint tree, plain or not);
+    *previous* is what the last sync kept of the key's fingerprint. The delta
+    is sound only when all of these hold, and None sends the list whole:
+
+    * both walks are of this object (it was changed in place, not rebound),
+      and both found it plain data, so each row converts alone exactly as it
+      does inside the list and no row holds a ``SafeString``;
+    * the pre-event fingerprint is the one the last sync kept: Rust holds the
+      list exactly as it was before the handler, so replacing the rows whose
+      fingerprints differ gives exactly the list as it is now;
+    * the length did not change, and at most a quarter of the rows did.
+    """
+    if (
+        post is None
+        or pre is None
+        or post[0] is not value
+        or pre[0] is not value
+        or not (post[2] and pre[2])
+    ):
+        return None
+    post_tree, pre_tree = post[1], pre[1]
+    if (
+        type(post_tree) is not tuple
+        or type(pre_tree) is not tuple
+        or len(post_tree) != 2
+        or len(pre_tree) != 2
+        or post_tree[0] != "L"
+        or pre_tree[0] != "L"
+    ):
+        return None
+    post_rows, pre_rows = post_tree[1], pre_tree[1]
+    if len(post_rows) != len(pre_rows) or len(post_rows) != len(value):
+        return None
+    if len(value) < _ITEM_DELTA_MIN_LEN or previous != retained_fingerprint(pre_tree):
+        return None
+    indices = [i for i, (a, b) in enumerate(zip(pre_rows, post_rows)) if a != b]
+    if not indices or 4 * len(indices) > len(value):
+        return None
+    rows: List[Any] = []
+    for i in indices:
+        converted = convert_for_render(value[i], "%s.%d" % (key, i))
+        if converted is None or converted[0]:
+            return None
+        rows.append(converted[1])
+    return indices, rows
+
+
 #: ``_request_scoped_fingerprint``'s answer for a value it does not fingerprint.
 _NO_FINGERPRINT: Any = object()
 
@@ -260,8 +639,9 @@ def _request_scoped_fingerprint(key: str, value: Any) -> Tuple[bool, Any, Any]:
       it is never reported as a changed key (#1786).
     * otherwise the value is plain data that ``update_state`` stores. When it is
       made only of exact builtin containers and exact leaf types (what
-      ``state_pass`` converts), ``fingerprint`` is its structural fingerprint,
-      which holds values and no reference to the object, and ``converted`` is
+      ``state_pass`` converts), ``fingerprint`` is what is kept of its
+      structural fingerprint (``retained_fingerprint``: a digest, #3998),
+      which holds no reference to the object, and ``converted`` is
       the ``(safe paths, rendered value)`` pair of the same walk. A value of any
       other type that still counts as serialisable (a ``SimpleLazyObject`` over
       a string, a ``str`` subclass, an ``IntEnum``) gets ``_NO_FINGERPRINT``:
@@ -283,34 +663,8 @@ def _request_scoped_fingerprint(key: str, value: Any) -> Tuple[bool, Any, Any]:
         return False, _NO_FINGERPRINT, None
     if truncated:
         # An incomplete fingerprint cannot prove equality: equal to nothing.
-        fingerprint = object()
-    return False, fingerprint, converted
-
-
-def _reuse_fingerprint(fp: Any, held: Any, baseline_entry: Any) -> Tuple[Any, bool]:
-    """``(fingerprint to store, is it unchanged since the last sync)`` (#3998).
-
-    One tree per attribute, not two or three. A fingerprint is an immutable
-    value that shares nothing with the state, so an EQUAL one can stand in
-    for it:
-
-    * *held* is what the last sync stored for the key (``_MISSING`` if
-      nothing). Equal: the key is unchanged and keeps the object it had, so
-      the caller's comparison is this one and does not run again.
-    * otherwise *baseline_entry* is the dirty baseline's entry for the
-      attribute of the same name (``("c", id, fingerprint)`` for a
-      container). Equal: the baseline's object is stored. Not equal: the new
-      fingerprint is rebuilt from the baseline's rows wherever those are
-      equal (``share_structure``), so one changed row costs one row.
-
-    Never returns a fingerprint that is not equal to *fp*.
-    """
-    if held is not _MISSING and held == fp:
-        return held, True
-    if type(baseline_entry) is tuple and len(baseline_entry) == 3 and baseline_entry[0] == "c":
-        base = baseline_entry[2]
-        return (base if base == fp else share_structure(fp, base)), False
-    return fp, False
+        return False, object(), converted
+    return False, retained_fingerprint(fingerprint), converted
 
 
 def _trusted_request_scoped_fingerprints(view: Any, prev_refs: Any) -> Optional[Dict[str, Any]]:
@@ -463,6 +817,34 @@ def _warn_rows_without_id(view: Any) -> None:
         )
 
 
+# ``_force_full_html`` holds one of three values (#4286):
+#
+# - falsy: nothing was requested;
+# - ``True``: send this turn's render as full HTML (``request_full_render()``,
+#   a restore, a dropped save, a catch-up), discarding the diff;
+# - ``RENDER_REQUESTED``: ``set_changed_keys()`` asked for the turn to RENDER
+#   (past the unchanged-state skip) but the render is still diffed and sent as
+#   a ``patch``.
+#
+# The sentinel is truthy on purpose. Every site that bypasses the skip,
+# consumes the flag or resyncs the full context to Rust keeps its truthiness
+# test, so a site that forgets about the sentinel still renders; only the
+# sites that DISCARD PATCHES test for ``True`` (:func:`full_html_requested`),
+# and one that forgets fails safe as a full-HTML frame (the parallel-path
+# drift class, #1646). A plain ``str`` so it pickles with the view.
+RENDER_REQUESTED = "render"
+
+
+def full_html_requested(view: Any) -> bool:
+    """Whether ``view`` asked for this turn's render as full HTML (#4286).
+
+    True only for an explicit full-page request (``_force_full_html is
+    True``); ``set_changed_keys()``'s :data:`RENDER_REQUESTED` forces the
+    render but keeps the diff.
+    """
+    return getattr(view, "_force_full_html", False) is True
+
+
 class RustBridgeMixin:
     """Rust integration: _initialize_rust_view, _sync_state_to_rust."""
 
@@ -477,6 +859,8 @@ class RustBridgeMixin:
         # instantiated standalone). See streaming.py for the same pattern.
         request: Any
         _rust_view: Any
+        # False, True (full HTML) or RENDER_REQUESTED (render, keep the diff).
+        _force_full_html: Union[bool, str]
         _websocket_session_id: Optional[str]
         _django_session_key: Optional[str]
         _cached_csrf_token: Optional[str]
@@ -493,6 +877,24 @@ class RustBridgeMixin:
         ) -> Dict[str, Any]: ...
 
         def get_template(self) -> str: ...
+
+        _jit_serialized_keys: Set[str]
+
+        def _jit_serialize_context(
+            self,
+            context: Dict[str, Any],
+            template_content: str,
+            keys: Optional[Iterable[str]] = None,
+            into: Optional[Set[str]] = None,
+        ) -> Set[str]: ...
+
+        def _deep_serialize_dict(
+            self, d: Dict[str, Any], template_content: Optional[str] = None, var_name: str = ""
+        ) -> Dict[str, Any]: ...
+
+        def _deep_serialize_sequence(
+            self, items: List[Any], template_content: Optional[str] = None, var_name: str = ""
+        ) -> List[Any]: ...
 
     #: Adaptive loop-cache bypass (#3071). After this many consecutive
     #: renders whose loop-cache hit rate is below
@@ -573,64 +975,26 @@ class RustBridgeMixin:
     def _initialize_rust_view(self, request: Any = None) -> None:
         """Initialize the Rust LiveView backend"""
 
-        from .._exposure import ExposureError, uses_legacy_exposure
+        from .._exposure import ExposureError
 
-        if not uses_legacy_exposure(self):
-            try:
-                policy = getattr(self, "exposure_policy", None)
-            except Exception:
-                raise ExposureError("Invalid render exposure policy") from None
-            if type(policy) is not str or policy != "explicit":
-                raise ExposureError("Invalid render exposure policy")
-            # A Rust view contains render context and a mutable VDOM baseline,
-            # not the declared server-persistence projection. Keep it owned by
-            # this instance; reconnect rebuilds it from authorized context and
-            # the separately restored declared state.
-            if self._rust_view is None or not getattr(self, "_rust_view_explicit", False):
-                _ensure_custom_filters_bridged()
-                explicit_template_source = self.get_template()
-                if getattr(self, "_authenticated_partial_root", False):
-                    explicit_template_source = (
-                        self._authenticated_template_source or explicit_template_source
-                    )
-                self._rust_view = RustLiveView(explicit_template_source, get_template_dirs())
-                if getattr(self, "_authenticated_partial_root", False):
-                    self._rust_view.set_authenticated_partial_root(True)
-                    self._rust_view.set_authenticated_view_path(
-                        f"{getattr(type(self), '__module__', '<unknown>')}.{type(self).__name__}"
-                    )
-                    self._rust_view.set_template_origin(
-                        getattr(self, "_authenticated_partial_root_origin", None)
-                    )
-                self._apply_loop_render_cache_flag()
-                self._rust_view_explicit = True
-            return
-
-        self._rust_view_explicit = False
-        logger.debug("[LiveView] _initialize_rust_view() called, _rust_view=%s", self._rust_view)
-
-        # Bootstrap project-defined ``@register.filter`` callables into the
-        # Rust filter registry the first time any LiveView is initialized
-        # (#1121). Subsequent calls are cheap — a process-level guard
-        # short-circuits, and re-bootstrapping is idempotent for late-
-        # loaded apps. Failure is non-fatal: filters still work in
-        # Python-rendered paths.
-        _ensure_custom_filters_bridged()
-
-        if self._rust_view is None:
-            # 2.0: a legacy view's Rust view is owned by this instance, as an
-            # explicit view's is. The shared state-backend copy keyed by the
-            # session and page (the "legacy render cache") was removed: it let
-            # a reconnect skip get_template() and reuse the previous
-            # connection's render state and VDOM baseline.
-            template_source = self.get_template()
-            logger.debug("[LiveView] Template length: %d chars", len(template_source))
-            logger.debug("[LiveView] Template preview: %s...", template_source[:200])
-
-            template_dirs = get_template_dirs()
+        try:
+            policy = getattr(self, "exposure_policy", None)
+        except Exception:
+            raise ExposureError("Invalid render exposure policy") from None
+        if type(policy) is not str or policy != "explicit":
+            raise ExposureError("Invalid render exposure policy")
+        # A Rust view contains render context and a mutable VDOM baseline,
+        # not the declared server-persistence projection. Keep it owned by
+        # this instance; reconnect rebuilds it from authorized context and
+        # the separately restored declared state.
+        if self._rust_view is None or not getattr(self, "_rust_view_explicit", False):
+            _ensure_custom_filters_bridged()
+            explicit_template_source = self.get_template()
             if getattr(self, "_authenticated_partial_root", False):
-                template_source = self._authenticated_template_source or template_source
-            self._rust_view = RustLiveView(template_source, template_dirs)
+                explicit_template_source = (
+                    self._authenticated_template_source or explicit_template_source
+                )
+            self._rust_view = RustLiveView(explicit_template_source, get_template_dirs())
             if getattr(self, "_authenticated_partial_root", False):
                 self._rust_view.set_authenticated_partial_root(True)
                 self._rust_view.set_authenticated_view_path(
@@ -639,8 +1003,8 @@ class RustBridgeMixin:
                 self._rust_view.set_template_origin(
                     getattr(self, "_authenticated_partial_root_origin", None)
                 )
-            # Apply the per-item loop render cache flag (#1967, default OFF).
             self._apply_loop_render_cache_flag()
+            self._rust_view_explicit = True
 
     def set_changed_keys(self, keys: Union[str, Iterable[str], None] = None) -> None:
         """Mark one or more public attrs as changed, forcing a re-render.
@@ -663,9 +1027,13 @@ class RustBridgeMixin:
                 self.rows[i].name = name  # in-place write on a model instance
                 self.set_changed_keys("rows")
 
-        This forces a full re-render of the view. When a targeted diff matters
-        (large views, hot paths), prefer building a NEW value immutably
-        instead — djust diffs that efficiently::
+        This forces the view to re-render this turn. The render is still
+        diffed and sent as a ``patch`` (#4286), so DOM state the server does
+        not render (an open native ``<dialog>``, focus, a caret) survives it;
+        use :meth:`request_full_render` for a full-HTML frame. Context is
+        resynced to the renderer in full, so for a large view on a hot path
+        prefer building a NEW value immutably instead — djust tracks that
+        change precisely::
 
             self.rows = [
                 {**r, "done": not r["done"]} if j == i else r
@@ -677,7 +1045,7 @@ class RustBridgeMixin:
         touched no public ``self.*`` attribute, but ``get_context_data()`` will
         return different HTML on the next render (it re-queries the DB). Auto
         change-detection sees no changed attr and would auto-skip the event; the
-        zero-arg form forces a full re-render without naming a key::
+        zero-arg form forces the re-render without naming a key::
 
             def switch_branch(self, message_id, child_id):
                 msg = Message.objects.get(id=message_id)
@@ -695,7 +1063,7 @@ class RustBridgeMixin:
         from declared ``state()`` fields or plain attributes re-renders on its
         own, and this call covers what no snapshot can see (an attribute write
         on an opaque object, a DB/external change). A named key may be the
-        public field name; either form forces the full render.
+        public field name; either form forces the render (sent as a diff).
 
         Note:
             Distinct from the Rust-side ``RustLiveView.set_changed_keys`` (the
@@ -707,15 +1075,14 @@ class RustBridgeMixin:
         # turn's first public request, so ``cancel_full_render()`` can undo
         # exactly what the request added (#4129) and never a full render the
         # framework itself required (a restore, a dropped save).
-        if "_djust_full_render_prior" not in self.__dict__:
-            self._djust_full_render_prior = bool(getattr(self, "_force_full_html", False))
+        self._record_full_render_prior()
         if keys is None:
             # Zero-arg form (#1992): the handler changed only EXTERNAL state (a
             # DB row, a cache) with no public ``self.*`` change, but
             # ``get_context_data()`` will render different HTML next time. Force
-            # a full re-render without naming a key — ``_force_full_html`` below
+            # the re-render without naming a key — ``_request_render()`` below
             # is the actual bypass; there is no key to add to ``_changed_keys``.
-            self._force_full_html = True
+            self._request_render()
             return
         key_iter: Iterable[str] = (keys,) if isinstance(keys, str) else keys
         existing: Set[str] = getattr(self, "_changed_keys", None) or set()
@@ -728,7 +1095,23 @@ class RustBridgeMixin:
         # auto-skip. ``_force_full_html`` is the sanctioned skip bypass: honored
         # on every skip path (runtime event spine, WS deferred-activity, WS tick)
         # and consumed (reset) after the render it forces.
-        self._force_full_html = True
+        self._request_render()
+
+    def _record_full_render_prior(self) -> None:
+        # Remember whether a render was already pending before this turn's
+        # first public request, so ``cancel_full_render()`` can undo exactly
+        # what the request added (#4129). The raw value: a framework ``True``
+        # restores as ``True`` (#4286).
+        if "_djust_full_render_prior" not in self.__dict__:
+            self._djust_full_render_prior = getattr(self, "_force_full_html", False) or False
+
+    def _request_render(self) -> None:
+        # set_changed_keys() forces the RENDER, not a full page (#4286): the
+        # sentinel bypasses every skip but keeps the diff. Upgrade only — a
+        # full-HTML request already pending (a restore, a dropped save,
+        # request_full_render()) stays a full page.
+        if getattr(self, "_force_full_html", False) is not True:
+            self._force_full_html = RENDER_REQUESTED
 
     # --- public render controls (#4129) ------------------------------------
 
@@ -741,7 +1124,7 @@ class RustBridgeMixin:
         lasts one turn — the framework consumes it whether or not the turn
         would have rendered.
 
-        A full render requested in the same turn (``set_changed_keys()``,
+        A render requested in the same turn (``set_changed_keys()``,
         :meth:`request_full_render`) wins over this: the forced render is
         never dropped silently (#2834).
 
@@ -785,14 +1168,16 @@ class RustBridgeMixin:
     def request_full_render(self) -> None:
         """Send this turn's render as full HTML rather than as a diff.
 
-        The same as the zero-argument ``set_changed_keys()``: use it after a
-        change djust cannot see, such as a database-only write that
-        ``get_context_data()`` will read back. Undo it in the same turn with
-        :meth:`cancel_full_render`.
+        Like the zero-argument ``set_changed_keys()`` it forces the render
+        after a change djust cannot see, but the page is replaced rather than
+        patched. ``set_changed_keys()`` sends a diff (#4286); use this only
+        when a diff against the browser's DOM is not wanted. Undo it in the
+        same turn with :meth:`cancel_full_render`.
 
         Replaces assigning ``self._force_full_html = True``, which keeps working.
         """
-        self.set_changed_keys()
+        self._record_full_render_prior()
+        self._force_full_html = True
 
     def cancel_full_render(self) -> None:
         """Undo a full render requested earlier in this turn.
@@ -802,8 +1187,9 @@ class RustBridgeMixin:
         framework itself requires (after a restore whose state differs from
         the page, or after a save that failed) stays, because the page and
         the server's diff baseline would otherwise disagree. Keys named in
-        ``set_changed_keys(keys)`` stay marked changed; only the full-HTML
-        request is withdrawn. A no-op when nothing was requested.
+        ``set_changed_keys(keys)`` stay marked changed; only the render
+        request (full HTML from ``request_full_render()``, or the diffed
+        render from ``set_changed_keys()``) is withdrawn. A no-op when nothing was requested.
 
         Replaces assigning ``self._force_full_html = False``, which keeps
         working (and, unlike this method, also clears a framework request).
@@ -877,8 +1263,78 @@ class RustBridgeMixin:
         self._cached_csrf_token = token
         return token
 
+    def _explicit_jit_serialize(self, context: Any, keys: Set[str], nested_keys: List[str]) -> None:
+        """Run the legacy JIT over an explicit context's walked names (#4069 review S1).
+
+        ``keys``: top-level QuerySets / model lists whose rows the template walks past
+        their columns. ``nested_keys``: plain dicts / lists holding a QuerySet / Model
+        inside a container (the #3788 walks). A JIT
+        failure is logged and leaves the value to the normalize pass (the rows captured
+        for the sidecar still answer the loop alias), as legacy's JIT failure does; a
+        recursive partial re-raises, as on legacy.
+        """
+        from .context import _jit_serialization_enabled
+        from .jit import _jit_template_content, drop_nested_evaluated, nested_raw_twin
+
+        if not _jit_serialization_enabled():
+            return
+        template_content: Optional[str] = None
+        try:
+            template_content = _jit_template_content(self)
+            if not template_content:
+                return
+            self._nested_template_source = [template_content]
+            # One name at a time (#4290 review): a name whose serializer raises leaves only
+            # itself to the normalize pass, not every name after it.
+            for key in sorted(keys):
+                try:
+                    self._jit_serialize_context(
+                        context,
+                        template_content,
+                        keys={key},
+                        into=self._jit_serialized_keys,
+                    )
+                except Exception as exc:  # noqa: BLE001 - the normalize pass serializes it
+                    if "djust:recursive-partial" in template_content:
+                        raise
+                    from .._exposure_diagnostics import log_failure_for
+
+                    log_failure_for(
+                        logger,
+                        (self,),
+                        exc,
+                        "JIT auto-serialization failed",
+                        level="warning",
+                        traceback=True,
+                    )
+            for key in nested_keys:
+                value = context[key]
+                walk = (
+                    self._deep_serialize_dict
+                    if type(value) is dict
+                    else self._deep_serialize_sequence
+                )
+                dict.__setitem__(context, key, walk(value, template_content, key))
+                # #4326: a nested QuerySet whose own ``all`` / methods the template reads.
+                nested_raw_twin(self, key, value)
+            drop_nested_evaluated(self)
+        except Exception as exc:  # noqa: BLE001 - the normalize pass serializes what is left
+            if template_content and "djust:recursive-partial" in template_content:
+                raise
+            from .._exposure_diagnostics import log_failure_for
+
+            # Value-free on an explicit owner: the exception text can carry row data.
+            log_failure_for(
+                logger,
+                (self,),
+                exc,
+                "JIT auto-serialization failed",
+                level="warning",
+                traceback=True,
+            )
+
     @recorded_render
-    def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> None:
+    def _sync_state_to_rust(self, preloaded_context: Optional[Dict[str, Any]] = None) -> bool:
         """Sync Python state to Rust backend.
 
         Phoenix-style change tracking: only sends values that actually changed
@@ -894,10 +1350,41 @@ class RustBridgeMixin:
           1. Instance attribute changes — snapshot-based (_changed_keys from handle_event)
           2. TypedState dirty flags — in-place dict mutation tracking
           3. Computed value changes — id() reference comparison against previous render
+
+        Runs inside ``LIVEVIEW_CONFIG["sync_turn_wrapper"]``'s ``"render"`` step
+        as a whole (#4276): not only ``get_context_data()`` but the queries the
+        sync makes after it (the explicit JIT serialization, the rows listed for
+        the template's sidecar, the normalize pass). Inside a render step
+        already (a ``render*`` method), it nests and enters nothing again.
+
+        Returns:
+            Whether the next ``render_with_diff()`` has anything to render
+            (#4123). ``False`` only when the sync found no changed and no
+            removed key since the previous sync, no render was requested
+            (``_force_full_html`` / ``set_changed_keys()``) and no context
+            value is an object compared only by ``id()`` (one an in-place
+            write can change unseen; it always renders): Rust then has no
+            changed keys and would render the whole template to send an empty
+            patch list. ``True`` on a first render and without a Rust view.
+            A server-originated render (an async result) may skip its render
+            on ``False``; an event turn already decided with its own snapshot.
         """
+        from ..sync_turn import run_sync_step
+
+        return bool(run_sync_step(self, "render", self._sync_state_to_rust_body, preloaded_context))
+
+    def _sync_state_to_rust_body(self, preloaded_context: Optional[Dict[str, Any]] = None) -> bool:
+        """:meth:`_sync_state_to_rust`, inside its ``"render"`` step."""
+        render_needed = True
         if self._rust_view:
             # Per-render, before anything is formatted (#2209, #2221).
             self._apply_render_env()
+
+            # The post-event snapshot's walks, taken before the context is
+            # built (#3999). None unless no application code runs from the
+            # snapshot to here (``_snapshot_walks_for_sync``).
+            turn_changed_keys = getattr(self, "_changed_keys", None)
+            snapshot_walks = _snapshot_walks_for_sync(self, turn_changed_keys, preloaded_context)
 
             # One place decides: preloaded, the GET's cached context, or a
             # fresh evaluation (#3725). Calling ``self.get_context_data`` here
@@ -931,11 +1418,175 @@ class RustBridgeMixin:
             # ({{ workspace.memberships.count }}, the #1985 symptom). Without
             # this, only request-scoped models (excluded from normalize) ever
             # reached the sidecar.
+            # #4241: a top-level QuerySet is captured too, but only when the
+            # template reads ``{{ qs.count }}`` / ``.exists`` / ``.first`` /
+            # ``.last`` on its own name -- the same condition the JIT uses. A
+            # loop row's ``{{ o.first }}`` does not count (#4258). The answer
+            # is computed once per sync, and only when a QuerySet is present. Holding every
+            # QuerySet would make its other attributes (``{{ qs.query }}``)
+            # reachable through the sidecar walk. The normalize loop below
+            # iterates this same object, filling its result cache, so
+            # ``count`` / ``exists`` cost no extra query; ``first`` / ``last``
+            # are Django's own methods and query as Django does (``last``
+            # always, ``first`` on an unordered QuerySet).
             from django.db.models import Model as _DjModel
+            from django.db.models import QuerySet as _DjQuerySet
 
-            _raw_models_for_sidecar = {
-                _key: _val for _key, _val in full_context.items() if isinstance(_val, _DjModel)
-            }
+            from .jit import rows_need_live_walk
+
+            # #3936: the raw model values behind state keys, for the render-time
+            # handle overlay (flag ``state_models_as_handles``). An explicit context
+            # still holds them here, before the normalize loop below. Empty with the
+            # flag off.
+            _overlay_raw: Dict[str, Any] = (
+                _state_model_values(full_context)
+                if type(full_context) is ExplicitRenderContext
+                else {}
+            )
+
+            _raw_models_for_sidecar = {}
+            _explicit_jit_keys: Dict[str, Any] = {}
+            # #4290: the DB values of an explicit context whose rows the template does NOT
+            # walk (a Model, a model list / QuerySet read only by its columns). They go
+            # through the JIT too, reduced to the paths the template reads, as 1.x's did;
+            # the normalize pass below copied every field of them into the renderer's state.
+            # Kept apart from ``_explicit_jit_keys``: the overlay still hands these a handle,
+            # and the sidecar keeps no evaluated rows for them.
+            _explicit_plain_keys: Set[str] = set()
+            _explicit = type(full_context) is ExplicitRenderContext
+            # Names whose DB values the JIT or the normalize pass rewrites: the
+            # snapshot's walk of them is never reused (#3999).
+            _rewritten_keys: Set[str] = set()
+            _qs_roots: Optional[FrozenSet[str]] = None
+            _walk_paths: Optional[Dict[str, FrozenSet[str]]] = None
+            for _key, _val in full_context.items():
+                if isinstance(_val, _DjModel):
+                    _raw_models_for_sidecar[_key] = _val
+                    if _explicit:
+                        if _walk_paths is None:
+                            _walk_paths = _queryset_row_walk_paths_for(self)
+                        _m_paths = _walk_paths.get(_key) or frozenset()
+                        # #4290: a Model the template reads only columns / properties off is
+                        # reduced to them. One whose relations or methods it walks keeps the
+                        # normalized dict, which the sidecar and the overlay handle answer
+                        # as before (a forward FK read whole prints its ``__str__``).
+                        if not (
+                            rows_need_live_walk(type(_val), _m_paths, full_context)
+                            or _paths_read_a_relation(type(_val), _m_paths)
+                        ) and _plain_rows_take_the_jit(_val, type(_val), _m_paths, full_context):
+                            _explicit_plain_keys.add(_key)
+                    continue
+                _is_qs = isinstance(_val, _DjQuerySet)
+                if _is_qs:
+                    if _qs_roots is None:
+                        _qs_roots = _queryset_method_roots_for(self)
+                    if _key in _qs_roots:
+                        _raw_models_for_sidecar[_key] = _val
+                        # Review S1: an explicit view's method-read QuerySet whose rows
+                        # the template ALSO walks goes on to the walk check below, which
+                        # hands it to the JIT as legacy's does, so each row dict carries
+                        # the relation values and a
+                        # filtered rebinding of a row (``{% with r=x|default:x %}``)
+                        # reads them. Legacy's JIT already ran (context.py).
+                        if not _method_read_rows_take_the_jit(full_context):
+                            continue
+                # #4069: a loop row's relation walk (``{% for u in users %}
+                # {{ u.groups.all }}``) is answered through the sidecar alias
+                # ``u -> users.<N>``; the normalized column dicts cannot answer
+                # it. Keep the EVALUATED ROWS (never the QuerySet, so
+                # ``{{ users.query }}`` stays unreachable, #4241) when the
+                # template walks past a row's columns. Such a name first goes
+                # through the JIT (#4069 review S1, below); only a name the JIT
+                # did not serialize keeps its rows, floored with every other
+                # sidecar value below.
+                # Explicit only: legacy's JIT serialized these rows with their
+                # relation paths, and reaches here raw only when the JIT failed
+                # (logged there; a re-walk would raise the same error again).
+                if type(full_context) is not ExplicitRenderContext:
+                    continue
+                if _is_qs or (
+                    isinstance(_val, (list, tuple))
+                    and _val
+                    and any(isinstance(_r, _DjModel) for _r in _val)
+                ):
+                    if _walk_paths is None:
+                        _walk_paths = _queryset_row_walk_paths_for(self)
+                    _paths = _walk_paths.get(_key)
+                    _model_cls = (
+                        _val.model
+                        if _is_qs
+                        else next(type(_r) for _r in _val if isinstance(_r, _DjModel))
+                    )
+                    if not _paths:
+                        # No field path read off the rows (``{% regroup %}``, ``{{ rows.0 }}``,
+                        # ``|length``): whole rows, as the JIT's own no-path list gives
+                        # (#2736), so the normalize pass below serializes them.
+                        continue
+                    if rows_need_live_walk(_model_cls, _paths, full_context) or (
+                        # Review N4: a forward FK read as one segment (``{{ p.content_type }}``)
+                        # was walked per row through the sidecar alias (2N+1 queries); the JIT
+                        # selects it with the rows, as legacy's does.
+                        _is_qs and _explicit_fk_rows_take_the_jit(_model_cls, _paths)
+                    ):
+                        _explicit_jit_keys[_key] = _val
+                    elif _plain_rows_take_the_jit(_val, _model_cls, _paths, full_context):
+                        _explicit_plain_keys.add(_key)
+
+            # #4069 review S1: an explicit view's walked rows also go through the
+            # JIT, as legacy's do, so each row dict CARRIES the relation values the
+            # template reads. A filtered operand (``users|slice``, ``dictsort``,
+            # ``{% with %}``, ``|first``) has no sidecar alias and answers from those
+            # dicts; the row cap applies; and the value is part of the loop render
+            # cache's item hash. A dict holding a QuerySet / Model goes through the
+            # template-aware container walk (#3788). The captured rows above stay for
+            # the method / alias shapes the JIT does not serialize.
+            # A container twin (#4326) from an earlier render: this render's walk
+            # holds its own again. Not reset with the rest on a preloaded context.
+            from .jit import drop_nested_twins
+
+            drop_nested_twins(self)
+            if type(full_context) is ExplicitRenderContext:
+                # ``_all_method_rows`` is NOT reset here: ``serialize_for_template``
+                # in the view's own ``get_context_data`` already wrote it this render.
+                self._jit_serialized_keys = set()
+                _nested_db_keys = [
+                    _key
+                    for _key, _val in full_context.items()
+                    if _key not in _explicit_jit_keys
+                    and (type(_val) is dict or type(_val) is list)
+                    and not any(isinstance(_r, _DjModel) for _r in _val)
+                    and _holds_db_value(_val)
+                ]
+                _rewritten_keys.update(_explicit_jit_keys, _explicit_plain_keys, _nested_db_keys)
+                if _explicit_jit_keys or _explicit_plain_keys or _nested_db_keys:
+                    self._explicit_jit_serialize(
+                        full_context,
+                        set(_explicit_jit_keys) | _explicit_plain_keys,
+                        _nested_db_keys,
+                    )
+                # A name the JIT did not serialize keeps its evaluated rows for the
+                # sidecar alias walk. A serialized one needs none (as on legacy), and
+                # evaluating it here would cost the outer query a second time.
+                for _key, _val in _explicit_jit_keys.items():
+                    if _key not in self._jit_serialized_keys:
+                        _raw_models_for_sidecar[_key] = list(_val)
+                    elif _key in _raw_models_for_sidecar:
+                        # A method-read QuerySet the JIT serialized (review S1): the
+                        # method answers come from the JIT's EVALUATED QuerySet
+                        # (``_all_method_rows``), not the caller's unevaluated one,
+                        # so ``{{ qs.count }}`` costs no second query.
+                        _evaluated = (getattr(self, "_all_method_rows", None) or {}).get(_key)
+                        if _evaluated is not None:
+                            _raw_models_for_sidecar[_key] = _evaluated
+                # #4290: the same for a method-read QuerySet whose rows the template reads
+                # only columns off; the JIT's evaluated rows answer ``{{ qs.count }}``.
+                for _key in _explicit_plain_keys:
+                    if _key in self._jit_serialized_keys and isinstance(
+                        _raw_models_for_sidecar.get(_key), _DjQuerySet
+                    ):
+                        _evaluated = (getattr(self, "_all_method_rows", None) or {}).get(_key)
+                        if _evaluated is not None:
+                            _raw_models_for_sidecar[_key] = _evaluated
 
             for _key, _val in list(full_context.items()):
                 _normalized = _normalize_db_values(_val)
@@ -1034,8 +1685,9 @@ class RustBridgeMixin:
             # `completed_count = sum(...)` that change without their source
             # name appearing in `_changed_keys`.
             prev_immutables = getattr(self, "_prev_context_immutables", {})
-            # Structural fingerprints of the previous render's containers
-            # (#2664). Computed at most once per key per sync (compare + store).
+            # What the previous render kept of its containers' structural
+            # fingerprints (#2664): a 16-byte digest each (#3998). Computed at
+            # most once per key per sync (compare + store).
             prev_fps = getattr(self, "_prev_context_fingerprints", {})
             new_fps: Dict[str, Any] = {}
             # Safe-key paths + rendered value of a key whose fingerprint was
@@ -1053,20 +1705,35 @@ class RustBridgeMixin:
             def _is_structural(value: Any) -> bool:
                 return isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value)
 
-            share_fps = _per_turn.on("shared_fingerprints")
-            fp_same: Set[str] = set()
-            dirty_baseline = (self.__dict__.get("_dirty_baseline") or {}) if share_fps else {}
-
             def _fp_differs(key: str, value: Any) -> bool:
                 """Did *key*'s fingerprint change since the last sync?"""
-                fp = _fp_of(key, value)
-                if share_fps:
-                    return key not in fp_same
-                return bool(prev_fps.get(key, _MISSING) != fp)
+                return bool(prev_fps.get(key, _MISSING) != _fp_of(key, value))
+
+            def _snapshot_walk(key: str, value: Any) -> Optional[SnapshotEntry]:
+                """The post-event snapshot's walk of this very object, if reusable."""
+                if snapshot_walks is None or key in _rewritten_keys:
+                    return None
+                entry = snapshot_walks.get(id(value))
+                if entry is None or entry[0] is not value:
+                    return None
+                return entry
 
             def _fp_of(key: str, value: Any, convert: bool = False) -> Any:
                 fp = new_fps.get(key, _MISSING)
                 if fp is _MISSING:
+                    entry = _snapshot_walk(key, value)
+                    if entry is not None:
+                        # The snapshot walked this object after the handler and
+                        # nothing ran since (#3999): its tree is this value's
+                        # fingerprint. Converting it for Rust, when it is sent,
+                        # is a walk that builds no fingerprint.
+                        fp = retained_fingerprint(entry[1])
+                        new_fps[key] = fp
+                        if convert:
+                            converted_walk = convert_for_render(value, key)
+                            if converted_walk is not None:
+                                converted_by_fp[key] = converted_walk
+                        return fp
                     if convert:
                         fp, truncated, converted = fingerprint_and_convert(value, key)
                         if converted is not None:
@@ -1076,15 +1743,12 @@ class RustBridgeMixin:
                     if truncated:
                         # An incomplete fingerprint cannot prove equality.
                         fp = object()
-                    elif share_fps:
-                        fp, same = _reuse_fingerprint(
-                            fp, prev_fps.get(key, _MISSING), dirty_baseline.get(key)
-                        )
-                        if same:
-                            fp_same.add(key)
-                    new_fps[key] = fp
-                    if truncated:
                         warn_fingerprint_truncated(type(self), key, value)
+                    else:
+                        # The tree is dropped here; the digest is what is
+                        # compared and kept (#3998).
+                        fp = retained_fingerprint(fp)
+                    new_fps[key] = fp
                 return fp
 
             # _force_full_html: bypass ALL change tracking and send everything.
@@ -1134,6 +1798,12 @@ class RustBridgeMixin:
                     elif rs_converted is not None:
                         converted_by_fp[key] = rs_converted
 
+            # A value compared only by ``id()`` (an object the detector cannot
+            # fingerprint) may have changed in place without the sync seeing
+            # it. Such a value makes this sync report a render as needed, so
+            # a skippable render never drops it (#4123).
+            opaque_seen = False
+
             # Determine which context to send to Rust
             if prev_refs:
                 if changed_keys:
@@ -1155,11 +1825,28 @@ class RustBridgeMixin:
                     # this very object, and reused below as the key's
                     # fingerprint and rendered value: the key is being sent
                     # (its own id is still added), so that walk ran regardless.
+                    # When the post-event snapshot's walk of the attribute may
+                    # be reused (``snapshot_walks``), that walk already says
+                    # whether it is plain, for any changed attribute, whether
+                    # or not it is itself a context value, and nothing is
+                    # walked here at all.
                     plain_on = _per_turn.on("plain_sub_ids")
                     context_key_of: Optional[Dict[int, str]] = None
                     for key in changed_keys:
                         val = getattr(self, key, None) or full_context.get(key)
                         if val is None:
+                            continue
+                        # Plain data, by the post-event snapshot's own walk of
+                        # this object (#3999): nothing under it can be a context
+                        # value that only ``id()`` would find. Covers a changed
+                        # attribute that is not itself a context value too.
+                        walked = (
+                            snapshot_walks.get(id(val))
+                            if plain_on and snapshot_walks is not None
+                            else None
+                        )
+                        if walked is not None and walked[0] is val and walked[2]:
+                            changed_sub_ids.add(id(val))
                             continue
                         if plain_on and type(val) in (dict, list, tuple):
                             if context_key_of is None:
@@ -1226,8 +1913,10 @@ class RustBridgeMixin:
                             # that as "changed" since the type flipped).
                             if prev_immutables.get(key, _MISSING) != value:
                                 context[key] = value
-                        elif id(value) != prev_refs.get(key):
-                            context[key] = value  # derived value with new id()
+                        else:
+                            opaque_seen = True
+                            if id(value) != prev_refs.get(key):
+                                context[key] = value  # derived value with new id()
                 else:
                     # No explicit changed_keys — use id() comparison as fallback.
                     # This path runs on the internal sync from render_with_diff
@@ -1247,8 +1936,10 @@ class RustBridgeMixin:
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             if prev_immutables.get(key, _MISSING) != value:
                                 context[key] = value
-                        elif id(value) != prev_refs.get(key):
-                            context[key] = value  # different object reference
+                        else:
+                            opaque_seen = True
+                            if id(value) != prev_refs.get(key):
+                                context[key] = value  # different object reference
             else:
                 # First render: send everything
                 context = full_context
@@ -1283,11 +1974,44 @@ class RustBridgeMixin:
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and isinstance(v, _IMMUTABLE_TYPES_FOR_SYNC)
             }
+            # A list the handler changed in a few rows is sent to Rust as those
+            # rows (#4325), when the pre-event snapshot proves Rust holds the
+            # list as it was before the handler. ``item_deltas`` maps the key
+            # to ``(indices, converted rows)``; it is never converted whole.
+            item_deltas: Dict[str, Tuple[List[int], List[Any]]] = {}
+            # Rust's index-keyed per-item loop store (#4325) follows its
+            # switch; it is on by default in Rust.
+            set_item_store = getattr(self._rust_view, "set_loop_item_store_enabled", None)
+            if set_item_store is not None:
+                set_item_store(_per_turn.on("loop_item_render"))
+            if (
+                snapshot_walks is not None
+                and prev_refs
+                and not getattr(self, "_force_full_html", False)
+                and _per_turn.on("list_item_deltas")
+                and hasattr(self._rust_view, "update_state_items")
+            ):
+                pre_walks = getattr(turn_changed_keys, "pre_fingerprints", None) or {}
+                for key, value in context.items():
+                    if type(value) is not list or key in _request_scoped_keys:
+                        continue
+                    delta = _list_item_delta(
+                        key,
+                        value,
+                        _snapshot_walk(key, value),
+                        pre_walks.get(id(value)),
+                        prev_fps.get(key, _MISSING),
+                    )
+                    if delta is not None and self._rust_view.update_state_items(
+                        key, delta[0], delta[1]
+                    ):
+                        item_deltas[key] = delta
+
             # A key already known to be sent (first render, a new key, a
             # changed name, ...) has not been fingerprinted yet: take the
             # fingerprint, the SafeString paths and the Rust value in one walk.
             self._prev_context_fingerprints = {
-                k: _fp_of(k, v, convert=context.get(k, _MISSING) is v)
+                k: _fp_of(k, v, convert=context.get(k, _MISSING) is v and k not in item_deltas)
                 for k, v in full_context.items()
                 if k not in _request_scoped_keys and _is_structural(v)
             }
@@ -1317,6 +2041,8 @@ class RustBridgeMixin:
             converted_values: Dict[str, Any] = {}
             needs_normalize = False
             for key, value in context.items():
+                if key in item_deltas:
+                    continue  # its changed rows are already in the Rust state (#4325)
                 # #1786: request-scoped, framework-provided context values
                 # (the request, auth ``user`` / ``perms``, messages storage)
                 # that are NOT JSON-serializable must not flow into
@@ -1632,8 +2358,38 @@ class RustBridgeMixin:
                         exc_info=True,
                     )
 
+            # #3936: the handle overlay, set on EVERY sync (empty with the flag
+            # off, or when no state key holds a model) so a key that left state
+            # leaves no stale handle.
+            # An empty overlay is not sent to a view that has none (review N3): the
+            # flag-off sync then costs one ``has_render_handles`` read, and a view
+            # that held handles is still cleared on the sync they leave.
+            if hasattr(self._rust_view, "set_render_handles"):
+                # B-H1/B-H2 (train/2.0-ai): a key the flag-off path already answers
+                # (QuerySet methods, JIT-walked rows) keeps that path, so the overlay
+                # issues no query the flag-off render does not.
+                _skip = set(sidecar_only_keys)
+                if _overlay_raw:
+                    _skip.update(
+                        _overlay_skip_keys(
+                            self,
+                            _overlay_raw,
+                            full_context,
+                            _explicit_jit_keys,
+                            _qs_roots,
+                            _explicit_plain_keys,
+                        )
+                    )
+                _handles = _render_handles(_overlay_raw, full_context, _skip)
+                if _handles or getattr(self._rust_view, "has_render_handles", lambda: True)():
+                    self._rust_view.set_render_handles(_handles)
+
             if user_changed is not None:
                 self._rust_view.set_changed_keys(user_changed)
+            # #4123: nothing to render when this was not a first (or forced)
+            # sync, no key changed, was removed or was named, and every value
+            # was compared by content (none only by ``id()``).
+            render_needed = not prev_refs or user_changed is not None or opaque_seen
 
             # The ``dj-update="append"|"prepend"`` containers whose rows come from
             # a ``temporary_assigns`` key must ACCUMULATE in the differ, as the
@@ -1652,3 +2408,4 @@ class RustBridgeMixin:
                 self, "_static_assigns_sent", False
             ):
                 self._static_assigns_sent = True
+        return render_needed

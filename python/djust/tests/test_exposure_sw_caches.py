@@ -40,14 +40,6 @@ class ExplicitSWView(LiveView):
         self.count = 5
 
 
-class LegacySWView(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><span>{{ count }}</span></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 5
-
-
 @pytest.fixture
 def staged(monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
@@ -93,19 +85,18 @@ def test_identity_marker_absent_without_session_or_authenticated_user():
 # ---------------------------------------------------------------------------
 
 
-def test_eligibility_is_legacy_only_and_fails_closed(staged):
-    assert service_worker_cache_eligible(LegacySWView()) is True
+def test_eligibility_fails_closed(staged):
     assert service_worker_cache_eligible(ExplicitSWView()) is False
 
-    legacy = LegacySWView()
-    legacy._get_all_child_views = lambda: {"child": ExplicitSWView()}
-    assert service_worker_cache_eligible(legacy) is False
+    page = ExplicitSWView()
+    page._get_all_child_views = lambda: {"child": ExplicitSWView()}
+    assert service_worker_cache_eligible(page) is False
 
     def broken():
         raise RuntimeError("CHILD_SENTINEL")
 
-    legacy._get_all_child_views = broken
-    assert service_worker_cache_eligible(legacy) is False
+    page._get_all_child_views = broken
+    assert service_worker_cache_eligible(page) is False
 
 
 # ---------------------------------------------------------------------------
@@ -122,15 +113,10 @@ def _http_request(session):
 
 
 @pytest.mark.django_db
-def test_http_explicit_page_is_marked_no_store_and_legacy_is_unchanged(staged):
+def test_http_explicit_page_is_marked_no_store(staged):
     explicit = ExplicitSWView.as_view()(_http_request(SessionStore()))
     assert explicit.status_code == 200
     assert explicit[SW_CACHE_HEADER] == "no-store"
-
-    legacy = LegacySWView.as_view()(_http_request(SessionStore()))
-    assert legacy.status_code == 200
-    assert b">5</span>" in legacy.content  # the legacy page did render
-    assert not legacy.has_header(SW_CACHE_HEADER)
 
 
 # ---------------------------------------------------------------------------
@@ -188,15 +174,3 @@ async def test_mount_frame_marks_explicit_ineligible_and_carries_identity(staged
         capped = await _mount_frame(ExplicitSWView, await sync_to_async(_mount_request)())
     assert capped["state_snapshot_signed"]
     assert capped["state_snapshot_max_age"] == 86400
-
-
-@pytest.mark.asyncio
-@pytest.mark.django_db(transaction=True)
-async def test_mount_frame_legacy_control_stays_cacheable(staged):
-    request = await sync_to_async(_mount_request)()
-    frame = await _mount_frame(LegacySWView, request)
-    assert "html" in frame and ">5</span>" in frame["html"]
-    assert "sw_cache" not in frame
-    assert frame["sw_identity"] == identity_marker(request.session.session_key, request.user)
-    assert "state_snapshot_max_age" not in frame  # no snapshot, no lifetime
-    assert "state_snapshot_signed" not in frame  # a legacy view signs nothing

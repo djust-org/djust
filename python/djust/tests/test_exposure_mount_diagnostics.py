@@ -1,10 +1,10 @@
 """Mount failures must not export undeclared values through diagnostics.
 
 Contract (ADR-038 D-a, revised 2026-09-22): in production (``DEBUG=False``) a
-nonlegacy owner's mount failure is value-free in the error frame, the log and
+owner's mount failure is value-free in the error frame, the log and
 the traceback ring. Under ``DEBUG=True`` every owner's failure reads like
 Django's DEBUG output — detailed error frame, logged exception and traceback,
-traceback-ring entry — exactly as a legacy owner's does.
+traceback-ring entry.
 """
 
 import asyncio
@@ -27,7 +27,7 @@ from .test_runtime_state_save_tt_1894 import MockTransport
 
 
 class FailureView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>ready</div>"
     failure_stage = "mount"
     failure_policy = "explicit"
@@ -62,12 +62,7 @@ class FailureView(LiveView):
 @pytest.mark.parametrize("stage", ["initialize", "auth", "mount", "params", "render"])
 @pytest.mark.parametrize(
     "initial_policy,final_policy",
-    [
-        ("explicit", "explicit"),
-        ("legacy", "explicit"),
-        ("explicit", "legacy"),
-        ("legacy", "legacy"),
-    ],
+    [("explicit", "explicit")],
 )
 async def test_mount_diagnostics_respect_policy_at_entry_and_failure(
     monkeypatch, caplog, debug, stage, initial_policy, final_policy
@@ -87,9 +82,8 @@ async def test_mount_diagnostics_respect_policy_at_entry_and_failure(
         )
     assert transport.sent and transport.sent[-1]["type"] == "error"
     assert not any(frame.get("type") == "mount" for frame in transport.sent)
-    legacy = initial_policy == final_policy == "legacy"
-    # Details are allowed for a legacy owner, and for every owner under DEBUG.
-    allowed = legacy or debug
+    # Details are allowed for every owner under DEBUG (the positive control).
+    allowed = debug
     assert ("MOUNT_DIAGNOSTIC_SENTINEL" in json.dumps(transport.sent)) == (allowed and debug)
     assert ("MOUNT_DIAGNOSTIC_SENTINEL" in caplog.text) == allowed
     assert (
@@ -123,25 +117,10 @@ def test_redacted_error_never_inspects_payload_or_records_traceback(
     assert caplog.records[-1].exc_info is None
 
 
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-@pytest.mark.parametrize("debug", [False, True])
-async def test_successful_policy_change_cannot_enable_nested_diagnostics(
-    monkeypatch, caplog, debug
-):
-    def change_policy(self, params, uri):
-        self.exposure_policy = "legacy"
-
-    monkeypatch.setattr(FailureView, "handle_params", change_policy)
-    await test_mount_diagnostics_respect_policy_at_entry_and_failure(
-        monkeypatch, caplog, debug, "render", "explicit", "legacy"
-    )
-
-
 @pytest.mark.parametrize("policy", ["explicit", None, "bogus"])
-def test_restrict_diagnostics_follows_debug_for_nonlegacy_owners(policy):
-    """The single rule: legacy owner or DEBUG. Under DEBUG a nonlegacy owner
-    no longer restricts the scope; in production it does."""
+def test_restrict_diagnostics_follows_debug(policy):
+    """The single rule: DEBUG. Under DEBUG an owner does not restrict the
+    scope; in production it does."""
     owner = SimpleNamespace(exposure_policy=policy)
     with override_settings(DEBUG=True), diagnostic_scope():
         restrict_diagnostics(owner)
@@ -149,9 +128,6 @@ def test_restrict_diagnostics_follows_debug_for_nonlegacy_owners(policy):
     with override_settings(DEBUG=False), diagnostic_scope():
         restrict_diagnostics(owner)
         assert not diagnostics_allowed()
-    with override_settings(DEBUG=False), diagnostic_scope():
-        restrict_diagnostics(SimpleNamespace(exposure_policy="legacy"))
-        assert diagnostics_allowed()
 
 
 @override_settings(DEBUG=False)
@@ -161,7 +137,7 @@ def test_diagnostic_scope_is_restrictive_and_resets_after_exception():
         restrict_diagnostics(SimpleNamespace(exposure_policy="explicit"))
         assert not diagnostics_allowed()
         with diagnostic_scope():
-            restrict_diagnostics(SimpleNamespace(exposure_policy="legacy"))
+            restrict_diagnostics(SimpleNamespace(exposure_policy="explicit"))
             assert not diagnostics_allowed()
     assert diagnostics_allowed()
     with pytest.raises(ValueError), diagnostic_scope():
@@ -185,14 +161,14 @@ async def test_diagnostic_scope_crosses_worker_threads_without_crossing_requests
             assert not await sync_to_async(diagnostics_allowed)()
         assert diagnostics_allowed()
 
-    async def legacy_request():
+    async def unrestricted_request():
         await started.wait()
         try:
             with diagnostic_scope():
-                restrict_diagnostics(SimpleNamespace(exposure_policy="legacy"))
+                # This request restricted nothing: the other one's scope does not leak.
                 assert await sync_to_async(diagnostics_allowed)()
         finally:
             release.set()
 
-    await asyncio.wait_for(asyncio.gather(protected_request(), legacy_request()), timeout=5)
+    await asyncio.wait_for(asyncio.gather(protected_request(), unrestricted_request()), timeout=5)
     assert diagnostics_allowed()

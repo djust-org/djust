@@ -63,7 +63,6 @@ CLASS_BUDGET = 12
 
 TAGS = tuple(safe_sweep.tag_units())
 CLASSES = tuple(safe_sweep.class_units())
-RUST_COMPONENTS = tuple(safe_sweep.rust_component_units())
 
 SWEEP_POPULATIONS = {
     "marked-safe-attr/tags": lambda: list(TAGS),
@@ -154,9 +153,9 @@ class TestEveryTag:
             engines[name.split("@")[0]] |= keys
         assert engines["django"] == sample and engines["rust"] == sample
         assert reached["rust"] == sample
-        # the Django engine draws ``data_table`` through its inclusion template, which needs
-        # rows and columns the per-argument call does not give it (swept by the inclusion test)
-        assert reached["django"] == sample - {"djust_components:data_table"}
+        # ``data_table`` is one implementation on both engines (#3869), so the Django engine
+        # reaches an attribute with it too
+        assert reached["django"] == sample
 
     @pytest.mark.pr_tier
     def test_the_sweep_finds_a_raw_attribute_on_each_engine(self, monkeypatch):
@@ -209,11 +208,13 @@ class TestEveryClass:
         assert {k[2] for k in found} >= {"variant"}
 
 
-class TestEveryRustComponent:
-    def test_no_argument_leaves_an_attribute(self):
-        found, rendered = safe_sweep.rust_component_findings()
-        assert found == {}
-        assert rendered == set(RUST_COMPONENTS) and len(RUST_COMPONENTS) >= 15
+class TestNoRustComponent:
+    def test_the_crate_classes_are_gone(self):
+        """#4002 removed the ``djust_components`` crate; ``djust.components.ui`` draws those
+        components, and the class sweep above covers them."""
+        from djust import _rust
+
+        assert [n for n in dir(_rust) if n.startswith("Rust") and n != "RustLiveView"] == []
 
 
 class TestEveryThemePack:
@@ -452,3 +453,198 @@ def test_no_named_exception_is_stale():
         else:
             found, _ = safe_sweep.class_findings(only={unit})
         assert any(k[2] == param for k in found), (axis, unit, param)
+
+
+# --------------------------------------------------------------------------------------------
+# Page templates (#4157): the admin, allauth / djust_auth, bug-capture replay and gallery pages.
+# --------------------------------------------------------------------------------------------
+
+PAGES = safe_sweep.page_templates()
+#: The pages the issue names, by area; each must be in the inventory (a glob that silently found
+#: nothing would pass for nothing).
+PAGE_AREAS = ("djust_admin/", "allauth/elements/", "djust/bug_capture/replay.html",
+              "djust_components/gallery/", "djust_theming/gallery/", "djust_auth/")  # fmt: skip
+
+
+def _page_source(name: str) -> str:
+    return safe_sweep.page_template_path(name).read_text()
+
+
+@pytest.fixture
+def page_urls():
+    from django.test.utils import override_settings
+
+    with override_settings(ROOT_URLCONF=safe_sweep.PAGE_URLCONF):
+        yield
+
+
+def _hrefs(markup: str) -> list[str]:
+    from html.parser import HTMLParser
+
+    class _Hrefs(HTMLParser):
+        found: list = []
+
+        def handle_starttag(self, tag, attrs):
+            self.found += [v or "" for n, v in attrs if n in ("href", "action", "src")]
+
+    parser = _Hrefs(convert_charrefs=True)
+    parser.found = []
+    parser.feed(markup)
+    return parser.found
+
+
+@pytest.mark.pr_tier
+class TestEveryPageTemplate:
+    """Every ``{{ }}`` in an attribute of these templates escapes its value whatever it is marked
+    as (``|force_escape``; a URL attribute ``|djust_url_attr``), and rendering each one with every
+    value the marked-safe payload grows no attribute, on Django and, for the LiveView admin
+    pages, the Rust engine."""
+
+    @pytest.mark.parametrize("name", PAGES)
+    def test_every_attribute_slot_escapes(self, name):
+        assert safe_sweep.page_slot_findings(_page_source(name)) == []
+
+    @pytest.mark.parametrize("name", PAGES)
+    def test_no_marked_safe_value_leaves_an_attribute(self, name, page_urls):
+        found, _reached, errors = safe_sweep.page_findings(name)
+        assert errors == {}
+        assert found == {}
+
+    def test_the_page_sweep_reaches_attributes(self, page_urls):
+        for area in PAGE_AREAS:
+            assert any(n.startswith(area) for n in PAGES), area
+        missed = []
+        for name in PAGES:
+            if not safe_sweep.page_attr_slots(_page_source(name)):
+                continue
+            _found, reached, _errors = safe_sweep.page_findings(name)
+            expected = {"django", "rust"} if name.startswith("djust_admin/") else {"django"}
+            if set(reached) != expected or not all(reached.values()):
+                missed.append((name, reached))
+        assert missed == []
+
+    @pytest.mark.parametrize("bad", ["javascript:alert(1)", "java\tscript:alert(1)"])
+    def test_a_script_url_is_neutralised_in_page_urls(self, bad, page_urls):
+        value = mark_safe(bad)
+        cases = [
+            ("allauth/elements/provider.html", {"attrs": {"href": value, "name": "x"}}),
+            ("djust_admin/bulk_progress.html", {"redirect_url": value, "job": {"done": True}}),
+            (
+                "djust_admin/base.html",
+                {"plugin_nav": [{"section": "S", "items": [{"url": value, "label": "x"}]}]},
+            ),
+        ]
+        for name, fixed in cases:
+            out, errors = safe_sweep.page_render(name, fixed)
+            assert errors == {}, (name, errors)
+            for engine, markup in out.items():
+                hrefs = _hrefs(markup)
+                assert "#" in hrefs, (name, engine)
+                assert not [h for h in hrefs if "script:" in h.replace("\t", "")], (name, engine)
+
+    def test_a_plain_url_is_escaped_exactly_once(self, page_urls):
+        out, errors = safe_sweep.page_render(
+            "djust_admin/bulk_progress.html", {"redirect_url": "/admin/x/?a=1&b=2"}
+        )
+        assert errors == {}
+        assert set(out) == {"django", "rust"}
+        for engine, markup in out.items():
+            assert 'href="/admin/x/?a=1&amp;b=2"' in markup, engine
+
+    def test_a_handler_argument_keeps_its_string_on_both_engines(self, page_urls):
+        """N4 of the #4157 review: ``force_escape`` is HTML escaping, and the browser decodes it
+        before the client parses ``dj-click``: a ``'`` in a column or filter name ended the
+        argument string. ``djust_handler_arg`` backslash-escapes ``\\ ' "`` for the client's
+        parser (``parseArguments``: ``\\'`` is ``'``, ``\\\\`` is ``\\``) and then escapes HTML."""
+        from html.parser import HTMLParser
+
+        name = mark_safe('a\'b\\c" x="1')
+        out, errors = safe_sweep.page_render(
+            "djust_admin/model_list.html",
+            {
+                "columns": [{"name": name, "label": "L", "sortable": True}],
+                "filters": [{"name": name, "label": "F", "choices": [], "current_value": ""}],
+            },
+        )
+        assert errors == {}
+        assert set(out) == {"django", "rust"}
+        quoted = 'a\\\'b\\\\c\\" x=\\"1'  # each of \\ ' " behind a backslash
+        for engine, markup in out.items():
+            found: dict = {}
+
+            class _P(HTMLParser):
+                def handle_starttag(self, tag, attrs):
+                    for attr, value in attrs:
+                        if attr in ("dj-click", "dj-change") and "(" in (value or ""):
+                            found.setdefault(attr, []).append(value)
+
+            _P(convert_charrefs=True).feed(markup)
+            assert f"sort_by('{quoted}')" in found.get("dj-click", []), (engine, found)
+            assert f"apply_filter('{quoted}', value)" in found.get("dj-change", []), (engine, found)
+
+    def test_the_page_sweep_sees_a_raw_attribute(self):
+        """Gate off: ``provider.html`` without its filters is found by both instruments."""
+        from django.template import Context
+
+        raw = _page_source("allauth/elements/provider.html").replace("|djust_url_attr", "")
+        raw = raw.replace("|force_escape", "")
+        assert len(safe_sweep.page_slot_findings(raw)) == 2
+        ctx = {"attrs": {"href": safe_sweep.attr_payload(), "name": safe_sweep.attr_payload()}}
+        out = safe_sweep._page_engine().from_string(raw).render(Context(ctx))
+        assert "<a data-pwn> (breakout)" in safe_sweep.attr_findings(out)
+
+    def test_the_slot_scanner_sees_a_tag_chosen_by_a_tag(self):
+        src = '<{% if x %}a href="{{ u }}"{% else %}button{% endif %} id="{{ i }}">'
+        assert safe_sweep.page_attr_slots(src) == [(1, "href", "u"), (1, "id", "i")]
+        # a slot after a literal prefix cannot set the scheme: force_escape is enough there
+        src = '<a href="/x/?next={{ n|force_escape }}">'
+        assert safe_sweep.page_slot_findings(src) == []
+        assert safe_sweep.page_slot_findings('<a href="{{ n|force_escape }}">') != []
+
+    def test_marked_safe_text_in_a_page_keeps_its_markup(self, page_urls):
+        bold = mark_safe("<b>bold</b>")
+        out, errors = safe_sweep.page_render(
+            "djust_admin/base.html",
+            {"plugin_nav": [{"section": "S", "items": [{"url": "/x/", "icon": bold}]}]},
+        )
+        assert errors == {}
+        for markup in out.values():
+            assert '<span class="mr-2"><b>bold</b></span>' in markup
+        out, errors = safe_sweep.page_render(
+            "allauth/elements/field.html", {"attrs": {"type": "text", "errors": [bold]}}
+        )
+        assert errors == {}
+        assert "<b>bold</b>" in out["django"]
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (None, ""),
+            ("", ""),
+            ("/a/?x=1&y=2", "/a/?x=1&amp;y=2"),
+            ("https://example.com/a", "https://example.com/a"),
+            ("javascript:alert(1)", "#"),
+            (mark_safe("javascript:alert(1)"), "#"),
+            (mark_safe('/a/" data-pwn="1'), "/a/&quot; data-pwn=&quot;1"),
+            (mark_safe("&#x6A;avascript:x"), "&amp;#x6A;avascript:x"),
+            ("javascript:void(0)", "javascript:void(0)"),
+        ],
+    )
+    def test_the_url_filter(self, value, expected):
+        from djust.templatetags.djust_attrs import djust_url_attr
+
+        assert str(djust_url_attr(value)) == expected
+
+    def test_a_filter_library_bridged_past_the_djust_prefix_registers_no_tag(self):
+        """``_DJUST_FILTER_LIBRARIES`` skips the tag allowlist (``_DJUST_TAGS_BRIDGED``) for a
+        ``djust.templatetags`` library so its FILTERS bridge on ``{% load %}`` (#4157). That is
+        only right while the library has no tag: one added later would bridge unvetted."""
+        import importlib
+
+        from djust.template_libraries import _DJUST_FILTER_LIBRARIES
+
+        assert _DJUST_FILTER_LIBRARIES
+        for module in _DJUST_FILTER_LIBRARIES:
+            library = importlib.import_module(module).register
+            assert library.tags == {}, (module, sorted(library.tags))
+            assert library.filters, module

@@ -128,7 +128,9 @@ def test_fragment_map_is_rebuilt_after_a_structural_render():
     c.send_event("set_state", b="C")  # text only
     html, patches, _ = c.render_with_patches()
     assert '<i dj-id="' in html and ">C</i>" in html
-    assert patches == [{"type": "SetText", "path": [1, 2, 0], "text": "C"}], patches
+    assert patches == [
+        {"type": "SetText", "path": [1, 2, 0], "text": "C", "parent_d": "5", "index": 0}
+    ], patches
 
 
 def test_loop_placeholder_never_reaches_the_page_on_a_later_partial_render():

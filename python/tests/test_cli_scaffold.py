@@ -1,12 +1,14 @@
 """
-Tests for CLI startproject/startapp commands (#266).
+Tests for the CLI scaffold commands (#266): ``djust new`` writes the project
+(``startproject`` was removed in 2.0, #4207) and ``startapp`` the app.
 """
 
+import sys
 import types
 
 import pytest
 
-from djust.cli import cmd_startproject, cmd_startapp
+from djust.cli import cmd_new, cmd_startapp, main
 
 
 @pytest.fixture
@@ -16,18 +18,22 @@ def tmp_cwd(tmp_path, monkeypatch):
     return tmp_path
 
 
-class TestStartProjectDeprecated:
-    """``djust startproject`` is deprecated (#1791) and now delegates to the
-    canonical ``djust new`` generator (``djust.scaffolding.generator``) instead
-    of emitting its own divergent — and broken (#1787) — project templates.
+class TestStartProjectRemoved:
+    """``djust startproject`` was removed in 2.0 (#4207): it names ``djust new``
+    and creates nothing."""
 
-    These tests pin the *deprecation + delegation* contract:
+    def test_refuses_and_names_the_replacement(self, tmp_cwd, capsys, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["djust", "startproject", "mysite"])
+        with pytest.raises(SystemExit) as exit_info:
+            main()
+        assert exit_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "djust new" in err and "removed in djust 2.0" in err
+        assert not (tmp_cwd / "mysite").exists()
 
-    - it prints a deprecation notice pointing at ``djust new``;
-    - the produced project is the same warning-clean, uvicorn-booting output
-      ``djust new`` produces — NOT the old ``daphne`` / ``live_session()``
-      project (which did not boot);
-    - validation (invalid name, existing directory) still exits non-zero.
+
+class TestNewProject:
+    """What ``djust new`` writes (the generator ``startproject`` once duplicated).
 
     Auto-setup is disabled (``no_setup=True``) so the tests don't shell out to
     venv/install/migrate.
@@ -36,26 +42,20 @@ class TestStartProjectDeprecated:
     def _args(self, name):
         return types.SimpleNamespace(name=name, no_setup=True)
 
-    def test_prints_deprecation_notice(self, tmp_cwd, capsys):
-        cmd_startproject(self._args("mysite"))
-        out = capsys.readouterr().out
-        assert "deprecated" in out.lower()
-        assert "djust new" in out
-
     def test_creates_project_directory(self, tmp_cwd):
-        cmd_startproject(self._args("mysite"))
+        cmd_new(self._args("mysite"))
         assert (tmp_cwd / "mysite").is_dir()
 
     def test_creates_manage_py(self, tmp_cwd):
-        cmd_startproject(self._args("mysite"))
+        cmd_new(self._args("mysite"))
         manage = tmp_cwd / "mysite" / "manage.py"
         assert manage.exists()
         assert "mysite.settings" in manage.read_text()
 
     def test_delegates_to_canonical_generator_not_old_templates(self, tmp_cwd):
         """The produced project must be the NEW (warning-clean, booting) shape,
-        not the deprecated startproject boilerplate."""
-        cmd_startproject(self._args("mysite"))
+        not the old startproject boilerplate."""
+        cmd_new(self._args("mysite"))
         settings = (tmp_cwd / "mysite" / "mysite" / "settings.py").read_text()
         # New stack uses channels, not the dropped daphne app.
         assert '"channels"' in settings
@@ -69,30 +69,30 @@ class TestStartProjectDeprecated:
     def test_asgi_is_protocol_type_router_not_live_session(self, tmp_cwd):
         """The #1787 regression guard: asgi.py must be a real ASGI app, not the
         broken ``application = live_session()`` shape."""
-        cmd_startproject(self._args("mysite"))
+        cmd_new(self._args("mysite"))
         asgi = (tmp_cwd / "mysite" / "mysite" / "asgi.py").read_text()
         assert "application = live_session()" not in asgi
         assert "ProtocolTypeRouter" in asgi
         assert "ASGIStaticFilesHandler" in asgi
 
     def test_creates_templates_directory(self, tmp_cwd):
-        cmd_startproject(self._args("mysite"))
+        cmd_new(self._args("mysite"))
         assert (tmp_cwd / "mysite" / "templates").is_dir()
 
     def test_rejects_existing_directory(self, tmp_cwd):
         (tmp_cwd / "existing").mkdir()
         with pytest.raises(SystemExit):
-            cmd_startproject(self._args("existing"))
+            cmd_new(self._args("existing"))
 
     def test_rejects_invalid_name(self, tmp_cwd):
         with pytest.raises(SystemExit):
-            cmd_startproject(self._args("my-site"))
+            cmd_new(self._args("my-site"))
 
     def test_settings_defaults_debug_to_false_from_env(self, tmp_cwd):
         """#637 (still upheld via the canonical generator): scaffolded
         settings.py must fail safe — unconfigured deploys default to
         DEBUG=False, not DEBUG=True."""
-        cmd_startproject(self._args("mysite"))
+        cmd_new(self._args("mysite"))
         settings = (tmp_cwd / "mysite" / "mysite" / "settings.py").read_text()
         assert "DEBUG = True" not in settings
         assert 'DEBUG = os.environ.get("DEBUG", "False")' in settings
@@ -100,7 +100,7 @@ class TestStartProjectDeprecated:
 
     def test_settings_narrows_allowed_hosts_from_env(self, tmp_cwd):
         """#637: ALLOWED_HOSTS defaults to localhost only when env var unset."""
-        cmd_startproject(self._args("mysite"))
+        cmd_new(self._args("mysite"))
         settings = (tmp_cwd / "mysite" / "mysite" / "settings.py").read_text()
         assert 'ALLOWED_HOSTS = ["*"]' not in settings
         assert 'os.environ.get("ALLOWED_HOSTS"' in settings
@@ -109,7 +109,7 @@ class TestStartProjectDeprecated:
     def test_generates_env_example_file(self, tmp_cwd):
         """#637: the project ships a ``.env.example`` developers copy to
         ``.env`` for local development."""
-        cmd_startproject(self._args("mysite"))
+        cmd_new(self._args("mysite"))
         env_example = tmp_cwd / "mysite" / ".env.example"
         assert env_example.exists()
         content = env_example.read_text()
@@ -125,7 +125,7 @@ class TestStartProjectDeprecated:
 
     def test_env_example_not_in_gitignore_but_dot_env_is(self, tmp_cwd):
         """``.env.example`` is committed, ``.env`` is ignored."""
-        cmd_startproject(self._args("mysite"))
+        cmd_new(self._args("mysite"))
         gitignore = (tmp_cwd / "mysite" / ".gitignore").read_text()
         lines = {line.strip() for line in gitignore.splitlines()}
         assert ".env" in lines

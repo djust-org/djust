@@ -1,6 +1,6 @@
 /**
- * #3958: under the strict event-parameter policy (ADR-036) the pressed submit
- * button was lost: `_target` (its only channel) is never generated under
+ * #3958: under the strict event-parameter policy (ADR-036, the only policy since
+ * #4205) the pressed submit button was lost: `_target` (its only channel) is never generated under
  * strict (decision Q2), and the button's own name=value was never a field.
  *
  * Wire contract asserted here:
@@ -10,16 +10,12 @@
  *    catch-all. A closed handler that does not declare it never receives it
  *    (a page cannot inject a parameter by naming a button), and there is still
  *    no `_target`.
- *  - LEGACY: unchanged. `_target` stays the channel and no new field appears:
- *    a legacy handler with a closed signature rejects an unexpected parameter
- *    (validation.py: "received unexpected parameters"), so adding the button
- *    would break pages whose buttons carry a `name` today.
  *
  * Real DOM, a real `submit` event (requestSubmit / click) carrying the
  * `submitter`, through the bundled client over the HTTP fallback.
  */
 import { describe, expect, it } from 'vitest';
-import { legacy, param, setup, strict, submit } from './_form_events_harness.js';
+import { param, setup, strict, submit } from './_form_events_harness.js';
 
 const FORM = `
     <form id="f" dj-submit="HANDLER">
@@ -33,7 +29,6 @@ const handlers = {
     open: strict(param('form', 'Any', 'var_keyword', false)),
     declared: strict(param('title', 'str'), param('intent', 'str', 'positional_or_keyword', false)),
     closed: strict(param('title', 'str')),
-    old: legacy(),
 };
 const form = handler => FORM.replace('HANDLER', handler);
 const buttons = t => t.win.document.querySelectorAll('button');
@@ -118,16 +113,5 @@ describe('dj-submit: the pressed button is a field under strict (#3958)', () => 
         submit(t.win, t.$('form'), t.$('button'));
         await t.settle();
         expect(last(t).intent).toEqual(['typed', 'pressed']);
-    });
-});
-
-describe('dj-submit: legacy payload is unchanged (#3958)', () => {
-    it('keeps `_target` and gains no field for the pressed button', async () => {
-        const t = setup(form('old'), handlers);
-        submit(t.win, t.$('form'), buttons(t)[1]);
-        await t.settle();
-        expect(last(t)._target).toBe('intent');
-        expect('intent' in last(t)).toBe(false);
-        expect(last(t).title).toBe('Hello');
     });
 });

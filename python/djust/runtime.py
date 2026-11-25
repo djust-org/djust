@@ -29,7 +29,7 @@ Phasing
 -------
 
 In this PR (v0.9.2-1) only WebSocket's ``handle_url_change`` migrates to
-the runtime. ``handle_event``/``handle_mount`` remain on the existing
+the runtime. ``handle_event``/``_mount_page`` remain on the existing
 WS-specific paths until follow-up PRs migrate them. SSE uses the runtime
 for all three verbs (mount / event / url_change).
 """
@@ -64,6 +64,7 @@ from typing import (
     Optional,
     Protocol,
     Tuple,
+    Union,
     runtime_checkable,
 )
 
@@ -73,6 +74,7 @@ from . import _per_turn
 from ._params_form import run_handle_params
 from ._view_hooks import call_async_result, call_hook
 from ._held_rows import rows_written, writes_by
+from ._background_render import snapshot_delivers_nothing, sync_reports_render_needed
 
 if TYPE_CHECKING:
     from ._async_batch import AsyncBatch
@@ -207,8 +209,8 @@ def _log_unobserved_save_failure(work: "asyncio.Future[None]") -> None:
     """Report a save failure nobody is waiting for any more (value-free)."""
     if work.cancelled() or work.exception() is None:
         return
-    if isinstance(work.exception(), LateSaveDropped):
-        return  # a logged-out session, already reported at debug (#3247)
+    if isinstance(work.exception(), (LateSaveDropped, _WorkReleased)):
+        return  # a logged-out session (#3247), or released work (#4211): nothing failed
     logger.warning("State save failed after its turn stopped waiting")
 
 
@@ -388,6 +390,10 @@ def _save_running_for(pending: "Optional[asyncio.Future[None]]") -> float:
     return asyncio.get_running_loop().time() - started
 
 
+#: The page's notice when its changes could not be saved three times in a row
+#: (#4164 item 1). Transient: the values are kept and saving goes on.
+_UNSAVED_NOTICE_MESSAGE = "Your recent changes are not saved yet. Saving keeps trying."
+
 #: Consecutive refused authorizations after which a flush forgets the change
 #: (a logout). Fewer would drop it on one ``cache``-engine blip, which reads
 #: as an empty session (design: save frequency, review finding 5).
@@ -397,6 +403,14 @@ _REFUSALS_BEFORE_FORGET = 3
 #: tries again a moment later (a turn in progress holds them).
 _STATE_FLUSH_LOCK_WAIT_S = 0.1
 _STATE_FLUSH_RETRY_S = 0.5
+#: Flushes made while the connection is up: a busy connection or a failure
+#: is retried, and a refusal is final only when it repeats. The interval's,
+#: and a reconnect's request to save (#4164 item 1).
+_LIVE_FLUSHES = ("interval", "flush_request")
+#: A flush request waits this long for the turn locks: within the
+#: reconnect's own wait (``_state_flush_request.WAIT_S``), so the save can
+#: still land before the reconnect restores.
+_FLUSH_REQUEST_LOCK_WAIT_S = 0.5
 
 
 #: Every runtime holding a change no save has written, in this process: what
@@ -448,6 +462,23 @@ async def flush_unsaved_states(reason: str = "shutdown", deadline: Optional[floa
     return written
 
 
+def _load_and_name_flush_group(load: Callable[[Any, Any], Any], view: Any, request: Any) -> Any:
+    """The mount's restore (``load``), then, for a view whose turns may be
+    deferred, the name of its tab's flush group, in the same sync hop: a
+    deferred turn joins it later without one (#4164 item 1)."""
+    restored = load(view, request)
+    from ._save_policy import holder_claims
+
+    if holder_claims(view):
+        from ._state_flush_request import flush_group
+
+        try:
+            view.__dict__["_djust_flush_group"] = flush_group(view, request) or ""
+        except Exception:  # noqa: BLE001 — named later, in the join's own hop
+            logger.debug("djust: the tab's state flush group was not named at the mount")
+    return restored
+
+
 def _save_session_writes(view: Any) -> None:
     """Store what the turn's handler wrote to ``request.session`` when the
     view's own state could not be saved (over its limit, option A): the
@@ -456,6 +487,102 @@ def _save_session_writes(view: Any) -> None:
 
     request = getattr(view, "_djust_event_request", None)
     save_session_writes(getattr(request, "session", None))
+
+
+def _save_session_writes_unless(view: Any, released: Callable[[], bool]) -> None:
+    """:func:`_save_session_writes`, unless the work no longer belongs to the
+    live view (#4211). The check and the save are one thread step, so a
+    teardown run in that executor cannot fall between them."""
+    if released():
+        return
+    _save_session_writes(view)
+
+
+class _WorkReleased(Exception):
+    """A background result's save found, as its first step, that the work no
+    longer belongs to the live view (#4211): nothing was written."""
+
+
+def _unless_released(
+    save: Callable[[], None], released: Optional[Callable[[], bool]]
+) -> Callable[[], None]:
+    """``save``, preceded IN ITS OWN THREAD STEP by the ``released`` check, so
+    a teardown that lands while the save waits for its thread (unbounded on
+    the WebSocket) cannot fall between the check and the write (#4211)."""
+    if released is None:
+        return save
+
+    def run() -> None:
+        if released():
+            raise _WorkReleased
+        save()
+
+    return run
+
+
+def _turn_session(view: Any) -> Any:
+    """The session a turn's handlers write through ``self.request.session``:
+    the view's authorized turn request."""
+    request = getattr(view, "_djust_event_request", None)
+    return getattr(request, "session", None)
+
+
+def _store_session_writes_sync(session: Any, source: str) -> None:
+    from django.contrib.sessions.backends.base import UpdateError
+
+    from ._session_merge import save_session_writes
+    from .state_store import StateSuperseded
+
+    try:
+        save_session_writes(session)
+    except (LateSaveDropped, StateSuperseded):
+        # The tab restored elsewhere while the turn ran: nothing more is written.
+        logger.debug("Session writes of a %s turn dropped: the session moved on", source)
+    except UpdateError:
+        # Django's db store raises UpdateError for ANY database error on the
+        # update, not only for a deleted row (#4274). Only a row that is really
+        # gone is a logout, dropped quietly; anything else is a storage error.
+        if _session_row_gone(session):
+            logger.debug("Session writes of a %s turn dropped: the session moved on", source)
+        else:
+            logger.warning("Session writes of a %s turn were not stored", source)
+    except Exception:  # noqa: BLE001 — storage errors can carry server-only values
+        logger.warning("Session writes of a %s turn were not stored", source)
+
+
+def _session_row_gone(session: Any) -> bool:
+    """Whether ``session``'s stored row no longer exists (a logout deleted it).
+    False when that cannot be told: a failed check is a storage error too."""
+    try:
+        return not type(session)().exists(session.session_key)
+    except Exception as exc:  # noqa: BLE001 — the store did not answer: not a logout
+        # The type only: a storage error can carry server-only values.
+        logger.debug("Could not tell whether the session row still exists (%s)", type(exc).__name__)
+        return False
+
+
+async def store_turn_session_writes(view: Any, source: str = "event") -> None:
+    """Store what a turn's hooks wrote to ``request.session`` (#4162, #4168).
+
+    For a turn that has no commit of its own: a tick, push or ``db_notify``
+    turn that renders nothing.
+    Merged with what other requests stored meanwhile. Costs nothing, not even
+    a thread hop, when the session is untracked or nothing but djust's own
+    keys changed. Never raises.
+    """
+    from ._session_merge import TrackedSessionData
+
+    session = _turn_session(view)
+    data = getattr(session, "_session_cache", None)
+    if type(data) is not TrackedSessionData or not data.has_foreign_changes():
+        return
+    if not getattr(session, "session_key", None):
+        # A socket mounted without a session cookie (an anonymous view):
+        # saving would create a session row whose key no browser ever
+        # receives, one orphan per socket (#4168 review N5). The writes stay
+        # on the socket's session object only.
+        return
+    await sync_to_async(_store_session_writes_sync)(session, source)
 
 
 def _is_refusal(exc: BaseException) -> bool:
@@ -659,7 +786,7 @@ async def apply_restored_state(
 
 
 def _diagnostics_policy_allows(owner: Any) -> bool:
-    """Legacy owner or DEBUG: see ``_exposure_diagnostics.diagnostics_policy_allows``."""
+    """See ``_exposure_diagnostics.diagnostics_policy_allows``."""
     from ._exposure_diagnostics import diagnostics_policy_allows
 
     return diagnostics_policy_allows(owner)
@@ -1043,6 +1170,26 @@ def navigation_title_variables(view: Any) -> Tuple[str, ...]:
         return ()
 
 
+def _title_value(value: Any) -> Any:
+    """A view value for the ``<title>`` render: its serialized dict, or with
+    ``state_models_as_handles`` on (#3936) a floored handle for a model, so the
+    title reads a model as the page body does (plain text, as the overlay's
+    handles are). A floor that raises falls back to the dict (fail closed)."""
+    from .mixins.context import _state_model_values
+    from .serialization import (
+        _overlay_plain_text_handles,
+        _protect_sidecar_tree,
+        normalize_django_value,
+    )
+
+    if _state_model_values({"v": value}):
+        try:
+            return _overlay_plain_text_handles(_protect_sidecar_tree(value, 0, {}, set()), {})
+        except Exception:  # noqa: BLE001 -- fail closed: the dict
+            pass
+    return normalize_django_value(value)
+
+
 def navigation_title(view: Any) -> Optional[str]:
     """The ``<title>`` the destination page would have on a full load (#3036).
 
@@ -1066,7 +1213,6 @@ def navigation_title(view: Any) -> Optional[str]:
         if "{" not in inner:
             return document_title(f"<head><title>{inner}</title></head>")
         from ._rust import extract_template_variables, render_template
-        from .serialization import normalize_django_value
 
         immutables = getattr(view, "_prev_context_immutables", None) or {}
         context: Dict[str, Any] = {}
@@ -1077,7 +1223,7 @@ def navigation_title(view: Any) -> Optional[str]:
                 value = view.__dict__[name]
                 if callable(value):
                     return None
-                context[name] = normalize_django_value(value)
+                context[name] = _title_value(value)
             else:
                 return None
         rendered = render_template(inner, context)
@@ -1156,7 +1302,7 @@ class Transport(Protocol):
         parallel-path twin).
 
         - WS: returns ``consumer._next_version_armed(html)`` — the per-connection
-          counter that ``handle_mount`` / ``handle_event`` use, AND arms
+          counter that ``_mount_page`` / ``handle_event`` use, AND arms
           ``request_html`` recovery to that version (#1788 / #1817).
         - SSE: returns ``rust_version`` unchanged (SSE has no consumer counter;
           its existing behavior is preserved).
@@ -1348,52 +1494,12 @@ class Transport(Protocol):
         """Return a fresh trusted event request; unsupported transports fail closed."""
         raise NotImplementedError("Explicit event requests are not supported")
 
-    async def recheck_event_auth(self, view: Any) -> bool:
-        """Opt-in per-event auth re-check for a live event turn (#1777, T3).
-
-        ADR-022 Iter 2 Phase 2.3a. Auth runs once at mount and the mount-time
-        principal is cached on the session, so a user who logs out / loses a
-        permission mid-session would keep dispatching events on the open
-        connection until they reconnect. When ``LIVEVIEW_CONFIG['reauth_on_event']``
-        is set AND the view declares ``login_required`` / ``permission_required``,
-        this hook re-resolves the CURRENT principal and re-runs the view's auth
-        check before the handler runs. Called by ``_dispatch_event_inner`` at the
-        same point the WS bespoke handler does — after the view-mounted check,
-        BEFORE the normal handler path.
-
-        Returns ``True`` to allow the event to proceed, ``False`` to refuse it.
-        On a ``False`` return the caller has ALREADY done nothing — it is the
-        hook's responsibility to emit any client-visible redirect/error and to
-        terminate the transport (matching the WS bespoke behavior: navigate to
-        the login url + ``close(4403)``). The caller then clears ``view_instance``
-        and aborts the event (see ``_dispatch_event_inner``).
-
-        - WS: when the flag is set + the view requires auth, re-resolves the user
-          from the scope session (``channels.auth.get_user``), reflects it onto
-          ``view.request.user``, re-runs ``check_view_auth_lightweight``; on
-          failure sends a ``navigate`` to the login url + ``close(4403)`` (verbatim
-          from websocket.py:3193-3222) and returns ``False``. Fail-safe: any error
-          (no session in scope, etc.) skips the re-check and returns ``True``.
-        - SSE: when the flag is set + the view requires auth, re-runs
-          ``check_view_auth_lightweight`` against the LIVE event-POST request
-          (``session._event_request`` — the current POSTer's request.user, not the
-          stale mount request); on failure sends an auth-error frame + ends the
-          stream and returns ``False``. The owner-binding check (Finding #24) runs
-          at the endpoint BEFORE dispatch, so this is the SSE analog of the WS
-          mid-session deauth gate — a still-owning POSTer whose auth was revoked is
-          refused. Fail-safe identical to WS.
-
-        Default (Protocol): returns ``True`` (no re-check). A transport that does
-        not implement this never blocks events.
-        """
-        return True
-
     # ------------------------------------------------------------------ #
     # Mount hooks (ADR-022 Iter 3 Phase 3.2, #1915)
     #
     # Phase 3.3a (#1917) wired these hooks into ``dispatch_mount``; Phase 3.3b
     # (#1919) routed WS mounts through it. ``LiveViewConsumer.RUNTIME_OWNED_VERBS``
-    # includes "mount", and ``handle_mount`` delegates direct callers to the
+    # includes "mount", and ``_mount_page`` delegates direct callers to the
     # same runtime path. WS implements consumer-specific behavior; SSE keeps
     # its no-op / raw-version behavior.
     # ------------------------------------------------------------------ #
@@ -1404,7 +1510,7 @@ class Transport(Protocol):
         ADR-022 Iter 3 Phase 3.2 (#1915, Finding B — ``view_instance``
         ownership INVERTS at mount: url_change/event mirror consumer→runtime,
         but mount CREATES the view, so every WS-only consumer attr that the
-        bespoke ``handle_mount`` stamped right after instantiation must move
+        bespoke ``_mount_page`` stamped right after instantiation must move
         into a transport hook that writes onto the consumer during the runtime
         mount). Called by ``dispatch_mount`` (Phase 3.3a) immediately after the
         view is instantiated, BEFORE auth / mount / render.
@@ -1463,9 +1569,8 @@ class Transport(Protocol):
         adjusted) HTML the caller should use for the mount frame.
 
         - WS: on the ``live_redirect`` path (when the consumer staged a
-          ``_sticky_preserved`` dict), scans the rendered HTML for surviving
-          ``[dj-sticky-slot]`` ids (``_find_sticky_slot_ids``), re-registers the
-          survivors onto the new parent (``view._register_child``), and emits the
+          ``_sticky_preserved`` dict), keeps the survivors the destination's
+          ``{% live_render %}`` tags re-registered, discards the rest, and emits the
           ``sticky_hold`` frame BEFORE the mount frame so the client's
           ``reattachStickyAfterMount`` reconciliation is authoritative
           (websocket.py:2080-2082 reset + 2836-2903 emit). Returns ``html``
@@ -1548,56 +1653,6 @@ def _joins_presence_group(view: Any) -> bool:
     return True
 
 
-async def _stored_scope_user(scope: Any) -> Any:
-    """The socket's user as the session store holds it NOW.
-
-    ``channels.auth.get_user(scope)`` reads ``scope["session"]``, the session
-    object loaded when the socket connected: its data stays cached for the
-    life of the connection. A sign-out in another tab (or over HTTP) deletes
-    the stored session, yet the cached copy still names the user, so a
-    per-event re-check against it never sees the sign-out. Re-read the
-    session by its key from the configured engine; a deleted or expired
-    session loads empty and resolves to ``AnonymousUser``. Without a session
-    key there is nothing stored to re-read, so the scope's own answer stands.
-    """
-    from channels.auth import get_user
-    from django.conf import settings
-
-    session = scope.get("session")
-    key = getattr(session, "session_key", None)
-    if not key:
-        return await get_user(scope)
-    from importlib import import_module
-
-    store = import_module(settings.SESSION_ENGINE).SessionStore(key)
-    return await get_user({**scope, "session": store})
-
-
-def _stored_request_user(request: Any) -> Any:
-    """``request`` as the session store holds its principal NOW (SSE server turns).
-
-    The SSE twin of :func:`_stored_scope_user`: a copy of the mount request whose
-    session is re-read by key from the configured engine and whose user is
-    resolved from it, so a sign-out elsewhere (the stored session is gone) or a
-    deactivated account resolves to ``AnonymousUser``. A request with no session
-    key has nothing stored to re-read, so it is returned as it is.
-    """
-    from copy import copy
-    from importlib import import_module
-
-    from django.conf import settings
-    from django.contrib.auth import get_user
-
-    session = getattr(request, "session", None)
-    key = getattr(session, "session_key", None)
-    if not key:
-        return request
-    fresh = copy(request)
-    fresh.session = import_module(settings.SESSION_ENGINE).SessionStore(key)
-    fresh.user = get_user(fresh)
-    return fresh
-
-
 class WSConsumerTransport:
     """Transport adapter wrapping ``LiveViewConsumer``.
 
@@ -1668,10 +1723,24 @@ class WSConsumerTransport:
         ``self.scope`` (carrying the authenticated user + session)."""
         return None
 
+    async def join_state_flush_group(self, group: str) -> bool:
+        """Join the tab's state flush group (#4164 item 1): a reconnect of the
+        same tab elsewhere can then ask this socket to save. False without a
+        channel layer. Left at disconnect, with the view's other groups."""
+        consumer = self._consumer
+        layer = getattr(consumer, "channel_layer", None)
+        name = getattr(consumer, "channel_name", None)
+        if layer is None or not name:
+            return False
+        await layer.group_add(group, name)
+        joined = consumer.__dict__.setdefault("_djust_state_flush_groups", set())
+        joined.add(group)
+        return True
+
     async def on_view_mounted(self, view_instance: Any) -> None:
         """WS post-mount channel-layer wiring + tick + flags (#1919, Finding B residual).
 
-        Verbatim fold of the WS bespoke ``handle_mount`` post-instantiation setup
+        Verbatim fold of the WS bespoke ``_mount_page`` post-instantiation setup
         block (websocket.py:2148-2217 + the per-mount ``_sticky_auto_reattached``
         reset at websocket.py:2082) that ``dispatch_mount`` did NOT carry pre-flip.
         The runtime calls this hook AFTER instantiation + back-refs AND after the
@@ -1906,13 +1975,11 @@ class WSConsumerTransport:
         # ``_previous_html`` is read-only (never assigned in production), so
         # ``previous_html_snippet`` is inert on both paths.
         try:
-            from .websocket import _build_context_snapshot
             from ._exposure import explicit_debug_projection
 
             html_for_snapshot = getattr(view, "_previous_html", None)
-            explicit_debug = explicit_debug_projection(view)
             context_snapshot = (
-                (explicit_debug if explicit_debug is not None else _build_context_snapshot(context))
+                explicit_debug_projection(view)
                 if reason == "no_patches" and context is not None
                 else None
             )
@@ -2084,7 +2151,7 @@ class WSConsumerTransport:
         sql_scope = _dj_sql_capture(
             session_id=_sid,
             event_id=f"{_sid}:{time.perf_counter()}" if _sid else None,
-            owner=view,  # ADR-038 D-d: params are redacted for a nonlegacy owner
+            owner=view,  # ADR-038 D-d: params are redacted unless the owner allows details
         )
         sql_scope.__enter__()
         try:
@@ -2104,76 +2171,6 @@ class WSConsumerTransport:
             consumer._processing_user_event = False
             consumer._render_lock.release()
 
-    async def recheck_event_auth(self, view: Any) -> bool:
-        """WS per-event auth re-check — verbatim from websocket.py:3193-3222 (#1777).
-
-        Re-resolves the user from the scope session, reflects it onto
-        ``view.request.user`` (the mount request stored on the view), and re-runs
-        the view's auth check. On failure: navigate to the login url + ``close(4403)``
-        and return ``False``. On success return ``True``; on any error in the re-check,
-        deny (fail closed).
-
-        Gated on ``reauth_on_event`` + ``login_required``/``permission_required``
-        so default views never pay the session read. Live since Phase 2.3b
-        (#1907): ``LiveViewConsumer.RUNTIME_OWNED_VERBS`` routes ``event`` frames
-        through ``dispatch_message`` → ``dispatch_event``; direct ``handle_event``
-        calls also delegate to ``dispatch_event``. Its event body invokes this
-        hook for legacy-exposure views before normal handler
-        dispatch. ``check_view_auth_lightweight`` delegates to ``check_view_auth``,
-        including an overridden ``check_permissions(request)`` hook.
-        """
-        from .config import config as djust_config
-
-        if not (
-            djust_config.get("reauth_on_event")
-            and (
-                getattr(view, "login_required", None) or getattr(view, "permission_required", None)
-            )
-        ):
-            return True
-
-        consumer = self._consumer
-        try:
-            from .auth.core import acheck_view_auth_lightweight
-
-            fresh_user = await _stored_scope_user(consumer.scope)
-            # The mount request is stored on the view (handle_mount:
-            # ``view.request = request``), not on the consumer.
-            request = getattr(view, "request", None)
-            if request is None:
-                # No request to re-check against — fail-safe skip (matches the WS
-                # bespoke guard, which only re-checks when a request exists).
-                return True
-            request.user = fresh_user  # reflect current auth for the check + handler
-            # An ``async def check_permissions`` is awaited on the loop.
-            authorized = await acheck_view_auth_lightweight(view, request)
-        except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
-            # Only the exception TYPE and view class are logged — never the
-            # message, traceback or request data (log-exposure pin).
-            exc_type = type(exc).__name__
-            logger.warning(
-                "reauth_on_event re-check raised %s on view %s (WS); denying the event",
-                exc_type,
-                type(view).__name__,
-            )
-            authorized = False
-        if not authorized:
-            from django.conf import settings as _dj_settings
-
-            login_url = getattr(view, "login_url", None) or getattr(
-                _dj_settings, "LOGIN_URL", "/accounts/login/"
-            )
-            # Best-effort refusal frames: the event is denied even if the peer is gone.
-            # A view beside the page view is refused in its own container, and
-            # only it goes (#3252); the page view's refusal is the page's.
-            with contextlib.suppress(Exception):
-                if not await self.send_view_refusal("login_required", login_url):
-                    await consumer.send_json({"type": "navigate", "to": login_url})
-            with contextlib.suppress(Exception):
-                await consumer.close(code=4403)
-            return False
-        return True
-
     async def explicit_event_request(self, view: Any) -> Any:
         """Supply freshly loaded session authentication for explicit events."""
         from ._exposure_auth import fresh_socket_request
@@ -2182,7 +2179,7 @@ class WSConsumerTransport:
 
     # ------------------------------------------------------------------ #
     # Mount hooks (ADR-022 Iter 3 Phase 3.2, #1915)
-    # WS implementations extracted from the former bespoke ``handle_mount``.
+    # WS implementations extracted from the former bespoke ``_mount_page``.
     # Wired into ``dispatch_mount`` in Phase 3.3a (#1917), and live for WS
     # mounts since Phase 3.3b (#1919).
     # ------------------------------------------------------------------ #
@@ -2190,7 +2187,7 @@ class WSConsumerTransport:
     def on_view_instantiated(self, view: Any) -> None:
         """Stamp WS consumer back-references on the freshly-instantiated view.
 
-        Verbatim fold of the WS bespoke ``handle_mount`` post-instantiation
+        Verbatim fold of the WS bespoke ``_mount_page`` post-instantiation
         stamps (#1915, Finding B):
 
           * ``view._ws_consumer = consumer`` (streaming support, and the
@@ -2235,7 +2232,7 @@ class WSConsumerTransport:
         """Stamp the consumer-owned NO-ARM wire version for the mount frame (#1915, Finding C).
 
         Returns ``consumer._next_version()`` — the SAME monotonic per-connection
-        counter the bespoke ``handle_mount`` uses (websocket.py:2746). Crucially
+        counter the bespoke ``_mount_page`` uses (websocket.py:2746). Crucially
         this is NOT ``_next_version_armed`` / ``_arm_recovery``: a mount
         ESTABLISHES the client VDOM baseline and has no prior frame to recover to,
         so ``_recovery_html`` MUST stay unset after a mount (distinct from
@@ -2250,10 +2247,10 @@ class WSConsumerTransport:
 
         Verbatim fold of the WS bespoke sticky block (websocket.py:2836-2903).
         On the ``live_redirect`` path the consumer staged a ``_sticky_preserved``
-        dict; this scans the just-rendered ``html`` for surviving
-        ``[dj-sticky-slot]`` ids, re-registers survivors onto the new parent
-        (``view._register_child``), updates ``consumer._sticky_preserved`` to the
-        authoritative survivor set, and emits the ``sticky_hold`` frame BEFORE the
+        dict; this keeps the survivors the template tag re-registered (it checks
+        each child's expected class, inputs and request identity; bare slot
+        markup never reattaches one), discards the rest, updates
+        ``consumer._sticky_preserved`` to the authoritative survivor set, and emits the ``sticky_hold`` frame BEFORE the
         mount frame (ordering matters — the client's ``reattachStickyAfterMount``
         must see the hold first). The ``_sticky_auto_reattached`` set (reset per
         mount at websocket.py:2082) records survivors the template tag already
@@ -2269,8 +2266,6 @@ class WSConsumerTransport:
         (returns ``html``) when no stickys were staged.
         """
         from ._child_lifecycle import discard_sticky_child
-        from ._exposure import uses_legacy_exposure
-        from .websocket import _find_sticky_slot_ids
 
         consumer = self._consumer
         # mount() (or a session restore) has run and the view is admitted:
@@ -2284,7 +2279,6 @@ class WSConsumerTransport:
             return html
 
         try:
-            matched_ids = _find_sticky_slot_ids(html or "")
             survivors_final: Dict[str, Any] = {}
             auto_reattached: set[str] = getattr(consumer, "_sticky_auto_reattached", set())
             for sticky_id, child in list(sticky_preserved.items()):
@@ -2293,23 +2287,9 @@ class WSConsumerTransport:
                     # don't call _register_child again (it would ValueError), but
                     # keep it in survivors_final for an authoritative hold list.
                     survivors_final[sticky_id] = child
-                elif sticky_id in matched_ids and uses_legacy_exposure(child):
-                    # Explicit children must pass the tag's expected-class,
-                    # inputs and request-identity checks. Bare slot markup
-                    # cannot authorize their reattachment.
-                    if hasattr(view, "_register_child"):
-                        try:
-                            view._register_child(sticky_id, child)
-                            survivors_final[sticky_id] = child
-                        except ValueError:
-                            logger.warning(
-                                "sticky_id %s collided with new child on reattach",
-                                sticky_id,
-                            )
-                            discard_sticky_child(child)
                 else:
-                    # No slot on the new page (or an explicit child the tag
-                    # did not reattach): drop it, waiters included (#3244).
+                    # No slot on the new page (or the tag did not reattach
+                    # it): drop it, waiters included (#3244).
                     discard_sticky_child(child)
             consumer._sticky_preserved = survivors_final
             await consumer.send_json(
@@ -2327,7 +2307,7 @@ class WSConsumerTransport:
 
         The runtime path already SENT the verdict frame (error / navigate) and
         cleared ``view_instance``; this adds the transport-level
-        ``close(code=4403)`` the WS bespoke ``handle_mount`` performed
+        ``close(code=4403)`` the WS bespoke ``_mount_page`` performed
         (websocket.py:2344-2399).
 
         ``verdict`` is a marker string describing the block kind. ALL verdicts
@@ -2495,9 +2475,14 @@ class SSESessionTransport:
 
     @property
     def turn_request(self) -> Any:
-        """The live request for a turn: the event POST, else the stream GET."""
+        """The page request this turn's view is (being) mounted under.
+
+        The stream GET's, or the destination ``page_request`` a navigation or
+        slot mount built from the live event POST -- so the principal is the
+        POST's and the route the page's, never ``/djust/sse/<id>/message/``
+        (#4255). The event POST itself is only a defensive fallback."""
         session = self._session
-        return getattr(session, "_event_request", None) or getattr(session, "_request", None)
+        return getattr(session, "_request", None) or getattr(session, "_event_request", None)
 
     @property
     def mount_turn_source(self) -> Optional[str]:
@@ -2696,81 +2681,6 @@ class SSESessionTransport:
         finally:
             lock.release()
 
-    async def recheck_event_auth(self, view: Any) -> bool:
-        """SSE per-event auth re-check against the LIVE event-POST request (#1777).
-
-        SSE parity for the WS mid-session deauth gate. The owner-binding check
-        (Finding #24) already runs at the ``/message/`` endpoint
-        BEFORE dispatch, so the POSTer is the session owner — but a still-owning
-        principal whose ``login_required`` / ``permission_required`` posture was
-        revoked mid-session would keep driving the view. When ``reauth_on_event``
-        is set + the view requires auth, re-run ``check_view_auth_lightweight``
-        against the CURRENT event-POST request (``session._event_request``, stamped
-        by the SSE endpoint just before ``dispatch_event`` — the live POSTer's
-        ``request.user``, NOT the stale mount request that ``build_request``
-        returns). On failure: send an auth-error frame + end the stream and return
-        ``False``. Fail closed: any error in the re-check denies and returns ``False``.
-
-        LIVE for SSE today: SSE events route through ``dispatch_event`` →
-        ``_dispatch_event_inner`` since Iter 1 (#1887), so this hook fires on the
-        live SSE event path the moment ``reauth_on_event`` is enabled.
-        """
-        from .config import config as djust_config
-
-        if not (
-            djust_config.get("reauth_on_event")
-            and (
-                getattr(view, "login_required", None) or getattr(view, "permission_required", None)
-            )
-        ):
-            return True
-
-        session = self._session
-        try:
-            from .auth.core import acheck_view_auth_lightweight
-
-            # The live event-POST request, stamped on the session by the SSE
-            # endpoint right before dispatch. Falls back to the mount request
-            # (``session._request``) defensively if the endpoint didn't stamp one
-            # (e.g. a direct runtime.dispatch_event call) — the mount request
-            # still carries a real user, so the re-check stays meaningful.
-            request = getattr(session, "_event_request", None)
-            if request is None:
-                # A server-originated turn (tick, push, background result): no
-                # POST is in flight. The mount request's user was resolved when
-                # the stream opened and stays cached, so it cannot see a logout
-                # or a deactivation since: re-read the session and the user, as
-                # the WebSocket does (#3809).
-                request = getattr(session, "_request", None)
-                if request is None:
-                    return True
-                request = await sync_to_async(_stored_request_user)(request)
-            # An ``async def check_permissions`` is awaited on the loop.
-            authorized = await acheck_view_auth_lightweight(view, request)
-        except Exception as exc:  # noqa: BLE001 — fail CLOSED: an unverifiable check denies
-            # Only the exception TYPE and view class are logged — never the
-            # message, traceback or request data (log-exposure pin).
-            exc_type = type(exc).__name__
-            logger.warning(
-                "reauth_on_event re-check raised %s on view %s (SSE); denying the event",
-                exc_type,
-                type(view).__name__,
-            )
-            authorized = False
-        if not authorized:
-            # Best-effort refusal frames: the event is denied even if the stream is gone.
-            with contextlib.suppress(Exception):
-                # A view beside the page view is refused in its own container (#3252).
-                if not await self.send_view_refusal("permission_denied"):
-                    await session.send_error(
-                        "Session is no longer authorized. Please reload the page.",
-                        code="permission_denied",
-                    )
-            with contextlib.suppress(Exception):
-                await session.close(code=4403)
-            return False
-        return True
-
     async def explicit_event_request(self, view: Any) -> Any:
         """Use the current owner-checked POST; never fall back to mount auth.
 
@@ -2952,7 +2862,7 @@ def _context_changed_besides(view: Any, context: Dict[str, Any], name: str) -> O
     the reason the scoped path is not exact. Returns that key, or ``None``
     when only the component changed.
     """
-    from .change_detection import deep_fingerprint, fingerprints_by_content
+    from .change_detection import deep_digest, fingerprints_by_content
     from .mixins.rust_bridge import _FRAMEWORK_KEYS, _IMMUTABLE_TYPES_FOR_SYNC
 
     prev_refs = getattr(view, "_prev_context_refs", None)
@@ -2972,7 +2882,8 @@ def _context_changed_besides(view: Any, context: Dict[str, Any], name: str) -> O
         if key in skip:
             continue
         if isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value):
-            fp, truncated = deep_fingerprint(value)
+            # The sync keeps a digest per key (#3998); compare like with like.
+            fp, truncated = deep_digest(value)
             if truncated or key not in prev_fps or prev_fps[key] != fp:
                 return str(key)
         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
@@ -3056,11 +2967,315 @@ def _reconstruct_explicit_page_shell(view: Any, request: Any) -> None:
         return
     from ._child_rendering import render_view_full_template
 
+    if not _page_shell_may_register_children(view):
+        # Nothing in the page can mount a child view, so the full render
+        # would register nothing; its HTML is never sent (#4295). Asked before
+        # ``get_template()``, which a skipped render need not pay for (#4299).
+        return
+    # Refreshes ``_full_template`` should the view have changed its template
+    # since its Rust view was built; with ``DEBUG`` off it is a kept copy.
     view.get_template()
     if getattr(view, "_full_template", None) is None:
         return
     render_view_full_template(view, request)
     view._cached_context = None
+
+
+#: Tag libraries whose tags never mount a child view: Django's own, djust's
+#: ``live_tags`` (whose only child-mounting tag, ``live_render``, is found by
+#: name), and djust's component, flash and theme libraries (#4298), whose tags
+#: render only the templates ``_LIBRARY_RENDERED_TEMPLATES`` names. Any other
+#: ``{% load %}`` of a library with tags may hold a tag that does, so it keeps
+#: the full page-shell render (#4295) unless the project lists it in
+#: ``LIVEVIEW_CONFIG['childless_tag_libraries']``.
+_CHILDLESS_TAG_LIBRARIES = frozenset(
+    {
+        "static",
+        "i18n",
+        "l10n",
+        "tz",
+        "cache",
+        "humanize",
+        "live_tags",
+        "djust_components",
+        "djust_flash",
+        "theme_tags",
+    }
+)
+#: The templates a library on ``_CHILDLESS_TAG_LIBRARIES`` renders from its tags.
+#: A project can override any of them (an app template dir earlier in the search
+#: order), so a page that loads the library scans them as it scans an include.
+#: ``*`` stands for a theme name: ``theme_tags`` picks the active theme's copy
+#: first. ``python/djust/tests/test_mount_template_work_4298_4299.py`` keeps this in step
+#: with the libraries' source.
+_LIBRARY_RENDERED_TEMPLATES: Dict[str, Tuple[str, ...]] = {
+    "djust_components": (
+        "djust_components/toast.html",
+        "djust_components/progress.html",
+        "djust_components/badge.html",
+        "djust_components/pagination.html",
+        "djust_components/avatar.html",
+    ),
+    "theme_tags": (
+        "djust_theming/theme_head.html",
+        "djust_theming/theme_switcher.html",
+        "djust_theming/themes/*/theme_switcher.html",
+        "djust_theming/components/theme_panel.html",
+        "djust_theming/themes/*/components/theme_panel.html",
+        "djust_theming/components/theme_mode_button.html",
+        "djust_theming/themes/*/components/theme_mode_button.html",
+        "djust_theming/components/preset_selector_dropdown.html",
+        "djust_theming/themes/*/components/preset_selector_dropdown.html",
+        "djust_theming/components/preset_selector_grid.html",
+        "djust_theming/themes/*/components/preset_selector_grid.html",
+        "djust_theming/components/preset_selector_list.html",
+        "djust_theming/themes/*/components/preset_selector_list.html",
+    ),
+}
+#: The module each djust name on ``_CHILDLESS_TAG_LIBRARIES`` must resolve to: an
+#: app's own library of the same name (a later app wins in Django's map) or an
+#: ``OPTIONS['libraries']`` entry is not vouched for by the name alone (#4298).
+_DJUST_LIBRARY_MODULES: Dict[str, str] = {
+    "live_tags": "djust.templatetags.live_tags",
+    "djust_components": "djust.components.templatetags.djust_components",
+    "djust_flash": "djust.templatetags.djust_flash",
+    "theme_tags": "djust.theming.templatetags.theme_tags",
+}
+#: Tags of a child-free library that render more than the scan can read: the
+#: component catalogue's previews render any component template, through
+#: other libraries and whole views. A file that uses one keeps the render.
+_LIBRARY_UNSCANNED_TAGS: Dict[str, Tuple[str, ...]] = {
+    "theme_tags": ("component_preview", "component_thumbnail"),
+}
+_LOAD_TAG_RE = re.compile(r"\{%\s*load\s+(.*?)\s*%\}", re.DOTALL)
+#: ``{% extends X %}`` / ``{% include X %}``: the operand, quoted or not.
+_TEMPLATE_REF_RE = re.compile(
+    r"\{%\s*(?:extends|include)\s+(\"[^\"]*\"|'[^']*'|[^\s%]+)", re.DOTALL
+)
+#: More templates than this in one page means the scan gives up (renders).
+_SHELL_SCAN_MAX_TEMPLATES = 64
+
+
+def _project_childless_libraries() -> Tuple[str, ...]:
+    """``LIVEVIEW_CONFIG['childless_tag_libraries']``: names a project vouches for (#4298)."""
+    from .config import config as djust_config
+
+    names = djust_config.get("childless_tag_libraries") or ()
+    if isinstance(names, str):
+        names = (names,)
+    return tuple(sorted(str(name) for name in names))
+
+
+def _page_shell_may_register_children(view: Any) -> bool:
+    """Whether a full render of ``view``'s page could mount a child view (#4295).
+
+    Reads the raw text of every template the page is built from: the
+    ``template_name`` file, each ``{% extends %}`` parent and each
+    ``{% include %}`` partial, followed recursively, plus the templates a loaded
+    djust library renders (``_LIBRARY_RENDERED_TEMPLATES``). ``False`` only when
+    no file names ``live_render``, every ``extends`` / ``include`` operand is a
+    quoted template name that resolves, and every ``{% load %}`` is child-free
+    (``_library_is_childless``). A tag no template has to load (an engine's
+    ``builtins``, a djust tag handler registered outside djust) could mount a
+    child unseen, so either keeps the full render. Anything else the scan
+    cannot read answers ``True``: the full render runs, as before.
+    """
+    from ._render_caches import render_caches_enabled
+    from .mixins.jit import _SHELL_CHILDREN_CACHE_MAX, _shell_children_cache
+    from .utils import get_template_dirs
+
+    from .mixins.template import TemplateMixin
+
+    name = getattr(view, "template_name", None)
+    if type(name) is not str or not name:
+        return True
+    if getattr(
+        type(view), "get_template", None
+    ) is not TemplateMixin.get_template or "get_template" in getattr(view, "__dict__", {}):
+        return True  # the page may not be built from these files
+    try:
+        if _unloaded_tags_may_mount_children():
+            return True
+        vouched = _project_childless_libraries()
+        key = (name, tuple(get_template_dirs()), vouched) if render_caches_enabled() else None
+        if key is not None:
+            cached = _shell_children_cache.get(key)
+            if cached is not None:
+                return cached
+        answer = _templates_may_register_children(name, vouched)
+    except Exception:  # noqa: BLE001 — undecidable: keep the full render
+        logger.debug("Page-shell child scan could not read the templates")
+        return True
+    if key is not None:
+        if len(_shell_children_cache) >= _SHELL_CHILDREN_CACHE_MAX:
+            _shell_children_cache.clear()
+        _shell_children_cache[key] = answer
+    return answer
+
+
+def _unloaded_tags_may_mount_children() -> bool:
+    """Whether a tag reachable without ``{% load %}`` may come from outside djust."""
+    from django.conf import settings
+
+    from .template_tags import get_registered_handlers
+
+    for config in getattr(settings, "TEMPLATES", ()) or ():
+        if (config.get("OPTIONS") or {}).get("builtins"):
+            return True
+    for handler in get_registered_handlers().values():
+        module = getattr(handler if isinstance(handler, type) else type(handler), "__module__", "")
+        if not str(module).startswith("djust."):
+            return True
+    return False
+
+
+def _templates_may_register_children(name: str, vouched: Tuple[str, ...] = ()) -> bool:
+    """``_page_shell_may_register_children`` for the page whose root file is ``name``."""
+    pending = [name]
+    seen: set = set()
+    libraries_seen: set = set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if len(seen) > _SHELL_SCAN_MAX_TEMPLATES:
+            return True
+        source = _template_file_source(current)
+        if source is None:
+            return True
+        loaded = _source_childless_loads(source, vouched)
+        if loaded is None:
+            return True
+        for library in loaded - libraries_seen:
+            libraries_seen.add(library)
+            pending.extend(_library_rendered_templates(library))
+        for match in _TEMPLATE_REF_RE.finditer(source):
+            operand = match.group(1)
+            if len(operand) < 3 or operand[0] not in "\"'" or operand[-1] != operand[0]:
+                return True  # a variable template name: unknowable here
+            # A Django 6 named partial (``"page.html#card"``) lives in its file.
+            pending.append(operand[1:-1].partition("#")[0])
+    return False
+
+
+def _library_rendered_templates(library: str) -> List[str]:
+    """The templates ``library``'s tags may render, as the scan should read them.
+
+    A plain name is read like an include (it must resolve). A ``*`` pattern is a
+    theme's own copy, read wherever a template directory has one.
+    """
+    import glob
+    import os
+
+    from .utils import get_template_dirs
+
+    names: List[str] = []
+    for entry in _LIBRARY_RENDERED_TEMPLATES.get(library, ()):
+        if "*" not in entry:
+            names.append(entry)
+            continue
+        for template_dir in get_template_dirs():
+            for path in sorted(glob.glob(os.path.join(glob.escape(template_dir), entry))):
+                names.append(os.path.relpath(path, template_dir).replace(os.sep, "/"))
+    return names
+
+
+def _template_file_source(name: str) -> Optional[str]:
+    """The raw text of template ``name``, as the template engine would find it."""
+    import os
+
+    from .utils import get_template_dirs
+
+    for template_dir in get_template_dirs():
+        path = os.path.join(template_dir, name)
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as handle:
+                return handle.read()
+    from django.template import TemplateDoesNotExist, engines
+
+    for backend in engines.all():
+        engine = getattr(backend, "engine", None)
+        if engine is None:
+            continue
+        try:
+            template, _origin = engine.find_template(name)
+        except TemplateDoesNotExist:
+            continue
+        source = getattr(template, "source", None)
+        if isinstance(source, str):
+            return source
+    return None
+
+
+def _source_childless_loads(content: Any, vouched: Tuple[str, ...] = ()) -> Optional[set]:
+    """The libraries one template file loads, or ``None`` when it could mount a child.
+
+    ``None`` when the text names ``live_render`` or loads a library that
+    ``_library_is_childless`` cannot clear.
+    """
+    if not isinstance(content, str) or "live_render" in content:
+        return None
+    loaded: set = set()
+    for match in _LOAD_TAG_RE.finditer(content):
+        words = match.group(1).split()
+        # ``{% load name1 name2 %}`` or ``{% load tag1 tag2 from library %}``
+        # (Django's own test: three words or more, ``from`` the penultimate).
+        if len(words) >= 3 and words[-2] == "from":
+            libraries, items = words[-1:], tuple(words[:-2])
+        else:
+            libraries, items = words, None
+        for library in libraries:
+            if not _library_is_childless(library, items, vouched):
+                return None
+            for tag in _LIBRARY_UNSCANNED_TAGS.get(library, ()):
+                if (items is None or tag in items) and re.search(
+                    r"\{%-?\s*" + tag + r"\b", content
+                ):
+                    return None
+            loaded.add(library)
+    return loaded
+
+
+def _source_may_register_children(content: Any, vouched: Tuple[str, ...] = ()) -> bool:
+    """Whether one template file's own text could mount a child view."""
+    return _source_childless_loads(content, vouched) is None
+
+
+def _library_is_childless(
+    library: str, items: Optional[Tuple[str, ...]], vouched: Tuple[str, ...] = ()
+) -> bool:
+    """Whether loading ``library`` (or only ``items`` of it) can mount no child view.
+
+    True for ``_CHILDLESS_TAG_LIBRARIES``, for a library the project vouches for
+    (the ``childless_tag_libraries`` setting, or ``register.djust_childless = True``
+    in the library itself), and for one whose loaded part registers no tag: a filter cannot mount a
+    child view (#4298). A library that cannot be found keeps the full render.
+    """
+    if library in vouched or (
+        library in _CHILDLESS_TAG_LIBRARIES and library not in _DJUST_LIBRARY_MODULES
+    ):
+        return True
+    try:
+        from .template_libraries import _find_library
+
+        found = _find_library(library)
+        if getattr(found, "djust_childless", False) is True:
+            return True
+        module = _DJUST_LIBRARY_MODULES.get(library)
+        if module is not None:
+            from importlib import import_module
+
+            if found is getattr(import_module(module), "register", None):
+                return True
+        tags = getattr(found, "tags", None)
+    except Exception:  # noqa: BLE001 — an unknown library: assume it may
+        return False
+    if not isinstance(tags, dict):
+        return False
+    if items is None:
+        return not tags
+    return not any(item in tags for item in items)
 
 
 def _explicit_descendant(root: Any, view_id: Any) -> Any:
@@ -3069,11 +3284,9 @@ def _explicit_descendant(root: Any, view_id: Any) -> Any:
     Direct children keep their existing lookup. Below them, an explicit root
     routes to a descendant only through the server-owned registry chain, and
     only when exactly one owned explicit descendant carries that id; an
-    ambiguous or unknown id is not routed. Legacy roots are unchanged.
+    ambiguous or unknown id is not routed.
     """
-    from ._exposure import uses_legacy_exposure
-
-    if type(view_id) is not str or uses_legacy_exposure(root):
+    if type(view_id) is not str:
         return None
     matches = []
     pending = [root]
@@ -3091,13 +3304,63 @@ def _explicit_descendant(root: Any, view_id: Any) -> Any:
                 getattr(child, "_parent_view", None) is not parent
                 or getattr(child, "_view_id", None) != slot
                 or getattr(child, "_djust_child_disposed", False)
-                or uses_legacy_exposure(child)
             ):
                 continue
             if parent is not root and slot == view_id:
                 matches.append(child)
             pending.append(child)
     return matches[0] if len(matches) == 1 else None
+
+
+def _owned_descendants(root: Any) -> List[Any]:
+    """Every embedded view the root owns now, through the registry chain (#4179).
+
+    Walks the server-owned registry as :func:`_explicit_descendant` does (a
+    child counts only while its parent's registry holds it under its own
+    ``view_id`` and it is not disposed), for both exposure policies, bounded
+    at 257 views.
+    """
+    found: List[Any] = []
+    pending = [root]
+    seen: set = set()
+    while pending and len(seen) < 257:
+        parent = pending.pop()
+        if id(parent) in seen:
+            continue
+        seen.add(id(parent))
+        registry = getattr(parent, "_child_views", None)
+        if type(registry) is not dict:
+            continue
+        for slot, child in tuple(registry.items()):
+            if (
+                getattr(child, "_parent_view", None) is not parent
+                or getattr(child, "_view_id", None) != slot
+                or getattr(child, "_djust_child_disposed", False)
+                or id(child) in seen
+            ):
+                continue
+            found.append(child)
+            pending.append(child)
+    return found
+
+
+def _still_owned(root: Any, child: Any) -> bool:
+    """Whether ``child`` is still registered under ``root``, at every level (#4179)."""
+    current = child
+    for _ in range(16):
+        if current is root:
+            return True
+        if current is None or getattr(current, "_djust_child_disposed", False):
+            return False
+        parent = getattr(current, "_parent_view", None)
+        registry = getattr(parent, "_child_views", None)
+        if (
+            type(registry) is not dict
+            or registry.get(getattr(current, "_view_id", None)) is not current
+        ):
+            return False
+        current = parent
+    return False
 
 
 def _public_decorator_metadata(view_instance: Any) -> List[Tuple[str, Dict[str, Any]]]:
@@ -3156,8 +3419,7 @@ def _derive_missing_principal(request: Any) -> None:
     is still refused there. Later gates keep judging it that way
     (``auth.core.request_as_the_stack_built_it``); the view's own code, the
     state binding, presence, rate limits and tenant resolution see the user.
-    A ``user`` the stack supplied is never replaced, and a legacy view is
-    never given one. Without ``django.contrib.auth`` there is nothing to read
+    A ``user`` the stack supplied is never replaced. Without ``django.contrib.auth`` there is nothing to read
     and the binding's own refusal stands.
     """
     if getattr(request, "user", None) is not None:
@@ -3258,6 +3520,10 @@ class ViewRuntime(RuntimeTurnPort):
         # whose state a turn changed and no save has written yet, the one-shot
         # timer that flushes it, the flush it started, and consecutive failures.
         self._state_dirty_view: Any = None
+        # #4164 item 1: the join of the tab's flush group, and the page's
+        # "not saved yet" notice, each a task the loop must keep referenced.
+        self._flush_group_task: Optional["asyncio.Future[None]"] = None
+        self._unsaved_notice: Optional["asyncio.Future[None]"] = None
         self._state_timer: Optional[asyncio.TimerHandle] = None
         self._state_timer_delay: Optional[float] = None
         self._state_flush_task: Optional["asyncio.Future[Any]"] = None
@@ -3271,8 +3537,8 @@ class ViewRuntime(RuntimeTurnPort):
         # connection created, so repeated mounts reuse one replacement.
         self._replacement_sessions: Dict[str, str] = {}
         # ADR-036: only transport-local advertisement state, never application
-        # state or a cached owner/contract. A later all-legacy render must clear
-        # a previously advertised strict manifest.
+        # state or a cached owner/contract. A later render of a tree with no
+        # handlers must clear a previously advertised manifest.
         self._parameter_contracts_active = False
         self._parameter_contract_view: Optional[str] = None
         # #3036: the destination page's <title>, recorded after the mount
@@ -3350,7 +3616,7 @@ class ViewRuntime(RuntimeTurnPort):
                     logger.error("Protected transport could not be closed")
 
     # ------------------------------------------------------------------ #
-    # Mount dispatch (used by SSE in this PR; WS still uses handle_mount)
+    # Mount dispatch (used by SSE in this PR; WS still uses _mount_page)
     # ------------------------------------------------------------------ #
 
     async def dispatch_mount(
@@ -3424,7 +3690,7 @@ class ViewRuntime(RuntimeTurnPort):
         This protects against the legacy ``?view=`` GET-mount + new POST
         mount-frame double-fire (Risk #1 in the plan).
 
-        Frame schema (matches WebSocket ``handle_mount`` at
+        Frame schema (matches WebSocket ``_mount_page`` at
         ``websocket.py:1657-1660``)::
 
             {
@@ -3445,7 +3711,7 @@ class ViewRuntime(RuntimeTurnPort):
         # F23 (#1819 traversal fix, parallel-path-drift #1646): the client URL is
         # attacker-controlled and is fed to RequestFactory.get() / resolve() /
         # logs / build_absolute_uri below. Validate it through the SAME shared
-        # validator the WebSocket path uses (websocket.handle_mount), so the SSE
+        # validator the WebSocket path uses (websocket._mount_page), so the SSE
         # / runtime path neutralises "/%2e%2e/admin/" identically. _build_request
         # validates again defensively.
         from .security.mount import is_view_path_allowed, validate_mount_url
@@ -3498,7 +3764,7 @@ class ViewRuntime(RuntimeTurnPort):
         # ---- Transport back-references on the freshly-instantiated view ----
         # ADR-022 Iter 3 Phase 3.3a (#1917, Finding B). Wire the
         # ``on_view_instantiated`` hook at the SAME point the bespoke WS
-        # ``handle_mount`` stamps its consumer back-refs (websocket.py:2128 ff):
+        # ``_mount_page`` stamps its consumer back-refs (websocket.py:2128 ff):
         # IMMEDIATELY after instantiation, BEFORE auth / mount /
         # render. WS: stamps ``_ws_consumer`` /
         # observability ``register_view`` / validated handshake host. SSE: no-op.
@@ -3507,6 +3773,10 @@ class ViewRuntime(RuntimeTurnPort):
         on_view_instantiated = getattr(self.transport, "on_view_instantiated", None)
         if on_view_instantiated is not None:
             on_view_instantiated(view_instance)
+        # #4167: a live runtime mounted this view, so a ``lazy=`` child in its
+        # templates is rendered (and registered) in place: nothing on a live
+        # connection runs the page GET's deferred fill.
+        view_instance.__dict__["_djust_live_runtime"] = True
 
         self.view_instance = view_instance
 
@@ -3556,27 +3826,24 @@ class ViewRuntime(RuntimeTurnPort):
         if slot_target:
             request._djust_slot_target = slot_target
 
-        from ._exposure import uses_legacy_exposure
+        # #3201: a cookie naming a vanished session (cache flush, expiry)
+        # mounts fresh under a replacement session, as the HTTP GET does,
+        # instead of failing the state binding on every reconnect. Runs
+        # before the pre-mount auth sequence so auth sees the re-derived
+        # (anonymous) user, not the connect-time one.
+        from ._exposure_auth import establish_mount_session
 
-        if not uses_legacy_exposure(view_instance):
-            # #3201: a cookie naming a vanished session (cache flush, expiry)
-            # mounts fresh under a replacement session, as the HTTP GET does,
-            # instead of failing the state binding on every reconnect. Runs
-            # before the pre-mount auth sequence so auth sees the re-derived
-            # (anonymous) user, not the connect-time one.
-            from ._exposure_auth import establish_mount_session
-
-            presented = getattr(getattr(request, "session", None), "session_key", None)
-            # A WebSocket runtime synthesizes its request (it has a scope); an
-            # SSE runtime mounts on the real stream request, whose response
-            # issues the replacement as a cookie (review I-b).
-            replacement = await sync_to_async(establish_mount_session)(
-                request,
-                self._replacement_sessions.get(presented or ""),
-                ephemeral=self.scope is not None,
-            )
-            if replacement and presented:
-                self._replacement_sessions[presented] = replacement
+        presented = getattr(getattr(request, "session", None), "session_key", None)
+        # A WebSocket runtime synthesizes its request (it has a scope); an
+        # SSE runtime mounts on the real stream request, whose response
+        # issues the replacement as a cookie (review I-b).
+        replacement = await sync_to_async(establish_mount_session)(
+            request,
+            self._replacement_sessions.get(presented or ""),
+            ephemeral=self.scope is not None,
+        )
+        if replacement and presented:
+            self._replacement_sessions[presented] = replacement
 
         try:
             view_instance.request = request
@@ -3616,7 +3883,7 @@ class ViewRuntime(RuntimeTurnPort):
             return
 
         # ---- on_mount hooks (after auth, before mount) ----
-        # Ported from WS handle_mount (websocket.py:2383-2401), placed at the
+        # Ported from WS _mount_page (websocket.py:2383-2401), placed at the
         # SAME point: AFTER the pre-mount auth sequence, BEFORE mount(). The
         # registered ``on_mount`` hooks (djust.hooks.run_on_mount_hooks) run
         # against the live view + request and may return a redirect URL.
@@ -3651,8 +3918,7 @@ class ViewRuntime(RuntimeTurnPort):
 
         # After every admission decision (the auth sequence and the on_mount
         # hooks judged the request as the stack built it), before mount().
-        if not uses_legacy_exposure(view_instance):
-            await sync_to_async(_derive_missing_principal)(request)
+        await sync_to_async(_derive_missing_principal)(request)
 
         # Transport-specific identity + post-mount setup hook (#1887 / #1919):
         # SSE stamps _sse_session_id / _sse_session + the real query string here so
@@ -3683,7 +3949,6 @@ class ViewRuntime(RuntimeTurnPort):
         if url_kwargs:
             mount_kwargs.update(url_kwargs)
 
-        legacy_exposure = uses_legacy_exposure(view_instance)
         # Whether saved state was put back over mount(): handle_restore() then
         # runs after the object-permission check (#4088).
         run_restore_hook = False
@@ -3703,55 +3968,77 @@ class ViewRuntime(RuntimeTurnPort):
             snapshot_private = getattr(view_instance, "_snapshot_user_private_attrs", None)
             if callable(snapshot_private):
                 snapshot_private()
-            if not legacy_exposure:
-                from ._exposure_sessions import load_server_state
+            from ._exposure_sessions import load_server_state
 
-                if callable(getattr(view_instance, "resolve_tenant", None)):
-                    request.tenant = getattr(view_instance, "_tenant", None)
-                restored = await sync_to_async(load_server_state)(view_instance, request)
-                from django.conf import settings
+            if callable(getattr(view_instance, "resolve_tenant", None)):
+                request.tenant = getattr(view_instance, "_tenant", None)
+            # #4164 item 1: the serial of the last state the page was shown
+            # (a reconnect sends it). When the store is behind it, the tab's
+            # other connection is asked to save first.
+            page_serial = data.get("state_serial") if not slot_target else None
+            if type(page_serial) is not int or page_serial <= 0:
+                page_serial = None
+            from ._save_policy import holder_claims
 
-                incoming = data.get("state_snapshot")
+            if page_serial is not None and holder_claims(view_instance):
+                from ._state_flush_request import request_flush
+
+                await request_flush(view_instance, request, page_serial)
+            restored = await sync_to_async(_load_and_name_flush_group)(
+                load_server_state, view_instance, request
+            )
+            if page_serial is not None:
+                from ._automatic_state import turn_serial
+
+                restored_serial = turn_serial(view_instance)
                 if (
-                    getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
-                    and not slot_target
-                    and type(incoming) is dict
-                    and incoming.get("view_slug") == view_path
-                    and await sync_to_async(
-                        _lifecycle_step(view_instance, view_instance._should_restore_snapshot)
-                    )(request)
+                    restored_serial is not None
+                    and restored_serial < page_serial <= restored_serial + 1
                 ):
-                    from ._exposure_snapshots import snapshot_codec
+                    view_instance.__dict__["_djust_not_restored"] = True
+            from django.conf import settings
 
-                    codec = await sync_to_async(snapshot_codec)(view_instance, request)
-                    client_values = codec.restore(incoming.get("state_json")) if codec else None
-                    if client_values is not None:
-                        # Server/client fields are disjoint by declaration;
-                        # both dictionaries are completely validated first.
-                        restored = {**(restored or {}), **client_values}
-                if restored is not None:
-                    # #3989: the declared state came back AFTER mount() ran, so
-                    # mount() never saw it. The ``handle_restore`` hook lets the
-                    # view act on what was restored (read rows again from a
-                    # restored id, clear a persisted "running" flag whose work
-                    # did not survive). It runs below, after handle_params(),
-                    # the saved state's re-apply and the object-permission
-                    # check: the order of the HTTP fallback (mixins/request.py)
-                    # and an embedded child (templatetags/live_tags.py), so the
-                    # hook sees the same view on every transport (#4088).
-                    await apply_restored_state(view_instance, restored, request, run_hook=False)
-                    run_restore_hook = True
-                    # #1977: the client's DOM predates this restore, so the
-                    # Rust diff baseline primed by the mount render does not
-                    # match it. The first event after the restore must send
-                    # full HTML, not a patch against that stale baseline. The
-                    # mount render reads the flag and never resets it; the
-                    # first event's render consumes it. Not when the restore
-                    # put back exactly what mount() built (#4107): the page
-                    # GET saved that state and rendered the page from it, so
-                    # the browser's DOM and the baseline already agree.
-                    if view_instance.__dict__.get("_djust_restore_changed_view", True):
-                        view_instance._force_full_html = True
+            incoming = data.get("state_snapshot")
+            if (
+                getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True)
+                and not slot_target
+                and type(incoming) is dict
+                and incoming.get("view_slug") == view_path
+                and await sync_to_async(
+                    _lifecycle_step(view_instance, view_instance._should_restore_snapshot)
+                )(request)
+            ):
+                from ._exposure_snapshots import snapshot_codec
+
+                codec = await sync_to_async(snapshot_codec)(view_instance, request)
+                client_values = codec.restore(incoming.get("state_json")) if codec else None
+                if client_values is not None:
+                    # Server/client fields are disjoint by declaration;
+                    # both dictionaries are completely validated first.
+                    restored = {**(restored or {}), **client_values}
+            if restored is not None:
+                # #3989: the declared state came back AFTER mount() ran, so
+                # mount() never saw it. The ``handle_restore`` hook lets the
+                # view act on what was restored (read rows again from a
+                # restored id, clear a persisted "running" flag whose work
+                # did not survive). It runs below, after handle_params(),
+                # the saved state's re-apply and the object-permission
+                # check: the order of the HTTP fallback (mixins/request.py)
+                # and an embedded child (templatetags/live_tags.py), so the
+                # hook sees the same view on every transport (#4088).
+                await apply_restored_state(view_instance, restored, request, run_hook=False)
+                run_restore_hook = True
+                # #1977: the client's DOM predates this restore, so the
+                # Rust diff baseline primed by the mount render does not
+                # match it. The first event after the restore must send
+                # full HTML, not a patch against that stale baseline. The
+                # mount render reads the flag and never resets it; the
+                # first event's render consumes it. Not when the restore
+                # put back exactly what mount() built (#4107): the page
+                # GET saved that state and rendered the page from it, so
+                # the browser's DOM and the baseline already agree.
+                if view_instance.__dict__.get("_djust_restore_changed_view", True):
+                    view_instance._force_full_html = True
         except Exception as exc:
             response = handle_exception(
                 exc,
@@ -3766,7 +4053,7 @@ class ViewRuntime(RuntimeTurnPort):
 
         # ---- Mount-request stash + dirty/private baselines (ADR-022 Iter 3
         # Phase 3.0 transport-agnostic grows) ----
-        # Ported from WS handle_mount (websocket.py:2596-2603), placed at the
+        # Ported from WS _mount_page (websocket.py:2596-2603), placed at the
         # SAME point: AFTER mount(), BEFORE handle_params. The object-permission
         # check runs after handle_params (below); a denial there clears the
         # explicit binding set here along with the view.
@@ -3778,12 +4065,11 @@ class ViewRuntime(RuntimeTurnPort):
         # mount-stash net goes RED).
         view_instance._djust_mount_request = request
         view_instance._djust_mount_kwargs = mount_kwargs
-        if not legacy_exposure:
-            from ._exposure_sessions import request_binding
+        from ._exposure_sessions import request_binding
 
-            if callable(getattr(view_instance, "resolve_tenant", None)):
-                request.tenant = getattr(view_instance, "_tenant", None)
-            self._explicit_mount_binding = await sync_to_async(request_binding)(request)
+        if callable(getattr(view_instance, "resolve_tenant", None)):
+            request.tenant = getattr(view_instance, "_tenant", None)
+        self._explicit_mount_binding = await sync_to_async(request_binding)(request)
 
         # _capture_dirty_baseline: record the dirty-tracking baseline so
         # subsequent renders/change-detection see the correct "since mount"
@@ -3799,13 +4085,12 @@ class ViewRuntime(RuntimeTurnPort):
             query_string = urlencode(params, doseq=True) if params else ""
             uri = f"{page_url}?{query_string}" if query_string else page_url
             await run_handle_params(view_instance, params, uri)
-            if not legacy_exposure:
-                # #4107: what a handler set (restored above) goes back over the
-                # defaults handle_params() just assigned; a declared
-                # persist="server" field keeps the URL's value (#3624).
-                from ._exposure_sessions import reapply_saved_state
+            # #4107: what a handler set (restored above) goes back over the
+            # defaults handle_params() just assigned; a declared
+            # persist="server" field keeps the URL's value (#3624).
+            from ._exposure_sessions import reapply_saved_state
 
-                reapply_saved_state(view_instance)
+            reapply_saved_state(view_instance)
         except Exception as exc:
             response = handle_exception(
                 exc,
@@ -3850,7 +4135,7 @@ class ViewRuntime(RuntimeTurnPort):
                 )
             # ADR-022 Iter 3 Phase 3.3b (#1919, Finding E): the runtime sent the
             # error frame; finalize_mount_auth adds the transport-level
-            # ``close(4403)`` the bespoke WS handle_mount performed UNCONDITIONALLY
+            # ``close(4403)`` the bespoke WS _mount_page performed UNCONDITIONALLY
             # on an object-perm denial (websocket.py:2622 — matching the
             # PermissionDenied verdict, NOT the batch-gated redirect verdicts). SSE
             # no-op. Without this the WS socket stayed open after a denied mount
@@ -3927,13 +4212,12 @@ class ViewRuntime(RuntimeTurnPort):
             # native client can bootstrap its widget tree on connect.
             from ._child_rendering import render_view_with_diff
 
-            if not uses_legacy_exposure(view_instance):
-                # ADR-038 E3-6: the page shell stays in the browser across
-                # a (re)connect, but this is a new root instance. Render the
-                # full page once, as the HTTP GET does, so explicit
-                # page-shell children are reconstructed from their stored
-                # state and registered for routing.
-                await sync_to_async(_reconstruct_explicit_page_shell)(view_instance, request)
+            # ADR-038 E3-6: the page shell stays in the browser across
+            # a (re)connect, but this is a new root instance. Render the
+            # full page once, as the HTTP GET does, so explicit
+            # page-shell children are reconstructed from their stored
+            # state and registered for routing.
+            await sync_to_async(_reconstruct_explicit_page_shell)(view_instance, request)
             html, render_patches, rust_version = await sync_to_async(render_view_with_diff)(
                 view_instance
             )
@@ -4050,28 +4334,25 @@ class ViewRuntime(RuntimeTurnPort):
         # fields ships their signed token on the mount frame; the client stores
         # it verbatim and echoes it back on the next back-navigation, where the
         # restore above verifies it. Every other explicit mount ships null,
-        # which clears a token the browser still holds. A legacy view ships
-        # nothing. Emission can never break the mount (#1788 posture).
-        if not legacy_exposure:
-            from django.conf import settings
+        # which clears a token the browser still holds. Emission can never
+        # break the mount (#1788 posture).
+        from django.conf import settings
 
-            # Clear stale browser state when capture is disabled or unavailable.
-            mount_msg["state_snapshot_signed"] = None
-            if getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True):
-                from ._exposure_snapshots import snapshot_codec
+        # Clear stale browser state when capture is disabled or unavailable.
+        mount_msg["state_snapshot_signed"] = None
+        if getattr(settings, "DJUST_STATE_SNAPSHOT_ENABLED", True):
+            from ._exposure_snapshots import snapshot_codec
 
-                try:
-                    codec = await sync_to_async(snapshot_codec)(view_instance, request)
-                    if codec is not None:
-                        mount_msg["state_snapshot_signed"] = await sync_to_async(codec.capture)(
-                            view_instance
-                        )
-                except Exception:
-                    # No repr or traceback: descriptor factories and codec
-                    # failures can contain server-only values.
-                    logger.warning(
-                        "Explicit client snapshot unavailable; cached snapshot invalidated"
+            try:
+                codec = await sync_to_async(snapshot_codec)(view_instance, request)
+                if codec is not None:
+                    mount_msg["state_snapshot_signed"] = await sync_to_async(codec.capture)(
+                        view_instance
                     )
+            except Exception:
+                # No repr or traceback: descriptor factories and codec
+                # failures can contain server-only values.
+                logger.warning("Explicit client snapshot unavailable; cached snapshot invalidated")
 
         # A view beside the page view (#3252) ships no navigation snapshot, not
         # even the null that clears one: the client keeps one token per view
@@ -4079,6 +4360,12 @@ class ViewRuntime(RuntimeTurnPort):
         # or revoke.
         if slot_target:
             mount_msg.pop("state_snapshot_signed", None)
+        else:
+            from ._automatic_state import turn_serial
+
+            serial = turn_serial(view_instance)
+            if serial is not None:
+                mount_msg["state_serial"] = serial
 
         # ADR-038 D-b / D-n: value-free service-worker cache signals — an
         # ineligibility marker for explicit pages, an HMAC identity marker the
@@ -4110,8 +4397,16 @@ class ViewRuntime(RuntimeTurnPort):
             except Exception:  # noqa: BLE001 — an asset check must never break mount
                 logger.warning("dj-track-static check failed; no stale assets reported")
 
+        # Both configs read the same decorator scan: run it once per mount (#4299).
+        try:
+            decorator_metadata: Optional[List[Tuple[str, Dict[str, Any]]]] = (
+                _public_decorator_metadata(view_instance)
+            )
+        except Exception:  # noqa: BLE001 — each extractor rescans and drops its own config
+            decorator_metadata = None
+
         # Optional cache_config (mirrors WS consumer)
-        cache_config = self._extract_cache_config(view_instance)
+        cache_config = self._extract_cache_config(view_instance, decorator_metadata)
         if cache_config:
             mount_msg["cache_config"] = cache_config
 
@@ -4121,7 +4416,7 @@ class ViewRuntime(RuntimeTurnPort):
         # CSP-strict (no inline <script>) and survives the #1610 mount morph,
         # unlike the `window.handlerMetadata` script tag, which the client
         # now reads only as an HTTP-path fallback.
-        handler_config = self._extract_handler_config(view_instance)
+        handler_config = self._extract_handler_config(view_instance, decorator_metadata)
         if handler_config:
             mount_msg["handler_config"] = handler_config
 
@@ -4155,6 +4450,33 @@ class ViewRuntime(RuntimeTurnPort):
                 }
 
         await self.transport.send(mount_msg)
+        if view_instance.__dict__.pop("_djust_not_restored", False):
+            # #4164 item 1: the restore is behind what the page showed.
+            from ._state_flush_request import NOT_RESTORED_CODE, NOT_RESTORED_MESSAGE
+
+            logger.info("djust: a reconnect restored an older state than its page showed")
+            await self.transport.send_error(
+                NOT_RESTORED_MESSAGE,
+                code=NOT_RESTORED_CODE,
+                transient=True,
+                source="async",
+                view=view_path,
+            )
+        # #4181: a carried sticky child whose updatable inputs this page changed
+        # took them through ``_on_sticky_update``; the browser reattached its old
+        # DOM with the mount frame, so it is re-rendered right after it.
+        for child in view_instance.__dict__.pop("_djust_sticky_refresh", None) or ():
+            slot = getattr(child, "_view_id", None)
+            if slot is None or view_instance._get_all_child_views().get(slot) is not child:
+                continue
+            try:
+                from .websocket import render_embedded_child_html
+
+                html = await sync_to_async(render_embedded_child_html)(child)
+            except Exception:  # noqa: BLE001 — application render errors may carry values
+                logger.error("Sticky child refresh after navigation failed")
+                continue
+            await self.transport.send({"type": "embedded_update", "view_id": slot, "html": html})
         # From here a server-originated turn (push / tick, #3809) may address
         # this view: before the mount frame the client has nothing to patch.
         self._mount_sent_for = view_instance
@@ -4204,11 +4526,9 @@ class ViewRuntime(RuntimeTurnPort):
         Wrapped in the tenant context (Finding #6) so the handler + render see
         the correct tenant in the tenant-scoped managers, cleared on exit.
         """
-        from ._exposure import uses_legacy_exposure
-
         explicit_request = None
         view = self.view_instance
-        if view is not None and not uses_legacy_exposure(view):
+        if view is not None:
             try:
                 # Capture the current POST before waiting on another turn's
                 # lock (or a middleware's await). A later POST may replace the
@@ -4263,37 +4583,27 @@ class ViewRuntime(RuntimeTurnPort):
             await self.transport.send_error("View not mounted. Please reload the page.")
             return
 
-        # ``reauth_on_event`` (#1777) runs before this, on the turn chain's
-        # ``reauth`` built-in (ADR-044 D7): a failed re-check has already
-        # answered, closed the transport and cleared ``view_instance``.
-        from ._exposure import uses_legacy_exposure
-
-        explicit_lock = (
-            contextlib.nullcontext()
-            if uses_legacy_exposure(self.view_instance)
-            else self._explicit_event_lock
-        )
+        explicit_lock = self._explicit_event_lock
         async with explicit_lock, self.transport.event_context(self.view_instance):
             if self.view_instance is None:
                 return
-            if not uses_legacy_exposure(self.view_instance):
-                try:
-                    from ._exposure_auth import aauthorize_event
+            try:
+                from ._exposure_auth import aauthorize_event
 
-                    authorized_request = await aauthorize_event(
-                        self.view_instance, explicit_request, self._explicit_mount_binding
-                    )
-                    self.view_instance._djust_event_request = authorized_request
-                except Exception:
-                    # No exception text/traceback: auth providers may include
-                    # credentials or other internal state in their exceptions.
-                    self.view_instance = None
-                    await self.transport.send_error(
-                        "Event authorization failed. Please reload the page.",
-                        code="permission_denied",
-                    )
-                    await self.transport.close(code=4403)
-                    return
+                authorized_request = await aauthorize_event(
+                    self.view_instance, explicit_request, self._explicit_mount_binding
+                )
+                self.view_instance._djust_event_request = authorized_request
+            except Exception:
+                # No exception text/traceback: auth providers may include
+                # credentials or other internal state in their exceptions.
+                self.view_instance = None
+                await self.transport.send_error(
+                    "Event authorization failed. Please reload the page.",
+                    code="permission_denied",
+                )
+                await self.transport.close(code=4403)
+                return
             try:
                 await self._dispatch_event_render(data)
             finally:
@@ -4399,7 +4709,7 @@ class ViewRuntime(RuntimeTurnPort):
             # Queued WITHOUT permission/rate-limit check (by design: per-handler
             # auth runs on dispatch via the lock-free re-dispatcher
             # ``_dispatch_single_event``). Per-activity cap bounds memory.
-            view._queue_deferred_activity_event(_activity_name, event_name, params)
+            view._queue_deferred_activity_event(_activity_name, event_name, params, event_ref)
             # No-op so the client clears its loading state. Mirrors the runtime's
             # skip-render noop shape (type/source/event_name/ref) so the client
             # can match the ack to its pending event (#560 sequencing).
@@ -4435,6 +4745,7 @@ class ViewRuntime(RuntimeTurnPort):
                 validation_details={
                     "expected_params": validation["expected"],
                     "provided_params": validation["provided"],
+                    "missing_params": validation.get("missing", []),
                     "type_errors": validation["type_errors"],
                 },
             )
@@ -4536,10 +4847,7 @@ class ViewRuntime(RuntimeTurnPort):
             log_args=(event_name,),
         )
 
-        # An explicit view commits its declared state before the frame goes out
-        # (E3); a legacy view persists nothing after an event.
-        from ._exposure import uses_legacy_exposure
-
+        # The view commits its declared state before the frame goes out (E3).
         target_view = self.view_instance
         # #4107: the post-event snapshot, taken before the commit so the save
         # can tell from it whether any saved attribute changed (and walk
@@ -4548,29 +4856,26 @@ class ViewRuntime(RuntimeTurnPort):
         # there do not change the view's state. Off with the shortcut, the
         # snapshot is taken where it always was.
         early_post_assigns: Optional[Dict[str, Any]] = None
-        if not uses_legacy_exposure(target_view):
-            if (
-                _per_turn.on("unchanged_save_skip")
-                and target_view is view
-                and pre_assigns is not None
-                and not getattr(view, "_force_full_html", False)
-            ):
-                early_post_assigns = _snapshot_assigns(view)
-                view.__dict__["_djust_auto_changed"] = _compute_changed_keys(
-                    pre_assigns, early_post_assigns
-                )
-            # A failed explicit save withholds the success frame (E3); the
-            # child tree is saved on the render/noop branches below.
-            try:
-                committed = await self.commit_explicit_turn(
-                    target_view, source="event", children=False
-                )
-            finally:
-                # This turn's answer only: a commit that never reached the
-                # save must not leave it for a later turn's save to trust.
-                view.__dict__["_djust_auto_changed"] = None
-            if not committed:
-                return
+        if (
+            _per_turn.on("unchanged_save_skip")
+            and target_view is view
+            and pre_assigns is not None
+            and not getattr(view, "_force_full_html", False)
+        ):
+            early_post_assigns = _snapshot_assigns(view)
+            view.__dict__["_djust_auto_changed"] = _compute_changed_keys(
+                pre_assigns, early_post_assigns
+            )
+        # A failed explicit save withholds the success frame (E3); the
+        # child tree is saved on the render/noop branches below.
+        try:
+            committed = await self.commit_explicit_turn(target_view, source="event", children=False)
+        finally:
+            # This turn's answer only: a commit that never reached the
+            # save must not leave it for a later turn's save to trust.
+            view.__dict__["_djust_auto_changed"] = None
+        if not committed:
+            return
 
         snapshot_fields = await self._explicit_event_snapshot(view)
 
@@ -4584,13 +4889,9 @@ class ViewRuntime(RuntimeTurnPort):
         # _render_and_send).
         skip_render = _resolve_skip_render(view)
         force_html = getattr(view, "_force_full_html", False)
-        from ._exposure import uses_legacy_exposure
-
         # The parent's assign snapshot does not include owned child state.
         # A handler can mutate a child without changing a parent declaration.
-        has_explicit_children = not uses_legacy_exposure(view) and bool(
-            getattr(view, "_child_views", None)
-        )
+        has_explicit_children = bool(getattr(view, "_child_views", None))
         if not skip_render and not force_html:
             post_assigns = (
                 early_post_assigns if early_post_assigns is not None else _snapshot_assigns(view)
@@ -4743,7 +5044,15 @@ class ViewRuntime(RuntimeTurnPort):
         from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
 
         try:
+            # Owned embedded children too (#4179): snapshot first, so a child a
+            # released handler disposes reaches the ownership check instead.
+            children = _owned_descendants(view)
             await view._flush_deferred_activity_events(self)
+            for child in children:
+                if getattr(child, "_deferred_activity_events", None) and hasattr(
+                    child, "_flush_deferred_activity_events"
+                ):
+                    await child._flush_deferred_activity_events(self)
         except Exception:  # noqa: BLE001 — never fail the event for a drain bug
             restrict_diagnostics(view)
             restrict_diagnostics(self.view_instance)
@@ -4812,6 +5121,11 @@ class ViewRuntime(RuntimeTurnPort):
         * Exceptions are logged + swallowed so one bad queued event cannot break
           the rest of the drain (the flush also catches, defense-in-depth).
         """
+        if target_view is not self.view_instance:
+            # #4179: an event queued on an embedded child's activity.
+            return await self._dispatch_released_child_event(
+                target_view, event_name, params, event_ref
+            )
         from .websocket import _compute_changed_keys, _resolve_skip_render, _snapshot_assigns
 
         from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics
@@ -4855,7 +5169,10 @@ class ViewRuntime(RuntimeTurnPort):
             restrict_diagnostics(target_view)
         except Exception:  # noqa: BLE001 — never break the flush
             restrict_diagnostics(target_view)
-            if diagnostics_allowed():
+            from ._exposure_diagnostics import server_exception_detail_enabled
+
+            # The server log may name the failure under the #4180 opt-in.
+            if diagnostics_allowed() or server_exception_detail_enabled():
                 logger.exception(
                     "Runtime deferred-activity event %r on %s raised during dispatch",
                     sanitize_for_log(event_name or ""),
@@ -4883,14 +5200,10 @@ class ViewRuntime(RuntimeTurnPort):
             return
         # Deferred events have the same commit-before-ack contract as live
         # events, including handlers that explicitly request no render (#3253).
-        from ._exposure import uses_legacy_exposure
-
-        legacy = uses_legacy_exposure(view)
         snapshot_fields: Dict[str, Any] = {}
-        if not legacy:
-            if not await self.commit_explicit_turn(view, source="event", children=False):
-                return
-            snapshot_fields = await self._explicit_event_snapshot(view)
+        if not await self.commit_explicit_turn(view, source="event", children=False):
+            return
+        snapshot_fields = await self._explicit_event_snapshot(view)
 
         # _resolve_skip_render owns the skip decision (#2834/#2847) — the same
         # resolution as dispatch_event / server_push / db_notify / tick. This
@@ -5042,9 +5355,67 @@ class ViewRuntime(RuntimeTurnPort):
             )
             return True
 
-        from ._exposure import ExposureError, uses_legacy_exposure
+        # #4179: an event for a hidden (not eager) activity inside the child is
+        # queued on the child, as a root event is on the root, and released by
+        # the drains with the child's own checks. The marker never reaches
+        # handler validation.
+        activity = params.pop("_activity", None)
+        if (
+            activity
+            and hasattr(target_view, "is_activity_visible")
+            and not target_view.is_activity_visible(activity)
+            and not target_view._is_activity_eager(activity)
+        ):
+            target_view._queue_deferred_activity_event(activity, event_name, params, event_ref)
+            noop: Dict[str, Any] = {"type": "noop", "source": "event", "event_name": event_name}
+            if event_ref is not None:
+                noop["ref"] = event_ref
+            await self.transport.send(noop)
+            return True
 
-        explicit_child = not uses_legacy_exposure(target_view)
+        await self._run_child_event(
+            target_view, view_id, event_name, params, positional_args, event_ref
+        )
+        return True
+
+    async def _dispatch_released_child_event(
+        self,
+        target_view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        event_ref: Optional[int],
+    ) -> None:
+        """Run a released activity event queued on an embedded child (#4179).
+
+        The child path of a live child event: explicit checks, handler, object
+        permission, the child's own render and ``embedded_update``. A child no
+        longer on the page is dropped without an error frame.
+        """
+        root = self.view_instance
+        if root is None or not _still_owned(root, target_view):
+            logger.debug(
+                "Released activity event for an embedded view no longer on the page dropped"
+            )
+            return
+        params = dict(params or {})
+        positional_args = params.pop("_args", [])
+        await self._run_child_event(
+            target_view, target_view._view_id, event_name, params, positional_args, event_ref
+        )
+
+    async def _run_child_event(
+        self,
+        target_view: Any,
+        view_id: str,
+        event_name: str,
+        params: Dict[str, Any],
+        positional_args: List[Any],
+        event_ref: Optional[int],
+    ) -> None:
+        """Authorize, run, render and answer one event on an embedded child."""
+        view = self.view_instance
+        from ._exposure import ExposureError
+
         event_request = getattr(view, "_djust_event_request", None)
 
         def resolve_explicit_child() -> ChildStateSession | None:
@@ -5053,8 +5424,7 @@ class ViewRuntime(RuntimeTurnPort):
             from .auth.core import check_view_auth
 
             if (
-                uses_legacy_exposure(view)
-                or event_request is None
+                event_request is None
                 or request_binding(event_request) != self._explicit_mount_binding
             ):
                 raise ExposureError("Missing current child event authorization")
@@ -5064,15 +5434,14 @@ class ViewRuntime(RuntimeTurnPort):
                 raise ExposureError("Child event authorization denied")
             return adapter
 
-        if explicit_child:
-            try:
-                await sync_to_async(resolve_explicit_child)()
-            except Exception:  # noqa: BLE001 — fail closed without provider values
-                await self.transport.send_error(
-                    "Child event authorization failed. Please reload the page.",
-                    code="permission_denied",
-                )
-                return True
+        try:
+            await sync_to_async(resolve_explicit_child)()
+        except Exception:  # noqa: BLE001 — fail closed without provider values
+            await self.transport.send_error(
+                "Child event authorization failed. Please reload the page.",
+                code="permission_denied",
+            )
+            return
 
         # Validate the handler against the CHILD (not the parent) — mirrors WS
         # using ``target_view`` for handler lookup (websocket.py:3498).
@@ -5084,7 +5453,7 @@ class ViewRuntime(RuntimeTurnPort):
             root_view=self.view_instance,
         )
         if handler is None:
-            return True
+            return
 
         coerce = get_handler_coerce_setting(handler)
         validation = validate_handler_params(
@@ -5100,33 +5469,20 @@ class ViewRuntime(RuntimeTurnPort):
                 validation_details={
                     "expected_params": validation["expected"],
                     "provided_params": validation["provided"],
+                    "missing_params": validation.get("missing", []),
                     "type_errors": validation["type_errors"],
                 },
             )
-            return True
+            return
 
         coerced_params = validation.get("coerced_params", params)
         call_args, call_kwargs = validated_call_arguments(validation)
 
         try:
             await _call_handler(handler, call_kwargs or None, positional_args=call_args)
-        except Exception as exc:
-            if explicit_child:
-                await self.transport.send_error("Child event failed.", code="event_error")
-                return True
-            response = handle_exception(
-                exc,
-                error_type="event",
-                event_name=event_name,
-                view_class=target_view.__class__.__name__,
-                logger=logger,
-                log_message=(
-                    f"Error in embedded child {target_view.__class__.__name__}."
-                    f"{sanitize_for_log(event_name)}()"
-                ),
-            )
-            await self.transport.send(response)
-            return True
+        except Exception:  # noqa: BLE001 — no handler values in client errors
+            await self.transport.send_error("Child event failed.", code="event_error")
+            return
 
         # Waiter notification (ADR-002 Phase 1b) — resolve waiters on the CHILD
         # view. Best-effort: a waiter bug must never break the event.
@@ -5138,21 +5494,19 @@ class ViewRuntime(RuntimeTurnPort):
             log_args=(event_name,),
         )
 
-        # An explicit child's declared state is saved with the page (below);
-        # a legacy child keeps nothing across a reconnect.
-        if explicit_child:
-            try:
-                from .auth.core import enforce_object_permission
+        # A child's declared state is saved with the page (below).
+        try:
+            from .auth.core import enforce_object_permission
 
-                await sync_to_async(resolve_explicit_child)()
-                await sync_to_async(enforce_object_permission)(target_view, event_request)
-                # The shared post-render batch saves the owner and reconciles
-                # nested slots together; no separate pre-render child flush.
-            except Exception:  # noqa: BLE001 — no legacy save or success frame on failure
-                await self.transport.send_error(
-                    "Child state unavailable. Please reload the page.", code="state_error"
-                )
-                return True
+            await sync_to_async(resolve_explicit_child)()
+            await sync_to_async(enforce_object_permission)(target_view, event_request)
+            # The shared post-render batch saves the owner and reconciles
+            # nested slots together; no separate pre-render child flush.
+        except Exception:  # noqa: BLE001 — no success frame on failure
+            await self.transport.send_error(
+                "Child state unavailable. Please reload the page.", code="state_error"
+            )
+            return
 
         # Render just the child's subtree (single-sourced render core) and emit
         # the scoped full-HTML ``embedded_update`` frame. Mirrors the WS
@@ -5163,12 +5517,10 @@ class ViewRuntime(RuntimeTurnPort):
         try:
             html = await sync_to_async(render_embedded_child_html)(target_view)
         except Exception:
-            if not explicit_child:
-                raise
             await self.transport.send_error("Child rendering unavailable.", code="render_error")
-            return True
-        if explicit_child and not await self._persist_explicit_children_after_event(view):
-            return True
+            return
+        if not await self._persist_explicit_children_after_event(view):
+            return
         _emit_full_html_update(target_view, "embedded_child", event_name, html, 0)
 
         msg: Dict[str, Any] = {
@@ -5189,20 +5541,17 @@ class ViewRuntime(RuntimeTurnPort):
         # Child side effects carry their own audio scope; drain the child's queue.
         self._flush_push_events(target_view)
         # Dispatch any background work the child handler scheduled (WS parity).
-        if explicit_child:
-            from ._child_async import dispatch_child_work
+        from ._child_async import dispatch_child_work
 
-            assert child_batch is not None
-            dispatch_child_work(self, target_view, event_name, child_batch)
-            # Work the handler queued on another explicit child (a sibling or
-            # descendant) runs under that child's owner too, not at its next
-            # event (ADR-038 E3-3, decided 2026-09-22).
-            self._dispatch_explicit_child_queues(event_name)
-        else:
-            from ._child_async import dispatch_legacy_child_work
-
-            dispatch_legacy_child_work(self, target_view, view_id, event_name, child_batch)
-        return True
+        assert child_batch is not None
+        dispatch_child_work(self, target_view, event_name, child_batch)
+        # Work the handler queued on another explicit child (a sibling or
+        # descendant) runs under that child's owner too, not at its next
+        # event (ADR-038 E3-3, decided 2026-09-22).
+        self._dispatch_explicit_child_queues(event_name)
+        # A child handler that showed its own hidden activity releases that
+        # activity's queue in the same round trip, as a root handler does (#4179).
+        await self._flush_deferred_activity_events()
 
     async def _dispatch_component_event(
         self,
@@ -5292,6 +5641,7 @@ class ViewRuntime(RuntimeTurnPort):
                 validation_details={
                     "expected_params": validation["expected"],
                     "provided_params": validation["provided"],
+                    "missing_params": validation.get("missing", []),
                     "type_errors": validation["type_errors"],
                 },
             )
@@ -5379,12 +5729,9 @@ class ViewRuntime(RuntimeTurnPort):
         # fields from an earlier turn (#3231).
         snapshot_fields: Dict[str, Any] = {}
         if view is self.view_instance:
-            from ._exposure import uses_legacy_exposure
-
-            if not uses_legacy_exposure(view):
-                if not await self.commit_explicit_turn(view, source="event"):
-                    return True
-                snapshot_fields = await self._explicit_event_snapshot(view)
+            if not await self.commit_explicit_turn(view, source="event"):
+                return True
+            snapshot_fields = await self._explicit_event_snapshot(view)
 
         from ._async_batch import AsyncBatch
 
@@ -5512,8 +5859,8 @@ class ViewRuntime(RuntimeTurnPort):
         """Handle a URL change frame (popstate or dj-patch click): a ``params`` turn.
 
         Calls ``handle_params(params, uri)`` then re-renders + sends patches,
-        inside the turn-middleware chain (ADR-044). Mirrors the legacy
-        ``LiveViewConsumer.handle_url_change`` (now a thin shim over this method).
+        inside the turn-middleware chain (ADR-044). The WebSocket and SSE
+        transports both reach it through ``dispatch_message``.
 
         Wrapped in the tenant context (Finding #6) so handle_params + the
         object-permission re-check + render see the correct tenant.
@@ -5543,29 +5890,24 @@ class ViewRuntime(RuntimeTurnPort):
         # background results. Otherwise their HTML and owner contracts can
         # describe different turns. Navigation may replace the owner while
         # this task waits for the borrowed transport lock.
-        from ._exposure import uses_legacy_exposure
-
-        # An explicit route change mutates declared state with no inbound event
+        # A route change mutates declared state with no inbound event
         # request: authorize it fresh, like background turns (ADR-038 D-l).
-        explicit = not uses_legacy_exposure(view)
-        explicit_lock = self._explicit_event_lock if explicit else contextlib.nullcontext()
+        explicit_lock = self._explicit_event_lock
         async with explicit_lock, self.transport.event_context(view):
             if self.view_instance is not view:
                 await self.transport.send_error("View changed. Please reload the page.")
                 return
             with _tenant_context(getattr(view, "_tenant", None)):
-                if explicit:
-                    try:
-                        await self.authorize_explicit_turn(view)
-                    except Exception:  # noqa: BLE001 — no auth provider values
-                        if self.view_instance is view:
-                            await self.deny_explicit_turn()
-                        return
+                try:
+                    await self.authorize_explicit_turn(view)
+                except Exception:  # noqa: BLE001 — no auth provider values
+                    if self.view_instance is view:
+                        await self.deny_explicit_turn()
+                    return
                 try:
                     await self._dispatch_url_change_inner(data)
                 finally:
-                    if explicit:
-                        view.__dict__.pop("_djust_event_request", None)
+                    view.__dict__.pop("_djust_event_request", None)
 
     async def _dispatch_url_change_inner(self, data: Dict[str, Any]) -> None:
         """URL-change body (see :meth:`dispatch_url_change` for the tenant wrapper)."""
@@ -5598,8 +5940,8 @@ class ViewRuntime(RuntimeTurnPort):
 
             from .auth.core import enforce_object_permission
 
-            # An explicit turn re-checks against its freshly authorized request,
-            # never the mount-time one.
+            # The turn re-checks against its freshly authorized request, never
+            # the mount-time one.
             permission_request = getattr(
                 self.view_instance,
                 "_djust_event_request",
@@ -5625,10 +5967,15 @@ class ViewRuntime(RuntimeTurnPort):
 
             html, patches, version = await sync_to_async(self.view_instance.render_with_diff)()
 
-            # Allow views to force full HTML by setting _force_full_html = True
+            # Allow views to force full HTML by setting _force_full_html = True.
+            # set_changed_keys()'s RENDER_REQUESTED is consumed but keeps the
+            # diff (#4286).
             if getattr(self.view_instance, "_force_full_html", False):
+                from .mixins.rust_bridge import full_html_requested
+
+                if full_html_requested(self.view_instance):
+                    patches = None
                 self.view_instance._force_full_html = False
-                patches = None
 
             # Stamp the transport's client-checked wire version (#1858, the #1788
             # parallel-path twin). On WS this is the consumer-owned monotonic counter
@@ -5698,7 +6045,7 @@ class ViewRuntime(RuntimeTurnPort):
         deferred send from a FAILED view leaked into the NEXT view's collector — a
         bad view's error frame surfaced in a survivor's ``captured[]`` and flipped
         the survivor to ``failed[]``. Stashing the frame and letting the async
-        ``dispatch_mount`` AWAIT it (mirroring the bespoke ``handle_mount``, which
+        ``dispatch_mount`` AWAIT it (mirroring the bespoke ``_mount_page``, which
         ``await self.send_json(...)``-ed the error inline) keeps the send inside the
         correct ``_mount_one`` window — no cross-entry contamination.
         """
@@ -5785,7 +6132,7 @@ class ViewRuntime(RuntimeTurnPort):
         # HTTP_HOST the request defaults to RequestFactory's "testserver",
         # misresolving the tenant to None on runtime-rebuilt requests (url_change
         # etc.). Sourced from ``self.scope`` (set for WS-backed runtimes), routed
-        # through the SAME shared helper the WS handle_mount path uses
+        # through the SAME shared helper the WS _mount_page path uses
         # (``websocket.validated_host_from_scope``) so the two reconstructed-
         # request paths cannot drift (#1646). SSE-backed runtimes have
         # ``scope=None`` and use the real HTTP request, so they are unaffected.
@@ -5913,7 +6260,7 @@ class ViewRuntime(RuntimeTurnPort):
         from django.core.exceptions import PermissionDenied
 
         auth_view = self.view_instance
-        legacy_diagnostics = _diagnostics_policy_allows(auth_view)
+        details_allowed = _diagnostics_policy_allows(auth_view)
         try:
             if has_async_check_permissions(auth_view):
                 # ``async def check_permissions``: awaited on the event loop, in
@@ -5941,7 +6288,7 @@ class ViewRuntime(RuntimeTurnPort):
                 logger=logger,
                 log_message="Error in pre-mount security sequence for %s"
                 % sanitize_for_log(self.view_instance.__class__.__name__),
-                expose_details=legacy_diagnostics and _diagnostics_policy_allows(auth_view),
+                expose_details=details_allowed and _diagnostics_policy_allows(auth_view),
             )
             await self.transport.send(response)
             # No close: the WS bespoke path lets a non-auth-verdict exception
@@ -6075,15 +6422,23 @@ class ViewRuntime(RuntimeTurnPort):
 
         return own_route_kwargs(view_instance, page_url)
 
-    def _extract_cache_config(self, view_instance: Any) -> Optional[Dict[str, Any]]:
+    def _extract_cache_config(
+        self,
+        view_instance: Any,
+        metadata: Optional[List[Tuple[str, Dict[str, Any]]]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Extract @cache decorator metadata from the view's handlers.
 
         Sole live copy after the mount flip (#1919/#1920): the bespoke
         ``LiveViewConsumer`` twin was removed as dead code in #1921.
+        ``metadata`` is a ``_public_decorator_metadata`` scan the caller
+        already ran (#4299); without it the view is scanned here.
         """
         try:
+            if metadata is None:
+                metadata = _public_decorator_metadata(view_instance)
             cache_config: Dict[str, Any] = {}
-            for attr_name, decorators in _public_decorator_metadata(view_instance):
+            for attr_name, decorators in metadata:
                 cache_info = decorators.get("cache")
                 if cache_info:
                     cache_config[attr_name] = cache_info
@@ -6097,7 +6452,11 @@ class ViewRuntime(RuntimeTurnPort):
     #: start costing every mount bytes it has no consumer for.
     _CLIENT_RATE_LIMIT_KEYS = ("debounce", "throttle")
 
-    def _extract_handler_config(self, view_instance: Any) -> Optional[Dict[str, Any]]:
+    def _extract_handler_config(
+        self,
+        view_instance: Any,
+        metadata: Optional[List[Tuple[str, Dict[str, Any]]]] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Extract @debounce / @throttle metadata from the view's handlers.
 
         Mirrors :meth:`_extract_cache_config`; ships on the mount frame as
@@ -6105,8 +6464,10 @@ class ViewRuntime(RuntimeTurnPort):
         ``static/djust/src/05-handler-rate-limit.js`` (#2656).
         """
         try:
+            if metadata is None:
+                metadata = _public_decorator_metadata(view_instance)
             handler_config: Dict[str, Any] = {}
-            for attr_name, decorators in _public_decorator_metadata(view_instance):
+            for attr_name, decorators in metadata:
                 entry = {
                     key: decorators[key]
                     for key in self._CLIENT_RATE_LIMIT_KEYS
@@ -6152,25 +6513,32 @@ class ViewRuntime(RuntimeTurnPort):
     async def _explicit_event_snapshot(self, view: Any) -> Dict[str, Any]:
         """Refresh only declared client persistence after an authorized turn.
 
-        Null explicitly invalidates a previously cached token. Omission is for
-        legacy callers, not a fallback to the last successfully captured state.
-        Called for the root view only, after a committed foreground event or a
+        Null explicitly invalidates a previously cached token. A view beside
+        the page view gets no fields, not a fallback to the last successfully
+        captured state. Called for the root view only, after a committed foreground event or a
         committed server-originated turn (background result, tick, push,
         NOTIFY), while the turn's authorized request is still attached. Never
         for child-view rendering: the client stores tokens for the primary view.
         """
         from django.conf import settings
 
-        from ._exposure import ExposureError, uses_legacy_exposure
+        from ._exposure import ExposureError
         from ._exposure_sessions import request_binding
         from ._exposure_snapshots import snapshot_codec
 
-        if uses_legacy_exposure(view) or getattr(view, "_djust_slot_target", None):
+        if getattr(view, "_djust_slot_target", None):
             return {}  # a view beside the page view mints none (#3252)
         fields: Dict[str, Any] = {
             "view": view._djust_mount_view_path,
             "state_snapshot_signed": None,
         }
+        from ._automatic_state import turn_serial
+
+        serial = turn_serial(view)
+        if serial is not None:
+            # #4164 item 1: the turn serial of the state this frame shows; the
+            # page sends it back when it reconnects.
+            fields["state_serial"] = serial
         # Read once: only the commit that ran in THIS turn may vouch for it.
         verified, self._explicit_binding_verified = self._explicit_binding_verified, None
         request = getattr(view, "_djust_event_request", None)
@@ -6186,7 +6554,7 @@ class ViewRuntime(RuntimeTurnPort):
                         fields["state_snapshot_signed"] = await sync_to_async(codec.capture)(view)
             except Exception:
                 # Factories and codec errors may contain secrets. Never stringify
-                # them or fall back to reflective legacy state.
+                # them or fall back to reflective state.
                 logger.warning("Explicit event snapshot unavailable; cached snapshot invalidated")
             return fields
 
@@ -6217,7 +6585,7 @@ class ViewRuntime(RuntimeTurnPort):
             fields["state_snapshot_signed"] = await sync_to_async(capture)()
         except Exception:
             # Factories and codec errors may contain secrets. Never stringify
-            # them or fall back to reflective legacy state.
+            # them or fall back to reflective state.
             logger.warning("Explicit event snapshot unavailable; cached snapshot invalidated")
         return fields
 
@@ -6333,6 +6701,7 @@ class ViewRuntime(RuntimeTurnPort):
         children: bool = True,
         async_batch: Optional[str] = None,
         async_result: bool = False,
+        released: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """Persist an authorized explicit turn before any success frame.
 
@@ -6361,16 +6730,20 @@ class ViewRuntime(RuntimeTurnPort):
         full HTML. Storage that keeps missing the deadline, or a catch-up that
         cannot finish, ends in the terminal reload error. A refused save
         (identity changed) or a storage exception is terminal too.
+
+        ``released`` (background results, #4211): True once the work no longer
+        belongs to the live view. Checked as the first step of each save's own
+        thread step (and of the deferred path's check), so a teardown that
+        lands while the save waits for its thread stores nothing; the turn
+        then returns False without a frame or an error.
         """
-        from ._exposure import ExposureError, uses_legacy_exposure
+        from ._exposure import ExposureError
         from ._exposure_sessions import StateLimitExceeded
         from .state_store import StateStoreError
 
         from ._save_policy import DEFERRED, deferrable, save_mode
         from .state_store import StateSuperseded
 
-        if uses_legacy_exposure(view):
-            return True
         # The one place a socket turn's save is decided (``_save_policy``):
         # immediate (below) unless the project set an interval and nothing
         # about this turn needs it in storage before its frame.
@@ -6379,7 +6752,7 @@ class ViewRuntime(RuntimeTurnPort):
         extra = self._explicit_error_fields(view, source=source, async_batch=async_batch)
         if mode == DEFERRED:
             return await self._defer_explicit_turn(
-                view, extra, children=children, async_batch=async_batch
+                view, extra, children=children, async_batch=async_batch, released=released
             )
         if self._state_dirty_view is view:
             # Earlier turns' changes are in memory only: this turn's "nothing
@@ -6392,9 +6765,11 @@ class ViewRuntime(RuntimeTurnPort):
                 raise ExposureError("Explicit persistence requires current authorization")
             await _run_explicit_save(
                 self,
-                lambda: self._save_explicit_root(view, request),
+                _unless_released(lambda: self._save_explicit_root(view, request), released),
                 deadline=self._explicit_save_deadline(),
             )
+        except _WorkReleased:
+            return False
         except ExplicitSaveDeferred as deferred:
             # The turn's values are on the view; the store has them only once
             # this save lands (#4095 reads it).
@@ -6422,11 +6797,12 @@ class ViewRuntime(RuntimeTurnPort):
                 # change), so the page is told every time it cannot be made,
                 # and what the handler wrote to the session is still stored.
                 await self._note_over_limit(view, refused, interactive=True, every_time=True)
-                await sync_to_async(_save_session_writes)(view)
+                if not await self._save_session_writes_in_order(view, extra, released):
+                    return False
                 self._mark_state_dirty(view)
                 if children:
                     return await self._persist_explicit_children_after_event(
-                        view, async_batch=async_batch
+                        view, async_batch=async_batch, released=released
                     )
                 return True
             return await self._refuse_over_limit_turn(view, refused, extra)
@@ -6464,7 +6840,9 @@ class ViewRuntime(RuntimeTurnPort):
         self._explicit_save_succeeded()
         self._state_saved(view)
         if children:
-            return await self._persist_explicit_children_after_event(view, async_batch=async_batch)
+            return await self._persist_explicit_children_after_event(
+                view, async_batch=async_batch, released=released
+            )
         return True
 
     # ------------------------------------------------------------------ #
@@ -6478,6 +6856,7 @@ class ViewRuntime(RuntimeTurnPort):
         *,
         children: bool,
         async_batch: Optional[str],
+        released: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """A turn whose save is left to the flush: it writes nothing and
         holds no storage wait before its frame.
@@ -6487,6 +6866,10 @@ class ViewRuntime(RuntimeTurnPort):
         and the child tree's own save, which is declared state. The view is
         marked changed when the turn changed it (or cannot tell), and the
         first such turn arms the one-shot timer.
+
+        ``released`` (see :meth:`commit_explicit_turn`): checked in the check's
+        thread step and again on the loop before the change is marked owed, so
+        work torn down meanwhile leaves nothing for a flush to store (#4211).
         """
         from ._automatic_state import turn_changed_state
         from ._exposure import ExposureError
@@ -6500,11 +6883,17 @@ class ViewRuntime(RuntimeTurnPort):
         request = getattr(view, "_djust_event_request", None)
 
         def check() -> None:
+            if released is not None and released():
+                raise _WorkReleased
             if request is None or request_binding(request) != self._explicit_mount_binding:
                 raise ExposureError("Explicit persistence requires current authorization")
 
         try:
             await sync_to_async(check)()
+            if released is not None and released():
+                raise _WorkReleased
+        except _WorkReleased:
+            return False
         except Exception:  # noqa: BLE001 — identity errors may carry values; never logged
             view._force_full_html = True
             logger.warning(
@@ -6518,17 +6907,64 @@ class ViewRuntime(RuntimeTurnPort):
         if turn_changed_state(view):
             self._mark_state_dirty(view)
         if children:
-            return await self._persist_explicit_children_after_event(view, async_batch=async_batch)
+            return await self._persist_explicit_children_after_event(
+                view, async_batch=async_batch, released=released
+            )
         return True
 
     def _mark_state_dirty(self, view: Any) -> None:
-        """``view`` holds a change no save has written: arm the timer once."""
+        """``view`` holds a change no save has written: arm the timer once.
+
+        The state the page is shown is then one turn serial past the store's
+        (#4164 item 1), and the connection joins its tab's flush group, so a
+        reconnect elsewhere can ask it to save (:mod:`djust._state_flush_request`).
+        """
+        from ._automatic_state import note_unsaved_change
+
+        note_unsaved_change(view)
         if self._state_dirty_view is not view:
             self._state_dirty_view = view
             self._state_flush_failures = 0
         _UNSAVED_RUNTIMES.add(self)
         if self._state_timer is None:
             self._arm_state_timer(view)
+        if not view.__dict__.get("_djust_flush_group_joined"):
+            join = getattr(self.transport, "join_state_flush_group", None)
+            if callable(join):
+                view.__dict__["_djust_flush_group_joined"] = True  # once per view
+                task = asyncio.ensure_future(self._join_flush_group(view, join))
+                self._flush_group_task = task
+
+    async def _join_flush_group(self, view: Any, join: Callable[[str], Any]) -> None:
+        from ._state_flush_request import flush_group
+
+        try:
+            # Named at the mount, in its own hop (``_load_and_name_flush_group``);
+            # a view mounted another way is named here, in one hop.
+            group = view.__dict__.get("_djust_flush_group")
+            if group is None:
+                request = view.__dict__.get("_djust_event_request") or getattr(
+                    view, "request", None
+                )
+                group = await sync_to_async(flush_group)(view, request)
+                view.__dict__["_djust_flush_group"] = group or ""
+            if group:
+                await join(group)
+        except Exception:  # noqa: BLE001 — the interval and the close still save
+            logger.warning("djust: could not join the tab's state flush group")
+
+    async def answer_flush_request(self) -> None:
+        """Another connection of this tab is mounting and the store is behind
+        what this page showed: save now (#4164 item 1). As the interval's
+        flush: a busy connection or a failure is retried, one refusal does not
+        drop the change; the locks are waited for at most
+        :data:`_FLUSH_REQUEST_LOCK_WAIT_S`."""
+        view = self._state_dirty_view
+        if not self.state_unsaved:
+            return
+        if not await self.flush_state(reason="flush_request") and self.state_unsaved:
+            if self._state_timer is None:
+                self._arm_state_timer(view)  # the interval keeps trying
 
     def _arm_state_timer(self, view: Any, delay: Optional[float] = None) -> None:
         """One ``call_later`` per connection, armed by the first unsaved change
@@ -6633,8 +7069,13 @@ class ViewRuntime(RuntimeTurnPort):
         if view is not self.view_instance:
             self._forget_state_flush()  # the view it was owed for is gone
             return True
-        interactive = reason == "interval"
-        wait = _STATE_FLUSH_LOCK_WAIT_S if interactive else MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
+        interactive = reason in _LIVE_FLUSHES
+        if reason == "flush_request":
+            wait = _FLUSH_REQUEST_LOCK_WAIT_S
+        elif interactive:
+            wait = _STATE_FLUSH_LOCK_WAIT_S
+        else:
+            wait = MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
         try:
             async with self._flush_locks(wait):
                 if self._state_dirty_view is not view or self.view_instance is not view:
@@ -6664,7 +7105,7 @@ class ViewRuntime(RuntimeTurnPort):
         from .state_store import StateSuperseded
 
         self._cancel_state_timer()
-        interactive = reason == "interval"
+        interactive = reason in _LIVE_FLUSHES
         try:
             await self.authorize_explicit_turn(view)
         except Exception as exc:  # noqa: BLE001 — no auth provider values on the wire/log
@@ -6744,6 +7185,56 @@ class ViewRuntime(RuntimeTurnPort):
         self._state_saved(view)
         return True
 
+    async def _save_session_writes_in_order(
+        self, view: Any, extra: Dict[str, Any], released: Optional[Callable[[], bool]]
+    ) -> bool:
+        """Store an over-limit turn's ``request.session`` writes (#4164 item 3).
+
+        Through :func:`_run_explicit_save`, like every other save of this
+        runtime: it waits for a save still running, so an older write cannot
+        land after it, and it is bounded by the turn's save deadline. Past the
+        deadline the write keeps running in order and the turn is served (its
+        state is the view's, as with any over-limit turn). False when the
+        session could not be written (the page gets the reload error) or the
+        work was released (#4211)."""
+        try:
+            await _run_explicit_save(
+                self,
+                _unless_released(lambda: _save_session_writes(view), released),
+                deadline=self._explicit_save_deadline(),
+            )
+        except _WorkReleased:
+            return False
+        except ExplicitSaveDeferred:
+            logger.warning(
+                "djust: the session writes of an over-limit turn outran the save deadline; "
+                "they are stored when the save lands"
+            )
+        except LateSaveDropped:
+            view._force_full_html = True
+            await self.transport.send_error(
+                "State unavailable. Please reload the page.", code="state_error", **extra
+            )
+            return False
+        except Exception as exc:  # noqa: BLE001 — storage errors can carry values
+            from ._exposure_diagnostics import log_failure_for
+
+            view._force_full_html = True
+            log_failure_for(
+                logger,
+                (view,),
+                exc,
+                "Session writes of an over-limit turn not stored: %s",
+                exc,
+                level="warning",
+            )
+            self._mark_state_dirty(view)  # the view keeps its values, as served or not
+            await self.transport.send_error(
+                "State unavailable. Please reload the page.", code="state_error", **extra
+            )
+            return False
+        return True
+
     async def _note_over_limit(
         self, view: Any, refused: Any, *, interactive: bool, every_time: bool = False
     ) -> None:
@@ -6789,6 +7280,17 @@ class ViewRuntime(RuntimeTurnPort):
                 "djust: view state could not be saved %d times in a row; the view keeps "
                 "working and its changes stay unsaved until a save succeeds",
                 count,
+            )
+        if count == 3 and interactive and self.view_instance is view:
+            # #4164 item 1: the page is told once that what it shows is not
+            # saved yet (a reconnect now would restore an older state). The
+            # notice is transient: the page's next update clears it.
+            extra = self._explicit_error_fields(view, source="async")
+            extra.pop("state_snapshot_signed", None)
+            self._unsaved_notice = asyncio.ensure_future(
+                self.transport.send_error(
+                    _UNSAVED_NOTICE_MESSAGE, code="state_error", transient=True, **extra
+                )
             )
         if interactive and self._state_dirty_view is view:
             self._arm_state_timer(view, delay=min(interval_for(view) * count, MAX_INTERVAL_S))
@@ -7067,17 +7569,18 @@ class ViewRuntime(RuntimeTurnPort):
         request: Any = None,
         async_batch: Optional[str] = None,
         mounted: bool = True,
+        released: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """Save the authorized child tree before acknowledging a parent event.
 
         ``mounted=False`` is the mount path: the browser has no page yet, so a
         deferred save there cannot be caught up and stays the terminal
         reload error it was before #3200.
-        """
-        from ._exposure import ExposureError, uses_legacy_exposure
 
-        if uses_legacy_exposure(view):
-            return True
+        ``released``: as for :meth:`commit_explicit_turn` (#4211).
+        """
+        from ._exposure import ExposureError
+
         if (
             request is None
             and not getattr(view, "_child_views", None)
@@ -7097,9 +7600,11 @@ class ViewRuntime(RuntimeTurnPort):
                 raise ExposureError("Child persistence requires current authorization")
             await _run_explicit_save(
                 self,
-                lambda: self._save_explicit_children(view, request),
+                _unless_released(lambda: self._save_explicit_children(view, request), released),
                 deadline=self._explicit_save_deadline(),
             )
+        except _WorkReleased:
+            return False
         except ExplicitSaveDeferred as deferred:
             if not mounted:
                 # No mount frame will be sent, so there is nothing to catch up.
@@ -7133,7 +7638,7 @@ class ViewRuntime(RuntimeTurnPort):
         event_name: str,
         cache_request_id: Optional[str] = None,
         has_async: bool = False,
-        force_html: bool = False,
+        force_html: Union[bool, str] = False,
         event_ref: Optional[int] = None,
         scoped_component: Optional[Any] = None,
         snapshot_fields: Optional[Dict[str, Any]] = None,
@@ -7152,12 +7657,14 @@ class ViewRuntime(RuntimeTurnPort):
         (no diff or compression fallback). Mirrors the legacy
         ``_sse_handle_event`` render branch.
 
-        ``force_html`` (the view's ``_force_full_html`` flag, read by the
-        caller): when True, discard the VDOM patches and send a full
+        ``force_html`` (the view's raw ``_force_full_html`` flag, read by the
+        caller): when ``True``, discard the VDOM patches and send a full
         ``html_update`` instead — mirrors WS handle_event
-        (websocket.py:4039-4040). The flag is consumed (reset to False) here so
-        a single ``self._force_full_html = True`` in a handler forces exactly
-        one full render.
+        (websocket.py:4039-4040). ``set_changed_keys()``'s
+        ``RENDER_REQUESTED`` (#4286) is truthy, so it renders the whole page
+        (never a scoped component) but keeps the diff. The flag is consumed
+        (reset to False) here so a single ``self._force_full_html = True`` in a
+        handler forces exactly one full render.
 
         ``event_ref`` (#560): echoed back on every emitted frame so the client
         can match the response to its pending event request.
@@ -7245,8 +7752,9 @@ class ViewRuntime(RuntimeTurnPort):
         # render falls into the no-diff ``html_update`` branch below (mirrors WS
         # handle_event websocket.py:4039-4040, which sets ``patches = None`` when
         # ``_force_full_html`` is set). The flag itself was already consumed at
-        # the top of this method.
-        if force_html:
+        # the top of this method. Only a real ``True``: set_changed_keys()'s
+        # RENDER_REQUESTED forces the render but keeps the diff (#4286).
+        if force_html is True:
             patches = None
 
         # Stamp the transport's client-checked wire version (#1858, the #1788
@@ -7271,8 +7779,12 @@ class ViewRuntime(RuntimeTurnPort):
                 patches_size = len(patches.encode("utf-8")) if isinstance(patches, str) else 0
                 html_size = len(html.encode("utf-8")) if html else 0
                 if patches_size and html_size < patches_size * 0.7:
-                    if hasattr(view, "_rust_view") and view._rust_view:
-                        view._rust_view.reset()
+                    # The baseline is kept (#4229). ``render_with_diff`` already
+                    # stored the tree this HTML was serialized from (its ``dj-id``s
+                    # included) and advanced the version, so the client's DOM after
+                    # this frame IS the baseline and the next event diffs normally.
+                    # (A ``reset()`` here made the next event a full-HTML reply too,
+                    # and restarted the Rust version, which SSE stamps on the wire.)
                     _compressed_patch_count = len(patch_list)
                     patch_list = None
 
@@ -7348,7 +7860,7 @@ class ViewRuntime(RuntimeTurnPort):
 
             _reason = (
                 "force_full_html"
-                if force_html
+                if force_html is True
                 else (
                     "first_render"
                     if version <= 1
@@ -7554,10 +8066,9 @@ class ViewRuntime(RuntimeTurnPort):
         # component's fingerprint included, so it is not re-sent unchanged.
         view._changed_keys = None
         try:
-            from .change_detection import deep_fingerprint
+            from .change_detection import deep_digest
 
-            fp, truncated = deep_fingerprint(context[name])
-            view._prev_context_fingerprints[name] = object() if truncated else fp
+            view._prev_context_fingerprints[name] = deep_digest(context[name])[0]
         except Exception:  # noqa: BLE001 — bookkeeping; a miss only costs a re-sync
             pass
         timing = getattr(rust_view, "get_render_timing", None)
@@ -7811,20 +8322,16 @@ class ViewRuntime(RuntimeTurnPort):
         queued on a child is otherwise stranded until that child's next routed
         event. Each owner gets its own batch and the owned, re-authorized
         completion path of :func:`djust._child_async.dispatch_child_work`; no
-        parent acknowledgement advertises or completes it. Legacy roots and
-        legacy children keep their existing behavior.
+        parent acknowledgement advertises or completes it.
         """
-        from ._exposure import uses_legacy_exposure
-
         root = self.view_instance
         if (
             root is None
-            or uses_legacy_exposure(root)
             or self._explicit_mount_binding is None
             or getattr(root, "_djust_child_disposed", False)
         ):
             return
-        # Imported past the legacy early return: this runs after every turn,
+        # Imported past the early return: this runs after every turn,
         # on the event loop (#3095).
         from ._async_batch import AsyncBatch
         from ._child_async import dispatch_child_work
@@ -7845,7 +8352,6 @@ class ViewRuntime(RuntimeTurnPort):
                     getattr(child, "_parent_view", None) is not parent
                     or getattr(child, "_view_id", None) != slot
                     or getattr(child, "_djust_child_disposed", False)
-                    or uses_legacy_exposure(child)
                 ):
                     continue
                 owners.append(child)
@@ -7896,7 +8402,7 @@ class ViewRuntime(RuntimeTurnPort):
                 future = asyncio.ensure_future(
                     self._execute_async_task(task_name, callback, args, kwargs, event_name)
                 )
-                track_async_task(view, future)
+                track_async_task(view, future, callback)
                 track_running_async_task(view, task_name, future)
             view._async_tasks = {}
 
@@ -7989,145 +8495,17 @@ class ViewRuntime(RuntimeTurnPort):
     ) -> None:
         """Run one background task and stream the re-rendered result.
 
-        Mirrors ``sse.py:_sse_execute_async_task``: run the callback off-thread,
-        let ``handle_async_result`` observe success/failure, re-sync + re-render,
-        and emit a ``patch`` / ``html_update`` frame plus a turn-end flush. Any
-        callback failure is logged and routed through ``handle_async_result`` so
-        the client is never left stuck in a loading state.
-
-        The handler + render half of each arm runs under the consumer's render
-        lock, borrowed via ``transport.event_context`` (#2840/#1646: same
-        serialization as the WS twin ``_run_async_work``, which holds
-        ``_render_lock`` across handler + render). SSE uses its session render
-        lock to prevent late results from crossing a page-replacement boundary.
+        Hands the mounted view's task to :meth:`_execute_explicit_async_task`,
+        which starts the callback only under fresh authority, routes any
+        callback failure through ``handle_async_result`` so the client is never
+        left stuck in a loading state, commits declared state and emits the
+        result frame (ADR-038 E3, D-k/D-l).
         """
         # ``_detach_from_finished_request`` already ran (in the turn wrapper).
         view = self.view_instance
         if not view:
             return
-        from ._exposure import uses_legacy_exposure
-
-        legacy_diagnostics = uses_legacy_exposure(view)
-        if not legacy_diagnostics:
-            await self._execute_explicit_async_task(
-                view, task_name, callback, args, kwargs, event_name
-            )
-            return
-
-        # cancel_async() / cancel_async_all() before the task started: skip it.
-        # The WS twin ``_run_async_work`` has always checked this; the runtime
-        # copy, which serves WS events since the ADR-022 flip, did not (#2969).
-        if _consume_async_cancel(view, task_name):
-            logger.debug("Runtime: async task %s was cancelled, skipping execution", task_name)
-            await self._settle_cancelled_async(view, event_name)
-            return
-
-        try:
-            # Dispatch through the ONE shared helper so the sync/async handling
-            # can never drift from the consumer twin (#2020, #2016 / #1646).
-            # Without the coroutine check the helper encapsulates, an async
-            # callback would hit ``sync_to_async`` and raise ``TypeError:
-            # sync_to_async can only be applied to sync functions``, silently
-            # failing every async background task on the converged WS-event path
-            # (#2001, the parallel-path drift vs ``websocket.py:_run_async_work``).
-            from .mixins.async_work import run_async_callback
-
-            result = await run_async_callback(callback, args, kwargs, owner=view)
-
-            # Teardown identity-guard (#1940 — mirror of the WS twin's
-            # pre-mutation guard): the callback above is the FIRST await in
-            # this detached task; during that window a disconnect (→
-            # ``view_instance = None``) or a re-mount (→ a NEW view) can run.
-            # Writing the stale view — handler state OR render — contaminates
-            # a torn-down / replaced view.
-            if self.view_instance is not view:
-                if legacy_diagnostics and uses_legacy_exposure(view):
-                    logger.debug(
-                        "Runtime: async task %s completed after view teardown/re-mount; "
-                        "dropping stale re-render",
-                        task_name,
-                    )
-                else:
-                    logger.debug("Explicit background result discarded after owner replacement")
-                return
-
-            # Cancelled while running: skip the result handler and re-render,
-            # as the WS twin does (#2969).
-            if _consume_async_cancel(view, task_name):
-                logger.debug("Runtime: async task %s was cancelled, skipping re-render", task_name)
-                await self._settle_cancelled_async(view, event_name)
-                return
-
-            # Serialise handler + render on the consumer's render lock via
-            # ``transport.event_context`` (the ADR-022 mechanism): after the
-            # ADR-022 flip THIS helper serves WS events' ``start_async`` work,
-            # so an unlocked handler mutation / render could interleave with a
-            # concurrent tick / server_push / db_notify render — the PyO3
-            # VDOM baseline is not thread-safe (#2830). ``event_context`` also
-            # sets ``_processing_user_event`` (ticks yield during the frame)
-            # and the observability scopes — the same per-event posture a live
-            # event turn gets. Ordering mirrors the WS twin: handler first,
-            # THEN the in-lock identity re-check (a view torn down mid-handler
-            # still gets its user callback — only the stale re-render is
-            # dropped), then the render.
-            async with self.transport.event_context(view):
-
-                async def complete() -> None:
-                    if hasattr(view, "handle_async_result"):
-                        await call_async_result(
-                            view, view.handle_async_result, task_name, result=result, error=None
-                        )
-                    # Identity re-check INSIDE the lock (#1940): the handler await
-                    # above is an unbounded wait during which the view can be torn
-                    # down or replaced. Rendering the stale view would emit a frame
-                    # the connection's version/recovery state does not own.
-                    if self.view_instance is not view:
-                        return
-                    await self._render_async_result(event_name)
-
-                await self._run_async_result_turn(view, task_name, complete)
-
-        except Exception as exc:
-            failure = exc  # bound for the nested result turn below
-            if legacy_diagnostics and uses_legacy_exposure(view):
-                logger.exception(
-                    "Runtime: error in start_async callback '%s' on %s",
-                    task_name,
-                    view.__class__.__name__ if view else "?",
-                )
-            else:
-                logger.warning("Explicit background callback failed")
-            try:
-                # Same locked shape as the success arm (#2840 twin): the
-                # error-state mutation + re-render must not interleave with
-                # a concurrent lock-holding render. Ordering preserved:
-                # handler → in-lock identity re-check → render. The result
-                # frame is sent even without a ``handle_async_result``: the
-                # turn announced ``async_pending`` (#2963), and this frame is
-                # what ends the client's loading state.
-                async with self.transport.event_context(view):
-
-                    async def complete_error() -> None:
-                        if hasattr(view, "handle_async_result"):
-                            await call_async_result(
-                                view,
-                                view.handle_async_result,
-                                task_name,
-                                result=None,
-                                error=failure,
-                            )
-                        if self.view_instance is not view:
-                            return
-                        await self._render_async_result(event_name)
-
-                    await self._run_async_result_turn(view, task_name, complete_error)
-            except Exception:
-                if legacy_diagnostics and uses_legacy_exposure(view):
-                    logger.exception(
-                        "Runtime: error in handle_async_result for task '%s'", task_name
-                    )
-                else:
-                    logger.warning("Explicit background result handling failed")
+        await self._execute_explicit_async_task(view, task_name, callback, args, kwargs, event_name)
 
     async def _settle_cancelled_async(self, view: Any, event_name: Optional[str]) -> None:
         """End the loading state a cancelled task's event announced.
@@ -8141,21 +8519,14 @@ class ViewRuntime(RuntimeTurnPort):
         """
         if event_name is None:
             return
-        from ._exposure import uses_legacy_exposure
-
         try:
             async with self.transport.event_context(view):
                 if self.view_instance is not view:
                     return
+                # Never skipped (#4123): this frame is what ends the loading state.
                 await self._render_async_result(event_name)
         except Exception:  # noqa: BLE001 — a settle frame must never raise out of a task
-            if uses_legacy_exposure(view):
-                logger.exception(
-                    "Runtime: error settling cancelled async task for %s",
-                    sanitize_for_log(event_name),
-                )
-            else:
-                logger.warning("Explicit cancelled background settle failed")
+            logger.warning("Explicit cancelled background settle failed")
 
     async def _execute_explicit_async_task(
         self,
@@ -8166,16 +8537,16 @@ class ViewRuntime(RuntimeTurnPort):
         kwargs: Any,
         event_name: Optional[str],
     ) -> None:
-        """Run a nonlegacy root's background task under fresh authority.
+        """Run the root's background task under fresh authority.
 
-        The legacy runner trusts the mount-time principal and never saves. Here
-        (ADR-038 E3, D-k/D-l) the callback starts only after a fresh
+        Here (ADR-038 E3, D-k/D-l) the callback starts only after a fresh
         authorization, the result is handled only after another one, declared
         server state is committed before the result frame, and a revoked or
         failed turn is dropped with a static error. Nothing here logs or sends
         exception values; application result handlers still get their own
         exception object.
         """
+        from ._surviving_work import is_surviving
         from .mixins.async_work import run_async_callback
 
         # cancel_async() / cancel_async_all() before the task started (#2969).
@@ -8185,11 +8556,30 @@ class ViewRuntime(RuntimeTurnPort):
         # state was announced.
         if _consume_async_cancel(view, task_name):
             return
+        # The root twin of ``_child_async._check_owner`` (#4211): a teardown
+        # (disconnect, owner replacement, disposal) advances the work
+        # generation. Work cancelled by it keeps nothing: no session write,
+        # no view state, no frame.
+        generation = getattr(view, "_async_work_generation", 0)
+
+        def released() -> bool:
+            return (
+                self.view_instance is not view
+                or bool(getattr(view, "_djust_child_disposed", False))
+                or getattr(view, "_async_work_generation", 0) != generation
+            )
 
         async with self._explicit_event_lock, self.transport.event_context(view):
             try:
                 await self.authorize_explicit_turn(view)
             except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
+                if is_surviving(callback):
+                    # Decision 4 (#4182): a disposed view cannot be re-authorized.
+                    logger.warning(
+                        "survive_disconnect task %s did not start: its view could not be "
+                        "re-authorized",
+                        sanitize_for_log(task_name),
+                    )
                 if self.view_instance is view:
                     await self.deny_explicit_turn()
                 return
@@ -8217,8 +8607,8 @@ class ViewRuntime(RuntimeTurnPort):
                 traceback=True,
             )
 
-        if self.view_instance is not view:
-            logger.debug("Explicit background result discarded after owner replacement")
+        if released():
+            logger.debug("Explicit background result discarded after teardown or owner replacement")
             return
         # Cancelled while running: skip the result handler and render (#2969).
         if _consume_async_cancel(view, task_name):
@@ -8234,6 +8624,10 @@ class ViewRuntime(RuntimeTurnPort):
                         if self.view_instance is view:
                             await self.deny_explicit_turn()
                         return
+                    if released():
+                        # Torn down while the result was authorized: nothing
+                        # is carried, handled, saved or sent (#4211).
+                        return
                     from ._session_merge import carry_session_writes
 
                     carry_session_writes(
@@ -8248,7 +8642,7 @@ class ViewRuntime(RuntimeTurnPort):
                         # other effects stand too, and the fallback, which runs
                         # the work inside its request, keeps them (#4162).
                         try:
-                            await sync_to_async(_save_session_writes)(view)
+                            await sync_to_async(_save_session_writes_unless)(view, released)
                         except Exception as exc:  # noqa: BLE001 — storage errors carry values
                             from ._exposure_diagnostics import log_failure_for
 
@@ -8287,12 +8681,24 @@ class ViewRuntime(RuntimeTurnPort):
                         # Legacy parity: an unhandled failure renders nothing.
                         await keep_session_writes()
                         return
-                    if self.view_instance is not view:
+                    if released():
                         return
-                    if not await self.commit_explicit_turn(view, source="async", async_result=True):
+                    from ._automatic_state import turn_serial
+
+                    serial_before = turn_serial(view)
+                    if not await self.commit_explicit_turn(
+                        view, source="async", async_result=True, released=released
+                    ):
                         return
                     snapshot_fields = await self._explicit_event_snapshot(view)
-                    await self._render_async_result(event_name, snapshot_fields=snapshot_fields)
+                    # A result that changed nothing renders and sends nothing
+                    # (#4123); the batch's ``async_complete`` ends the
+                    # client's loading state (#4309).
+                    await self._render_async_result(
+                        event_name,
+                        snapshot_fields=snapshot_fields,
+                        skip_unchanged=snapshot_delivers_nothing(snapshot_fields, serial_before),
+                    )
                 finally:
                     view.__dict__.pop("_djust_event_request", None)
 
@@ -8306,8 +8712,15 @@ class ViewRuntime(RuntimeTurnPort):
         force_html: bool = False,
         source: str = "async",
         broadcast: bool = False,
+        skip_unchanged: bool = False,
     ) -> None:
         """Re-sync + re-render after background work and emit the result frame.
+
+        ``skip_unchanged`` (async results, #4123): when the sync reports that
+        nothing changed since the last render, render nothing and send no
+        frame; the turn's pending work is still flushed. The caller passes it
+        only when the frame's snapshot fields tell the page nothing new
+        (``snapshot_delivers_nothing``). A forced render always renders.
 
         Shared by the success + error paths of ``_execute_async_task``. Stamps
         the transport's client-checked wire version (#1858) and drains the
@@ -8327,15 +8740,27 @@ class ViewRuntime(RuntimeTurnPort):
         view = self.view_instance
         if not view:
             return
-        if hasattr(view, "_sync_state_to_rust"):
+        # The turn committed its declared state before it got here.
+        if skip_unchanged and not force_html:
+            if not await sync_to_async(sync_reports_render_needed)(view):
+                await self._flush_all_pending()
+                return
+        elif hasattr(view, "_sync_state_to_rust"):
             await sync_to_async(view._sync_state_to_rust)()
         html, patches, version = await sync_to_async(view.render_with_diff)()
         wire_version = self.transport.next_client_version(html, version)
-        if force_html:
-            # An explicit catch-up turn (#3200): the browser missed a withheld
-            # frame, so a patch against its DOM is not safe.
-            view._force_full_html = False
+        from .mixins.rust_bridge import full_html_requested
+
+        if force_html or full_html_requested(view):
+            # An explicit catch-up turn (#3200) or a full-page request: a
+            # patch against the browser's DOM is not safe / not wanted.
             patches = None
+        # Consume any render request once, as the WebSocket twins do
+        # (_background_render.py, websocket.py): set_changed_keys()'s
+        # RENDER_REQUESTED keeps the diff, but must not leak to later ticks
+        # or events (#4286).
+        if getattr(view, "_force_full_html", False):
+            view._force_full_html = False
 
         if patches is not None:
             patch_list = fast_json_loads(patches) if isinstance(patches, str) else patches
@@ -8432,9 +8857,7 @@ class ViewRuntime(RuntimeTurnPort):
 
     def _server_turn_busy(self, view: Any) -> bool:
         """Whether a turn holds the lock(s) a server-originated turn would take."""
-        from ._exposure import uses_legacy_exposure
-
-        if not uses_legacy_exposure(view) and self._explicit_event_lock.locked():
+        if self._explicit_event_lock.locked():
             return True
         busy = getattr(self.transport, "render_busy", None)
         return bool(busy and busy(view))
@@ -8535,22 +8958,20 @@ class ViewRuntime(RuntimeTurnPort):
     async def _server_turn_locks(
         self, view: Any, lock_wait: Optional[float]
     ) -> AsyncIterator[None]:
-        """The explicit-exposure turn lock (non-legacy views), then the
+        """The explicit-exposure turn lock, then the
         transport's render lock (``event_context``). With ``lock_wait``, each is
         waited for at most that long; one still held then raises
         :class:`_TurnLockBusy` before the body runs."""
-        from ._exposure import uses_legacy_exposure
         from .websocket import _acquire_render_lock
 
-        explicit = None if uses_legacy_exposure(view) else self._explicit_event_lock
-        if explicit is not None:
-            if lock_wait is None:
-                await explicit.acquire()
-            else:
-                try:
-                    await _acquire_render_lock(explicit, lock_wait)
-                except asyncio.TimeoutError:
-                    raise _TurnLockBusy() from None
+        explicit = self._explicit_event_lock
+        if lock_wait is None:
+            await explicit.acquire()
+        else:
+            try:
+                await _acquire_render_lock(explicit, lock_wait)
+            except asyncio.TimeoutError:
+                raise _TurnLockBusy() from None
         try:
             if lock_wait is None:
                 context = self.transport.event_context(view)
@@ -8569,8 +8990,7 @@ class ViewRuntime(RuntimeTurnPort):
                     raise _TurnLockBusy() from None
                 yield
         finally:
-            if explicit is not None:
-                explicit.release()
+            explicit.release()
 
     async def _run_server_push(
         self,
@@ -8642,19 +9062,16 @@ class ViewRuntime(RuntimeTurnPort):
         re-checks). A ``{"type": "db_notify", ...}`` entry is a NOTIFY: its
         hook is ``handle_info(message)`` (#3885).
         """
-        from ._exposure import uses_legacy_exposure
         from .push import push_tenant_matches
         from .websocket import LiveViewConsumer, _resolve_skip_render
 
-        legacy = uses_legacy_exposure(view)
-        if not legacy:
-            try:
-                await self.authorize_explicit_turn(view)
-            except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
-                if self.view_instance is view:
-                    await self.deny_explicit_turn()
-                view.__dict__.pop("_djust_event_request", None)
-                return
+        try:
+            await self.authorize_explicit_turn(view)
+        except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
+            if self.view_instance is view:
+                await self.deny_explicit_turn()
+            view.__dict__.pop("_djust_event_request", None)
+            return
         try:
             with _tenant_context(getattr(view, "_tenant", None)):
                 render = False
@@ -8696,13 +9113,13 @@ class ViewRuntime(RuntimeTurnPort):
                     return
                 if not render:
                     # No frame of its own (#3034): a push has no ``ref`` to acknowledge.
+                    # Its hooks' session writes are still stored (#4168).
+                    await store_turn_session_writes(view, "push")
                     await self._flush_all_pending()
                     return
-                snapshot_fields = None
-                if not legacy:
-                    if not await self.commit_explicit_turn(view, source="async"):
-                        return
-                    snapshot_fields = await self._explicit_event_snapshot(view)
+                if not await self.commit_explicit_turn(view, source="async"):
+                    return
+                snapshot_fields = await self._explicit_event_snapshot(view)
                 await self._render_async_result(
                     None, snapshot_fields=snapshot_fields, source="broadcast", broadcast=True
                 )
@@ -8743,20 +9160,16 @@ class ViewRuntime(RuntimeTurnPort):
         progress and to a client that is not draining (it is skipped, not
         queued: the next interval picks up any change, #560), waits for the
         mount frame, and runs the turn chain, so
-        ``LIVEVIEW_CONFIG["sync_turn_wrapper"]`` and ``reauth_on_event`` apply.
+        ``LIVEVIEW_CONFIG["sync_turn_wrapper"]`` and ``LIVEVIEW_MIDDLEWARE`` apply.
         """
         if self.view_instance is not view or self._mount_sent_for is not view:
             return False  # gone, or still mounting: the client has nothing to patch yet
         if self._server_turn_busy(view) or self._client_backlogged():
             logger.debug("[djust] Tick on %s skipped — session busy", type(view).__name__)
             return False
-        from ._exposure import uses_legacy_exposure
-
         sent = False
         ran = [False]
-        explicit_lock = (
-            contextlib.nullcontext() if uses_legacy_exposure(view) else self._explicit_event_lock
-        )
+        explicit_lock = self._explicit_event_lock
         try:
             async with explicit_lock, self.transport.event_context(view):
                 if self.view_instance is not view:
@@ -8787,19 +9200,16 @@ class ViewRuntime(RuntimeTurnPort):
     async def _tick_body(self, view: Any, ran: List[bool]) -> bool:
         """The locked part of a tick: whether a frame was sent. ``ran[0]`` is set
         once ``handle_tick`` has run."""
-        from ._exposure import uses_legacy_exposure
         from ._view_hooks import call_tick
         from .websocket import _resolve_skip_render, _snapshot_assigns
 
-        legacy = uses_legacy_exposure(view)
-        if not legacy:
-            try:
-                await self.authorize_explicit_turn(view)
-            except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
-                if self.view_instance is view:
-                    await self.deny_explicit_turn()
-                view.__dict__.pop("_djust_event_request", None)
-                return False
+        try:
+            await self.authorize_explicit_turn(view)
+        except Exception:  # noqa: BLE001 — no auth provider values on the wire/log
+            if self.view_instance is view:
+                await self.deny_explicit_turn()
+            view.__dict__.pop("_djust_event_request", None)
+            return False
         try:
             with _tenant_context(getattr(view, "_tenant", None)):
                 pre_assigns = _snapshot_assigns(view)
@@ -8808,6 +9218,9 @@ class ViewRuntime(RuntimeTurnPort):
                 if self.view_instance is not view:
                     return False
                 if _resolve_skip_render(view):
+                    # No frame, no commit: the hook's session writes are
+                    # still stored (#4168).
+                    await store_turn_session_writes(view, "tick")
                     await self._flush_all_pending()
                     return False
                 force_full_html = getattr(view, "_force_full_html", False)
@@ -8816,13 +9229,12 @@ class ViewRuntime(RuntimeTurnPort):
                     and not force_full_html
                     and not rows_written(view)
                 ):
+                    await store_turn_session_writes(view, "tick")
                     await self._flush_all_pending()
                     return False
-                snapshot_fields = None
-                if not legacy:
-                    if not await self.commit_explicit_turn(view, source="async"):
-                        return False
-                    snapshot_fields = await self._explicit_event_snapshot(view)
+                if not await self.commit_explicit_turn(view, source="async"):
+                    return False
+                snapshot_fields = await self._explicit_event_snapshot(view)
                 await self._render_async_result(
                     "tick", snapshot_fields=snapshot_fields, source="tick"
                 )

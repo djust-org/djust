@@ -104,6 +104,9 @@ class AudioMixin:
 
     audio_banks = {}
     _djust_context_providers = (AUDIO_PROVIDER,)
+    #: The ``_audio_`` namespace (scope, cursors, the manifest cache) is ephemeral:
+    #: automatic state never saves it, so a reconnect cannot restore a stale scope.
+    _djust_unsaved_prefixes = ("_audio_",)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -229,24 +232,3 @@ class AudioMixin:
         payload = {"version": 1, "op": "stop", "scope": self._audio_scope, "bank": bank}
         if ("djust:audio", payload) not in self._pending_push_events:
             self.push_event("djust:audio", payload)
-
-    def _get_private_state(self):
-        # The _audio_ namespace is ephemeral, including application cursors.
-        return {
-            key: value
-            for key, value in super()._get_private_state().items()
-            if not key.startswith("_audio_") and key != "_pending_push_events"
-        }
-
-    def _restore_private_state(self, private_state):
-        from ._exposure import require_legacy_state_api
-
-        # Reject before filtering: the base guard runs after argument evaluation.
-        require_legacy_state_api(self)
-        super()._restore_private_state(
-            {
-                key: value
-                for key, value in private_state.items()
-                if not key.startswith("_audio_") and key != "_pending_push_events"
-            }
-        )

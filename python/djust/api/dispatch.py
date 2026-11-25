@@ -2,11 +2,11 @@
 
 The dispatch view is a transport adapter over the existing handler pipeline. It
 reuses ``validate_handler_params``, ``check_view_auth``, ``check_handler_permission``,
-``_snapshot_assigns``/``_compute_changed_keys``, and ``DjangoJSONEncoder`` — the
-exact same safety checks and serialization the WebSocket path runs.
+and ``DjangoJSONEncoder`` — the exact same safety checks and serialization the
+WebSocket path runs.
 
 Responses:
-  200: ``{"result": <return>, "assigns": {<changed public attrs>}}``
+  200: ``{"result": <return>, "assigns": {<declared client=True fields that changed>}}``
   400: validation or JSON parse error
   401: unauthenticated (no auth class accepted the request)
   403: CSRF failed or permission denied
@@ -20,7 +20,7 @@ from __future__ import annotations
 import inspect
 import json
 import logging
-from typing import Any, Callable, Dict, Iterable, Optional, cast
+from typing import Any, Callable, Dict, Optional, cast
 
 from asgiref.sync import async_to_sync
 from django.core.exceptions import PermissionDenied
@@ -43,9 +43,32 @@ from djust.rate_limit import (
     reset_handler_buckets,
 )
 from djust.validation import validate_handler_params, validated_call_arguments
-from djust.websocket import _compute_changed_keys, _snapshot_assigns
 
 logger = logging.getLogger(__name__)
+
+
+def _permission_denied(owners: tuple, exc: PermissionDenied) -> JsonResponse:
+    """A 403 that never carries the exception's text (#4170).
+
+    WebSocket and SSE answer ``PermissionDenied`` with a fixed "Permission
+    denied" frame under every policy, DEBUG included (``runtime.py``); the
+    HTTP API and ``@server_function`` now do the same (transport parity).
+    Other error detail follows ADR-038 D-a (revised): detailed under DEBUG,
+    value-free in production, through ``diagnostics_policy_allows``. The
+    text goes to the server log only, through that gate (value-free
+    outside DEBUG).
+    """
+    from .._exposure_diagnostics import log_failure_for
+
+    log_failure_for(
+        logger,
+        owners,
+        exc,
+        "djust API: permission denied: %s",
+        sanitize_for_log(str(exc)),
+        level="info",
+    )
+    return api_error(403, "permission_denied", "Permission denied")
 
 
 def _caller_key(request: HttpRequest) -> str:
@@ -134,37 +157,20 @@ async def _await(coro: Any) -> Any:
     return await coro
 
 
-def _client_projection(view_instance: Any) -> Optional[Dict[str, Any]]:
-    """Declared ``client=True`` values for a nonlegacy view; ``None`` for legacy.
+def _client_projection(view_instance: Any) -> Dict[str, Any]:
+    """The view's declared ``client=True`` values.
 
     ADR-038: an HTTP API response's automatic ``assigns`` may carry only fields
     explicitly permitted for client use — the projection ``get_state`` returns.
     An unavailable projection (unknown policy, failing factory) yields no
     fields rather than falling back to public attributes.
     """
-    from .._exposure import ExposureError, explicit_state_projection, uses_legacy_exposure
+    from .._exposure import ExposureError, explicit_state_projection
 
-    if uses_legacy_exposure(view_instance):
-        return None
     try:
         return explicit_state_projection(view_instance, "client")
     except ExposureError:
         return {}
-
-
-def _public_assigns_snapshot_diff(
-    view_instance: Any, changed_keys: Iterable[str]
-) -> Dict[str, Any]:
-    """Build the JSON-safe assigns diff from changed keys."""
-    diff: Dict[str, Any] = {}
-    for key in changed_keys:
-        if key.startswith("_"):
-            continue
-        try:
-            diff[key] = getattr(view_instance, key)
-        except AttributeError:
-            continue
-    return diff
 
 
 def _resolve_serializer(spec: Any, view: Any) -> Optional[Callable[..., Any]]:
@@ -358,7 +364,7 @@ def _dispatch_api_authenticated(
     try:
         view = _instantiate_view(view_cls, request)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view_cls,), exc)
     except Exception as exc:
         from .._exposure_diagnostics import log_failure_for
 
@@ -376,7 +382,7 @@ def _dispatch_api_authenticated(
     try:
         redirect_url = check_view_auth(view, request, event=True)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
     if redirect_url:
         # View demands login — in HTTP land, this is 401 not a redirect.
         return api_error(401, "login_required", "Authentication required")
@@ -393,7 +399,7 @@ def _dispatch_api_authenticated(
     try:
         enforce_object_permission(view, request)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
 
     # 7. Look up handler + verify opt-in.
     handler = getattr(view, handler_name, None)
@@ -425,22 +431,22 @@ def _dispatch_api_authenticated(
             validation.get("error") or "Parameter validation failed",
             details={
                 "expected": validation.get("expected", []),
+                "missing": validation.get("missing", []),
                 "provided": validation.get("provided", []),
                 "type_errors": validation.get("type_errors") or [],
             },
         )
     call_args, call_kwargs = validated_call_arguments(validation)
 
-    # 11. Snapshot pre-state. A nonlegacy view's assigns come from its
-    # declared client projection, not from public attributes (ADR-038).
-    pre = _snapshot_assigns(view)
+    # 11. Snapshot pre-state. The view's assigns come from its declared
+    # client projection, not from public attributes (ADR-038).
     pre_client = _client_projection(view)
 
     # 12. Invoke the handler.
     try:
         return_value = _call_possibly_async(handler, *call_args, **call_kwargs)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
     except Exception as exc:
         from .._exposure_diagnostics import log_failure_for
 
@@ -463,7 +469,7 @@ def _dispatch_api_authenticated(
     except PermissionDenied as exc:
         # Mirror the handler-invocation block: a PermissionDenied raised from
         # api_response() / serialize= must surface as 403, not 500.
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
     except TypeError as exc:
         from .._exposure_diagnostics import log_failure_for
 
@@ -496,17 +502,12 @@ def _dispatch_api_authenticated(
         return api_error(500, "serialize_error", "Response transform raised an unexpected error")
 
     # 13. Snapshot post-state and compute diff.
-    if pre_client is not None:
-        post_client = _client_projection(view) or {}
-        assigns_diff = {
-            key: value
-            for key, value in post_client.items()
-            if key not in pre_client or pre_client[key] != value
-        }
-    else:
-        post = _snapshot_assigns(view)
-        changed = _compute_changed_keys(pre, post)
-        assigns_diff = _public_assigns_snapshot_diff(view, changed)
+    post_client = _client_projection(view)
+    assigns_diff = {
+        key: value
+        for key, value in post_client.items()
+        if key not in pre_client or pre_client[key] != value
+    }
 
     return JsonResponse(
         {"result": return_value, "assigns": assigns_diff},
@@ -626,7 +627,7 @@ def _dispatch_server_function_checked(
     try:
         view = _instantiate_view(view_cls, request)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view_cls,), exc)
     except Exception as exc:
         from .._exposure_diagnostics import log_failure_for
 
@@ -644,7 +645,7 @@ def _dispatch_server_function_checked(
     try:
         redirect_url = check_view_auth(view, request, event=True)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
     if redirect_url:
         return api_error(401, "login_required", "Authentication required")
 
@@ -658,7 +659,7 @@ def _dispatch_server_function_checked(
     try:
         enforce_object_permission(view, request)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
 
     # 6. Resolve the attribute and gate on @server_function metadata.
     fn = getattr(view, function_name, None)
@@ -686,6 +687,7 @@ def _dispatch_server_function_checked(
             validation.get("error") or "Parameter validation failed",
             details={
                 "expected": validation.get("expected", []),
+                "missing": validation.get("missing", []),
                 "provided": validation.get("provided", []),
                 "type_errors": validation.get("type_errors") or [],
             },
@@ -696,7 +698,7 @@ def _dispatch_server_function_checked(
     try:
         result = _call_possibly_async(fn, *call_args, **call_kwargs)
     except PermissionDenied as exc:
-        return api_error(403, "permission_denied", str(exc) or "Permission denied")
+        return _permission_denied((view,), exc)
     except Exception as exc:
         from .._exposure_diagnostics import log_failure_for
 

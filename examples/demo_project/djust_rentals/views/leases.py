@@ -4,6 +4,9 @@ Lease Management Views
 CRUD operations for leases with filtering and expiration tracking.
 """
 
+from typing import Any
+
+from djust import state
 from djust_shared.views import BaseViewWithNavbar
 from djust.decorators import debounce, event_handler
 from djust_shared.components.ui import HeroSection
@@ -25,15 +28,11 @@ class LeaseListView(BaseViewWithNavbar):
     """
     template_name = 'rentals/lease_list.html'
 
-    def mount(self, request, **kwargs):
-        """Initialize lease list state"""
-        # Filter state
-        self.search_query = ""
-        self.filter_status = "active"  # all, active, expired, upcoming, terminated
-        self.sort_by = "end_date"
-
-        # Load leases
-        self._refresh_leases()
+    # Search and filter inputs; persist="server" keeps them across the HTTP
+    # fallback and a reconnect. The list is queried per render from them.
+    search_query = state("", persist="server")
+    filter_status = state("active", persist="server")  # all, active, expired, upcoming, terminated
+    sort_by = state("end_date", persist="server")
 
     def _refresh_leases(self):
         """Refresh lease list based on current filters"""
@@ -60,8 +59,6 @@ class LeaseListView(BaseViewWithNavbar):
         elif self.sort_by == "rent":
             leases = leases.order_by('-monthly_rent')
 
-        # Store as private variable to avoid auto-JIT serialization
-        # We'll create lease_data with computed fields instead
         self._leases = leases
 
     @event_handler()
@@ -69,26 +66,20 @@ class LeaseListView(BaseViewWithNavbar):
     def search(self, value: str = "", **kwargs):
         """Search leases with debouncing - value parameter matches what @input sends"""
         self.search_query = value
-        self._refresh_leases()
 
     @event_handler()
     def filter_by_status(self, value: str = "all", **kwargs):
         """Filter leases by status - value parameter matches what @change sends"""
         self.filter_status = value
-        self._refresh_leases()
 
     @event_handler()
     def sort_leases(self, value: str = "end_date", **kwargs):
         """Sort leases - value parameter matches what @change sends"""
         self.sort_by = value
-        self._refresh_leases()
 
     def get_context_data(self, **kwargs):
         """Add lease list context"""
-        # Store leases as instance variable for JIT serialization
-        self.leases = self._leases
-
-        # Call parent - JIT serializes 'leases' with Rust + auto-generates 'leases_count'
+        self._refresh_leases()
         context = super().get_context_data(**kwargs)
 
         # Create page header (do this in get_context_data so it's available for every render)
@@ -190,39 +181,46 @@ class LeaseDetailView(BaseViewWithNavbar):
 
     def mount(self, request, pk=None, **kwargs):
         """Initialize lease detail view"""
-        self.lease_id = pk
+        self._pk = pk
+
+    def _load(self):
+        # Read on every render, not kept from mount(): between events the HTTP
+        # fallback restores a saved model as its field dict, not a row.
+        pk = self._pk
+        self._lease_id = pk
 
         # Load lease
         try:
-            self.lease = Lease.objects.select_related(
+            self._lease = Lease.objects.select_related(
                 'property', 'tenant__user'
             ).get(pk=pk)
         except Lease.DoesNotExist:
-            self.lease = None
-            self.error_message = f"Lease with ID {pk} not found"
+            self._lease = None
+            self._error_message = f"Lease with ID {pk} not found"
             return
 
         # Load payment history
         from ..models import Payment
-        self.payments = Payment.objects.filter(lease=self.lease).order_by('-payment_date')
+        self._payments = Payment.objects.filter(lease=self._lease).order_by('-payment_date')
 
     def get_context_data(self, **kwargs):
         """Add lease detail context"""
+        self._load()
         context = super().get_context_data(**kwargs)
 
-        if not self.lease:
-            context['error_message'] = self.error_message
+        if not self._lease:
+            context['error_message'] = self._error_message
             return context
 
         # Create page header
         page_header = PageHeader(
-            title=f"Lease: {self.lease.property.name}",
-            subtitle=f"{self.lease.tenant.user.get_full_name()} • {self.lease.start_date} - {self.lease.end_date}",
+            title=f"Lease: {self._lease.property.name}",
+            subtitle=f"{self._lease.tenant.user.get_full_name()} • {self._lease.start_date} - {self._lease.end_date}",
             icon="file-text",
             actions=[
                 {
                     "label": "Edit Lease",
-                    "url": f"/rentals/leases/{self.lease.pk}/edit/",
+                    "url": f"/rentals/leases/{self._lease.pk}/edit/",
                     "icon": "edit",
                     "variant": "secondary"
                 }
@@ -230,11 +228,11 @@ class LeaseDetailView(BaseViewWithNavbar):
         )
 
         # Create status badge
-        status_badge = StatusBadge(status=self.lease.status).render()
+        status_badge = StatusBadge(status=self._lease.status).render()
 
         # Calculate payment statistics
         from django.db.models import Sum, Count
-        payment_stats = self.payments.aggregate(
+        payment_stats = self._payments.aggregate(
             total_paid=Sum('amount'),
             payment_count=Count('id')
         )
@@ -242,10 +240,10 @@ class LeaseDetailView(BaseViewWithNavbar):
         # Calculate expected vs actual payments
         from datetime import date
 
-        start_date = self.lease.start_date
-        end_date = min(self.lease.end_date, date.today())
+        start_date = self._lease.start_date
+        end_date = min(self._lease.end_date, date.today())
         months_elapsed = (end_date.year - start_date.year) * 12 + end_date.month - start_date.month + 1
-        expected_total = months_elapsed * float(self.lease.monthly_rent)
+        expected_total = months_elapsed * float(self._lease.monthly_rent)
 
         balance = expected_total - float(payment_stats['total_paid'] or 0)
 
@@ -255,13 +253,13 @@ class LeaseDetailView(BaseViewWithNavbar):
             'status_badge': status_badge,
 
             # Lease data
-            'lease': self.lease,
-            'payments': self.payments,
+            'lease': self._lease,
+            'payments': self._payments,
             'total_paid': payment_stats['total_paid'] or 0,
             'payment_count': payment_stats['payment_count'] or 0,
             'expected_total': expected_total,
             'balance': balance,
-            'days_left': self.lease.days_until_expiration(),
+            'days_left': self._lease.days_until_expiration(),
         })
 
         return context
@@ -279,44 +277,33 @@ class LeaseFormView(BaseViewWithNavbar):
     """
     template_name = 'rentals/lease_form.html'
 
+    # The edited lease's id: from the URL, or set when a new lease is saved.
+    # persist="server" keeps it across the HTTP fallback, so a second save
+    # updates that lease instead of creating another.
+    lease_id = state(None, persist="server", render=False)
+    success_message = state("", render=False)
+    error_message = state("", render=False)
+    validation_errors = state(default_factory=dict, render=False)
+
     def mount(self, request, pk=None, **kwargs):
         """Initialize lease form"""
         self.lease_id = pk
-        self.is_edit = pk is not None
-        # Set before the not-found return below: get_context_data reads them (#3994).
-        self.success_message = ""
-        self.error_message = ""
-        self.validation_errors = {}
-        self.properties = Property.objects.none()
-        self.tenants = Tenant.objects.none()
+        if pk is not None and self._lease() is None:
+            self.error_message = f"Lease with ID {pk} not found"
 
-        if self.is_edit:
-            # Load existing lease
-            try:
-                self.lease = Lease.objects.select_related(
-                    'property', 'tenant__user'
-                ).get(pk=pk)
-            except Lease.DoesNotExist:
-                self.lease = None
-                self.error_message = f"Lease with ID {pk} not found"
-                return
-        else:
-            # New lease
-            self.lease = None
-
-        # Form state
-        self.success_message = ""
-        self.error_message = ""
-        self.validation_errors = {}
-
-        # Load properties and tenants for dropdowns
-        self.properties = Property.objects.all().order_by('name')
-        self.tenants = Tenant.objects.select_related('user').all().order_by('user__last_name')
+    def _lease(self):
+        """The edited lease, or None for a new one."""
+        if self.lease_id is None:
+            return None
+        return Lease.objects.select_related('property', 'tenant__user').filter(
+            pk=self.lease_id
+        ).first()
 
     @event_handler
-    def save_lease(self, property_id=None, tenant_id=None, start_date=None,
-                  end_date=None, monthly_rent=None, security_deposit=None,
-                  rent_due_day=1, late_fee=0, status="active", terms="", **kwargs):
+    def save_lease(self, property_id: Any = None, tenant_id: Any = None, start_date: Any = None,
+                  end_date: Any = None, monthly_rent: Any = None, security_deposit: Any = None,
+                  rent_due_day: Any = 1, late_fee: Any = 0, status: str = "active",
+                  terms: str = "", **kwargs):
         """Save lease (create or update)"""
         try:
             # Validate
@@ -327,24 +314,25 @@ class LeaseFormView(BaseViewWithNavbar):
             property_obj = Property.objects.get(pk=property_id)
             tenant_obj = Tenant.objects.get(pk=tenant_id)
 
-            if self.is_edit and self.lease:
+            lease = self._lease()
+            if lease is not None:
                 # Update existing lease
-                self.lease.property = property_obj
-                self.lease.tenant = tenant_obj
-                self.lease.start_date = start_date
-                self.lease.end_date = end_date
-                self.lease.monthly_rent = monthly_rent
-                self.lease.security_deposit = security_deposit
-                self.lease.rent_due_day = rent_due_day
-                self.lease.late_fee = late_fee if late_fee else 0
-                self.lease.status = status
-                self.lease.terms = terms
-                self.lease.save()
+                lease.property = property_obj
+                lease.tenant = tenant_obj
+                lease.start_date = start_date
+                lease.end_date = end_date
+                lease.monthly_rent = monthly_rent
+                lease.security_deposit = security_deposit
+                lease.rent_due_day = rent_due_day
+                lease.late_fee = late_fee if late_fee else 0
+                lease.status = status
+                lease.terms = terms
+                lease.save()
 
                 self.success_message = "Lease updated successfully!"
             else:
                 # Create new lease
-                self.lease = Lease.objects.create(
+                lease = Lease.objects.create(
                     property=property_obj,
                     tenant=tenant_obj,
                     start_date=start_date,
@@ -362,8 +350,7 @@ class LeaseFormView(BaseViewWithNavbar):
                 property_obj.save()
 
                 self.success_message = "Lease created successfully!"
-                self.is_edit = True
-                self.lease_id = self.lease.id
+                self.lease_id = lease.id
 
             self.error_message = ""
             self.validation_errors = {}
@@ -378,10 +365,13 @@ class LeaseFormView(BaseViewWithNavbar):
     def get_context_data(self, **kwargs):
         """Add form context"""
         context = super().get_context_data(**kwargs)
+        is_edit = self.lease_id is not None
+        lease = self._lease()
+        found = lease is not None or not is_edit
 
         # Create page header
-        title = "Edit Lease" if self.is_edit else "Create New Lease"
-        subtitle = "Update lease details" if self.is_edit else "Fill in lease details"
+        title = "Edit Lease" if is_edit else "Create New Lease"
+        subtitle = "Update lease details" if is_edit else "Fill in lease details"
         page_header = PageHeader(
             title=title,
             subtitle=subtitle,
@@ -393,10 +383,14 @@ class LeaseFormView(BaseViewWithNavbar):
             'page_header': page_header.render(),
 
             # Form data
-            'lease': self.lease,
-            'is_edit': self.is_edit,
-            'properties': self.properties,
-            'tenants': self.tenants,
+            'lease': lease,
+            'is_edit': is_edit,
+            # A missing lease shows its error and no form choices (#3994).
+            'properties': Property.objects.all().order_by('name') if found else Property.objects.none(),
+            'tenants': (
+                Tenant.objects.select_related('user').all().order_by('user__last_name')
+                if found else Tenant.objects.none()
+            ),
             'success_message': self.success_message,
             'error_message': self.error_message,
             'validation_errors': self.validation_errors,

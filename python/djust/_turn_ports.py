@@ -1,8 +1,7 @@
-"""How each transport answers a turn's refusal, error or reauth (ADR-044 D5, D7).
+"""How each transport answers a turn's refusal or error (ADR-044 D5, D7).
 
 ``djust.turns.run_turn`` is wire-blind. The *port* a turn carries maps a
-:class:`~djust.turns.Refusal` to the transport's established frames / responses
-and runs the ``reauth`` built-in's fresh-principal check:
+:class:`~djust.turns.Refusal` to the transport's established frames / responses:
 
 - :class:`RuntimeTurnPort` — turns the :class:`~djust.runtime.ViewRuntime`
   dispatches (mount, reconnect, event, params, async) over WebSocket and SSE.
@@ -15,15 +14,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import time
 from typing import Any, Dict, Mapping, Optional
 
 from .turns import Refusal, Turn
 
 logger = logging.getLogger(__name__)
-
-#: Fallback for ``LIVEVIEW_CONFIG["reauth_server_turn_interval"]``.
-_SERVER_TURN_REAUTH_INTERVAL_S = 5.0
 
 _MOUNT_KINDS = frozenset({"mount", "reconnect"})
 _SERVER_KINDS = frozenset({"push", "async", "render"})
@@ -95,46 +90,6 @@ def _default_close(turn: Turn, refusal: Refusal) -> bool:
     return False
 
 
-async def reauth_live_turn(owner: Any, transport: Any, view: Any, *, server: bool) -> bool:
-    """The ``reauth`` built-in's check, one implementation for WS and SSE.
-
-    ``transport.recheck_event_auth`` reads the fresh principal and, on failure,
-    sends the transport's refusal (navigate to login on WS, ``permission_denied``
-    on SSE) and closes. A server turn's pass is remembered on ``owner`` (the WS
-    consumer, or the SSE runtime) for ``reauth_server_turn_interval`` seconds, so
-    a ticking view does not read the session store every tick. Fails closed.
-    """
-    from .config import config as djust_config
-
-    if server:
-        try:
-            interval = float(djust_config.get("reauth_server_turn_interval") or 0)
-        except (TypeError, ValueError):
-            interval = _SERVER_TURN_REAUTH_INTERVAL_S
-        last = getattr(owner, "_server_turn_reauth_at", None)
-        now = time.monotonic()
-        if last is not None and interval > 0 and 0 <= now - last < interval:
-            return True
-    try:
-        allowed = bool(await transport.recheck_event_auth(view))
-    except Exception as exc:  # noqa: BLE001 - fail CLOSED; type + view class only
-        logger.warning(
-            "reauth_on_event re-check raised %s on view %s; denying the turn",
-            type(exc).__name__,
-            type(view).__name__,
-        )
-        allowed = False
-        with contextlib.suppress(Exception):
-            await transport.close(code=4403)
-    if server:
-        with contextlib.suppress(AttributeError):
-            owner._server_turn_reauth_at = time.monotonic() if allowed else None
-    elif not allowed:
-        with contextlib.suppress(AttributeError):
-            owner._server_turn_reauth_at = None
-    return allowed
-
-
 class RuntimeTurnPort:
     """Port methods for :class:`~djust.runtime.ViewRuntime` (mixed in).
 
@@ -144,24 +99,6 @@ class RuntimeTurnPort:
     @property
     def turn_transport(self) -> str:
         return getattr(self.transport, "turn_transport", "ws")
-
-    async def turn_reauth(self, turn: Turn, *, server: bool) -> bool:
-        view = turn.view
-        consumer = getattr(self.transport, "_consumer", None)
-        if server and consumer is not None:
-            # One throttle per WebSocket connection for every server turn.
-            allowed = await consumer._reauth_legacy_server_turn(view, locked=turn._locked)
-            if not allowed and self.view_instance is view:
-                self.view_instance = None
-            return allowed
-        owner = consumer if consumer is not None else self
-        allowed = await reauth_live_turn(owner, self.transport, view, server=server)
-        if not allowed:
-            # The client-event reauth has always cleared only the runtime's view
-            # (#291); the transport closed, and the disconnect releases it.
-            if self.view_instance is view:
-                self.view_instance = None
-        return allowed
 
     async def _drop_turn_view(self, turn: Turn) -> None:
         """Nothing keeps serving a view whose turn was refused with a close."""
@@ -275,21 +212,6 @@ class ConsumerTurnPort:
     """Port methods for the WebSocket consumer's own (server) turns (mixed in)."""
 
     view_instance: Any
-
-    async def turn_reauth(self, turn: Turn, *, server: bool) -> bool:
-        view = turn.view
-        if server:
-            return bool(
-                await self._reauth_legacy_server_turn(view, locked=turn._locked)  # type: ignore[attr-defined]
-            )
-        from .runtime import WSConsumerTransport
-
-        runtime = getattr(self, "_runtime", None)
-        transport = getattr(runtime, "transport", None) or WSConsumerTransport(self)
-        allowed = await reauth_live_turn(self, transport, view, server=False)
-        if not allowed:
-            await self._drop_revoked_view(view, locked=turn._locked)
-        return allowed
 
     async def _drop_revoked_view(self, view: Any, *, locked: bool = True) -> None:
         """Drop and release a view whose principal no longer passes.

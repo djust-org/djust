@@ -81,7 +81,12 @@ class TestEventAttrs:
     def test_name_rides_along_only_when_set(self):
         assert "dj-value-name" not in Rating(value=1).event_attrs("set_rating", value=1)
         out = Rating(value=1, name="service").event_attrs("set_rating", value=2)
-        assert out == 'dj-click="set_rating" dj-value-value:int="2" dj-value-name="service"'
+        # #4285: the identity stamp is marked optional, so a strict handler that does not
+        # declare ``name`` still accepts the event.
+        assert out == (
+            'dj-click="set_rating" dj-value-value:int="2" dj-value-name="service"'
+            ' data-djust-optional="name"'
+        )
 
     def test_a_form_field_name_is_not_an_identity(self):
         """Review 🔴1: 26 components mean the HTML field name by ``name`` and
@@ -109,18 +114,6 @@ class TestEventAttrs:
         with pytest.raises(TypeError, match="reserved"):
             Chip(state={"a": 1})
 
-    def test_a_str_annotated_handler_still_receives_text(self):
-        """Compat: a handler written for the untyped wire keeps working."""
-
-        def pick(self: Any, value: str) -> None:
-            pass
-
-        result = validate_handler_params(pick, {"value": 4}, "pick")
-        assert result["valid"], result
-        assert result["coerced_params"] == {"value": "4"}
-        result = validate_handler_params(pick, {"value": True}, "pick")
-        assert result["coerced_params"] == {"value": "true"}
-
     def test_an_int_id_written_back_still_opens_the_item(self):
         """Review 🔴2: ``str(id) == self.active`` never matched an int."""
         from djust.components.components.accordion import Accordion
@@ -135,10 +128,14 @@ class TestEventAttrs:
         assert r.name == "service"
 
     def test_the_handler_convention_accepts_the_typed_params(self):
-        def set_rating(self: Any, value: int, name: str | None = None, **kwargs: Any) -> None:
-            pass
+        class Owner:
+            @event_handler
+            def set_rating(self, value: int, name: str | None = None, **kwargs: Any) -> None:
+                pass
 
-        result = validate_handler_params(set_rating, {"value": 4, "name": "service"}, "set_rating")
+        result = validate_handler_params(
+            Owner().set_rating, {"value": 4, "name": "service"}, "set_rating"
+        )
         assert result["valid"], result
         assert result["coerced_params"] == {"value": 4, "name": "service"}
 

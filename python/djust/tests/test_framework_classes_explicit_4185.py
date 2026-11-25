@@ -36,7 +36,6 @@ from djust import LiveView
 from djust._parameter_contract import ContractError, ParameterError
 from djust.admin_ext import DjustAdminSite, DjustModelAdmin
 from djust.components.descriptors import Dropdown, Modal, Tabs
-from djust.config import config
 from djust.tests.test_admin_page_render import _Socket, _session_cookie
 from djust.validation import (
     bind_declared_component_name,
@@ -50,9 +49,9 @@ pytestmark = pytest.mark.admin
 MODULE = __name__
 PACKAGE = Path(__file__).resolve().parents[1]
 
-#: The one framework class still stating a legacy mode: the ``@live_view``
-#: decorator's per-request class, which #4183 rewrites.
-STILL_LEGACY = {"live_view.py"}
+#: Framework files still stating a legacy mode: none since #4183 moved the
+#: ``@live_view`` decorator's per-request class.
+STILL_LEGACY: set = set()
 
 
 # --------------------------------------------------------------------------- #
@@ -60,12 +59,12 @@ STILL_LEGACY = {"live_view.py"}
 # --------------------------------------------------------------------------- #
 
 
-def _legacy_statements() -> dict[str, list[int]]:
+def _legacy_statements(package: Path = PACKAGE) -> dict[str, list[int]]:
     """Package files (tests excluded) whose class body assigns the legacy
     exposure policy, or that pass the legacy parameter policy to a call."""
     found: dict[str, list[int]] = {}
-    for source in sorted(PACKAGE.rglob("*.py")):
-        relative = source.relative_to(PACKAGE).as_posix()
+    for source in sorted(package.rglob("*.py")):
+        relative = source.relative_to(package).as_posix()
         if relative.startswith("tests/") or "/tests/" in relative:
             continue
         for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
@@ -89,10 +88,19 @@ def _legacy_statements() -> dict[str, list[int]]:
     return found
 
 
-def test_the_scan_finds_both_statement_forms():
-    """Not vacuous: the scan reports the one class #4183 still has to move."""
+def test_the_package_states_no_legacy_mode():
     found = _legacy_statements()
     assert set(found) == STILL_LEGACY, found
+
+
+def test_the_scan_finds_both_statement_forms(tmp_path):
+    """Not vacuous: with nothing left in the package, a stand-in package that
+    states both forms is reported."""
+    # Built from parts: this module states no legacy policy itself.
+    statement = "exposure_policy = %r" % "legacy"
+    (tmp_path / "views.py").write_text("class V:\n    %s\n" % statement)
+    (tmp_path / "handlers.py").write_text('x = event_handler(parameter_policy="legacy")\n')
+    assert _legacy_statements(tmp_path) == {"views.py": [2], "handlers.py": [1]}
 
 
 # --------------------------------------------------------------------------- #
@@ -161,14 +169,6 @@ def site_urls(settings):
     _reset_route_map_cache()
     yield
     _reset_route_map_cache()
-
-
-@pytest.fixture
-def strict_policy():
-    previous = config.get("event_parameter_policy", "legacy")
-    config.set("event_parameter_policy", "strict")
-    yield
-    config.set("event_parameter_policy", previous)
 
 
 def test_the_admin_and_terminal_views_are_explicit():
@@ -329,7 +329,11 @@ async def test_change_list_over_sse(site_urls, django_user_model):
     assert "1 selected" in json.dumps(answers[1])
 
 
-_EDITS = [("update_field", {"field": "name", "value": "edited"}), ("save_and_continue", {})]
+# Save carries the form's values (#4218): a Save without them saves nothing.
+_EDITS = [
+    ("validate_field", {"field": "name", "value": "edited"}),
+    ("save_and_continue", {"name": "edited"}),
+]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -443,7 +447,7 @@ def test_any_other_component_id_is_refused(target):
         bind_declared_component_name(AliasPage().toggle_dropdown, {"component_id": target})
 
 
-def test_strict_validation_routes_component_id_to_the_alias(strict_policy):
+def test_strict_validation_routes_component_id_to_the_alias():
     view = AliasPage()
     ok = validate_handler_params(view.set_tab, {"component_id": "tabs", "value": "2"}, "set_tab")
     assert ok["valid"], ok
@@ -452,7 +456,7 @@ def test_strict_validation_routes_component_id_to_the_alias(strict_policy):
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_the_alias_dispatches_under_strict_over_the_websocket(site_urls, strict_policy):
+async def test_the_alias_dispatches_under_strict_over_the_websocket(site_urls):
     """Events without a component_id reach the view-level alias, which
     resolves the single component of its type."""
     browser = Client()
@@ -469,7 +473,7 @@ async def test_the_alias_dispatches_under_strict_over_the_websocket(site_urls, s
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_the_alias_dispatches_under_strict_over_the_http_fallback(site_urls, strict_policy):
+async def test_the_alias_dispatches_under_strict_over_the_http_fallback(site_urls):
     browser = Client()
     page = await sync_to_async(browser.get)("/alias/")
     assert page.status_code == 200
@@ -490,7 +494,7 @@ async def test_the_alias_dispatches_under_strict_over_the_http_fallback(site_url
 
 
 @pytest.mark.django_db(transaction=True)
-async def test_the_alias_dispatches_under_strict_over_sse(site_urls, strict_policy):
+async def test_the_alias_dispatches_under_strict_over_sse(site_urls):
     browser = Client()
     await sync_to_async(browser.get)("/alias/")
     key = browser.cookies[settings.SESSION_COOKIE_NAME].value

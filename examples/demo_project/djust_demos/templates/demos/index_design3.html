@@ -516,7 +516,7 @@
         </div>
         <div class="stat-item">
             <span class="stat-label">Bundle Size:</span>
-            <span class="stat-value">~87 KB gz</span>
+            <span class="stat-value">~90 KB gz</span>
         </div>
     </div>
 
@@ -604,7 +604,7 @@
                         {% if dropdown_open %}
                         <div class="dropdown-menu">
                             {% for item in dropdown_items %}
-                            <div dj-click="select_item" data-item="{{ item }}" class="dropdown-item">
+                            <div dj-click="select_item" dj-value-item="{{ item }}" class="dropdown-item">
                                 {{ item }}
                             </div>
                             {% endfor %}

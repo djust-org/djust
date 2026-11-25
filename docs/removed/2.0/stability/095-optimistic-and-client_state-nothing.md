@@ -16,23 +16,23 @@ from djust.decorators import client_state, event_handler, optimistic
 
 @optimistic
 @event_handler
-def increment(self, **kwargs):
+def increment(self):
     self.count += 1
 
 @client_state(keys=["filter"])  # removed in 2.0, #4006
 @event_handler
-def update_filter(self, filter: str = "", **kwargs):
+def update_filter(self, filter: str = ""):
     self.filter = filter
 
 # After
 from djust.decorators import event_handler
 
 @event_handler
-def increment(self, **kwargs):
+def increment(self):
     self.count += 1
 
 @event_handler
-def update_filter(self, filter: str = "", **kwargs):
+def update_filter(self, filter: str = ""):
     self.filter = filter
 ```
 

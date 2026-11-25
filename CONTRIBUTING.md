@@ -272,11 +272,11 @@ missing node ids listed) is always on, serial or `-n auto`.
 
 ### CI shards — `.test_durations`
 
-CI runs the Python suite as **four `pytest-split` shards** (`--splits 4
---group N`), each a separate `python-tests (pyX.Y, shard N/4)` job with
+CI runs the Python suite as **eight `pytest-split` shards** (`--splits 8
+--group N`), each a separate `python-tests (pyX.Y, shard N/8)` job with
 `-n auto` inside it. The shards are balanced by the per-test durations in the
 committed `.test_durations` file, not by test count. Every shard collects the
-full suite and deselects the other groups, so the union of the four is exactly
+full suite and deselects the other groups, so the union of the shards is exactly
 one unsharded run (`tests/test_ci_python_test_shards.py` pins this).
 
 - **A missing or stale entry never drops a test.** pytest-split falls back to
@@ -285,7 +285,7 @@ one unsharded run (`tests/test_ci_python_test_shards.py` pins this).
   regenerate the file for every PR.
 - **Regenerate it from a CI run, not from your machine** (#2584). Every
   `python-tests` shard records what it measured (`--store-durations
-  --clean-durations`) and uploads it as `test-durations-shard-N`; the four are
+  --clean-durations`) and uploads it as `test-durations-shard-N`; the shards are
   disjoint and their union is the whole suite, timed on the runner:
 
   ```bash

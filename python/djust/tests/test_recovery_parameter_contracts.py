@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from djust.runtime import ViewRuntime, WSConsumerTransport
-from djust.tests.test_parameter_metadata import LegacyOwner, StrictOwner
+from djust.tests.test_parameter_metadata import StrictOwner
 from djust.websocket import LiveViewConsumer
 
 
@@ -29,6 +29,9 @@ def setup():
     runtime.view_instance = consumer.view_instance
     runtime._parameter_contract_view = "app.Page"
     consumer._runtime = runtime
+    # This file tests what the turn does once authorized; the authorization
+    # itself (#4201) is covered by test_explicit_turn_kinds_4201.py.
+    consumer._authorize_explicit_consumer_turn = AsyncMock(return_value=True)
     return consumer, runtime, transport
 
 
@@ -47,9 +50,9 @@ async def rendered(consumer, runtime, transport):
 async def test_cached_recovery_keeps_detached_render_snapshot(monkeypatch):
     consumer, runtime, transport = setup()
     sent = await rendered(consumer, runtime, transport)
-    consumer.view_instance.choose = LegacyOwner().choose
+    consumer.view_instance.choose = None  # shadowed: the owner has no handler, so no contracts
     original = copy.deepcopy(sent["parameter_contracts"])
-    sent["parameter_contracts"]["owners"][0]["handlers"].clear()
+    sent["parameter_contracts"]["handlers"][0].clear()
     sent["parameter_contracts"] = None
 
     def forbidden(_view):
@@ -137,7 +140,7 @@ async def test_fresh_sticky_render_captures_new_contract_and_preserves_wire_vers
     consumer._has_live_sticky_children = Mock(return_value=True)
 
     def render():
-        consumer.view_instance.choose = LegacyOwner().choose
+        consumer.view_instance.choose = None  # shadowed: the owner has no handler, so no contracts
         return "<span>fresh</span>", [], 999
 
     consumer.view_instance.render_with_diff = render
@@ -187,19 +190,6 @@ async def test_invalid_uncaptured_contract_is_redacted(monkeypatch, caplog):
     consumer.send_error.assert_awaited_once()
     assert "SECRET_CONTRACT_FAILURE" not in repr(consumer.send_error.call_args)
     assert "SECRET_CONTRACT_FAILURE" not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_legacy_recovery_keeps_existing_wire_shape():
-    consumer, runtime, transport = setup()
-    consumer.view_instance.choose = LegacyOwner().choose
-    sent = await rendered(consumer, runtime, transport)
-    await consumer.handle_request_html({})
-    assert consumer.send_json.call_args.args[0] == {
-        "type": "html_recovery",
-        "html": "<span>original</span>",
-        "version": sent["version"],
-    }
 
 
 @pytest.mark.asyncio
@@ -285,7 +275,7 @@ async def test_old_frame_cannot_replace_new_recovery_contracts():
 async def test_cached_explicit_clear_does_not_rediscover_contracts(monkeypatch):
     consumer, runtime, transport = setup()
     await rendered(consumer, runtime, transport)
-    consumer.view_instance.choose = LegacyOwner().choose
+    consumer.view_instance.choose = None  # shadowed: the owner has no handler, so no contracts
     await rendered(consumer, runtime, transport)
     discovery = Mock(side_effect=AssertionError("must not rediscover cached metadata"))
     monkeypatch.setattr("djust._parameter_metadata.parameter_contract_manifest", discovery)
@@ -299,7 +289,7 @@ async def test_cached_explicit_clear_does_not_rediscover_contracts(monkeypatch):
 @pytest.mark.asyncio
 async def test_first_strict_recovery_requires_later_explicit_clear():
     consumer, runtime, transport = setup()
-    consumer.view_instance.choose = LegacyOwner().choose
+    consumer.view_instance.choose = None  # shadowed: the owner has no handler, so no contracts
     await rendered(consumer, runtime, transport)
     consumer._has_live_sticky_children = Mock(return_value=True)
 
@@ -310,7 +300,41 @@ async def test_first_strict_recovery_requires_later_explicit_clear():
     consumer.view_instance.render_with_diff = render
     await consumer.handle_request_html({})
     assert consumer.send_json.call_args.args[0]["parameter_contracts"] is not None
-    consumer.view_instance.choose = LegacyOwner().choose
+    consumer.view_instance.choose = None  # shadowed: the owner has no handler, so no contracts
     frame = await rendered(consumer, runtime, transport)
     assert "parameter_contracts" in frame
     assert frame["parameter_contracts"] is None
+
+
+def test_held_recovery_contracts_are_deflated_and_round_trip():
+    """The snapshot lives as long as the connection, once per view; even a
+    deduplicated manifest (wire v2, #4307) is held compressed (the view-memory
+    guide's "view and consumer" row, #4189)."""
+    import json
+    import zlib
+
+    from djust.websocket import LiveViewConsumer
+
+    contract = {"coerce_types": True, "parameters": [{"name": "value"}] * 5}
+    contracts = {
+        "version": 2,
+        "digest": "0123456789abcdef",
+        "contracts": [contract],
+        "handlers": [{f"h{j}": 0 for j in range(6)}],
+        "owners": [[None, None, 0]] + [[None, f"c{i}", 0] for i in range(100)],
+    }
+    frame = {
+        "type": "patch",
+        "version": 3,
+        "parameter_contracts": contracts,
+        "parameter_contract_view": "x.V",
+    }
+    consumer = LiveViewConsumer.__new__(LiveViewConsumer)
+    consumer._recovery_version = 3
+    consumer._capture_recovery_contracts(frame)
+
+    held = consumer._recovery_contracts
+    assert isinstance(held, bytes)
+    plain = json.dumps({"parameter_contracts": contracts, "parameter_contract_view": "x.V"})
+    assert len(held) < len(plain) / 3
+    assert json.loads(zlib.decompress(held)) == json.loads(plain)

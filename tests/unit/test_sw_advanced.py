@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Tuple
 import pytest
 
 from djust.live_view import LiveView
+from djust.testing import with_live_session
 
 
 # ---------------------------------------------------------------------------
@@ -50,12 +51,12 @@ def _parse(html: str) -> _AttrCollector:
 
 
 # ---------------------------------------------------------------------------
-# Module-scope views — resolvable by dotted path for handle_mount.
+# Module-scope views — resolvable by dotted path for _mount_page.
 # ---------------------------------------------------------------------------
 
 
 class _SimpleCounter(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -68,7 +69,7 @@ class _SimpleCounter(LiveView):
 class _SnapshotCounter(LiveView):
     """A legacy counter with the default ``_should_restore_snapshot``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -81,7 +82,7 @@ class _SnapshotCounter(LiveView):
 class _SnapshotRejecting(LiveView):
     """Rejects every client snapshot via a _should_restore_snapshot override."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -98,7 +99,7 @@ class _SnapshotRejecting(LiveView):
 class _PushEventOnMount(LiveView):
     """View that calls push_event() during mount() — exercises #1295."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>Hello</span></div>"
 
     def mount(self, request, **kwargs):
@@ -126,14 +127,14 @@ class TestStateSnapshotAPI:
 # ---------------------------------------------------------------------------
 # Consumer shim — bypasses Channels ASGI wiring. Mirrors the pattern in
 # tests/integration/test_sticky_redirect_flow.py so we can drive
-# handle_mount / handle_mount_batch without a full channel layer.
+# _mount_page / handle_mount_batch without a full channel layer.
 # ---------------------------------------------------------------------------
 
 
 class _AllowAllRateLimiter:
     """Permissive rate limiter for the fake consumer. ``_get_runtime`` (#1919)
     constructs ``ViewRuntime(..., rate_limiter=self._rate_limiter)`` when the
-    handle_mount shim runs, so the fake needs one that never throttles."""
+    _mount_page shim runs, so the fake needs one that never throttles."""
 
     def check(self, _msg_type):
         return True
@@ -167,10 +168,11 @@ def _make_fake_consumer():
             self._db_notify_channels = set()
             self.sent_frames: List[Dict[str, Any]] = []
             self.session_id = "test-session"
-            self.scope = {"path": "/", "query_string": b"", "session": None}
+            # An explicit mount binds to a saved session (and a user), as a socket's is.
+            self.scope = with_live_session({"path": "/", "query_string": b"", "headers": []})
             self.channel_name = "test-channel"
             # Wire-version counter attrs the runtime mount path reads via the
-            # next_mount_version hook (#1919 THE MOUNT FLIP: handle_mount is now a
+            # next_mount_version hook (#1919 THE MOUNT FLIP: _mount_page is now a
             # thin shim over ViewRuntime.dispatch_mount, so these fakes drive the
             # runtime path). ``_next_version`` uses getattr-with-default, but set
             # them explicitly for clarity + a clean fresh baseline.
@@ -179,7 +181,7 @@ def _make_fake_consumer():
             self._recovery_version = 0
             # Permissive rate limiter — the runtime is constructed with
             # ``rate_limiter=self._rate_limiter`` in ``_get_runtime`` (post-#1919
-            # the shim calls it). Allow-all so the direct handle_mount /
+            # the shim calls it). Allow-all so the direct _mount_page /
             # handle_mount_batch calls these tests make reach the mount logic.
             self._rate_limiter = _AllowAllRateLimiter()
 
@@ -224,7 +226,7 @@ def _make_fake_consumer_with_push_events():
 
 
 # ---------------------------------------------------------------------------
-# 4-8. State snapshot integration with handle_mount.
+# 4-8. State snapshot integration with _mount_page.
 # ---------------------------------------------------------------------------
 
 
@@ -233,7 +235,7 @@ def _allow_test_module(settings):
     """Register tests.unit.test_sw_advanced with LIVEVIEW_ALLOWED_MODULES.
 
     The demo settings whitelist doesn't include the test module, so
-    handle_mount would refuse to import our module-scoped view classes
+    _mount_page would refuse to import our module-scoped view classes
     without this fixture.
     """
     existing = list(getattr(settings, "LIVEVIEW_ALLOWED_MODULES", []) or [])
@@ -246,6 +248,7 @@ def _allow_test_module(settings):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.django_db(transaction=True)  # the mount session is saved, then read on a worker thread
 @pytest.mark.usefixtures("_allow_test_module")
 class TestMountBatch:
     def test_mount_batch_emitted_for_multiple_views(self):
@@ -516,6 +519,7 @@ class TestConfigAliases:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.django_db(transaction=True)  # the mount session is saved, then read on a worker thread
 @pytest.mark.usefixtures("_allow_test_module")
 class TestMountBatchNavigatePassthrough:
     """Fix #4 — redirect frames from on_mount hooks must propagate."""
@@ -535,7 +539,7 @@ class TestMountBatchNavigatePassthrough:
             on_mount = [_redirect_to_login]
 
         # Register the new class under the module namespace so
-        # handle_mount can import it by dotted path.
+        # _mount_page can import it by dotted path.
         module_name = __name__
         setattr(
             __import__(module_name, fromlist=["_RedirectingView"]),

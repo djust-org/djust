@@ -36,7 +36,7 @@ VIEWS: dict = {}
 
 
 class _Counted:
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self.count = 0
@@ -265,8 +265,8 @@ async def test_mounting_the_same_container_again_replaces_only_that_view():
         await _bump(session, key, stream, "w1")
         await _mount(session, key, stream, Widget, "w1")
         assert VIEWS["w1"] is not first and VIEWS["w1"].count == 0
-        assert first._djust_waiters_closed is True  # the old view was released
-        assert not getattr(VIEWS["w2"], "_djust_waiters_closed", False)
+        assert first._djust_child_disposed is True  # the old view was released
+        assert not getattr(VIEWS["w2"], "_djust_child_disposed", False)
         assert set(session._slots) == {"w1", "w2"}
     finally:
         await stream.aclose()
@@ -365,8 +365,8 @@ async def test_unmount_releases_only_the_view_it_names():
         w1, w2 = VIEWS["w1"], VIEWS["w2"]
         await _post(session, key, {"type": "unmount", "target_id": "w1"})
         assert set(session._slots) == {"w2"}
-        assert w1._djust_waiters_closed is True
-        assert not getattr(w2, "_djust_waiters_closed", False)
+        assert w1._djust_child_disposed is True
+        assert not getattr(w2, "_djust_child_disposed", False)
         # The unmounted address is refused; the others still answer.
         await _post(
             session, key, {"type": "event", "event": "bump", "params": {}, "target_id": "w1"}
@@ -387,7 +387,7 @@ async def test_closing_the_stream_tears_every_view_down():
     await stream.aclose()  # the client went away
     await _until(lambda: session.view_instance is None, "the session to drop its view")
     for view in views:
-        await _until(lambda v=view: v._djust_waiters_closed is True, "a view's teardown")
+        await _until(lambda v=view: v._djust_child_disposed is True, "a view's teardown")
     assert session._slots == {}
 
 
@@ -399,7 +399,7 @@ async def test_a_navigation_replaces_every_view_including_the_ones_beside_the_pa
         await _post(session, key, {"type": "live_redirect_mount", "url": "/page/", "params": {}})
         await _frame(stream, "mount")
         assert session._slots == {}
-        assert w1._djust_waiters_closed is True
+        assert w1._djust_child_disposed is True
         # The new page view is live, and the old address is gone.
         assert (await _bump(session, key, stream))["type"] != "error"
         await _post(

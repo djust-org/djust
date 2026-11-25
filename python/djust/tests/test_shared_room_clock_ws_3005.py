@@ -56,7 +56,7 @@ class RecordingConsumer(LiveViewConsumer):
 
 
 class RoomView(TenantMixin, PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ room }}:{{ refreshes }}</div>"
     presence_key = "room:{room}"
     room_clock = CLOCK
@@ -111,7 +111,7 @@ class PollView(RoomView):
 
 
 class PlainView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>plain</div>"
 
     def mount(self, request, **kwargs):
@@ -276,6 +276,7 @@ async def test_busy_session_fifty_beats_one_real_queued_doorbell():
             await wait_until(
                 lambda: consumer.view_instance.refreshes == 1, what="one drained refresh"
             )
+            await wait_until(lambda: not consumer._render_lock.locked(), what="push turn done")
         finally:
             consumer._processing_user_event = False
             if consumer._render_lock.locked():

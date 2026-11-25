@@ -86,7 +86,7 @@ from djust.decorators import event_handler, rate_limit
 class MyView(LiveView):
     @rate_limit(rate=5, burst=3)
     @event_handler
-    def expensive_operation(self, **kwargs):
+    def expensive_operation(self):
         """Limited to 5/sec sustained, 3 burst."""
         ...
 ```
@@ -376,7 +376,7 @@ class DashboardView(LiveView):
         return {**super().get_context_data(**kwargs), "metrics": self.metrics}
 ```
 
-An undeclared attribute that `get_context_data()` does not return is not rendered, whatever its name. `_api_key` would stay on the server without the underscore too; the prefix marks it as internal for the reader. Such values are not saved to the session or sent to the browser either: that takes a `state(..., persist=...)` or `state(..., client=True)` declaration. A view that states `exposure_policy = "legacy"` (deprecated) is different: it publishes every public attribute to the template and to saved state, and there the underscore is what keeps a value out.
+An undeclared attribute that `get_context_data()` does not return is not rendered, whatever its name. `_api_key` would stay on the server without the underscore too; the prefix marks it as internal for the reader. Such values are not saved to the session or sent to the browser either: that takes a `state(..., persist=...)` or `state(..., client=True)` declaration. (A view still on the deprecated 1.x exposure policy publishes every public attribute, and there the underscore is what keeps a value out; see [Migrating to djust 2.0](../guides/migrating-to-2.0.md#1-move-each-view-to-explicit-exposure).)
 
 ## Content Security Policy (CSP) with nonces
 

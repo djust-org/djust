@@ -156,7 +156,9 @@ def _render_head(mode: str, theme_css: str, title: str = "djust-components Galle
     """Return the <head> block with theme CSS, component CSS, and gallery styles."""
     theming_base_link = ""
     try:
-        theming_base_link = f'<link rel="stylesheet" href="{static("djust_theming/css/base.css")}">'
+        theming_base_link = (
+            f'<link rel="stylesheet" href="{static("djust_theming/css/scaffold.css")}">'
+        )
     except Exception as exc:
         # djust_theming may not be installed / staticfiles may not resolve it; skip silently.
         logger.debug("Optional djust_theming base CSS link unavailable: %s", exc)

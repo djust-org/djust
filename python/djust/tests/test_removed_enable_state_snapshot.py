@@ -19,7 +19,17 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 
 from djust import LiveView, event_handler
+from djust.decorators import state
 from djust._removed_settings import MIGRATION_GUIDE_URL, REMOVED_VIEW_ATTRIBUTES
+
+
+@pytest.fixture(autouse=True)
+def _log_the_refusal_detail():
+    """A refusal reaches a client as a generic error; its cause is in the server log."""
+    from django.test import override_settings
+
+    with override_settings(LIVEVIEW_CONFIG={"log_exception_detail": True}):
+        yield
 
 
 def _assert_names_the_replacement(message: str) -> None:
@@ -34,12 +44,11 @@ def _assert_names_the_replacement(message: str) -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_a_view_that_sets_the_flag_is_refused_at_class_creation(policy):
+def test_a_view_that_sets_the_flag_is_refused_at_class_creation():
     with pytest.raises(ImproperlyConfigured) as refused:
 
         class SnapshotView(LiveView):
-            exposure_policy = policy
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
             enable_state_snapshot = True
 
@@ -54,13 +63,13 @@ def test_a_mixin_that_sets_the_flag_is_refused_where_it_meets_liveview():
     with pytest.raises(ImproperlyConfigured, match="enable_state_snapshot"):
 
         class MixedView(SnapshotMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
 
 
 def test_a_subclass_of_a_plain_view_that_turns_it_on_is_refused():
     class Base(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
 
     with pytest.raises(ImproperlyConfigured, match="Child"):
@@ -71,7 +80,7 @@ def test_a_subclass_of_a_plain_view_that_turns_it_on_is_refused():
 
 def test_the_flag_false_and_an_ordinary_view_are_accepted():
     class Off(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
         enable_state_snapshot = False
 
@@ -125,7 +134,7 @@ def test_an_unknown_name_is_still_an_ordinary_attribute_error():
 class InstanceAttributeSnapshotView(LiveView):
     """Sets it on the instance, in ``mount()``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>instance</div>"
 
     def mount(self, request, **kwargs):
@@ -135,7 +144,7 @@ class InstanceAttributeSnapshotView(LiveView):
 class LateClassAttributeSnapshotView(LiveView):
     """Plain when created; a test assigns the class attribute afterwards."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>late</div>"
 
 
@@ -145,13 +154,13 @@ class _SkipsSuper:
 
 
 class HiddenFromInitSubclassSnapshotView(_SkipsSuper, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>hidden</div>"
     enable_state_snapshot = True
 
 
 class PlainSnapshotlessView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>plain</div>"
 
 
@@ -184,11 +193,12 @@ def _http_request(rf):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("shape", SHAPES, indirect=True)
-def test_the_http_get_refuses_each_shape(shape, rf):
-    with pytest.raises(ImproperlyConfigured) as refused:
-        shape.as_view()(_http_request(rf))
-    assert shape.__name__ in str(refused.value)
-    _assert_names_the_replacement(str(refused.value))
+def test_the_http_get_refuses_each_shape(shape, rf, caplog):
+    # An explicit view's HTTP failure is the project's 500 page; the cause is logged.
+    response = shape.as_view()(_http_request(rf))
+    assert response.status_code == 500
+    assert shape.__name__ in caplog.text
+    _assert_names_the_replacement(caplog.text)
 
 
 @pytest.mark.django_db
@@ -240,18 +250,16 @@ async def test_the_runtime_mount_still_mounts_a_plain_view():
 
 
 # --------------------------------------------------------------------------
-# A legacy view over a real socket: a 1.x session save is neither read nor written
+# An explicit view over a real socket: a 1.x session save is neither read nor written
 # --------------------------------------------------------------------------
 
 _PATH = "/removed-snapshot-ws/"
 
 
 class LegacyCounterView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0"><b>n={{ n }}</b></div>'
-
-    def mount(self, request, **kwargs):
-        self.n = 0
+    n = state(0)
 
     @event_handler()
     def bump(self, **kwargs):
@@ -345,7 +353,7 @@ def test_c304_is_silent_for_server_side_and_clean_client_fields():
         title = state("", client=True)
 
     class LegacyWithPiiNames(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
         password = ""
 
@@ -361,7 +369,7 @@ def test_c304_is_silent_for_server_side_and_clean_client_fields():
 
 
 class InstanceAttributeSnapshotChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>child</div>"
 
     def mount(self, request, **kwargs):
@@ -369,12 +377,12 @@ class InstanceAttributeSnapshotChild(LiveView):
 
 
 class LateClassAttributeSnapshotChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>late child</div>"
 
 
 class PlainChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>plain child</div>"
 
 
@@ -385,7 +393,7 @@ def _page_for(child_name, lazy):
         (LiveView,),
         {
             "__module__": __name__,
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template": (
                 "{% load live_tags %}<div dj-root>"
                 '{% live_render "' + __name__ + "." + child_name + '"' + flag + " %}</div>"

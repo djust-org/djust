@@ -79,7 +79,7 @@ class SalesView(LiveView):
         self.period = "week"
 
     @event_handler()
-    def set_period(self, value: str = "week", **kwargs):
+    def set_period(self, value: str = "week"):
         self.period = value
 
     def chart_data(self):

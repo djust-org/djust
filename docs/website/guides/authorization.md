@@ -29,11 +29,24 @@ class DocumentDetailView(LiveView):
         return obj.owner_id == request.user.id
 
     @event_handler()
-    def add_comment(self, body=""):
+    def add_comment(self, body: str):
         # has_object_permission already ran for this event. Reuse the
         # cached object rather than re-querying:
         Comment.objects.create(document=self._object, body=body)
 ```
+
+> **Naming trap.** Inside a class body that sets the attribute
+> `permission_required = "app.access"`, the name `permission_required` is that
+> string, so a `@permission_required(...)` handler decorator in the same class
+> fails with `TypeError: 'str' object is not callable`. Import the decorator
+> under another name:
+>
+> ```python
+> from djust.decorators import event_handler
+> from djust.decorators import permission_required as require_permission
+> ```
+>
+> then write `@require_permission("app.change_item")` above `@event_handler()`.
 
 ## The four-layer onion
 
@@ -90,7 +103,7 @@ After each successful `has_object_permission` check, the framework stores the re
 
 ```python
 @event_handler()
-def add_comment(self, body=""):
+def add_comment(self, body: str):
     # Don't re-fetch; use the permission-verified object.
     Comment.objects.create(document=self._object, body=body)
 ```
@@ -177,7 +190,7 @@ class DocumentDetailView(LiveView):
         return ctx
 
     @event_handler()
-    def add_comment(self, body=""):
+    def add_comment(self, body: str):
         # NO PER-EVENT CHECK — vulnerable to mid-session access revocation
         # AND to a user crafting events on a session for an object they
         # never had legitimate access to (mount-time render error doesn't
@@ -206,7 +219,7 @@ class DocumentDetailView(LiveView):
         return ctx
 
     @event_handler()
-    def add_comment(self, body=""):
+    def add_comment(self, body: str):
         # has_object_permission re-ran for THIS event. Safe to use
         # self._object directly.
         Comment.objects.create(document=self._object, body=body)

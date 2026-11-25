@@ -11,7 +11,6 @@ Verifies that:
 import asyncio
 import pytest
 from unittest.mock import MagicMock
-
 from djust import LiveView
 from djust.websocket import LiveViewConsumer
 from djust import state
@@ -63,7 +62,7 @@ class TestSendUpdateSourceAndRef:
         consumer.view_instance = MagicMock()
         # A real LiveView declares its policy; a Mock's auto-attribute would
         # read as an invalid policy and fail closed (ADR-038).
-        consumer.view_instance.exposure_policy = "legacy"
+        consumer.view_instance.exposure_policy = "explicit"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -94,7 +93,7 @@ class TestSendUpdateSourceAndRef:
         consumer.view_instance = MagicMock()
         # A real LiveView declares its policy; a Mock's auto-attribute would
         # read as an invalid policy and fail closed (ADR-038).
-        consumer.view_instance.exposure_policy = "legacy"
+        consumer.view_instance.exposure_policy = "explicit"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -126,7 +125,7 @@ class TestSendUpdateSourceAndRef:
         consumer.view_instance = MagicMock()
         # A real LiveView declares its policy; a Mock's auto-attribute would
         # read as an invalid policy and fail closed (ADR-038).
-        consumer.view_instance.exposure_policy = "legacy"
+        consumer.view_instance.exposure_policy = "explicit"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -155,7 +154,7 @@ class TestSendUpdateSourceAndRef:
         consumer.view_instance = MagicMock()
         # A real LiveView declares its policy; a Mock's auto-attribute would
         # read as an invalid policy and fail closed (ADR-038).
-        consumer.view_instance.exposure_policy = "legacy"
+        consumer.view_instance.exposure_policy = "explicit"
         consumer.view_instance._drain_push_events = MagicMock(return_value=[])
         consumer.view_instance._drain_navigation = MagicMock(return_value=[])
         consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
@@ -227,7 +226,7 @@ class TestTickYieldsToEvents:
         view = MagicMock()
         # A real LiveView declares its policy; a Mock's auto-attribute would
         # read as an invalid policy and fail closed (ADR-038).
-        view.exposure_policy = "legacy"
+        view.exposure_policy = "explicit"
         view.handle_tick = MagicMock()
         consumer.view_instance = view
 
@@ -289,73 +288,64 @@ class TestRenderLockSerialization:
         assert timed_out, "Tick should time out when lock is held by event"
 
 
+class PushedView(LiveView):
+    """A view a server push and background work re-render."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0)
+
+
+@pytest.fixture(autouse=True)
+def _allow_this_module(settings):
+    """The consumer mounts this module's views by dotted path."""
+    settings.LIVEVIEW_ALLOWED_MODULES = [__name__]
+
+
+async def _mounted_consumer(user=None):
+    """A consumer that really mounted ``PushedView``; its sends land in ``consumer.sent``."""
+    from djust.tests._live_session import amount_on_consumer
+
+    consumer = LiveViewConsumer()
+    consumer.use_binary = False
+    consumer.sent = []
+
+    async def capture(frame, *args, **kwargs):
+        consumer.sent.append(frame)
+
+    consumer.send_json = capture
+    view = await amount_on_consumer(consumer, f"{__name__}.PushedView", user=user)
+    return consumer, view
+
+
+@pytest.mark.django_db(transaction=True)
 class TestServerPushSourceBroadcast:
     """Test that server_push tags updates with source='broadcast'."""
 
     @pytest.mark.asyncio
     async def test_server_push_includes_source_broadcast(self):
         """server_push sends updates with source='broadcast'."""
-        consumer = LiveViewConsumer()
-        consumer.use_binary = False
-        consumer._render_lock = asyncio.Lock()
-        consumer._processing_user_event = False
-        sent_messages = []
-
-        async def mock_send_json(msg):
-            sent_messages.append(msg)
-
-        consumer.send_json = mock_send_json
-        consumer.view_instance = MagicMock()
-        # A real LiveView declares its policy; a Mock's auto-attribute would
-        # read as an invalid policy and fail closed (ADR-038).
-        consumer.view_instance.exposure_policy = "legacy"
-        consumer.view_instance._drain_push_events = MagicMock(return_value=[])
-        consumer.view_instance._drain_navigation = MagicMock(return_value=[])
-        consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_flash = MagicMock(return_value=[])
-        consumer.view_instance._skip_render = False
-        consumer.view_instance._sync_state_to_rust = MagicMock()
-        consumer.view_instance.render_with_diff = MagicMock(
-            return_value=("<div>hi</div>", '[{"op": "replace"}]', 5)
-        )
+        consumer, _view = await _mounted_consumer()
 
         await consumer.server_push({"state": {"count": 10}})
 
-        # Find the patch message
-        patch_msgs = [m for m in sent_messages if m.get("type") == "patch"]
+        patch_msgs = [m for m in consumer.sent if m.get("type") == "patch"]
         assert len(patch_msgs) == 1
         assert patch_msgs[0]["source"] == "broadcast"
 
     @pytest.mark.asyncio
     async def test_server_push_acquires_render_lock(self):
         """server_push acquires the render lock during render."""
-        consumer = LiveViewConsumer()
-        consumer.use_binary = False
-        consumer._render_lock = asyncio.Lock()
-        consumer._processing_user_event = False
+        consumer, view = await _mounted_consumer()
         lock_held_during_render = False
+        real_render = view.render_with_diff
 
-        async def mock_send_json(msg):
-            pass
-
-        consumer.send_json = mock_send_json
-        consumer.view_instance = MagicMock()
-        # A real LiveView declares its policy; a Mock's auto-attribute would
-        # read as an invalid policy and fail closed (ADR-038).
-        consumer.view_instance.exposure_policy = "legacy"
-        consumer.view_instance._drain_push_events = MagicMock(return_value=[])
-        consumer.view_instance._drain_navigation = MagicMock(return_value=[])
-        consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_flash = MagicMock(return_value=[])
-        consumer.view_instance._skip_render = False
-        consumer.view_instance._sync_state_to_rust = MagicMock()
-
-        def fake_render():
+        def render_and_observe(*args, **kwargs):
             nonlocal lock_held_during_render
             lock_held_during_render = consumer._render_lock.locked()
-            return ("<div>hi</div>", '[{"op": "replace"}]', 5)
+            return real_render(*args, **kwargs)
 
-        consumer.view_instance.render_with_diff = fake_render
+        view.render_with_diff = render_and_observe
 
         await consumer.server_push({"state": {"count": 10}})
 
@@ -364,38 +354,15 @@ class TestServerPushSourceBroadcast:
     @pytest.mark.asyncio
     async def test_server_push_yields_to_user_event(self):
         """server_push yields to a user event in progress, then delivers (#560, #3001)."""
-        consumer = LiveViewConsumer()
-        consumer.use_binary = False
-        consumer._render_lock = asyncio.Lock()
+        consumer, _view = await _mounted_consumer()
         consumer._processing_user_event = True  # User event in progress
-        sent_messages = []
-
-        async def mock_send_json(msg):
-            sent_messages.append(msg)
-
-        consumer.send_json = mock_send_json
-        consumer.view_instance = MagicMock()
-        # A real LiveView declares its policy; a Mock's auto-attribute would
-        # read as an invalid policy and fail closed (ADR-038).
-        consumer.view_instance.exposure_policy = "legacy"
-        consumer.view_instance._drain_push_events = MagicMock(return_value=[])
-        consumer.view_instance._drain_navigation = MagicMock(return_value=[])
-        consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_flash = MagicMock(return_value=[])
-        consumer.view_instance._async_tasks = {}
-        consumer.view_instance._async_pending = None
-        consumer.view_instance._skip_render = False
-        consumer.view_instance._sync_state_to_rust = MagicMock()
-        consumer.view_instance.render_with_diff = MagicMock(
-            return_value=("<div>hi</div>", '[{"op": "replace"}]', 5)
-        )
 
         # Hold the render lock to simulate user event in progress
         await consumer._render_lock.acquire()
 
         # server_push must not render while the user event runs (#560)...
         await consumer.server_push({"state": {"count": 10}})
-        patch_msgs = [m for m in sent_messages if m.get("type") == "patch"]
+        patch_msgs = [m for m in consumer.sent if m.get("type") == "patch"]
         assert len(patch_msgs) == 0
 
         # ...but it is deferred, not dropped (#3001): once the event ends it
@@ -403,49 +370,26 @@ class TestServerPushSourceBroadcast:
         consumer._processing_user_event = False
         consumer._render_lock.release()
         await asyncio.wait_for(consumer._push_drain_task, timeout=1)
-        patch_msgs = [m for m in sent_messages if m.get("type") == "patch"]
+        patch_msgs = [m for m in consumer.sent if m.get("type") == "patch"]
         assert len(patch_msgs) == 1
         assert patch_msgs[0]["source"] == "broadcast"
 
 
+@pytest.mark.django_db(transaction=True)
 class TestAsyncWorkSourceAsync:
     """Test that _run_async_work tags updates with source='async'."""
 
     @pytest.mark.asyncio
     async def test_async_work_includes_source_async(self):
         """_run_async_work sends updates with source='async'."""
-        consumer = LiveViewConsumer()
-        consumer.use_binary = False
-        consumer._render_lock = asyncio.Lock()
-        consumer._processing_user_event = False
-        sent_messages = []
-
-        async def mock_send_json(msg):
-            sent_messages.append(msg)
-
-        consumer.send_json = mock_send_json
-        consumer.view_instance = MagicMock()
-        # A real LiveView declares its policy; a Mock's auto-attribute would
-        # read as an invalid policy and fail closed (ADR-038).
-        consumer.view_instance.exposure_policy = "legacy"
-        consumer.view_instance._drain_push_events = MagicMock(return_value=[])
-        consumer.view_instance._drain_navigation = MagicMock(return_value=[])
-        consumer.view_instance._drain_accessibility = MagicMock(return_value=[])
-        consumer.view_instance._drain_flash = MagicMock(return_value=[])
-        consumer.view_instance._async_cancelled = set()
-        consumer.view_instance._djust_child_disposed = False
-        consumer.view_instance._async_work_generation = 0
-        consumer.view_instance._sync_state_to_rust = MagicMock()
-        consumer.view_instance.render_with_diff = MagicMock(
-            return_value=("<div>hi</div>", '[{"op": "replace"}]', 5)
-        )
+        consumer, view = await _mounted_consumer()
 
         def sync_callback():
+            view.count = 1
             return "done"
 
         await consumer._run_async_work("test_task", sync_callback, (), {}, event_name="generate")
 
-        # Find the patch message
-        patch_msgs = [m for m in sent_messages if m.get("type") == "patch"]
+        patch_msgs = [m for m in consumer.sent if m.get("type") == "patch"]
         assert len(patch_msgs) == 1
         assert patch_msgs[0]["source"] == "async"

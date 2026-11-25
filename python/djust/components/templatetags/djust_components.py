@@ -22,21 +22,20 @@ import logging
 import re as _re
 import uuid
 from urllib.parse import urlencode
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
 from typing import Any, Iterator, Optional
 
 from django import template
 from django.utils.html import conditional_escape, escape, format_html, format_html_join
-from django.utils.functional import Promise
 from django.utils.safestring import SafeString
 
 from djust._template_guards import call_method_for_template
+from djust.components._alias_deprecation import warn_alias
 from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
 from djust.components.utils import (
     rich_html,
     unique_ids as _unique_ids,
-    url_attr,
     data_url_attr,
     attr_text,
     calendar_month,
@@ -45,7 +44,6 @@ from djust.components.utils import (
     srcset_attr,
 )
 from djust.components.utils import (
-    row_pointer_style,
     safe_css_color,
     safe_css_length,
     style_attrs,
@@ -54,9 +52,6 @@ from djust.components.utils import (
 from djust.components.components.dashboard_grid import clamp_cells, clamp_columns
 from djust.components.utils import (
     _exact_str,
-    table_column,
-    table_rows,
-    table_value_is_url,
 )
 from django.utils.safestring import mark_safe
 
@@ -814,140 +809,7 @@ def do_card(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
-#: The column values ``data_table`` reads as a bare name (#3895): text (``str`` and its
-#: subclasses, lazy text), numbers and bools; ``None`` too. Not "anything that is not a dict": an
-#: object column is read through its attributes (#3894).
-_BARE_COLUMN_TYPES: tuple[type, ...] = (str, Promise, int, float)
-
-
-def _checked_column_widths(columns: Any) -> Any:
-    """Columns with any ``width`` that is not a plain CSS length cleared.
-
-    ``table.html`` writes ``col.width`` into a ``data-dj-style-width`` attribute (#3979).
-
-    A SCALAR column (:data:`_BARE_COLUMN_TYPES`: a bare name such as ``columns=["name", "age"]``,
-    a ``str`` subclass or lazy text, a number, a bool, ``None``) is the column whose key and label
-    are its text, as the native handler draws it. ``table.html`` reads ``col.key``, and a filter
-    argument that does not resolve raises, so a shape the native handler accepted made the first,
-    Django-engine render fail (#3895). The text is plain: a ``mark_safe`` name is escaped like any
-    other, as natively (a header with markup is the dict form's ``label``). An ``int`` keeps its
-    value as the key, so it still reads a row's ``int`` key (the native handler reads the row
-    after a JSON round trip, where that key is the same text).
-
-    Any other object (a column class, a namedtuple) becomes the dict of the attributes it has
-    (``table_column``), which is what the native handler is now handed too; a function in a column
-    is dropped on both engines, with a warning (#3895)."""
-    if not isinstance(columns, (list, tuple)):
-        return columns
-    checked = []
-    for col in columns:
-        if col is None or isinstance(col, _BARE_COLUMN_TYPES):
-            # ``_exact_str`` returns an exact ``str``: a ``SafeString`` name loses its safe flag
-            # (``str()`` and ``"%s" %`` keep it), so the template escapes it like any text.
-            text = _exact_str(col)
-            key = col if type(col) is int else text
-            col = {"key": key, "label": text}
-        else:
-            col = table_column(col)
-        if isinstance(col, dict) and col.get("width") and not safe_css_length(col["width"], ""):
-            col = {**col, "width": ""}
-        checked.append(col)
-    return checked
-
-
-def _table_row_keys(columns: Any, *named: Any) -> list[Any]:
-    """The row keys a table reads: each column's ``key`` and ``link``, and the named ones
-    (``row_key``, ``row_url``, ``row_click_value_key``), plus ``id`` (the selection checkbox).
-    An object row is read for these attributes only (``table_row``)."""
-    keys: list[Any] = ["id", *named]
-    for col in columns if isinstance(columns, (list, tuple)) else ():
-        if isinstance(col, Mapping):
-            keys += [col.get("key"), col.get("link")]
-    return keys
-
-
-@register.filter
-def table_width(value: Any) -> Any:
-    """``col.width`` as a CSS length, or ``""``.
-
-    Checked HERE, in the template, so it holds whatever the columns are (a list of dicts, of
-    objects, any other iterable) and whatever the width is marked as: the value is judged as the
-    plain text it prints (:func:`~djust.components.utils.style_value`, the free-form style check)
-    and escaped, so a marked-safe width cannot leave the attribute (#3894).
-    ``_checked_column_widths`` only reaches dicts in a list or tuple."""
-    if not value:
-        return ""
-    return mark_safe(conditional_escape(style_value("width", str(value))))
-
-
-@register.filter
-def table_width_attrs(value: Any) -> Any:
-    """``col.width`` as the header's width attribute(s), or ``""`` (#3979).
-
-    ``' style="width:..."'`` by default; with ``LIVEVIEW_CONFIG["csp_strict"]`` the
-    ``data-dj-style-*`` attributes the client applies. The value passes the same check as
-    :func:`table_width`."""
-    if not value:
-        return ""
-    return mark_safe(style_attrs(width=str(value), css="width:{}"))
-
-
-@register.filter
-def table_cell(row: Any, key: Any) -> Any:
-    """``row[key]`` of a dict row, as ``table.html`` writes a cell and a row's ``dj-value-value`` (#3870).
-
-    The template read a cell as ``{{ row|dictsort:col.key|first }}``: ``dictsort`` over a dict
-    iterates its KEYS and resolves ``col.key`` against each one, so every cell was ``""``. Django
-    has no lookup by a name held in a variable, and ``row.items`` is the row's ``items`` key when it
-    has one, so this is the lookup.
-
-    A row that is not a mapping, and a key it lacks, are ``""`` (what the native table writes).
-    Anything but a string is written the way the native table writes it, ``str()``: a number is not
-    localised (``1,000`` is not a row id), ``None`` is ``None``. A string, a ``mark_safe`` one
-    included, is returned as it is and escaped (or not) by the template.
-    """
-    if not isinstance(row, Mapping):
-        return ""
-    try:
-        value = row.get(key, "")
-    except TypeError:  # an unhashable key
-        return ""
-    return value if isinstance(value, str) else str(value)
-
-
-@register.filter
-def table_href(row: Any, key: Any) -> Any:
-    """``row[key]`` as a URL for ``href`` / ``data-href``: escaped, and a dangerous scheme is ``#``.
-
-    Reading the value out of the row (#3870) is what made these two sinks live: they were ``""``
-    for every dict row. A row is data, often someone else's, so ``javascript:`` is neutralised
-    here as for every other URL of a component (``url_attr``). The result is escaped, so it is
-    marked safe for the template.
-
-    A marked-safe value (``mark_safe``, a lazy one, ``Markup``) is checked and escaped like any
-    other (``honor_safe=False``, as the class-based components do): marking a cell safe keeps its
-    markup in a TEXT cell, and says nothing about using it as a URL (#3894).
-    """
-    return mark_safe(url_attr(table_cell(row, key), honor_safe=False))
-
-
-@register.filter
-def table_has_href(row: Any, key: Any) -> bool:
-    """Whether ``row[key]`` is a URL at all (#3895): not for a row that is not a mapping, a key
-    it lacks, ``None``, blank text or a number that is not one (``NaN``, an infinity).
-    ``table_cell`` writes those as ``""`` / ``"None"`` / ``"nan"``, which as an ``href`` is the
-    current page or a relative link; a link column then draws plain text and a ``row_url`` row is
-    not clickable. The native table decides the same (``_has_row_href``)."""
-    if not isinstance(row, Mapping):
-        return False
-    try:
-        value = row.get(key)
-    except TypeError:  # an unhashable key
-        return False
-    return table_value_is_url(value)
-
-
-@register.inclusion_tag("djust_components/table.html")
+@register.simple_tag
 def data_table(
     rows: Any,
     columns: Any,
@@ -1041,7 +903,7 @@ def data_table(
     row_click_event: Any = "",
     row_click_value_key: Any = "id",
     row_url: Any = "",
-) -> "dict[str, Any]":
+) -> Any:
     """Render a sortable data table with search, filters, selection, pagination, and editing.
 
     Phase 1 args:
@@ -1166,110 +1028,13 @@ def data_table(
         ``<a href="{{ row[col.link] }}">{{ row[col.key] }}</a>``;
         otherwise plain text (pre-#1110 behavior).
     """
-    columns = _checked_column_widths(columns)
-    return {
-        # The clickable row's pointer: inline by default, the class's under a strict CSP (#4139).
-        # A context without it (an app rendering table.html itself) keeps the inline pointer.
-        "row_pointer_class_only": not row_pointer_style(),
-        # A model instance or another object is read as the dict the native handler reads (#3895).
-        "rows": table_rows(rows, _table_row_keys(columns, row_key, row_url, row_click_value_key)),
-        "columns": columns,
-        "sort_by": sort_by,
-        "sort_desc": sort_desc,
-        "sort_event": sort_event,
-        "page": page,
-        "total_pages": total_pages,
-        "prev_event": prev_event,
-        "next_event": next_event,
-        "selectable": selectable,
-        "selected_rows": selected_rows or [],
-        "select_event": select_event,
-        "row_key": row_key,
-        "search": search,
-        "search_query": search_query,
-        "search_event": search_event,
-        "search_debounce": search_debounce,
-        "filters": filters or {},
-        "filter_event": filter_event,
-        "loading": loading,
-        "empty_title": empty_title,
-        "empty_description": empty_description,
-        "empty_icon": empty_icon,
-        "paginate": paginate,
-        "page_event": page_event,
-        "striped": striped,
-        "compact": compact,
-        # Phase 2
-        "editable_columns": editable_columns or [],
-        "edit_event": edit_event,
-        "resizable": resizable,
-        "reorderable": reorderable,
-        "reorder_event": reorder_event,
-        "frozen_left": frozen_left,
-        "frozen_right": frozen_right,
-        "column_visibility": column_visibility,
-        "visibility_event": visibility_event,
-        "density": density,
-        "density_toggle": density_toggle,
-        "density_event": density_event,
-        "responsive_cards": responsive_cards,
-        "editable_rows": editable_rows,
-        "edit_row_event": edit_row_event,
-        "save_row_event": save_row_event,
-        "cancel_row_event": cancel_row_event,
-        "editing_rows": editing_rows or [],
-        # Phase 3
-        "expandable": expandable,
-        "expand_event": expand_event,
-        "expanded_rows": expanded_rows or [],
-        "bulk_actions": bulk_actions or [],
-        "bulk_action_event": bulk_action_event,
-        "exportable": exportable,
-        "export_event": export_event,
-        "export_formats": export_formats or ["csv", "json"],
-        "group_by": group_by,
-        "group_event": group_event,
-        "group_toggle_event": group_toggle_event,
-        "collapsible_groups": collapsible_groups,
-        "collapsed_groups": collapsed_groups or [],
-        "keyboard_nav": keyboard_nav,
-        "virtual_scroll": virtual_scroll,
-        "virtual_row_height": virtual_row_height,
-        "virtual_buffer": virtual_buffer,
-        "server_mode": server_mode,
-        "facets": facets,
-        "facet_counts": facet_counts or {},
-        "persist_key": persist_key,
-        "printable": printable,
-        "column_stats": column_stats or {},
-        # Phase 4
-        "footer_aggregations": footer_aggregations or {},
-        "row_class_map": row_class_map or {},
-        "column_groups": column_groups or [],
-        "row_drag": row_drag,
-        "row_drag_event": row_drag_event,
-        "copyable": copyable,
-        "copy_event": copy_event,
-        "copy_format": copy_format,
-        # Phase 5
-        "importable": importable,
-        "import_event": import_event,
-        "import_formats": import_formats or ["csv", "json"],
-        "import_preview": import_preview,
-        "import_preview_data": import_preview_data or [],
-        "import_errors": import_errors or [],
-        "import_pending": import_pending,
-        "computed_columns": computed_columns or [],
-        "cell_merge_key": cell_merge_key,
-        "column_expressions": column_expressions or {},
-        "expression_event": expression_event,
-        "active_expressions": active_expressions or {},
-        "conditional_formatting": conditional_formatting or [],
-        # Phase 6 (#1111: row-level navigation)
-        "row_click_event": row_click_event,
-        "row_click_value_key": row_click_value_key,
-        "row_url": row_url,
-    }
+    # the operands are the signature's parameters, not whatever else is local here (review N3)
+    given = locals()
+    code = data_table.__code__
+    params = {name: given[name] for name in code.co_varnames[: code.co_argcount]}
+    from djust.components.rust_handlers import render_data_table
+
+    return render_data_table(**params)
 
 
 # ---------------------------------------------------------------------------
@@ -1443,7 +1208,7 @@ _DJ_BUTTON_VARIANT_CLASS_MAP = {
     "primary": "btn-primary",
     "secondary": "btn-secondary",
     "destructive": "btn-destructive",
-    "danger": "btn-destructive",  # back-compat alias (#1619)
+    "danger": "btn-destructive",  # deprecated alias, removed no earlier than 3.0.0 (#4207)
     "ghost": "btn-ghost",
     "link": "btn-link",
 }
@@ -1521,8 +1286,8 @@ def dj_button(
     Args:
         label: button text
         variant: one of ``primary``, ``secondary``, ``destructive``,
-            ``ghost``, ``link``. ``danger`` is accepted as a back-compat
-            alias for ``destructive`` (#1619). Any other string is passed
+            ``ghost``, ``link``. ``danger`` is a deprecated alias for
+            ``destructive``, removed no earlier than 3.0.0 (#4207). Any other string is passed
             through verbatim as ``btn-<variant>`` so user-defined theme
             classes still work.
         event: dj-click event name
@@ -1539,6 +1304,8 @@ def dj_button(
     label, variant, event, confirm, icon, disabled, loading, size = resolve_dj_button_args(
         label, variant, event, confirm, icon, disabled, loading, size, preset
     )
+    if variant == "danger":
+        warn_alias("{% dj_button %}", 'variant="danger"', 'variant="destructive"')
 
     # Map well-known variants to their canonical CSS class names; for
     # everything else, pass through with conditional_escape (#1619).
@@ -3670,11 +3437,12 @@ def date_picker(
             declares two (#4134). A declared ``DatePicker`` answers the default
             ``prev_event`` / ``next_event``; ``select_event`` is the application's.
 
-    Deprecated aliases (still accepted):
+    Deprecated aliases (still accepted, removed no earlier than 3.0.0):
         range → is_range
     """
-    # Backward-compat: accept deprecated 'range' kwarg
+    # Deprecated to 3.0 (#4207): accept 'range' kwarg
     if "range" in kwargs:
+        warn_alias("{% date_picker %}", "range", "is_range")
         is_range = kwargs.pop("range")
 
     if isinstance(is_range, str):
@@ -4871,7 +4639,7 @@ def toggle_group(
         buttons.append(
             f'<button type="button" class="toggle-group-btn{active_cls}" '
             f'aria-pressed="{aria_pressed}" '
-            f'dj-value-name="{e_name}"{click_attr}{disabled_attr}>'
+            f'dj-value-name="{e_name}" data-djust-optional="name"{click_attr}{disabled_attr}>'
             f"{icon_html}"
             f'<span class="toggle-group-label">{opt_label}</span>'
             f"</button>"
@@ -5009,11 +4777,12 @@ def split_button(
             the default (#4134)
         component_id: the ``Dropdown`` the toggle drives, when a view declares two
 
-    Deprecated aliases (still accepted):
+    Deprecated aliases (still accepted, removed no earlier than 3.0.0):
         open → is_open
     """
-    # Backward-compat: accept deprecated 'open' kwarg
+    # Deprecated to 3.0 (#4207): accept 'open' kwarg
     if "open" in kwargs:
+        warn_alias("{% split_button %}", "open", "is_open")
         is_open = kwargs.pop("open")
 
     if options is None:
@@ -10646,10 +10415,10 @@ class SignaturePadNode(template.Node):
 
         disabled_attr = " disabled" if disabled else ""
 
-        from djust.components.components.signature_pad import DEFAULT_MAX_BYTES, pad_extras
+        from djust.components.components.signature_pad import MAX_SEND_BYTES, pad_extras
 
         extras = pad_extras(
-            kw.get("max_bytes", DEFAULT_MAX_BYTES), kw.get("label"), kw.get("typed", True)
+            kw.get("max_bytes", MAX_SEND_BYTES), kw.get("label"), kw.get("typed", True)
         )
 
         return mark_safe(

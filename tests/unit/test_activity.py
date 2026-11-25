@@ -19,6 +19,7 @@ and preserves their local state across show/hide cycles. Covers:
 """
 
 from __future__ import annotations
+from djust import state
 
 import asyncio
 from html.parser import HTMLParser
@@ -79,7 +80,7 @@ def _find_activity(html: str):
 class _PanelView(LiveView):
     """LiveView with two panels wrapped in {% dj_activity %} blocks."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -88,11 +89,10 @@ class _PanelView(LiveView):
         "</div>"
     )
 
-    def mount(self, request, **kwargs):
-        self.tab_a_visible = True
-        self.tab_b_visible = False
-        self.a_value = "hello"
-        self.b_count = 0
+    tab_a_visible = state(True, client=True)
+    tab_b_visible = state(False)
+    a_value = state("hello", client=True)
+    b_count = state(0)
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +262,7 @@ def test_deferred_events_flush_in_same_round_trip():
     # the completion list will be [0, 1, 2] when flush returns.
     completions: list = []
 
-    async def _fake_dispatch(target_view, event_name, params):
+    async def _fake_dispatch(target_view, event_name, params, event_ref=None):
         # Yield once so a create_task-based (broken) implementation would
         # return from the flush before this line executes.
         await asyncio.sleep(0)
@@ -525,7 +525,7 @@ def test_activities_internal_state_excluded_from_get_state(rf):
     view._queue_deferred_activity_event("tab-a", "ping", {"x": 1})
 
     state = view.get_state()
-    # get_state exposes only non-underscore user attributes.
+    # get_state exposes only the declared client=True fields.
     assert "_djust_activities" not in state
     assert "_deferred_activity_events" not in state
     # Public attrs (assigned in mount) are surfaced — sanity check that

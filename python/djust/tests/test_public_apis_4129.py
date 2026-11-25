@@ -12,8 +12,8 @@ import pytest
 
 from djust import LiveView
 from djust.decorators import event_handler
-from djust.tests.test_skip_render_force_parity_2834 import _consumer_with_view
-from djust.tests.test_transport_behavioral_parity import _event_runtime_with_view
+from djust.tests.test_skip_render_force_parity_2834 import _mounted_consumer
+from djust.tests.test_transport_behavioral_parity import _mounted_event_runtime
 
 _HERE = "djust.tests.test_public_apis_4129"
 
@@ -27,7 +27,7 @@ def _noops(sent):
 
 
 class _Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def mount(self, request, **kwargs):
         self.c = 0
@@ -79,13 +79,12 @@ class RenderControlView(_Base):
 
 
 async def _run(view, event):
-    runtime, transport = _event_runtime_with_view(view)
-    runtime.view_instance.mount(None)
+    runtime, transport = await _mounted_event_runtime(view)
     await runtime.dispatch_event({"type": "event", "event": event, "params": {}})
     return runtime.view_instance, transport.sent
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 class TestRenderControls:
     async def test_skip_render_from_an_event_handler_sends_no_render(self):
@@ -96,7 +95,7 @@ class TestRenderControls:
         assert view._skip_render is False, "the request lasts one turn"
 
     async def test_skip_render_from_a_push_handler_sends_no_render(self):
-        consumer = _consumer_with_view(RenderControlView)
+        consumer = await _mounted_consumer(RenderControlView)
         await consumer.server_push({"handler": "handle_push", "payload": {}})
         assert consumer.view_instance.c == 1
         assert not _updates(consumer.sent), consumer.sent
@@ -120,8 +119,7 @@ class TestRenderControls:
         any handler runs; the handler's cancel must not drop it, or the page
         and the diff baseline disagree."""
         view = RenderControlView()
-        runtime, transport = _event_runtime_with_view(view)
-        view.mount(None)
+        runtime, transport = await _mounted_event_runtime(view)
         view._force_full_html = True  # what the restore path sets
         await runtime.dispatch_event(
             {"type": "event", "event": "request_then_cancel", "params": {}}
@@ -133,8 +131,7 @@ class TestRenderControls:
         cancel in a later turn must not clear a full render the framework
         required in between."""
         view = RenderControlView()
-        runtime, transport = _event_runtime_with_view(view)
-        view.mount(None)
+        runtime, transport = await _mounted_event_runtime(view)
         await runtime.dispatch_event({"type": "event", "event": "db_only", "params": {}})
         assert _updates(transport.sent)
         transport.sent.clear()
@@ -182,7 +179,7 @@ def test_get_theme_state_reads_the_current_mode():
     from djust.theming import ThemeMixin
 
     class Themed(ThemeMixin, LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root>{{ theme_mode }}</div>"
 
     request = RequestFactory().get("/")

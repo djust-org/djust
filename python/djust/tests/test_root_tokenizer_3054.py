@@ -51,6 +51,32 @@ def test_stamp_targets_the_real_attribute_after_an_unquoted_quote():
     )
 
 
+def test_stamp_http_only_adds_the_transport_marker():
+    """#4236: a function view's root also asks for the HTTP transport; the
+    default stamp is unchanged."""
+    html = "<div dj-root>x</div>"
+    assert TemplateMixin._stamp_dj_view(html, "views.Page", http_only=True) == (
+        '<div dj-root dj-view="views.Page" data-djust-transport="http">x</div>'
+    )
+    assert TemplateMixin._stamp_dj_view(html, "views.Page") == (
+        '<div dj-root dj-view="views.Page">x</div>'
+    )
+
+
+def test_stamp_http_only_marks_a_root_that_declares_its_own_dj_view():
+    """#4236 review N6: a function-view template that declares ``dj-view`` on
+    its root itself still gets the transport marker (the view path is not
+    stamped over the author's); without ``http_only`` nothing changes."""
+    html = '<main class="a" dj-root dj-view="app.views.Fn">x</main>'
+    assert TemplateMixin._stamp_dj_view(html, "views.Page", http_only=True) == (
+        '<main data-djust-transport="http" class="a" dj-root dj-view="app.views.Fn">x</main>'
+    )
+    assert TemplateMixin._stamp_dj_view(html, "views.Page") == html
+    assert TemplateMixin._stamp_dj_view("<p>no root</p>", "views.Page", http_only=True) == (
+        "<p>no root</p>"
+    )
+
+
 def test_stamp_does_not_touch_bogus_comments_or_unterminated_tags():
     html = '<?x "<div dj-root>" ?><p title="never><main dj-root>'
     assert TemplateMixin._stamp_dj_view(html, "views.Page") == html
@@ -79,7 +105,9 @@ def test_native_render_and_update_keep_the_html5ever_root(template, tag):
     updated, patches, _ = view.render_with_diff()
     assert updated.startswith("<" + tag + " ")
     assert ">second</p>" in updated
-    assert json.loads(patches) == [{"type": "SetText", "path": [0, 0], "text": "second"}]
+    assert json.loads(patches) == [
+        {"type": "SetText", "path": [0, 0], "text": "second", "parent_d": "1", "index": 0}
+    ]
 
 
 @pytest.mark.django_db

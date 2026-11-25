@@ -87,7 +87,9 @@ def test_patch_after_a_kept_space_targets_the_right_path():
     view.update_state({"b": "C"})
     _html, patches, _v = view.render_with_diff()
     patches = json.loads(patches)
-    assert patches == [{"type": "SetText", "path": [0, 2, 0], "text": "C"}]
+    assert patches == [
+        {"type": "SetText", "path": [0, 2, 0], "text": "C", "parent_d": "3", "index": 0}
+    ]
 
 
 def test_text_fast_paths_still_fire_on_a_page_with_kept_spaces():
@@ -101,7 +103,9 @@ def test_text_fast_paths_still_fire_on_a_page_with_kept_spaces():
     view.set_changed_keys(["b"])
     view.update_state({"b": "C"})
     _html, patches, _v = view.render_with_diff()
-    assert json.loads(patches) == [{"type": "SetText", "path": [0, 2, 0], "text": "C"}]
+    assert json.loads(patches) == [
+        {"type": "SetText", "path": [0, 2, 0], "text": "C", "parent_d": "3", "index": 0}
+    ]
     assert view.get_render_timing()["fast_path"] != 0.0, "text fast path disabled"
 
 
@@ -116,7 +120,9 @@ def test_text_becoming_whitespace_only_goes_through_the_full_parse():
     html, patches, _v = view.render_with_diff()
     assert view.get_render_timing()["fast_path"] == 0.0
     assert "</b> <i" in html
-    assert json.loads(patches) == [{"type": "SetText", "path": [1, 1], "text": " "}]
+    assert json.loads(patches) == [
+        {"type": "SetText", "path": [1, 1], "text": " ", "parent_d": "2", "index": 1}
+    ]
 
 
 # ---------------------------------------------------------------------------

@@ -1,13 +1,14 @@
-"""Regression test for backward-compat imports after the _types/_constants refactor.
+"""Imports after the _types/_constants refactor (#4207 removed the re-exports).
 
-All the types and instances that used to live in presets.py / theme_packs.py
-must still be importable from those locations for user code that imports
-them directly.
+The types now come from ``djust.theming``; presets.py / theme_packs.py no
+longer re-export them (``test_compat_shims_removed_4207`` pins the refusal).
+The names those modules define or use stay importable.
 """
 
 
 def test_presets_exports_types():
-    from djust.theming.presets import ColorScale, SurfaceTreatment, ThemePreset, ThemeTokens
+    from djust.theming.presets import ThemePreset
+    from djust.theming import ColorScale, SurfaceTreatment, ThemeTokens
 
     assert ColorScale.__module__  # just verify they're real classes
     assert ThemeTokens.__module__
@@ -17,16 +18,18 @@ def test_presets_exports_types():
 
 def test_theme_packs_exports_types():
     from djust.theming.theme_packs import (
-        AnimationStyle,
         DesignSystem,
-        IconStyle,
-        IllustrationStyle,
-        InteractionStyle,
         LayoutStyle,
-        PatternStyle,
         SurfaceStyle,
         ThemePack,
         TypographyStyle,
+    )
+    from djust.theming import (
+        AnimationStyle,
+        IconStyle,
+        IllustrationStyle,
+        InteractionStyle,
+        PatternStyle,
     )
 
     for cls in (
@@ -70,7 +73,7 @@ def test_theme_packs_exports_instances():
 
 def test_base_exports_identical_objects():
     """Types + instances re-exported via _base must be the SAME objects."""
-    from djust.theming.presets import ColorScale as CS_presets
+    from djust.theming import ColorScale as CS_presets
     from djust.theming.themes._base import ColorScale as CS_base
 
     assert CS_base is CS_presets

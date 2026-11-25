@@ -352,9 +352,9 @@ def test_no_documentation_teaches_the_retired_kwargs_rule():
     assert found == [], found
 
 
-def test_guidance_says_what_legacy_submit_actually_sends():
-    # #3138 review: legacy dj-submit sends the form fields plus `_target`, never
-    # `field` (09-event-binding.js; _template_bindings DIRECTIVES "dj-submit").
+def test_guidance_says_what_submit_actually_sends():
+    # #3138 review: dj-submit sends the form fields, never `field` or `_target`
+    # (09-event-binding.js; _template_bindings DIRECTIVES "dj-submit").
     # Guidance telling an AI to declare `field` on a submit handler gets every
     # submit rejected for a missing required parameter.
     import json
@@ -364,8 +364,8 @@ def test_guidance_says_what_legacy_submit_actually_sends():
     from djust.schema import BEST_PRACTICES
 
     submit = DIRECTIVES["dj-submit"]
-    assert "field" not in submit.generated + submit.legacy_only
-    assert submit.legacy_only == ("_target",)
+    assert "field" not in submit.generated
+    assert "_target" not in submit.generated
     root = pathlib.Path(__file__).resolve().parents[3]
     texts = {
         "schema": json.dumps(BEST_PRACTICES),

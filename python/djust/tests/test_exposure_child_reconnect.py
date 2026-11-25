@@ -18,6 +18,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
 from djust import LiveView, event_handler
+from djust.tests._worker_connections import close_new_worker_connections
 from djust._exposure_children import child_state_key
 from djust.decorators import state
 
@@ -68,46 +69,11 @@ class ShellPage(LiveView):
         return super().get_context_data(n=self.n, **kwargs)
 
 
-class LegacyShellWidget(LiveView):
-    exposure_policy = "legacy"
-    sticky = True
-    sticky_id = "legacy-shell"
-    template = '<div><button dj-click="poke">x</button></div>'
-
-    @event_handler()
-    def poke(self):
-        pass
-
-
-class LegacyShellPage(LiveView):
-    exposure_policy = "legacy"
-    template_name = "e3_6_legacy_page.html"
-
-
 @pytest.fixture(autouse=True)
 async def close_reconnect_worker_connections(transactional_db):
     """Release connections opened by reconnect session creation on the async worker."""
-    from asgiref.sync import sync_to_async
-    from django.db import connections
-    from django.db.backends.base.base import BaseDatabaseWrapper
-
-    def snapshot():
-        return {
-            id(conn): conn.connection is not None for conn in connections.all(initialized_only=True)
-        }
-
-    def close_new_connections(before):
-        for conn in connections.all(initialized_only=True):
-            if conn.connection is None or before.get(id(conn), False):
-                continue
-            if conn.vendor == "sqlite" and conn.is_in_memory_db():
-                BaseDatabaseWrapper.close(conn)
-            else:
-                conn.close()
-
-    before = await sync_to_async(snapshot)()
-    yield
-    await sync_to_async(close_new_connections)(before)
+    async with close_new_worker_connections():
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -125,15 +91,6 @@ def staged(monkeypatch, settings, tmp_path):
     (tmp_path / "e3_6_shell_page.html").write_text(
         '{% extends "e3_6_base.html" %}{% block main %}'
         "<div dj-root>Page={{ n }}</div>{% endblock %}"
-    )
-    (tmp_path / "e3_6_legacy_base.html").write_text(
-        "{% load live_tags %}<html><body>"
-        f'{{% live_render "{MODULE}.LegacyShellWidget" sticky=True %}}'
-        "{% block main %}{% endblock %}</body></html>"
-    )
-    (tmp_path / "e3_6_legacy_page.html").write_text(
-        '{% extends "e3_6_legacy_base.html" %}{% block main %}'
-        "<div dj-root>Legacy</div>{% endblock %}"
     )
 
 
@@ -202,18 +159,6 @@ async def test_shell_child_is_reconstructed_with_state_and_routes_after_reconnec
         finally:
             await comm.disconnect()
         assert (await stored_shell(session_key))["count"] == 3
-
-
-async def test_legacy_shell_page_reconnect_behavior_is_unchanged():
-    """Legacy control: a legacy page still mounts only its live root on reconnect."""
-    session_key = await sync_to_async(new_session)()
-    with override_settings(**WS_SETTINGS):
-        comm = await connect(session_key, "LegacyShellPage")
-        try:
-            reply = await event_reply(comm, "poke", view_id="legacy-shell")
-            assert reply["type"] == "error" and reply["error"] == "Embedded view not found"
-        finally:
-            await comm.disconnect()
 
 
 class IgnoredWidget(ShellWidget):

@@ -15,11 +15,11 @@ async check on every transport:
 - a refusal blocks mount / handler (403 / ``permission_denied`` / close 4403
   for a signed-in user, a login redirect for an anonymous one);
 - an exception in the check fails closed;
-- with ``reauth_on_event`` the check runs before every event, and an event
-  queued behind a slow async check cannot run before its own check resolves;
+- an explicit view's check runs before every event (``authorize_explicit_turn``;
+  the ``reauth_on_event`` cases of the legacy mechanism are gone, #4198);
 - ``permission_required`` (``AnyOf`` included) still applies;
 - the async check runs on the event loop thread (on a mount, inside app
-  turn middleware; the reauth re-check is the outer ``reauth`` built-in).
+  turn middleware).
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ import sys
 import threading
 import uuid
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from asgiref.sync import async_to_sync, sync_to_async
@@ -155,21 +155,6 @@ class AnyOfAsyncCheckView(AsyncCheckView):
     permission_required = AnyOf("acp.alpha", "acp.beta")
 
 
-# The ``reauth_on_event`` re-check runs for legacy views only (turns.reauth);
-# an explicit view re-authorizes every turn regardless. The reauth tests below
-# use these legacy twins.
-class LegacySyncCheckView(SyncCheckView):
-    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
-
-
-class LegacyAsyncCheckView(AsyncCheckView):
-    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
-
-
-class LegacyBridgedCheckView(BridgedCheckView):
-    exposure_policy = "legacy"  # legacy subject: reauth_on_event re-checks legacy views only
-
-
 VIEWS = (
     SyncCheckView,
     AsyncCheckView,
@@ -178,9 +163,6 @@ VIEWS = (
     OpenAsyncCheckView,
     AnyOfSyncCheckView,
     AnyOfAsyncCheckView,
-    LegacySyncCheckView,
-    LegacyAsyncCheckView,
-    LegacyBridgedCheckView,
 )
 for _cls in VIEWS:
     setattr(sys.modules[MOD], _cls.__name__, _cls)
@@ -189,7 +171,6 @@ urlpatterns = [path("acp/%s/" % cls.__name__, cls.as_view()) for cls in VIEWS]
 
 FLAVOURS = {"sync": SyncCheckView, "async": AsyncCheckView}
 OPEN = {"sync": OpenSyncCheckView, "async": OpenAsyncCheckView}
-LEGACY = {"sync": LegacySyncCheckView, "async": LegacyAsyncCheckView}
 ANY_OF = {"sync": AnyOfSyncCheckView, "async": AnyOfAsyncCheckView}
 
 
@@ -228,14 +209,6 @@ def _clean():
     ):
         yield
     turns.reset_chain()
-    config.reset()
-
-
-@pytest.fixture
-def reauth_on():
-    with override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True}):
-        config.reset()
-        yield
     config.reset()
 
 
@@ -480,57 +453,13 @@ class TestWebSocket:
         else:
             assert CALLS[0][1] != threading.get_ident()
 
-    async def test_reauth_runs_the_check_before_every_event(self, flavour, reauth_on):
-        with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            comm, _ = await _ws(LEGACY[flavour])
-            try:
-                for ref in (1, 2, 3):
-                    await comm.send_json_to(_event("bump", ref))
-                    await _frames(comm, 0.2)
-            finally:
-                await _close(comm)
-        assert RAN == ["mount", "bump", "bump", "bump"]
-        assert len(CALLS) == 4  # mount + one per event
-        # The re-check is the ``reauth`` built-in, outside app middleware
-        # (ADR-044 D4): it runs before the probe middleware sets its value.
-        assert [c[2] for c in CALLS[1:]] == [None] * 3
-        if flavour == "async":
-            assert {c[1] for c in CALLS} == {threading.get_ident()}
-
-    @pytest.mark.parametrize("value", REFUSALS)
-    async def test_reauth_refusal_blocks_the_handler(self, flavour, reauth_on, value):
-        with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            comm, _ = await _ws(LEGACY[flavour])
-            VERDICT["value"] = value
-            try:
-                await comm.send_json_to(_event("bump", 1))
-                frames = await _frames(comm)
-            finally:
-                await _close(comm)
-        assert "bump" not in RAN
-        assert {"__close__": 4403} in frames
-
-    async def test_reauth_exception_fails_closed(self, flavour, reauth_on):
-        with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            comm, _ = await _ws(LEGACY[flavour])
-            VERDICT["value"] = RuntimeError("SECRET-IN-CHECK")
-            try:
-                await comm.send_json_to(_event("bump", 1))
-                frames = await _frames(comm)
-            finally:
-                await _close(comm)
-        assert "bump" not in RAN
-        assert {"__close__": 4403} in frames
-        assert "SECRET-IN-CHECK" not in json.dumps(frames)
-
-    async def test_handler_permission_required_any_of_still_applies(self, flavour, reauth_on):
-        with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User(perms=()))):
-            comm, _ = await _ws(FLAVOURS[flavour], user=_User(perms=()))
-            try:
-                await comm.send_json_to(_event("guarded", 1))
-                frames = await _frames(comm)
-            finally:
-                await _close(comm)
+    async def test_handler_permission_required_any_of_still_applies(self, flavour):
+        comm, _ = await _ws(FLAVOURS[flavour], user=_User(perms=()))
+        try:
+            await comm.send_json_to(_event("guarded", 1))
+            frames = await _frames(comm)
+        finally:
+            await _close(comm)
         assert "guarded" not in RAN
         assert any(f.get("type") == "error" for f in frames), frames
 
@@ -541,42 +470,6 @@ class TestWebSocket:
         assert "mount" not in RAN
         assert CALLS == []
         assert {"__close__": 4403} in frames
-
-
-class TestWebSocketSlowAsyncCheck:
-    """An event queued behind a slow async check cannot run before its own check."""
-
-    async def _two_events_behind_a_gate(self, final_verdict):
-        gate = asyncio.Event()
-        with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            comm, _ = await _ws(LegacyAsyncCheckView)
-            assert RAN == ["mount"]
-            GATE["gate"] = gate
-            try:
-                await comm.send_json_to(_event("bump", 1))
-                await comm.send_json_to(_event("bump", 2))
-                held = await _frames(comm, 0.3)
-                ran_while_held = list(RAN)
-                VERDICT["value"] = final_verdict
-                gate.set()
-                frames = held + await _frames(comm, 0.4)
-            finally:
-                await _close(comm)
-        return ran_while_held, frames
-
-    async def test_nothing_runs_while_the_check_is_pending(self, reauth_on):
-        ran_while_held, _ = await self._two_events_behind_a_gate(True)
-        assert ran_while_held == ["mount"]
-
-    async def test_refusal_after_the_wait_blocks_both_events(self, reauth_on):
-        _, frames = await self._two_events_behind_a_gate(False)
-        assert "bump" not in RAN
-        assert {"__close__": 4403} in frames
-
-    async def test_each_event_gets_its_own_check(self, reauth_on):
-        await self._two_events_behind_a_gate(True)
-        assert RAN == ["mount", "bump", "bump"]
-        assert len(CALLS) == 3  # mount + one per event
 
 
 async def _until(predicate, deadline=3.0):
@@ -605,7 +498,7 @@ class TestSharedSyncThreadStaysFree:
     the loop. The bridged sibling proves the probe detects a blocked thread.
     """
 
-    async def _mount_held(self, view_cls, reauth_event=False):
+    async def _mount_held(self, view_cls):
         from channels.testing import WebsocketCommunicator
 
         from djust.websocket import LiveViewConsumer
@@ -618,17 +511,9 @@ class TestSharedSyncThreadStaysFree:
         try:
             await _frames(comm, 0.2)
             frame = {"type": "mount", "view": f"{MOD}.{view_cls.__name__}", "url": "/acp/"}
-            if reauth_event:
-                await comm.send_json_to(frame)
-                await _frames(comm, 0.4)
-                assert RAN == ["mount"]
-                GATE["gate"] = gate
-                await comm.send_json_to(_event("bump", 1))
-                await _until(lambda: len(CALLS) == 2)
-            else:
-                GATE["gate"] = gate
-                await comm.send_json_to(frame)
-                await _until(lambda: len(CALLS) == 1)
+            GATE["gate"] = gate
+            await comm.send_json_to(frame)
+            await _until(lambda: len(CALLS) == 1)
             free = await _shared_thread_free()
             ran_while_held = list(RAN)
             gate.set()
@@ -648,19 +533,6 @@ class TestSharedSyncThreadStaysFree:
         free, ran = await self._mount_held(BridgedCheckView)
         assert not free
         assert ran == []
-
-    async def test_async_reauth_check_leaves_the_thread_free(self, reauth_on):
-        with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            free, ran = await self._mount_held(LegacyAsyncCheckView, reauth_event=True)
-        assert free, "an async re-check must not hold the shared sync thread"
-        assert ran == ["mount"]  # the handler waits for its check
-        assert RAN == ["mount", "bump"]
-
-    async def test_bridged_reauth_check_blocks_the_thread(self, reauth_on):
-        with patch("djust.runtime._stored_scope_user", AsyncMock(return_value=_User())):
-            free, ran = await self._mount_held(LegacyBridgedCheckView, reauth_event=True)
-        assert not free
-        assert ran == ["mount"]
 
     async def test_async_sse_mount_check_leaves_the_thread_free(self, sse_clean):
         gate = asyncio.Event()
@@ -760,27 +632,6 @@ class TestSSE:
         session = await _sse_mount(FLAVOURS[flavour])
         assert "mount" not in RAN
         assert session is None or session.view_instance is None
-
-    async def test_reauth_runs_before_every_event_and_refuses(self, flavour, sse_clean, reauth_on):
-        session = await _sse_mount(LEGACY[flavour])
-        _drain(session)
-        await _sse_post(_event("bump", 1))
-        await _sse_post(_event("bump", 2))
-        assert RAN == ["mount", "bump", "bump"]
-        assert len(CALLS) == 3
-        VERDICT["value"] = False
-        await _sse_post(_event("bump", 3))
-        frames = _drain(session)
-        assert RAN.count("bump") == 2
-        assert any(f.get("code") == "permission_denied" for f in frames), frames
-
-    async def test_reauth_exception_fails_closed(self, flavour, sse_clean, reauth_on):
-        session = await _sse_mount(LEGACY[flavour])
-        _drain(session)
-        VERDICT["value"] = RuntimeError("SECRET-IN-CHECK")
-        await _sse_post(_event("bump", 1))
-        assert "bump" not in RAN
-        assert "SECRET-IN-CHECK" not in json.dumps(_drain(session))
 
 
 # --------------------------------------------------------------------------- #

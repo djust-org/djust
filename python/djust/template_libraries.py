@@ -127,6 +127,14 @@ logger = logging.getLogger(__name__)
 #: (measured: 15 suite failures).
 _UNBRIDGED_PREFIXES = ("djust.templatetags.",)
 
+#: The exception to :data:`_UNBRIDGED_PREFIXES` for a djust library with NO tags
+#: (#4157): its filters bridge on ``{% load %}`` like a project library's. The
+#: filters of the other ``djust.templatetags`` libraries reach the Rust engine
+#: through ``bootstrap_django_filters``, which a ``{% load %}`` in an extended
+#: template's child can run ahead of; ``djust_attrs`` is loaded by children
+#: (the admin, auth and gallery pages), so it must not wait for it.
+_DJUST_FILTER_LIBRARIES = frozenset({"djust.templatetags.djust_attrs"})
+
 #: Modules that ship inside djust. A refusal of one of their tags is expected (#3655).
 _DJUST_OWN_MODULE_PREFIX = "djust."
 
@@ -790,7 +798,7 @@ def _still_bridged(label: str, library: Any, module: str) -> bool:
 def _bridge_library(label: str, library: Any) -> None:
     """Register every filter and tag of ``library`` with the Rust engine."""
     module = _library_module(library)
-    if module.startswith(_UNBRIDGED_PREFIXES):
+    if module.startswith(_UNBRIDGED_PREFIXES) and module not in _DJUST_FILTER_LIBRARIES:
         allowed = _DJUST_TAGS_BRIDGED.get(module)
         if not allowed:
             return
@@ -1167,6 +1175,28 @@ def _classify(compile_func: Callable[..., Any]) -> str:
     if "takes_context" in free and "params" in free:
         return "simple_tag"
     return "raw"
+
+
+def _binds_only_as_var(compile_func: Callable[..., Any]) -> bool:
+    """Can this tag write the context ONLY through its ``as <name>`` operand?
+
+    True for a ``simple_tag`` or ``inclusion_tag`` whose function does not
+    take the context (Django's ``SimpleNode`` binds just ``target_var``; an
+    ``InclusionNode`` renders into a fresh context). Anything that cannot be
+    proven — a raw node, ``takes_context=True``, an unreadable closure —
+    answers False, the safe reading for the partial renderer (#4124).
+    """
+    if _classify(compile_func) not in ("simple_tag", "inclusion_tag"):
+        return False
+    code = getattr(compile_func, "__code__", None)
+    closure = getattr(compile_func, "__closure__", None)
+    if code is None or not closure or "takes_context" not in code.co_freevars:
+        return False
+    try:
+        takes_context = closure[code.co_freevars.index("takes_context")].cell_contents
+    except (ValueError, IndexError):
+        return False
+    return not takes_context
 
 
 #: Anything in a raw compile function's source that reads the token stream.
@@ -1596,6 +1626,12 @@ class LibraryTagHandler:
         # tag once per template. A stateful node therefore keeps its state
         # per process rather than per template — documented divergence.
         self._nodes: Dict[Tuple[str, ...], Any] = {}
+        # A `simple_tag` / `inclusion_tag` that is NOT handed the context can
+        # bind only Django's `as <name>` target, so a use without `as` leaves
+        # later siblings' partial-render fragments reusable (#4124). A raw
+        # `@register.tag` node, or any tag given the context, may write any
+        # name and keeps the conservative default.
+        self.BINDS_ONLY_AS_VAR = _binds_only_as_var(compile_func)
 
     def _compile(self, args: List[str]) -> Any:
         key = tuple(args)

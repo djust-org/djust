@@ -34,7 +34,7 @@ Mark a method as callable from the client. **Required** on all event handlers �
 
 ```python
 @event_handler(params=None, description="", coerce_types=True, expose_api=False, serialize=None)
-def handle_event(self, **kwargs):
+def handle_event(self):
     ...
 ```
 
@@ -51,27 +51,27 @@ def handle_event(self, **kwargs):
 ```python
 # Simple — no arguments
 @event_handler()
-def increment(self, **kwargs):
+def increment(self):
     self.count += 1
 
 # With type coercion (item_id="5" → item_id=5)
 @event_handler()
-def delete(self, item_id: int = 0, **kwargs):
+def delete(self, item_id: int = 0):
     Item.objects.filter(pk=item_id).delete()
 
 # Input/change: parameter must be named 'value'
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.query = value
 
 # Form submit: named fields arrive as kwargs
 @event_handler()
-def save_form(self, name="", email="", **kwargs):
+def save_form(self, name: str = "", email: str = ""):
     User.objects.create(name=name, email=email)
 
 # Disable type coercion to receive raw strings
 @event_handler(coerce_types=False)
-def raw_handler(self, value: str = "", **kwargs):
+def raw_handler(self, value: str = ""):
     # value is always a string, not coerced
     pass
 ```
@@ -79,10 +79,10 @@ def raw_handler(self, value: str = "", **kwargs):
 **Rules:**
 
 - Declare the parameters the binding sends; `manage.py check` reports a mismatch (`djust.T020`)
-- Under the legacy policy, `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names
+- `parameter_policy="strict"` is accepted and does nothing: strict is the only policy, and `parameter_policy="legacy"` is refused
 - Give a parameter a default when a binding may omit it
 - `value` is the magic parameter name for `dj-input` and `dj-change` events
-- `data-item-id` becomes `item_id` (kebab-case → snake_case)
+- `data-item-id` does not become an argument; `dj-value-item-id` does (kebab-case → snake_case: `item_id`)
 
 ---
 
@@ -93,7 +93,7 @@ Debounce the handler on the client. The browser delays the SEND until `wait` sec
 ```python
 @event_handler()
 @debounce(wait=0.3, max_wait=None)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     ...
 ```
 
@@ -107,13 +107,13 @@ def search(self, value: str = "", **kwargs):
 ```python
 @event_handler()
 @debounce(wait=0.5)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     """Fires 500ms after the user stops typing."""
     self.results = Product.objects.filter(name__icontains=value)
 
 @event_handler()
 @debounce(wait=0.3, max_wait=2.0)
-def autosave(self, content: str = "", **kwargs):
+def autosave(self, content: str = ""):
     """Fires 300ms after last change, but always fires within 2 seconds."""
     self.draft = content
 ```
@@ -129,7 +129,7 @@ Cap how often the handler is SENT — at most once per `interval`. With both edg
 ```python
 @event_handler()
 @throttle(interval=0.1, leading=True, trailing=True)
-def on_scroll(self, position: int = 0, **kwargs):
+def on_scroll(self, position: int = 0):
     ...
 ```
 
@@ -144,7 +144,7 @@ def on_scroll(self, position: int = 0, **kwargs):
 ```python
 @event_handler()
 @throttle(interval=0.1)
-def on_scroll(self, position: int = 0, **kwargs):
+def on_scroll(self, position: int = 0):
     """Fires at most 10 times/second."""
     self.scroll_pos = position
 ```
@@ -158,7 +158,7 @@ Cache handler responses client-side. The response is stored in the browser index
 ```python
 @event_handler()
 @cache(ttl=60, key_params=None)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     ...
 ```
 
@@ -172,7 +172,7 @@ def search(self, value: str = "", **kwargs):
 ```python
 @event_handler()
 @cache(ttl=300, key_params=["value"])
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     """Results for "laptop" are cached for 5 minutes."""
     self.results = Product.objects.filter(name__icontains=value)[:20]
 ```
@@ -201,7 +201,7 @@ Check Django permissions before the handler executes. Returns an error if the us
 ```python
 @event_handler()
 @permission_required("myapp.can_delete")
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int = 0):
     ...
 ```
 
@@ -214,13 +214,13 @@ def delete_item(self, item_id: int = 0, **kwargs):
 ```python
 @event_handler()
 @permission_required("myapp.can_delete")
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int = 0):
     Item.objects.filter(pk=item_id).delete()
 
 # Require multiple permissions (all must be satisfied)
 @event_handler()
 @permission_required(["myapp.can_edit", "myapp.can_publish"])
-def publish(self, **kwargs):
+def publish(self):
     self.item.published = True
     self.item.save()
 ```
@@ -240,11 +240,11 @@ class BoardView(LiveView):
 
     @require_permission("app.add_decision")  # handler-level
     @event_handler()
-    def decide(self, **kwargs): ...
+    def decide(self): ...
 
     @decorators.permission_required("app.delete_decision")  # also fine
     @event_handler()
-    def undo(self, **kwargs): ...
+    def undo(self): ...
 ```
 
 System check `djust.S009` follows the import, so both spellings count as a per-handler gate.
@@ -258,7 +258,7 @@ Run the entire event handler in a background thread after flushing current state
 ```python
 @event_handler()
 @background
-def generate_content(self, **kwargs):
+def generate_content(self):
     ...
 ```
 
@@ -271,7 +271,7 @@ from djust.decorators import background
 
 @event_handler
 @background
-def generate_content(self, prompt: str = "", **kwargs):
+def generate_content(self, prompt: str = ""):
     """Entire method runs in background thread."""
     try:
         self.content = call_llm(prompt)  # Long-running operation
@@ -298,13 +298,24 @@ The task name is automatically set to the handler's function name. Cancel via `s
 ```python
 @event_handler
 @background
-def long_operation(self, **kwargs):
+def long_operation(self):
     # Task name is "long_operation"
     ...
 
 @event_handler
-def cancel_operation(self, **kwargs):
+def cancel_operation(self):
     self.cancel_async("long_operation")
+```
+
+**Work that must finish: `@background(survive_disconnect=True)`**
+
+By default the work is cancelled when the connection closes. With `survive_disconnect=True` it runs to completion after the user disconnects or navigates away (#4182); its result is then discarded, and setting declared state, `push_event()` or scheduling more work on the disposed view raises `ViewDisposedError`. `@background` and `@background()` keep the default. See [Work that must finish](../guides/loading-states.md#work-that-must-finish-survive_disconnecttrue).
+
+```python
+@event_handler
+@background(survive_disconnect=True)
+def charge(self, order_id: int = 0):
+    Payment.objects.charge(order_id)
 ```
 
 **Combining with other decorators:**
@@ -313,7 +324,7 @@ def cancel_operation(self, **kwargs):
 @event_handler
 @debounce(wait=0.5)
 @background
-def auto_save(self, **kwargs):
+def auto_save(self):
     # Debounced and runs in background
     self.save_draft()
 ```
@@ -334,7 +345,7 @@ Rate-limit a handler on the server with a per-handler token bucket. When the lim
 ```python
 @event_handler()
 @rate_limit(rate=10, burst=5)
-def expensive_operation(self, **kwargs):
+def expensive_operation(self):
     ...
 ```
 
@@ -349,12 +360,12 @@ def expensive_operation(self, **kwargs):
 ```python
 @rate_limit(rate=5, burst=3)
 @event_handler()
-def expensive_operation(self, **kwargs):
+def expensive_operation(self):
     ...
 
 @rate_limit(rate=2, burst=4, on_exceed="drop")
 @event_handler()
-def emote(self, **kwargs):
+def emote(self):
     ...
 ```
 
@@ -366,7 +377,7 @@ Mark a method as a same-origin browser RPC target. The client calls it with `awa
 
 ```python
 @server_function
-def search(self, q: str = "", **kwargs) -> list[dict]:
+def search(self, q: str = "") -> list[dict]:
     return [{"id": p.id, "name": p.name} for p in Product.objects.filter(name__icontains=q)[:10]]
 ```
 
@@ -398,7 +409,7 @@ Decorators compose — apply multiple to one handler:
 @event_handler()   # registers the handler
 @debounce(0.5)     # wait for typing to stop
 @cache(ttl=60)     # return cached result if available
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.results = Product.objects.filter(name__icontains=value)
 ```
 

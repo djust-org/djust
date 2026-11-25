@@ -9,12 +9,12 @@ evaluate it again. The cache short-circuit lives inside the stock
 happened twice on first paint, and a query budget read double.
 
 The render path now takes the context the request path already computed
-(``ContextMixin._context_for_render``), for both exposure policies.
+(``ContextMixin._context_for_render``).
 
 What is pinned here, each by running the real thing:
 
 * the call count per transport (Django test client GET; ``WebsocketCommunicator``
-  mount; SSE mount), for legacy and explicit views, with and without ``super()``,
+  mount; SSE mount), for explicit views, with and without ``super()``,
   inline template and ``{% extends %}`` page shell;
 * that the HTML carries the value computed by THE one call (``stamp``), not a
   second pass's;
@@ -57,7 +57,7 @@ INSTANCES: list = []
 
 
 class _Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
 
     @event_handler()
@@ -80,35 +80,19 @@ def _make(name: str, policy: str, use_super: bool, shell: bool):
             "template": '<div dj-root dj-view="' + MOD + "." + name + '">{{ n }}-{{ stamp }}</div>'
         }
     body: dict = {"exposure_policy": policy, **tpl}
-    if policy == "explicit":
-        body["n"] = state(1, persist="server")
+    body["n"] = state(1, persist="server")
 
-        def mount(self, request, **kwargs):
-            pass
+    def mount(self, request, **kwargs):
+        pass
 
-        if use_super:
+    if use_super:
 
-            def get_context_data(self, **kwargs):
-                return super(cls, self).get_context_data(n=self.n, stamp=_stamp(self), **kwargs)
-        else:
-
-            def get_context_data(self, **kwargs):
-                return {"n": self.n, "stamp": _stamp(self)}
+        def get_context_data(self, **kwargs):
+            return super(cls, self).get_context_data(n=self.n, stamp=_stamp(self), **kwargs)
     else:
 
-        def mount(self, request, **kwargs):
-            self.n = 1
-
-        if use_super:
-
-            def get_context_data(self, **kwargs):
-                ctx = super(cls, self).get_context_data(**kwargs)
-                ctx["stamp"] = _stamp(self)
-                return ctx
-        else:
-
-            def get_context_data(self, **kwargs):
-                return {"n": self.n, "stamp": _stamp(self)}
+        def get_context_data(self, **kwargs):
+            return {"n": self.n, "stamp": _stamp(self)}
 
     body["mount"] = mount
     body["get_context_data"] = get_context_data
@@ -122,7 +106,7 @@ def _name(policy: str, use_super: bool, shell: bool) -> str:
 
 
 VIEWS: dict = {}
-for _policy in ("legacy", "explicit"):
+for _policy in ("explicit",):
     for _super in (True, False):
         for _shell in (False, True):
             _n = _name(_policy, _super, _shell)
@@ -138,11 +122,9 @@ class _Plain(LiveView):
     """A view with NO override, for the unchanged-baseline check."""
 
     login_required = False
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '._Plain">{{ n }}</div>'
-
-    def mount(self, request, **kwargs):
-        self.n = 1
+    n = state(1)
 
 
 urlpatterns.append(path("plain/", _Plain.as_view()))
@@ -169,10 +151,7 @@ def _make_empty(name: str, policy: str):
     return cls
 
 
-EMPTY = {
-    name: _make_empty(name, policy)
-    for name, policy in (("E_legacy", "legacy"), ("E_explicit", "explicit"))
-}
+EMPTY = {name: _make_empty(name, policy) for name, policy in (("E_explicit", "explicit"),)}
 urlpatterns.extend(path(n.lower() + "/", v.as_view()) for n, v in EMPTY.items())
 
 
@@ -187,7 +166,7 @@ class _ModelShell(LiveView):
     """
 
     login_required = False
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "t3725/model_page.html"
 
     def mount(self, request, **kwargs):
@@ -421,19 +400,14 @@ async def test_a_websocket_mount_runs_the_override_once(name):
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#3725 sibling, tracked in #3733 and not fixed here: an EXPLICIT view whose page shell comes from "
-        "template_name evaluates the override three times on a live mount "
-        "(runtime._reconstruct_explicit_page_shell renders the full page with no cached "
-        "context, then the root renders again). Delete this marker when it is one."
-    ),
-)
 @pytest.mark.parametrize(
     "name", [n for n in ALL if n.startswith("V_explicit") and n.endswith("_shell")]
 )
-async def test_an_explicit_page_shell_websocket_mount_runs_the_override_once(name):
+async def test_an_explicit_page_shell_websocket_mount_runs_the_override_once(name, monkeypatch):
+    """A shell that can mount no child view skips the full page render on mount (#4295)."""
+    from .test_template_source_cache_4294_4295 import djust_handlers_only
+
+    djust_handlers_only(monkeypatch)
     communicator = await _connect()
     try:
         await _mount(communicator, name)
@@ -518,7 +492,7 @@ def _function_node(module, qualname):
 @pytest.mark.parametrize(
     "module_name, qualname",
     [
-        ("djust.mixins.rust_bridge", "RustBridgeMixin._sync_state_to_rust"),
+        ("djust.mixins.rust_bridge", "RustBridgeMixin._sync_state_to_rust_body"),
         ("djust.mixins.template", "TemplateMixin._render_full_template_inner"),
     ],
 )

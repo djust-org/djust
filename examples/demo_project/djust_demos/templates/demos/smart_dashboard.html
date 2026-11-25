@@ -371,7 +371,7 @@
                                     style="width: 20px; height: 20px; cursor: pointer;"
                                     {% if device.active %}checked{% endif %}
                                     dj-change="toggle_device"
-                                    data-device-id="{{ device.id }}"
+                                    dj-value-device-id="{{ device.id }}"
                                 />
                             </div>
                             {% endfor %}

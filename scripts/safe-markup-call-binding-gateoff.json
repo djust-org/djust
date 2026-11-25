@@ -1,5 +1,5 @@
 {
-  "_comment": "Each mechanism of the call binding of the safe-markup guard (#3864, #3845) turned off in turn: every mutation must turn a real row red (the test that pins this list is deselected, since it fails for every mutation). Run: .venv/bin/python scripts/gate_off.py scripts/safe-markup-call-binding-gateoff.json",
+  "_comment": "Each mechanism of the call binding of the safe-markup guard (#3864, #3845) turned off in turn: every mutation must turn a real row red (the test that pins this list is deselected, since it fails for every mutation). Run: .venv/bin/python scripts/gate_off.py scripts/safe-markup-call-binding-gateoff.json Three mechanisms no verdict depended on (the position pass judges each part where it lands) were removed in #4212 with their entries. Two entries survive a run with the command's -m 'not slow': 'the depth bound is not carried into a helper's hold level (pass B)' and 'the union is pass B alone (review 3, a)'; the slow TestTwoPasses::test_the_stress_programs is their witness (about 80 s per mutation without the filter).",
   "root": ".",
   "command": [
     "env",
@@ -83,12 +83,6 @@
       "new": "                for x, xsc in []:"
     },
     {
-      "label": "literal text does not see through a bound argument",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "            if len(values) == 1 and isinstance(values[0], _Actual):",
-      "new": "            if False:"
-    },
-    {
       "label": "containers that outlive the call are judged under the binding",
       "file": "scripts/lib/safe_markup_taint.py",
       "old": "        if not self._actuals or self._fresh(owner, name):",
@@ -141,18 +135,6 @@
       "file": "scripts/lib/safe_markup_taint.py",
       "old": "                binding[param] = _Actual(defaults[param], holder)",
       "new": "                return None"
-    },
-    {
-      "label": "literal text read through a binding is remembered",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "                    if self._actuals and not self._reads_a_binding(fscope)",
-      "new": "                    if self._actuals"
-    },
-    {
-      "label": "the escapers' order (pass B): a value escaper before the JSON escaper",
-      "file": "scripts/lib/safe_markup_taint.py",
-      "old": "            (\"json*\", \"json\", \"sens*\", \"sens\")\n            if self.call_binding",
-      "new": "            (\"json*\", \"sens*\", \"json\", \"sens\")\n            if self.call_binding"
     },
     {
       "label": "the depth bound is not carried into a helper's hold level (pass B)",

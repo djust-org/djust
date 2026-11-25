@@ -20,7 +20,6 @@ urlpatterns = [
     path('demos/counter/', views.CounterView.as_view(), name='demos-counter'),
     path('demos/todo/', views.TodoView.as_view(), name='demos-todo'),
     path('demos/chat/', views.ChatView.as_view(), name='demos-chat'),
-    path('demos/react/', views.ReactDemoView.as_view(), name='demos-react'),
     path('demos/performance/', views.PerformanceTestView.as_view(), name='demos-performance'),
     path('demos/datatable/', views.ProductDataTableView.as_view(), name='demos-datatable'),
     path('demos/rust-components/', views.RustComponentsDemo.as_view(), name='demos-rust-components'),

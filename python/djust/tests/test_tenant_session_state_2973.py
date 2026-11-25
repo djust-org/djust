@@ -27,7 +27,7 @@ _SEEN: list = []
 
 
 class _SecretView(TenantMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">[{{ secret }}]</div>'
 
     def mount(self, request, **kwargs):
@@ -56,7 +56,7 @@ class _OptionalSecretView(_SecretView):
 
 
 class _PlainView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">[{{ secret }}]</div>'
 
     def mount(self, request, **kwargs):

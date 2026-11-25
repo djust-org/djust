@@ -22,7 +22,7 @@ from djust.decorators import event_handler
 class CounterView(LiveView):
     """Simple test view for HTTP fallback protocol testing."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <span class="count">{{ count }}</span>
     <button dj-click="increment">+</button>
@@ -238,7 +238,7 @@ class TestWSMountSkip:
         source = inspect.getsource(ViewRuntime._dispatch_mount_body)
         check_auth_pos = source.find("_check_auth(")
         mount_pos = source.find("await call_hook(view_instance.mount, request, **mount_kwargs)")
-        restore_pos = source.find("load_server_state)(view_instance, request)")
+        restore_pos = source.find("load_server_state, view_instance, request")
         assert check_auth_pos != -1, (
             "_check_auth (the pre-mount auth+tenant sequence) must exist in dispatch_mount"
         )
@@ -396,7 +396,7 @@ class TestHTTPFallbackSecurityUndecorated:
         """Public methods without @event_handler are blocked via POST."""
 
         class UnsafeView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root>{{ data }}</div>"
 
             def mount(self, request, **kwargs):

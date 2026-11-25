@@ -257,8 +257,7 @@ def test_save_on_change_page_with_change_permission_saves(group, django_user_mod
     req = _request(_staff(django_user_model, "editor", "change_group"), "post")
     view = _view(ModelDetailView, "change", req)
     view.mount(req, object_id=group.pk)
-    view.form_data["name"] = "renamed"
-    view.save(redirect=False)
+    view.save_and_continue(name="renamed")
     group.refresh_from_db()
     assert group.name == "renamed"
 
@@ -279,8 +278,7 @@ def test_save_on_add_page_with_add_permission_creates(db, django_user_model):
     req = _request(_staff(django_user_model, "adder", "add_group"), "post")
     view = _view(ModelCreateView, "add", req)
     view.mount(req)
-    view.form_data["name"] = "new"
-    view.save(redirect=False)
+    view.save_and_continue(name="new")
     assert Group.objects.filter(name="new").exists()
 
 

@@ -1,0 +1,21 @@
+{% extends "djust_workflow/base.html" %}
+{% block title %}{{ ticket.title }}{% endblock %}
+{% block content %}
+<div dj-root>
+    <p><a href="{% url 'djust_workflow:list' %}" dj-navigate>All tickets</a></p>
+    <h1>{{ ticket.title }}</h1>
+    <p class="muted">{{ ticket.status }}, {{ ticket.priority }}, opened by {{ ticket.created_by.username }}</p>
+    <p>{{ ticket.body }}</p>
+
+    {% if error_message %}<p class="error" role="alert">{{ error_message }}</p>{% endif %}
+    {% if success_message %}<p class="ok" role="status">{{ success_message }}</p>{% endif %}
+
+    {% if can_close %}
+        {% if ticket.status == "open" %}
+        <button dj-click="close_ticket" dj-loading.disable>Close ticket</button>
+        <span class="loading muted" dj-loading.show dj-loading.for="close_ticket">Closing...</span>
+        {% endif %}
+        <a href="{% url 'djust_workflow:edit' ticket.pk %}" dj-navigate>Edit</a>
+    {% endif %}
+</div>
+{% endblock %}

@@ -434,7 +434,7 @@ class TestHandleParamsOnMount:
     """
 
     def test_handle_params_called_after_mount(self):
-        """Simulates the handle_mount() flow: mount() then handle_params()."""
+        """Simulates the _mount_page() flow: mount() then handle_params()."""
 
         call_order = []
 
@@ -452,7 +452,7 @@ class TestHandleParamsOnMount:
                 self.category = params.get("category", "default")
 
         view = MyView()
-        # Simulate handle_mount flow
+        # Simulate _mount_page flow
         view.mount(None, **{"category": "books"})
         view.handle_params({"category": "books"}, "/items/?category=books")
 

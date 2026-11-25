@@ -68,3 +68,97 @@ def test_with_the_interval_at_zero_a_kill_loses_nothing():
         cluster["A"].kill()
         assert socket_a.recv() is None
         assert _reconnect_to_b(browser, socket_a, cluster) == (2, 2)
+
+
+# ---------------------------------------------------------------------------
+# What a graceful stop keeps, per ASGI server (#4159)
+# ---------------------------------------------------------------------------
+
+#: What each server does on SIGTERM while a socket holds two unsaved changes,
+#: as recorded by the test below; the deployment guide's table states the same.
+#: ``exits``: the process stops on its own with the socket still open (else it
+#: waits until the client leaves). ``lifespan``: the ASGI lifespan shutdown
+#: reaches the application. ``restored``: what the reconnect to another
+#: process shows (2, 2: both changes; 0, 0: the last save, before them).
+SERVER_ROWS = {
+    # Closes each socket (1012), whose close saves, then runs lifespan.
+    "uvicorn": {"exits": True, "lifespan": True, "restored": (2, 2)},
+    # Keeps an open WebSocket open: the stop waits until the client leaves
+    # (its close saves) or a supervisor's SIGKILL ends it (the kill rows).
+    "hypercorn": {"exits": False, "lifespan": True, "restored": (2, 2)},
+    # gunicorn with uvicorn's worker: the arbiter forwards SIGTERM to the
+    # worker, which stops as uvicorn does.
+    "gunicorn": {"exits": True, "lifespan": True, "restored": (2, 2)},
+    # Cancels the application instances and runs no lifespan: the unsaved
+    # changes are lost, at most one interval of them.
+    "daphne": {"exits": True, "lifespan": False, "restored": (0, 0)},
+}
+
+#: How long a server gets to stop on its own before it is taken as waiting.
+STOP_WAIT_S = 8
+
+
+def _server_available(server: str) -> bool:
+    import importlib.util
+    import os
+
+    if importlib.util.find_spec(server) is not None:
+        return True
+    extra = os.environ.get("DJUST_MN_SERVER_PATH")
+    return bool(extra) and os.path.isdir(os.path.join(extra, server))
+
+
+def _printed_after_exit(node) -> list:
+    """Every line the (exited) node printed."""
+    import queue
+
+    lines = list(node.lines.seen)
+    while True:
+        try:
+            line = node.lines.queue.get(timeout=5)
+        except queue.Empty:
+            return lines
+        if line is None:
+            return lines
+        lines.append(line)
+
+
+@pytest.mark.parametrize("server", sorted(SERVER_ROWS))
+def test_what_a_graceful_stop_keeps_per_server(server):
+    """SIGTERM a node holding two deferred changes, under each ASGI server,
+    with the application wrapped in ``with_lifespan``; the reconnect to the
+    other (uvicorn) node shows what was saved. A server that is not installed
+    is skipped (``DJUST_MN_SERVER_PATH`` names a directory holding one that is
+    not in the venv)."""
+    import os
+    import signal
+    import subprocess
+
+    if not _server_available(server):
+        pytest.skip("%s is not installed" % server)
+    row = SERVER_ROWS[server]
+    with Cluster(
+        "db",
+        "memory",
+        None,
+        save_interval=60,
+        lifespan=True,
+        node_env={"A": {"DJUST_MN_CONFIG_SERVER": server}},
+    ) as cluster:
+        browser, socket_a = _two_events_on_a(cluster)
+        process = cluster["A"].process
+        os.kill(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=STOP_WAIT_S)
+            exited = True
+        except subprocess.TimeoutExpired:
+            exited = False
+        assert exited is row["exits"], (server, "exits on SIGTERM with a socket open")
+        if exited:
+            assert socket_a.recv() is None
+        else:
+            socket_a.close()  # the client leaves; the server can finish stopping
+            process.wait(timeout=STOP_WAIT_S)
+        printed = _printed_after_exit(cluster["A"])
+        assert ("LIFESPAN_SHUTDOWN" in printed) is row["lifespan"], (server, printed)
+        assert _reconnect_to_b(browser, socket_a, cluster) == row["restored"]

@@ -2,7 +2,7 @@
 Tests for parent-child component communication in LiveView.
 """
 
-from djust import LiveView, LiveComponent
+from djust import LiveView, LiveComponent, state
 
 
 class TodoListComponent(LiveComponent):
@@ -66,7 +66,7 @@ class UserListComponent(LiveComponent):
 class TodoDashboardView(LiveView):
     """Test view with child components."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """
         <div>
             <h1>Dashboard</h1>
@@ -74,14 +74,20 @@ class TodoDashboardView(LiveView):
         </div>
     """
 
-    def mount(self, request, **kwargs):
-        """Initialize view with components."""
-        self.todos = [
+    # Explicit views render only components declared at class level; each view gets its own copy.
+    todo_list = TodoListComponent(
+        items=[
             {"id": 1, "text": "Task 1", "completed": False},
             {"id": 2, "text": "Task 2", "completed": False},
         ]
-        self.todo_list = TodoListComponent(items=self.todos)
-        self.events_received = []
+    )
+    todos = state(
+        default_factory=lambda: [
+            {"id": 1, "text": "Task 1", "completed": False},
+            {"id": 2, "text": "Task 2", "completed": False},
+        ]
+    )
+    events_received = state(default_factory=list)
 
     def handle_component_event(self, component_id, event, data):
         """Handle events from child components."""
@@ -96,7 +102,7 @@ class TodoDashboardView(LiveView):
 class MultiComponentView(LiveView):
     """Test view with multiple child components."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """
         <div>
             {{ user_list.render }}
@@ -104,15 +110,12 @@ class MultiComponentView(LiveView):
         </div>
     """
 
-    def mount(self, request, **kwargs):
-        self.users = [{"id": 1, "name": "Alice"}]
-        self.todos = [{"id": 1, "text": "Task", "completed": False}]
-
-        self.user_list = UserListComponent(users=self.users)
-        self.todo_list = TodoListComponent(items=self.todos)
-
-        self.selected_user_id = None
-        self.events_received = []
+    user_list = UserListComponent(users=[{"id": 1, "name": "Alice"}])
+    todo_list = TodoListComponent(items=[{"id": 1, "text": "Task", "completed": False}])
+    users = state(default_factory=lambda: [{"id": 1, "name": "Alice"}])
+    todos = state(default_factory=lambda: [{"id": 1, "text": "Task", "completed": False}])
+    selected_user_id = state(None)
+    events_received = state(default_factory=list)
 
     def handle_component_event(self, component_id, event, data):
         self.events_received.append({"component_id": component_id, "event": event, "data": data})
@@ -233,11 +236,10 @@ class TestComponentAutoRegistration:
             template = "<div>Hello</div>"
 
         class SimpleView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "{{ simple.render }}"
 
-            def mount(self, request, **kwargs):
-                self.simple = SimpleComponent()
+            simple = state(default_factory=lambda: SimpleComponent())
 
         view = SimpleView()
         request = rf.get("/")
@@ -253,9 +255,6 @@ class TestComponentAutoRegistration:
         view = TodoDashboardView()
         request = rf.get("/")
         view.mount(request)
-
-        # Before registration, no callback
-        assert view.todo_list._parent_callback is None
 
         # After registration, callback set
         view.get_context_data()
@@ -327,11 +326,10 @@ class TestComponentPropUpdates:
                 return {"title": self.title, "count": self.count}
 
         class ConfigView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "{{ config.render }}"
 
-            def mount(self, request, **kwargs):
-                self.config = ConfigComponent(title="Test", count=5)
+            config = ConfigComponent(title="Test", count=5)
 
         view = ConfigView()
         request = rf.get("/")
@@ -376,11 +374,10 @@ class TestUpdateComponentNoUpdateOverride:
                 return {"label": self.label}
 
         class BareView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "{{ widget.render }}"
 
-            def mount(self, request, **kwargs):
-                self.widget = BareComponent(label="initial")
+            widget = BareComponent(label="initial")
 
         view = BareView()
         request = rf.get("/")
@@ -433,11 +430,10 @@ class TestUpdateComponentNoUpdateOverride:
                 return {"value": self.value}
 
         class CustomView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "{{ widget.render }}"
 
-            def mount(self, request, **kwargs):
-                self.widget = CustomUpdateComponent(value=3)
+            widget = CustomUpdateComponent(value=3)
 
         view = CustomView()
         request = rf.get("/")
@@ -458,11 +454,10 @@ class TestDefaultHandleComponentEvent:
         """Test default handle_component_event() does nothing."""
 
         class MinimalView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "{{ comp.render }}"
 
-            def mount(self, request, **kwargs):
-                self.comp = TodoListComponent(items=[])
+            comp = TodoListComponent(items=[])
 
         view = MinimalView()
         request = rf.get("/")

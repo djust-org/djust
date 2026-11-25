@@ -46,7 +46,7 @@ def test_every_context_restore_site_goes_through_the_helper():
         "mixins/request.py": 0,  # the page-POST fallback's session restore was removed in 2.0
         "runtime.py": 0,  # the socket session restore was removed in 2.0
         "mixins/sticky.py": 0,  # the sticky child restore was removed in 2.0
-        "_lazy_containers.py": 1,  # lazily mounted child
+        "_lazy_containers.py": 0,  # the legacy lazy child restore was removed with #4200
         "live_view.py": 0,  # the legacy signed snapshot restore was removed in 2.0
     }
     found = {name: (root / name).read_text().count("restore_public_state(") for name in sites}

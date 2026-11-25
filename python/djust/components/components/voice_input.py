@@ -118,7 +118,7 @@ class VoiceInput(Component):
         from djust.components.components.voice_input import clean_transcript
 
         @event_handler()
-        def transcribe(self, text="", **kwargs):
+        def transcribe(self, text: str = "", **kwargs):
             text = clean_transcript(text, max_length=500)
             if text:
                 self.note += (" " if self.note else "") + text  # shown escaped, never |safe

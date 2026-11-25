@@ -14,7 +14,9 @@ pub use djust_base::retained::table_bytes;
 
 fn key_bytes(key: &ObjectKey) -> usize {
     match key {
-        ObjectKey::Str(s) | ObjectKey::Decimal(s) | ObjectKey::BigInt(s) => s.capacity(),
+        ObjectKey::Str(s) | ObjectKey::Method(s) | ObjectKey::Decimal(s) | ObjectKey::BigInt(s) => {
+            s.capacity()
+        }
         ObjectKey::Tuple(items) => {
             items.capacity() * size_of::<ObjectKey>() + items.iter().map(key_bytes).sum::<usize>()
         }
@@ -35,9 +37,11 @@ impl Value {
             Value::Missing | Value::None | Value::Bool(_) | Value::Integer(_) | Value::Float(_) => {
                 0
             }
-            Value::String(s) | Value::SafeString(s) | Value::Decimal(s) | Value::BigInt(s) => {
-                s.capacity()
-            }
+            Value::String(s)
+            | Value::SafeString(s)
+            | Value::ModelName(s)
+            | Value::Decimal(s)
+            | Value::BigInt(s) => s.capacity(),
             Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
                 items_bytes(items)
             }

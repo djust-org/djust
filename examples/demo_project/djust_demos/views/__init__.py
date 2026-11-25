@@ -5,7 +5,7 @@ Demo views for djust_demos app
 from .counter_demo import CounterView
 from .nav_demo import NavDemoPageAView, NavDemoPageBView
 from .smoke_demo import BrowserSmokeView
-from .exposure_demo import ExposureMatrixView, LegacyExposureMatrixView
+from .exposure_demo import ExposureMatrixView
 from .strict_parameters_demo import StrictParametersView
 from .model_form_demo import ModelFormDemoView, model_form_index
 from .interactive_dropdown_demo import InteractiveDropdownView
@@ -17,7 +17,6 @@ from .table_select_demo import TableSelectView
 from .demos import (
     TodoView,
     ChatView,
-    ReactDemoView,
     PerformanceTestView,
     ProductDataTableView,
     DemosIndexView,
@@ -57,7 +56,6 @@ __all__ = [
     "NavDemoPageBView",
     "BrowserSmokeView",
     "ExposureMatrixView",
-    "LegacyExposureMatrixView",
     "StrictParametersView",
     "ModelFormDemoView",
     "model_form_index",
@@ -69,7 +67,6 @@ __all__ = [
     "TableSelectView",
     "TodoView",
     "ChatView",
-    "ReactDemoView",
     "PerformanceTestView",
     "ProductDataTableView",
     "DemosIndexView",

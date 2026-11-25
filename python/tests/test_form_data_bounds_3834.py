@@ -41,7 +41,10 @@ MOD = __name__
 
 def limits(fields=None, size=None, **extra):
     """A LIVEVIEW_CONFIG that sets the two limits (``None`` keeps the default) and no rate limit."""
-    cfg: Dict[str, Any] = {"rate_limit": {"rate": 10**9, "burst": 10**9}, **extra}
+    cfg: Dict[str, Any] = {
+        "rate_limit": {"rate": 10**9, "burst": 10**9},
+        **extra,
+    }
     if fields is not None:
         cfg["max_form_fields"] = fields
     if size is not None:
@@ -136,16 +139,18 @@ class TestWhatTheSocketAllowedBefore:
     """The evidence. The limits are switched OFF here, which is the behaviour before #3834."""
 
     def test_one_frame_under_the_frame_limit_carries_thousands_of_fields(self):
-        event = frame_of(4000)
+        # Past Django's POST limit (1000) and under the strict contract's own
+        # budget of 1,024 members to a collection (#4205).
+        event = frame_of(1020)
         assert len(json.dumps(event)) < 65536  # the default max_message_size admits it
         with limits(**UNLIMITED):
             answers = drive([event])
         assert answers[0]["type"] == "mount", answers[0]
         assert not any(f.get("type") == "message_too_large" for f in answers[1])
         # Django's POST limit would have stopped it at 1000
-        assert len(WsContact.last.form_data) == 4000 + len(DECLARED)
+        assert len(WsContact.last.form_data) == 1020 + len(DECLARED)
         # ... and that is what the form the template reads (``form.data``) is bound to
-        assert len(WsContact.last._form_instance.data) == 4000 + len(DECLARED)
+        assert len(WsContact.last._form_instance.data) == 1020 + len(DECLARED)
 
     def test_a_run_of_small_events_grows_form_data_without_end(self):
         events = [
@@ -160,7 +165,7 @@ class TestWhatTheSocketAllowedBefore:
 class TestTheLimitsHoldOverTheSocket:
     def test_a_frame_with_more_fields_than_the_limit_is_refused_whole(self):
         with limits(fields=1000):
-            answers = drive([frame_of(4000)])
+            answers = drive([frame_of(1020)])
         assert WsContact.last.form_data == DECLARED  # nothing of it was stored
         assert WsContact.last.is_valid is False
         assert "more fields than the server accepts (1000)" in WsContact.last.form_errors[0]
@@ -214,19 +219,18 @@ class TestEmptyMembersAreNotFree:
     character now, so the size limit bounds how many are kept."""
 
     def test_events_of_empty_strings_stop_at_the_size_limit_over_the_socket(self):
-        payload = [""] * 15_000
+        payload = [""] * 1_000  # a collection is bounded to 1,024 members by the strict contract
         assert len(json.dumps(payload)) < 65_536
         events = [
             {"event": "validate_field", "params": {"field": "f%d" % i, "value": payload}}
             for i in range(30)
         ]
-        # The member limit (#3844) would stop these first (13 x 15,002 members is past 100,000): it has
-        # its own tests; this one is about the characters.
-        with limits(size=200_000, max_form_members=0):
+        # The member limit (#3844) has its own tests; this one is about the characters.
+        with limits(size=20_000, max_form_members=0):
             answers = drive(events)
         stored = sum(len(v) for v in WsContact.last.form_data.values() if isinstance(v, list))
-        assert 0 < stored <= 200_000, stored  # 13 events fit; the other 17 were refused
-        assert "larger than the server accepts (200000" in WsContact.last.form_errors[0]
+        assert 0 < stored <= 20_000, stored  # 19 events fit; the others were refused
+        assert "larger than the server accepts (20000" in WsContact.last.form_errors[0]
         assert all(frame[-1]["type"] != "error" for frame in answers[1:])  # refusals, not crashes
 
 

@@ -211,7 +211,7 @@ class ProductSearch(LiveView):
         self.query = ""
 
     @event_handler()
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         self.query = value
 
     def get_context_data(self, **kwargs):
@@ -271,7 +271,7 @@ class RegistrationForm(LiveView):
             self.errors["password"] = "Must be at least 8 characters"
 
     @event_handler()
-    def register(self, **kwargs):
+    def register(self):
         self.validate()
         if not self.errors and self.agree_terms:
             ...  # create the account
@@ -324,7 +324,7 @@ class FilterView(LiveView):
         self.sort_by = "name"
 
     @event_handler()
-    def apply_filters(self, **kwargs):
+    def apply_filters(self):
         pass  # the bound values are already set; this event re-renders
 
     def get_context_data(self, **kwargs):

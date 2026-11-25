@@ -284,7 +284,7 @@ def test_the_component_entry_captures_too():
     (components/base.py)."""
     src = Path(__file__).resolve().parents[1] / "components" / "base.py"
     body = src.read_text()
-    fn = body[body.index("def _render_template_name_with_markers") :]
+    fn = body[body.index("def _render_source_with_markers") :]
     fn = fn[: fn.index("\nclass ")]
     assert "capture_render_env()" in fn
 

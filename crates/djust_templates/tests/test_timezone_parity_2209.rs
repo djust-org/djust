@@ -20,7 +20,7 @@
 //! (`-0400` in August, `-0500` in January). A single render can contain both —
 //! any table of timestamps spanning six months does — so a fixed per-render
 //! offset would be correct for one row and wrong for the next. That is the
-//! whole argument for the `chrono-tz` dependency, and
+//! whole argument for a bundled tz database (`chrono-tz`, `jiff` since #4222), and
 //! `winter_and_summer_disagree_within_one_render` is the test that would go red
 //! if someone later "optimised" it back to an offset.
 //!

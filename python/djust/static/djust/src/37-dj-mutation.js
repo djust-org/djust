@@ -67,10 +67,15 @@ function _installDjMutationFor(el) {
         const proceed = el.dispatchEvent(ev);
         if (!proceed) return;
         // Route to the standard djust event pipeline so the server-side
-        // handler named in dj-mutation="..." actually runs.
+        // handler named in dj-mutation="..." actually runs. The event carries
+        // no owner context, so the server runs it on the page's view; a strict
+        // handler there gets the generated values it declares (#4225).
         if (globalThis.djust && typeof globalThis.djust.handleEvent === 'function') {
-            if (typeof globalThis.djust._markSlotOf === 'function') globalThis.djust._markSlotOf(payload, el);
-            globalThis.djust.handleEvent(handlerName, payload);
+            const strict = globalThis.djust._strictBinding(el, handlerName, payload, [], null, true);
+            if (strict === false) return;
+            const sent = strict;
+            if (typeof globalThis.djust._markSlotOf === 'function') globalThis.djust._markSlotOf(sent, el);
+            globalThis.djust.handleEvent(handlerName, sent);
         }
     }
 

@@ -49,6 +49,7 @@ urlpatterns += [
     path("rentals/", include("djust_rentals.urls")),  # Rental property management
     # Sticky LiveViews / app-shell demo — embeds {% live_render ... sticky=True %}
     # so the initial HTTP GET exercises the server-render path (#1784).
+    path("workflow/", include("djust_workflow.urls")),  # Incremental workflow (#3659)
     path("sticky_demo/", include("sticky_demo.urls")),
     # Old app (for backwards compatibility - will be phased out)
     # path('', include('demo_app.urls')),

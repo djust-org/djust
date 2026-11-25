@@ -41,7 +41,10 @@ use inheritance::{build_inheritance_chain, build_inheritance_chain_from, Templat
 use parser::Node;
 
 // Re-export for JIT auto-serialization
-pub use parser::{extract_item_key_only_reads, extract_template_variables};
+pub use parser::{
+    extract_item_key_only_reads, extract_own_reads, extract_printed_item_key_reads,
+    extract_template_variables,
+};
 
 // Re-export for the dj-model mass-assignment allowlist (CWE-915, finding #3):
 // derives the bindable-field set from developer-authored template TEXT, which
@@ -235,6 +238,8 @@ impl Template {
         if !self.uses_extends() || self.resolved.get().is_some() {
             return Ok(());
         }
+        // No template name here (#4265): this runs on an inline source or an already-flattened one,
+        // whose names are absolute; a file's own relative names are resolved where it is loaded.
         let chain = build_inheritance_chain(self.nodes.clone(), loader, 10)?;
         let root_nodes = chain.get_root_nodes();
         let final_nodes = chain.apply_block_overrides(root_nodes);

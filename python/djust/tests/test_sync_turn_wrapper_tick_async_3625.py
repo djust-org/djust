@@ -97,7 +97,7 @@ def probe():
 @pytest.fixture(params=[None, 2], ids=["stock", "pool"])
 def pool(request, monkeypatch):
     """The tick runs in two shapes: ``worker_threads`` off (``call_tick``) and on
-    (``tick_turn`` on the session's thread). Both must enter the step."""
+    (the one-hop tick turn's ``tick_turn`` on the session's thread, #4166). Both must enter the step."""
     from djust import worker_pool
 
     monkeypatch.setitem(djust_config._config, "worker_threads", request.param)
@@ -345,7 +345,7 @@ def test_http_result_sync_callable_returning_awaitable_is_completed(probe, monke
 
 
 async def _consumer_with_view():
-    """A consumer that mounted ProbeView through ``handle_mount`` (whose render
+    """A consumer that mounted ProbeView through ``_mount_page`` (whose render
     is the diff baseline): an explicit view's background work is authorized by
     the runtime that mounted it."""
     from djust.tests._live_session import amount_on_consumer
@@ -457,13 +457,10 @@ async def test_an_explicit_childs_result_hook_runs_inside_the_wrapper(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_a_legacy_sticky_childs_result_hook_runs_inside_the_wrapper(
-    probe, staged, monkeypatch
-):
+async def test_a_sticky_childs_result_hook_runs_inside_the_wrapper(probe, staged, monkeypatch):
     from djust.tests.test_runtime_child_routing_1892 import (
         _StickyChildView,
-        _make_runtime_with_view,
-        _make_sticky_parent,
+        _mounted_sticky_parent,
     )
 
     @event_handler(parameter_policy="strict")
@@ -474,11 +471,10 @@ async def test_a_legacy_sticky_childs_result_hook_runs_inside_the_wrapper(
     monkeypatch.setattr(
         _StickyChildView, "handle_async_result", _result_probe("sticky_result"), raising=False
     )
-    parent, child = _make_sticky_parent()
-    runtime, _transport = _make_runtime_with_view(parent)
+    parent, child, runtime, _transport = await _mounted_sticky_parent()
     runtime._parameter_contract_view = "tests.Parent"
     try:
-        await runtime.dispatch_event({"event": "begin", "params": {"view_id": "child-1"}, "ref": 1})
+        await runtime.dispatch_event({"event": "begin", "params": {"view_id": "child"}, "ref": 1})
         handles = tuple(getattr(child, "_async_task_handles", ()))
         assert handles, "the routed child must own its dispatched background task"
         await asyncio.wait_for(asyncio.gather(*handles), 5)
@@ -752,24 +748,18 @@ EXPECTED_HOOK_REFERENCES = {
     ): ("call_async_result"),
     # Consumer: the worker-pool tick enters the "tick" step with run_sync_step;
     # the stock tick goes through call_tick below.
-    ("websocket.py", "LiveViewConsumer._tick_locked.tick_turn", "handle_tick"): "run_sync_step",
+    (
+        "websocket.py",
+        "LiveViewConsumer._run_tick_turn_offloaded.tick_turn",
+        "handle_tick",
+    ): "run_sync_step",
     ("_view_hooks.py", "call_tick", "handle_tick"): "sync_step",
-    # Runtime: the result turns of a start_async task, success and error arms,
-    # and the explicit-exposure twin.
-    ("runtime.py", "ViewRuntime._execute_async_task_body.complete", "handle_async_result"): (
-        "call_async_result"
-    ),
-    ("runtime.py", "ViewRuntime._execute_async_task_body.complete_error", "handle_async_result"): (
-        "call_async_result"
-    ),
+    # Runtime: the result turns of a start_async task.
     ("runtime.py", "ViewRuntime._execute_explicit_async_task.complete", "handle_async_result"): (
         "call_async_result"
     ),
-    # Embedded / sticky children: explicit and legacy owners.
+    # Embedded / sticky children.
     ("_child_async.py", "_execute_body.complete", "handle_async_result"): "call_async_result",
-    ("_child_async.py", "dispatch_legacy_child_work.run_body.complete", "handle_async_result"): (
-        "call_async_result"
-    ),
     # HTTP fallback: synchronous result hooks enter the async step.
     (
         "mixins/request.py",

@@ -208,7 +208,7 @@ Event Handlers shows:
 ```python
 # Before: 52 patches, 8.2ms
 @event_handler
-def filter_items(self, value: str = "", **kwargs):
+def filter_items(self, value: str = ""):
     self.filter_value = value
     self.items = self._get_filtered()
     self.count = len(self.items)
@@ -216,7 +216,7 @@ def filter_items(self, value: str = "", **kwargs):
 
 # After: 3 patches, 1.1ms
 @event_handler
-def filter_items(self, value: str = "", **kwargs):
+def filter_items(self, value: str = ""):
     self.filter_value = value
     self._refresh_items()
 

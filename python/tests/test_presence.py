@@ -73,7 +73,7 @@ class FakeRequest:
 class FakeView:
     """Fake view for testing mixins"""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def __init__(self, ws_session_id: str = "test_ws"):
         # Call parent __init__ methods if they exist
@@ -277,7 +277,8 @@ class TestPresenceMixin:
         # Check presence in manager
         presences = view.list_presences()
         assert len(presences) == 1
-        assert presences[0]["meta"]["name"] == user.username
+        # An explicit view adds nothing to what peers see (ADR-038 D-c): only the meta passed.
+        assert presences[0]["meta"] == {"color": "#ff0000"}
 
     def test_track_presence_anonymous_user(self, request_factory):
         """Test tracking presence with anonymous user"""

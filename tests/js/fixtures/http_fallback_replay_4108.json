@@ -14,6 +14,64 @@
   "counter": {
    "answers": [
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Counter",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -29,6 +87,64 @@
      "render_digest": "digest-2.99e963b4227a3102"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Counter",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -44,6 +160,64 @@
      "render_digest": "digest-3.99a14f2222e03103"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Counter",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -62,14 +236,188 @@
    "answers_whole": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><header dj-id=\"1\"><h1 dj-id=\"2\">Counter</h1></header><main dj-id=\"3\"><p class=\"lead\" dj-id=\"4\">Value: <strong dj-id=\"5\">1</strong></p><input dj-id=\"6\" name=\"note\" value=\"\" /><details dj-id=\"7\"><summary dj-id=\"8\">More</summary><p dj-id=\"9\">Static body</p></details><button dj-click=\"increment\" dj-id=\"a\">+</button></main></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Counter",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><header dj-id=\"1\"><h1 dj-id=\"2\">Counter</h1></header><main dj-id=\"3\"><p class=\"lead\" dj-id=\"4\">Value: <strong dj-id=\"5\">2</strong></p><input dj-id=\"6\" name=\"note\" value=\"\" /><details dj-id=\"7\"><summary dj-id=\"8\">More</summary><p dj-id=\"9\">Static body</p></details><button dj-click=\"increment\" dj-id=\"a\">+</button></main></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Counter",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><header dj-id=\"1\"><h1 dj-id=\"2\">Counter</h1></header><main dj-id=\"3\"><p class=\"lead\" dj-id=\"4\">Value: <strong dj-id=\"5\">3</strong></p><input dj-id=\"6\" name=\"note\" value=\"\" /><details dj-id=\"7\"><summary dj-id=\"8\">More</summary><p dj-id=\"9\">Static body</p></details><button dj-click=\"increment\" dj-id=\"a\">+</button></main></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Counter",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     }
    ],
@@ -90,7 +438,7 @@
    ],
    "expected_dom": "<div dj-root=\"\"><header><h1>Counter</h1></header><main><p class=\"lead\">Value: <strong>3</strong></p><input name=\"note\" value=\"\" /><details><summary>More</summary><p>Static body</p></details><button dj-click=\"increment\">+</button></main></div>",
    "fallback_final": "<div dj-root=\"\"><header><h1>Counter</h1></header><main><p class=\"lead\">Value: <strong>3</strong></p><input name=\"note\" value=\"\" /><details><summary>More</summary><p>Static body</p></details><button dj-click=\"increment\">+</button></main></div>",
-   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.2f0185f922143101\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Counter\">\n<header><h1>Counter</h1></header>\n<main><p class=\"lead\">Value: <strong>0</strong></p>\n<input name=\"note\" value=\"\">\n<details><summary>More</summary><p>Static body</p></details>\n<button dj-click=\"increment\">+</button></main>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"increment\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
+   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.2f0185f922143101\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Counter\">\n<header><h1>Counter</h1></header>\n<main><p class=\"lead\">Value: <strong>0</strong></p>\n<input name=\"note\" value=\"\">\n<details><summary>More</summary><p>Static body</p></details>\n<button dj-click=\"increment\">+</button></main>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"increment\": {\"event_handler\": {\"params\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"value\", \"kwargs\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}});\n</script>\n<script type=\"application/json\" data-djust-parameter-contracts>{\"view\": \"djust.tests.http_fallback_matrix.Counter\", \"contracts\": {\"version\": 2, \"contracts\": [{\"coerce_types\": true, \"parameters\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}], \"handlers\": [{\"increment\": 0, \"update_model\": 1}], \"owners\": [[null, null, 0]], \"digest\": \"b0e0822c070d368c\"}}</script>\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client-core.min.js\" defer data-turbo-track=\"reload\" data-djust-chunks=\"{&quot;cursor-overlay&quot;: &quot;/static/djust/chunks/cursor-overlay.min.js&quot;, &quot;service-worker&quot;: &quot;/static/djust/chunks/service-worker.min.js&quot;, &quot;tutorial&quot;: &quot;/static/djust/chunks/tutorial.min.js&quot;, &quot;uploads&quot;: &quot;/static/djust/chunks/uploads.min.js&quot;, &quot;virtual-list&quot;: &quot;/static/djust/chunks/virtual-list.min.js&quot;}\"></script></body></html>",
    "kinds": [
     "patches",
     "patches",
@@ -113,11 +461,127 @@
    "answers": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><ul dj-id=\"1\" dj-update=\"append\" id=\"feed\"><li dj-id=\"2\" id=\"e-1\">entry 1</li></ul><p dj-id=\"3\" id=\"sent\">Sent: <b dj-id=\"4\">1</b></p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Feed",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "2b0550af4bc78e6f",
+      "handlers": [
+       {
+        "post_entry": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "render_digest": "digest-2.d1a5d56dc9261741",
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><ul dj-id=\"1\" dj-update=\"append\" id=\"feed\"><li dj-id=\"2\" id=\"e-2\">entry 2</li></ul><p dj-id=\"3\" id=\"sent\">Sent: <b dj-id=\"4\">2</b></p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Feed",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "2b0550af4bc78e6f",
+      "handlers": [
+       {
+        "post_entry": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "render_digest": "digest-3.2bf01188c96d1744",
      "version": 1
     }
@@ -125,10 +589,126 @@
    "answers_whole": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><ul dj-id=\"1\" dj-update=\"append\" id=\"feed\"><li dj-id=\"2\" id=\"e-1\">entry 1</li></ul><p dj-id=\"3\" id=\"sent\">Sent: <b dj-id=\"4\">1</b></p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Feed",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "2b0550af4bc78e6f",
+      "handlers": [
+       {
+        "post_entry": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><ul dj-id=\"1\" dj-update=\"append\" id=\"feed\"><li dj-id=\"2\" id=\"e-2\">entry 2</li></ul><p dj-id=\"3\" id=\"sent\">Sent: <b dj-id=\"4\">2</b></p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Feed",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "2b0550af4bc78e6f",
+      "handlers": [
+       {
+        "post_entry": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     }
    ],
@@ -145,7 +725,7 @@
    ],
    "expected_dom": "<div dj-root=\"\"><ul dj-update=\"append\" id=\"feed\"><li id=\"e-0\">first</li><li id=\"e-1\">entry 1</li><li id=\"e-2\">entry 2</li></ul><p id=\"sent\">Sent: <b>2</b></p></div>",
    "fallback_final": "<div dj-root=\"\"><ul dj-update=\"append\" id=\"feed\"><li id=\"e-2\">entry 2</li></ul><p id=\"sent\">Sent: <b>2</b></p></div>",
-   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.388aade79f7f16e4\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Feed\">\n<ul id=\"feed\" dj-update=\"append\"><li id=\"e-0\">first</li></ul>\n<p id=\"sent\">Sent: <b>0</b></p>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"post_entry\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
+   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.388aade79f7f16e4\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Feed\">\n<ul id=\"feed\" dj-update=\"append\"><li id=\"e-0\">first</li></ul>\n<p id=\"sent\">Sent: <b>0</b></p>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"post_entry\": {\"event_handler\": {\"params\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"value\", \"kwargs\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}});\n</script>\n<script type=\"application/json\" data-djust-parameter-contracts>{\"view\": \"djust.tests.http_fallback_matrix.Feed\", \"contracts\": {\"version\": 2, \"contracts\": [{\"coerce_types\": true, \"parameters\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}], \"handlers\": [{\"post_entry\": 0, \"update_model\": 1}], \"owners\": [[null, null, 0]], \"digest\": \"2b0550af4bc78e6f\"}}</script>\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client-core.min.js\" defer data-turbo-track=\"reload\" data-djust-chunks=\"{&quot;cursor-overlay&quot;: &quot;/static/djust/chunks/cursor-overlay.min.js&quot;, &quot;service-worker&quot;: &quot;/static/djust/chunks/service-worker.min.js&quot;, &quot;tutorial&quot;: &quot;/static/djust/chunks/tutorial.min.js&quot;, &quot;uploads&quot;: &quot;/static/djust/chunks/uploads.min.js&quot;, &quot;virtual-list&quot;: &quot;/static/djust/chunks/virtual-list.min.js&quot;}\"></script></body></html>",
    "kinds": [
     "html",
     "html"
@@ -164,6 +744,99 @@
   "form": {
    "answers": [
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ContactForm",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "field_name",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "4b0eaa81b80d4bcb",
+      "handlers": [
+       {
+        "reset_form": 0,
+        "submit_form": 0,
+        "update_model": 1,
+        "validate_field": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "key": "value",
@@ -206,6 +879,99 @@
      "render_digest": "digest-2.3733e5d3c28a7f6b"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ContactForm",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "field_name",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "4b0eaa81b80d4bcb",
+      "handlers": [
+       {
+        "reset_form": 0,
+        "submit_form": 0,
+        "update_model": 1,
+        "validate_field": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "key": "value",
@@ -248,6 +1014,99 @@
      "render_digest": "digest-3.783c34484a919534"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ContactForm",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "field_name",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "4b0eaa81b80d4bcb",
+      "handlers": [
+       {
+        "reset_form": 0,
+        "submit_form": 0,
+        "update_model": 1,
+        "validate_field": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "key": "value",
@@ -266,14 +1125,293 @@
    "answers_whole": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"5\"></div></div><div class=\"row\" dj-id=\"6\"><label dj-id=\"7\">email</label><input dj-change=\"validate_field\" dj-id=\"8\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\" dj-id=\"9\"><span dj-id=\"a\">Enter a valid email address.</span></div></div><div class=\"row\" dj-id=\"b\"><label dj-id=\"c\">city</label><input dj-change=\"validate_field\" dj-id=\"d\" name=\"city\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"e\"></div></div><button dj-id=\"f\" type=\"submit\">Send</button></form></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ContactForm",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "field_name",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "4b0eaa81b80d4bcb",
+      "handlers": [
+       {
+        "reset_form": 0,
+        "submit_form": 0,
+        "update_model": 1,
+        "validate_field": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\" dj-id=\"5\"><span dj-id=\"6\">Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\" dj-id=\"7\"><label dj-id=\"8\">email</label><input dj-change=\"validate_field\" dj-id=\"9\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\" dj-id=\"a\"><span dj-id=\"b\">Enter a valid email address.</span></div></div><div class=\"row\" dj-id=\"c\"><label dj-id=\"d\">city</label><input dj-change=\"validate_field\" dj-id=\"e\" name=\"city\" type=\"text\" value=\"\" /><div class=\"err\" dj-id=\"f\"></div></div><button dj-id=\"g\" type=\"submit\">Send</button></form></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ContactForm",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "field_name",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "4b0eaa81b80d4bcb",
+      "handlers": [
+       {
+        "reset_form": 0,
+        "submit_form": 0,
+        "update_model": 1,
+        "validate_field": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><form dj-id=\"1\" dj-submit=\"submit_form\"><div class=\"row\" dj-id=\"2\"><label dj-id=\"3\">name</label><input dj-change=\"validate_field\" dj-id=\"4\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\" dj-id=\"5\"><span dj-id=\"6\">Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\" dj-id=\"7\"><label dj-id=\"8\">email</label><input dj-change=\"validate_field\" dj-id=\"9\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\" dj-id=\"a\"><span dj-id=\"b\">Enter a valid email address.</span></div></div><div class=\"row\" dj-id=\"c\"><label dj-id=\"d\">city</label><input dj-change=\"validate_field\" dj-id=\"e\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\" dj-id=\"f\"></div></div><button dj-id=\"g\" type=\"submit\">Send</button></form></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ContactForm",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "field_name",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "4b0eaa81b80d4bcb",
+      "handlers": [
+       {
+        "reset_form": 0,
+        "submit_form": 0,
+        "update_model": 1,
+        "validate_field": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     }
    ],
@@ -303,7 +1441,7 @@
    ],
    "expected_dom": "<div dj-root=\"\"><form dj-submit=\"submit_form\"><div class=\"row\"><label>name</label><input dj-change=\"validate_field\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\"><span>Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\"><label>email</label><input dj-change=\"validate_field\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\"><span>Enter a valid email address.</span></div></div><div class=\"row\"><label>city</label><input dj-change=\"validate_field\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\"></div></div><button type=\"submit\">Send</button></form></div>",
    "fallback_final": "<div dj-root=\"\"><form dj-submit=\"submit_form\"><div class=\"row\"><label>name</label><input dj-change=\"validate_field\" name=\"name\" type=\"text\" value=\"Al\" /><div class=\"err\"><span>Ensure this value has at least 3 characters (it has 2).</span></div></div><div class=\"row\"><label>email</label><input dj-change=\"validate_field\" name=\"email\" type=\"text\" value=\"not-an-email\" /><div class=\"err\"><span>Enter a valid email address.</span></div></div><div class=\"row\"><label>city</label><input dj-change=\"validate_field\" name=\"city\" type=\"text\" value=\"Lyon\" /><div class=\"err\"></div></div><button type=\"submit\">Send</button></form></div>",
-   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.bf54cd573ae66e90\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.ContactForm\">\n<form dj-submit=\"submit_form\">\n<div class=\"row\"><label>name</label><input type=\"text\" name=\"name\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<div class=\"row\"><label>email</label><input type=\"text\" name=\"email\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<div class=\"row\"><label>city</label><input type=\"text\" name=\"city\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<button type=\"submit\">Send</button></form>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"reset_form\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"Reset the form to its initial state.\\n\\nAn event handler, so a template can call it directly\\n(``dj-click=\\\"reset_form\\\"``), and safe to call from ``form_valid``:\\n``submit_form`` does not sync the submitted values back over a reset\\n(#2974).\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"submit_form\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"Handle form submission.\\n\\nThis is called when the form is submitted (dj-submit event).\\nValidates all fields and calls form_valid() or form_invalid().\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"validate_field\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"field_name\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"field_name\", \"value\"], \"description\": \"Validate a single field in real-time.\\n\\nThis is called when a field changes (dj-change / dj-input event).\\n\\nThe client sends the field name under the key ``field``, because\\n``buildFormEventParams`` (``09-event-binding.js:525``) HARDCODES that\\nkey, sourcing the value from ``getFieldName`` \\u2014 ``data-field``, then\\nthe element's ``name``, then its ``id``. It merges only ``dj-value-*``;\\nit does NOT collect ``data-*``, which is what ``extractTypedParams``\\ndoes on the click/poll/mount paths. (An earlier version of this\\ndocstring said \\\"djust maps ``data-*`` attributes to handler\\nparameters\\\" \\u2014 true for those other paths, false for this one, and a\\nmaintainer acting on it would expect ``data-foo`` on an input to reach\\nthe handler. It does not.) ``field_name`` is\\naccepted for backwards compatibility and is what this signature used\\nto take EXCLUSIVELY \\u2014 which meant the client's payload matched nothing,\\n``**kwargs`` swallowed it instead of raising ``TypeError``, and the\\nhandler ran on every keystroke doing nothing at all (#2137). No error,\\nno warning; the form looked live and was inert.\\n\\n``WizardMixin.validate_field`` already had this coalesce; this is the\\nsame shape, applied to the two implementations that did not (#1646).\\n\\nPOSITIONAL CALLERS: ``field`` is the first parameter, so\\n``validate_field(\\\"email\\\", \\\"text\\\")`` binds ``field_name=\\\"text\\\"`` and\\nleaves ``value`` as ``None`` \\u2014 a filled field then reports \\\"required\\\".\\nCall with keywords. The order is deliberate: djust admin's own adapters\\nemit ``validate_field('\\u003cname\\u003e', value)`` (``admin_ext/adapters.py``, 8\\nsites), whose second positional token is the literal string\\n``\\\"value\\\"``; with ``field`` first that junk lands in ``field_name`` and\\nthe real value survives as a keyword. Under the previous order it\\noverwrote the real value, so the admin validated the string \\\"value\\\" on\\nevery change.\\n\\nArgs:\\n    field: Name of the field to validate \\u2014 what the client sends\\n    field_name: Legacy alias for ``field``\\n    value: Current field value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"field_name\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
+   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.bf54cd573ae66e90\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.ContactForm\">\n<form dj-submit=\"submit_form\">\n<div class=\"row\"><label>name</label><input type=\"text\" name=\"name\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<div class=\"row\"><label>email</label><input type=\"text\" name=\"email\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<div class=\"row\"><label>city</label><input type=\"text\" name=\"city\" value=\"\" dj-change=\"validate_field\"><div class=\"err\"></div></div>\n<button type=\"submit\">Send</button></form>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"reset_form\": {\"event_handler\": {\"params\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"kwargs\"], \"description\": \"Reset the form to its initial state.\\n\\nAn event handler, so a template can call it directly\\n(``dj-click=\\\"reset_form\\\"``), and safe to call from ``form_valid``:\\n``submit_form`` does not sync the submitted values back over a reset\\n(#2974).\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"submit_form\": {\"event_handler\": {\"params\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"kwargs\"], \"description\": \"Handle form submission.\\n\\nThis is called when the form is submitted (dj-submit event).\\nValidates all fields and calls form_valid() or form_invalid().\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"value\", \"kwargs\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"validate_field\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"field_name\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"field_name\", \"value\", \"kwargs\"], \"description\": \"Validate a single field in real-time.\\n\\nThis is called when a field changes (dj-change / dj-input event).\\n\\nThe client sends the field name under the key ``field``, because\\nthe client's form-event binder (``09-event-binding.js``) HARDCODES that\\nkey, sourcing the value from ``getFieldName`` \\u2014 ``data-field``, then\\nthe element's ``name``, then its ``id``. It merges only ``dj-value-*``;\\nit does NOT collect ``data-*``, which no client path sends. (An earlier version of this\\ndocstring said \\\"djust maps ``data-*`` attributes to handler\\nparameters\\\" \\u2014 true for those other paths, false for this one, and a\\nmaintainer acting on it would expect ``data-foo`` on an input to reach\\nthe handler. It does not.) ``field_name`` is\\naccepted for backwards compatibility and is what this signature used\\nto take EXCLUSIVELY \\u2014 which meant the client's payload matched nothing,\\n``**kwargs`` swallowed it instead of raising ``TypeError``, and the\\nhandler ran on every keystroke doing nothing at all (#2137). No error,\\nno warning; the form looked live and was inert.\\n\\n``WizardMixin.validate_field`` already had this coalesce; this is the\\nsame shape, applied to the two implementations that did not (#1646).\\n\\nPOSITIONAL CALLERS: ``field`` is the first parameter, so\\n``validate_field(\\\"email\\\", \\\"text\\\")`` binds ``field_name=\\\"text\\\"`` and\\nleaves ``value`` as ``None`` \\u2014 a filled field then reports \\\"required\\\".\\nCall with keywords. The order is deliberate: a template written as\\n``validate_field('\\u003cname\\u003e', value)`` (djust admin's own adapters were,\\nuntil #4218) sends the literal string ``\\\"value\\\"`` as its second\\npositional token; with ``field`` first that junk lands in ``field_name``\\nand the real value survives as a keyword. Under the previous order it\\noverwrote the real value, so the admin validated the string \\\"value\\\" on\\nevery change. Bind it by name alone (``dj-input=\\\"validate_field\\\"``): the\\nclient generates ``field`` and ``value``, and under the strict parameter\\npolicy a positional token that is also a generated name is refused.\\n\\nArgs:\\n    field: Name of the field to validate \\u2014 what the client sends\\n    field_name: Legacy alias for ``field``\\n    value: Current field value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"field_name\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}});\n</script>\n<script type=\"application/json\" data-djust-parameter-contracts>{\"view\": \"djust.tests.http_fallback_matrix.ContactForm\", \"contracts\": {\"version\": 2, \"contracts\": [{\"coerce_types\": true, \"parameters\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"field_name\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}], \"handlers\": [{\"reset_form\": 0, \"submit_form\": 0, \"update_model\": 1, \"validate_field\": 2}], \"owners\": [[null, null, 0]], \"digest\": \"4b0eaa81b80d4bcb\"}}</script>\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client-core.min.js\" defer data-turbo-track=\"reload\" data-djust-chunks=\"{&quot;cursor-overlay&quot;: &quot;/static/djust/chunks/cursor-overlay.min.js&quot;, &quot;service-worker&quot;: &quot;/static/djust/chunks/service-worker.min.js&quot;, &quot;tutorial&quot;: &quot;/static/djust/chunks/tutorial.min.js&quot;, &quot;uploads&quot;: &quot;/static/djust/chunks/uploads.min.js&quot;, &quot;virtual-list&quot;: &quot;/static/djust/chunks/virtual-list.min.js&quot;}\"></script></body></html>",
    "kinds": [
     "patches",
     "patches",
@@ -325,6 +1463,64 @@
   "hooked": {
    "answers": [
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Hooked",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "dca552816277a36f",
+      "handlers": [
+       {
+        "toggle": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "key": "class",
@@ -338,6 +1534,64 @@
      "render_digest": "digest-2.fde5a241dd14199e"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Hooked",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "dca552816277a36f",
+      "handlers": [
+       {
+        "toggle": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "key": "class",
@@ -351,6 +1605,64 @@
      "render_digest": "digest-1.fde5a241dd14199e"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Hooked",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "dca552816277a36f",
+      "handlers": [
+       {
+        "toggle": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "key": "class",
@@ -367,14 +1679,188 @@
    "answers_whole": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><div class=\"host\" dj-hook=\"Widget\" dj-id=\"1\"></div><ul dj-id=\"2\"><li dj-id=\"3\">one</li><li dj-id=\"4\">two</li></ul><button class=\"active\" dj-click=\"toggle\" dj-id=\"5\">toggle</button></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Hooked",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "dca552816277a36f",
+      "handlers": [
+       {
+        "toggle": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><div class=\"host\" dj-hook=\"Widget\" dj-id=\"1\"></div><ul dj-id=\"2\"><li dj-id=\"3\">one</li><li dj-id=\"4\">two</li></ul><button class=\"\" dj-click=\"toggle\" dj-id=\"5\">toggle</button></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Hooked",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "dca552816277a36f",
+      "handlers": [
+       {
+        "toggle": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><div class=\"host\" dj-hook=\"Widget\" dj-id=\"1\"></div><ul dj-id=\"2\"><li dj-id=\"3\">one</li><li dj-id=\"4\">two</li></ul><button class=\"active\" dj-click=\"toggle\" dj-id=\"5\">toggle</button></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Hooked",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "dca552816277a36f",
+      "handlers": [
+       {
+        "toggle": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     }
    ],
@@ -395,7 +1881,7 @@
    ],
    "expected_dom": "<div dj-root=\"\"><div class=\"host\" dj-hook=\"Widget\"></div><ul><li>one</li><li>two</li></ul><button class=\"active\" dj-click=\"toggle\">toggle</button></div>",
    "fallback_final": "<div dj-root=\"\"><div class=\"host\" dj-hook=\"Widget\"></div><ul><li>one</li><li>two</li></ul><button class=\"active\" dj-click=\"toggle\">toggle</button></div>",
-   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.fde5a241dd14199e\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Hooked\">\n<div dj-hook=\"Widget\" class=\"host\"></div>\n<ul><li>one</li><li>two</li></ul>\n<button dj-click=\"toggle\" class=\"\">toggle</button>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"toggle\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
+   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.fde5a241dd14199e\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Hooked\">\n<div dj-hook=\"Widget\" class=\"host\"></div>\n<ul><li>one</li><li>two</li></ul>\n<button dj-click=\"toggle\" class=\"\">toggle</button>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"toggle\": {\"event_handler\": {\"params\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"value\", \"kwargs\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}});\n</script>\n<script type=\"application/json\" data-djust-parameter-contracts>{\"view\": \"djust.tests.http_fallback_matrix.Hooked\", \"contracts\": {\"version\": 2, \"contracts\": [{\"coerce_types\": true, \"parameters\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}], \"handlers\": [{\"toggle\": 0, \"update_model\": 1}], \"owners\": [[null, null, 0]], \"digest\": \"dca552816277a36f\"}}</script>\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client-core.min.js\" defer data-turbo-track=\"reload\" data-djust-chunks=\"{&quot;cursor-overlay&quot;: &quot;/static/djust/chunks/cursor-overlay.min.js&quot;, &quot;service-worker&quot;: &quot;/static/djust/chunks/service-worker.min.js&quot;, &quot;tutorial&quot;: &quot;/static/djust/chunks/tutorial.min.js&quot;, &quot;uploads&quot;: &quot;/static/djust/chunks/uploads.min.js&quot;, &quot;virtual-list&quot;: &quot;/static/djust/chunks/virtual-list.min.js&quot;}\"></script></body></html>",
    "kinds": [
     "patches",
     "patches",
@@ -417,6 +1903,72 @@
   "leaving": {
    "answers": [
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Leaving",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "0f175941d169647b",
+      "handlers": [
+       {
+        "remove": 0,
+        "rename": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "index": 0,
@@ -429,6 +1981,72 @@
      "render_digest": "digest-2.9e3d978840bc246e"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Leaving",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "0f175941d169647b",
+      "handlers": [
+       {
+        "remove": 0,
+        "rename": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -444,6 +2062,72 @@
      "render_digest": "digest-3.6b1b7c9465422498"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Leaving",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "0f175941d169647b",
+      "handlers": [
+       {
+        "remove": 0,
+        "rename": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -462,14 +2146,212 @@
    "answers_whole": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"2\" dj-id=\"3\" dj-remove=\"fade-out\"><span dj-id=\"4\">Item 2</span></li><li data-key=\"3\" dj-id=\"5\" dj-remove=\"fade-out\"><span dj-id=\"6\">Item 3</span></li></ul></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Leaving",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "0f175941d169647b",
+      "handlers": [
+       {
+        "remove": 0,
+        "rename": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"2\" dj-id=\"3\" dj-remove=\"fade-out\"><span dj-id=\"4\">Item 2</span></li><li data-key=\"3\" dj-id=\"5\" dj-remove=\"fade-out\"><span dj-id=\"6\">Item 3*</span></li></ul></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Leaving",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "0f175941d169647b",
+      "handlers": [
+       {
+        "remove": 0,
+        "rename": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"2\" dj-id=\"3\" dj-remove=\"fade-out\"><span dj-id=\"4\">Item 2*</span></li><li data-key=\"3\" dj-id=\"5\" dj-remove=\"fade-out\"><span dj-id=\"6\">Item 3*</span></li></ul></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Leaving",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "0f175941d169647b",
+      "handlers": [
+       {
+        "remove": 0,
+        "rename": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     }
    ],
@@ -496,7 +2378,7 @@
    ],
    "expected_dom": "<div dj-root=\"\"><h1>Rows</h1><ul><li data-key=\"2\" dj-remove=\"fade-out\"><span>Item 2*</span></li><li data-key=\"3\" dj-remove=\"fade-out\"><span>Item 3*</span></li></ul></div>",
    "fallback_final": "<div dj-root=\"\"><h1>Rows</h1><ul><li data-key=\"2\" dj-remove=\"fade-out\"><span>Item 2*</span></li><li data-key=\"3\" dj-remove=\"fade-out\"><span>Item 3*</span></li></ul></div>",
-   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.c7d02c2007eb3484\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Leaving\">\n<h1>Rows</h1>\n<ul>\n<li dj-remove=\"fade-out\" data-key=\"1\"><span>Item 1</span></li>\n<li dj-remove=\"fade-out\" data-key=\"2\"><span>Item 2</span></li>\n<li dj-remove=\"fade-out\" data-key=\"3\"><span>Item 3</span></li></ul>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"remove\": {\"event_handler\": {\"params\": [{\"name\": \"row\", \"type\": \"int\", \"required\": false, \"default\": \"0\"}], \"param_names\": [\"row\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"row\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"rename\": {\"event_handler\": {\"params\": [{\"name\": \"row\", \"type\": \"int\", \"required\": false, \"default\": \"0\"}], \"param_names\": [\"row\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"row\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
+   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.c7d02c2007eb3484\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Leaving\">\n<h1>Rows</h1>\n<ul>\n<li dj-remove=\"fade-out\" data-key=\"1\"><span>Item 1</span></li>\n<li dj-remove=\"fade-out\" data-key=\"2\"><span>Item 2</span></li>\n<li dj-remove=\"fade-out\" data-key=\"3\"><span>Item 3</span></li></ul>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"remove\": {\"event_handler\": {\"params\": [{\"name\": \"row\", \"kind\": \"positional_or_keyword\", \"type\": \"int\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"row\", \"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"row\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"rename\": {\"event_handler\": {\"params\": [{\"name\": \"row\", \"kind\": \"positional_or_keyword\", \"type\": \"int\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"row\", \"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"row\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"value\", \"kwargs\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}});\n</script>\n<script type=\"application/json\" data-djust-parameter-contracts>{\"view\": \"djust.tests.http_fallback_matrix.Leaving\", \"contracts\": {\"version\": 2, \"contracts\": [{\"coerce_types\": true, \"parameters\": [{\"name\": \"row\", \"kind\": \"positional_or_keyword\", \"type\": \"int\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}], \"handlers\": [{\"remove\": 0, \"rename\": 0, \"update_model\": 1}], \"owners\": [[null, null, 0]], \"digest\": \"0f175941d169647b\"}}</script>\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client-core.min.js\" defer data-turbo-track=\"reload\" data-djust-chunks=\"{&quot;cursor-overlay&quot;: &quot;/static/djust/chunks/cursor-overlay.min.js&quot;, &quot;service-worker&quot;: &quot;/static/djust/chunks/service-worker.min.js&quot;, &quot;tutorial&quot;: &quot;/static/djust/chunks/tutorial.min.js&quot;, &quot;uploads&quot;: &quot;/static/djust/chunks/uploads.min.js&quot;, &quot;virtual-list&quot;: &quot;/static/djust/chunks/virtual-list.min.js&quot;}\"></script></body></html>",
    "kinds": [
     "patches",
     "patches",
@@ -518,6 +2400,85 @@
   "list": {
    "answers": [
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ListEdit",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "e8d2d20f5ceebd8a",
+      "handlers": [
+       {
+        "add": 0,
+        "bump": 1,
+        "remove": 1,
+        "update_model": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "index": 3,
@@ -609,6 +2570,85 @@
      "render_digest": "digest-2.e02a11886ef43bb0"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ListEdit",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "e8d2d20f5ceebd8a",
+      "handlers": [
+       {
+        "add": 0,
+        "bump": 1,
+        "remove": 1,
+        "update_model": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -624,6 +2664,85 @@
      "render_digest": "digest-3.942ceb1d6f703bb1"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ListEdit",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "e8d2d20f5ceebd8a",
+      "handlers": [
+       {
+        "add": 0,
+        "bump": 1,
+        "remove": 1,
+        "update_model": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "index": 3,
@@ -641,6 +2760,85 @@
      "render_digest": "digest-4.c6bda7c9eef32cb9"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ListEdit",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "e8d2d20f5ceebd8a",
+      "handlers": [
+       {
+        "add": 0,
+        "bump": 1,
+        "remove": 1,
+        "update_model": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "index": 3,
@@ -732,6 +2930,85 @@
      "render_digest": "digest-5.8906e17d736e3bb8"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ListEdit",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "e8d2d20f5ceebd8a",
+      "handlers": [
+       {
+        "add": 0,
+        "bump": 1,
+        "remove": 1,
+        "update_model": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "index": 3,
@@ -752,22 +3029,417 @@
    "answers_whole": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"1\" dj-id=\"3\"><span dj-id=\"4\">Item 1</span> <b dj-id=\"5\">1</b></li><li data-key=\"2\" dj-id=\"6\"><span dj-id=\"7\">Item 2</span> <b dj-id=\"8\">2</b></li><li data-key=\"3\" dj-id=\"9\"><span dj-id=\"a\">Item 3</span> <b dj-id=\"b\">3</b></li><li data-key=\"4\" dj-id=\"c\"><span dj-id=\"d\">Item 4</span> <b dj-id=\"e\">0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><p class=\"many\" dj-id=\"f\">Many rows</p><!--/dj-if--><button dj-click=\"add\" dj-id=\"g\">add</button></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ListEdit",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "e8d2d20f5ceebd8a",
+      "handlers": [
+       {
+        "add": 0,
+        "bump": 1,
+        "remove": 1,
+        "update_model": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"1\" dj-id=\"3\"><span dj-id=\"4\">Item 1</span> <b dj-id=\"5\">1</b></li><li data-key=\"2\" dj-id=\"6\"><span dj-id=\"7\">Item 2</span> <b dj-id=\"8\">3</b></li><li data-key=\"3\" dj-id=\"9\"><span dj-id=\"a\">Item 3</span> <b dj-id=\"b\">3</b></li><li data-key=\"4\" dj-id=\"c\"><span dj-id=\"d\">Item 4</span> <b dj-id=\"e\">0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><p class=\"many\" dj-id=\"f\">Many rows</p><!--/dj-if--><button dj-click=\"add\" dj-id=\"g\">add</button></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ListEdit",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "e8d2d20f5ceebd8a",
+      "handlers": [
+       {
+        "add": 0,
+        "bump": 1,
+        "remove": 1,
+        "update_model": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"2\" dj-id=\"3\"><span dj-id=\"4\">Item 2</span> <b dj-id=\"5\">3</b></li><li data-key=\"3\" dj-id=\"6\"><span dj-id=\"7\">Item 3</span> <b dj-id=\"8\">3</b></li><li data-key=\"4\" dj-id=\"9\"><span dj-id=\"a\">Item 4</span> <b dj-id=\"b\">0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><!--/dj-if--><button dj-click=\"add\" dj-id=\"c\">add</button></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ListEdit",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "e8d2d20f5ceebd8a",
+      "handlers": [
+       {
+        "add": 0,
+        "bump": 1,
+        "remove": 1,
+        "update_model": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"2\" dj-id=\"3\"><span dj-id=\"4\">Item 2</span> <b dj-id=\"5\">3</b></li><li data-key=\"3\" dj-id=\"6\"><span dj-id=\"7\">Item 3</span> <b dj-id=\"8\">3</b></li><li data-key=\"4\" dj-id=\"9\"><span dj-id=\"a\">Item 4</span> <b dj-id=\"b\">0</b></li><li data-key=\"5\" dj-id=\"c\"><span dj-id=\"d\">Item 5</span> <b dj-id=\"e\">0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><p class=\"many\" dj-id=\"f\">Many rows</p><!--/dj-if--><button dj-click=\"add\" dj-id=\"g\">add</button></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ListEdit",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "e8d2d20f5ceebd8a",
+      "handlers": [
+       {
+        "add": 0,
+        "bump": 1,
+        "remove": 1,
+        "update_model": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><h1 dj-id=\"1\">Rows</h1><ul dj-id=\"2\"><li data-key=\"2\" dj-id=\"3\"><span dj-id=\"4\">Item 2</span> <b dj-id=\"5\">3</b></li><li data-key=\"3\" dj-id=\"6\"><span dj-id=\"7\">Item 3</span> <b dj-id=\"8\">3</b></li><li data-key=\"5\" dj-id=\"9\"><span dj-id=\"a\">Item 5</span> <b dj-id=\"b\">0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><!--/dj-if--><button dj-click=\"add\" dj-id=\"c\">add</button></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.ListEdit",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "row",
+          "reduced_checking": false,
+          "required": false,
+          "type": "int"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "e8d2d20f5ceebd8a",
+      "handlers": [
+       {
+        "add": 0,
+        "bump": 1,
+        "remove": 1,
+        "update_model": 2
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     }
    ],
@@ -802,7 +3474,7 @@
    ],
    "expected_dom": "<div dj-root=\"\"><h1>Rows</h1><ul><li data-key=\"2\"><span>Item 2</span> <b>3</b></li><li data-key=\"3\"><span>Item 3</span> <b>3</b></li><li data-key=\"5\"><span>Item 5</span> <b>0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><!--/dj-if--><button dj-click=\"add\">add</button></div>",
    "fallback_final": "<div dj-root=\"\"><h1>Rows</h1><ul><li data-key=\"2\"><span>Item 2</span> <b>3</b></li><li data-key=\"3\"><span>Item 3</span> <b>3</b></li><li data-key=\"5\"><span>Item 5</span> <b>0</b></li></ul><!--dj-if id=\"if-441412b0-0\"--><!--/dj-if--><button dj-click=\"add\">add</button></div>",
-   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.33aa6e04ec2e2cb3\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.ListEdit\">\n<h1>Rows</h1>\n<ul>\n<li data-key=\"1\"><span>Item 1</span> <b>1</b></li>\n<li data-key=\"2\"><span>Item 2</span> <b>2</b></li>\n<li data-key=\"3\"><span>Item 3</span> <b>3</b></li></ul>\n<!--dj-if id=\"if-441412b0-0\"--><!--/dj-if-->\n<button dj-click=\"add\">add</button>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"add\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"bump\": {\"event_handler\": {\"params\": [{\"name\": \"row\", \"type\": \"int\", \"required\": false, \"default\": \"0\"}], \"param_names\": [\"row\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"row\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"remove\": {\"event_handler\": {\"params\": [{\"name\": \"row\", \"type\": \"int\", \"required\": false, \"default\": \"0\"}], \"param_names\": [\"row\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"row\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
+   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.33aa6e04ec2e2cb3\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.ListEdit\">\n<h1>Rows</h1>\n<ul>\n<li data-key=\"1\"><span>Item 1</span> <b>1</b></li>\n<li data-key=\"2\"><span>Item 2</span> <b>2</b></li>\n<li data-key=\"3\"><span>Item 3</span> <b>3</b></li></ul>\n<!--dj-if id=\"if-441412b0-0\"--><!--/dj-if-->\n<button dj-click=\"add\">add</button>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"add\": {\"event_handler\": {\"params\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"bump\": {\"event_handler\": {\"params\": [{\"name\": \"row\", \"kind\": \"positional_or_keyword\", \"type\": \"int\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"row\", \"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"row\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"remove\": {\"event_handler\": {\"params\": [{\"name\": \"row\", \"kind\": \"positional_or_keyword\", \"type\": \"int\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"row\", \"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"row\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"value\", \"kwargs\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}});\n</script>\n<script type=\"application/json\" data-djust-parameter-contracts>{\"view\": \"djust.tests.http_fallback_matrix.ListEdit\", \"contracts\": {\"version\": 2, \"contracts\": [{\"coerce_types\": true, \"parameters\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"row\", \"kind\": \"positional_or_keyword\", \"type\": \"int\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}], \"handlers\": [{\"add\": 0, \"bump\": 1, \"remove\": 1, \"update_model\": 2}], \"owners\": [[null, null, 0]], \"digest\": \"e8d2d20f5ceebd8a\"}}</script>\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client-core.min.js\" defer data-turbo-track=\"reload\" data-djust-chunks=\"{&quot;cursor-overlay&quot;: &quot;/static/djust/chunks/cursor-overlay.min.js&quot;, &quot;service-worker&quot;: &quot;/static/djust/chunks/service-worker.min.js&quot;, &quot;tutorial&quot;: &quot;/static/djust/chunks/tutorial.min.js&quot;, &quot;uploads&quot;: &quot;/static/djust/chunks/uploads.min.js&quot;, &quot;virtual-list&quot;: &quot;/static/djust/chunks/virtual-list.min.js&quot;}\"></script></body></html>",
    "kinds": [
     "patches",
     "patches",
@@ -830,6 +3502,64 @@
   "paged": {
    "answers": [
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Paged",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "15c8ada5497dce1f",
+      "handlers": [
+       {
+        "star": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -844,6 +3574,64 @@
      "render_digest": "digest-2.09f740ead49b1b62"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Paged",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "15c8ada5497dce1f",
+      "handlers": [
+       {
+        "star": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -861,10 +3649,126 @@
    "answers_whole": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><nav dj-id=\"1\"><a dj-id=\"2\" href=\"?page=4\">next</a></nav><p dj-id=\"3\">Page <b dj-id=\"4\">3</b>, starred: <i dj-id=\"5\">1</i></p><button dj-click=\"star\" dj-id=\"6\">star</button></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Paged",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "15c8ada5497dce1f",
+      "handlers": [
+       {
+        "star": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><nav dj-id=\"1\"><a dj-id=\"2\" href=\"?page=4\">next</a></nav><p dj-id=\"3\">Page <b dj-id=\"4\">3</b>, starred: <i dj-id=\"5\">2</i></p><button dj-click=\"star\" dj-id=\"6\">star</button></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Paged",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "15c8ada5497dce1f",
+      "handlers": [
+       {
+        "star": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     }
    ],
@@ -881,7 +3785,7 @@
    ],
    "expected_dom": "<div dj-root=\"\"><nav><a href=\"?page=4\">next</a></nav><p>Page <b>3</b>, starred: <i>2</i></p><button dj-click=\"star\">star</button></div>",
    "fallback_final": "<div dj-root=\"\"><nav><a href=\"?page=4\">next</a></nav><p>Page <b>3</b>, starred: <i>2</i></p><button dj-click=\"star\">star</button></div>",
-   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.3f05d019d47a1b61\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Paged\">\n<nav><a href=\"?page=4\">next</a></nav>\n<p>Page <b>3</b>, starred: <i>0</i></p>\n<button dj-click=\"star\">star</button>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"star\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
+   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.3f05d019d47a1b61\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Paged\">\n<nav><a href=\"?page=4\">next</a></nav>\n<p>Page <b>3</b>, starred: <i>0</i></p>\n<button dj-click=\"star\">star</button>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"star\": {\"event_handler\": {\"params\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"value\", \"kwargs\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}});\n</script>\n<script type=\"application/json\" data-djust-parameter-contracts>{\"view\": \"djust.tests.http_fallback_matrix.Paged\", \"contracts\": {\"version\": 2, \"contracts\": [{\"coerce_types\": true, \"parameters\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}], \"handlers\": [{\"star\": 0, \"update_model\": 1}], \"owners\": [[null, null, 0]], \"digest\": \"15c8ada5497dce1f\"}}</script>\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client-core.min.js\" defer data-turbo-track=\"reload\" data-djust-chunks=\"{&quot;cursor-overlay&quot;: &quot;/static/djust/chunks/cursor-overlay.min.js&quot;, &quot;service-worker&quot;: &quot;/static/djust/chunks/service-worker.min.js&quot;, &quot;tutorial&quot;: &quot;/static/djust/chunks/tutorial.min.js&quot;, &quot;uploads&quot;: &quot;/static/djust/chunks/uploads.min.js&quot;, &quot;virtual-list&quot;: &quot;/static/djust/chunks/virtual-list.min.js&quot;}\"></script></body></html>",
    "kinds": [
     "patches",
     "patches"
@@ -901,11 +3805,127 @@
    "answers": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">1</b></p><p class=\"stamp\" dj-id=\"3\">6</p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Stamped",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "render_digest": "digest-2.8eb522824c8905b5",
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">2</b></p><p class=\"stamp\" dj-id=\"3\">10</p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Stamped",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "render_digest": "digest-3.71c0055d528705e1",
      "version": 1
     }
@@ -913,10 +3933,126 @@
    "answers_whole": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">1</b></p><p class=\"stamp\" dj-id=\"3\">4</p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Stamped",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">2</b></p><p class=\"stamp\" dj-id=\"3\">6</p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Stamped",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     }
    ],
@@ -933,7 +4069,7 @@
    ],
    "expected_dom": "<div dj-root=\"\"><p>Value: <b>2</b></p><p class=\"stamp\">N</p></div>",
    "fallback_final": "<div dj-root=\"\"><p>Value: <b>2</b></p><p class=\"stamp\">N</p></div>",
-   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.667ee1604c7305b0\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Stamped\">\n<p>Value: <b>0</b></p>\n<p class=\"stamp\">2</p>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"increment\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
+   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.667ee1604c7305b0\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Stamped\">\n<p>Value: <b>0</b></p>\n<p class=\"stamp\">2</p>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"increment\": {\"event_handler\": {\"params\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"value\", \"kwargs\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}});\n</script>\n<script type=\"application/json\" data-djust-parameter-contracts>{\"view\": \"djust.tests.http_fallback_matrix.Stamped\", \"contracts\": {\"version\": 2, \"contracts\": [{\"coerce_types\": true, \"parameters\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}], \"handlers\": [{\"increment\": 0, \"update_model\": 1}], \"owners\": [[null, null, 0]], \"digest\": \"b0e0822c070d368c\"}}</script>\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client-core.min.js\" defer data-turbo-track=\"reload\" data-djust-chunks=\"{&quot;cursor-overlay&quot;: &quot;/static/djust/chunks/cursor-overlay.min.js&quot;, &quot;service-worker&quot;: &quot;/static/djust/chunks/service-worker.min.js&quot;, &quot;tutorial&quot;: &quot;/static/djust/chunks/tutorial.min.js&quot;, &quot;uploads&quot;: &quot;/static/djust/chunks/uploads.min.js&quot;, &quot;virtual-list&quot;: &quot;/static/djust/chunks/virtual-list.min.js&quot;}\"></script></body></html>",
    "kinds": [
     "html",
     "html"
@@ -953,11 +4089,127 @@
    "answers": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">1</b></p><p class=\"serial\" dj-id=\"3\">render 3</p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Unstable",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "render_digest": "digest-2.2a0ffaef848c0852",
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">2</b></p><p class=\"serial\" dj-id=\"3\">render 5</p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Unstable",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "render_digest": "digest-3.7d18ddd984a30855",
      "version": 1
     }
@@ -965,10 +4217,126 @@
    "answers_whole": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">1</b></p><p class=\"serial\" dj-id=\"3\">render 2</p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Unstable",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Value: <b dj-id=\"2\">2</b></p><p class=\"serial\" dj-id=\"3\">render 3</p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Unstable",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "b0e0822c070d368c",
+      "handlers": [
+       {
+        "increment": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     }
    ],
@@ -985,7 +4353,7 @@
    ],
    "expected_dom": "<div dj-root=\"\"><p>Value: <b>2</b></p><p class=\"serial\">render N</p></div>",
    "fallback_final": "<div dj-root=\"\"><p>Value: <b>2</b></p><p class=\"serial\">render N</p></div>",
-   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.ae2de5c28475084f\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Unstable\">\n<p>Value: <b>0</b></p>\n<p class=\"serial\">render 1</p>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"increment\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
+   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.ae2de5c28475084f\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Unstable\">\n<p>Value: <b>0</b></p>\n<p class=\"serial\">render 1</p>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"increment\": {\"event_handler\": {\"params\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"value\", \"kwargs\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}});\n</script>\n<script type=\"application/json\" data-djust-parameter-contracts>{\"view\": \"djust.tests.http_fallback_matrix.Unstable\", \"contracts\": {\"version\": 2, \"contracts\": [{\"coerce_types\": true, \"parameters\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}], \"handlers\": [{\"increment\": 0, \"update_model\": 1}], \"owners\": [[null, null, 0]], \"digest\": \"b0e0822c070d368c\"}}</script>\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client-core.min.js\" defer data-turbo-track=\"reload\" data-djust-chunks=\"{&quot;cursor-overlay&quot;: &quot;/static/djust/chunks/cursor-overlay.min.js&quot;, &quot;service-worker&quot;: &quot;/static/djust/chunks/service-worker.min.js&quot;, &quot;tutorial&quot;: &quot;/static/djust/chunks/tutorial.min.js&quot;, &quot;uploads&quot;: &quot;/static/djust/chunks/uploads.min.js&quot;, &quot;virtual-list&quot;: &quot;/static/djust/chunks/virtual-list.min.js&quot;}\"></script></body></html>",
    "kinds": [
     "html",
     "html"
@@ -1004,6 +4372,64 @@
   "volatile": {
    "answers": [
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Volatile",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "791a61aa16fcf51a",
+      "handlers": [
+       {
+        "bump": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -1027,6 +4453,64 @@
      "render_digest": "digest-2.a223162181e007aa"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Volatile",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "791a61aa16fcf51a",
+      "handlers": [
+       {
+        "bump": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -1050,6 +4534,64 @@
      "render_digest": "digest-3.13c03f6681f707ac"
     },
     {
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Volatile",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "791a61aa16fcf51a",
+      "handlers": [
+       {
+        "bump": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "patches": [
       {
        "path": [
@@ -1076,14 +4618,188 @@
    "answers_whole": [
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">1</b>, lost: <i dj-id=\"3\">1</i></p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Volatile",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "791a61aa16fcf51a",
+      "handlers": [
+       {
+        "bump": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">2</b>, lost: <i dj-id=\"3\">2</i></p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Volatile",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "791a61aa16fcf51a",
+      "handlers": [
+       {
+        "bump": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     },
     {
      "html": "<div dj-id=\"0\" dj-root=\"\"><p dj-id=\"1\">Kept: <b dj-id=\"2\">3</b>, lost: <i dj-id=\"3\">3</i></p></div>",
+     "parameter_contract_view": "djust.tests.http_fallback_matrix.Volatile",
+     "parameter_contracts": {
+      "contracts": [
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       },
+       {
+        "coerce_types": true,
+        "parameters": [
+         {
+          "kind": "positional_or_keyword",
+          "name": "field",
+          "reduced_checking": false,
+          "required": false,
+          "type": "str"
+         },
+         {
+          "kind": "positional_or_keyword",
+          "name": "value",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         },
+         {
+          "kind": "var_keyword",
+          "name": "kwargs",
+          "reduced_checking": true,
+          "required": false,
+          "type": "Any"
+         }
+        ]
+       }
+      ],
+      "digest": "791a61aa16fcf51a",
+      "handlers": [
+       {
+        "bump": 0,
+        "update_model": 1
+       }
+      ],
+      "owners": [
+       [
+        null,
+        null,
+        0
+       ]
+      ],
+      "version": 2
+     },
      "version": 1
     }
    ],
@@ -1104,7 +4820,7 @@
    ],
    "expected_dom": "<div dj-root=\"\"><p>Kept: <b>3</b>, lost: <i>3</i></p></div>",
    "fallback_final": "<div dj-root=\"\"><p>Kept: <b>3</b>, lost: <i>3</i></p></div>",
-   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.cd7df11c81c907a8\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Volatile\">\n<p>Kept: <b>0</b>, lost: <i>0</i></p>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"bump\": {\"event_handler\": {\"params\": [], \"param_names\": [], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"type\": \"str\", \"required\": false, \"default\": \"\"}, {\"name\": \"value\", \"type\": \"Any\", \"required\": false, \"default\": \"None\"}], \"param_names\": [\"field\", \"value\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null, \"parameter_policy\": null}}});\n</script>\n\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client.min.js\" defer data-turbo-track=\"reload\"></script></body></html>",
+   "get": "<!DOCTYPE html><html><head><title>t</title><meta name=\"djust-csrf-cookie\" content=\"djust_demo_csrftoken\"><meta name=\"djust-csrf-token\" content=\"CSRF\"><meta name=\"djust-render-digest\" content=\"digest-1.cd7df11c81c907a8\"><meta name=\"djust-page-shell\" content=\"cf1cbb66a638b486\"><meta name=\"djust-tab\" content=\"tab-fixture-0001\"></head><body>\n<div dj-root dj-view=\"djust.tests.http_fallback_matrix.Volatile\">\n<p>Kept: <b>0</b>, lost: <i>0</i></p>\n</div>\n\n<script>\n// Handler metadata for client-side decorators\nwindow.handlerMetadata = window.handlerMetadata || {};\nObject.assign(window.handlerMetadata, {\"bump\": {\"event_handler\": {\"params\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"kwargs\"], \"description\": \"\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}, \"update_model\": {\"event_handler\": {\"params\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}], \"param_names\": [\"field\", \"value\", \"kwargs\"], \"description\": \"Default handler for dj-model changes from the client.\\n\\nArgs:\\n    field: The attribute name to update\\n    value: The new value\", \"accepts_kwargs\": true, \"required\": [], \"optional\": [\"field\", \"value\", \"kwargs\"], \"coerce_types\": true, \"expose_api\": false, \"serialize\": null}}});\n</script>\n<script type=\"application/json\" data-djust-parameter-contracts>{\"view\": \"djust.tests.http_fallback_matrix.Volatile\", \"contracts\": {\"version\": 2, \"contracts\": [{\"coerce_types\": true, \"parameters\": [{\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}, {\"coerce_types\": true, \"parameters\": [{\"name\": \"field\", \"kind\": \"positional_or_keyword\", \"type\": \"str\", \"required\": false, \"reduced_checking\": false}, {\"name\": \"value\", \"kind\": \"positional_or_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}, {\"name\": \"kwargs\", \"kind\": \"var_keyword\", \"type\": \"Any\", \"required\": false, \"reduced_checking\": true}]}], \"handlers\": [{\"bump\": 0, \"update_model\": 1}], \"owners\": [[null, null, 0]], \"digest\": \"791a61aa16fcf51a\"}}</script>\n        <script data-turbo-track=\"reload\">\n            // djust configuration\n            window.DJUST_USE_WEBSOCKET = true;\n            // Enable debug logging for client-dev.js (development only)\n            window.djustDebug = false;\n            window.DEBUG_MODE = false;\n        </script>\n        \n        <script src=\"/static/djust/client-core.min.js\" defer data-turbo-track=\"reload\" data-djust-chunks=\"{&quot;cursor-overlay&quot;: &quot;/static/djust/chunks/cursor-overlay.min.js&quot;, &quot;service-worker&quot;: &quot;/static/djust/chunks/service-worker.min.js&quot;, &quot;tutorial&quot;: &quot;/static/djust/chunks/tutorial.min.js&quot;, &quot;uploads&quot;: &quot;/static/djust/chunks/uploads.min.js&quot;, &quot;virtual-list&quot;: &quot;/static/djust/chunks/virtual-list.min.js&quot;}\"></script></body></html>",
    "kinds": [
     "patches",
     "patches",

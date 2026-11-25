@@ -20,7 +20,8 @@ import pytest
 
 from djust.theming import _types
 from djust.theming.css_generator import ThemeCSSGenerator
-from djust.theming.presets import THEME_PRESETS, ColorScale
+from djust.theming.presets import THEME_PRESETS
+from djust.theming import ColorScale
 
 pytestmark = pytest.mark.theming
 

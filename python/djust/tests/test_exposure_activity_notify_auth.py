@@ -125,7 +125,7 @@ RAN = []
 
 
 class ActivityFailureView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ count }}</div>"
     count = state(0, persist="server")
     _listen_channels = frozenset({"exposure_activity_fail"})
@@ -166,7 +166,6 @@ class ActivityFailureView(LiveView):
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("debug", [True, False])
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
 @pytest.mark.parametrize(
     "event,ran,sentinel",
     [
@@ -177,18 +176,16 @@ class ActivityFailureView(LiveView):
     ],
 )
 async def test_notify_released_event_failures_log_value_free_for_explicit_views(
-    monkeypatch, caplog, policy, debug, event, ran, sentinel
+    caplog, debug, event, ran, sentinel
 ):
     """Once a released event is authorized, the consumer's dispatcher runs its
     handler, re-render and any ``start_async`` work; each catch logged the
-    exception with its traceback for any policy. Under ``DEBUG=False`` an
-    explicit view's log is value-free; under ``DEBUG=True`` it carries the
-    exception like a legacy view's (ADR-038 D-a, revised 2026-09-22)."""
+    exception with its traceback. Under ``DEBUG=False`` an explicit view's log
+    is value-free; under ``DEBUG=True`` it carries the exception (ADR-038 D-a,
+    revised 2026-09-22)."""
     import logging
 
     RAN.clear()
-    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(ActivityFailureView, "exposure_policy", policy)
     with override_settings(
         LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=debug, DJUST_TENANTS=None, DJUST_CONFIG={}
     ):
@@ -220,7 +217,7 @@ async def test_notify_released_event_failures_log_value_free_for_explicit_views(
                     ),
                 )
             assert ran in RAN, f"{ran} never ran; the test would be vacuous"
-            if policy == "legacy" or debug:
+            if debug:
                 assert sentinel in caplog.text
                 assert "Traceback" in caplog.text
                 assert "Protected" not in caplog.text

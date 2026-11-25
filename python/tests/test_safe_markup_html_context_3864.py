@@ -159,14 +159,14 @@ class TestThePositionReader:
 # ---------------------------------------------------------------------------
 
 HTML_ONLY = ("escape", "cond_escape", "attr_text")
-#: Unsafe when run and still cleared (the same on ``main``): anything in a ``style`` attribute (CSS:
-#: eleven sites of the tree put an escaped value there; ``safe_css_*`` is the rule). An HTML escaper
-#: between attributes, as an attribute or a tag name is reported since the position walk
-#: (``_walk``, #3864): it reads comments and data blocks, which is what made the position flag
-#: correct sites of the tree before.
-REMAINING = {
-    *((s, "style_attr") for s in ("escape", "attr_text", "url")),
-}
+#: Unsafe when run and still cleared: none. A URL checker's output in a ``style`` attribute was
+#: the last (#4212 item 7): the guard read one value escaper class for ``safe_url`` and
+#: ``safe_css_*``; they are two now (``SYM_VALUE`` a checked URL, ``SYM_CSS`` a CSS escaper's
+#: output), and only the CSS one fits a ``style`` value. An HTML escaper there is reported since
+#: #4212. An HTML escaper between attributes, as an attribute or a tag name is reported since the
+#: position walk (``_walk``, #3864): it reads comments and data blocks, which is what made the
+#: position flag correct sites of the tree before.
+REMAINING: set[tuple[str, str]] = set()
 #: Flagged although no payload of the fuzz gets through: an escaped value inside a quoted JS string
 #: of a script body (a trailing backslash still eats the closing quote), and a context-sensitive
 #: escaper in a comment (flagged by ``main`` too: a comment is no position it knows).
@@ -217,6 +217,8 @@ class TestEveryPlacement:
             (s, p) for s in ("escape", "cond_escape") for p in ("between", "attr_name", "tag_name")
         }
         expected |= {("cond_escape", "comment")}
+        # an HTML escaper's output, or a checked URL, in a style attribute: CSS (#4212)
+        expected |= {(s, "style_attr") for s in ("escape", "attr_text", "url")}
         assert new == expected
 
 
@@ -261,6 +263,11 @@ SPELLINGS = {
     "an escaper around an escaper": f"f'<a href=\"{{conditional_escape({E})}}\">l</a>'",
     "a checked URL in a handler": "f'<b onclick=\"go(\\'{safe_url(x)}\\')\">b</b>'",
     "a checked URL in a script body": "f'<script>var a={safe_url(x)};</script>'",
+    # #4212 item 7: ``/a);color:red;background:url(//evil`` is a relative URL safe_url accepts
+    "a checked URL in a style attribute": "f'<b style=\"background:url({safe_url(x)})\">b</b>'",
+    "a checked URL in a style attribute, + chain": (
+        "'<b style=\"color:' + safe_url(x) + '\">b</b>'"
+    ),
 }
 #: label -> a whole ``f``: the output reaches the position through a name or a parameter
 THROUGH = {
@@ -306,6 +313,11 @@ THROUGH = {
     "an f-string as a % argument": (
         "def f(x):\n    return mark_safe('<a href=\"%s\">l</a>' % f'{escape(x)}')\n"
     ),
+    "format_html with a checked URL in a style attribute": (
+        "from django.utils.html import format_html\n"
+        "def f(x):\n"
+        "    return format_html('<b style=\"background:url({})\">b</b>', safe_url(x))\n"
+    ),
     "html.escape": (
         "import html\ndef f(x):\n    return mark_safe(f'<a href=\"{html.escape(x)}\">l</a>')\n"
     ),
@@ -345,6 +357,10 @@ CLEAN_MODULES = {
     "a name rebound to the checked URL before it is written": (
         "def f(x):\n    u = escape(x)\n    u = safe_url(x)\n"
         "    return mark_safe(f'<a href=\"{u}\">l</a>')\n"
+    ),
+    "a CSS escaper in a style attribute": (
+        "from djust.components.utils import safe_css_color\n"
+        "def f(x):\n    return mark_safe(f'<b style=\"color:{safe_css_color(x)}\">b</b>')\n"
     ),
     "a helper that puts its parameter in text": (
         "def bold(u):\n    return f'<b>{u}</b>'\ndef f(x):\n    return mark_safe(bold(escape(x)))\n"
@@ -399,6 +415,27 @@ class TestOtherSpellings:
         mod = fuzz.build("escape", [], placement)
         assert taint._Module(mod).findings() == []
         assert taint._Module(mod, call_binding=True).findings() != []
+
+
+class TestTwoValueEscaperClasses:
+    """#4212 item 7: a checked URL and a CSS escaper's output are two classes: each fits its own
+    attribute value's start, neither the other's."""
+
+    def test_a_checked_url_fits_a_url_not_a_style(self):
+        assert taint._walk('<a href="' + taint.SYM_VALUE + '">')[0]
+        assert not taint._walk('<b style="color:' + taint.SYM_VALUE + '">')[0]
+
+    def test_a_css_escaper_fits_a_style_not_a_url(self):
+        assert taint._walk('<b style="color:' + taint.SYM_CSS + '">')[0]
+        assert not taint._walk('<a href="' + taint.SYM_CSS + '">')[0]
+
+    def test_both_fit_text_and_an_ordinary_value(self):
+        for sym in (taint.SYM_VALUE, taint.SYM_CSS):
+            assert taint._walk("<p>" + sym + "</p>")[0]
+            assert taint._walk('<b title="' + sym + '">')[0]
+
+    def test_either_one_is_escaped_text(self):
+        assert taint._join({taint.SYM_VALUE, taint.SYM_CSS}) == taint.SYM_ESCAPED
 
 
 class TestTheGateOffListApplies:

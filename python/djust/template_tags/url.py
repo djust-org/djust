@@ -13,6 +13,9 @@ from ._builtin import DjangoBuiltinTagHandler
 
 @register("url")
 class UrlTagHandler(DjangoBuiltinTagHandler):
+    # Django's node binds only its `as <name>` target (#4124).
+    BINDS_ONLY_AS_VAR = True
+
     # The native argument channel preserves the assignment-name marker; all
     # other positions are raw source tokens under the built-in bridge policy.
     ACCEPTS_AS_VAR = True

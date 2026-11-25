@@ -2,10 +2,9 @@
 Event handler parameter validation utilities.
 
 Provides runtime validation of event handler signatures including:
-- Required parameter checking
-- Unexpected parameter detection
-- Type validation using type hints
-- Automatic type coercion from string values
+- The strict contract: only parameters the signature declares are accepted
+- Required parameter checking and unexpected parameter refusal
+- Conversion to the declared type hints (``coerce_types``)
 - Clear error message generation
 """
 
@@ -14,10 +13,7 @@ import logging
 import types
 import threading
 import weakref
-from decimal import Decimal, InvalidOperation
-from collections import OrderedDict
-from typing import Any, Callable, Dict, List, Optional, Union, get_type_hints, get_origin, get_args
-from uuid import UUID
+from typing import Any, Callable, Dict, Optional, Union, get_type_hints, get_origin, get_args
 
 from djust.security import sanitize_for_log
 from ._parameter_contract import ROUTED_COMPONENT_PARAMETER, ParameterContract
@@ -72,142 +68,6 @@ def get_strict_handler_contract(
         return variants[key]
 
 
-def get_project_parameter_policy() -> str:
-    """The project default, shared by dispatch and the startup system check."""
-    from .config import config
-    from ._parameter_contract import ContractError
-
-    policy = config.get("event_parameter_policy", "legacy")
-    if policy not in ("legacy", "strict"):
-        raise ContractError("event_parameter_policy must be 'legacy' or 'strict'.")
-    return str(policy)
-
-
-_DECLARES_STRICT: "weakref.WeakKeyDictionary[type, bool]" = weakref.WeakKeyDictionary()
-
-
-def _declares_strict(view_class: type) -> bool:
-    """Whether any handler the class declares opts into the strict policy."""
-    cached = _DECLARES_STRICT.get(view_class)
-    if cached is None:
-        from ._parameter_metadata import declared_handlers
-
-        cached = False
-        for handler in declared_handlers(view_class, server_functions=True):
-            decorators = getattr(handler.function, "_djust_decorators", {})
-            metadata = decorators.get("event_handler", decorators.get("server_function", {}))
-            if metadata.get("parameter_policy") == "strict":
-                cached = True
-                break
-        _DECLARES_STRICT[view_class] = cached
-    return cached
-
-
-def _strict_possible(view: Any) -> bool:
-    """Whether any handler of ``view`` can resolve to the strict policy (fails safe)."""
-    from ._parameter_contract import ContractError
-
-    try:
-        if get_project_parameter_policy() == "strict":
-            return True
-        return _declares_strict(type(view))
-    except (ContractError, TypeError):
-        return True
-
-
-def _definition_key(function: Any) -> tuple:
-    """What a function's signature and type hints are derived from.
-
-    A cache entry is used only while this still matches, so a function whose
-    code, defaults, annotations or ``__signature__`` / ``__wrapped__`` are
-    changed after its first event is resolved again, exactly as it would be
-    without the cache. The annotations are compared by value (a dict mutated
-    in place still differs) and are small.
-    """
-    annotations = getattr(function, "__annotations__", None)
-    return (
-        function.__code__,
-        function.__defaults__,
-        tuple(function.__kwdefaults__.items()) if function.__kwdefaults__ else None,
-        tuple(annotations.items()) if annotations else None,
-        function.__dict__.get("__signature__"),
-        function.__dict__.get("__wrapped__"),
-    )
-
-
-_SIGNATURES: weakref.WeakKeyDictionary[Any, Dict[bool, tuple]] = weakref.WeakKeyDictionary()
-
-
-def _handler_signature(handler: Callable) -> inspect.Signature:
-    """``inspect.signature(handler)``, computed once per function (#3095).
-
-    Building a signature is the most expensive step of validating an event's
-    parameters, and it runs on the event loop for every event. Keyed like the
-    strict contracts: by the underlying function (weakly) and whether it is
-    bound, never by a bound method or its owner instance, and valid only
-    while :func:`_definition_key` still matches. A ``Signature`` is
-    immutable, so sharing one is safe across threads.
-    """
-    bound = inspect.ismethod(handler)
-    function: Any = getattr(handler, "__func__", handler) if bound else handler
-    if not inspect.isfunction(function):
-        return inspect.signature(handler)
-    key = _definition_key(function)
-    variants = _SIGNATURES.get(function)
-    if variants is None:
-        with _STRICT_CONTRACT_LOCK:
-            variants = _SIGNATURES.setdefault(function, {})
-    entry = variants.get(bound)
-    if entry is not None and entry[0] == key:
-        cached: inspect.Signature = entry[1]
-        return cached
-    sig = inspect.signature(handler)
-    variants[bound] = (key, sig)
-    return sig
-
-
-_TYPE_HINTS: weakref.WeakKeyDictionary[Any, tuple] = weakref.WeakKeyDictionary()
-
-
-def _handler_type_hints(handler: Callable) -> Dict[str, Any]:
-    """``get_type_hints(handler)``, resolved once per function (#3095).
-
-    Same keying and validity check as :func:`_handler_signature`; the hints
-    of a bound method are its function's. Only a successful resolution is
-    cached: a forward reference that fails now raises again next time, as
-    before. Callers only read the returned dict.
-    """
-    function: Any = getattr(handler, "__func__", handler) if inspect.ismethod(handler) else handler
-    if not inspect.isfunction(function):
-        return get_type_hints(handler)
-    key = _definition_key(function)
-    entry = _TYPE_HINTS.get(function)
-    if entry is not None and entry[0] == key:
-        hints: Dict[str, Any] = entry[1]
-        return hints
-    hints = get_type_hints(handler)
-    with _STRICT_CONTRACT_LOCK:
-        _TYPE_HINTS[function] = (key, hints)
-    return hints
-
-
-def get_handler_parameter_policy(handler: Callable) -> str:
-    """Resolve only server-owned policy, independently of client metadata."""
-    from ._parameter_contract import ContractError
-
-    decorators = getattr(handler, "_djust_decorators", {})
-    metadata = decorators.get("event_handler", decorators.get("server_function", {}))
-    policy = metadata.get("parameter_policy")
-    if policy is not None and policy not in ("legacy", "strict"):
-        raise ContractError("parameter_policy must be 'legacy' or 'strict'.")
-    if policy is not None:
-        return str(policy)
-    # A dj-auto-recover target follows the same policy as any handler: its
-    # form values and data attributes are ordinary declared parameters
-    # (``form_values`` / ``data_attrs``) under strict (#4178).
-    return get_project_parameter_policy()
-
-
 def get_handler_coercion(handler: Callable) -> bool:
     """One coercion setting for events and deliberately exposed server functions."""
     decorators = getattr(handler, "_djust_decorators", {})
@@ -216,7 +76,7 @@ def get_handler_coercion(handler: Callable) -> bool:
 
 
 def validated_call_arguments(validation: Dict[str, Any]) -> tuple[tuple[Any, ...], Dict[str, Any]]:
-    """Consume the validated call plan, preserving legacy result dictionaries."""
+    """Consume the validated call plan."""
     if not validation.get("valid"):
         raise ValueError("Cannot invoke an invalid handler call.")
     bound = validation.get("bound_arguments")
@@ -259,6 +119,23 @@ def bind_declared_component_name(handler: Callable, params: Any) -> tuple[Any, D
     return remaining, {ROUTED_COMPONENT_PARAMETER: target}
 
 
+def _flat_arguments(bound: Any) -> Dict[str, Any]:
+    """``bound.arguments`` with a ``**kwargs`` parameter's entries spread into
+    the mapping, the shape legacy ``coerced_params`` always had: the params the
+    handler received by name, which waiters and hooks are handed (``{"a": 1}``,
+    not ``{"kwargs": {"a": 1}}``)."""
+    flat: Dict[str, Any] = {}
+    parameters = bound.signature.parameters
+    for name, value in bound.arguments.items():
+        if parameters[name].kind is inspect.Parameter.VAR_KEYWORD:
+            flat.update(value)
+        elif parameters[name].kind is inspect.Parameter.VAR_POSITIONAL:
+            continue
+        else:
+            flat[name] = value
+    return flat
+
+
 def _validate_strict_handler_params(
     handler: Callable, params: Dict[str, Any], coerce: bool, positional_args: Any
 ) -> Dict[str, Any]:
@@ -290,11 +167,22 @@ def _validate_strict_handler_params(
     except ParameterError as exc:
         # Never return the original payload or arbitrary client-supplied keys in
         # an error envelope. Declared names and fixed type labels are sufficient.
+        if type(params) is dict and logger.isEnabledFor(logging.DEBUG):
+            # Server log only, and only at DEBUG: the names a client sent that
+            # the handler does not declare. Never part of the response.
+            undeclared = contract.undeclared_keys(params)
+            if undeclared:
+                logger.debug(
+                    "Strict handler %s refused undeclared argument names: %s",
+                    getattr(handler, "__qualname__", "<handler>"),
+                    sanitize_for_log(", ".join(undeclared[:10]), max_length=200),
+                )
         return {
             "valid": False,
             "error": exc.public_message,
             "expected": expected,
             "provided": [],
+            "missing": list(exc.missing),
             "type_errors": None,
             "coerced_params": {},
         }
@@ -302,317 +190,11 @@ def _validate_strict_handler_params(
         "valid": True,
         "error": None,
         "expected": expected,
-        "provided": list(bound.arguments),
+        "provided": list(_flat_arguments(bound)),
         "type_errors": None,
-        "coerced_params": dict(bound.arguments),
+        "coerced_params": _flat_arguments(bound),
         "bound_arguments": bound,
     }
-
-
-def coerce_parameter_types(handler: Callable, params: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Coerce parameter values to match handler type hints.
-
-    Template data-* attributes always pass values as strings. This function
-    automatically converts string values to the expected types based on
-    the handler's type hints.
-
-    Args:
-        handler: Event handler method with type hints
-        params: Parameters from client event (typically strings from data-* attributes)
-
-    Returns:
-        New dict with coerced parameter values
-
-    Supported coercions:
-        - str -> int: "123" -> 123
-        - str -> float: "3.14" -> 3.14
-        - str -> bool: "true"/"1"/"yes"/"on" -> True, others -> False
-        - str -> Decimal: "123.45" -> Decimal("123.45")
-        - str -> UUID: "550e8400-..." -> UUID("550e8400-...")
-        - str -> list: "a,b,c" -> ["a", "b", "c"]
-        - str -> List[int]: "1,2,3" -> [1, 2, 3]
-
-    Example:
-        >>> def handler(self, count: int, enabled: bool = False):
-        ...     pass
-        >>> coerce_parameter_types(handler, {"count": "42", "enabled": "true"})
-        {"count": 42, "enabled": True}
-    """
-    try:
-        type_hints = _handler_type_hints(handler)
-    except Exception:
-        # If type hints can't be extracted, return params unchanged
-        return params
-
-    coerced = {}
-
-    for name, value in params.items():
-        expected_type = type_hints.get(name)
-
-        # Skip if no type hint or value is not a string
-        if expected_type is None:
-            coerced[name] = value
-            continue
-
-        # Handle Optional[T] and Union types
-        origin = get_origin(expected_type)
-        if origin is Union:
-            # Get non-None types from Union (handles Optional[T])
-            # For Union types like Union[int, str], coerce to the first non-None type.
-            # This means Union[int, str] will try int coercion first.
-            args = [arg for arg in get_args(expected_type) if arg is not type(None)]
-            if args:
-                expected_type = args[0]
-                origin = get_origin(expected_type)
-
-        # A typed wire value (ADR-033 D4: ``dj-value-value:int="4"`` arrives
-        # as ``4``) for a handler annotated ``str`` is the text the untyped
-        # attribute used to carry — never a rejection of a pre-existing
-        # handler over a bool/int/float.
-        if expected_type is str and isinstance(value, (bool, int, float)):
-            coerced[name] = (
-                ("true" if value else "false") if isinstance(value, bool) else str(value)
-            )
-            continue
-
-        # Only coerce if value is a string
-        if not isinstance(value, str):
-            coerced[name] = value
-            continue
-
-        try:
-            coerced[name] = _coerce_value(value, expected_type, origin)
-        except (ValueError, TypeError, InvalidOperation):
-            # If coercion fails, keep original value
-            # Type validation will catch the error with a helpful message
-            coerced[name] = value
-
-    return coerced
-
-
-def _coerce_value(value: str, expected_type: Any, origin: Any) -> Any:
-    """
-    Coerce a string value to the expected type.
-
-    Args:
-        value: String value to coerce
-        expected_type: Target type from type hints
-        origin: Origin type for generics (e.g., list for List[int])
-
-    Returns:
-        Coerced value
-
-    Raises:
-        ValueError: If coercion fails
-    """
-    # Handle List types
-    if origin is list or expected_type is list:
-        if not value:
-            return []
-        items = [item.strip() for item in value.split(",")]
-        # Check for typed list like List[int]
-        args = get_args(expected_type) if origin is list else None
-        if args:
-            item_type = args[0]
-            return [_coerce_single_value(item, item_type) for item in items]
-        return items
-
-    return _coerce_single_value(value, expected_type)
-
-
-def _coerce_single_value(value: str, expected_type: type) -> Any:
-    """
-    Coerce a single string value to the expected type.
-
-    Args:
-        value: String value to coerce
-        expected_type: Target type
-
-    Returns:
-        Coerced value
-
-    Raises:
-        ValueError: If coercion fails
-    """
-    if not isinstance(expected_type, type):
-        return value
-
-    if expected_type is int:
-        return int(value) if value else 0
-
-    if expected_type is float:
-        return float(value) if value else 0.0
-
-    if expected_type is bool:
-        return value.lower() in ("true", "1", "yes", "on")
-
-    if expected_type is Decimal:
-        return Decimal(value) if value else Decimal("0")
-
-    if expected_type is UUID:
-        return UUID(value)
-
-    if expected_type is str:
-        return value
-
-    # Unknown type - return original
-    return value
-
-
-# Framework-injected keys that legitimately reach a handler's **kwargs and must
-# never be reported. Underscore-prefixed keys are covered by the repo's
-# private-name convention and excluded wholesale; these are the routing keys
-# that carry no underscore.
-#
-# Both were recorded against the actor dispatch path, which read `view_id`
-# with `.get` and never popped `component_id`. That path was removed in 2.0;
-# the normal paths pop both keys before the handler call. The set is kept as a
-# floor: whether either key can still reach `**kwargs` has not been re-measured
-# since the removal.
-_FRAMEWORK_KWARGS_KEYS = frozenset({"view_id", "component_id"})
-
-# Warn once per (module, handler, key). This fires on @input/@change paths — a
-# warning per keystroke would be worse than no warning at all.
-#
-# Keyed on the module too, because `__qualname__` alone collides: two apps with
-# a same-named view class share one entry, so the second app's identical bug is
-# silenced and neither warning names it.
-#
-# LRU rather than a hard stop. Parameter names come from the client, so the set
-# must be bounded — but a hard stop turns a memory concern into a cheaper and
-# permanent one: ~560 events of novel near-miss keys from a single socket would
-# fill it and blind the diagnostic for every view and every tenant for the rest
-# of the process's life. Evicting the oldest entry keeps memory bounded while
-# leaving the diagnostic alive. The residual trade is that a client cycling
-# keys can be warned about repeatedly; that is noisy rather than blinding, and
-# it is the better failure of the two.
-_NEAR_MISS_WARNED: "OrderedDict[tuple, None]" = OrderedDict()
-_NEAR_MISS_WARNED_CAP = 512
-
-# A name shorter than this is a near miss of far too much: `id`/`uid`, `q`/`qs`
-# and `tab`/`tag` are all one edit apart and virtually never a wire mismatch.
-_MIN_NAME_LEN = 3
-
-
-def _is_near_miss(key: str, candidate: str) -> bool:
-    """Is `key` plausibly a mis-named `candidate`?
-
-    Structural, not a similarity score. An earlier version used
-    ``difflib.get_close_matches(..., cutoff=0.6)``, which is wrong in both
-    directions on short identifiers: it claims `data`/`date`, `from`/`form`,
-    `mode`/`node` and `id`/`uid` are typos of each other — confidently wrong
-    advice on djust's own parameter names — while *missing* `name` against
-    `field_name` (0.571) and `page` against `page_number` (0.533), which are
-    the #2137 class one step further along.
-
-    What a real wire/signature mismatch actually looks like is one of:
-
-    * the same name modulo case and underscores (``item_id`` / ``itemId``) —
-      the classic JS/Python boundary drift;
-    * one name a prefix or suffix of the other (``field`` / ``field_name``,
-      ``checked`` / ``is_checked``, ``value`` / ``val``).
-
-    Anything else is far likelier to be a key deliberately passed through to
-    ``**kwargs``, which is the documented catch-all shape.
-    """
-    a = key.lower().replace("_", "")
-    b = candidate.lower().replace("_", "")
-    if a == b:
-        return True
-    short, long_ = (a, b) if len(a) <= len(b) else (b, a)
-    if len(short) < _MIN_NAME_LEN:
-        return False
-    return long_.startswith(short) or long_.endswith(short)
-
-
-def _warn_on_near_miss_kwargs(
-    handler: Callable,
-    provided: Dict[str, Any],
-    accepted: List[str],
-    event_name: str,
-) -> None:
-    """Warn when a **kwargs handler silently swallowed a near-miss parameter.
-
-    Only *near misses* are reported — see `_is_near_miss`. An unexpected key
-    bearing no resemblance to the signature is the documented catch-all shape
-    (``def on_event(self, **kwargs)`` reading ``kwargs`` directly), and warning
-    about it would make this noise on the very paths that need it quiet.
-    """
-    if not accepted:
-        # Fast path only. A pure `**kwargs` signature is a catch-all by
-        # construction, and the loop below would find no candidate anyway —
-        # this return saves the work, it does not create the behaviour. Noted
-        # because a gate-off of this line does NOT fail the suite, and a reader
-        # should not mistake that for a missing test.
-        return
-
-    unexpected = [k for k in provided if k not in accepted]
-    if not unexpected:
-        return
-
-    name = getattr(handler, "__qualname__", None) or getattr(handler, "__name__", repr(handler))
-    module = getattr(handler, "__module__", "") or ""
-
-    for key in unexpected:
-        if key.startswith("_") or key in _FRAMEWORK_KWARGS_KEYS:
-            continue
-        # Cap the client-supplied name ONCE, for both the memo key and the log
-        # record (#2579). An earlier version of this code capped neither, on the
-        # stated grounds that "a near miss must be a prefix/suffix of a declared
-        # parameter, so neither can be long". That is false, by three routes
-        # through `_is_near_miss`, because it normalises before it compares:
-        #   1. it strips underscores from both sides, so `field_name` matches
-        #      `f_i_e_l_d_n_a_m_e` + 20_000 underscores via the `a == b` branch;
-        #   2. when the key is the longer side it becomes `long_`, so
-        #      `field_name` + 20_000 of anything matches via `startswith`;
-        #   3. likewise `fieldname` + 20_000 digits, with no underscore at all.
-        # Uncapped, that is an unbounded client-controlled write to the log on
-        # every event. The warn-once memo is no defence — its key includes
-        # `key`, so varying the padding mints a fresh entry each time and only
-        # evicts. Capping the memo key too keeps 512 entries from retaining
-        # 20 KB apiece. `_is_near_miss` still sees the FULL key, so matching
-        # semantics are unchanged; for a normal identifier `sanitize_for_log`
-        # is the identity, so the common path is unaffected.
-        # An identifier of at most 100 characters is what sanitize_for_log
-        # returns unchanged; skip the call on that common path (#3095).
-        safe_key = (
-            key
-            if len(key) <= 100 and key.isidentifier() and key.isascii()
-            else sanitize_for_log(key, max_length=100)
-        )
-        pair = (module, name, safe_key)
-        if pair in _NEAR_MISS_WARNED:
-            # Checked BEFORE the match below, so the steady state on a
-            # keystroke path is one dict lookup.
-            _NEAR_MISS_WARNED.move_to_end(pair)
-            continue
-        match = next((p for p in accepted if _is_near_miss(key, p)), None)
-        if match is None:
-            continue
-        _NEAR_MISS_WARNED[pair] = None
-        while len(_NEAR_MISS_WARNED) > _NEAR_MISS_WARNED_CAP:
-            _NEAR_MISS_WARNED.popitem(last=False)
-        # %r, not %s, for every client-influenced field. repr() escapes CR/LF,
-        # so a parameter name like "field_name\r\n" cannot forge a second log
-        # record — but repr() does not bound LENGTH, which is what the
-        # sanitize_for_log calls add. `match` is the only field here that is not
-        # client-influenced: it comes from `accepted`, the handler's own
-        # declared parameters, so it is bounded by the source file.
-        logger.warning(
-            "Handler %r (event %r) was sent parameter %r, which it does not "
-            "accept, but its signature declares the similarly-named %r. Because "
-            "the handler takes **kwargs the value was discarded silently rather "
-            "than raising TypeError, so the handler ran and did nothing. "
-            "Rename one side to match. Accepted parameters: %s",
-            sanitize_for_log(name, max_length=100),
-            sanitize_for_log(str(event_name), max_length=100),
-            # ``safe_key`` skips sanitising a short identifier on the hot path
-            # above; this warning runs once per near miss, so sanitise here.
-            sanitize_for_log(safe_key, max_length=100),
-            match,
-            sanitize_for_log(", ".join(accepted), max_length=200),
-        )
 
 
 def validate_handler_params(
@@ -622,255 +204,41 @@ def validate_handler_params(
     coerce: Optional[bool] = None,
     positional_args: Any = _MISSING_POSITIONAL,
 ) -> Dict[str, Any]:
-    """
-    Validate event parameters match handler signature.
+    """Validate event parameters against the handler's strict contract.
 
-    Automatically coerces string parameters to expected types based on
-    type hints (enabled by default). Template data-* attributes always
-    pass strings, so coercion converts them to int, float, bool, etc.
-
-    Positional arguments from inline handler syntax (e.g., dj-click="handler('value')")
-    are mapped to named parameters based on their position in the handler signature.
+    A parameter reaches the handler only if its signature declares it. Values
+    are converted to the declared type hints (unless ``coerce`` is false) and
+    positional arguments from inline handler syntax such as
+    ``dj-click="handler('value')"`` are mapped to parameters by position.
 
     Args:
         handler: Event handler method to validate against
-        params: Parameters provided by client event
+        params: Parameters provided by the client event
         event_name: Name of the event (for error messages)
-        coerce: Whether to coerce values; None uses the decorator's coerce_types
-            setting (default True).
-        positional_args: Optional list of positional arguments from inline handler
-            syntax (e.g., ['value'] from dj-click="handler('value')")
+        coerce: Whether to convert values; None uses the decorator's
+            ``coerce_types`` setting (default True).
+        positional_args: Optional list of positional arguments from inline
+            handler syntax (e.g. ``['value']``)
 
     Returns:
-        Dict with validation result:
-        {
-            "valid": bool,
-            "error": Optional[str],
-            "expected": List[str],  # Expected parameter names
-            "provided": List[str],  # Provided parameter names
-            "type_errors": Optional[List[Dict]],  # Type mismatch details
-            "coerced_params": Dict[str, Any],  # Parameters after coercion
-        }
+        Dict with ``valid``, ``error``, ``expected``, ``provided``,
+        ``type_errors``, ``coerced_params`` and, when valid, a server-only
+        ``bound_arguments`` (``inspect.BoundArguments``) that invokers consume
+        through :func:`validated_call_arguments`; it is never serialized.
 
     Example:
-        >>> def my_handler(self, value: str, count: int = 0):
-        ...     pass
-        >>> result = validate_handler_params(my_handler, {"value": "test", "count": "5"}, "my_event")
-        >>> assert result["valid"] is True
-        >>> assert result["coerced_params"]["count"] == 5  # String coerced to int
-        >>> result = validate_handler_params(my_handler, {}, "my_event")
+        >>> class V:
+        ...     def my_handler(self, value: str, count: int = 0):
+        ...         pass
+        >>> result = validate_handler_params(V().my_handler, {}, "my_event")
         >>> assert result["valid"] is False
-        >>> assert "missing required parameters" in result["error"]
-        >>> # Positional args are mapped to named parameters
-        >>> result = validate_handler_params(my_handler, {}, "my_event", positional_args=["hello"])
+        >>> result = validate_handler_params(V().my_handler, {}, "my_event", positional_args=["hello"])
         >>> assert result["valid"] is True
         >>> assert result["coerced_params"]["value"] == "hello"
     """
     if coerce is None:
         coerce = get_handler_coercion(handler)
-    if get_handler_parameter_policy(handler) == "strict":
-        return _validate_strict_handler_params(handler, params, coerce, positional_args)
-    if positional_args is _MISSING_POSITIONAL:
-        positional_args = None
-
-    # Legacy mapping below is unchanged. Strict results additionally carry a
-    # server-only BoundArguments; invokers consume validated_call_arguments(),
-    # never serialize the bound call into a response or state snapshot.
-    # Map positional arguments to named parameters based on handler signature
-    sig = _handler_signature(handler)
-
-    # Build list of parameter names (excluding self, *args, **kwargs)
-    param_names = []
-    for name, param in sig.parameters.items():
-        if name == "self":
-            continue
-        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
-            continue
-        param_names.append(name)
-
-    # Merge positional args into params (positional args take precedence)
-    merged_params = params.copy()
-    if positional_args:
-        for i, arg in enumerate(positional_args):
-            if i < len(param_names):
-                param_name = param_names[i]
-                if param_name in params and logger.isEnabledFor(logging.DEBUG):
-                    # Sanitize values for safe logging to prevent log injection
-                    old_val = sanitize_for_log(str(params[param_name]), max_length=100)
-                    new_val = sanitize_for_log(str(arg), max_length=100)
-                    logger.debug(
-                        "Positional arg overrides data-* attribute for %r: %s -> %s",
-                        param_name,
-                        old_val,
-                        new_val,
-                    )
-                merged_params[param_name] = arg
-
-    # Coerce parameters before validation
-    coerced_params = coerce_parameter_types(handler, merged_params) if coerce else merged_params
-
-    # Extract parameter information
-    required_params = []
-    optional_params = []
-    accepted_params = []
-    has_var_keyword = False
-
-    for name, param in sig.parameters.items():
-        # Skip 'self' parameter
-        if name == "self":
-            continue
-
-        # Check for **kwargs
-        if param.kind == inspect.Parameter.VAR_KEYWORD:
-            has_var_keyword = True
-            continue
-
-        # Skip *args
-        if param.kind == inspect.Parameter.VAR_POSITIONAL:
-            continue
-
-        accepted_params.append(name)
-
-        if param.default == inspect.Parameter.empty:
-            required_params.append(name)
-        else:
-            optional_params.append(name)
-
-    # Check for missing required parameters
-    missing = [p for p in required_params if p not in coerced_params]
-    if missing:
-        return {
-            "valid": False,
-            "error": f"Handler '{event_name}' missing required parameters: {missing}",
-            "expected": accepted_params,
-            "provided": list(coerced_params.keys()),
-            "type_errors": None,
-            "coerced_params": coerced_params,
-        }
-
-    # A handler WITH **kwargs absorbs an unexpected parameter instead of
-    # raising TypeError, so a name mismatch between client and signature is
-    # silent (#2144). That is what #2137 was: the client sent `field`, the
-    # handler took `field_name`, and it ran on every keystroke doing nothing.
-    if has_var_keyword:
-        # Positional-only parameters are excluded from the suggestion pool:
-        # `h(field_name=...)` raises TypeError for `def h(field_name, /)`, so
-        # "rename one side to match" would be advice that cannot be followed.
-        nameable = [
-            n
-            for n in accepted_params
-            if sig.parameters[n].kind is not inspect.Parameter.POSITIONAL_ONLY
-        ]
-        _warn_on_near_miss_kwargs(handler, coerced_params, nameable, event_name)
-
-    # Check for unexpected parameters (if no **kwargs)
-    if not has_var_keyword:
-        unexpected = [p for p in coerced_params if p not in accepted_params]
-        if unexpected:
-            return {
-                "valid": False,
-                "error": f"Handler '{event_name}' received unexpected parameters: {unexpected}. Expected: {accepted_params}",
-                "expected": accepted_params,
-                "provided": list(coerced_params.keys()),
-                "type_errors": None,
-                "coerced_params": coerced_params,
-            }
-
-    # Validate parameter types using type hints (on coerced params)
-    type_errors = validate_parameter_types(handler, coerced_params)
-    if type_errors:
-        error_msg = f"Handler '{event_name}' received wrong parameter types:\n"
-        for err in type_errors:
-            # Truncate repr safely to avoid cutting mid-escape sequence
-            val_repr = repr(err.get("value", "?"))
-            if len(val_repr) > 50:
-                val_repr = val_repr[:47] + "..."
-
-            error_msg += f"  - {err['param']}: expected {err['expected']}, got {err['actual']} ({val_repr})\n"
-
-            # Add detailed hint with actionable fix suggestions
-            hint = format_type_error_hint(
-                param=err["param"],
-                expected=err["expected"],
-                actual=err["actual"],
-                value=err.get("value"),
-                coercion_attempted=coerce,
-            )
-            error_msg += hint + "\n\n"
-
-        return {
-            "valid": False,
-            "error": error_msg.strip(),
-            "expected": accepted_params,
-            "provided": list(coerced_params.keys()),
-            "type_errors": type_errors,
-            "coerced_params": coerced_params,
-        }
-
-    return {
-        "valid": True,
-        "error": None,
-        "expected": accepted_params,
-        "provided": list(coerced_params.keys()),
-        "type_errors": None,
-        "coerced_params": coerced_params,
-    }
-
-
-def validate_parameter_types(
-    handler: Callable, params: Dict[str, Any]
-) -> Optional[List[Dict[str, str]]]:
-    """
-    Validate parameter types against type hints.
-
-    Args:
-        handler: Event handler method
-        params: Parameters provided by client
-
-    Returns:
-        List of type errors, or None if all types valid
-        Each error dict contains: {param, expected, actual}
-
-    Example:
-        >>> def handler(self, count: int):
-        ...     pass
-        >>> errors = validate_parameter_types(handler, {"count": "not_an_int"})
-        >>> assert errors is not None
-        >>> assert errors[0]["param"] == "count"
-        >>> assert errors[0]["expected"] == "int"
-        >>> assert errors[0]["actual"] == "str"
-    """
-    try:
-        type_hints = _handler_type_hints(handler)
-    except Exception:
-        # If type hints can't be extracted, skip type validation
-        return None
-
-    errors = []
-
-    for param_name, param_value in params.items():
-        if param_name not in type_hints:
-            continue
-
-        expected_type = type_hints[param_name]
-
-        # Skip complex types (Union, Optional, UnionType, etc.) and Any.
-        # This guard means .__name__ below is safe — only simple types pass.
-        if not isinstance(expected_type, type) or expected_type is Any:
-            continue
-
-        # Check type match
-        if not isinstance(param_value, expected_type):
-            errors.append(
-                {
-                    "param": param_name,
-                    "expected": expected_type.__name__,
-                    "actual": type(param_value).__name__,
-                    "value": param_value,
-                }
-            )
-
-    return errors if errors else None
+    return _validate_strict_handler_params(handler, params, coerce, positional_args)
 
 
 def _type_display_name(hint: Any) -> str:
@@ -899,7 +267,7 @@ def _single_type_name(t: Any) -> str:
 
 
 def get_handler_signature_info(
-    handler: Callable, parameter_policy: Optional[str] = None, *, for_declaration: bool = False
+    handler: Callable, *, for_declaration: bool = False
 ) -> Dict[str, Any]:
     """
     Extract comprehensive signature information from handler.
@@ -908,10 +276,12 @@ def get_handler_signature_info(
 
     Args:
         handler: Event handler method
+        for_declaration: Introspect the signature as written (decoration time)
+            instead of compiling the strict contract.
 
     Returns:
         Dict containing:
-        - params: List of parameter dicts with name, type, required, default
+        - params: List of parameter dicts with name, type, required
         - description: Handler docstring
         - accepts_kwargs: Whether handler accepts **kwargs
 
@@ -928,8 +298,7 @@ def get_handler_signature_info(
         >>> assert info["accepts_kwargs"] is True
     """
     sig = inspect.signature(handler)
-    strict = (parameter_policy or get_handler_parameter_policy(handler)) == "strict"
-    if strict and not for_declaration:
+    if not for_declaration:
         # Class-level schema/check consumers see unbound methods. Bind only a
         # sentinel, never construct a view or run its mount for introspection.
         target = handler
@@ -968,11 +337,6 @@ def get_handler_signature_info(
             "type": _type_display_name(type_hints.get(name, Any)) if name in type_hints else "Any",
             "required": param.default == inspect.Parameter.empty,
         }
-        if not strict:
-            param_info["default"] = (
-                str(param.default) if param.default != inspect.Parameter.empty else None
-            )
-
         params.append(param_info)
 
     return {
@@ -980,124 +344,3 @@ def get_handler_signature_info(
         "description": inspect.getdoc(handler) or "",
         "accepts_kwargs": accepts_kwargs,
     }
-
-
-def format_type_error_hint(
-    param: str,
-    expected: str,
-    actual: str,
-    value: Any,
-    coercion_attempted: bool = True,
-) -> str:
-    """
-    Format a validation error with actionable hints.
-
-    Provides clear guidance on how to fix type mismatches,
-    with specific suggestions based on the mismatch type.
-
-    Args:
-        param: Parameter name that failed validation
-        expected: Expected type name
-        actual: Actual type name
-        value: The actual value received
-        coercion_attempted: Whether type coercion was tried
-
-    Returns:
-        Formatted hint string
-    """
-    # Build appropriate hint based on the type mismatch
-    if expected == "int" and actual == "str":
-        return _get_string_to_int_hint(param, value, coercion_attempted)
-    elif expected == "float" and actual == "str":
-        return _get_string_to_float_hint(param, value, coercion_attempted)
-    elif expected == "bool" and actual == "str":
-        return _get_string_to_bool_hint(param, value, coercion_attempted)
-    elif expected == "list" and actual == "str":
-        return _get_string_to_list_hint(param, value, coercion_attempted)
-    elif expected == "Decimal" and actual == "str":
-        return _get_string_to_decimal_hint(param, value, coercion_attempted)
-    else:
-        # Generic hint
-        return f"    Hint: Check that the value is valid for type '{expected}'."
-
-
-def _get_string_to_int_hint(param: str, value: Any, coercion_attempted: bool) -> str:
-    """Generate hint for string->int coercion failure."""
-    hint = "    This is a common issue! Template data-* attributes are always strings.\n\n"
-
-    if coercion_attempted:
-        hint += f"    The value '{value}' could not be converted to int.\n"
-        hint += "    Check that it's a valid integer (e.g., '42', not '42.5' or 'abc').\n\n"
-
-    hint += "    Quick fixes:\n"
-    hint += "      1. Use typed template attribute:\n"
-    hint += f'         data-{param.replace("_", "-")}:int="{{{{ value }}}}"\n'
-    hint += "      2. Ensure the value is numeric in your template:\n"
-    hint += f'         data-{param.replace("_", "-")}="{{{{ item.id|default:0 }}}}"'
-
-    return hint
-
-
-def _get_string_to_float_hint(param: str, value: Any, coercion_attempted: bool) -> str:
-    """Generate hint for string->float coercion failure."""
-    hint = "    Template data-* attributes are always strings.\n\n"
-
-    if coercion_attempted:
-        hint += f"    The value '{value}' could not be converted to float.\n"
-        hint += "    Check that it's a valid number (e.g., '3.14' or '42').\n\n"
-
-    hint += "    Quick fixes:\n"
-    hint += "      1. Use typed template attribute:\n"
-    hint += f'         data-{param.replace("_", "-")}:float="{{{{ value }}}}"\n'
-    hint += "      2. Ensure the value is numeric in your template:\n"
-    hint += f'         data-{param.replace("_", "-")}="{{{{ item.price|default:0.0 }}}}"'
-
-    return hint
-
-
-def _get_string_to_bool_hint(param: str, value: Any, coercion_attempted: bool) -> str:
-    """Generate hint for string->bool coercion failure."""
-    hint = "    Template data-* attributes pass 'true'/'false' as strings.\n\n"
-
-    if coercion_attempted:
-        hint += f"    The value '{value}' was treated as False.\n"
-        hint += "    Valid true values: 'true', '1', 'yes', 'on'\n\n"
-
-    hint += "    Quick fixes:\n"
-    hint += "      1. Use typed template attribute:\n"
-    hint += f"         data-{param.replace('_', '-')}:bool=\"{{{{ value|yesno:'true,false' }}}}\"\n"
-    hint += "      2. Use proper boolean string:\n"
-    hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.enabled|yesno:'true,false' }}}}\""
-
-    return hint
-
-
-def _get_string_to_list_hint(param: str, value: Any, coercion_attempted: bool) -> str:
-    """Generate hint for string->list coercion failure."""
-    hint = "    Lists should be passed as JSON or comma-separated strings.\n\n"
-
-    hint += "    Quick fixes:\n"
-    hint += "      1. Use JSON typed attribute:\n"
-    hint += f'         data-{param.replace("_", "-")}:json="{{{{ values|safe }}}}"\n'
-    hint += "      2. Use comma-separated list:\n"
-    hint += f'         data-{param.replace("_", "-")}:list="a,b,c"\n'
-    hint += "      3. Pass as JSON string:\n"
-    hint += f'         data-{param.replace("_", "-")}=\'["a", "b", "c"]\''
-
-    return hint
-
-
-def _get_string_to_decimal_hint(param: str, value: Any, coercion_attempted: bool) -> str:
-    """Generate hint for string->Decimal coercion failure."""
-    hint = "    Decimal values require valid numeric strings.\n\n"
-
-    if coercion_attempted:
-        hint += f"    The value '{value}' could not be converted to Decimal.\n\n"
-
-    hint += "    Quick fixes:\n"
-    hint += "      1. Ensure the value is a valid decimal:\n"
-    hint += f'         data-{param.replace("_", "-")}="{{{{ item.price }}}}"\n'
-    hint += "      2. Use a default value:\n"
-    hint += f"         data-{param.replace('_', '-')}=\"{{{{ item.price|default:'0.00' }}}}\""
-
-    return hint

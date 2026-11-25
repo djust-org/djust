@@ -4,7 +4,6 @@ djust CLI - Command-line tools for djust developers
 
 Usage:
     python -m djust new <name> [options]  Create a new djust project (recommended)
-    python -m djust startproject <name>   Create a new djust project (legacy)
     python -m djust startapp <name>       Create a new djust app
 
     python -m djust ai <subcommand>       Discover capabilities and UI components
@@ -30,7 +29,6 @@ Examples:
     python -m djust new myapp
     python -m djust new myapp --with-auth --with-db
     python -m djust new myapp --from-schema schema.json
-    python -m djust startproject mysite
     python -m djust startapp dashboard
     python -m djust.cli stats
 """
@@ -518,45 +516,6 @@ def cmd_new(args: argparse.Namespace) -> None:
     print("\nCreated djust project '%s'" % args.name)
     if features:
         print("  Features: %s" % ", ".join(features))
-    print("\nNext steps:")
-    for step in next_steps(args.name, setup_ran=not getattr(args, "no_setup", False)):
-        print("  %s" % step)
-    print("\nThen open http://127.0.0.1:8000/\n")
-
-
-def cmd_startproject(args: argparse.Namespace) -> None:
-    """Deprecated: scaffold a project via the canonical ``djust new`` generator.
-
-    ``startproject`` predates ``djust new`` and used to emit its own divergent
-    project boilerplate. That second template set drifted out of sync with the
-    real scaffolder (``djust.scaffolding``) — it shipped the broken
-    ``application = live_session()`` ASGI app (live_session() is a URL-pattern
-    helper, not an ASGI app — #1787) and the dropped ``daphne`` dev stack, so a
-    ``startproject`` project did not boot under uvicorn.
-
-    Rather than maintain a second, parallel set of project templates (the
-    parallel-path-drift failure mode), this command now prints a deprecation
-    notice and delegates to the same :func:`generate_project` that powers
-    ``djust new``, producing a working, warning-clean project. New projects
-    should call ``djust new <name>`` directly.
-    """
-    from djust.scaffolding.generator import ScaffoldSetupError, generate_project, next_steps
-
-    print(
-        "Note: `djust startproject` is deprecated — use `djust new` instead.\n"
-        "      Scaffolding via the canonical `djust new` generator..."
-    )
-
-    try:
-        generate_project(
-            app_name=args.name,
-            auto_setup=not getattr(args, "no_setup", False),
-        )
-    except (ValueError, ScaffoldSetupError) as e:
-        print("Error: %s" % e)
-        sys.exit(1)
-
-    print("\nCreated djust project '%s'" % args.name)
     print("\nNext steps:")
     for step in next_steps(args.name, setup_ran=not getattr(args, "no_setup", False)):
         print("  %s" % step)
@@ -1463,9 +1422,9 @@ def main() -> None:
         help="Also put DjustTemplateBackend first in TEMPLATES (default: only report it)",
     )
 
-    # startproject command (legacy)
-    sp_parser = subparsers.add_parser("startproject", help="Create a new djust project (legacy)")
-    sp_parser.add_argument("name", help="Project name")
+    # startproject was removed in 2.0: parse it only to name its replacement.
+    sp_parser = subparsers.add_parser("startproject", help="removed: use `djust new`")
+    sp_parser.add_argument("name", nargs="?")
 
     # startapp command
     sa_parser = subparsers.add_parser("startapp", help="Create a new djust app with LiveView")
@@ -1551,11 +1510,18 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
 
+    if args.command == "startproject":
+        print(
+            "djust startproject was removed in djust 2.0: use `djust new <name>`. "
+            "See https://docs.djust.org/guides/migrating-to-2.0/",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     # Execute command
     commands = {
         "new": cmd_new,
         "init": cmd_init,
-        "startproject": cmd_startproject,
         "startapp": cmd_startapp,
         "stats": cmd_stats,
         "health": cmd_health,

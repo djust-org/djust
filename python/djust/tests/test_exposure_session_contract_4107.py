@@ -53,24 +53,6 @@ class Matrix(LiveView):
         self.count += 1
 
 
-class LegacyMatrix(LiveView):
-    exposure_policy = "legacy"
-    template = PAGE % BODY
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self.secret_note = UNDECLARED
-        self._private_note = PRIVATE
-        self.password = FLOOR
-
-    def get_context_data(self, **kwargs):
-        return {"count": self.count}
-
-    @event_handler
-    def increment(self, **kwargs):
-        self.count += 1
-
-
 class Leaks(LiveView):
     """Gate-off: a client-facing path that sends the undeclared value."""
 
@@ -95,7 +77,6 @@ class Leaks(LiveView):
 
 urlpatterns = [
     path("e5/explicit/", Matrix.as_view()),
-    path("e5/legacy/", LegacyMatrix.as_view()),
     path("e5/leaks/", Leaks.as_view()),
 ]
 
@@ -134,14 +115,11 @@ def client_failures(received: str):
     return [value for value in (UNDECLARED, PRIVATE, FLOOR) if value in received]
 
 
-@pytest.mark.parametrize("policy,url", [("explicit", "/e5/explicit/"), ("legacy", "/e5/legacy/")])
-def test_the_matrix_views_meet_both_contracts(policy, url):
-    received, rows = flow(url)
+def test_the_matrix_view_meets_both_contracts():
+    received, rows = flow("/e5/explicit/")
     assert rows, "the flow stored no session"
     assert client_failures(received) == []
-    assert contract.stored_session_failures(policy, policy, rows) == []
-    if policy == "legacy":  # a legacy view saves none of its own state
-        assert not any(value in json.dumps(rows, default=str) for value in (UNDECLARED, PRIVATE))
+    assert contract.stored_session_failures("explicit", "explicit", rows) == []
 
 
 def test_the_explicit_views_own_state_rests_only_in_its_envelope():
@@ -201,8 +179,3 @@ def test_the_contract_accepts_only_the_two_resting_places():
     }
     for name, rows in cases.items():
         assert contract.stored_session_failures("t", "explicit", rows), name
-
-
-def test_the_floor_is_asserted_for_the_legacy_policy_too():
-    assert contract.stored_session_failures("t", "legacy", [{"k": FLOOR}])
-    assert contract.stored_session_failures("t", "legacy", [{"k": "fine"}]) == []

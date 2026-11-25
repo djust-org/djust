@@ -210,6 +210,7 @@ def test_the_socket_mount_is_refused_with_the_reason_logged(caplog):
     from channels.testing import WebsocketCommunicator
     from django.contrib.sessions.backends.signed_cookies import SessionStore
 
+    from djust._exposure_diagnostics import PROTECTED_FAILURE
     from djust.websocket import LiveViewConsumer
 
     async def run():
@@ -239,6 +240,11 @@ def test_the_socket_mount_is_refused_with_the_reason_logged(caplog):
     ):
         frames = asyncio.run(run())
     assert frames[-1]["type"] == "error", frames
-    assert any("signed_cookies" in r.getMessage() for r in caplog.records), [
-        r.getMessage() for r in caplog.records
-    ]
+    # The refusal's own reason, not the unrelated once-per-process signed_cookies warning from
+    # ``djust.utils`` (#4262): that one is emitted only for the first signed_cookies request in
+    # a process, so a test that asserted on it passed or failed with the run order.
+    logged = [r.getMessage() for r in caplog.records]
+    assert any(
+        m.startswith(PROTECTED_FAILURE + ": ") and "signed_cookies" in m and DB_ENGINE in m
+        for m in logged
+    ), logged

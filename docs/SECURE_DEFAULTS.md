@@ -393,11 +393,9 @@ flag, a PII column — because serialization defaulted to *allow everything*.
 >   `{{ row.shelf }}`;
 > - a row reached through a relation, `{{ shelf.rows.all.first }}` (and
 >   `.last`);
-> - on the `DjustTemplateBackend`, a QuerySet's `{{ rows.first }}` /
->   `{{ rows.last }}`, also beside a field read (`{{ rows.first }}|{{ rows.first.name }}`).
->   A LiveView attribute that is a top-level QuerySet renders `{{ rows.first }}`
->   as nothing today (a parity gap that withholds more, not less; pinned as a
->   strict `xfail` so the list above is updated when it is fixed).
+> - a QuerySet's `{{ rows.first }}` / `{{ rows.last }}`, on the `DjustTemplateBackend`
+>   (also beside a field read, `{{ rows.first }}|{{ rows.first.name }}`) and, since #4241,
+>   for a LiveView attribute that is a top-level QuerySet.
 >
 > A model whose `__str__` builds its text from a field the floor withholds
 > therefore shows that field's value in the page: `__str__` returning
@@ -511,12 +509,10 @@ if envelope is None or envelope.get("binding") != binding:
 The signature covers **declared client fields only**. Nothing a view does not
 declare with `persist="client"` is ever in the signed token.
 
-A legacy view's private (`_*`) attributes are not saved at all in 2.0 (the
-page-POST fallback runs `mount()` again). The one exception is a legacy
-`lazy=True` child on the page-POST fallback: `_restore_private_state()`
-(`python/djust/live_view.py`) assigns each of its saved `_*` keys from the
-**server-side Django session**. That path is trusted *because it is
-server-side session storage*, not because it is signed.
+A view's private (`_*`) attributes are not saved at all in 2.0 (the
+page-POST fallback runs `mount()` again). The legacy lazy-child path that
+restored saved `_*` keys from the server-side Django session
+(`_restore_private_state()`) is gone.
 
 **Implication:** do **not** store auth/ownership/PII state in `_*` attributes
 expecting cryptographic integrity. For private state the guarantee is "lives in

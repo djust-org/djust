@@ -45,7 +45,7 @@ class ProfileView(UploadMixin, LiveView):
         )
 
     @event_handler()
-    def save_avatar(self, **kwargs):
+    def save_avatar(self):
         for entry in self.consume_uploaded_entries('avatar'):
             # safe_client_name, never client_name: see the note below.
             path = default_storage.save(
@@ -99,7 +99,7 @@ class PhotosView(UploadMixin, LiveView):
         return {**super().get_context_data(**kwargs), "upload": self._upload}
 
     @event_handler()
-    def photos_uploaded(self, count=0, **kwargs):
+    def photos_uploaded(self, count: int):
         for entry in self.consume_uploaded_entries("photos"):
             ...  # as above: entry.safe_client_name, never entry.client_name
 ```
@@ -112,10 +112,12 @@ class PhotosView(UploadMixin, LiveView):
 |-----------|------|---------|-------------|
 | `name` | `str` | required | Upload slot name, referenced in templates as `dj-upload="name"` |
 | `accept` | `str` | `""` | Comma-separated extensions or MIME types (e.g., `".jpg,.png"` or `"image/*"`) |
-| `max_entries` | `int` | `1` | Maximum files for this slot. Sets `multiple` automatically if > 1. |
+| `max_entries` | `int` | `1` | Maximum files the slot holds at once: uploads in flight and finished uploads not yet consumed (or cancelled) both count; a failed upload does not. Sets `multiple` automatically if > 1. |
 | `max_file_size` | `int` | `10_000_000` | Maximum file size in bytes (default 10MB) |
 | `chunk_size` | `int` | `64512` | Chunk size for transfer (default 63KB; clamped so a chunk frame, header included, fits `max_message_size`) |
 | `auto_upload` | `bool` | `True` | Start upload immediately when files are selected |
+| `timeout` | `float` or `None` | `None` | Seconds an upload may take from its registration (from the resume, for a resumed upload). An upload unfinished by then is cancelled: its writer is aborted with a `TimeoutError`, its entry dropped, and the browser told ("Upload timed out after N seconds."). `None` sets no limit. |
+| `progress_hook` | `bool` | `False` | Call the view's `handle_upload_progress(name, entry)` at each 10% step the browser is sent (each step once). Needs that method on the view (`allow_upload` raises `ImproperlyConfigured` without it). See [Upload hooks](#upload-hooks-in-the-view). |
 
 ```python
 # Single image
@@ -125,7 +127,61 @@ self.allow_upload('avatar', accept='.jpg,.png,.webp',
 # Multiple documents
 self.allow_upload('documents', accept='.pdf,.docx',
                   max_entries=10, max_file_size=20_000_000)
+
+# An image that must arrive within a minute
+self.allow_upload('photo', accept='image/*', max_file_size=5_000_000, timeout=60)
 ```
+
+A finished upload holds its place in `max_entries` until your handler consumes it with `consume_uploaded_entries()` or drops it with `cancel_upload()`, so consume what you keep and cancel what you don't.
+
+### Cancelling from the view
+
+`self.cancel_upload(name, ref)` aborts the upload's writer and drops its entry. At the end of the turn the browser is told: `djust:upload:progress` fires with status `cancelled` and `error` "Upload cancelled by the server.", the client stops sending chunks, and a pending `djust.uploads.uploadFile()` promise rejects with that message.
+
+## Upload hooks in the view
+
+A view hears its uploads through optional methods. Define the ones you need; a view that defines none pays nothing (no turn, no render).
+
+| Method | Called |
+|--------|--------|
+| `handle_upload_started(name, entry)` | After the server accepts the file's registration, and again after a resume (a resumed upload starts again; `entry.progress` shows what already arrived). |
+| `handle_upload_progress(name, entry)` | Only on a slot with `progress_hook=True`: at each 10% step the browser is sent. A step is reported once, at the first chunk that reaches it (an upload in 3-byte chunks of 40 bytes reports 15, 22, 30, 45, 52, 60, 75, 82, 90, 100), so an upload calls it at most ten times however many chunks it has. |
+| `handle_upload_finished(name, entry)` | After the upload completes (the writer closed, or the file was validated and written). `entry.writer_result` is set. |
+| `handle_upload_failed(name, entry, reason)` | When the upload fails. `reason` is one of `"refused"` (the writer raised `UploadRefused`; its message is `entry.error`), `"too_large"` (over `max_file_size` or the announced size), `"timeout"` (the slot's `timeout=`), `"cancelled"` (the browser cancelled an upload in flight) or `"error"` (anything else: a writer fault, a content check, an upload stopped because its view was too busy to queue more of it, a second register of the same ref). |
+
+`name` is the slot name. Each hook runs as a turn of the view, like a server push: in order with the view's other frames, under the render lock, followed by a render and the usual end-of-turn work (`push_event`, flash messages, `start_async`). Set `self._skip_render = True` in a hook to send no frame. A hook that raises is logged and renders nothing; the upload carries on as if the hook were absent.
+
+When the socket carries several views, a hook is queued on its view's lane, after the frame that called for it: a slow hook holds up its own view's later frames (as a slow event handler does) but never the other views'.
+
+```python
+class DocumentView(UploadMixin, LiveView):
+    status = state("")
+
+    def mount(self, request, **kwargs):
+        self.allow_upload("doc", accept=".pdf", writer=S3Writer, progress_hook=True)
+
+    def handle_upload_started(self, name, entry):
+        self.status = "Uploading %s..." % entry.client_name
+
+    def handle_upload_progress(self, name, entry):
+        self.status = "%d%%" % entry.progress
+
+    def handle_upload_finished(self, name, entry):
+        self.status = "Processing..."
+        self.start_async(self._process, entry.writer_result)
+
+    def handle_upload_failed(self, name, entry, reason):
+        self.status = entry.error if reason == "refused" else "Upload failed (%s)" % reason
+```
+
+What calls no hook:
+
+- The view's own `cancel_upload()`: the view already knows. A started, progress or finished hook also does not run for an upload the view cancelled or consumed before the hook's turn.
+- A cancel of an upload that had already finished or failed, and the chunks that still arrive for a failed upload: `handle_upload_failed` runs once per upload.
+- An upload refused at registration (type, size, `max_entries`): it never started.
+- An upload dropped when the connection closes.
+
+Uploads, and so these hooks, are WebSocket-only: the SSE transport and the HTTP fallback carry no file uploads.
 
 ## UploadEntry Properties
 
@@ -162,8 +218,9 @@ Only one bar exists per container, so files uploaded one after another reuse it;
 
 ```javascript
 window.addEventListener('djust:upload:progress', (e) => {
-    // e.detail: {ref, progress, status, uploadName}
+    // e.detail: {ref, progress, status, error, uploadName}
     // status: "uploading" | "complete" | "error" | "cancelled"
+    // error: the server's reason for "error" / "cancelled", or null
     console.log(`${e.detail.uploadName}: ${e.detail.progress}%`);
 });
 ```
@@ -183,7 +240,7 @@ class GalleryView(UploadMixin, LiveView):
         )
 
     @event_handler()
-    def upload_photos(self, **kwargs):
+    def upload_photos(self):
         for entry in self.consume_uploaded_entries('photos'):
             path = default_storage.save(
                 f'gallery/{uuid4().hex}/{entry.safe_client_name}', entry.file
@@ -343,7 +400,7 @@ class UploadView(LiveView, UploadMixin):
         )
 
     @event_handler()
-    def save_uploads(self, **kwargs):
+    def save_uploads(self):
         for entry in self.consume_uploaded_entries("asset"):
             # entry.writer_result is whatever on_complete() returned
             url = entry.writer_result["url"]
@@ -364,8 +421,27 @@ Clients send whatever chunk size they send (djust's default is 64 KB per WebSock
 | `write_chunk()` raised | the exception raised by `write_chunk()` |
 | `close()` raised | the exception raised by `close()` |
 | Total bytes exceeds `max_file_size` | `ValueError("File size exceeds limit (N bytes)")` |
-| Client sent a cancel frame | `ConnectionAbortedError("upload cancelled")` |
+| Client sent a cancel frame, or the view called `cancel_upload()` | `ConnectionAbortedError("upload cancelled")` |
+| The slot's `timeout=` passed | `TimeoutError("Upload timed out after N seconds.")` |
 | WebSocket session closed with upload in flight | `ConnectionAbortedError("session closed")` |
+
+#### Refusing an upload
+
+To refuse an upload with a reason the user should see (a size or content policy, a per-user quota), raise `djust.uploads.UploadRefused` from `open()`, `write_chunk()` or `close()`:
+
+```python
+from djust.uploads import UploadRefused, UploadWriter
+
+class ImageWriter(UploadWriter):
+    def write_chunk(self, chunk, chunk_index=0):
+        if self.expected_size > 2_000_000:
+            raise UploadRefused("Images must be under 2 MB.")
+        ...
+```
+
+djust logs the refusal at WARNING without a traceback, aborts the writer, and sends the browser the exception's `message` (one line, at most 200 characters): it becomes the `error` of the `djust:upload:progress` event and of `entry.error`, and the message of the `uploadFile()` rejection. Only `message` is sent, never `sdk_exc` or anything else on the exception, so write it for the user and keep internal detail (bucket names, ARNs, URLs) out of it.
+
+Any other exception is a fault: logged at ERROR with its traceback, and the browser gets fixed text ("Upload writer rejected chunk"). That includes the other `UploadError` subclasses (`UploadCredentialError`, `UploadNetworkError`, `UploadQuotaError`), which the object-storage backends raise for infrastructure failures and whose messages name the vendor.
 
 If your own `abort()` implementation raises, djust logs the traceback and swallows it — a failing S3 `AbortMultipartUpload` is a cleanup problem, not a correctness problem for the rest of the view.
 
@@ -415,6 +491,12 @@ Network hiccups, backgrounded mobile tabs, and brief WebSocket disconnects shoul
 Add `resumable=True` to an `allow_upload()` slot whose writer is a `ResumableUploadWriter` (see [ResumableUploadWriter](#resumableuploadwriter)). When the WebSocket drops mid-transfer, the browser sends an `upload_resume` message with the upload's `ref` on reconnect. The server replies with the bytes and chunk indices it has already received, and the client continues from there — no re-sending of already-received chunks.
 
 When the WebSocket drops with an upload in flight, djust **suspends** a `ResumableUploadWriter` instead of aborting it: the state entry stays, and the inner writer (an open S3 multipart upload, say) is not aborted. The suspended upload waits for its client for up to 10 minutes (or the state's TTL, if shorter), at most 32 per process; past that, or when the cap is exceeded, the oldest is aborted as before. On reconnect the same session's `upload_resume` re-attaches it and the remaining chunks continue the same writer. A cancel, a writer error or a size-limit violation still aborts it and deletes the state. (Before 1.2.1 every disconnect aborted it, so resume never worked; #2972.)
+
+Explicit views (the 2.0 default) resume too (#4175). The resume record is bound to the session that registered the upload and to the view's owner: its user, tenant and page (the route, or the slot of a view mounted beside the page). The binding is checked on `upload_resume`, on every chunk, complete and cancel frame, and by `UploadStatusView`. The page is the route the view was mounted on: after a `live_patch` or `live_redirect` that changes the path, a resume from the new path restarts at byte 0. Another session, user, tenant or page gets `not_found` (the same answer as for an unknown id), and a frame from a connection that does not own the upload is refused without affecting the upload. Offsets are kept server-side, and a chunk the server already has is skipped.
+
+Uploads run over the WebSocket only: SSE carries no binary upload frames, and the HTTP fallback POST carries none either. The HTTP part of the protocol is `UploadStatusView` (`GET djust/uploads/<id>/status`), which applies the same owner check.
+
+**Retention.** The resume record lives for `ttl_hours` (default 24 hours) in the state store. A suspended writer waits for its client for up to 10 minutes, at most 32 per process. The record is deleted when the upload finishes, is cancelled or aborted, or its suspended writer expires and is aborted.
 
 Resume continues the live writer, so it works for a reconnect **to the same server process**. When the reconnect lands on another process, or after a server restart, the server answers `not_found` and the client starts over from byte 0 — even with a shared state store such as Redis, which only lets `UploadStatusView` report progress across processes.
 
@@ -526,10 +608,12 @@ The wrapper delegates `open()`, `write_chunk()`, `close()` and `abort()` to the 
 
 | Failure | With `resumable=True` | Without |
 |---------|----------------------|---------|
-| WS drops, reconnects < TTL | Intended: resumes from last chunk. At rc10: restarts from byte 0 (see the known issue above) | Upload aborted |
-| Browser tab backgrounded (mobile) | Intended: resumes on foreground. At rc10: restarts from byte 0 if the WebSocket dropped | Upload aborted |
+| WS drops, reconnects to the same process within 10 minutes | Resumes from the last chunk, on legacy and explicit views alike | Upload aborted |
+| WS reconnect lands on another process | Restarts from byte 0 (the live writer is in the first process) | Upload aborted |
+| Browser tab backgrounded (mobile) | Resumes on foreground if the WebSocket reconnects to the same process within 10 minutes | Upload aborted |
+| Another session, user, tenant or page sends `upload_resume` | `not_found`; the owner's upload is not disturbed | n/a |
 | Server process restart (in-memory store) | Upload aborted | Upload aborted |
-| Server restart (Redis store) | Intended: resumes from last chunk. At rc10: a graceful shutdown runs the same disconnect abort, so expect a restart from byte 0 | Upload aborted |
+| Server restart (Redis store) | Restarts from byte 0: the record survives, but the live writer does not | Upload aborted |
 | Client closes tab | Upload aborted | Upload aborted |
 | Second tab tries to resume same upload | Resume refused (`locked`); that tab starts a fresh upload | n/a |
 

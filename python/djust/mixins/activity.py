@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import collections
 import logging
-from typing import Any, Deque, Dict, FrozenSet, Tuple
+from typing import Any, Deque, Dict, FrozenSet, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ class ActivityMixin:
 
     # Declared on the class for type checkers; populated by _init_activity.
     _djust_activities: Dict[str, Dict[str, bool]]
-    _deferred_activity_events: Dict[str, Deque[Tuple[str, Dict[str, Any]]]]
+    _deferred_activity_events: Dict[str, Deque[Tuple[str, Dict[str, Any], Optional[int]]]]
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -167,9 +167,17 @@ class ActivityMixin:
         return bool(entry and entry.get("eager", False))
 
     def _queue_deferred_activity_event(
-        self, activity_name: str, event_name: str, params: Dict[str, Any]
+        self,
+        activity_name: str,
+        event_name: str,
+        params: Dict[str, Any],
+        event_ref: Optional[int] = None,
     ) -> None:
-        """Push ``(event_name, params)`` onto the deferred queue for ``activity_name``.
+        """Push ``(event_name, params, event_ref)`` onto the deferred queue for ``activity_name``.
+
+        ``event_ref`` is the client's ref for the queued event. Its release
+        frame echoes it, as every frame answering an event does (#4309); the
+        noop sent at queue time already settled that request on the client.
 
         FIFO eviction once the queue reaches
         :attr:`activity_event_queue_cap`. The cap guards against a
@@ -201,16 +209,22 @@ class ActivityMixin:
             # Subclass may have re-bound activity_event_queue_cap at
             # runtime; rebuild the deque with the new cap while
             # preserving existing entries (trimmed to the new maxlen).
-            new_queue: Deque[Tuple[str, Dict[str, Any]]] = collections.deque(queue, maxlen=cap)
+            new_queue: Deque[Tuple[str, Dict[str, Any], Optional[int]]] = collections.deque(
+                queue, maxlen=cap
+            )
             self._deferred_activity_events[activity_name] = new_queue
             queue = new_queue
         # Copy params so later mutation in the caller's scope doesn't
         # corrupt the queued payload. Shallow copy is sufficient — values
         # are already JSON-coerced from the WebSocket frame.
-        queue.append((event_name, dict(params) if params else {}))
+        queue.append((event_name, dict(params) if params else {}, event_ref))
 
     async def _flush_deferred_activity_events(self, consumer: Any) -> None:
         """Drain all queues whose activity is now both visible and non-eager-skipped.
+
+        The transports' drains call this on the root view and then on every
+        embedded child it owns (#4179): a child's queued event is dispatched
+        through the child path, with the child's own checks.
 
         Called by :class:`~djust.websocket.LiveViewConsumer` after every
         successful ``handle_event`` / ``handle_info`` / ``db_notify``
@@ -273,7 +287,7 @@ class ActivityMixin:
             # handler that flips the activity back to hidden mid-drain
             # doesn't re-deliver events we've already dispatched.
             while queue:
-                event_name, params = queue.popleft()
+                event_name, params, event_ref = queue.popleft()
                 # Strip the _activity marker so the server-side gate
                 # does not re-queue this event. (If we left it in and
                 # the handler itself flipped the activity back to
@@ -283,7 +297,7 @@ class ActivityMixin:
                 if params and "_activity" in params:
                     params = {k: v for k, v in params.items() if k != "_activity"}
                 try:
-                    await dispatch(self, event_name, params or {})
+                    await dispatch(self, event_name, params or {}, event_ref=event_ref)
                 except Exception:  # noqa: BLE001 — never let a drained event kill the consumer
                     restrict_diagnostics(self)
                     restrict_diagnostics(getattr(consumer, "view_instance", self))

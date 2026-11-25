@@ -104,7 +104,7 @@ class ProfileView(LiveView):
         return context
 
     @event_handler
-    def save(self, **kwargs):
+    def save(self):
         user = self.request.user
         user.first_name = self.first_name
         user.last_name = self.last_name

@@ -38,7 +38,7 @@ SLOT_BREAKOUT = "</dj-lazy-slot><img src=x onerror=alert(1)>"
 
 
 class _Child(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>child</div>"
 
     def mount(self, request, **kwargs):
@@ -46,7 +46,7 @@ class _Child(LiveView):
 
 
 class _Parent(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "{% load live_tags %}<div dj-root></div>"
 
     def mount(self, request, **kwargs):

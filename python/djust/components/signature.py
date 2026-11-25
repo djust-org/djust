@@ -23,7 +23,7 @@ re-encoding) with the validated dimensions. Typical use::
     from djust.components.signature import SignatureError, decode_signature_data_url
 
     @event_handler()
-    def save_signature(self, signature="", **kwargs):
+    def save_signature(self, signature: str = "", **kwargs):
         try:
             image = decode_signature_data_url(signature)
         except SignatureError:
@@ -46,8 +46,9 @@ is already bounded::
         out = BytesIO()
         flat.save(out, format="PNG", optimize=True)
 
-The SignaturePad component sends at most ``max_bytes`` (default 200 KB) of data
-URL and the defaults here accept at most that much decoded PNG; both limits are
+The SignaturePad component sends at most ``max_bytes`` (default and ceiling
+60,000, below the strict collector's 65,536-character text limit) of data URL,
+and the defaults here accept at most 200 KB of decoded PNG; both limits are
 yours to tighten.
 """
 
@@ -61,6 +62,7 @@ from typing import NamedTuple
 
 __all__ = [
     "DEFAULT_MAX_BYTES",
+    "MAX_SEND_BYTES",
     "SignatureError",
     "SignatureImage",
     "decode_signature_data_url",
@@ -68,6 +70,11 @@ __all__ = [
 
 #: What the SignaturePad hook sends at most, and what is accepted by default.
 DEFAULT_MAX_BYTES = 200 * 1024
+
+#: The most the SignaturePad hook ever sends. The strict event collector refuses a
+#: text value over 65,536 characters (ADR-036), so a larger data URL would never
+#: reach the server; this stays below it with room for the envelope.
+MAX_SEND_BYTES = 60_000
 
 _PREFIX = "data:image/png;base64,"
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"

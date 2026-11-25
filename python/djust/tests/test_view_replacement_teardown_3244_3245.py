@@ -1,6 +1,6 @@
 """#3244 / #3245: a view a transport discards is torn down, children included.
 
-#3244 — a legacy view's embedded (``{% live_render %}``) children:
+#3244 — a view's embedded (``{% live_render %}``) children:
 
 * WebSocket ``live_redirect`` left the non-sticky children registered and
   running (SSE ``_replace_view`` unregistered them), so an explicit child of a
@@ -99,7 +99,7 @@ class _Waits:
 
 
 class LegacyKid(_Waits, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div><span>kid</span></div>"
 
     def mount(self, request, **kwargs):
@@ -107,7 +107,7 @@ class LegacyKid(_Waits, LiveView):
 
 
 class StickyKid(_Waits, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "dock"
     template = "<div><span>dock</span></div>"
@@ -125,10 +125,10 @@ class ExplicitKid(_Waits, LiveView):
 
 
 class Parent(_Waits, LiveView):
-    """A legacy page embedding a non-sticky legacy child, an explicit child
+    """A page embedding a non-sticky child, an explicit child
     and a sticky child."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.Parent">'
@@ -142,14 +142,11 @@ class Parent(_Waits, LiveView):
     def mount(self, request, **kwargs):
         self._tagged()
 
-    def get_context_data(self, **kwargs):
-        return {"view": self}
-
 
 class Dest(_Waits, LiveView):
     """The navigation target: it has the sticky child's slot."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.Dest">'
@@ -161,14 +158,11 @@ class Dest(_Waits, LiveView):
     def mount(self, request, **kwargs):
         self._tagged()
 
-    def get_context_data(self, **kwargs):
-        return {"view": self}
-
 
 class Alpha(_Waits, LiveView):
-    """A plain legacy page (the view a second mount replaces) with a child."""
+    """A plain page (the view a second mount replaces) with a child."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.Alpha">'
@@ -180,12 +174,9 @@ class Alpha(_Waits, LiveView):
     def mount(self, request, **kwargs):
         self._tagged()
 
-    def get_context_data(self, **kwargs):
-        return {"view": self}
-
 
 class Beta(_Waits, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Beta"><h1>beta</h1></div>'
 
     def mount(self, request, **kwargs):
@@ -193,7 +184,7 @@ class Beta(_Waits, LiveView):
 
 
 class Gamma(_Waits, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Gamma"><h1>gamma</h1></div>'
 
     def mount(self, request, **kwargs):
@@ -204,7 +195,7 @@ class Listener(_Waits, LiveView):
     """A page subscribed to a db_notify channel (as ``listen()`` records it,
     without starting a PostgreSQL listener)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Listener"><h1>listener</h1></div>'
 
     def mount(self, request, **kwargs):
@@ -221,7 +212,7 @@ class ScopedListener(Listener):
 class Present(PresenceMixin, _Waits, LiveView):
     """A page that tracks the user's presence."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     presence_key = "wsx3250"
     template = '<div dj-root dj-view="' + MOD + '.Present"><h1>present</h1></div>'
 
@@ -411,8 +402,9 @@ async def test_websocket_live_redirect_tears_down_the_legacy_views_children():
         # The non-sticky legacy child: unregistered, its waiter cancelled.
         await _until(lambda: ("cleanup", kid) in EVENTS, "the legacy child's waiter cleanup")
         _assert_waiter_cleaned(kid)
-        assert ("unregistered", kid) in EVENTS
-        assert VIEWS[kid]._djust_waiters_closed is True
+        # Navigation teardown cancels the waiter and runs the child's cleanup hook
+        # (test_exposure_child_lifecycle.py pins ["unregister", "unmount"]).
+        assert VIEWS[kid]._djust_child_disposed is True
         # The explicit child of the legacy parent: disposed.
         assert explicit._djust_child_disposed is True
         assert explicit._parent_view is None
@@ -446,8 +438,8 @@ async def test_websocket_live_redirect_without_a_slot_discards_the_sticky_child(
         await _until(lambda: ("cleanup", dock) in EVENTS, "the dropped sticky child's cleanup")
         _assert_waiter_cleaned(dock)
         assert unmounted == [dock]
-        # Dropped once, by the navigation's hook, not unregistered again.
-        assert ("unregistered", dock) not in EVENTS
+        # Dropped once: its cleanup hook runs on navigation, exactly once.
+        assert EVENTS.count(("unregistered", dock)) == 1
     finally:
         await _close(communicator)
 
@@ -471,7 +463,7 @@ async def test_websocket_live_redirect_discards_a_sticky_child_its_auth_now_deni
         await _until(lambda: ("cleanup", dock) in EVENTS, "the refused sticky child's cleanup")
         _assert_waiter_cleaned(dock)
         assert unmounted == [dock]
-        assert ("unregistered", dock) not in EVENTS
+        assert EVENTS.count(("unregistered", dock)) == 1
     finally:
         await _close(communicator)
 
@@ -551,7 +543,8 @@ async def test_sse_navigation_cancels_the_legacy_childrens_waiters(caplog):
 
         await _until(lambda: ("cleanup", kid) in EVENTS, "the legacy child's waiter cleanup")
         _assert_waiter_cleaned(kid)
-        assert ("unregistered", kid) in EVENTS
+        # Navigation teardown cancels the waiter and runs the child's cleanup hook
+        # (test_exposure_child_lifecycle.py pins ["unregister", "unmount"]).
         assert explicit._djust_child_disposed is True
         # SSE does not preserve sticky children (``_replace_view``): the old
         # page's sticky child is torn down like any other, not leaked with a
@@ -645,8 +638,9 @@ async def test_a_second_mount_tears_down_the_replaced_view(caplog, monkeypatch):
         await _until(lambda: ("cleanup", kid) in EVENTS, "Alpha's child's waiter cleanup")
         _assert_waiter_cleaned(alpha)
         _assert_waiter_cleaned(kid)
-        assert ("unregistered", kid) in EVENTS
-        assert VIEWS[alpha]._djust_waiters_closed is True
+        # Navigation teardown cancels the waiter and runs the child's cleanup hook
+        # (test_exposure_child_lifecycle.py pins ["unregister", "unmount"]).
+        assert VIEWS[alpha]._djust_child_disposed is True
     finally:
         await _close(communicator)
     VIEWS.clear()
@@ -730,8 +724,8 @@ async def test_a_mount_after_a_mount_batch_tears_down_every_batch_view():
         assert _members(_view_group(Beta)) == []
         assert _members(_view_group(Gamma)) == []
         assert len(_members(_view_group(Alpha))) == 1
-        assert VIEWS[beta]._djust_waiters_closed is True
-        assert VIEWS[gamma]._djust_waiters_closed is True
+        assert VIEWS[beta]._djust_child_disposed is True
+        assert VIEWS[gamma]._djust_child_disposed is True
     finally:
         await _close(communicator)
     assert _members(_view_group(Alpha)) == []
@@ -954,7 +948,7 @@ async def test_live_render_discarding_a_legacy_sticky_child_uses_the_shared_tear
     hooks = []
 
     class Kid(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def _on_sticky_unmount(self):
             hooks.append("unmount")
@@ -966,5 +960,5 @@ async def test_live_render_discarding_a_legacy_sticky_child_uses_the_shared_tear
     parent._register_child("dock", kid)
     _discard_sticky_child(parent, "dock", kid)
     assert parent._get_all_child_views() == {}
-    assert kid._djust_waiters_closed is True
-    assert hooks == ["unmount", "unregister"]
+    assert kid._djust_child_disposed is True
+    assert hooks == ["unregister", "unmount"]

@@ -1,22 +1,25 @@
-"""Complete event turns, explicit exposure against legacy, on the same views (#3997).
+"""Complete event turns, explicit exposure with and without the save, on the same views (#3997).
 
 What is timed is one event turn through the real consumer, end to end: the
 event frame goes into a ``WebsocketCommunicator``, ``ViewRuntime.dispatch_event``
 authorizes, runs the handler, takes the change-detection snapshots, builds the
 context, syncs state to Rust, renders, diffs, saves, and the timer stops when
 the reply frame with the event's ``ref`` comes back. The same class body is
-measured under three settings, each a subclass that differs ONLY in the class
+measured under two settings, each a subclass that differs ONLY in the class
 attributes named:
 
 =================  ===========================================================
-``legacy``         ``exposure_policy = "legacy"`` (automatic context, saves
-                   nothing between requests).
 ``explicit``       ``exposure_policy = "explicit"`` as shipped: declared
                    ``state()`` and ``get_context_data()`` reach the template,
                    and the view's state is saved server-side (#4107).
 ``explicit_nosave`` ``explicit`` with ``automatic_state = False`` (#4128): the
-                   exposure work without the automatic save, so the gap can be
+                   exposure work without the automatic save, so the cost can be
                    split into "exposure" and "saving".
+``explicit_interval`` ``explicit`` with ``state_save_interval = 60`` (#4164):
+                   the save is deferred to the flush (``DJUST_STATE_SAVE_INTERVAL``),
+                   so the turn pays the identity check and the change mark,
+                   not the write. The timer does not fire within a run; the
+                   close flushes.
 =================  ===========================================================
 
 Three shapes:
@@ -32,7 +35,7 @@ rotates), so drift on a loaded machine lands on every setting alike, and the
 statistic is the MEDIAN per setting. There is no latency assertion: the repo
 does not assert on wall clock (#2156, #1795). Each turn asserts only that it
 answered with a patch, and every setting must produce the same frames as
-``legacy`` - the comparison is of one view, not of two that render differently.
+``explicit`` - the comparison is of one view, not of two that render differently.
 
 Run (a RELEASE ``_rust`` build is required; a debug build inverts the result)::
 
@@ -62,7 +65,7 @@ from djust.decorators import state
 from djust.tests import _per_turn_harness as harness
 
 MODULE = __name__
-SETTINGS = ("legacy", "explicit", "explicit_nosave")
+SETTINGS = ("explicit", "explicit_nosave", "explicit_interval")
 ROWS = 500
 WARMUP = 3
 
@@ -177,8 +180,7 @@ class DashboardBody(LiveView):
     def get_context_data(self, **kwargs):
         from demo_app.models import Product
 
-        # Added after super(), as an application does; legacy drops a
-        # ``recent=`` keyword handed to its super().
+        # Added after super(), as an application does.
         context = super().get_context_data(**kwargs)
         context["recent"] = Product.objects.order_by("-id")[:5]
         return context
@@ -190,11 +192,10 @@ class DashboardBody(LiveView):
 
 def _concrete(body: type, setting: str) -> type:
     attrs: Dict[str, Any] = {"__module__": MODULE}
-    if setting == "legacy":
-        attrs["exposure_policy"] = "legacy"
-    else:
-        attrs["exposure_policy"] = "explicit"
-        attrs["automatic_state"] = setting == "explicit"
+    attrs["exposure_policy"] = "explicit"
+    attrs["automatic_state"] = setting != "explicit_nosave"
+    # 0: every turn saved before its reply; 60: deferred to the flush (#4164).
+    attrs["state_save_interval"] = 60 if setting == "explicit_interval" else 0
     name = f"{body.__name__[: -len('Body')]}_{setting}"
     made = type(name, (body,), attrs)
     globals()[name] = made
@@ -264,7 +265,7 @@ async def _measure(shape: str, rounds: int) -> Dict[str, List[float]]:
         pages[setting] = mount["html"].replace(views[setting].__name__, "<view>")
     try:
         for n in range(WARMUP + rounds):
-            order = SETTINGS[n % 3 :] + SETTINGS[: n % 3]
+            order = SETTINGS[n % len(SETTINGS) :] + SETTINGS[: n % len(SETTINGS)]
             for setting in order:
                 start = time.perf_counter()
                 frame = await _turn(comms[setting])
@@ -278,8 +279,8 @@ async def _measure(shape: str, rounds: int) -> Dict[str, List[float]]:
         for comm in comms.values():
             await comm.disconnect()
     for setting in SETTINGS[1:]:
-        assert pages[setting] == pages["legacy"], (shape, setting, "mount")
-        assert frames[setting] == frames["legacy"], (shape, setting)
+        assert pages[setting] == pages["explicit"], (shape, setting, "mount")
+        assert frames[setting] == frames["explicit"], (shape, setting)
     return times
 
 
@@ -292,20 +293,21 @@ def run_all(rounds: int) -> Dict[str, Dict[str, float]]:
         for shape in SHAPES:
             times = async_to_sync(_measure)(shape, rounds)
             out[shape] = {s: statistics.median(times[s]) * 1000 for s in SETTINGS}
-            out[shape]["rounds"] = float(len(times["legacy"]))
+            out[shape]["rounds"] = float(len(times["explicit"]))
     return out
 
 
 def format_table(medians: Dict[str, Dict[str, float]]) -> str:
     lines = [
-        "shape       legacy ms  explicit ms  ratio  +ms     nosave ms  ratio  +ms     rounds",
+        "shape       explicit ms  nosave ms  interval ms  nosave/explicit  interval/explicit"
+        "  rounds",
     ]
     for shape, row in medians.items():
-        legacy, explicit, nosave = row["legacy"], row["explicit"], row["explicit_nosave"]
+        explicit, nosave = row["explicit"], row["explicit_nosave"]
+        interval = row["explicit_interval"]
         lines.append(
-            f"{shape:<10} {legacy:9.3f}  {explicit:11.3f}  {explicit / legacy:5.2f}"
-            f"  {explicit - legacy:+6.3f}  {nosave:9.3f}  {nosave / legacy:5.2f}"
-            f"  {nosave - legacy:+6.3f}  {int(row['rounds'])}"
+            f"{shape:<10} {explicit:11.3f}  {nosave:9.3f}  {interval:11.3f}"
+            f"  {nosave / explicit:15.2f}  {interval / explicit:17.2f}  {int(row['rounds'])}"
         )
     return "\n".join(lines)
 

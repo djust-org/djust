@@ -11,6 +11,8 @@ from django.test import override_settings
 
 from .conftest import observability_request_factory
 
+from djust import LiveView
+from djust.decorators import state
 from djust.observability.registry import _clear_registry, register_view
 from djust.observability.views import view_assigns
 
@@ -22,53 +24,23 @@ def clean_registry():
     _clear_registry()
 
 
-class _FakeView:
-    """Stand-in matching the contract get_state() expects."""
+class _CounterView(LiveView):
+    """An explicit view: only its declared fields are reported."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
+    count = state(0, client=True)
+    label = state("test", client=True)
+    secret = state("hidden")
 
-    def __init__(self, count=0, label="test"):
-        self.count = count
-        self.label = label
-        # Private attrs should NOT appear in output.
-        self._websocket_session_id = "abc"
+    def mount(self, request, **kwargs):
         self._private = "hidden"
-
-    def get_state(self):
-        return {k: v for k, v in self.__dict__.items() if not k.startswith("_") and not callable(v)}
-
-
-class _FakeViewWithNonSerializable(_FakeView):
-    """Has an attribute the framework considers non-serializable (like a
-    live request or DB connection). Represents the DEBUG-mode common case.
-    """
-
-    def __init__(self):
-        super().__init__(count=42, label="mixed")
-        # Something that mimics a WSGIRequest — an object the framework's
-        # _is_serializable will reject.
-        self.request = object()
-
-    def _is_serializable(self, value):
-        # Mirror LiveView's semantics: reject objects of bare `object` type
-        # (non-JSON-serializable) but accept the ints/strs/lists/dicts.
-        try:
-            import json
-
-            json.dumps(value)
-            return True
-        except (TypeError, ValueError):
-            return False
-
-    def get_state(self):
-        # Would raise in real LiveView when DEBUG=True because of self.request;
-        # here we delegate to the framework-style check via super-equivalent.
-        raise TypeError("boom — non-serializable value")
 
 
 @override_settings(DEBUG=True)
 def test_view_assigns_returns_state_for_registered_session():
-    view = _FakeView(count=7, label="counter")
+    view = _CounterView()
+    view.count = 7
+    view.label = "counter"
     register_view("session-1", view)
 
     rf = observability_request_factory()
@@ -77,13 +49,13 @@ def test_view_assigns_returns_state_for_registered_session():
 
     data = json.loads(resp.content)
     assert data["session_id"] == "session-1"
-    assert data["view_class"] == "_FakeView"
-    assert data["assigns"] == {"count": 7, "label": "counter"}
+    assert data["view_class"] == "_CounterView"
+    assert data["assigns"] == {"count": 7, "label": "counter", "secret": "[redacted]"}
 
 
 @override_settings(DEBUG=True)
 def test_view_assigns_excludes_private_and_callable_attrs():
-    view = _FakeView()
+    view = _CounterView()
     register_view("s", view)
 
     rf = observability_request_factory()
@@ -91,6 +63,8 @@ def test_view_assigns_excludes_private_and_callable_attrs():
     data = json.loads(resp.content)
     assert "_private" not in data["assigns"]
     assert "_websocket_session_id" not in data["assigns"]
+    # A field that is not client-visible is reported as redacted, never its value.
+    assert data["assigns"]["secret"] == "[redacted]"
 
 
 @override_settings(DEBUG=True)
@@ -109,32 +83,8 @@ def test_view_assigns_404_when_session_unknown():
 
 @override_settings(DEBUG=False)
 def test_view_assigns_404_when_debug_off():
-    view = _FakeView()
+    view = _CounterView()
     register_view("s", view)
     rf = observability_request_factory()
     resp = view_assigns(rf.get("/?session_id=s"))
     assert resp.status_code == 404
-
-
-@override_settings(DEBUG=True)
-def test_view_assigns_per_attr_fallback_keeps_serializable_native():
-    """Partial serializability: good attrs stay native, bad ones get tagged.
-
-    Previously any non-serializable attr forced an all-or-nothing blanket
-    repr that lost all native values. Now each attr is handled independently.
-    """
-    view = _FakeViewWithNonSerializable()
-    register_view("s", view)
-    rf = observability_request_factory()
-    resp = view_assigns(rf.get("/?session_id=s"))
-    assert resp.status_code == 200
-    data = json.loads(resp.content)
-    # Serializable attrs stay as their actual values.
-    assert data["assigns"]["count"] == 42
-    assert data["assigns"]["label"] == "mixed"
-    # Non-serializable attr is tagged {_repr, _type} so the caller can see
-    # at a glance that it fell back.
-    request_field = data["assigns"]["request"]
-    assert isinstance(request_field, dict)
-    assert request_field["_type"] == "object"
-    assert "_repr" in request_field

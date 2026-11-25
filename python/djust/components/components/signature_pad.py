@@ -5,7 +5,7 @@ import html
 from djust import Component
 from typing import Any, NamedTuple
 
-from djust.components.signature import DEFAULT_MAX_BYTES
+from djust.components.signature import MAX_SEND_BYTES
 
 
 class PadExtras(NamedTuple):
@@ -19,18 +19,16 @@ class PadExtras(NamedTuple):
     status: str  # the live region after the actions
 
 
-def pad_extras(
-    max_bytes: Any = DEFAULT_MAX_BYTES, label: Any = None, typed: Any = True
-) -> PadExtras:
+def pad_extras(max_bytes: Any = MAX_SEND_BYTES, label: Any = None, typed: Any = True) -> PadExtras:
     """The markup the hook needs beyond what the component always rendered.
 
     Shared by the component class, the Django tag and the Rust tag handler so the
     three cannot drift; everything caller-supplied is escaped here.
     """
     try:
-        size = max(1024, int(max_bytes))
+        size = min(max(1024, int(max_bytes)), MAX_SEND_BYTES)
     except (ValueError, TypeError, OverflowError):
-        size = DEFAULT_MAX_BYTES
+        size = MAX_SEND_BYTES
     text = "Signature drawing area" if label is None or not str(label).strip() else str(label)
     e_label = html.escape(text)
     typed_html = toggle_html = ""
@@ -76,7 +74,8 @@ class SignaturePad(Component):
         {{ sig|safe }}
 
     Save sends ``save_event`` with ``{signature}``: a ``data:image/png;base64,``
-    URL, at most ``max_bytes`` (default 200 KB) long (the hook re-renders at a
+    URL, at most ``max_bytes`` (default and ceiling 60,000: the strict collector
+    refuses a longer text value) long (the hook re-renders at a
     lower resolution until it fits, and refuses a signature that cannot).
     Saving with nothing drawn sends nothing and says so. The same value is put
     in the hidden form field ``name`` for a regular form post.
@@ -92,7 +91,7 @@ class SignaturePad(Component):
         from djust.components.signature import SignatureError, decode_signature_data_url
 
         @event_handler()
-        def save_signature(self, signature="", **kwargs):
+        def save_signature(self, signature: str = "", **kwargs):
             try:
                 image = decode_signature_data_url(signature)
             except SignatureError:
@@ -102,10 +101,9 @@ class SignaturePad(Component):
 
     The module docstring shows a Pillow re-encode (white background, no
     metadata) to run after that check. The default WebSocket message limit
-    (``max_message_size``, 64 KiB) is smaller than ``max_bytes``: a typical
+    (``max_message_size``, 64 KiB) is close to ``max_bytes``: a typical
     signature is 5-30 KB, and when the server answers "Message too large" the
-    hook sends the signature once more at a smaller size; raise
-    ``max_message_size`` if you want the full 200 KB.
+    hook sends the signature once more at a smaller size.
 
     Accessibility: the canvas is a labelled image and drawing needs a pointer,
     so there is a keyboard alternative: "Type instead" shows a text field and
@@ -127,7 +125,7 @@ class SignaturePad(Component):
         pen_width: stroke width in px (default 2)
         disabled: disable drawing (default False)
         custom_class: additional CSS classes
-        max_bytes: largest data URL the hook sends (default 204800)
+        max_bytes: largest data URL the hook sends (default and ceiling 60000)
         label: accessible name of the canvas (default "Signature drawing area")
         typed: offer the typed-name alternative (default True)
     """
@@ -142,7 +140,7 @@ class SignaturePad(Component):
         pen_width: int = 2,
         disabled: bool = False,
         custom_class: str = "",
-        max_bytes: int = DEFAULT_MAX_BYTES,
+        max_bytes: int = MAX_SEND_BYTES,
         label: str = "Signature drawing area",
         typed: bool = True,
         **kwargs: Any,

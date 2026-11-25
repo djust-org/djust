@@ -25,6 +25,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { withContracts } from './_open_contracts.js';
 import { readFileSync } from 'fs';
 import { setTimeout as nativeSleep } from 'node:timers/promises';
 
@@ -32,7 +33,7 @@ const clientCode = readFileSync('./python/djust/static/djust/client.js', 'utf-8'
 
 function createTestEnv(bodyHtml) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body>${bodyHtml}</body></html>`,
+        `<!DOCTYPE html><html><body>${withContracts(bodyHtml, null, ['renamed', 'update_model'])}</body></html>`,
         { runScripts: 'dangerously', url: 'http://localhost/' }
     );
 
@@ -58,7 +59,7 @@ function createTestEnv(bodyHtml) {
             var body = {};
             try { body = JSON.parse((opts && opts.body) || "{}"); } catch(e) {}
             window._testFetchCalls.push({ eventName: eventName, body: body });
-            return { ok: true, json: async function() { return { patches: [], version: window._mockVersion }; } };
+            return { ok: true, json: async function() { return { patches: [], version: window._mockVersion, ...(() => { const s = document.querySelector('script[data-djust-parameter-contracts]'); if (!s) return {}; const m = JSON.parse(s.textContent); return {parameter_contracts: m.contracts, parameter_contract_view: m.view}; })() }; } };
         };
     `);
 
@@ -164,16 +165,16 @@ describe('#2858 dj-poll: a VALUE change on a surviving element must rebuild the 
         await until(() => expect(eventNames(dom).length).toBeGreaterThan(before));
     });
 
-    it('dispatches with FRESH data-* params after they change on the surviving element', async () => {
+    it('dispatches with FRESH dj-value-* params after they change on the surviving element', async () => {
         // The old closure snapshotted params at bind time; dj-click and
         // dj-change read theirs at fire time. The poll phase must too.
         const dom = createTestEnv(
-            '<div dj-view="app.PollView"><div id="p" dj-poll="refresh" dj-poll-interval="50" data-period="month"></div></div>'
+            '<div dj-view="app.PollView"><div id="p" dj-poll="refresh" dj-poll-interval="50" dj-value-period="month"></div></div>'
         );
         initClient(dom);
 
         await until(() => expect(bodyStrings(dom).some((b) => b.includes('month'))).toBe(true));
-        dom.window.document.getElementById('p').setAttribute('data-period', 'day');
+        dom.window.document.getElementById('p').setAttribute('dj-value-period', 'day');
         await until(() => expect(bodyStrings(dom).some((b) => b.includes('day'))).toBe(true));
     });
 });

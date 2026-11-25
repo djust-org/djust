@@ -43,7 +43,7 @@ class AudioPlayerView(LiveView):
     is_playing = state(False)
 
     @event_handler
-    def toggle_play(self, **kwargs):
+    def toggle_play(self):
         self.is_playing = not self.is_playing
 ```
 
@@ -145,7 +145,9 @@ The preserved instance is re-attached when all of these match the page it
 left:
 
 - the child class and its `state()` declarations, and the `sticky_id`;
-- the `{% live_render %}` keyword arguments (its mount inputs);
+- the `{% live_render %}` keyword arguments (its mount inputs), except those
+  named in `sticky_update_inputs`, which the carried child receives through
+  `_on_sticky_update` (it is then re-rendered right after the mount frame);
 - the nesting depth: a child the destination renders at a different depth
   (inside another embedded view instead of directly in the page, or the
   other way round) is not carried;
@@ -181,6 +183,46 @@ What the user sees when it goes wrong:
 
 A discarded child is never picked up by a later page, mount,
 `mount_batch` or `url_change` on the same connection.
+
+### Live mounts and the page shell
+
+A live mount of an explicit `template_name` page renders the whole page
+once, as the HTTP GET does, only to register the children its page shell
+(the part outside `dj-root`) embeds. djust skips that render when no
+template of the page can embed a child. It reads every template the page
+is built from (the `{% extends %}` parents and `{% include %}` partials)
+and skips the render only when none names `live_render` and every
+`{% load %}` is of a library that cannot embed one:
+
+- Django's own libraries and djust's `live_tags`, `djust_components`,
+  `djust_flash` and `theme_tags` (the templates djust's libraries render,
+  such as an overridden `djust_components/toast.html`, are read too; a
+  file that uses the catalogue's `component_preview` or
+  `component_thumbnail` keeps the render);
+- a library that registers only filters, or the filters loaded from one
+  with `{% load name from library %}`;
+- a library your project lists in `LIVEVIEW_CONFIG`:
+
+```python
+# Template tag libraries whose tags never embed a child view.
+LIVEVIEW_CONFIG = {"childless_tag_libraries": ["myapp_tags"]}
+```
+
+List only libraries whose tags never render `{% live_render %}`, or a
+template that does: a page-shell child of a skipped render is not
+registered, so its events have no view to reach.
+
+A library can also vouch for itself, without a project setting, by marking
+its `Library` object:
+
+```python
+register = template.Library()
+register.djust_childless = True
+```
+
+The same caveat applies. Inclusion-tag templates are not scanned for
+`{% live_render %}`; in DEBUG, check `C044` warns about an `inclusion_tag`
+in a marked library.
 
 ## The `sticky` class attribute
 
@@ -229,24 +271,31 @@ A sticky child keeps its live instance across parent re-renders, so its
 `mount()` runs once and the tag's kwargs reach it once. When the parent renders
 the tag again with different values (`{% live_render "..." sticky=True
 section=section %}` after `section` changed), a child that defines
-`_on_sticky_update(self, changed)` receives them:
+`_on_sticky_update(self, changed)` and names the input in
+`sticky_update_inputs` receives them:
 
 ```python
+from djust import LiveView, state
+
+
 class Sidebar(LiveView):
     sticky = True
     sticky_id = "sidebar"
+    sticky_update_inputs = ("section",)
+    section = state("home")
     collapsed = state(False)
 
     def mount(self, request, section="home", **kwargs):
         self.section = section
 
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "section": self.section}
-
     def _on_sticky_update(self, changed):
         if "section" in changed:
             self.section = changed["section"]
 ```
+
+`section` is declared with `state()`, so it renders by itself: under explicit
+exposure (the default) a value set on `self` without `state()` never reaches
+the template.
 
 How it behaves:
 
@@ -279,12 +328,24 @@ How it behaves:
 - **Not a client event.** The leading underscore keeps it out of event dispatch;
   only the tag calls it. Do not decorate it with
   `@event_handler`.
-- **Preserved children.** A sticky preserved across a `live_redirect` is not
-  rendered again (the browser keeps its DOM), so the hook does not run and a
-  changed kwarg logs the warning. Push changing data to such a child instead.
-- **Explicit exposure.** A child with `exposure_policy = "explicit"` is remounted
-  when its inputs change (they are part of its reuse identity), so it never
-  reaches the hook.
+- **Updatable vs identity inputs.** Under explicit exposure only the names in
+  `sticky_update_inputs` (a tuple of input names; anything else is refused with
+  a `TemplateSyntaxError`) reach the hook. Every other input is part of the
+  child's identity: a change to one remounts the child and discards its
+  in-memory state. Its `persist="server"` fields survive a change to an
+  updatable input, but not to an identity input. The object permission is
+  checked again after the hook runs, so an updatable input that names the
+  object cannot switch the child to one the user may not see. On the HTTP
+  fallback (and on any mount that restores saved state) the child is mounted
+  afresh, its saved fields are restored, and the hook then receives every
+  updatable input on the tag, so it ends where a live socket's child would.
+  Setting `sticky_update_inputs` on a non-sticky or legacy view warns: it is
+  ignored there.
+- **Preserved children.** An explicit sticky carried across a `live_redirect`
+  gets the hook with the destination's changed updatable inputs, and is
+  re-rendered to the browser right after the mount frame. A legacy sticky
+  preserved across a `live_redirect` is not rendered again (the browser keeps
+  its DOM), so the hook does not run and a changed kwarg logs the warning.
 
 ### Allowlist mismatch
 
@@ -339,7 +400,7 @@ replaces it) or contain fallback content for the pre-JS render.
 
 If the destination layout does NOT contain
 `<div dj-sticky-slot="audio-player">`, the server's post-render slot
-scan in `handle_mount` drops the sticky from its survivor list. The
+scan in `_mount_page` drops the sticky from its survivor list. The
 client's `reattachStickyAfterMount` also defends against drift: any
 stashed subtree with no matching slot fires
 `djust:sticky-unmounted` with `reason='no-slot'` and is dropped.

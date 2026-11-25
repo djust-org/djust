@@ -44,7 +44,9 @@
      */
     function extractAndRegister(root) {
         root = root || document;
-        const scripts = root.querySelectorAll('script[type="djust/hook"]');
+        const scripts = Array.from(root.querySelectorAll('script[type="djust/hook"]'));
+        // A patch can insert the script itself as the root it hands over (#4001).
+        if (root.matches && root.matches('script[type="djust/hook"]')) scripts.unshift(root);
         for (const scriptEl of scripts) {
             if (scriptEl.dataset.djustHookRegistered === '1') continue;
             const hookName = scriptEl.getAttribute('data-hook');

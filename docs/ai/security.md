@@ -21,7 +21,7 @@ class SecureView(LiveView):
 
     # Re-verify in handlers (state can change between events)
     @event_handler()
-    def delete(self, item_id: int = 0, **kwargs):
+    def delete(self, item_id: int = 0):
         item = MyModel.objects.get(id=item_id)
         if item.owner != self.request.user:
             raise PermissionDenied
@@ -30,7 +30,7 @@ class SecureView(LiveView):
     # Or use permission decorator
     @permission_required("myapp.delete_mymodel")
     @event_handler()
-    def admin_delete(self, item_id: int = 0, **kwargs):
+    def admin_delete(self, item_id: int = 0):
         MyModel.objects.filter(id=item_id).delete()
 ```
 
@@ -38,7 +38,7 @@ class SecureView(LiveView):
 
 ```python
 @event_handler()
-def update_price(self, value: str = "", **kwargs):
+def update_price(self, value: str = ""):
     try:
         price = Decimal(value)
     except (ValueError, InvalidOperation):

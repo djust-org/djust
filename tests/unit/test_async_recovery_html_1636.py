@@ -35,45 +35,51 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from djust import LiveView, state
 from djust.websocket import LiveViewConsumer
 
 
-def _make_consumer(render_return):
-    """Minimal consumer wired to drive ``_run_async_work`` deterministically."""
+class AsyncView(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ count }}</div>"
+    count = state(0)
+
+
+@pytest.fixture(autouse=True)
+def _allow_this_module(settings):
+    """The consumer mounts this module's view by dotted path."""
+    settings.LIVEVIEW_ALLOWED_MODULES = [__name__]
+
+
+async def _make_consumer(render_return):
+    """A consumer that really mounted ``AsyncView``, wired to drive ``_run_async_work``
+    deterministically: the view's render is pinned to ``render_return``."""
+    from djust.tests._live_session import amount_on_consumer
+
     consumer = LiveViewConsumer()
-    consumer.view_instance = MagicMock()
-    # A real LiveView declares its policy; a Mock's auto-attribute would
-    # read as an invalid policy and fail closed (ADR-038).
-    consumer.view_instance.exposure_policy = "legacy"
-    consumer.view_instance._djust_child_disposed = False
-    consumer.view_instance._async_work_generation = 0
-    consumer.view_instance._skip_render = False
-    consumer.view_instance._sync_state_to_rust = MagicMock()
-    # No cancellation / no handle_async_result hooks for the happy path.
-    del consumer.view_instance._async_cancelled
-    del consumer.view_instance.handle_async_result
-    consumer.view_instance.render_with_diff = MagicMock(return_value=render_return)
-    consumer.view_instance._strip_comments_and_whitespace = MagicMock(side_effect=lambda h: h)
-    consumer.view_instance._extract_liveview_content = MagicMock(side_effect=lambda h: h)
     consumer.use_binary = False
     consumer.send = AsyncMock()
+    view = await amount_on_consumer(consumer, f"{__name__}.AsyncView")
+    # The mount advanced the wire version and the recovery baseline; start from none.
+    consumer._last_sent_version = 0
+    consumer._recovery_html = None
+    consumer._recovery_version = 0
+    view.render_with_diff = MagicMock(return_value=render_return)
     consumer._send_update = AsyncMock()
-    # Flush helpers are no-ops here.
-    for name in (
-        "_flush_push_events",
-        "_flush_flash",
-        "_flush_page_metadata",
-        "_flush_pending_layout",
-        "_flush_deferred",
-    ):
-        setattr(consumer, name, AsyncMock())
     return consumer
 
 
 async def _run(consumer):
+    view = consumer.view_instance
+
+    def _work():
+        # A result that changes state: one that changes nothing renders and
+        # sends nothing (#4123), so it would not exercise the recovery arm.
+        view.count += 1
+
     await consumer._run_async_work(
         task_name="t",
-        callback=lambda: None,
+        callback=_work,
         args=(),
         kwargs={},
         event_name="pick",
@@ -81,10 +87,11 @@ async def _run(consumer):
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_async_render_stores_recovery_html():
     """After an async-completion render with patches, the recovery baseline
     must be refreshed so a later ``request_html`` has fresh HTML to serve."""
-    consumer = _make_consumer(("<div>after-async</div>", '[{"type":"SetText"}]', 42))
+    consumer = await _make_consumer(("<div>after-async</div>", '[{"type":"SetText"}]', 42))
 
     await _run(consumer)
 
@@ -98,10 +105,11 @@ async def test_async_render_stores_recovery_html():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_recovery_html_refreshed_across_multiple_async_renders():
     """Consecutive async renders must each refresh the recovery baseline so a
     stale earlier render is never served on a later recovery."""
-    consumer = _make_consumer(None)
+    consumer = await _make_consumer(None)
     # #1788: use NON-sequential Rust versions (10, 20, 30) to prove the
     # recovery version tracks the CONSUMER counter (1, 2, 3 across three
     # renders), not the Rust version.
@@ -122,10 +130,11 @@ async def test_recovery_html_refreshed_across_multiple_async_renders():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_async_full_html_fallback_stores_recovery_html():
     """The full-HTML fallback branch (``patches is None``) sends full HTML to
     the client, so the recovery baseline must track that HTML too."""
-    consumer = _make_consumer(("<div>full-html-fallback</div>", None, 7))
+    consumer = await _make_consumer(("<div>full-html-fallback</div>", None, 7))
 
     await _run(consumer)
 
@@ -137,6 +146,7 @@ async def test_async_full_html_fallback_stores_recovery_html():
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_request_html_after_async_completion_serves_fresh_html():
     """End-to-end continuity (the load-bearing test): a recovery that consumed
     ``_recovery_html`` must be re-armed by a subsequent async completion, so the
@@ -145,11 +155,13 @@ async def test_request_html_after_async_completion_serves_fresh_html():
     Mirrors the reporter's sequence: event → patch fails → request_html (clears
     baseline) → start_async completes → patch fails again → request_html must
     succeed (not "Recovery HTML unavailable")."""
-    consumer = _make_consumer(("<div>routed</div>", '[{"type":"SetText"}]', 99))
+    consumer = await _make_consumer(("<div>routed</div>", '[{"type":"SetText"}]', 99))
 
     # Simulate the first recovery having already consumed the baseline.
     consumer._recovery_html = None
     consumer._recovery_version = 0
+    # The real frame goes out, so it carries the parameter contracts recovery needs.
+    del consumer._send_update
 
     # Async work completes and re-renders the advanced (routed) state.
     await _run(consumer)

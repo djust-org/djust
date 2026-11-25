@@ -232,7 +232,7 @@ class TestLayoutParity:
 #: aspects of ``scripts/template-library-parity-baseline.csv`` (the harness renders a spread of
 #: keyword, hostile, marked-safe, literal, missing, ``None``, positional and no-argument calls).
 #: These are the known divergences, kept on purpose with their twin (see ``rust_handlers``), and
-#: owed a convergence: the native twin is the faster render (``badge`` ... ``data_table``) or the
+#: owed a convergence: the native twin is the faster render (``badge`` ... ``pagination``) or the
 #: one that can render a Rust-only tag in its body (the children-reading block tags). A twin that
 #: starts or stops diverging fails here.
 KNOWN_DIVERGENCES = {
@@ -241,7 +241,6 @@ KNOWN_DIVERGENCES = {
     "app_shell": "DIFFERENT",  # keeps body content outside the slot tags (root-proof copies it)
     "avatar": "DIFFERENT",
     "badge": "DIFFERENT",
-    "data_table": "DIFFERENT",  # incl. the native-only features (#3869)
     "filter_bar": "DIFFERENT",  # draws what the body renders, not only direct children (#3878)
     "filter_date_range": "DIFFERENT-escape-policy-only",
     "filter_search": "DIFFERENT",

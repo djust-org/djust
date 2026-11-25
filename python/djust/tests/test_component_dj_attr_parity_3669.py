@@ -18,13 +18,10 @@ What is NOT compared, and why (each measured, none guessed):
   of ``scripts/template-library-parity-baseline.csv``), not event wiring, and the native side
   is the safe one. ``test_a_marked_safe_operand_is_never_emitted_raw_by_the_native_handler``
   pins that direction.
-* ``data_table``: the native handler also wires ~13 features the Python template never renders
-  (expand, export, reorder, ...). Removing them would delete working features from the live
-  render path, which is a product decision, not a parity fix (#3869); see
-  ``test_data_table_native_extras_only_add_attributes``. The Python template's own quirks
-  (empty cells for dict rows, ``sortable: False`` ignored) were #3870 and are fixed: the cells
-  are in ``test_component_arg_handling_3870_3871_3872.py`` and the unsortable column is a case
-  of ``DATA_TABLE`` below.
+* ``data_table``: one implementation on both engines since #3869 (the Django engine's tag calls
+  the native handler), so it has no case here: ``python/djust/tests/test_data_table_single_impl_3869.py``
+  pins that both engines draw the same table, features included. The unsortable column is still a
+  case of ``DATA_TABLE`` below.
 * ``nav_item`` nested three levels deep (#3873) and what a template nests in a condition,
   inside another bar or next to the controls of ``filter_bar`` / ``nav_item`` (#3878) were
   drawn natively and dropped by Django. The native behaviour is the reference: the Django
@@ -382,32 +379,6 @@ def test_a_marked_safe_operand_is_the_python_tags_on_both_engines() -> None:
         '{% dj_button label="L" event=ev %}',
     ):
         assert dj_attrs(_rust(src, ctx)) == dj_attrs(_django(src, ctx)), src
-
-
-# --- the two declined parts, pinned so they cannot silently widen -------------------------------
-
-_EXTRAS = [
-    "expandable=True",
-    "editable_columns=sel",
-    "exportable=True",
-    "reorderable=True",
-    "column_visibility=True",
-    "density_toggle=True",
-    'group_by="name"',
-    "copyable=True",
-    "importable=True",
-    "row_drag=True",
-    "editable_rows=True",
-]
-
-
-@pytest.mark.parametrize("flag", _EXTRAS)
-def test_data_table_native_extras_only_add_attributes(flag: str) -> None:
-    """The native table wires features the Python template never renders; it never LACKS one."""
-    src = "{% data_table rows=rows columns=tcols " + flag + " %}"
-    py, rs = dj_attrs(_django(src, CTX)), dj_attrs(_rust(src, CTX))
-    assert not (py - rs), f"native table lost a Python attribute: {_diff(py, rs)}"
-    assert rs - py, f"{flag} no longer differs; move it into DATA_TABLE and delete this entry"
 
 
 def test_nav_item_three_levels_are_drawn_on_both_engines() -> None:

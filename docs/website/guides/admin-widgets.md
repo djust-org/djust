@@ -79,10 +79,17 @@ other LiveView.
 
 The change list and change form use explicit exposure, like every djust
 view, so a widget does too: its template reads its declared `state()`
-fields and what its `get_context_data()` returns. An explicit page cannot
-embed a widget that still states `exposure_policy = "legacy"` (the page
-fails to render); `manage.py check` reports it as an error (`djust.V032`,
-which names the admin slot and the widget).
+fields and what its `get_context_data()` returns. A widget class that
+still states `exposure_policy = "legacy"` is refused with
+`ImproperlyConfigured` when it is created, like any view (#4199).
+
+Each widget slot has a stable id (`djust_admin_widget_1`, `_2`, ... in the
+order the slot lists them). Over a WebSocket or SSE the widget is then the
+same live child on every re-render of the page: an edit in the form, a
+sort or a selection on the list does not mount it again, and its `state()`
+is kept. `mount()` runs once per page load. A widget is mounted afresh when
+what it was given changes (another `object_id`), or when the slot's list
+changes (a permission now hides the widget before it).
 
 ### `change_list_widgets`
 

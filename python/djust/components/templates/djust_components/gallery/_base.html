@@ -1,11 +1,11 @@
-{% load static theme_tags %}
+{% load static theme_tags djust_attrs %}
 <!DOCTYPE html>
-<html lang="en" data-theme="{{ mode }}">
+<html lang="en" data-theme="{{ mode|force_escape }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}djust-components Gallery{% endblock %}</title>
-    <link rel="stylesheet" href="{% static 'djust_theming/css/base.css' %}">
+    <link rel="stylesheet" href="{% static 'djust_theming/css/scaffold.css' %}">
     <link rel="stylesheet" href="{% static 'djust_components/components.css' %}?v={% theme_asset_version %}">
     <link rel="stylesheet" href="{% static 'djust_components/components-classes.css' %}?v={% theme_asset_version %}">
     <style>
@@ -180,7 +180,7 @@ content once.
                 <label>Design</label>
                 <select id="gallery-ds-select" onchange="galleryTheme.setDS(this.value)">
                     {% for ds in ds_options %}
-                    <option value="{{ ds }}" {% if ds == design_system %}selected{% endif %}>{{ ds }}</option>
+                    <option value="{{ ds|force_escape }}" {% if ds == design_system %}selected{% endif %}>{{ ds }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -188,7 +188,7 @@ content once.
                 <label>Preset</label>
                 <select id="gallery-preset-select" onchange="galleryTheme.setPreset(this.value)">
                     {% for p in preset_options %}
-                    <option value="{{ p }}" {% if p == preset %}selected{% endif %}>{{ p }}</option>
+                    <option value="{{ p|force_escape }}" {% if p == preset %}selected{% endif %}>{{ p }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -202,10 +202,10 @@ content once.
     <div class="gallery-body">
         <nav class="gallery-sidebar">
             {% for cat in category_cards %}
-            <h3><a href="{{ cat.url }}" {% if cat.slug == active_category %}class="active"{% endif %}>{{ cat.label }} ({{ cat.count }})</a></h3>
+            <h3><a href="{{ cat.url|djust_url_attr }}" {% if cat.slug == active_category %}class="active"{% endif %}>{{ cat.label }} ({{ cat.count }})</a></h3>
             {% endfor %}
         </nav>
-        <main class="gallery-content preview-container {{ preview_mode }}">
+        <main class="gallery-content preview-container {{ preview_mode|force_escape }}">
             {% block content %}{% endblock %}
         </main>
     </div>

@@ -125,6 +125,22 @@ class TestTheHelperIsTheDefinition:
         assert got["__str__"] == str(user) == "bob"
         assert got["__model__"] == "User"
 
+    def test_model_identity_stamps_model_name(self) -> None:
+        """#3947: the marker is the TYPE of ``__model__`` (``ModelName``), and the JSON wire is
+        byte-identical to the plain class name."""
+        import json
+
+        got = model_identity(_make_user(pk=3, username="bob"))
+        assert type(got["__model__"]) is ser.ModelName
+        assert isinstance(got["__model__"], str)
+        assert json.dumps(got) == json.dumps(
+            {"id": 3, "pk": 3, "__str__": "bob", "__model__": "User"}
+        )
+        assert ser.is_serialized_model_map(got)
+        assert not ser.is_serialized_model_map({**got, "__model__": "User"})
+        # a dict copy keeps the marker (the value object is reused)
+        assert ser.is_serialized_model_map(dict(got))
+
     def test_id_and_pk_stay_NATIVE_types_for_template_comparisons(self) -> None:
         # `{% if item.id == state_var %}` compares an int to an int; stringifying
         # the pk here would silently break every such comparison.
@@ -400,15 +416,17 @@ class TestOneProducerNotSix:
             for path in (SER_PY, JIT_PY, RENDERING_PY)
         }
         # serialization.py: the def, the main path, the FK shorthand, the
-        # max-depth shorthand. jit.py: the identity-only subset.
+        # max-depth shorthand. jit.py: the identity-only subset, and the
+        # identity rows of a QuerySet read only through its methods (#4272),
+        # and the same for a nested QuerySet's rows (#4326).
         # rendering.py: the serialization-raised fallback (the JIT-unavailable
         # one went with the optional extension in 2.0).
         assert callers == {
             "serialization.py": 4,
-            "jit.py": 1,
+            "jit.py": 3,
             "rendering.py": 1,
         }, (
-            f"the `model_identity` call sites moved: {callers}. Five producers "
+            f"the `model_identity` call sites moved: {callers}. Six producers "
             f"call it (plus its own `def`); a producer that stopped calling it "
             f"is a hand-rolled literal coming back."
         )

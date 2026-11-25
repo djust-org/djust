@@ -136,7 +136,7 @@ def my_view(request):
 | Feature | DjustTemplateBackend | LiveView |
 |---------|---------------------|----------|
 | **Rendering** | Rust (~7-11x faster) | Rust (~7-11x faster) |
-| **Client.js** | ❌ No (smaller pages) | ✅ Yes (~87 KB gz) |
+| **Client.js** | ❌ No (smaller pages) | ✅ Yes (~90 KB gz) |
 | **WebSocket** | ❌ No | ✅ Yes |
 | **Interactivity** | ❌ Static only | ✅ Real-time updates |
 | **Use Case** | Static content pages | Interactive features |
@@ -450,7 +450,8 @@ scripts/template-library-parity-gateoff.py         # mutate the ratchet and the 
 Kept native, and why:
 
 - `app_shell`, `app_sidebar`, `app_header`, `app_content`: the root-proof protocol for partial-root rendering (`_render_root_parts`, `core_root_layout_object` in `crates/djust_templates/src/registry.rs`), which a bridged node cannot take part in.
-- `badge`, `avatar`, `progress`, `pagination`, `data_table`: inclusion tags. Through the bridge each use renders its template through the backend, measured 4 to 8x slower on a release build (`data_table` over 100 rows about 1 ms to 7 ms per turn); `data_table`'s native-only features are [#3869](https://github.com/djust-org/djust/issues/3869)'s open decision.
+- `badge`, `avatar`, `progress`, `pagination`: inclusion tags. Through the bridge each use renders its template through the backend, measured 4 to 8x slower on a release build.
+- `data_table`: the one implementation on both engines ([#3869](https://github.com/djust-org/djust/issues/3869)). The Django engine's tag calls the native handler, so there is no `djust_components/table.html` and every native feature is available under DjangoTemplates.
 - `accordion`, `sidebar`, `nav_menu`, `toolbar`, `filter_bar`, `form_array`, `page_header` and their child tags: their Django node reads its children, which the bridge can only serve by handing the body to Django's engine (the raw-body route), and Django's engine cannot compile a Rust-only tag in the body (`{% call %}`, `{% component %}`, `{% slot %}`, `{% dj_suspense %}`) and loses the `{% if %}` boundary markers the Rust renderer emits. `tabs` and `split_pane` already took the raw-body route before 2.0 and still do (`RAW_BODY_TAGS`); their body now ends at the end tag that closes the tag rather than the first one, so they nest ([#3878](https://github.com/djust-org/djust/issues/3878)), and their arguments are checked when the template compiles.
 
 Every other tag of the library renders its Python node under both engines (the ratchet below is `IDENTICAL` for all of them). Tags that drew a fresh id on every render (`tooltip`, `otp_input`, `tag_input`) derive it from their arguments plus the call's occurrence among identical calls in the same render (the second gets `-2`), counted in the render's own `RenderContext`: stable across renders, so a LiveView re-render does not change it, and unique within one render.

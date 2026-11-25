@@ -202,32 +202,71 @@ fallback has no reconnect, so it never fires recovery.
 
 #### Upgrading a 1.x recovery handler
 
-1.x delivered the values as `_form_values` / `_data_attrs` and ran the handler
-under the legacy parameter policy whatever the project used. A strict
-signature cannot declare `_` names, so the handler changes:
+A 1.x recovery handler read `_form_values` / `_data_attrs`, names a strict
+signature cannot declare. `manage.py check` reports one that still does
+(`djust.V031`) and names the new signature; the before-and-after is in
+[Migrating to djust 2.0](migrating-to-2.0.md#2-make-event-handlers-strict).
+
+## Slow Clients and Outbound Limits
+
+A client that reads more slowly than the server produces frames (a phone on a
+bad network, a busy tab, a flood of broadcasts) does not make the server buffer
+without bound. Each connection has an outbound limit,
+`LIVEVIEW_CONFIG["max_outbound_buffer_bytes"]` (default `4194304`, 4 MiB; `0`
+turns it off). Past it the server ends the connection and the client reconnects
+through the recovery path above: a fresh mount, then form recovery and
+`dj-auto-recover`. Single frames are never dropped or merged, because the
+client would then show a state the server never had.
 
 ```python
-# 1.x
-@event_handler()
-def restore_state(self, _form_values=None, _data_attrs=None, **kwargs):
-    fv = _form_values or {}
-    da = _data_attrs or {}
-    ...
-
-# 2.0
-@event_handler(parameter_policy="strict")
-def restore_state(self, form_values: dict[str, Any], data_attrs: dict[str, str]):
-    fv = form_values
-    da = data_attrs
-    ...
+# settings.py
+LIVEVIEW_CONFIG = {
+    "max_outbound_buffer_bytes": 8 * 1024 * 1024,  # 8 MiB per connection
+}
 ```
 
-`parameter_policy="strict"` is not needed when the project sets
-`LIVEVIEW_CONFIG["event_parameter_policy"] = "strict"`. `manage.py check`
-reports a recovery handler that still reads `_form_values` / `_data_attrs`,
-from its signature or from `**kwargs`, and one that declares the new names
-under the legacy policy (`djust.V031`), and names the new signature. Until the
-handler changes, a legacy-policy handler keeps receiving the 1.x envelope.
+| Transport | What is bounded | Over the limit |
+|-----------|-----------------|----------------|
+| WebSocket | Frames waiting while another frame of the same socket is still being handed to the ASGI server, in bytes (UTF-8 for text frames), not counting the frame that goes next | The socket is closed with code **1013** ("try again later"); the client reconnects with the usual backoff and remounts |
+| SSE | Frames waiting in the session's queue for the stream to write them, in bytes (UTF-8 JSON), not counting the frame the stream takes next | The waiting frames are dropped and the stream ends; `EventSource` reconnects with the same session id and that mount resyncs the page |
+| HTTP page POST | Nothing to bound: each response carries the frames of its own event and nothing is held between requests | n/a |
+| Streamed HTTP render (`StreamingHttpResponse` of a page) | At most `DJUST_LAZY_CHUNK_QUEUE_MAX` rendered chunks (default 8); a full queue makes the renderer wait for the client (back-pressure) | The renderer waits; nothing is dropped |
+
+What the WebSocket limit covers, exactly:
+
+- **One frame always goes out.** The frame next in line is not counted, so a
+  frame larger than the limit is never the reason for a close; the limit bounds
+  the backlog behind it, not how large one render may be.
+- **Order is kept.** One task per socket sends its frames, in the order they
+  were sent. A handler whose frame finds the socket idle waits until that frame
+  is sent (and sees a transport error, as before); one that finds a backlog
+  hands its frame off and carries on. A cancelled handler does not hold up the
+  frames behind its own.
+- **The limit is per connection**, so the memory one browser can pin is the
+  limit times its open sockets.
+- **It measures what the ASGI server has not accepted yet.** uvicorn's
+  `websockets` implementations apply back-pressure, so a slow reader shows up
+  here. A server that accepts every frame into its own buffer without
+  back-pressure (Daphne) holds that backlog itself; bound it there.
+- **A close waits for the frames before it.** A `close()` sends the frames
+  queued before it first, for up to 5 seconds, then closes anyway and drops
+  them. A disconnect drops waiting frames at once.
+
+Over SSE the same limit applies to the session's queue. It sits beside the
+frame-count back-pressure for server-driven frames (#3809): at 128 queued
+frames a tick is skipped and a `self.server_push()` is deferred and coalesced,
+while frames answering an event are never held back. The byte limit is the
+backstop for everything else, events included.
+
+The server logs a warning naming the backlog and the limit each time it closes
+a socket with 1013 or ends an SSE stream.
+
+**What is coalesced and what needs a resync.** No transport merges or drops
+single frames: a frame accepted for a connection reaches it in order, or the
+connection ends. The one coalescing step is upstream of the wire, on SSE:
+deferred `server_push()` calls (above). Anything a client misses because its
+connection ended is recovered by the reconnect's fresh mount, never by
+replaying frames.
 
 ## SSE Transport
 
@@ -276,11 +315,11 @@ class EditorView(LiveView):
     body = state("")
 
     @event_handler()
-    def validate_title(self, value="", **kwargs):
+    def validate_title(self, value: str):
         self.title = value
 
     @event_handler()
-    def preview(self, value="", **kwargs):
+    def preview(self, value: str):
         self.body = value
 
     @event_handler(parameter_policy="strict")

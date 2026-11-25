@@ -4,8 +4,8 @@ Kitchen Sink Demo View
 Showcases all available Django Rust Live components with interactive examples.
 """
 
-from django.http import HttpRequest
 from demo_app.views.navbar_example import BaseViewWithNavbar
+from djust import state
 from djust.decorators import event_handler
 from djust.components import (
     # UI Components
@@ -42,222 +42,183 @@ class KitchenSinkView(BaseViewWithNavbar):
 
     template_name = "kitchen_sink.html"
 
-    def mount(self, request: HttpRequest):
-        """Initialize all components with example configurations"""
+    # Every component is declared in the class body: each view renders its own
+    # copy (an explicit view never renders a component assigned in mount()).
+    button_primary = ButtonComponent(
+        label="Primary Button",
+        variant="primary",
+        size="md",
+        on_click="handle_button_click"
+    )
+    button_secondary = ButtonComponent(
+        label="Secondary",
+        variant="secondary",
+        size="sm"
+    )
+    button_success = ButtonComponent(
+        label="Success Button",
+        variant="success",
+        size="lg",
+        icon="✓"
+    )
+    button_danger = ButtonComponent(
+        label="Danger",
+        variant="danger",
+        outline=True
+    )
+    badge_primary = BadgeComponent(text="Primary", variant="primary")
+    badge_success = BadgeComponent(text="Active", variant="success", pill=True)
+    badge_warning = BadgeComponent(text="99+", variant="warning", pill=True)
+    badge_dismissible = BadgeComponent(
+        text="Python",
+        variant="info",
+        dismissible=True,
+        on_dismiss="dismiss_tag"
+    )
+    dropdown_actions = DropdownComponent(
+        label="Actions",
+        variant="primary",
+        items=[
+            {'text': 'Edit', 'action': 'edit_item', 'icon': '✏️'},
+            {'text': 'Delete', 'action': 'delete_item', 'icon': '🗑️', 'variant': 'danger'},
+            {'divider': True},
+            {'text': 'Archive', 'action': 'archive_item'},
+        ]
+    )
+    dropdown_split = DropdownComponent(
+        label="Split Dropdown",
+        variant="success",
+        split=True,
+        items=[
+            {'text': 'Action 1', 'action': 'action1'},
+            {'text': 'Action 2', 'action': 'action2'},
+        ]
+    )
+    alert_success = AlertComponent(
+        message="Operation completed successfully!",
+        type="success",
+        dismissible=True
+    )
+    alert_info = AlertComponent(
+        message="Here's some helpful information.",
+        type="info",
+        icon=True
+    )
+    alert_warning = AlertComponent(
+        message="Warning: Please review your changes.",
+        type="warning",
+        dismissible=True
+    )
+    card_basic = CardComponent(
+        title="Basic Card",
+        body="This is a simple card component with a title and body text.",
+        variant="default"
+    )
+    card_with_footer = CardComponent(
+        title="Featured Card",
+        body="This card has a footer with additional information.",
+        footer="Last updated 3 mins ago",
+        variant="primary"
+    )
+    modal_example = ModalComponent(
+        title="Example Modal",
+        body="This is a modal dialog with customizable content.",
+        show=False,
+        size="lg"
+    )
+    progress_simple = ProgressComponent(
+        value=45,
+        variant="primary",
+        show_label=True
+    )
+    progress_striped = ProgressComponent(
+        value=65,
+        variant="success",
+        striped=True,
+        animated=True,
+        show_label=True
+    )
+    progress_custom = ProgressComponent(
+        value=30,
+        variant="warning",
+        custom_label="Processing...",
+        striped=True
+    )
+    spinner_border = SpinnerComponent(
+        variant="primary",
+        size="md",
+        label="Loading..."
+    )
+    spinner_grow = SpinnerComponent(
+        variant="success",
+        size="sm",
+        type="grow"
+    )
+    tabs_example = TabsComponent(
+        tabs=[
+            {
+                'id': 'home',
+                'label': 'Home',
+                'content': '<p>Welcome to the Home tab!</p><p>This content is loaded immediately.</p>'
+            },
+            {
+                'id': 'profile',
+                'label': 'Profile',
+                'content': '<p>User profile information goes here.</p>'
+            },
+            {
+                'id': 'messages',
+                'label': 'Messages',
+                'content': '<p>Your messages appear here.</p>',
+                'badge': '5'
+            },
+            {
+                'id': 'settings',
+                'label': 'Settings',
+                'content': '<p>Configure your settings.</p>',
+                'disabled': True
+            },
+        ],
+        active='home',
+        variant='tabs'
+    )
+    table_users = TableComponent(
+        columns=[
+            {'key': 'id', 'label': 'ID', 'sortable': True},
+            {'key': 'name', 'label': 'Name', 'sortable': True},
+            {'key': 'email', 'label': 'Email', 'sortable': True},
+            {'key': 'role', 'label': 'Role', 'badge': True},
+            {'key': 'status', 'label': 'Status', 'badge': True},
+        ],
+        rows=[
+            {'id': 1, 'name': 'Alice Johnson', 'email': 'alice@example.com', 'role': 'Admin', 'status': 'active'},
+            {'id': 2, 'name': 'Bob Smith', 'email': 'bob@example.com', 'role': 'User', 'status': 'active'},
+            {'id': 3, 'name': 'Charlie Brown', 'email': 'charlie@example.com', 'role': 'User', 'status': 'inactive'},
+            {'id': 4, 'name': 'Diana Prince', 'email': 'diana@example.com', 'role': 'Moderator', 'status': 'active'},
+            {'id': 5, 'name': 'Eve Wilson', 'email': 'eve@example.com', 'role': 'User', 'status': 'active'},
+        ],
+        striped=True,
+        hoverable=True,
+        bordered=True
+    )
+    pagination_basic = PaginationComponent(
+        current_page=3,
+        total_pages=10,
+        show_page_info=True,
+        alignment='center'
+    )
+    pagination_large = PaginationComponent(
+        current_page=1,
+        total_items=250,
+        items_per_page=25,
+        size='lg',
+        on_page_change='handle_page_change'
+    )
 
-        # === UI COMPONENTS ===
-
-        # Buttons
-        self.button_primary = ButtonComponent(
-            label="Primary Button",
-            variant="primary",
-            size="md",
-            on_click="handle_button_click"
-        )
-
-        self.button_secondary = ButtonComponent(
-            label="Secondary",
-            variant="secondary",
-            size="sm"
-        )
-
-        self.button_success = ButtonComponent(
-            label="Success Button",
-            variant="success",
-            size="lg",
-            icon="✓"
-        )
-
-        self.button_danger = ButtonComponent(
-            label="Danger",
-            variant="danger",
-            outline=True
-        )
-
-        # Badges
-        self.badge_primary = BadgeComponent(text="Primary", variant="primary")
-        self.badge_success = BadgeComponent(text="Active", variant="success", pill=True)
-        self.badge_warning = BadgeComponent(text="99+", variant="warning", pill=True)
-        self.badge_dismissible = BadgeComponent(
-            text="Python",
-            variant="info",
-            dismissible=True,
-            on_dismiss="dismiss_tag"
-        )
-
-        # Dropdowns
-        self.dropdown_actions = DropdownComponent(
-            label="Actions",
-            variant="primary",
-            items=[
-                {'text': 'Edit', 'action': 'edit_item', 'icon': '✏️'},
-                {'text': 'Delete', 'action': 'delete_item', 'icon': '🗑️', 'variant': 'danger'},
-                {'divider': True},
-                {'text': 'Archive', 'action': 'archive_item'},
-            ]
-        )
-
-        self.dropdown_split = DropdownComponent(
-            label="Split Dropdown",
-            variant="success",
-            split=True,
-            items=[
-                {'text': 'Action 1', 'action': 'action1'},
-                {'text': 'Action 2', 'action': 'action2'},
-            ]
-        )
-
-        # Alerts
-        self.alert_success = AlertComponent(
-            message="Operation completed successfully!",
-            type="success",
-            dismissible=True
-        )
-
-        self.alert_info = AlertComponent(
-            message="Here's some helpful information.",
-            type="info",
-            icon=True
-        )
-
-        self.alert_warning = AlertComponent(
-            message="Warning: Please review your changes.",
-            type="warning",
-            dismissible=True
-        )
-
-        # Cards
-        self.card_basic = CardComponent(
-            title="Basic Card",
-            body="This is a simple card component with a title and body text.",
-            variant="default"
-        )
-
-        self.card_with_footer = CardComponent(
-            title="Featured Card",
-            body="This card has a footer with additional information.",
-            footer="Last updated 3 mins ago",
-            variant="primary"
-        )
-
-        # Modal
-        self.modal_example = ModalComponent(
-            title="Example Modal",
-            body="This is a modal dialog with customizable content.",
-            show=False,
-            size="lg"
-        )
-
-        # Progress
-        self.progress_simple = ProgressComponent(
-            value=45,
-            variant="primary",
-            show_label=True
-        )
-
-        self.progress_striped = ProgressComponent(
-            value=65,
-            variant="success",
-            striped=True,
-            animated=True,
-            show_label=True
-        )
-
-        self.progress_custom = ProgressComponent(
-            value=30,
-            variant="warning",
-            custom_label="Processing...",
-            striped=True
-        )
-
-        # Spinner
-        self.spinner_border = SpinnerComponent(
-            variant="primary",
-            size="md",
-            label="Loading..."
-        )
-
-        self.spinner_grow = SpinnerComponent(
-            variant="success",
-            size="sm",
-            type="grow"
-        )
-
-        # === LAYOUT COMPONENTS ===
-
-        # Tabs
-        self.tabs_example = TabsComponent(
-            tabs=[
-                {
-                    'id': 'home',
-                    'label': 'Home',
-                    'content': '<p>Welcome to the Home tab!</p><p>This content is loaded immediately.</p>'
-                },
-                {
-                    'id': 'profile',
-                    'label': 'Profile',
-                    'content': '<p>User profile information goes here.</p>'
-                },
-                {
-                    'id': 'messages',
-                    'label': 'Messages',
-                    'content': '<p>Your messages appear here.</p>',
-                    'badge': '5'
-                },
-                {
-                    'id': 'settings',
-                    'label': 'Settings',
-                    'content': '<p>Configure your settings.</p>',
-                    'disabled': True
-                },
-            ],
-            active='home',
-            variant='tabs'
-        )
-
-        # === DATA COMPONENTS ===
-
-        # Table with sample data
-        self.table_users = TableComponent(
-            columns=[
-                {'key': 'id', 'label': 'ID', 'sortable': True},
-                {'key': 'name', 'label': 'Name', 'sortable': True},
-                {'key': 'email', 'label': 'Email', 'sortable': True},
-                {'key': 'role', 'label': 'Role', 'badge': True},
-                {'key': 'status', 'label': 'Status', 'badge': True},
-            ],
-            rows=[
-                {'id': 1, 'name': 'Alice Johnson', 'email': 'alice@example.com', 'role': 'Admin', 'status': 'active'},
-                {'id': 2, 'name': 'Bob Smith', 'email': 'bob@example.com', 'role': 'User', 'status': 'active'},
-                {'id': 3, 'name': 'Charlie Brown', 'email': 'charlie@example.com', 'role': 'User', 'status': 'inactive'},
-                {'id': 4, 'name': 'Diana Prince', 'email': 'diana@example.com', 'role': 'Moderator', 'status': 'active'},
-                {'id': 5, 'name': 'Eve Wilson', 'email': 'eve@example.com', 'role': 'User', 'status': 'active'},
-            ],
-            striped=True,
-            hoverable=True,
-            bordered=True
-        )
-
-        # Pagination
-        self.pagination_basic = PaginationComponent(
-            current_page=3,
-            total_pages=10,
-            show_page_info=True,
-            alignment='center'
-        )
-
-        self.pagination_large = PaginationComponent(
-            current_page=1,
-            total_items=250,
-            items_per_page=25,
-            size='lg',
-            on_page_change='handle_page_change'
-        )
-
-        # Component interaction state
-        self.button_click_count = 0
-        self.modal_open_count = 0
-        self.current_progress = 45
+    # Component interaction state (persist="server": the HTTP fallback keeps it).
+    button_click_count = state(0, persist="server")
+    modal_open_count = state(0, persist="server")
+    current_progress = state(45, persist="server")
 
     @event_handler
     def handle_button_click(self):
@@ -335,18 +296,6 @@ class KitchenSinkView(BaseViewWithNavbar):
         """Handle pagination page change"""
         self.alert_info.set_message(f"Navigated to page {page}")
         self.alert_info.show()
-
-    @event_handler
-    def dismiss(self, component_id: str = None, **kwargs):
-        """Handle component dismiss/hide - works for alerts, modals, etc."""
-        # Get the component by its attribute name (which is now used as component_id)
-        if component_id and hasattr(self, component_id):
-            component = getattr(self, component_id)
-            # Try dismiss() first (for alerts), then hide() (for modals)
-            if hasattr(component, 'dismiss'):
-                component.dismiss()
-            elif hasattr(component, 'hide'):
-                component.hide()
 
     @event_handler
     def activate_tab(self, tab: str = None):

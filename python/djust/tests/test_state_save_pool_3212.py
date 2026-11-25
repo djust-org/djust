@@ -31,6 +31,7 @@ from djust import LiveView, event_handler
 from djust import _exposure_sessions
 from djust import runtime as runtime_module
 from djust.decorators import state
+from djust.tests._worker_connections import close_new_worker_connections
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 from djust.tests.test_exposure_sse_resilience_3200 import BackgroundPage, _fresh_key, _request
 
@@ -44,6 +45,15 @@ VALVE_S = 15.0
 urlpatterns = [path("bg/", BackgroundPage.as_view())]
 
 VIEW = "djust.tests.test_exposure_sse_resilience_3200.BackgroundPage"
+
+
+@pytest.fixture(autouse=True)
+async def close_worker_connections(transactional_db):
+    """``sync_to_async`` below opens ``default`` on asgiref's shared executor thread, and
+    in-memory SQLite never closes it, so a later test's consumer dispatch trips pytest-django's
+    "Database access not allowed" (#4214). Close what this file's tests opened."""
+    async with close_new_worker_connections():
+        yield
 
 
 @pytest.fixture(autouse=True)

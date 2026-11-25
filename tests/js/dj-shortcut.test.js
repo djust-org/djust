@@ -6,13 +6,14 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { withContracts } from './_open_contracts.js';
 import { readFileSync } from 'fs';
 
 const clientCode = readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 
 function createTestEnv(bodyHtml) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body>${bodyHtml}</body></html>`,
+        `<!DOCTYPE html><html><body>${withContracts(bodyHtml)}</body></html>`,
         { runScripts: 'dangerously', url: 'http://localhost/' }
     );
 
@@ -36,7 +37,7 @@ function createTestEnv(bodyHtml) {
             var body = {};
             try { body = JSON.parse((opts && opts.body) || "{}"); } catch(e) {}
             window._testFetchCalls.push({ eventName: eventName, body: body });
-            return { ok: true, json: async function() { return { patches: [], version: window._mockVersion }; } };
+            return { ok: true, json: async function() { return { patches: [], version: window._mockVersion, ...(() => { const s = document.querySelector('script[data-djust-parameter-contracts]'); if (!s) return {}; const m = JSON.parse(s.textContent); return {parameter_contracts: m.contracts, parameter_contract_view: m.view}; })() }; } };
         };
     `);
 

@@ -14,7 +14,7 @@ from djust.websocket import _snapshot_assigns
 class TickView(LiveView):
     """Test view with tick_interval and handle_tick."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ count }}</div>"
     tick_interval = 1000
 
@@ -29,7 +29,7 @@ class TickView(LiveView):
 class MutatingTickView(LiveView):
     """Test view where tick mutates state."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ count }}</div>"
     tick_interval = 1000
 
@@ -44,7 +44,7 @@ class MutatingTickView(LiveView):
 class ConditionalTickView(LiveView):
     """Test view where tick sometimes mutates state."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ count }}</div>"
     tick_interval = 1000
 

@@ -73,25 +73,15 @@ function applyEmbeddedUpdate(data, transport) {
 async function handleEmbeddedResponse(data, transport) {
     // Capture ownership before morphing: the response may remove its trigger.
     const tracked = data.ref != null && _pendingEventOwners.get(data.ref) === transport;
-    const eventName = tracked ? _pendingEventNames.get(data.ref) : transport.lastEventName;
-    const trigger = tracked ? _pendingTriggerEls.get(data.ref) : transport.lastTriggerElement;
-    const owner = trigger && trigger.closest('[data-djust-embedded]');
-    const ownerId = owner && owner.getAttribute('data-djust-embedded');
     const applied = applyEmbeddedUpdate(data, transport);
     // A legitimate reply may arrive after its owner was removed. Settle its
     // own request rather than leaking the promise, but reject malformed frames.
     if (!applied && (!tracked || typeof data.view_id !== 'string' || !data.view_id ||
         typeof data.html !== 'string')) return false;
-    if (data.source === 'async') {
-        completeLegacyAsyncBatches(transport, data);
-        return true;
-    }
-    // No-ref SSE replies must match the pending element's scope. A reply for
-    // another child must not consume the most recently sent event's state.
-    if (!tracked && (ownerId !== data.view_id ||
-        (data.event_name && data.event_name !== eventName))) {
-        return true;
-    }
+    // Background results, released activity events (whose request the queueing
+    // noop settled) and the HTTP fallback (settled by its own request) answer
+    // no pending request by ref here (#4309).
+    if (!tracked || data.source === 'async') return true;
     const event = acknowledgeEventRequest(transport, data);
     if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
     if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {
@@ -128,11 +118,9 @@ function applyHttpSideChannels(data) {
     }
     if (Array.isArray(data._push_events)) {
         // The WebSocket push_event case, per queued event.
+        // An upload event is held while the uploads chunk loads (#4007).
         data._push_events.forEach(function(frame) {
-            window.dispatchEvent(new CustomEvent('djust:push_event', {
-                detail: { event: frame.event, payload: frame.payload }
-            }));
-            dispatchPushEventToHooks(frame.event, frame.payload);
+            _djustDispatchPushEvent(frame.event, frame.payload);
         });
     }
     if (data._layout && window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
@@ -320,8 +308,11 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             // null rootEl is correct for the root view.
             // `_applyIf` is set by the page-POST fallback for a patch answer
             // (11-event-handler.js): a function, so never from the wire.
+            // #4001: the patches report what they changed, so the rescans
+            // after them cover the change, not the page.
+            const changes = {};
             const success = await applyPatches(data.patches, null,
-                typeof data._applyIf === 'function' ? data._applyIf : null);
+                typeof data._applyIf === 'function' ? data._applyIf : null, changes);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.
@@ -376,7 +367,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             if (!window.djust._mountReady) window.djust._mountReady = true;
 
             _refreshRenderParameterContracts(transport, data);
-            reinitAfterDOMUpdate();
+            reinitAfterDOMUpdate(undefined, changes);
         }
         // Apply full HTML update (fallback)
         else if (data.html) {
@@ -398,9 +389,9 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             const newRoot = _parseRootFrameHtml(data.html, liveviewRoot);
 
             // Handle dj-update="append|prepend|ignore" for efficient list updates.
-            // When no dj-update elements exist, applyDjUpdateElements falls back
-            // to morphChildren internally, which preserves JS state (canvas contexts,
-            // event listeners, hook properties) better than innerHTML replacement.
+            // applyDjUpdateElements always morphs the whole tree (#4283), which
+            // preserves JS state (canvas contexts, event listeners, hook
+            // properties) better than innerHTML replacement.
             _withOwnedChildMount(data.owned_children,
                 () => applyDjUpdateElements(liveviewRoot, newRoot));
 

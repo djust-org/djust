@@ -7,9 +7,6 @@ Simple stateless checkbox.
 from typing import Any, Optional
 from ..base import Component
 
-from django.utils.html import conditional_escape
-from djust.components.utils import attr_text
-
 
 class Checkbox(Component):
     """
@@ -108,45 +105,3 @@ class Checkbox(Component):
             "switch": self.switch,
             "inline": self.inline,
         }
-
-    def _render_custom(self) -> str:
-        """Pure Python fallback (f-string rendering)."""
-        parts = ['<div class="mb-3">']
-
-        # Build form-check classes
-        check_classes = ["form-check"]
-        if self.switch:
-            check_classes.append("form-switch")
-        if self.inline:
-            check_classes.append("form-check-inline")
-
-        parts.append(f'    <div class="{" ".join(check_classes)}">')
-
-        # Build input attributes
-        attrs = [
-            'class="form-check-input"',
-            'type="checkbox"',
-            f'id="{attr_text(self.checkbox_id)}"',
-            f'name="{attr_text(self.name)}"',
-            f'value="{attr_text(self.value)}"',
-        ]
-        if self.checked:
-            attrs.append("checked")
-        if self.disabled:
-            attrs.append("disabled")
-
-        parts.append(f"        <input {' '.join(attrs)}>")
-        parts.append(
-            f'        <label class="form-check-label" for="{attr_text(self.checkbox_id)}">'
-        )
-        parts.append(f"            {conditional_escape(self.label)}")
-        parts.append("        </label>")
-        parts.append("    </div>")
-
-        # Help text
-        if self.help_text:
-            parts.append(f'    <div class="form-text">{conditional_escape(self.help_text)}</div>')
-
-        parts.append("</div>")
-
-        return "\n".join(parts)

@@ -160,18 +160,6 @@ class Declared(_Base):
         self.scratch += 1
 
 
-class LegacyCounter(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><pre>{{ count }}</pre></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    @event_handler()
-    def inc(self, **kwargs):
-        self.count += 1
-
-
 CASES = [
     (Counter, [("inc",), ("nothing",), ("inc",)], {"count": 2}),
     (
@@ -211,10 +199,13 @@ def _probe_of(markup: str) -> Dict[str, Any]:
 
 
 @pytest.fixture(autouse=True)
-def _one_tab(monkeypatch):
+def _one_tab(monkeypatch, settings):
     """Every page load in this module is the same tab unless a test says
-    otherwise: the GET mints the id the harness's client sends back."""
+    otherwise: the GET mints the id the harness's client sends back. Every
+    turn is saved before its reply: these tests read the store after each
+    turn, and pin the save's own rules (#4164: unset, the interval is 2)."""
     monkeypatch.setattr(_automatic_state, "new_tab_id", lambda: harness.TAB)
+    settings.DJUST_STATE_SAVE_INTERVAL = 0
 
 
 def _request(
@@ -1028,14 +1019,6 @@ def test_a_cookie_session_holds_no_automatic_state(caplog):
     assert "signed_cookies" in said and "DJUST_AUTOMATIC_STATE = False" in said
 
 
-@pytest.mark.django_db
-def test_a_legacy_view_takes_no_part():
-    """Deprecated and on its way out: nothing is saved for it on any transport,
-    so a fallback POST cannot bring back a value older than its socket's."""
-    view, key, _ = _fallback(LegacyCounter, [("inc",), ("inc",)])
-    assert view.count == 1 and not _stored(key)
-
-
 # ---------------------------------------------------------------------------
 # The 1.3 model: a saved view is rebuilt, mount() does not run again
 # ---------------------------------------------------------------------------
@@ -1187,6 +1170,41 @@ def test_a_model_instance_is_saved_as_its_field_dict_as_in_1_3():
 
 
 @pytest.mark.django_db
+def test_a_held_model_saves_its_model_name_marker_as_plain_text_3947():
+    """#3947 stamps ``__model__`` as a ``ModelName``; the saver writes it as plain text.
+
+    Before the fix ``encode_state_value`` took only an exact ``str``, so the marker
+    fell to ``convert`` and the held model was dropped (every request mounted again).
+    """
+    from djust.serialization import ModelName, encode_state_value, model_identity
+
+    member = User(username="ann-3947", email="ann@example.com", password="pw-hash")
+    identity = model_identity(member)
+    assert type(identity["__model__"]) is ModelName
+    encoded = encode_state_value({"m": identity, "names": [identity["__model__"]]})
+    assert type(encoded["m"]["__model__"]) is str and encoded["m"]["__model__"] == "User"
+    assert type(encoded["names"][0]) is str  # the list fast path too
+
+    class HoldsModel(_Base):
+        shown = ("count",)
+
+        def mount(self, request, **kwargs):
+            self.count = 0
+            self.member = member
+
+        @event_handler()
+        def inc(self, **kwargs):
+            self.count += 1
+
+    view, key, _ = _fallback(HoldsModel, [("inc",)])
+    assert view.count == 1
+    envelope = _saved_envelope(key)
+    assert envelope["remount"] is False
+    saved_member = envelope["values"]["member"]
+    assert type(saved_member["__model__"]) is str and saved_member["__model__"] == "User"
+
+
+@pytest.mark.django_db
 def test_work_mount_queued_makes_the_next_request_mount_again():
     class Queues(_Base):
         shown = ("count",)
@@ -1302,7 +1320,7 @@ def test_a_stored_name_the_view_would_not_save_is_not_put_back():
         login_required=False,
         password="injected",
         flash_rows=["injected"],
-        exposure_policy="legacy",
+        exposure_policy="explicit",
         brand_new="allowed: a handler may create attributes",
     )
     _tamper(

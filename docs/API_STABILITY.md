@@ -83,7 +83,7 @@ The **public API** — the surface SemVer covers — is exactly the following:
    re-exported from `djust.__init__.py`'s `__all__`** — for example
    `FormMixin`, `WizardMixin`, `DraftModeMixin`, `PresenceMixin`,
    `LiveCursorMixin`, `StreamingMixin`, `UploadMixin`, `FlashMixin`,
-   `PageMetadataMixin`, `NotificationMixin`, `ReactMixin`,
+   `PageMetadataMixin`, `NotificationMixin`,
    `LoginRequiredMixin`, and `PermissionRequiredMixin`. These are the opt-in
    mixins applications add to their own `LiveView` subclasses.
 
@@ -239,39 +239,8 @@ SemVer rules above are unchanged by it.
 
 The one access pattern deprecated during the `1.x` series (dict-style
 `block.super` reads in a bridged tag) was removed in `2.0.0`; see below. One
-value and one tag argument are deprecated on the 2.0 line:
-
-### `exposure_policy = "legacy"` → the default, `"explicit"`
-
-`LiveView.exposure_policy` defaults to `"explicit"` since djust 2.0 (it was
-`"legacy"` in 1.x). This is a changed default, made in a MAJOR release: a view
-that states no policy now gets a template context, session state and browser
-data made only of what it declares. See
-[explicit exposure](website/state/explicit-exposure.md).
-
-`"legacy"` is still accepted when a class states it, so a 1.x view keeps its
-behaviour by adding one line:
-
-```python
-class OldView(LiveView):
-    exposure_policy = "legacy"
-```
-
-Stating it raises a `DeprecationWarning` through `warn_deprecated`, once for
-each class that states it, when the class is defined (or, for a policy assigned
-to the class afterwards, the first time a view of that class is constructed).
-The message names the class, the replacement and the guide. A class shipped in
-djust that states `"legacy"` does not warn. The value is accepted through the
-2.0 pre-releases and removed in `2.0.0`: 2.x has no legacy runtime (see
-[the 2.x direction](#the-14-bridge-and-2x-direction-2026-10-19)).
-
-System check `djust.V028` (Warning) also lists each application class that
-states `"legacy"`, on every `manage.py check` and server start, with the views
-that inherit it and a pointer to `djust_exposure_inventory`; a warning raised
-at import time is easy to miss. djust's own classes are not reported.
-
-This warning and the check are first raised on the 2.0 line. The 1.3.x releases
-raise neither: there `"legacy"` is the default and stating it is not deprecated.
+tag argument is deprecated on the 2.0 line (`exposure_policy = "legacy"`,
+deprecated earlier on the 2.0 line, was removed in `2.0.0`; see below):
 
 ### `{% kanban_board add_col_event=... %}` → nothing (it did nothing)
 
@@ -280,6 +249,18 @@ it. It is deprecated since 2.0 and removed no earlier than `3.0.0`. Passing it
 raises one `DeprecationWarning` through `warn_deprecated` per process; the board
 renders exactly as before. Leave it out, and draw your own "Add column" control
 that sends your view's event (#4134).
+
+
+### Component argument aliases → their current names (#4207)
+
+Each still works, is deprecated since 2.0 and removed no earlier than `3.0.0`.
+Using one raises one `DeprecationWarning` per process through `warn_deprecated`:
+
+- `{% slider %}` and `{% currency_input %}`: `min` / `max` → `min_val` / `max_val`
+- `{% date_picker range=... %}` → `is_range`
+- `{% split_button open=... %}` → `is_open`
+- `{% dj_button variant="danger" %}` → `variant="destructive"`
+- `Dropdown(items=[{...}])` → `DropdownItem` objects; `Tabs(tabs=[{...}])` → `TabItem` objects
 
 ---
 
@@ -517,7 +498,7 @@ class OrderView(LiveView):
 # After: render the message into <p role="status" aria-live="polite">{{ status }}</p>
 class OrderView(LiveView):
     @event_handler()
-    def save(self, **kwargs):
+    def save(self):
         self.status = "Order saved"
         self.push_commands(JS.focus("#order-summary"))
 ```
@@ -576,23 +557,23 @@ from djust.decorators import client_state, event_handler, optimistic
 
 @optimistic
 @event_handler
-def increment(self, **kwargs):
+def increment(self):
     self.count += 1
 
 @client_state(keys=["filter"])  # removed in 2.0, #4006
 @event_handler
-def update_filter(self, filter: str = "", **kwargs):
+def update_filter(self, filter: str = ""):
     self.filter = filter
 
 # After
 from djust.decorators import event_handler
 
 @event_handler
-def increment(self, **kwargs):
+def increment(self):
     self.count += 1
 
 @event_handler
-def update_filter(self, filter: str = "", **kwargs):
+def update_filter(self, filter: str = ""):
     self.filter = filter
 ```
 
@@ -726,7 +707,7 @@ class Counter(LiveView):
         self.count = 0
 
     @event_handler
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
 ```
 
@@ -830,6 +811,118 @@ were removed in djust `2.0.0`. They worked only on views that state
 `exposure_policy = "legacy"`; every other view got `409`, so they leave with
 the legacy policy. The read-only endpoints and their MCP tools stay.
 
+### `djust_components/table.html` and the `table_*` filters → the native `{% data_table %}`
+
+Under Django's template engine `{% data_table %}` was an inclusion tag over
+`djust_components/table.html`, a second implementation of the table that drew
+none of the native-only features (`expandable`, `editable_columns`,
+`exportable` ...) and differed from the Rust engine's table in markup. djust
+`2.0.0` removed it (#3869): the tag is now a simple tag that hands the native
+`DataTableHandler` the same operands the Rust engine does, so both engines draw
+the same bytes. Removed with the template: the filters `table_cell`,
+`table_href`, `table_has_href`, `table_width` and `table_width_attrs` of
+`djust_components_tags`.
+
+**Lost:** a project override of `djust_components/table.html` (the documented
+way to change the row-click script's `/static/` prefix) has no effect, and a
+template that used the filters outside `table.html` must read the row itself
+(`{{ row.name }}` in a loop over your own rows). **Kept:** every argument of
+`{% data_table %}`, and every feature the tag documented, which now works under
+Django's engine too.
+
+The markup is the native table's (no whitespace between elements, `data-row-key`
+on rows, the handler's classes and wrappers), so CSS or tests written against the
+old `table.html` markup may need new selectors. The row-click script is
+`/static/djust_components/data-table-row-click.js` with a fixed `/static/` prefix;
+serve it from there or load it yourself.
+
+### `djust.react` / `ReactMixin` → JavaScript hooks
+
+`djust.react` (`ReactMixin`, `react_components`, `register_react_component`)
+turned a capitalized tag such as `<Counter initialCount="0" />` into a
+placeholder `<div data-react-component="Counter">` that the server post-processed
+and that only a demo Counter ever hydrated on the client. djust `2.0.0` removed
+it (#4006), together with the client's `initReactCounters`. `from djust import
+ReactMixin` (and the other two names) raises `ImportError` naming the
+replacement and the migration guide, and a capitalized tag in a template is a
+template error that names the same replacement. HTML reads element
+names in any case, so an ordinary HTML or SVG element spelled in capitals or mixed
+case (`<DIV>`, `<BR>`, `<TextArea>`) is still HTML; the component shape, a
+self-closing non-void element such as `<Button label="x" />`, and a name HTML
+does not have, such as `<Widget>`, are refused. Mount a
+client-side widget with a hook:
+
+<!-- doc-snippet-check: anti-pattern -->
+```python
+# Before (removed in 2.0, #4006)
+from djust import LiveView, ReactMixin
+
+class Page(ReactMixin, LiveView):
+    template = '<div dj-root><Counter initialCount="0" /></div>'
+```
+
+```python
+# After
+from djust import LiveView
+
+class Page(LiveView):
+    exposure_policy = "explicit"
+    template = '<div dj-root><div dj-hook="Counter" dj-hook-value-initial="0"></div></div>'
+```
+
+```javascript
+window.djust.hooks.Counter = {
+  mounted() { this.el.textContent = this.el.dataset.initial || "0"; },
+};
+```
+
+### The legacy exposure and parameter policies → explicit exposure and strict parameters
+
+djust `2.0.0` keeps one exposure policy and one parameter policy (#4199).
+`exposure_policy = "legacy"` (the 1.x attribute walk) raises
+`ImproperlyConfigured` when the class is created, and again on construction for
+a value the class statement did not show.
+`@event_handler(parameter_policy="legacy")` and
+`@server_function(parameter_policy="legacy")` raise when the decorator applies.
+`cancel_async_on_disconnect = True` raises when the class is created, and the
+`LIVEVIEW_CONFIG` / `DJUST_CONFIG` keys `event_parameter_policy`,
+`reauth_on_event` and `reauth_server_turn_interval` raise at startup. Each
+error names the replacement. The system checks `djust.V028`, `djust.V032`,
+`djust.C045` and `djust.V036`, which reported those spellings, are retired;
+their IDs are not reused.
+
+<!-- doc-snippet-check: anti-pattern -->
+```python
+# Before (removed: raises ImproperlyConfigured)
+class Cart(LiveView):
+    exposure_policy = "legacy"
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+
+    @event_handler(parameter_policy="legacy")
+    def add(self, item_id):
+        self.count += 1
+```
+
+```python
+# After
+class Cart(LiveView):
+    count = state(0, persist="server")
+
+    @event_handler
+    def add(self, item_id: int):
+        self.count += 1
+```
+
+The template sends `dj-value-item-id` instead of `data-item-id`.
+`exposure_policy = "explicit"` and `parameter_policy="strict"` are accepted and
+do nothing. `python manage.py djust_exposure_inventory --fix` reads 1.3 code
+and makes the mechanical part of the change; it is the only code that may
+import a module stating the removed spellings. A module imported while Django
+starts (a URLconf, an `AppConfig.ready()`) is refused before the command runs,
+so delete its line by hand.
+
 <!-- END GENERATED removed-sections:2.0 -->
 
 ## Template-Syntax Deprecations
@@ -910,4 +1003,4 @@ API is evaluated. Existing per-session ticks and push/presence behavior retain
 their stability commitments. Phases 1–3 are process-local; distributed ownership
 is deferred.
 
-<!-- generated-doc prose-sha256: a49ebdcfa0a3 -->
+<!-- generated-doc prose-sha256: 10d92fd3cd47 -->

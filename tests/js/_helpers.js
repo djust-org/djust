@@ -22,6 +22,7 @@
 
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
+import { openContracts } from './_open_contracts.js';
 
 const CLIENT_SRC_PATH = './python/djust/static/djust/client.js';
 
@@ -55,6 +56,7 @@ export function createDom(bodyHtml = '', opts = {}) {
     const dom = new JSDOM(
         `<!DOCTYPE html><html><head></head><body>
             <div dj-view="${view}" dj-root>${bodyHtml}</div>
+            ${opts.contracts === false ? '' : openContracts(bodyHtml, view)}
         </body></html>`,
         { runScripts: 'dangerously', url }
     );

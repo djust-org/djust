@@ -174,7 +174,7 @@ class MapPicker(Component):
         import math
 
         @event_handler()
-        def set_location(self, lat=None, lng=None, **kwargs):
+        def set_location(self, lat: Any = None, lng: Any = None, **kwargs):
             try:
                 lat, lng = float(lat), float(lng)
             except (TypeError, ValueError):

@@ -217,7 +217,8 @@ def test_the_request_is_not_state_and_not_a_change():
 
 
 def test_a_views_interval_overrides_the_projects(caplog):
-    assert _save_policy.interval_for(Surface()) == 0.0
+    # Unset: the default (#4164).
+    assert _save_policy.interval_for(Surface()) == _save_policy.DEFAULT_INTERVAL_S
     assert _save_policy.interval_for(OwnInterval()) == float(INTERVAL)
     with override_settings(DJUST_STATE_SAVE_INTERVAL=5):
         assert _save_policy.interval_for(Surface()) == 5.0

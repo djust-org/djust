@@ -29,8 +29,6 @@ depends on.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import django
 import pytest
 from django.conf import settings
@@ -43,20 +41,15 @@ if not settings.configured:
     django.setup()
 
 
-_TABLE_HTML_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "python"
-    / "djust"
-    / "components"
-    / "templates"
-    / "djust_components"
-    / "table.html"
-)
-_ENGINE = Engine(
-    # table.html loads the component filters (``table_cell``, #3870).
-    libraries={"djust_components": "djust.components.templatetags.djust_components"}
-)
-_TABLE_TEMPLATE = _ENGINE.from_string(_TABLE_HTML_PATH.read_text())
+_ENGINE = Engine(libraries={"djust_components": "djust.components.templatetags.djust_components"})
+
+
+def _draw_table(ctx):
+    """Draw ``{% data_table %}`` (the one implementation, #3869) with ``ctx``'s keys as its
+    arguments."""
+    arguments = " ".join(f"{key}={key}" for key in ctx)
+    template = _ENGINE.from_string("{% load djust_components %}{% data_table " + arguments + " %}")
+    return template.render(Context(ctx))
 
 
 def _ctx(row_url_value: str) -> dict:
@@ -97,7 +90,7 @@ def _ctx(row_url_value: str) -> dict:
 
 
 def _render(ctx: dict) -> str:
-    return _TABLE_TEMPLATE.render(Context(ctx))
+    return _draw_table(ctx)
 
 
 # Mix of allowed and hostile URL shapes. The JS regex

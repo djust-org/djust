@@ -127,7 +127,7 @@ def test_initial_render_saves_without_legacy_browser_snapshot_optin(rf):
     assert not any(key.startswith("liveview_") for key in stored)
 
 
-@pytest.mark.parametrize("mutation", ["extra", "schema", "inputs", "legacy"])
+@pytest.mark.parametrize("mutation", ["extra", "schema", "inputs", "unwrapped"])
 def test_rejected_state_leaves_fresh_mount_defaults(rf, mutation):
     parent = MountParent()
     request = make_request(rf, SessionStore())
@@ -137,7 +137,8 @@ def test_rejected_state_leaves_fresh_mount_defaults(rf, mutation):
         raw["state"]["values"]["public_note"] = "RESTORE_SENTINEL"
     elif mutation == "schema":
         raw["state"]["schema"] = "old"
-    elif mutation == "legacy":
+    elif mutation == "unwrapped":
+        # A bare value dict, not the stored envelope.
         raw = {"count": 9}
     adapter.session[adapter.key] = raw
     adapter.session.save()
@@ -168,19 +169,6 @@ def test_unregistered_ancestor_cannot_claim_another_parent_scope(rf):
     request = make_request(rf, SessionStore())
     with pytest.raises(ExposureError, match="registered"):
         child_state_adapter(MountChild(), parent, request, "counter", {}, create=True)
-    assert request.session.session_key is None
-
-
-class _LegacyLiveView(LiveView):
-    """A bare LiveView under the legacy policy, whatever the framework default is."""
-
-    exposure_policy = "legacy"
-
-
-def test_mixed_policy_does_not_implicitly_gain_an_explicit_contract(rf):
-    request = make_request(rf, SessionStore())
-    with pytest.raises(ExposureError, match="ancestry"):
-        child_state_adapter(MountChild(), _LegacyLiveView(), request, "counter", {}, create=True)
     assert request.session.session_key is None
 
 

@@ -22,25 +22,25 @@ from djust.config import config
 
 def test_a_reset_inside_an_override_does_not_outlive_it():
     """The polluter's exact shape, in-process."""
-    before = config.get("reauth_on_event")
-    with override_settings(LIVEVIEW_CONFIG={"reauth_on_event": not before}):
+    before = config.get("auto_navigate")
+    with override_settings(LIVEVIEW_CONFIG={"auto_navigate": not before}):
         config.reset()
-        assert config.get("reauth_on_event") is (not before)
-    assert config.get("reauth_on_event") == before
+        assert config.get("auto_navigate") is (not before)
+    assert config.get("auto_navigate") == before
 
 
 def test_an_override_takes_effect_without_a_manual_reset():
-    before = config.get("reauth_on_event")
-    with override_settings(LIVEVIEW_CONFIG={"reauth_on_event": not before}):
-        assert config.get("reauth_on_event") is (not before)
-    assert config.get("reauth_on_event") == before
+    before = config.get("auto_navigate")
+    with override_settings(LIVEVIEW_CONFIG={"auto_navigate": not before}):
+        assert config.get("auto_navigate") is (not before)
+    assert config.get("auto_navigate") == before
 
 
 def test_djust_config_is_followed_too():
-    before = config.get("reauth_on_event")
-    with override_settings(DJUST_CONFIG={"reauth_on_event": not before}):
-        assert config.get("reauth_on_event") is (not before)
-    assert config.get("reauth_on_event") == before
+    before = config.get("auto_navigate")
+    with override_settings(DJUST_CONFIG={"auto_navigate": not before}):
+        assert config.get("auto_navigate") is (not before)
+    assert config.get("auto_navigate") == before
 
 
 def test_an_unrelated_setting_change_does_not_reload_the_config():

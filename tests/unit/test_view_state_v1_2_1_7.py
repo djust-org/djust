@@ -6,8 +6,8 @@
   ``_component_<name>`` slot.
 - #2896 (a snapshot's ``__components__`` applied by the time-travel restore)
   was removed with time-travel debugging in 2.0 (#4184).
-- #2959: a legacy view must not save ``state()`` backing slots or
-  ``_reactive_state`` in the private session; the public-state restore already
+- #2959: automatic state must not save ``state()`` backing slots or
+  ``_reactive_state`` among the private attributes; the public-state restore already
   carries ``state()`` values through the descriptor.
 - #2974: ``FormMixin.reset_form`` is an ``@event_handler``, and a
   ``reset_form()`` inside ``form_valid`` is not undone by ``_sync_form_data``.
@@ -35,7 +35,7 @@ class Counter(LiveComponent):
 
 
 class StateFieldView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ count }} {{ label }}</div>"
 
     count = state(1)
@@ -45,7 +45,7 @@ class StateFieldView(LiveView):
 
 
 class ComponentView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ counter }}</div>"
 
     counter = Counter()
@@ -95,7 +95,7 @@ class TestDirtyStateFields2956:
 
     def test_private_state_field_stays_invisible(self):
         class V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
             _hidden = state(0)
 
@@ -106,7 +106,7 @@ class TestDirtyStateFields2956:
 
     def test_static_assign_state_field_is_skipped(self):
         class V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
             static_assigns = ["count"]
             count = state(0)
@@ -174,15 +174,13 @@ def _session_request(method: str = "get", body: Any = None, session: Any = None)
 
 
 class LevelView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ level }}</div>"
 
     level = state(1)
-    _quiet = state(0)
 
     def mount(self, request: Any, **kwargs: Any) -> None:
         self.level = 3
-        self._quiet = 5
         self._note = "private"
 
     @event_handler()
@@ -192,27 +190,15 @@ class LevelView(LiveView):
 
 class TestPrivateStateSlots2959:
     def test_public_state_slot_not_in_private_state(self):
+        from djust.testing import persisted_state
+
         v = LevelView()
         v.mount(None)
         v._snapshot_user_private_attrs()
-        private = v._get_private_state()
+        private = persisted_state(v).automatic_private
         assert "_state_level" not in private
         assert "_reactive_state" not in private
         assert private["_note"] == "private"
-
-    def test_private_state_field_is_still_persisted(self):
-        """A ``_``-named state() field never reaches the public context, so its
-        slot is the only copy — it stays in the private session."""
-        v = LevelView()
-        v.mount(None)
-        v._snapshot_user_private_attrs()
-        assert v._get_private_state()["_state__quiet"] == 5
-
-    def test_old_session_keys_are_restored_but_not_resaved(self):
-        v = LevelView()
-        v._restore_private_state({"_state_level": 7, "_note": "old"})
-        assert v.level == 7
-        assert "_state_level" not in v._get_private_state()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -226,7 +212,7 @@ class NameForm(forms.Form):
 
 
 class ResetInValidView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = NameForm
     template = "<div dj-root>{{ form_data.name }}</div>"
 
@@ -236,7 +222,7 @@ class ResetInValidView(FormMixin, LiveView):
 
 
 class PlainValidView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = NameForm
     template = "<div dj-root>{{ form_data.name }}</div>"
 
@@ -278,30 +264,6 @@ class TestResetForm2974:
 
 
 class TestReviewFollowUps:
-    @pytest.mark.django_db
-    def test_model_valued_state_slot_stays_private(self):
-        """The public path flattens a model to a dict; the private path
-        re-hydrates it (#1994), so a model-holding state() slot is kept."""
-        from django.contrib.auth.models import User
-
-        class OwnerView(LiveView):
-            exposure_policy = "legacy"
-            template = "<div dj-root></div>"
-            owner = state(None)
-            label = state("x")
-
-        user = User.objects.create(username="owner-2959")
-        v = OwnerView()
-        v.owner = user
-        v.label = "y"
-        v._snapshot_user_private_attrs()
-        private = v._get_private_state()
-        assert private["_state_owner"]["pk"] == user.pk
-        assert "_state_label" not in private
-        restored = OwnerView()
-        restored._restore_private_state(private)
-        assert restored.owner == user
-
     def test_lazy_class_attribute_is_not_evaluated(self):
         from django.utils.functional import SimpleLazyObject
 
@@ -309,7 +271,7 @@ class TestReviewFollowUps:
             raise RuntimeError("evaluated")
 
         class LazyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
             settings_obj = SimpleLazyObject(boom)
             count = state(0)

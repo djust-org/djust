@@ -2,7 +2,7 @@
 
 Root cause (the #1788 PARALLEL-PATH TWIN, #1646): #1788 made
 ``LiveViewConsumer._next_version()`` (a per-connection monotonic counter) the single
-source of truth for the outbound VDOM ``version`` and wired it into ``handle_mount`` and
+source of truth for the outbound VDOM ``version`` and wired it into ``_mount_page`` and
 ``handle_event``. But ``url_change`` (from ``dj-patch`` clicks and browser popstate) is
 delegated to ``ViewRuntime.dispatch_url_change`` (``runtime.py``), which stamped the wire
 ``version`` directly from the ``render_with_diff()`` return — the **Rust render counter** —

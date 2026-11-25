@@ -14,6 +14,7 @@ from django.utils.html import conditional_escape
 from django.utils.safestring import SafeString
 
 from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
+from djust.components._alias_deprecation import warn_alias
 from djust.components.utils import attr_text
 from ._registry import (
     register,
@@ -58,13 +59,15 @@ def slider(
         disabled: Disable the input.
         custom_class: Extra CSS class.
 
-    Deprecated aliases (still accepted):
+    Deprecated aliases (still accepted, removed no earlier than 3.0.0):
         min → min_val, max → max_val
     """
-    # Backward-compat: accept deprecated 'min'/'max' kwargs
+    # Deprecated to 3.0 (#4207): accept 'min'/'max' kwargs
     if "min" in kwargs:
+        warn_alias("{% slider %}", "min", "min_val")
         min_val = kwargs.pop("min")
     if "max" in kwargs:
+        warn_alias("{% slider %}", "max", "max_val")
         max_val = kwargs.pop("max")
 
     if isinstance(disabled, str):
@@ -777,13 +780,15 @@ def currency_input(
         error: Error message to display.
         custom_class: Extra CSS class.
 
-    Deprecated aliases (still accepted):
+    Deprecated aliases (still accepted, removed no earlier than 3.0.0):
         min → min_val, max → max_val
     """
-    # Backward-compat: accept deprecated 'min'/'max' kwargs
+    # Deprecated to 3.0 (#4207): accept 'min'/'max' kwargs
     if "min" in kwargs:
+        warn_alias("{% currency_input %}", "min", "min_val")
         min_val = kwargs.pop("min")
     if "max" in kwargs:
+        warn_alias("{% currency_input %}", "max", "max_val")
         max_val = kwargs.pop("max")
     if isinstance(disabled, str):
         disabled = disabled.lower() not in ("false", "0", "")

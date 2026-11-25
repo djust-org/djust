@@ -1,13 +1,12 @@
 """Deferred activity commits through real SSE/WS dispatch before its success frame."""
 
-import json
 import uuid
 
 import pytest
 from asgiref.sync import sync_to_async
 from channels.layers import get_channel_layer
 from channels.testing import WebsocketCommunicator
-from django.test import RequestFactory, override_settings
+from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust.decorators import state
@@ -21,8 +20,8 @@ TOKEN = "state_snapshot_signed"
 MOD = __name__
 
 
-class DeferredLegacy(LiveView):
-    exposure_policy = "legacy"
+class DeferredBase(LiveView):
+    exposure_policy = "explicit"
     template = "<div dj-root>count={{ count }} label={{ label }}</div>"
     _listen_channels = frozenset({"deferred_3253"})
 
@@ -35,7 +34,7 @@ class DeferredLegacy(LiveView):
         return super().get_context_data(count=self.count, label=self.label, **kwargs)
 
     @event_handler()
-    def change(self, quiet=False, **kwargs):
+    def change(self, quiet: bool = False, **kwargs):
         self.count += 1
         self.label = "updated"
         self._skip_render = quiet
@@ -49,7 +48,7 @@ class DeferredLegacy(LiveView):
         self.set_activity_visible("panel", True)
 
 
-class DeferredExplicit(DeferredLegacy):
+class DeferredExplicit(DeferredBase):
     exposure_policy = "explicit"
     count = state(0, persist="server")
     label = state("initial", persist="client", client=True)
@@ -90,9 +89,9 @@ async def sse_event(session, request, event, params):
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("transport", ["sse", "ws", "ws-notify"])
-@pytest.mark.parametrize("cls", [DeferredLegacy, DeferredExplicit])
 @pytest.mark.parametrize("quiet", [False, True])
-async def test_deferred_turn_saves_and_signs_declared_state_only(transport, cls, quiet):
+async def test_deferred_turn_saves_and_signs_declared_state_only(transport, quiet):
+    cls = DeferredExplicit
     request = await sync_to_async(make_request)()
     session = socket = None
     try:
@@ -138,42 +137,16 @@ async def test_deferred_turn_saves_and_signs_declared_state_only(transport, cls,
         assert successes, frames
         # Read fresh storage, not the in-memory mounted instance/session cache.
         fresh = await sync_to_async(make_request)(request.session.session_key)
-        if cls is DeferredExplicit:
-            from djust._exposure_sessions import server_state_adapter
+        from djust._exposure_sessions import server_state_adapter
 
-            stored = await sync_to_async(lambda: server_state_adapter(cls(), fresh).load())()
-            assert stored["count"] == 1, frames
-            assert successes[-1].get(TOKEN), frames
-        else:
-            # A legacy view keeps nothing: no state is saved and nothing is signed.
-            stored = await sync_to_async(fresh.session.load)()
-            assert f"liveview_{request.path}" not in stored, stored
-            assert not any(TOKEN in f for f in frames), frames
+        stored = await sync_to_async(lambda: server_state_adapter(cls(), fresh).load())()
+        assert stored["count"] == 1, frames
+        assert successes[-1].get(TOKEN), frames
     finally:
         if socket is not None:
             await socket.disconnect()
         if session is not None:
             await session.close()
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("quiet", [False, True])
-def test_http_post_of_a_legacy_turn_mints_no_token_and_saves_nothing(quiet):
-    request = make_request()
-    response = DeferredLegacy.as_view()(request)
-    assert response.status_code == 200
-    post = RequestFactory().post(
-        request.path,
-        json.dumps({"event": "change", "params": {"quiet": quiet}}),
-        content_type="application/json",
-    )
-    post.session, post.user = request.session, request.user
-    response = DeferredLegacy.as_view()(post)
-    assert response.status_code == 200, response.content
-    body = json.loads(response.content)
-    assert TOKEN not in body, body
-    # 2.0 keeps no legacy view state in the session between requests.
-    assert f"liveview_{request.path}" not in post.session
 
 
 @pytest.mark.asyncio

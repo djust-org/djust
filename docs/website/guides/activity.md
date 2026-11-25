@@ -46,7 +46,7 @@ class TabbedView(LiveView):
     notes_visible = state(False)
 
     @event_handler
-    def switch_tab(self, tab: str = "", **kwargs):
+    def switch_tab(self, tab: str = ""):
         self.profile_visible = tab == "profile"
         self.notes_visible = tab == "notes"
 ```
@@ -87,6 +87,16 @@ class Dashboard(LiveView):
 
 This is equivalent to setting `eager=True` on every
 `{% dj_activity "live-ticker" %}` block.
+
+### Inside an embedded child
+
+A `{% dj_activity %}` inside a `{% live_render %}` child belongs to the
+child. An event for that child's hidden activity is queued on the child,
+and released when the child's activity is shown: by the child's own
+handler, by the page's handler, or by `handle_info` after a `db_notify`.
+A released event runs with the child's own checks (as any event of the
+child does) and answers with the child's `embedded_update`. One for a
+child that has left the page by then is dropped.
 
 ## Client API
 
@@ -236,7 +246,7 @@ Auth runs in **two phases** and it's important to keep them distinct:
   <!-- doc-snippet-check: skip -->
   ```python
   @event_handler()
-  def purchase(self, **kwargs):
+  def purchase(self):
       if not self.is_activity_visible("checkout"):
           return  # or raise / log
       ...

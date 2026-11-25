@@ -46,7 +46,7 @@ class _AsyncView(LiveView):
 async def _make_consumer(view_class):
     """A real consumer with only frame capture stubbed, mirroring the harness in
     ``test_live_redirect_skip_render_1643.py``. The view is mounted through the
-    real ``handle_mount`` (whose render establishes the VDOM baseline): an
+    real ``_mount_page`` (whose render establishes the VDOM baseline): an
     explicit view's background work is authorized by the runtime that mounted
     it."""
     from djust.tests._live_session import amount_on_consumer

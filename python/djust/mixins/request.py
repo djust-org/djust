@@ -8,6 +8,7 @@ import inspect
 import json
 from types import MappingProxyType
 import logging
+import re
 import sys
 import threading
 import time
@@ -44,13 +45,11 @@ from ..utils import is_model_list
 from ..validation import (
     validate_handler_params,
     validated_call_arguments,
-    get_handler_parameter_policy,
 )
 from ..security import safe_setattr, sanitize_for_log
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_push_only
 from ..hooks import run_on_mount_hooks
-from .._exposure import uses_legacy_exposure
 from .._view_hooks import call_async_result_sync, call_hook_sync
 
 if TYPE_CHECKING:
@@ -87,6 +86,45 @@ _HTTP_BACKGROUND_MAX_ABANDONED = 16
 _ABANDONED_WORKERS: "set[threading.Thread]" = set()
 _WORKERS_RESERVED = 0  # in flight for a POST that is still waiting
 _ABANDONED_LOCK = threading.Lock()
+
+
+def _with_render_digest_meta(view: Any, request: Any, page: Any, committed_html: Any) -> Any:
+    """``page`` with the render-digest ``<meta>`` of ``committed_html`` in its ``<head>``.
+
+    For a page prepared in one evaluation: the digest of its committed render is
+    known only after the page is validated. A page without a real ``<head>``, or
+    a view that turned the patches off, is returned as it is; its first
+    fallback answer then carries the digest. Never raises.
+    """
+    try:
+        from .._http_fallback_baseline import patches_enabled
+        from .._render_digest import META_NAME, render_token
+        from .post_processing import _find_head_close, _mask_document_text
+
+        if not patches_enabled(view) or not isinstance(committed_html, str):
+            return page
+        token = render_token(view, request, committed_html)
+        if not token:
+            return page
+        text = str(page)
+        head_close = _find_head_close(_mask_document_text(text))
+        if head_close < 0:
+            return page
+        from django.utils.html import escape
+
+        meta = '<meta name="%s" content="%s">' % (META_NAME, escape(token))
+        return text[:head_close] + meta + text[head_close:]
+    except Exception as exc:  # noqa: BLE001 - a missing digest only costs one whole-page answer
+        from .._exposure_diagnostics import log_failure
+
+        log_failure(
+            logger,
+            exc,
+            "could not add the render digest to the page",
+            level="debug",
+            traceback=True,
+        )
+        return page
 
 
 def _reserve_worker_slot() -> Optional[int]:
@@ -194,15 +232,20 @@ class _BackgroundRun:
         self.result: Any = None
         self.error: Optional[BaseException] = None
         self.abandoned = False
+        self.cancel_requested = False
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.task: Optional["asyncio.Future[Any]"] = None
         self.thread: Optional[threading.Thread] = None
 
-    def abandon(self) -> None:
-        """Ask the task to stop (an ``async def`` callback honours it) and stop waiting."""
+    def abandon(self, cancel: bool = True) -> None:
+        """Stop waiting and, with ``cancel``, ask the task to stop (an
+        ``async def`` callback honours it). A ``survive_disconnect=True``
+        task is abandoned without ``cancel`` (#4182): it runs to completion
+        and its result is discarded."""
         with self.lock:
             self.abandoned = True
-            if self.task is not None and self.loop is not None:
+            self.cancel_requested = cancel
+            if cancel and self.task is not None and self.loop is not None:
                 try:
                     self.loop.call_soon_threadsafe(self.task.cancel)
                 except RuntimeError:
@@ -232,13 +275,18 @@ def _start_background_run(
         with run.lock:
             run.loop = asyncio.get_running_loop()
             run.task = task
-            if run.abandoned:
+            if run.abandoned and run.cancel_requested:
                 task.cancel()
         return await task
 
     def body() -> None:
         from django.db import connections
 
+        from .._surviving_work import ABANDONABLE_RUN, is_surviving
+
+        # Runs in this thread's own context copy: a survivor the request
+        # abandons is refused the view from then on (#4182).
+        ABANDONABLE_RUN.set(run)
         completed = False
         try:
             run.result = async_to_sync(runner)()
@@ -247,6 +295,11 @@ def _start_background_run(
             # Handed back to the request thread (a cancelled task as well).
             run.error = exc
             completed = True
+            if run.abandoned and is_surviving(callback) and isinstance(exc, Exception):
+                # Nobody reads an abandoned run's error: log it here.
+                from .async_work import log_survivor_failure
+
+                log_survivor_failure(view, exc)
         finally:
             if not completed:
                 # Anything else (SystemExit, KeyboardInterrupt) is not swallowed
@@ -303,6 +356,7 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
     from asgiref.sync import async_to_sync
 
     from .._exposure_diagnostics import log_failure_for
+    from .._surviving_work import is_surviving
     from ..mixins.async_work import run_async_callback
     from ..runtime import _consume_async_cancel
 
@@ -349,7 +403,7 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
                             run = _start_background_run(view, name, callback, args, kwargs)
                             finished = run.done.wait(budget.remaining())
                             if not finished:
-                                run.abandon()
+                                run.abandon(cancel=not is_surviving(callback))
                                 abandoned_thread = run.thread
                         finally:
                             _release_worker_slot(abandoned_thread)
@@ -362,7 +416,8 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
                                 "[djust HTTP] start_async task %s on %s did not finish within the "
                                 "%.4g second budget of http_fallback_background_timeout; the "
                                 "fallback stopped waiting for it and answers without its result. "
-                                "A sync callback keeps running on its worker thread.",
+                                "A sync callback, and a survive_disconnect=True task, keeps "
+                                "running on its worker thread.",
                                 sanitize_for_log(name),
                                 view.__class__.__name__,
                                 budget.timeout,
@@ -523,8 +578,11 @@ def _run_http_deferred(view: Any) -> None:
 
 #: Sent by the client when its HTTP scope holds strict contracts, so a response
 #: whose tree no longer has any carries an explicit clear (the stateless HTTP
-#: counterpart of the socket runtime's ``_parameter_contracts_active``).
+#: counterpart of the socket runtime's ``_parameter_contracts_active``). The
+#: value is ``1``, or the digest of the manifest held: an answer whose manifest
+#: has that digest carries the digest alone (#4307).
 PARAMETER_CONTRACTS_HEADER = "X-Djust-Parameter-Contracts"
+_DIGEST = re.compile(r"[0-9a-f]{16}")
 
 
 #: A page POST carrying this header (value ``1``) and no event asks for the
@@ -564,23 +622,18 @@ def _compress_fallback_answer(request: Any, response: Any) -> Any:
 
 
 def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
-    """Escaped JSON for the initial page's contract element, or None if legacy.
+    """Escaped JSON for the initial page's contract element, or None if the tree declares no handlers.
 
-    ``false`` marks discovery failure where strict contracts can exist: the
-    client installs an invalid scope and strict lookups fail closed instead of
-    guessing a legacy contract. A view that can only be legacy keeps its legacy
-    page, as the socket path keeps a legacy session's frame shape.
+    ``false`` marks discovery failure: the client installs an invalid scope and
+    lookups fail closed instead of guessing a contract.
     """
     from .._parameter_metadata import parameter_contract_manifest
     from ..security.json_script import escape_json_for_script  # the defining module (#3820)
-    from ..validation import _strict_possible
 
     try:
         manifest = parameter_contract_manifest(view)
     except Exception:  # noqa: BLE001 — declaration errors must not break the page
         logger.warning("Initial parameter contracts unavailable")
-        if not _strict_possible(view):
-            return None
         return escape_json_for_script(json.dumps({"view": view_path, "contracts": False}))
     if manifest is None:
         return None
@@ -588,25 +641,26 @@ def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
 
 
 def _http_parameter_contract_fields(view: Any, request: Any) -> Optional[Dict[str, Any]]:
-    """Contract fields for an HTTP render response (``{}`` for a legacy tree).
+    """Contract fields for an HTTP render response (``{}`` for a tree with no handlers).
 
-    None means discovery failed where strict contracts can exist: the caller
-    withholds the DOM update. A legacy-only view whose client never advertised
-    contracts keeps its legacy response shape instead.
+    A client that names the digest of the manifest it holds
+    (``X-Djust-Parameter-Contracts``) gets the digest string in place of an
+    unchanged manifest (#4307); any other value gets the full manifest.
+    None means discovery failed: the caller withholds the DOM update.
     """
     from .._parameter_metadata import parameter_contract_manifest
-    from ..validation import _strict_possible
 
     try:
         manifest = parameter_contract_manifest(view)
     except Exception:  # noqa: BLE001 — never send a DOM update with invalid contracts
         logger.warning("Render parameter contracts unavailable")
-        if request.headers.get(PARAMETER_CONTRACTS_HEADER) != "1" and not _strict_possible(view):
-            return {}
         return None
-    if manifest is None and request.headers.get(PARAMETER_CONTRACTS_HEADER) != "1":
+    header = request.headers.get(PARAMETER_CONTRACTS_HEADER) or ""
+    if manifest is None and not header:
         return {}
     view_path = f"{view.__class__.__module__}.{view.__class__.__name__}"
+    if manifest is not None and _DIGEST.fullmatch(header) and header == manifest["digest"]:
+        return {"parameter_contracts": header, "parameter_contract_view": view_path}
     return {"parameter_contracts": manifest, "parameter_contract_view": view_path}
 
 
@@ -683,7 +737,9 @@ class RequestMixin:
         def get_template(self) -> str: ...
 
         @staticmethod
-        def _stamp_dj_view(html: str, view_path: str, *, trusted: bool = False) -> str: ...
+        def _stamp_dj_view(
+            html: str, view_path: str, *, trusted: bool = False, http_only: bool = False
+        ) -> str: ...
 
         def handle_params(self, params: Dict[str, Any], uri: str) -> None: ...
 
@@ -868,27 +924,27 @@ class RequestMixin:
         # messages, etc.). This is intentional — those callers only need
         # serialized view state, not request-scoped processor context.
         t0 = time.perf_counter()
+        from ..components.base import LiveComponent
         from ..sync_turn import run_sync_step
 
-        context = run_sync_step(self, "render", self.get_context_data)
-        self._cached_context = dict(context)
-        context = self._apply_context_processors(context, request)
+        def _context_and_state() -> Any:
+            # Nested in the render step below: runs directly.
+            context = run_sync_step(self, "render", self.get_context_data)
+            self._cached_context = dict(context)
+            context = self._apply_context_processors(context, request)
+
+            # Serialize state for rendering (but don't store in session).
+            # Normalizing a model runs its @property and get_* methods, which
+            # often query: part of the render step, so inside the wrapper
+            # (#4276), as are the context processors (a lazy user, messages).
+            state = {k: v for k, v in context.items() if not isinstance(v, LiveComponent)}
+            for key, value in list(state.items()):
+                if isinstance(value, models.Model) or is_model_list(value):
+                    state[key] = normalize_django_value(value)
+            return state
+
+        state_serializable = run_sync_step(self, "render", _context_and_state)
         t_get_context = (time.perf_counter() - t0) * 1000
-
-        # Serialize state for rendering (but don't store in session)
-        from ..components.base import LiveComponent
-
-        state = {k: v for k, v in context.items() if not isinstance(v, LiveComponent)}
-
-        t0 = time.perf_counter()
-        for key, value in list(state.items()):
-            if isinstance(value, models.Model):
-                state[key] = normalize_django_value(value)
-            elif is_model_list(value):
-                state[key] = normalize_django_value(value)
-
-        state_serializable = state
-        t_json = (time.perf_counter() - t0) * 1000
 
         t0_sc = time.perf_counter()
         from django.contrib.sessions.backends.base import UpdateError
@@ -927,9 +983,10 @@ class RequestMixin:
         # #3252: the VDOM-diff render below runs the template a SECOND time, so
         # the tag stashes a second thunk for every lazy slot. Those are NOT
         # interchangeable with the page pass: `_prepare_child_ids` scopes the
-        # ids per render, and an explicit-exposure parent assigns different ones
-        # on the two passes. Hold the page pass and restore it below, so neither
-        # the fill nor the streaming emitter ever sees the baseline's copies.
+        # ids per render (both passes now get the same ids on either policy,
+        # #4173), but each pass stashes its own thunk objects. Hold the page
+        # pass and restore it below, so neither the fill nor the streaming
+        # emitter ever sees the baseline's copies.
         page_lazy_thunks = list(getattr(self, "_lazy_thunks", None) or [])
         t_render_full = (time.perf_counter() - t0) * 1000
         liveview_content = html
@@ -959,10 +1016,9 @@ class RequestMixin:
                 self.__dict__["_page_render_digest"] = render_token(self, request, baseline_html)
             t_render_diff = (time.perf_counter() - t0) * 1000
             self._lazy_thunks = list(page_lazy_thunks)
-            if not uses_legacy_exposure(self):
-                from .._exposure_child_persistence import save_child_states
+            from .._exposure_child_persistence import save_child_states
 
-                save_child_states(self, request)
+            save_child_states(self, request)
             self._cached_context = None
 
         # Wrap in Django template if wrapper_template is specified
@@ -1006,13 +1062,12 @@ class RequestMixin:
         t_total = (time.perf_counter() - t_start) * 1000
         logger.debug(
             "[LIVEVIEW GET TIMING] mount=%.2fms assign_ids=%.2fms "
-            "get_context=%.2fms json=%.2fms save_components=%.2fms "
+            "get_context=%.2fms save_components=%.2fms "
             "get_template=%.2fms render_full=%.2fms "
             "render_diff=%.2fms TOTAL=%.2fms",
             t_mount,
             t_assign,
             t_get_context,
-            t_json,
             t_save_components,
             t_get_template,
             t_render_full,
@@ -1023,7 +1078,7 @@ class RequestMixin:
         # Expose timing breakdown for metrics middleware
         request._djust_timing = {
             "mount_ms": round(t_mount, 2),
-            "context_ms": round(t_get_context + t_json, 2),
+            "context_ms": round(t_get_context, 2),
             "render_ms": round(t_render_full, 2),
             "vdom_ms": round(t_render_diff, 2),
         }
@@ -1032,6 +1087,9 @@ class RequestMixin:
         # however it is written (any element, any other attributes), and only
         # where the author did not declare dj-view themselves (#2981).
         view_path = f"{self.__class__.__module__}.{self.__class__.__name__}"
+        # A view no socket can mount (a ``@live_view`` function view) asks the
+        # client for the HTTP fallback instead (#4236).
+        http_only = bool(getattr(type(self), "_djust_http_transport", False))
         if page_root:
             # Authenticate before stamping; only the framework-generated view
             # attribute on this already validated page may gain provenance.
@@ -1040,13 +1098,13 @@ class RequestMixin:
             authenticated_root_shell(
                 html, list(cast("RenderedHTML", html).root_spans), exact_range=authenticated_root
             )
-            html = self._stamp_dj_view(html, view_path, trusted=True)
+            html = self._stamp_dj_view(html, view_path, trusted=True, http_only=http_only)
         else:
-            html = self._stamp_dj_view(html, view_path)
+            html = self._stamp_dj_view(html, view_path, http_only=http_only)
 
         # ADR-036: the page's own owner contracts, for events sent before a
         # socket mounts or over the HTTP fallback. Emitted outside dj-root so
-        # the VDOM baseline is unaffected; all-legacy pages are unchanged.
+        # the VDOM baseline is unaffected.
         self.__dict__["_initial_parameter_contracts"] = _initial_parameter_contracts(
             self, view_path
         )
@@ -1080,14 +1138,18 @@ class RequestMixin:
             # Commit exactly the VDOM captured with the delivered page; do not
             # execute stateful template selectors a second time.
             t0 = time.perf_counter()
-            self._rust_view.commit_authenticated_page()
+            committed_html, _, _ = self._rust_view.commit_authenticated_page()
             self._pending_authenticated_page = False
+            # #4108: this page had no separate diff render to take a digest
+            # from (Django 6 prepares every extending template this way), so
+            # the first fallback answer was the whole page. The committed
+            # render is the baseline the fallback diffs against: digest it.
+            html = _with_render_digest_meta(self, request, html, committed_html)
             self._record_dj_model_fields_from_rust(self._rust_view)
             request._djust_timing["vdom_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-            if not uses_legacy_exposure(self):
-                from .._exposure_child_persistence import save_child_states
+            from .._exposure_child_persistence import save_child_states
 
-                save_child_states(self, request)
+            save_child_states(self, request)
             self._cached_context = None
         response: HttpResponse
         if getattr(self, "streaming_render", False):
@@ -1098,7 +1160,7 @@ class RequestMixin:
         if status is not None:
             response.status_code = int(status)
         # ADR-038 D-b: the service worker must not persist an explicit page's
-        # HTML in its shell cache. Legacy responses are unchanged.
+        # HTML in its shell cache.
         from .._exposure import service_worker_cache_eligible
         from ..security.service_worker import SW_CACHE_HEADER, SW_CACHE_NO_STORE
 
@@ -1171,9 +1233,10 @@ class RequestMixin:
         template — and its `DOMContentLoaded` auto-scan already covers the
         activator running before the bundle defines ``lazyFill``.
 
-        Over a WebSocket or SSE stream the consumer or the chunk emitter runs
-        those thunks. On the plain page render (the page-POST fallback, for a
-        browser with neither WebSocket nor ``EventSource``) nothing did, so the
+        The streaming GET's chunk emitter runs those thunks; a live runtime
+        (WebSocket, SSE) renders the child in place instead (#4167). On the
+        plain page render (the page-POST fallback, for a browser with neither
+        WebSocket nor ``EventSource``) nothing did, so the
         slot stayed empty even though the server could render it. Running them
         here makes that transport host its lazy slots like the others.
 
@@ -1492,11 +1555,9 @@ class RequestMixin:
         Every HTTP request builds the view afresh, so ids from the process-wide
         counter never repeat between the page GET and the event POST that
         follows; per-render numbering makes them repeat, which is what lets
-        an event be routed to the child it names. A page that does not use
-        legacy exposure keeps the counter: its children are not routed over
-        HTTP.
+        an event be routed to the child it names (#4173).
         """
-        if uses_legacy_exposure(self) and hasattr(self, "_scope_child_ids_to_render"):
+        if hasattr(self, "_scope_child_ids_to_render"):
             self._scope_child_ids_to_render()
 
     def _http_embedded_child(self, request: "HttpRequest", view_id: Any) -> Optional[Any]:
@@ -1506,12 +1567,12 @@ class RequestMixin:
         here (its output is not sent: a child's event answers with the child's
         own HTML). The child exists only if it passed what ``{% live_render %}``
         checks at registration: its view-level auth and its object permission,
-        against this request. Only a legacy page's legacy child is routed over
-        HTTP: an explicit-exposure child's turn is authorized against the mount
-        binding the socket transports hold, which a stateless request has not.
+        against this request (#4173). The child must also pass the socket runtime's event checks
+        against this request (``child_event_adapter``: ownership, schema,
+        reuse identity and state binding) and its view auth for an event.
         Anything else is refused by the caller, as it was before routing.
         """
-        if type(view_id) is not str or not view_id or not uses_legacy_exposure(self):
+        if type(view_id) is not str or not view_id:
             return None
         self._prepare_child_ids()
         with self._processor_context(request):
@@ -1534,9 +1595,64 @@ class RequestMixin:
         child = mount_http_lazy(self, request, view_id)
         if child is None:
             child = self._get_all_child_views().get(view_id)
-        if child is None or not uses_legacy_exposure(child):
+        if child is None:
+            child = self._http_fill_lazy_slot(view_id)
+        if child is None:
+            # A nested explicit child, as the socket runtime resolves it.
+            from ..runtime import _explicit_descendant
+
+            child = _explicit_descendant(self, view_id)
+        if child is None:
             return None
+        from .._exposure import ExposureError
+        from .._exposure_children import child_event_adapter
+        from ..auth.core import check_view_auth
+
+        try:
+            # The socket runtime's event checks (runtime.py resolve_explicit_child),
+            # against this request: ownership, schema, reuse identity
+            # (session, user, tenant, route, slot, inputs) and state binding.
+            child_event_adapter(child, self, request)
+        except ExposureError:
+            return None
+        child.request = request
+        if check_view_auth(child, request, event=True) is not None:
+            raise PermissionDenied("Embedded view denied")
         return child
+
+    def _http_fill_lazy_slot(self, view_id: str) -> Optional[Any]:
+        """Mount the ``{% live_render lazy %}`` child ``view_id`` names, or ``None``.
+
+        A lazy slot's child is mounted by its fill, which only the page GET
+        runs (``_fill_lazy_slots``): the POST's render stashes the fill and
+        registers nothing, so an event from the child found no child. Running
+        that one slot's fill here mounts the child with the checks of its fill
+        (the eager ones, and for an explicit child the identity compiled when
+        the tag rendered). Its envelope is not sent; the other slots are not
+        filled. A refused fill registers nothing, and the caller refuses the
+        event.
+        """
+        thunks = list(getattr(self, "_lazy_thunks", None) or [])
+        self._lazy_thunks = []
+        thunk = next((t for vid, t in thunks if vid == view_id), None)
+        if thunk is None:
+            return None
+        from asgiref.sync import async_to_sync
+
+        try:
+            async_to_sync(thunk)()
+        except Exception as exc:  # noqa: BLE001 — the event is refused below
+            from .._exposure_diagnostics import log_failure_for
+
+            log_failure_for(
+                logger,
+                (self,),
+                exc,
+                "Lazy slot %s could not be mounted for an HTTP POST event",
+                sanitize_for_log(view_id),
+            )
+            return None
+        return self._get_all_child_views().get(view_id)
 
     def _http_child_response(
         self,
@@ -1583,9 +1699,12 @@ class RequestMixin:
             return _contract_error_response()
         response.update(contract_fields)
         response["html"] = render_embedded_child_html(child)
-        from .._lazy_containers import save_http_lazy
+        # The explicit tree's persisted fields (a sticky child's
+        # ``persist="server"`` state), and the session writes of the
+        # child's handler (#4162). A transient child keeps nothing.
+        from .._exposure_child_persistence import save_child_states
 
-        save_http_lazy(self, request, view_id, child)
+        save_child_states(self, request)
         response["event_name"] = event_name
         if cache_request_id:
             response["cache_request_id"] = cache_request_id
@@ -1729,8 +1848,6 @@ class RequestMixin:
             # Security: validate event name format (blocks dunders, private methods)
             if not render_only and not is_safe_event_name(event_name):
                 return JsonResponse({"error": "Invalid event name"}, status=400)
-
-            legacy_exposure = uses_legacy_exposure(self)
 
             # ADR-035: bound before mount() so the route, not the body, supplies it.
             bind_route = getattr(self, "_djust_bind_route_kwargs", None)
@@ -1883,8 +2000,9 @@ class RequestMixin:
             # its children (the same ids on every request, ``_prepare_child_ids``),
             # and the child's handler is then validated, authorized and run
             # exactly as the page's own would be. An id that names no child of
-            # this page (forged, stale, an explicit-exposure child, which this
-            # transport does not route) is refused, not run on the parent.
+            # this page (forged, stale, or a child whose exposure policy differs
+            # from the page's) is refused, not run on the parent. An explicit
+            # child also passes the socket runtime's event checks (#4173).
             # Same rule as ``ViewRuntime`` (pop, then route only a truthy id
             # other than this view's own), so the transports cannot disagree.
             view_id = None
@@ -2062,11 +2180,11 @@ class RequestMixin:
                     event_meta = handler._djust_decorators.get("event_handler", {})
                     coerce = event_meta.get("coerce_types", True)
 
-                if get_handler_parameter_policy(handler) == "strict" and "event" not in data:
-                    # The flat body drops "_" keys for legacy handlers. Strict
-                    # validation owns that namespace on every transport: it
-                    # drops transport metadata, consumes _args and rejects the
-                    # rest, so an unknown key is not silently discarded here.
+                if "event" not in data:
+                    # Strict validation owns the "_" namespace on every
+                    # transport: it drops transport metadata, consumes _args
+                    # and rejects the rest, so an unknown key is not silently
+                    # discarded here.
                     params.update({k: v for k, v in data.items() if k.startswith("_")})
                 validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                 if not validation["valid"]:
@@ -2078,6 +2196,7 @@ class RequestMixin:
                             "validation_details": {
                                 "expected_params": validation["expected"],
                                 "provided_params": validation["provided"],
+                                "missing_params": validation.get("missing", []),
                                 "type_errors": validation["type_errors"],
                             },
                         },
@@ -2154,6 +2273,22 @@ class RequestMixin:
                     _run_http_background_work(self, bg_budget)
 
             if child_view is not None:
+                # The object permission again after the handler, as the socket
+                # runtime re-checks an explicit child's (#4173).
+                from ..auth.core import enforce_object_permission
+
+                try:
+                    enforce_object_permission(child_view, request)
+                except PermissionDenied:
+                    logger.warning(
+                        "Auth denied for %s: embedded child object permission (HTTP POST)",
+                        type(child_view).__name__,
+                    )
+                    return JsonResponse(
+                        {"error": "Permission denied", "code": "permission_denied"}, status=403
+                    )
+
+            if child_view is not None:
                 return self._http_child_response(
                     request,
                     child_view,
@@ -2188,7 +2323,7 @@ class RequestMixin:
             # The flag is not saved state: this request's view is discarded.
             reset_form = bool(getattr(self, "_should_reset_form", False))
 
-            # Explicit and legacy views alike (#4107).
+            # Every view (#4107).
             from .._exposure_sessions import StateLimitExceeded, save_server_state
 
             from ..state_store import StateStoreError
@@ -2280,10 +2415,9 @@ class RequestMixin:
                 self._rust_view.reset()
                 return _contract_error_response()
 
-            if not legacy_exposure:
-                from .._exposure_child_persistence import save_child_states
+            from .._exposure_child_persistence import save_child_states
 
-                save_child_states(self, request)
+            save_child_states(self, request)
 
             import json as json_module
 
@@ -2293,11 +2427,17 @@ class RequestMixin:
             # delivers; the client echoes it with its next fallback POST.
             # Skipped when the patches are off for this view or project (#4114).
             from .._http_fallback_baseline import patches_enabled
+            from .._render_digest import answer_shape
 
-            if patches_enabled(self):
+            # One walk of the answer, for its token and the touch check below
+            # (None when the patches are off: the touch check then picks the
+            # whole page).
+            answer_patches = patches_enabled(self)
+            answer_found = answer_shape(request, html) if answer_patches else None
+            if answer_patches:
                 from .._render_digest import ANSWER_FIELD, render_token
 
-                answer_digest = render_token(self, request, html)
+                answer_digest = render_token(self, request, html, answer_found)
                 if answer_digest:
                     response_fields[ANSWER_FIELD] = answer_digest
 
@@ -2320,6 +2460,8 @@ class RequestMixin:
                         logger.debug("Failed to inject debug info", exc_info=True)
 
             if patches_json:
+                from .._http_fallback_baseline import patches_touch_opaque
+
                 patches = json_module.loads(patches_json)
                 patch_count = len(patches)
 
@@ -2343,7 +2485,11 @@ class RequestMixin:
                     _inject_side_channels(response_data)
                     _inject_debug(response_data)
                     return JsonResponse(response_data)
-                if baseline_matched and 0 <= patch_count <= PATCH_THRESHOLD:
+                if (
+                    baseline_matched
+                    and 0 <= patch_count <= PATCH_THRESHOLD
+                    and not patches_touch_opaque(self, patches, after=answer_found)
+                ):
                     from .._render_digest import path_addressed
 
                     response_data = {
@@ -2359,14 +2505,20 @@ class RequestMixin:
                 else:
                     # More patches than a whole page is worth: the whole page,
                     # numbered as every whole-page answer of this transport is
-                    # (v1; the client re-bases on it).
-                    self._rust_view.reset()
+                    # (v1; the client re-bases on it). The renderer keeps the
+                    # tree this HTML was serialized from (#4229): a reused
+                    # renderer's next answer diffs against the page just sent.
                     response_data = {
                         "html": html,
                         "version": version if reused_renderer else 1,
                         **contract_fields,
                         **response_fields,
                     }
+                    if baseline_matched and patch_count > PATCH_THRESHOLD:
+                        # The digest matched: the whole page was chosen for
+                        # its size, so the client does not count it as a
+                        # digest miss (#4229).
+                        response_data["whole_page"] = "size"
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
                     _inject_side_channels(response_data)
@@ -2389,8 +2541,6 @@ class RequestMixin:
             import traceback
             from django.conf import settings
 
-            # uses_legacy_exposure is the module-level import; a local import
-            # here would make the name local to all of post().
             from .._exposure import ExposureConfigurationError
             from .._exposure_diagnostics import diagnostics_policy_allows
 
@@ -2402,11 +2552,28 @@ class RequestMixin:
             if not diagnostics_policy_allows(self):
                 # ADR-038: undeclared state can occur in the exception's message,
                 # its traceback and the posted params, so in production a
-                # nonlegacy view gets the value-free log line and the generic
+                # view gets the value-free log line and the generic
                 # response. Under DEBUG it gets Django-like detail (D-a).
-                from .._exposure_diagnostics import log_failure_for
+                from .._exposure_diagnostics import (
+                    log_failure_for,
+                    send_request_exception,
+                    server_exception_detail_enabled,
+                )
 
-                log_failure_for(logger, (self,), e, "HTTP event failed")
+                # The message and traceback reach the log only under
+                # ``LIVEVIEW_CONFIG["log_exception_detail"]`` (#4180), which
+                # also sends ``got_request_exception``; the answer stays generic.
+                log_failure_for(
+                    logger,
+                    (self,),
+                    e,
+                    "HTTP event failed: %s: %s",
+                    type(e).__name__,
+                    e,
+                    traceback=True,
+                )
+                if server_exception_detail_enabled():
+                    send_request_exception(e, request)
                 return JsonResponse(
                     {
                         "error": "An error occurred processing your request. Please try again.",
@@ -2420,6 +2587,14 @@ class RequestMixin:
             error_msg += f": {type(e).__name__}: {str(e)}"
 
             logger.error(error_msg, exc_info=True)
+            from .._exposure_diagnostics import (
+                send_request_exception,
+                server_exception_detail_enabled,
+            )
+
+            if server_exception_detail_enabled():
+                # #4180: the signal fires whatever the owner's policy.
+                send_request_exception(e, request)
 
             if settings.DEBUG:
                 error_details = {

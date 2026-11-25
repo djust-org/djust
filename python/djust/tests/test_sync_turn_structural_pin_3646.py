@@ -31,7 +31,7 @@ What it cannot see: a hand-off built dynamically (``getattr(asgiref.sync, name)`
 ``partial(api_in_a_variable, ...)`` is not), and a hook reached through a call the exact
 resolver cannot follow (an attribute call to a method defined in several classes).
 
-What it asserts without checking: the ``outside`` (12), ``entry`` (4) and ``external`` (3)
+What it asserts without checking: the ``outside`` (13), ``entry`` (4) and ``external`` (3)
 entries of ``ALLOWED`` are named and carry a reason, and nothing more. They are threads of
 other subsystems (clocks, the worker pool, the dev server), the HTTP request entry, and
 calls into Django or the Rust extension; no test here proves they enter no hook. And an
@@ -376,13 +376,9 @@ LEAVES: Dict[Tuple[str, str], Tuple[str, Optional[str]]] = {
     ("hooks.py", "run_on_mount_hooks"): ("run_guarded_step", "lifecycle"),
     ("_child_lifecycle.py", "run_view_disconnected"): ("run_sync_step", "lifecycle"),
     ("_child_lifecycle.py", "begin_live_connection"): ("sync_step", "lifecycle"),
-    ("live_view.py", "LiveView._restore_private_state"): ("run_guarded_step", "lifecycle"),
     # teardown hooks (#3646): every site that calls one goes through call_teardown_hook
     ("_child_lifecycle.py", "call_teardown_hook"): ("run_teardown_step", "lifecycle"),
     ("_child_lifecycle.py", "dispose_child_subtree"): ("call_teardown_hook", None),
-    ("_child_lifecycle.py", "discard_sticky_child"): ("call_teardown_hook", None),
-    ("_child_lifecycle.py", "release_root_view"): ("call_teardown_hook", None),
-    ("mixins/sticky.py", "StickyChildRegistry._unregister_child"): ("call_teardown_hook", None),
     # the hook-calling helpers (their step comes from the hook's name, or is fixed)
     ("_view_hooks.py", "call_hook"): ("sync_step", None),
     ("_view_hooks.py", "call_hook_sync"): ("run_sync_step", None),
@@ -440,7 +436,7 @@ def external(reason: str) -> Entry:
 
 _RENDER = (
     "render plumbing (template build, Rust state sync, HTML post-processing, diff): "
-    "get_context_data inside it is its own render step"
+    "the render methods and _sync_state_to_rust inside it enter the render step (#4276)"
 )
 _SESSION = "session, auth-state or storage I/O of the framework; calls no view hook"
 _STATE = "framework-owned bookkeeping (component ids, dirty baseline, temporary assigns)"
@@ -487,13 +483,17 @@ _ABANDON = (
     "release_root_view, whose teardown hooks enter a lifecycle step off the loop "
     "(test_an_sse_response_close_runs_the_teardown_hooks_inside_a_lifecycle_step)"
 )
+_RELEASE = (
+    "releases the view through dispose_child_subtree (a leaf: its teardown hooks are stepped there)"
+)
 _PRESERVE = (
     "re-checks each sticky child through the auth leaves and discards a refused one "
     "through discard_sticky_child (a leaf, so its teardown hooks are stepped here)"
 )
 _PUSH_TURN = (
-    "the one-hop server-push turn: the handler runs through run_sync_step with the "
-    "hook's step (#3646) and the render through render_background_sync"
+    "the one-hop server-originated turn (push, tick, db_notify; #4152, #4166): its "
+    "body runs each hook through run_sync_step with the hook's step (#3646; "
+    "handle_tick as the 'tick' step) and the render through render_background_sync"
 )
 
 
@@ -519,11 +519,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("_child_async.py", "_execute_body.complete", "render_embedded_child_html"): plumbing(
         _RENDER, _GET_TEMPLATE
     ),
-    (
-        "_child_async.py",
-        "dispatch_legacy_child_work.run_body.complete",
-        "render_embedded_child_html",
-    ): plumbing(_RENDER, _GET_TEMPLATE),
     ("_child_lifecycle.py", "fire_view_disconnected", "run_view_disconnected"): leaf(),
     ("_child_lifecycle.py", "arelease_root_view", "_clear_live_handles"): plumbing(
         "drops the Rust live handles (framework state); calls no view hook"
@@ -569,15 +564,14 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "the multi-loop runner's own event-loop thread"
     ),
     ("push.py", "_sync_presence_scope_group", "_presence_probe"): leaf(),
+    # #4168: a turn's handler session writes.
+    ("runtime.py", "store_turn_session_writes", "_store_session_writes_sync"): plumbing(_SESSION),
     ("runtime.py", "_spawn_save", "detached(run)"): plumbing(_SAVE),
     ("runtime.py", "_SaveExecutor.submit", "_run_with_connection_hygiene"): outside(
         "the request-scoped save executor's submit(); the callable it runs is _spawn_save's run (plumbing, above)"
     ),
     ("runtime.py", "_spawn_save", "run"): plumbing(_SAVE),
     ("runtime.py", "WSConsumerTransport.explicit_event_request", "fresh_socket_request"): plumbing(
-        _SESSION
-    ),
-    ("runtime.py", "SSESessionTransport.recheck_event_auth", "_stored_request_user"): plumbing(
         _SESSION
     ),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "run_on_mount_hooks"): leaf(),
@@ -618,7 +612,13 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ),
     (
         "runtime.py",
-        "ViewRuntime._dispatch_sticky_child_event",
+        "ViewRuntime._run_child_event",
+        "render_embedded_child_html",
+    ): plumbing(_RENDER, _GET_TEMPLATE),
+    # #4181: a carried sticky child re-rendered after the navigation's mount frame.
+    (
+        "runtime.py",
+        "ViewRuntime._dispatch_mount_body",
         "render_embedded_child_html",
     ): plumbing(_RENDER, _GET_TEMPLATE),
     (
@@ -634,8 +634,14 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ): plumbing(_AUTH_OF_CHILD, _TENANT),
     ("runtime.py", "ViewRuntime._flush_pending_layout", "render_pending_layout"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_async_result", "view._sync_state_to_rust"): plumbing(
-        _RENDER, _GET_TEMPLATE
+        _RENDER
     ),
+    # #4123: the same sync, reporting whether the result has anything to render.
+    (
+        "runtime.py",
+        "ViewRuntime._render_async_result",
+        "sync_reports_render_needed",
+    ): plumbing(_RENDER),
     (
         "runtime.py",
         "ViewRuntime._dispatch_mount_body",
@@ -643,20 +649,25 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ): plumbing(_STATE),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "render_view_with_diff"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "mount_frame_metadata"): plumbing(_RENDER),
-    ("runtime.py", "ViewRuntime._dispatch_sticky_child_event", "resolve_explicit_child"): plumbing(
-        _STATE
-    ),
-    ("runtime.py", "ViewRuntime._dispatch_sticky_child_event", "enforce_object_permission"): leaf(),
+    ("runtime.py", "ViewRuntime._run_child_event", "resolve_explicit_child"): plumbing(_STATE),
+    ("runtime.py", "ViewRuntime._run_child_event", "enforce_object_permission"): leaf(),
     ("runtime.py", "ViewRuntime._dispatch_url_change_inner", "enforce_object_permission"): leaf(),
     (
         "runtime.py",
         "ViewRuntime._dispatch_url_change_inner",
         "self.view_instance._sync_state_to_rust",
-    ): plumbing(_RENDER, _GET_TEMPLATE),
+    ): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._check_auth", "run_pre_mount_auth"): leaf(),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "snapshot_codec"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_and_send", "render_view_with_diff"): plumbing(_RENDER),
-    ("runtime.py", "ViewRuntime._dispatch_mount_body", "load_server_state"): plumbing(_SESSION),
+    # #4164 item 1: the restore, and the tab's flush group named in the same hop.
+    ("runtime.py", "ViewRuntime._dispatch_mount_body", "_load_and_name_flush_group"): plumbing(
+        _SESSION
+    ),
+    ("runtime.py", "ViewRuntime._join_flush_group", "flush_group"): plumbing(_SESSION),
+    ("_state_flush_request.py", "request_flush", "flush_group"): plumbing(_SESSION),
+    ("_state_flush_request.py", "request_flush", "stored_serial"): plumbing(_SESSION),
+    ("_state_flush_request.py", "request_flush", "_reload_session"): plumbing(_SESSION),
     # #4095: an over-limit turn goes back to the stored state.
     ("runtime.py", "ViewRuntime._refuse_over_limit_turn", "load_server_state"): plumbing(_SESSION),
     (
@@ -668,7 +679,7 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "runtime.py",
         "ViewRuntime._dispatch_mount_body",
         "view_instance._sync_state_to_rust",
-    ): plumbing(_RENDER, _GET_TEMPLATE),
+    ): plumbing(_RENDER),
     (
         "runtime.py",
         "ViewRuntime._dispatch_mount_body",
@@ -698,15 +709,13 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     # A deferred turn's identity check (design: save frequency): the binding
     # read the save makes, without the save.
     ("runtime.py", "ViewRuntime._defer_explicit_turn", "check"): plumbing(_SESSION),
-    # Over the size limit with saves deferred, the session writes of a turn
-    # whose own state could not be saved (option A): a session write only.
-    ("runtime.py", "ViewRuntime.commit_explicit_turn", "_save_session_writes"): plumbing(_SESSION),
     # Background work that failed: its session writes, under the result's
     # authorization, without saving the view (#4162).
     (
         "runtime.py",
         "ViewRuntime._execute_explicit_async_task.complete.keep_session_writes",
-        "_save_session_writes",
+        # Unless the work was torn down meanwhile (#4211).
+        "_save_session_writes_unless",
     ): plumbing(_SESSION),
     ("runtime.py", "ViewRuntime._explicit_event_snapshot", "codec.capture"): plumbing(_RENDER),
     # The same three calls in one hop (#3997): the session binding read, then
@@ -729,12 +738,12 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("sse.py", "SSESession._untrack_replaced_presence", "untrack_view_presence"): leaf(),
     ("sse.py", "DjustSSEStreamView.get", "page_request"): plumbing(_SESSION),
     ("sse.py", "DjustSSEMessageView.post", "_request_owns_session"): plumbing(_SESSION),
-    ("sse.py", "SSESession._release_slot", "release_root_view"): leaf(),
+    ("sse.py", "SSESession._release_slot", "release_root_view"): plumbing(_RELEASE),
     ("sse.py", "DjustSSEStreamView.get", "django_session.save"): plumbing(_SESSION),
     ("sse.py", "DjustSSEMessageView.post", "protected_server_error"): plumbing(_ERROR_PAGE),
     ("sse.py", "SSESession._replace_view", "PresenceManager.per_connection"): plumbing(_SESSION),
     ("sse.py", "DjustSSEStreamView.get", "protected_server_error"): plumbing(_ERROR_PAGE),
-    ("sse.py", "SSESession._replace_view", "release_root_view"): leaf(),
+    ("sse.py", "SSESession._replace_view", "release_root_view"): plumbing(_RELEASE),
     ("streaming.py", "StreamingMixin.push_state", "render"): plumbing(_RENDER),
     ("streaming.py", "StreamingMixin.push_state", "self._strip_comments_and_whitespace"): plumbing(
         _RENDER
@@ -748,9 +757,7 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("streaming.py", "StreamingMixin._render_stream_fragment", "tmpl.render"): external(
         _DJANGO_TEMPLATE
     ),
-    ("templatetags/live_tags.py", "live_render._lazy_thunk", "_render_eager"): plumbing(
-        _RENDER, _GET_TEMPLATE
-    ),
+    ("templatetags/live_tags.py", "live_render._lazy_thunk", "_render_eager"): plumbing(_RENDER),
     ("testing.py", "_call_hook", "context.run"): plumbing(_RENDER),
     # djust.testing's live-session helpers (#4191): the test's own session save,
     # and the bare consumer's session/user read, off the event loop; no view hook.
@@ -760,6 +767,11 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("websocket.py", "LiveViewConsumer._queue_on_lane", "consumer._run_lane_item"): outside(_LANE),
     ("websocket.py", "LiveViewConsumer.handle_unmount", "self._unmount_slot"): outside(_LANE),
     ("websocket.py", "LiveViewConsumer._handle_upload_frame", "owner._run_lane_item"): outside(
+        _LANE
+    ),
+    # #4312: an upload hook queued on the owner's lane; it runs as its own
+    # turn (_run_upload_hook_turn) when the lane reaches it.
+    ("websocket.py", "LiveViewConsumer._run_upload_hook", "self._run_queued_upload_hook"): outside(
         _LANE
     ),
     (
@@ -800,9 +812,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("websocket.py", "LiveViewConsumer._handle_request_html_locked", "_sync_and_render"): plumbing(
         _RENDER
     ),
-    ("websocket.py", "LiveViewConsumer._tick_locked", "tick_turn"): plumbing(
-        "the offloaded tick: handle_tick runs through run_sync_step(..., 'tick', ...) in this function's own body"
-    ),
     ("websocket.py", "LiveViewConsumer._handle_upload_resume", "mgr.resume_entry"): plumbing(
         _SESSION
     ),
@@ -819,9 +828,7 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("websocket.py", "LiveViewConsumer._handle_request_html_locked", "contract_snapshot"): plumbing(
         _RENDER
     ),
-    ("websocket.py", "LiveViewConsumer._run_server_push_turn_offloaded", "turn"): plumbing(
-        _PUSH_TURN
-    ),
+    ("websocket.py", "LiveViewConsumer._run_offloaded_turn", "turn"): plumbing(_PUSH_TURN),
     ("websocket_utils.py", "_validate_event_security", "check_handler_permission"): leaf(),
     ("websocket_utils.py", "_post_only_rules_deny", "check_event_auth"): leaf(),
     ("websocket_utils.py", "_validate_event_security", "check_object_permission_for_event"): leaf(),
@@ -852,10 +859,12 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
 #                                    not-threaded  no thread hand-off in the package names
 #                                                  it, so it runs in its caller's thread and
 #                                                  step (checked)
-#                                    template-time it runs while the template engine renders,
-#                                                  after get_context_data() returned, so NO
-#                                                  step is open and a row read in it has no
-#                                                  wrapper scope (checked by running it)
+#                                    template-time it runs while the template engine renders
+#                                                  with NO step open, so a row read in it has
+#                                                  no wrapper scope (checked by running it).
+#                                                  No hook has it since #4276: the render
+#                                                  methods and _sync_state_to_rust are the
+#                                                  "render" step, the template engine included
 #                                    scope-input   it produces what the scope depends on, so
 #                                                  it cannot run inside it (an ALLOWED entry
 #                                                  must declare reaching it)
@@ -887,7 +896,7 @@ HOOKS: Dict[str, str] = {
     "ContextMixin.get_context_data": "stepped:render",
     "DraftModeMixin.get_context_data": "stepped:render",
     "Component.render": "stepped:render",
-    "TemplateMixin.get_template": "unwrapped:template-time:read by the template build at template/render-plumbing time with no step open (an HTTP GET shows none); only hot reload calls it inside a render step, and the hand-off pin covers that site",
+    "TemplateMixin.get_template": "inside:none|render@mixins/request.py::RequestMixin._get_turn_body",
     # ---- cursor / presence ----
     "LiveCursorMixin.handle_cursor_move": (
         "unwrapped:not-threaded:djust 2.0 removed the socket's cursor_move frame (#3515), so the "
@@ -921,18 +930,16 @@ HOOKS: Dict[str, str] = {
     "ComponentMixin.handle_component_event": (
         "inside:event@mixins/components.py::ComponentMixin._register_component.component_callback"
     ),
-    "Component.get_context_data": "unwrapped:template-time:a component renders while the template engine runs (`{{ component }}`), after get_context_data() returned, so no step is open; row reads in it run without the wrapper scope",
-    "Component._render_custom": "unwrapped:template-time:called by Component.render at template time, so no step is open; row reads in it run without the wrapper scope",
+    "Component.get_context_data": "inside:render@components/base.py::Component.render",
+    "Component._render_custom": "inside:render@components/base.py::Component.render",
     "ContextMixin.get_render_only_context": (
-        "inside:render@mixins/context.py::ContextMixin.get_context_data"
+        "inside:render@mixins/context.py::ContextMixin._get_explicit_context_data"
     ),
     "JITMixin.serialize_for_template": (
         "unwrapped:not-threaded:an app helper for get_context_data; the framework never calls it, "
         "so it runs where the app calls it (inside the render step in the documented use)"
     ),
-    "StickyChildRegistry._on_sticky_update": (
-        "unwrapped:template-time:called by the {% live_render %} tag while the parent's template renders, so no step is open (the parent's render step covers only its get_context_data())"
-    ),
+    "StickyChildRegistry._on_sticky_update": "inside:render@templatetags/live_tags.py::_apply_sticky_input_changes",
     "StickyChildRegistry._get_all_child_views": (
         "unwrapped:not-threaded:a registry lookup, not an application hook "
         "(its docstring mentions overriding __init__)"
@@ -942,13 +949,15 @@ HOOKS: Dict[str, str] = {
     "FormMixin.get_form_kwargs": "inside:event|mount@forms.py::FormMixin.get_form",
     "FormMixin._form_class_for_restore": "unwrapped:not-threaded:called by FormMixin._djust_scrub_restored while restore_public_state restores saved state, in the thread and step of that restore (a snapshot restore, a mount, the HTTP event fallback)",
     "FormMixin._create_form": "inside:mount|event@forms.py::FormMixin.mount",
-    "FormMixin._ensure_form_state": "inside:event|none@forms.py::FormMixin.submit_form",
-    "FormMixin.as_live": "unwrapped:template-time:called by the {% live_form %} tag, at template time: no step is open, so a queryset the form's fields evaluate (a ModelChoiceField) is read without the wrapper scope",
-    "FormMixin.as_live_field": "unwrapped:template-time:called by the {% live_field %} tag, at template time: no step is open, so a queryset the field evaluates (a ModelChoiceField) is read without the wrapper scope",
+    "FormMixin._ensure_form_state": "inside:event|render@forms.py::FormMixin.submit_form",
+    "FormMixin.as_live": "inside:render@templatetags/live_tags.py::live_form",
+    "FormMixin.as_live_field": "inside:render@templatetags/live_tags.py::live_field",
     "AdminFormMixin._create_form": "inside:mount@admin_ext/forms.py::AdminFormMixin.mount",
-    "AdminFormMixin.get_field_value": "inside:render|none@admin_ext/views.py::ModelListView.get_context_data",
-    "AdminTailwindAdapter.render_field": "unwrapped:template-time:called while as_live_field renders a field at template time: no step is open",
-    "BaseAdapter._merge_widget_attrs": "unwrapped:template-time:called while the form adapter renders a widget at template time: no step is open",
+    # An @event_handler since #4218 (the override was undeclared, so refused).
+    "AdminFormMixin.validate_field": "stepped:event",
+    "AdminFormMixin.get_field_value": "inside:render@admin_ext/views.py::ModelListView.get_context_data",
+    "AdminTailwindAdapter.render_field": "inside:render@forms.py::FormMixin.as_live_field",
+    "BaseAdapter._merge_widget_attrs": "inside:render@frameworks.py::BaseAdapter._render_input",
     "DraftModeMixin.get_draft_key": "inside:event|render@drafts.py::DraftModeMixin.get_context_data",
     "WizardMixin.on_wizard_complete": "inside:event@wizard.py::WizardMixin.submit_wizard",
     "WizardMixin.mount": "stepped:mount",
@@ -983,7 +992,6 @@ HOOKS: Dict[str, str] = {
         "the view's own selection and reuse checks in the thread of the check that asked; it "
         "reads view state (its docstring says not to query) and no thread hand-off names it"
     ),
-    "ReactMixin.get_react_components": "unwrapped:not-threaded:no framework code calls it (render_react_component is an app helper), so it runs wherever the app calls it; the step is whatever that is",
     # ---- the data table ----
     "DataTableMixin.handle_cell_edit": (
         "inside:event@components/mixins/data_table.py::DataTableMixin.on_table_cell_edit"
@@ -1043,9 +1051,6 @@ HOOKS: Dict[str, str] = {
         "unwrapped:not-threaded:transport adapter SPI of the runtime, not an application hook"
     ),
     "WSConsumerTransport.on_view_mounted": "unwrapped:async-def:transport SPI, awaited on the loop",
-    "WSConsumerTransport.recheck_event_auth": (
-        "unwrapped:async-def:transport SPI, awaited on the loop"
-    ),
     "ViewRuntime._instantiate_view": (
         "unwrapped:not-threaded:runtime SPI that builds the view instance, not an application hook"
     ),
@@ -1716,6 +1721,12 @@ EXPECTED_AUTH_SINKS: Dict[Tuple[str, str, str], Optional[str]] = {
     # (an ordinary lookup, under the mount step), not the view hook.
     ("admin_ext/forms.py", "mount", "get_object"): None,
     ("admin_ext/views.py", "mount", "get_object"): None,
+    # The delete page loads its row by key in the event handler (an ordinary lookup, under
+    # the event step): over the HTTP fallback ``self.object`` is restored state (#4218).
+    ("admin_ext/views.py", "confirm_delete", "get_object"): None,
+    # The delete page's own hook loads the row through the ModelAdmin (#4218): the call is
+    # ``ModelAdmin.get_object``, inside the view hook the auth step already wraps.
+    ("admin_ext/views.py", "get_object", "get_object"): None,
 }
 
 _TEARDOWN_HOOKS = {"_cleanup_uploads", "_cleanup_on_unregister", "_on_sticky_unmount"}
@@ -2072,4 +2083,4 @@ def test_the_unchecked_allowed_kinds_are_the_ones_the_module_docstring_names():
     """The docstring says which entries carry a reason and no mechanical check; keep that
     list from drifting (#3646 review)."""
     counts = collections.Counter(entry_.kind for entry_ in ALLOWED.values())
-    assert (counts["outside"], counts["entry"], counts["external"]) == (12, 4, 3), counts
+    assert (counts["outside"], counts["entry"], counts["external"]) == (13, 4, 3), counts

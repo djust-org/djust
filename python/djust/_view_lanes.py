@@ -69,6 +69,11 @@ class ViewLane:
         """How many tasks are blocked in :meth:`quiesce` on this lane."""
         return self._waiting
 
+    def running_here(self) -> bool:
+        """Whether the caller is the turn this lane is running."""
+        task = self._task
+        return task is not None and not task.done() and task is asyncio.current_task()
+
     def busy(self) -> bool:
         """Whether a turn is queued or running."""
         return bool(self._turns) or (self._task is not None and not self._task.done())

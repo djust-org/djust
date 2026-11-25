@@ -1,8 +1,5 @@
 """
-Card Component - Stateless container with header, body, and footer
-
-A simple, stateless card component following the Badge/Button pattern.
-Uses the automatic 3-tier performance waterfall.
+Card Component - Stateless container with header, body, and footer.
 
 Features:
 - Header (optional)
@@ -10,54 +7,34 @@ Features:
 - Footer (optional)
 - Variants (default, outlined, elevated)
 
-Example:
-    from djust.components.ui import Card
-
-    # Simple card. Header, body and footer are escaped and render as text.
-    card = Card(
-        header="User Profile",
-        body="John Doe",
-        footer="Last edited today",
-    )
-
-Performance:
-    - Pure Rust: ~0.5 μs (if available)
-    - Hybrid: ~3-5 μs (template cached)
-    - Python: ~0.3 μs (f-string fallback)
+One renderer (#4002): ``_render_custom`` returns the markup of ``CardComponent``, built from this
+class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
 from typing import Any, Optional
+
+from djust.components._alias_deprecation import warn_alias
+
 from ..base import Component
-
-from django.utils.html import conditional_escape
-
-from djust._rust import RustCard
+from ._twin import plain_text, render_twin
+from .card import CardComponent
 
 
 class Card(Component):
     """
-    Simple stateless Card component.
-
-    Automatic performance waterfall:
-    1. Pure Rust (RustCard) - if available
-    2. Rust template engine - with caching
-    3. Python f-strings - fallback
+    Simple stateless Card component, drawn by ``CardComponent``.
 
     Args:
-        body: Body text (required, escaped)
-        header: Optional header text (escaped)
-        footer: Optional footer text (escaped)
-        variant: Style variant (default, outlined, elevated)
+        body: Body text (required, escaped; ``CardComponent``'s ``body``)
+        header: Optional header text (escaped). ``CardComponent`` has no header section: it
+            draws as the card title (``title``) at the top of the body.
+        footer: Optional footer text (escaped; ``footer``)
+        variant: Deprecated (#4002): ``CardComponent`` has no variant, so any value draws the
+            default card; a value other than ``default`` warns. Add ``border`` / ``shadow``
+            on the container instead.
+
+    An empty header or footer draws no section.
     """
-
-    _rust_impl_class = RustCard
-
-    # Template for hybrid rendering
-    template = """<div class="card{% if variant == "outlined" %} border{% endif %}{% if variant == "elevated" %} shadow{% endif %}">{% if header %}
-    <div class="card-header">{{ header }}</div>{% endif %}
-    <div class="card-body">{{ body }}</div>{% if footer %}
-    <div class="card-footer">{{ footer }}</div>{% endif %}
-</div>"""
 
     def __init__(
         self,
@@ -68,86 +45,38 @@ class Card(Component):
     ):
         super().__init__(body=body, header=header, footer=footer, variant=variant)
 
+        # Declared for type checkers; the base class already set each from the kwargs.
         self.body = body
         self.header = header
         self.footer = footer
         self.variant = variant
 
-    def get_context_data(self) -> dict[str, Any]:
-        return {
-            "body": self.body,
-            "header": self.header,
-            "footer": self.footer,
-            "variant": self.variant,
-        }
+        self._warn_unmapped()
+
+    def _warn_unmapped(self) -> None:
+        """Warn for an argument value the twin has no equivalent for (#4002).
+
+        ``stacklevel=5`` points at the caller of ``__init__`` / ``update``.
+        """
+        if self.variant != "default":
+            warn_alias(
+                "Card",
+                "variant",
+                "a border/shadow class on the container (it draws no variant)",
+                stacklevel=5,
+            )
+
+    def update(self, **kwargs: Any) -> Component:
+        """Update the properties, warning again for an argument the twin cannot draw."""
+        super().update(**kwargs)
+        self._warn_unmapped()
+        return self
 
     def _render_custom(self) -> str:
-        """Python f-string fallback"""
-        from djust.config import config
-
-        framework = config.get("css_framework", "bootstrap5")
-
-        if framework == "bootstrap5":
-            return self._render_bootstrap()
-        elif framework == "tailwind":
-            return self._render_tailwind()
-        else:
-            return self._render_plain()
-
-    def _render_bootstrap(self) -> str:
-        variant_class = {
-            "default": "",
-            "outlined": " border",
-            "elevated": " shadow",
-        }.get(self.variant, "")
-
-        parts = [f'<div class="card{variant_class}">']
-
-        if self.header:
-            parts.append(f'    <div class="card-header">{conditional_escape(self.header)}</div>')
-
-        parts.append(f'    <div class="card-body">{conditional_escape(self.body)}</div>')
-
-        if self.footer:
-            parts.append(f'    <div class="card-footer">{conditional_escape(self.footer)}</div>')
-
-        parts.append("</div>")
-        return "\n".join(parts)
-
-    def _render_tailwind(self) -> str:
-        variant_class = {
-            "default": "bg-white rounded-lg",
-            "outlined": "bg-white rounded-lg border border-gray-200",
-            "elevated": "bg-white rounded-lg shadow-lg",
-        }.get(self.variant, "bg-white rounded-lg")
-
-        parts = [f'<div class="{variant_class}">']
-
-        if self.header:
-            parts.append(
-                f'    <div class="px-6 py-4 border-b font-semibold">{conditional_escape(self.header)}</div>'
-            )
-
-        parts.append(f'    <div class="px-6 py-4">{conditional_escape(self.body)}</div>')
-
-        if self.footer:
-            parts.append(
-                f'    <div class="px-6 py-4 border-t bg-gray-50">{conditional_escape(self.footer)}</div>'
-            )
-
-        parts.append("</div>")
-        return "\n".join(parts)
-
-    def _render_plain(self) -> str:
-        parts = ['<div class="card">']
-
-        if self.header:
-            parts.append(f'    <div class="card-header">{conditional_escape(self.header)}</div>')
-
-        parts.append(f'    <div class="card-body">{conditional_escape(self.body)}</div>')
-
-        if self.footer:
-            parts.append(f'    <div class="card-footer">{conditional_escape(self.footer)}</div>')
-
-        parts.append("</div>")
-        return "\n".join(parts)
+        return render_twin(
+            CardComponent,
+            self.id,
+            title=plain_text(self.header),
+            body=plain_text(self.body),
+            footer=plain_text(self.footer),
+        )

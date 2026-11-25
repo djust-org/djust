@@ -16,7 +16,7 @@ from asgiref.sync import sync_to_async
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from djust.security import is_safe_event_name
 from djust.websocket_utils import _validate_event_security
 
@@ -26,18 +26,21 @@ _MOD = "djust.tests.test_sticky_update_hook_2919"
 class HookChild(LiveView):
     """Takes ``n`` and ``label`` at mount; ``_on_sticky_update`` re-applies them."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "hookchild"
+    sticky_update_inputs = ("n", "label")
     template = '<div>child {{ n }} {{ label }} clicks={{ clicks }}</div><b dj-click="bump">b</b>'
     mounts = 0
     updates: list = []
+    n = state(0)
+    label = state("")
+    clicks = state(0)
 
     def mount(self, request, n=0, label="", **kwargs):
         type(self).mounts += 1
         self.n = n
         self.label = label
-        self.clicks = 0
 
     def _on_sticky_update(self, changed):
         type(self).updates.append(dict(changed))
@@ -50,12 +53,9 @@ class HookChild(LiveView):
     def bump(self, **kwargs):
         self.clicks += 1
 
-    def get_context_data(self, **kwargs):
-        return {"n": self.n, "label": self.label, "clicks": self.clicks}
-
 
 class HookParent(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + _MOD + '.HookParent">'
@@ -63,52 +63,42 @@ class HookParent(LiveView):
         '{% live_render "' + _MOD + '.HookChild" sticky=True n=n label=label %}'
         "</div>"
     )
-
-    def mount(self, request, **kwargs):
-        self.n = 1
-        self.label = "a"
+    n = state(1)
+    label = state("a")
 
     @event_handler()
-    def set_n(self, n=0, **kwargs):
+    def set_n(self, n: int = 0, **kwargs):
         self.n = int(n)
-
-    def get_context_data(self, **kwargs):
-        return {"view": self, "n": self.n, "label": self.label}
 
 
 class PlainChild(LiveView):
-    """No override: kwargs stay mount-time only, with a warning."""
+    """Takes ``n`` at mount; a subclass names it in ``sticky_update_inputs``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "plainchild"
+    sticky_update_inputs = ("n",)
     template = "<div>plain {{ n }}</div>"
+    n = state(0)
 
     def mount(self, request, n=0, **kwargs):
         self.n = n
 
-    def get_context_data(self, **kwargs):
-        return {"n": self.n}
-
 
 class PlainParent(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + _MOD + '.PlainParent">'
         '{% live_render "' + _MOD + '.PlainChild" sticky=True n=n %}'
         "</div>"
     )
-
-    def mount(self, request, **kwargs):
-        self.n = 1
-
-    def get_context_data(self, **kwargs):
-        return {"view": self, "n": self.n}
+    n = state(1)
 
 
 class RaisingChild(PlainChild):
     sticky_id = "raisingchild"
+    n = state(0)
     calls = 0
 
     def _on_sticky_update(self, changed):
@@ -120,12 +110,14 @@ class RaisingParent(PlainParent):
     template = PlainParent.template.replace("PlainParent", "RaisingParent").replace(
         "PlainChild", "RaisingChild"
     )
+    n = state(1)
 
 
 class PickyChild(PlainChild):
     """Validates its input, as a hook must: tag values are not trusted."""
 
     sticky_id = "pickychild"
+    n = state(0)
 
     def _on_sticky_update(self, changed):
         n = int(changed["n"])  # raw template values: strings, not numbers
@@ -138,10 +130,12 @@ class PickyParent(PlainParent):
     template = PlainParent.template.replace("PlainParent", "PickyParent").replace(
         "PlainChild", "PickyChild"
     )
+    n = state(1)
 
 
 class AsyncChild(PlainChild):
     sticky_id = "asyncchild"
+    n = state(0)
 
     async def _on_sticky_update(self, changed):  # a mistake: it cannot be awaited
         pass
@@ -151,6 +145,7 @@ class AsyncParent(PlainParent):
     template = PlainParent.template.replace("PlainParent", "AsyncParent").replace(
         "PlainChild", "AsyncChild"
     )
+    n = state(1)
 
 
 @pytest.fixture(autouse=True)
@@ -162,79 +157,79 @@ def _reset():
         yield
 
 
-def _parent(cls, **attrs):
-    request = RequestFactory().get("/")
+async def _parent(cls):
+    """The parent mounted on a runtime, as a transport does (its template mounts the child)."""
+    from djust.tests.test_runtime_child_routing_1892 import _mounted_runtime
+
     view = cls()
-    view.request = request
-    view.mount(request)
-    for key, value in attrs.items():
-        setattr(view, key, value)
+    await _mounted_runtime(view)
     return view
 
 
-def _render(view):
-    return view.render_with_diff()[0]
+async def _render(view):
+    return await sync_to_async(lambda: view.render_with_diff()[0])()
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
 class TestUpdateHook:
-    def test_changed_input_is_applied_without_a_remount(self):
-        view = _parent(HookParent)
-        assert "child 1 a" in _render(view)
+    async def test_changed_input_is_applied_without_a_remount(self):
+        view = await _parent(HookParent)
+        assert "child 1 a" in await _render(view)
         assert HookChild.mounts == 1
         view.n = 2
-        html = _render(view)
+        html = await _render(view)
         assert "child 2 a" in html
         assert HookChild.mounts == 1  # never remounted
         assert HookChild.updates == [{"n": 2}]
 
-    def test_only_the_changed_inputs_are_passed(self):
-        view = _parent(HookParent)
-        _render(view)
+    async def test_only_the_changed_inputs_are_passed(self):
+        view = await _parent(HookParent)
+        await _render(view)
         view.label = "z"
-        _render(view)
+        await _render(view)
         view.n = 5
         view.label = "y"
-        _render(view)
+        await _render(view)
         assert HookChild.updates == [{"label": "z"}, {"n": 5, "label": "y"}]
 
-    def test_state_the_child_built_up_survives_the_update(self):
-        view = _parent(HookParent)
-        _render(view)
+    async def test_state_the_child_built_up_survives_the_update(self):
+        view = await _parent(HookParent)
+        await _render(view)
         child = view._get_child_view("hookchild")
         child.clicks = 7  # what the user did in the child since it mounted
         view.n = 2
-        html = _render(view)
+        html = await _render(view)
         assert "child 2 a clicks=7" in html
         assert view._get_child_view("hookchild") is child
 
-    def test_hook_runs_once_per_change_not_once_per_render(self):
-        view = _parent(HookParent)
-        _render(view)
-        _render(view)
+    async def test_hook_runs_once_per_change_not_once_per_render(self):
+        view = await _parent(HookParent)
+        await _render(view)
+        await _render(view)
         assert HookChild.updates == []
         view.n = 2
-        _render(view)
-        _render(view)
-        _render(view)
+        await _render(view)
+        await _render(view)
+        await _render(view)
         assert HookChild.updates == [{"n": 2}]
         view.n = 1  # back to the mount-time value is a change too
-        _render(view)
+        await _render(view)
         assert HookChild.updates == [{"n": 2}, {"n": 1}]
 
-    def test_the_hook_runs_before_the_child_renders(self):
-        view = _parent(HookParent)
-        _render(view)
+    async def test_the_hook_runs_before_the_child_renders(self):
+        view = await _parent(HookParent)
+        await _render(view)
         view.n = 9
         # The very render that sees the new input already shows it.
-        assert "child 9 a" in _render(view)
+        assert "child 9 a" in await _render(view)
 
-    def test_a_child_without_the_override_keeps_mount_time_kwargs_and_warns(self, caplog):
-        view = _parent(PlainParent)
-        assert "plain 1" in _render(view)
+    async def test_a_child_without_the_override_keeps_mount_time_kwargs_and_warns(self, caplog):
+        view = await _parent(PlainParent)
+        assert "plain 1" in await _render(view)
         view.n = 2
         with caplog.at_level(logging.WARNING, logger="djust"):
-            html = _render(view)
+            html = await _render(view)
         assert "plain 1" in html  # unchanged behaviour
         message = next(
             r.getMessage() for r in caplog.records if "mount-time only" in r.getMessage()
@@ -242,38 +237,38 @@ class TestUpdateHook:
         assert "'n'" in message
         assert "_on_sticky_update" in message  # and the warning now names the way out
 
-    def test_the_base_class_default_is_not_an_override(self):
+    async def test_the_base_class_default_is_not_an_override(self):
         from djust.mixins.sticky import StickyChildRegistry
 
         assert PlainChild._on_sticky_update is StickyChildRegistry._on_sticky_update
         assert HookChild._on_sticky_update is not StickyChildRegistry._on_sticky_update
         assert PlainChild()._on_sticky_update({"n": 1}) is None
 
-    def test_a_failing_hook_propagates_and_is_retried(self):
-        view = _parent(RaisingParent)
-        _render(view)
+    async def test_a_failing_hook_propagates_and_is_retried(self):
+        view = await _parent(RaisingParent)
+        await _render(view)
         view.n = 2
         with pytest.raises(Exception):
-            _render(view)
+            await _render(view)
         assert RaisingChild.calls == 1
         with pytest.raises(Exception):
-            _render(view)
+            await _render(view)
         assert RaisingChild.calls == 2  # not recorded as applied
 
-    def test_the_parent_fails_until_the_input_is_acceptable_then_recovers(self):
+    async def test_the_parent_fails_until_the_input_is_acceptable_then_recovers(self):
         """The hook's failure is the parent's: every render fails while the tag
         passes a value the hook rejects, and the next acceptable value applies."""
-        view = _parent(PickyParent)
-        assert "plain 1" in _render(view)
+        view = await _parent(PickyParent)
+        assert "plain 1" in await _render(view)
         view.n = -5
         for _ in range(3):
             with pytest.raises(ValueError, match="negative"):
-                _render(view)
+                await _render(view)
         view.n = 7
-        assert "plain 7" in _render(view)
-        assert "plain 7" in _render(view)  # applied once, then quiet
+        assert "plain 7" in await _render(view)
+        assert "plain 7" in await _render(view)  # applied once, then quiet
 
-    def test_values_are_the_raw_template_values(self):
+    async def test_values_are_the_raw_template_values(self):
         """What the tag passes is the template context's value, resolved by the
         tag: a non-scalar arrives as the string the template would print."""
         seen = []
@@ -292,24 +287,24 @@ class TestUpdateHook:
         # Sees lives in a function scope: register it under the module path.
         globals()["Sees"] = Sees
         try:
-            view = _parent(SeesParent)
-            _render(view)
+            view = await _parent(SeesParent)
+            await _render(view)
             view.n = [1, 2]
-            _render(view)
+            await _render(view)
         finally:
             globals().pop("Sees", None)
         assert seen and isinstance(seen[0], str)
 
-    def test_an_async_hook_is_refused(self):
-        view = _parent(AsyncParent)
-        _render(view)
+    async def test_an_async_hook_is_refused(self):
+        view = await _parent(AsyncParent)
+        await _render(view)
         view.n = 2
         with pytest.raises(TypeError, match="plain function"):
-            _render(view)
+            await _render(view)
 
-    def test_the_http_load_renders_the_initial_inputs(self):
+    async def test_the_http_load_renders_the_initial_inputs(self):
         """First render of a page: a fresh mount, so no hook call."""
-        view = _parent(HookParent)
+        view = await _parent(HookParent)
         html = view.render_full_template(RequestFactory().get("/"))
         assert "child 1 a" in html
         assert HookChild.updates == []

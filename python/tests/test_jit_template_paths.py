@@ -21,6 +21,7 @@ from django.contrib.auth.models import User
 
 from djust import LiveView
 from djust._rust import extract_template_variables
+from djust.testing import LiveViewTestClient
 from djust.utils import clear_template_dirs_cache
 
 TABS = (
@@ -73,20 +74,23 @@ def test_a_raw_body_that_does_not_parse_alone_contributes_nothing():
 
 
 class TabsView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="tests.TabsView">' + TABS + "</div>"
 
-    def mount(self, request, **kwargs):
-        self.rows = list(User.objects.filter(username__startswith="n33-").order_by("username"))
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["rows"] = User.objects.filter(username__startswith="n33-").order_by("username")
+        return ctx
 
 
 @pytest.mark.django_db
 def test_a_model_list_read_only_in_a_tab_is_serialized_by_its_paths():
     User.objects.create(username="n33-ada", first_name="Ada", email="ada@example.com")
-    view = TabsView()
-    view.mount(None)
+    client = LiveViewTestClient(TabsView)
+    client.mount()
+    client.render()
 
-    rows = view.get_context_data()["rows"]
+    rows = client.rendered_state()["rows"]
 
     assert [row["username"] for row in rows] == ["n33-ada"]
     assert "email" not in rows[0]
@@ -116,19 +120,23 @@ def partial_dir(tmp_path, settings):
 
 
 class InlineView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="tests.InlineView">{% include "jit_paths/_rows.html" %}</div>'
 
-    def mount(self, request, **kwargs):
-        self.rows = list(User.objects.filter(username__startswith="n33-").order_by("username"))
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["rows"] = User.objects.filter(username__startswith="n33-").order_by("username")
+        return ctx
 
 
 class FileView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "jit_paths/page.html"
 
-    def mount(self, request, **kwargs):
-        self.rows = list(User.objects.filter(username__startswith="n33-").order_by("username"))
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["rows"] = User.objects.filter(username__startswith="n33-").order_by("username")
+        return ctx
 
 
 def test_inline_template_includes_are_inlined_for_extraction(partial_dir):
@@ -148,11 +156,11 @@ def test_file_template_without_extends_includes_are_inlined(partial_dir):
 @pytest.mark.parametrize("view_class", [InlineView, FileView])
 def test_a_model_list_read_only_in_an_include_is_serialized_by_its_paths(partial_dir, view_class):
     User.objects.create(username="n33-ada", first_name="Ada", email="ada@example.com")
-    view = view_class()
-    view.mount(None)
-    view.get_template()
+    client = LiveViewTestClient(view_class)
+    client.mount()
+    client.render()
 
-    rows = view.get_context_data()["rows"]
+    rows = client.rendered_state()["rows"]
 
     assert [row["username"] for row in rows] == ["n33-ada"]
     assert "email" not in rows[0]
@@ -186,7 +194,7 @@ class Card:
 
 
 class CardsView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="tests.CardsView">'
         "{% for card in cards %}<h2>{{ card.title }} {{ card.get_badge }}</h2>"
@@ -254,14 +262,14 @@ def test_serialize_for_template_models_go_through_the_jit():
     User.objects.create(username="n33-ada", email="ada@example.com")
 
     class UsersView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = (
             '<div dj-root dj-view="tests.UsersView">'
             "{% for u in people %}{{ u.username }}{% endfor %}</div>"
         )
 
     class UserListView(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = (
             '<div dj-root dj-view="tests.UserListView">'
             "{% for u in members %}{{ u.username }}{% endfor %}</div>"
@@ -290,7 +298,7 @@ def test_serialized_cards_render_like_the_objects():
 
 
 class WholeAndFieldView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="tests.WholeAndFieldView">'
         "{% for card in cards %}{{ card }}|{{ card.title }};{% endfor %}"
@@ -310,3 +318,108 @@ def test_a_plain_object_read_whole_and_by_field_carries_its_text():
     assert [row["title"] for row in rows] == ["one", "two"]
     one = view.serialize_for_template(_cards()[0], "featured")
     assert one == {"__str__": str(_cards()[0]), "title": "one"}
+
+
+# ---------------------------------------------------------------------------
+# #4277: includes inside component bodies ({% tabs %}, {% split_pane %})
+# ---------------------------------------------------------------------------
+
+_PANEL_TABS = (
+    "{% load djust_components %}"
+    '<div dj-root dj-view="tests.@@">'
+    '{% tabs id="t" %}{% tab id="a" label="A" %}{% include "jit_paths/_panel.html" %}{% endtab %}'
+    "{% endtabs %}</div>"
+)
+_PANEL_SPLIT = (
+    "{% load djust_components %}"
+    '<div dj-root dj-view="tests.@@">'
+    '{% split_pane id="s" %}{% include "jit_paths/_panel.html" %}{% pane %}{{ right_name }}'
+    "{% endsplit_pane %}</div>"
+)
+
+
+@pytest.fixture
+def panel_dir(partial_dir):
+    (partial_dir / "jit_paths" / "_panel.html").write_text("{{ panel_name }}{{ panel_rows }}")
+    return partial_dir
+
+
+def _view(template, name):
+    return type(
+        name, (LiveView,), {"exposure_policy": "explicit", "template": template.replace("@@", name)}
+    )
+
+
+def test_include_inside_tabs_is_inlined_for_template_paths(panel_dir):
+    view = _view(_PANEL_TABS, "InTabsView")()
+    assert "{{ panel_name }}" in view._get_template_content()
+    assert {"panel_name", "panel_rows"} <= set(view.template_paths())
+
+
+def test_include_inside_split_pane_is_inlined_for_template_paths(panel_dir):
+    view = _view(_PANEL_SPLIT, "InSplitView")()
+    assert "{{ panel_name }}" in view._get_template_content()
+    assert {"panel_name", "panel_rows", "right_name"} <= set(view.template_paths())
+
+
+def test_names_in_both_split_pane_segments_are_extracted(panel_dir):
+    template = (
+        "{% load djust_components %}"
+        '<div dj-root dj-view="tests.@@">'
+        '{% split_pane id="s" %}{{ left_name }}{% pane %}{{ right_name }}{% endsplit_pane %}</div>'
+    )
+    paths = _view(template, "BothSegmentsView")().template_paths()
+    assert {"left_name", "right_name"} <= set(paths)
+
+
+def test_include_inside_an_opaque_raw_block_is_still_not_inlined(panel_dir):
+    from djust._rust import register_raw_block_tag_handler, unregister_raw_block_tag_handler
+
+    class Opaque:
+        def render(self, args, body, context):
+            return ""
+
+    template = (
+        '<div dj-root dj-view="tests.OpaqueView">{% opaque_x %}'
+        '{% include "jit_paths/_panel.html" %}{% endopaque_x %}</div>'
+    )
+    register_raw_block_tag_handler("opaque_x", "endopaque_x", Opaque())
+    try:
+        content = _view(template, "OpaqueView")()._get_template_content()
+    finally:
+        unregister_raw_block_tag_handler("opaque_x")
+    assert '{% include "jit_paths/_panel.html" %}' in content
+    assert "{{ panel_name }}" not in content
+
+
+class _HeldInTab(LiveView):
+    exposure_policy = "explicit"
+    template = _PANEL_TABS.replace("@@", "_HeldInTab")
+
+    def mount(self, request, **kwargs):
+        self.panel_name = "n"
+
+
+@pytest.mark.django_db
+def test_unsupplied_notice_names_a_held_name_read_in_a_tab_include(panel_dir, settings, caplog):
+    import logging
+
+    from djust import _exposure_unsupplied
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import RequestFactory
+
+    def make_request():
+        request = RequestFactory().get("/runtime-explicit/")
+        request.user = AnonymousUser()
+        request.tenant = None
+        request.session = SessionStore()
+        request.session.create()
+        return request
+
+    settings.DEBUG = True
+    _exposure_unsupplied._REPORTED.pop(_HeldInTab, None)
+    with caplog.at_level(logging.WARNING, logger="djust.exposure"):
+        _HeldInTab().get(make_request())
+    messages = [r.getMessage() for r in caplog.records if "_HeldInTab" in r.getMessage()]
+    assert any("{{ panel_name }}" in m for m in messages)

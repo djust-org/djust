@@ -12,7 +12,7 @@ from djust import LiveView
 
 
 class ReusableChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "guarded"
     template = "<div>PERMITTED_CHILD_CONTENT</div>"
@@ -62,15 +62,14 @@ def render(parent, request):
     ).render(Context({"view": parent, "request": request}))
 
 
-@pytest.fixture(autouse=True, params=["legacy", "explicit"])
-def allow_fixture_module(settings, monkeypatch, request):
+@pytest.fixture(autouse=True)
+def allow_fixture_module(settings, monkeypatch):
     settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = ["djust.tests.test_exposure_child_reuse"]
-    if request.param == "explicit":
-        # Only construction is bypassed: actual template, registry and auth run.
-        # Use an explicit root and stable middleware identity for preservation.
-        # No fields persist, so no session data is read or written.
-        monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-        monkeypatch.setattr(LiveView, "exposure_policy", "explicit")
+    # Only construction is bypassed: actual template, registry and auth run.
+    # Use an explicit root and stable middleware identity for preservation.
+    # No fields persist, so no session data is read or written.
+    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
+    monkeypatch.setattr(LiveView, "exposure_policy", "explicit")
 
 
 @pytest.mark.parametrize("reuse", ["registered", "preserved"])

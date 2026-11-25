@@ -11,9 +11,9 @@ requests + is event-scoped — so the agent can ask "what SQL did the
 increment handler just run?" and get a clean answer.
 
 ADR-038 D-d: query parameters are often derived from view state, so they are
-redacted when the capture's owning view is nonlegacy, or when the active
+redacted whenever the capture has an owning view, or when the active
 diagnostic scope is restricted (which covers captures opened without an owner).
-The SQL text, tags and timing are kept. Legacy owners are unchanged.
+The SQL text, tags and timing are kept.
 """
 
 from __future__ import annotations
@@ -52,17 +52,11 @@ def _get_active() -> Optional[Dict[str, Any]]:
 
 
 def _params_allowed(scope: Dict[str, Any]) -> bool:
-    """Raw params only for a legacy (or absent) owner in an unrestricted scope."""
-    from djust._exposure import uses_legacy_exposure
+    """Raw params only with no owning view, in an unrestricted scope."""
     from djust._exposure_diagnostics import diagnostics_allowed
 
-    owner_ref = scope.get("owner")
-    if owner_ref is not None:
-        owner = owner_ref()
-        # A collected owner (a context copy outliving the turn) cannot prove
-        # it is legacy: redact.
-        if owner is None or not uses_legacy_exposure(owner):
-            return False
+    if scope.get("owner") is not None:
+        return False
     return diagnostics_allowed()
 
 
@@ -164,8 +158,8 @@ def capture_for_event(
     Nested scopes are supported — the outermost scope's tags stick until
     it exits. (Most handlers don't nest; the protection is defensive.)
 
-    ``owner`` is the view whose turn this is. A nonlegacy owner has its
-    query parameters redacted (ADR-038 D-d).
+    ``owner`` is the view whose turn this is. Its query parameters are
+    redacted (ADR-038 D-d).
     """
     # Lazy import so djust.observability can be used without Django.
     try:

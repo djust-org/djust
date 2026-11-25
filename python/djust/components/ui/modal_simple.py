@@ -1,65 +1,59 @@
 """
 Modal component for djust.
 
-Simple stateless modal dialog with automatic Rust optimization.
+Simple stateless modal dialog (Bootstrap 5).
+
+One renderer (#4002): ``_render_custom`` returns the markup of ``ModalComponent``, built from
+this class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
 from typing import Any, Optional
+
 from ..base import Component
 
 from django.utils.html import conditional_escape
-from djust.components.utils import attr_text
+from djust.components._alias_deprecation import warn_alias
 
-from djust._rust import RustModal
+from ._twin import plain_text, render_twin
+from .modal import ModalComponent
 
 
 class Modal(Component):
     """
-    Modal dialog component (Bootstrap 5).
-
-    Features:
-    - Automatic Rust optimization (~1μs rendering)
-    - Template fallback if Rust unavailable
-    - Python fallback with f-strings
+    Modal dialog component, drawn by ``ModalComponent``.
 
     Args:
-        title: Modal title text
-        body: Modal body content (HTML allowed)
-        footer: Optional footer content (HTML allowed)
+        title: Modal title text (escaped)
+        body: Modal body content (markup: escaped unless marked safe)
+        footer: Optional footer content (markup: escaped unless marked safe). Without one,
+            ``ModalComponent`` draws its default "Close" button.
         size: Modal size (sm, md, lg, xl)
-        centered: Whether to vertically center the modal
-        dismissable: Whether to show close button in header
-        id: Modal ID for JavaScript control (auto-generated if not provided)
-        show: Whether modal should be shown on page load
+        centered: Deprecated (#4002): ``ModalComponent`` has no centred dialog; ``True`` warns
+            and draws the default dialog.
+        dismissable: Deprecated (#4002): ``ModalComponent`` always draws its close button;
+            ``False`` warns and the button is still drawn.
+        id: Modal ID (``ModalComponent``'s ``component_id``; defaults to ``"modal"``)
+        show: Whether the modal is shown. Hidden (the default), Bootstrap draws it as
+            ``modal fade`` with no backdrop, for ``data-bs-toggle="modal"`` to open; Tailwind
+            and plain draw nothing.
+
+    It is rendered ``standalone``: no view receives the twin's ``dismiss``, so under Bootstrap
+    the close controls are ``data-bs-dismiss="modal"``.
 
     Example:
         >>> modal = Modal(
         ...     title="Confirm Action",
         ...     body="Are you sure you want to continue?",
-        ...     footer='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary">Confirm</button>'
+        ...     footer=mark_safe('<button class="btn btn-primary">Confirm</button>'),
+        ...     id="confirm",
         ... )
         >>> modal.render()
-        '<div class="modal fade">...'
+        '... <div class="modal fade" id="confirm" tabindex="-1" aria-hidden="true"> ...'
     """
 
-    _rust_impl_class = RustModal
-
-    template = """<div class="modal fade{% if show %} show{% endif %}" id="{{ id }}" tabindex="-1" aria-labelledby="{{ id }}Label" aria-hidden="true">
-    <div class="modal-dialog{% if size != "md" %} modal-{{ size }}{% endif %}{% if centered %} modal-dialog-centered{% endif %}">
-        <div class="modal-content">{% if title %}
-            <div class="modal-header">
-                <h5 class="modal-title" id="{{ id }}Label">{{ title }}</h5>{% if dismissable %}
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>{% endif %}
-            </div>{% endif %}
-            <div class="modal-body">
-                {{ body }}
-            </div>{% if footer %}
-            <div class="modal-footer">
-                {{ footer }}
-            </div>{% endif %}
-        </div>
-    </div>
-</div>"""
+    # #3932: parameters the constructor already ``conditional_escape``s (a plain string is
+    # escaped, a marked-safe one is developer markup): printed as given.
+    markup_slots = frozenset({"body", "footer"})
 
     def __init__(
         self,
@@ -72,12 +66,11 @@ class Modal(Component):
         dismissable: bool = True,
         show: bool = False,
     ) -> None:
-        # ``body`` and ``footer`` are markup; the Rust renderer emits them as
-        # given, so they are HTML-escaped here unless they were marked safe.
+        # ``body`` and ``footer`` are markup: HTML-escaped here unless they were marked safe.
         body = conditional_escape(body)
         if footer is not None:
             footer = conditional_escape(footer)
-        # Pass kwargs to parent to create Rust instance
+
         super().__init__(
             body=body,
             id=id,
@@ -89,7 +82,7 @@ class Modal(Component):
             show=show,
         )
 
-        # Set instance attributes for Python/hybrid rendering
+        # Declared for type checkers; the base class already set each from the kwargs.
         self.body = body
         self.title = title
         self.footer = footer
@@ -98,68 +91,38 @@ class Modal(Component):
         self.dismissable = dismissable
         self.show = show
 
-    def get_context_data(self) -> dict[str, Any]:
-        """Return context for template rendering."""
-        return {
-            "body": self.body,
-            "title": self.title,
-            "footer": self.footer,
-            "size": self.size,
-            "centered": self.centered,
-            "dismissable": self.dismissable,
-            "id": self.id,
-            "show": self.show,
-        }
+        self._warn_unmapped()
+
+    def _warn_unmapped(self) -> None:
+        """Warn for an argument value the twin has no equivalent for (#4002).
+
+        ``stacklevel=5`` points at the caller of ``__init__`` / ``update``.
+        """
+        if self.centered:
+            warn_alias(
+                "Modal", "centered", "the default dialog (it draws no centred one)", stacklevel=5
+            )
+        if not self.dismissable:
+            warn_alias(
+                "Modal", "dismissable", "the close button (it is always drawn)", stacklevel=5
+            )
+
+    def update(self, **kwargs: Any) -> Component:
+        """Update the properties, warning again for an argument the twin cannot draw."""
+        super().update(**kwargs)
+        self._warn_unmapped()
+        return self
 
     def _render_custom(self) -> str:
-        """Pure Python fallback (f-string rendering)."""
-        # Build modal classes
-        modal_classes = ["modal", "fade"]
-        if self.show:
-            modal_classes.append("show")
-
-        # Build dialog classes
-        dialog_classes = ["modal-dialog"]
-        if self.size != "md":
-            dialog_classes.append(f"modal-{attr_text(self.size)}")
-        if self.centered:
-            dialog_classes.append("modal-dialog-centered")
-
-        parts = [
-            f'<div class="{" ".join(modal_classes)}" id="{attr_text(self.id)}" tabindex="-1" aria-labelledby="{attr_text(self.id)}Label" aria-hidden="true">',
-            f'    <div class="{" ".join(dialog_classes)}">',
-            '        <div class="modal-content">',
-        ]
-
-        # Add header if title exists
-        if self.title:
-            parts.append('            <div class="modal-header">')
-            parts.append(
-                f'                <h5 class="modal-title" id="{attr_text(self.id)}Label">{conditional_escape(self.title)}</h5>'
-            )
-            if self.dismissable:
-                parts.append(
-                    '                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>'
-                )
-            parts.append("            </div>")
-
-        # Body
-        parts.append('            <div class="modal-body">')
-        parts.append(f"                {conditional_escape(self.body)}")
-        parts.append("            </div>")
-
-        # Add footer if exists
-        if self.footer:
-            parts.append('            <div class="modal-footer">')
-            parts.append(f"                {conditional_escape(self.footer)}")
-            parts.append("            </div>")
-
-        parts.extend(
-            [
-                "        </div>",
-                "    </div>",
-                "</div>",
-            ]
+        return render_twin(
+            ModalComponent,
+            self.id,
+            title=plain_text(self.title),
+            # Escaped again here, not only in ``__init__``: ``update(body=...)`` or an attribute
+            # write puts a plain string back (a marked-safe one passes unchanged).
+            body=conditional_escape(self.body),
+            footer=conditional_escape(self.footer) if self.footer else "",
+            size=self.size,
+            show=bool(self.show),
+            standalone=True,
         )
-
-        return "\n".join(parts)

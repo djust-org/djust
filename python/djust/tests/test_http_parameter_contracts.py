@@ -2,7 +2,7 @@
 
 The initial page carries its root mount's contracts outside dj-root; HTTP
 fallback render responses carry the rendered tree's snapshot, with explicit
-clears for a client whose scope is strict. All-legacy pages are unchanged.
+clears for a client whose scope is strict.
 """
 
 import json
@@ -13,6 +13,7 @@ import pytest
 from djust import LiveView
 from djust.decorators import event_handler
 from djust import state
+from djust._parameter_metadata import expand_parameter_manifest
 
 BLOCK = re.compile(
     r'<script type="application/json" data-djust-parameter-contracts>(.*?)</script>', re.S
@@ -33,18 +34,6 @@ class StrictPage(LiveView):
 
     @event_handler(parameter_policy="strict")
     def quiet(self):
-        self._skip_render = True
-
-
-class LegacyPage(StrictPage):
-    template = "<div dj-root><span>{{ n }}</span></div>"
-
-    @event_handler(parameter_policy="legacy")
-    def choose(self, value=5, **kwargs):
-        self.n = int(value)
-
-    @event_handler(parameter_policy="legacy")
-    def quiet(self, **kwargs):
         self._skip_render = True
 
 
@@ -90,7 +79,7 @@ def test_initial_page_carries_root_contracts_outside_the_live_root():
     assert len(blocks) == 1
     payload = json.loads(blocks[0])
     assert payload["view"] == _path(StrictPage)
-    root = payload["contracts"]["owners"][0]
+    root = expand_parameter_manifest(payload["contracts"])[0]
     assert (root["view_id"], root["component_id"]) == (None, None)
     assert root["handlers"]["choose"]["policy"] == "strict"
     # Server defaults never reach the page; the block is not VDOM content.
@@ -98,12 +87,6 @@ def test_initial_page_carries_root_contracts_outside_the_live_root():
     root_start = html.index("<div dj-root")
     root_end = html.index("</div>", root_start)
     assert html.index("data-djust-parameter-contracts") > root_end
-
-
-@pytest.mark.django_db
-def test_all_legacy_page_is_unchanged():
-    _, html = _get(LegacyPage)
-    assert "djust-parameter-contracts" not in html
 
 
 @pytest.mark.django_db
@@ -128,21 +111,10 @@ def test_http_render_responses_carry_the_rendered_snapshot(event, params):
     status, body = _post(StrictPage, request, event, params)
     assert status == 200, body
     assert body["parameter_contract_view"] == _path(StrictPage)
-    assert body["parameter_contracts"]["owners"][0]["handlers"]["choose"]["policy"] == "strict"
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("event,params", [("choose", {"value": "7"}), ("quiet", {})])
-@pytest.mark.parametrize("header", [False, True])
-def test_legacy_responses_omit_contracts_unless_the_client_scope_is_strict(event, params, header):
-    request, _ = _get(LegacyPage)
-    status, body = _post(LegacyPage, request, event, params, header=header)
-    assert status == 200, body
-    if header:
-        assert body["parameter_contracts"] is None
-        assert body["parameter_contract_view"] == _path(LegacyPage)
-    else:
-        assert "parameter_contracts" not in body and "parameter_contract_view" not in body
+    assert (
+        expand_parameter_manifest(body["parameter_contracts"])[0]["handlers"]["choose"]["policy"]
+        == "strict"
+    )
 
 
 @pytest.mark.django_db

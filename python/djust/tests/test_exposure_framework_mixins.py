@@ -1,14 +1,13 @@
 """ADR-038 Step R, PR 0c: the mixins djust ships render under explicit exposure.
 
-Each of these mixins publishes public attributes that the legacy attribute
-walk turned into template context. An explicit view renders nothing it is not
+Each of these mixins publishes public attributes that the removed legacy
+attribute walk turned into template context. An explicit view renders nothing it is not
 given, so before this change a template that read ``{{ online_count }}``,
 ``{{ table_page }}`` or ``{{ tutorial_running }}`` silently rendered empty.
 
 Every test mounts a real view through ``ViewRuntime``, reads the mixin's names
 out of the mount frame, and fires one of the mixin's (or the view's) events
-through ``dispatch_event``. Each has a legacy control, so the two policies are
-shown to render the same text.
+through ``dispatch_event``. Each asserts the text the mixin's names render.
 """
 
 import pytest
@@ -32,7 +31,7 @@ from djust.tutorials import TutorialMixin, TutorialStep
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
 MODULE = __name__
-POLICIES = ["legacy", "explicit"]
+POLICIES = ["explicit"]
 
 
 async def _mount(view_class):
@@ -396,17 +395,14 @@ async def test_an_unrenderable_formset_key_does_not_stop_the_view(monkeypatch, c
         runtime, transport = await _mount(AwkwardFormSetView)
     html = _mount_html(transport)
     # The view mounts and the usable formset renders; the others do not, as on
-    # a legacy view (an underscore name is never template context).
+    # the removed walk (an underscore name is never template context).
     assert ">rows=0</i>" in html, html
     context = await sync_to_async(runtime.view_instance.get_context_data)()
     assert "_rows" not in context
     reported = [r.getMessage() for r in caplog.records if "formset_classes" in r.getMessage()]
-    if policy == "explicit":
-        assert set(provider_owners(AwkwardFormSetView)) >= {"addresses"}
-        assert provider_owners(AwkwardFormSetView).get("streams") == "djust.streams"
-        assert len(reported) == 1 and "'_rows'" in reported[0] and "'streams'" in reported[0]
-    else:
-        assert reported == []
+    assert set(provider_owners(AwkwardFormSetView)) >= {"addresses"}
+    assert provider_owners(AwkwardFormSetView).get("streams") == "djust.streams"
+    assert len(reported) == 1 and "'_rows'" in reported[0] and "'streams'" in reported[0]
 
 
 class Formatter:
@@ -440,6 +436,4 @@ def test_an_explicit_view_must_list_the_providing_mixin_first():
     for mixin in (DataTableMixin, FormSetHelpersMixin):
         with pytest.raises(TypeError, match="Put the mixin first"):
             type("Wrong", (LiveView, mixin), {"exposure_policy": "explicit", "__module__": MODULE})
-        # A legacy view keeps working in either order: its walk renders the names.
-        type("LegacyOrder", (LiveView, mixin), {"exposure_policy": "legacy", "__module__": MODULE})
         type("RightOrder", (mixin, LiveView), {"exposure_policy": "explicit", "__module__": MODULE})

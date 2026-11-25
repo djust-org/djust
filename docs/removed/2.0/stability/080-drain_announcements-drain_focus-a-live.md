@@ -35,7 +35,7 @@ class OrderView(LiveView):
 # After: render the message into <p role="status" aria-live="polite">{{ status }}</p>
 class OrderView(LiveView):
     @event_handler()
-    def save(self, **kwargs):
+    def save(self):
         self.status = "Order saved"
         self.push_commands(JS.focus("#order-summary"))
 ```

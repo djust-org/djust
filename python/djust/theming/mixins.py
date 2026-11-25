@@ -42,8 +42,8 @@ from .presets import THEME_PRESETS
 _RENDERED_THEME_NAMES = ("theme_head", "theme_css", "theme_switcher", "theme_presets")
 
 #: The three small values ``_setup_theme_context`` assigns as view attributes.
-#: The legacy attribute walk renders them; a view with explicit exposure gets
-#: them from :meth:`ThemeMixin._apply_context_processors` (ADR-038 Step R, PR 0c).
+#: A view gets them from :meth:`ThemeMixin._apply_context_processors`
+#: (ADR-038 Step R, PR 0c).
 _THEME_STATE_NAMES = ("theme_preset", "theme_mode", "theme_resolved_mode")
 
 

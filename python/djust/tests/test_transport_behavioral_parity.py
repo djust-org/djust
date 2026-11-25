@@ -8,7 +8,7 @@ the ViewRuntime convergence (ADR-022) found the runtime had already DRIFTED from
 WS on exactly that axis:
 
 * ``ViewRuntime.dispatch_mount`` did NOT run the post-mount object-permission
-  check the WS ``handle_mount`` runs (a latent IDOR — not live yet because nothing
+  check the WS ``_mount_page`` runs (a latent IDOR — not live yet because nothing
   mounts through the runtime, but it would go live the instant Iter 1 routes SSE
   through the runtime). Fixed in Iter 0 (``runtime.py`` dispatch_mount now routes
   through the shared ``enforce_object_permission`` chokepoint).
@@ -428,7 +428,7 @@ class TestWireVersionParity:
 # --------------------------------------------------------------------------- #
 # Net 4 — enumerate the KNOWN WS-only mount/event behaviors (ADR-022).
 #
-# These behaviors live ONLY on the WS handler path today (handle_mount /
+# These behaviors live ONLY on the WS handler path today (_mount_page /
 # handle_event / receive in websocket.py) and are NOT yet on the runtime —
 # Iters 1-3 of ADR-022 will migrate the runtime onto real transports and grow
 # the transport-agnostic hooks for these. The pin makes the WS↔runtime delta
@@ -463,18 +463,18 @@ _WS_ONLY_MARKERS = {
     # ``marker not in rt_src`` assertion trips → update this pin deliberately AND
     # note the move in ADR-022. This keeps the mount-side WS↔runtime delta VISIBLE
     # as the mount convergence proceeds.
-    # ``_find_sticky_slot_ids`` and ``register_view``
+    # ``register_view``
     # gained DORMANT ``WSConsumerTransport`` mount-hook impls in ADR-022 Iter 3
     # Phase 3.2 (#1915):
     # ``on_mount_render_ready`` (Finding B sticky preservation), and
     # ``on_view_instantiated`` (Finding B back-refs) now reference these symbols in
     # runtime.py. The hooks are DORMANT — ``dispatch_mount`` does NOT call them yet
-    # (3.3a wires them) and the WS bespoke ``handle_mount`` still does the work
+    # (3.3a wires them) and the WS bespoke ``_mount_page`` still does the work
     # inline (untouched until 3.3b) — so these are no longer WS-ONLY symbols and are
     # removed from this enumeration (mirrors the Phase-3.1 ``state_snapshot_signed``
     # move). The DORMANT contract + the WS-impl behavior are pinned by
     # test_transport_mount_hooks_1915.py (dispatch_mount-doesn't-call pins +
-    # handle_mount-still-inline pins + MockTransport / real-WebsocketCommunicator
+    # _mount_page-still-inline pins + MockTransport / real-WebsocketCommunicator
     # hook tests). The remaining WS-only mount mechanisms stay pinned below.
     #
     # ``state_snapshot_signed`` lives in ViewRuntime.dispatch_mount (ADR-022
@@ -995,7 +995,10 @@ class TestEventSpineEnumeration:
         from djust.runtime import ViewRuntime
 
         src = inspect.getsource(ViewRuntime._render_and_send)
-        assert "if force_html:" in src, "force_html patch-discard missing from _render_and_send"
+        assert "if force_html is True:" in src, (
+            "force_html patch-discard missing from _render_and_send (only an explicit "
+            "True discards the diff; set_changed_keys RENDER_REQUESTED keeps it, #4286)"
+        )
         assert "patches = None" in src, "force_html must discard patches"
         # ref echoed on all three frame branches (patch / compression / no-diff).
         assert src.count('msg["ref"] = event_ref') == 3, (
@@ -1011,7 +1014,7 @@ class TestEventSpineEnumeration:
 # --------------------------------------------------------------------------- #
 # Net 7 — MOUNT-spine parity grows (ADR-022 Iter 3 Phase 3.0, #1911).
 #
-# Phase 3.0 GROWS ``ViewRuntime.dispatch_mount`` toward the WS ``handle_mount``
+# Phase 3.0 GROWS ``ViewRuntime.dispatch_mount`` toward the WS ``_mount_page``
 # by adding the transport-agnostic shared MOUNT behaviors the runtime lacked:
 #
 #   1. ``_djust_mount_request`` / ``_djust_mount_kwargs`` stash (#1895).

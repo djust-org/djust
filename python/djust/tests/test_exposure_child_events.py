@@ -381,6 +381,7 @@ async def test_child_save_timeout_is_withheld_and_lands_late(monkeypatch):
     runtime, transport, request = await mount()
     # The conftest raises the save bound for exposure tests (#3130). The save
     # below blocks until released, so a short bound always fires first.
+    raised_bound = runtime_module.EVENT_STATE_SAVE_TIMEOUT_S
     monkeypatch.setattr(runtime_module, "EVENT_STATE_SAVE_TIMEOUT_S", 0.05)
     release = threading.Event()
     saved = []
@@ -414,5 +415,7 @@ async def test_child_save_timeout_is_withheld_and_lands_late(monkeypatch):
         f.get("type") == "html_update" and f.get("source") == "async" for f in transport.sent
     ), "the catch-up turn must send full HTML"
     monkeypatch.setattr(SessionStore, "save", original)
+    # The restoring mount saves too; on a loaded runner 50 ms is too short for it.
+    monkeypatch.setattr(runtime_module, "EVENT_STATE_SAVE_TIMEOUT_S", raised_bound)
     restored, _, _ = await mount(request.session.session_key)
     assert restored.view_instance._get_child_view("menu").count == 2

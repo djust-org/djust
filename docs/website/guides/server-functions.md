@@ -38,7 +38,7 @@ class ProductView(LiveView):
     api_name = "catalog.product"
 
     @server_function
-    def search(self, q: str = "", **kwargs) -> list[dict]:
+    def search(self, q: str = "") -> list[dict]:
         hits = Product.objects.filter(name__icontains=q)[:10]
         return [{"id": p.id, "name": p.name, "price": str(p.price)} for p in hits]
 ```
@@ -81,7 +81,7 @@ never touches the input's element.
 from djust.decorators import server_function
 
 @server_function
-def my_fn(self, arg1: int = 0, **kwargs) -> dict:
+def my_fn(self, arg1: int = 0) -> dict:
     ...
 ```
 
@@ -171,7 +171,7 @@ which echoes `expected` / `provided` / `type_errors`).
 | `not_a_server_function`  | 404    | Method exists but wasn't decorated with `@server_function`            |
 | `login_required`         | 401    | The view requires login (`login_required` / view `permission_required`) and the user is anonymous |
 | `csrf_failed`            | 403    | Django CSRF middleware rejected the request                           |
-| `permission_denied`      | 403    | View-level `permission_required` denied for a signed-in user, handler-level `@permission_required` denied, OR `PermissionDenied` raised in `mount()` or inside the function |
+| `permission_denied`      | 403    | View-level `permission_required` denied for a signed-in user, handler-level `@permission_required` denied, OR `PermissionDenied` raised in `mount()` or inside the function. The message is always "Permission denied" (the exception's text is logged, not leaked) |
 | `invalid_json`           | 400    | Body isn't valid UTF-8 JSON or isn't a top-level object               |
 | `invalid_body`           | 400    | Body is valid JSON but doesn't match the `{"params": {...}}` shape   |
 | `invalid_params`         | 400    | Missing required params, extra params, or type-coercion failed       |
@@ -213,7 +213,7 @@ class InboxView(LiveView):
     # or: permission_required = "inbox.view_message"
 
     @server_function
-    def unread_count(self, **kwargs) -> int:
+    def unread_count(self) -> int:
         return Message.objects.filter(to=self.request.user, read=False).count()
 ```
 

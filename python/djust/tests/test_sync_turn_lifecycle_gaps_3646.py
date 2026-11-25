@@ -30,7 +30,6 @@ import uuid
 from typing import Dict, List, Optional, Tuple
 
 import pytest
-from django.core.exceptions import PermissionDenied
 from asgiref.sync import sync_to_async
 from django.contrib.auth import get_user
 from django.contrib.auth.models import AnonymousUser
@@ -93,9 +92,9 @@ def seen(label: str) -> List[Tuple[Optional[str], int]]:
 
 
 class Kid(LiveView):
-    """A legacy embedded child with an unregister hook."""
+    """An embedded child with only an unregister hook."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div><span>kid</span></div>"
 
     def mount(self, request, **kwargs):
@@ -125,7 +124,7 @@ class ExplicitKid(LiveView):
 
 
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.Page">'
@@ -138,9 +137,6 @@ class Page(LiveView):
     def mount(self, request, **kwargs):
         pass
 
-    def get_context_data(self, **kwargs):
-        return {"view": self}
-
     def _cleanup_uploads(self):
         note("page_cleanup_uploads")
 
@@ -148,7 +144,7 @@ class Page(LiveView):
 class StickyKid(LiveView):
     """A sticky child: kept across a ``live_redirect`` unless its auth now fails."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "dock"
     template = "<div><span>dock</span></div>"
@@ -164,7 +160,7 @@ class StickyKid(LiveView):
 
 
 class StickyPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.StickyPage">'
@@ -176,14 +172,11 @@ class StickyPage(LiveView):
     def mount(self, request, **kwargs):
         pass
 
-    def get_context_data(self, **kwargs):
-        return {"view": self}
-
 
 class Beta(LiveView):
     """A destination with no slot for the sticky child."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Beta"><h1>beta</h1></div>'
 
     def mount(self, request, **kwargs):
@@ -193,7 +186,7 @@ class Beta(LiveView):
 class PushPage(LiveView):
     """A page with a server-push handler and a signed-snapshot opt-in."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.PushPage"><h1>push</h1></div>'
 
     def mount(self, request, **kwargs):
@@ -205,7 +198,7 @@ class PushPage(LiveView):
 
 
 class Dest(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '.Dest"><h1>dest</h1></div>'
 
     def mount(self, request, **kwargs):
@@ -240,7 +233,11 @@ def setup(monkeypatch):
     _sse_sessions.clear()
     djust_config.set("sync_turn_wrapper", recording_wrapper)
     with override_settings(
-        ROOT_URLCONF=__name__, LIVEVIEW_ALLOWED_MODULES=["djust", __name__], DEBUG=False
+        ROOT_URLCONF=__name__,
+        LIVEVIEW_ALLOWED_MODULES=["djust", __name__],
+        DEBUG=False,
+        # An explicit view's failure is logged without detail unless asked for.
+        LIVEVIEW_CONFIG={"log_exception_detail": True},
     ):
         yield
     djust_config.set("sync_turn_wrapper", previous)
@@ -302,14 +299,19 @@ async def _post(session, key, body):
     assert response.status_code == 200
 
 
-def _all_ran_in_a_lifecycle_step_off_the_loop(loop_thread):
-    for hook in (
-        "cleanup_on_unregister",
-        "explicit_cleanup_on_unregister",
-        "on_sticky_unmount",
-        "cleanup_uploads",
-        "page_cleanup_uploads",
-    ):
+#: What leaving a page for another runs: every teardown hook, including each child's
+#: ``_cleanup_on_unregister`` (as for a 1.3 child), once per disposed view.
+NAVIGATION_HOOKS = {
+    "on_sticky_unmount",
+    "cleanup_uploads",
+    "page_cleanup_uploads",
+    "cleanup_on_unregister",
+    "explicit_cleanup_on_unregister",
+}
+
+
+def _all_ran_in_a_lifecycle_step_off_the_loop(loop_thread, hooks=HOOKS):
+    for hook in hooks:
         found = seen(hook)
         assert found, (hook, SEEN)
         for step, thread in found:
@@ -367,11 +369,11 @@ async def test_an_sse_navigation_runs_the_teardown_hooks_inside_a_lifecycle_step
     del SEEN[:]
     try:
         await _post(session, key, {"type": "live_redirect_mount", "url": "/dest/", "params": {}})
-        await _until(lambda: HOOKS <= set(labels()), "the teardown hooks")
+        await _until(lambda: NAVIGATION_HOOKS <= set(labels()), "the teardown hooks")
     finally:
         await stream.aclose()
 
-    _all_ran_in_a_lifecycle_step_off_the_loop(loop_thread)
+    _all_ran_in_a_lifecycle_step_off_the_loop(loop_thread, NAVIGATION_HOOKS)
 
 
 async def test_an_sse_response_close_still_tears_down_when_the_wrapper_cannot_open_its_scope(
@@ -582,83 +584,10 @@ async def test_a_sticky_child_its_auth_now_denies_is_discarded_inside_a_lifecycl
 
     for hook in ("sticky_on_sticky_unmount", "sticky_cleanup_on_unregister"):
         found = seen(hook)
-        if hook == "sticky_cleanup_on_unregister" and not found:
-            continue  # a navigation discard runs only _on_sticky_unmount
         assert found, (hook, SEEN)
         for step, thread in found:
             assert step == "lifecycle", (hook, step, SEEN)
             assert thread != loop_thread, (hook, "ran on the event loop", SEEN)
-
-
-# --------------------------------------------------------------------------- #
-# _restore_private_state: the model re-fetch and the setters are a lifecycle step
-# --------------------------------------------------------------------------- #
-
-
-class Restorable(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><span>r</span></div>"
-
-    @property
-    def _gadget(self):
-        return self.__dict__.get("_gadget_value")
-
-    @_gadget.setter
-    def _gadget(self, value):
-        note("private_setter")
-        self.__dict__["_gadget_value"] = value
-
-
-def _restorable():
-    view = Restorable()
-    view._framework_attrs = frozenset()
-    view._user_private_keys = set()
-    return view
-
-
-async def test_the_private_state_restore_runs_its_setters_inside_a_lifecycle_step():
-    view = _restorable()
-    await sync_to_async(view._restore_private_state)({"_gadget": 7})
-
-    assert view._gadget == 7
-    assert seen("private_setter") == [("lifecycle", seen("private_setter")[0][1])]
-    assert [step for step, _thread in ENTERED] == ["lifecycle"]
-
-
-async def test_the_private_model_re_fetch_runs_inside_a_lifecycle_step():
-    """``decode_private_model_refs`` reads the row: under row-level security that read
-    needs the wrapper's scope, or the attribute comes back ``None``."""
-    from django.contrib.auth import get_user_model
-    from django.db.models.signals import post_init
-
-    User = get_user_model()
-    user = await sync_to_async(User.objects.create)(username="restore-" + uuid.uuid4().hex[:6])
-
-    def loaded(sender, **kwargs):
-        note("model_loaded")
-
-    post_init.connect(loaded, sender=User, weak=False)
-    try:
-        view = _restorable()
-        from djust.serialization import _PRIVATE_MODEL_REF_KEY
-
-        ref = {_PRIVATE_MODEL_REF_KEY: User._meta.label, "pk": user.pk}
-        del SEEN[:]
-        await sync_to_async(view._restore_private_state)({"_gadget": ref})
-    finally:
-        post_init.disconnect(loaded, sender=User)
-
-    assert view._gadget is not None and view._gadget.pk == user.pk
-    assert [step for step, _thread in seen("model_loaded")] == ["lifecycle"], SEEN
-
-
-async def test_the_private_state_restore_does_not_enter_the_wrapper_again_inside_a_step():
-    from djust.sync_turn import run_sync_step
-
-    view = _restorable()
-    await sync_to_async(run_sync_step)(view, "mount", view._restore_private_state, {"_gadget": 1})
-
-    assert [step for step, _thread in ENTERED] == ["mount"]
 
 
 # --------------------------------------------------------------------------- #
@@ -724,54 +653,6 @@ async def test_a_server_push_handler_runs_inside_the_wrapper_in_both_turn_shapes
 # --------------------------------------------------------------------------- #
 
 
-class LazyKid(LiveView):
-    exposure_policy = "legacy"
-    template = "<div><p>lazy {{ value }}</p></div>"
-
-    def mount(self, request, **kwargs):
-        note("lazy_mount")
-        self.value = "kid"
-
-    def get_context_data(self, **kwargs):
-        note("lazy_context")
-        return {"value": self.value}
-
-
-class LazyPage(LiveView):
-    exposure_policy = "legacy"
-    template = (
-        "{% load live_tags %}"
-        "<html><body><div dj-root>"
-        '{% live_render "' + MOD + '.LazyKid" lazy=True %}'
-        "</div></body></html>"
-    )
-
-    def mount(self, request, **kwargs):
-        pass
-
-
-async def test_a_lazy_childs_mount_and_context_run_inside_the_wrapper():
-    """``_render_eager`` called the child's ``mount`` and ``get_context_data`` raw on a
-    worker thread (#3646): the fill of a lazy slot ran them with no scope."""
-    from django.contrib.sessions.middleware import SessionMiddleware
-
-    def render_page():
-        request = RequestFactory().get("/")
-        request.user = AnonymousUser()
-        SessionMiddleware(lambda r: None).process_request(request)
-        request.session.save()
-        view = LazyPage()
-        view.streaming_render = False
-        with override_settings(DJUST_LIVE_RENDER_ALLOWED_MODULES=[MOD]):
-            return view.get(request).content.decode("utf-8")
-
-    html = await sync_to_async(render_page)()
-
-    assert "lazy kid" in html, html
-    assert [step for step, _thread in seen("lazy_mount")] == ["mount"], SEEN
-    assert {step for step, _thread in seen("lazy_context")} == {"render"}, SEEN
-
-
 class ExplicitLazyKid(LiveView):
     exposure_policy = "explicit"
     template = "<div><p>lazy {{ value }}</p></div>"
@@ -799,7 +680,7 @@ class ExplicitLazyPage(LiveView):
 
 
 async def test_an_explicit_lazy_childs_mount_and_context_run_inside_the_wrapper():
-    """The explicit fill (#4154) enters the same steps as the legacy one."""
+    """The fill of an explicit lazy slot (#4154) enters the mount and render steps."""
     from django.contrib.sessions.middleware import SessionMiddleware
 
     def render_page():
@@ -826,7 +707,7 @@ async def test_an_explicit_lazy_childs_mount_and_context_run_inside_the_wrapper(
 
 
 class SequencePage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>{{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -889,24 +770,32 @@ def _entered_by(view_class, *requests_):
 
 
 def test_the_guides_entries_per_request_for_a_page_get():
-    # One ``render`` step: the GET evaluates ``get_context_data()`` once and the
-    # render that follows reads that context instead of entering a second step
-    # (#3725). A page GET used to enter ``render`` twice.
-    assert _entered_by(SequencePage, _page_request("GET")) == [
-        "auth",
-        "mount",
-        "handle_params",
-        "auth",
-        "render",
-    ]
-    assert _entered_by(SequencePageWithOnMount, _page_request("GET")) == [
-        "auth",
-        "lifecycle",
-        "mount",
-        "handle_params",
-        "auth",
-        "render",
-    ]
+    # The GET evaluates ``get_context_data()`` once (#3725): its own ``render``
+    # entry. The page render and the diff-baseline render that follow read that
+    # context, and each is a ``render`` entry of its own since #4276, because the
+    # template engine's model walks are queries the wrapper has to scope.
+    renders = ["render", "render", "render"]
+    assert (
+        _entered_by(SequencePage, _page_request("GET"))
+        == [
+            "auth",
+            "mount",
+            "handle_params",
+            "auth",
+        ]
+        + renders
+    )
+    assert (
+        _entered_by(SequencePageWithOnMount, _page_request("GET"))
+        == [
+            "auth",
+            "lifecycle",
+            "mount",
+            "handle_params",
+            "auth",
+        ]
+        + renders
+    )
 
 
 def test_the_guides_entries_per_request_for_a_post_event():
@@ -920,137 +809,3 @@ def test_the_guides_entries_per_request_for_a_post_event():
     SequencePage.as_view()(first)
     after_get = _entered_by(SequencePage, _page_request("POST", session=first.session))
     assert after_get == fresh
-
-
-# --------------------------------------------------------------------------- #
-# _restore_private_state is a GUARDED step (#3646 review): a swallowing wrapper must not
-# turn a failing restore into a silent partial one
-# --------------------------------------------------------------------------- #
-
-
-class Exploding(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><span>x</span></div>"
-    applied: list = []
-
-    @property
-    def _gadget(self):
-        return self.__dict__.get("_gadget_value")
-
-    @_gadget.setter
-    def _gadget(self, value):
-        if value == "boom":
-            raise ValueError("a private setter failed")
-        self.__dict__["_gadget_value"] = value
-
-
-def _exploding():
-    view = Exploding()
-    view._framework_attrs = frozenset()
-    view._user_private_keys = set()
-    return view
-
-
-_PRIVATE = {"_a_first": 1, "_gadget": "boom", "_z_last": 3}
-
-
-def test_without_a_wrapper_a_failing_private_restore_raises_after_the_first_key():
-    djust_config.set("sync_turn_wrapper", None)
-    view = _exploding()
-
-    with pytest.raises(ValueError, match="private setter"):
-        view._restore_private_state(dict(_PRIVATE))
-
-    assert view.__dict__.get("_a_first") == 1
-    assert "_z_last" not in view.__dict__
-
-
-def test_a_swallowing_wrapper_cannot_turn_a_failing_private_restore_into_a_partial_one():
-    MODE["lifecycle"] = "swallow"
-    view = _exploding()
-
-    with pytest.raises(PermissionDenied):
-        view._restore_private_state(dict(_PRIVATE))
-
-    # The restore did not "succeed": it raised, as it does with no wrapper at all.
-    assert "_z_last" not in view.__dict__
-    assert [step for step, _thread in ENTERED] == ["lifecycle"]
-
-
-def test_a_wrapper_that_raises_refuses_the_private_restore():
-    MODE["lifecycle"] = "raise"
-    view = _exploding()
-
-    with pytest.raises(RuntimeError, match="cannot open its scope"):
-        view._restore_private_state({"_a_first": 1})
-
-    assert "_a_first" not in view.__dict__
-
-
-def test_an_allowing_wrapper_restores_every_private_key():
-    view = _exploding()
-
-    view._restore_private_state({"_a_first": 1, "_gadget": "fine", "_z_last": 3})
-
-    assert (view.__dict__["_a_first"], view._gadget, view.__dict__["_z_last"]) == (1, "fine", 3)
-
-
-class SwallowedRestorePage(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root><span>{{ n }}</span></div>"
-    armed = False
-
-    def mount(self, request, **kwargs):
-        self._a_first = 1
-        self._boom = 1
-        self._z_last = 3
-        self.n = 0
-
-    def __setattr__(self, name, value):
-        if name == "_boom" and type(self).armed:
-            raise ValueError("a private setter failed")
-        super().__setattr__(name, value)
-
-    def get_context_data(self, **kwargs):
-        return {"n": self.n}
-
-    @event_handler()
-    def bump(self, **kwargs):
-        self.n += 1
-
-
-@pytest.mark.parametrize("mode", [None, "swallow"])
-def test_an_http_post_with_a_failing_private_restore_fails_the_same_way_with_a_swallowing_wrapper(
-    mode,
-):
-    """The HTTP POST restore calls ``_restore_private_state``; whatever it does with no
-    wrapper (an error answer), it must do with a wrapper that swallows."""
-    first = _page_request("GET", view_path="swallowed")
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[MOD]):
-        SwallowedRestorePage.armed = False
-        SwallowedRestorePage.as_view()(first)
-        SwallowedRestorePage.armed = True
-        if mode:
-            MODE["lifecycle"] = mode
-        try:
-            response = SwallowedRestorePage.as_view()(
-                _page_request("POST", session=first.session, view_path="swallowed")
-            )
-        finally:
-            SwallowedRestorePage.armed = False
-
-    assert response.status_code >= 400, response.status_code
-
-
-def test_the_http_post_restore_page_works_when_nothing_fails():
-    """The control for the test above: the same page restores cleanly when the private
-    setter does not raise, so an error answer there is the restore's failure."""
-    first = _page_request("GET", view_path="swallowed")
-    with override_settings(LIVEVIEW_ALLOWED_MODULES=[MOD]):
-        SwallowedRestorePage.armed = False
-        SwallowedRestorePage.as_view()(first)
-        response = SwallowedRestorePage.as_view()(
-            _page_request("POST", session=first.session, view_path="swallowed")
-        )
-
-    assert response.status_code == 200, response.content[:200]

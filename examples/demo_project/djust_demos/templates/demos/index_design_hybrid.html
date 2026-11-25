@@ -858,7 +858,7 @@
                     <div class="hero-stat-label">Faster Rendering</div>
                 </div>
                 <div class="hero-stat">
-                    <div class="hero-stat-value">~87 KB gz</div>
+                    <div class="hero-stat-value">~90 KB gz</div>
                     <div class="hero-stat-label">Bundle Size</div>
                 </div>
                 <div class="hero-stat">
@@ -1013,7 +1013,7 @@
                         {% if dropdown_open %}
                         <div class="dropdown-menu">
                             {% for item in dropdown_items %}
-                            <div dj-click="select_item" data-item="{{ item }}" class="dropdown-item">
+                            <div dj-click="select_item" dj-value-item="{{ item }}" class="dropdown-item">
                                 {{ item }}
                             </div>
                             {% endfor %}

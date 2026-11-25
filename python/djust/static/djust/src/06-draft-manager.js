@@ -1,29 +1,10 @@
 
 // DraftManager for localStorage-based draft saving
 
-// Drafts saved before #3978 flattened a radio group to the LAST radio's value
-// (checked or not) and a checkbox group to one box's boolean, so those entries
-// do not say what was chosen. A draft without this format number drops them on
-// load; its other fields still restore.
+// Drafts saved before #3978 flattened a radio group to the LAST radio's value and a
+// checkbox group to one box's boolean, so they do not say what was chosen. A draft
+// without this format number is discarded on load (#4207).
 const DRAFT_FORMAT = 2;
-
-function _withoutLegacyGroups(data) {
-    if (!data || typeof data !== 'object') return data;
-    const kept = {};
-    const boxes = new Map();
-    const radios = new Set();
-    document.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(f => {
-        if (!f.name) return;
-        if (f.type === 'radio') radios.add(f.name);
-        else boxes.set(f.name, (boxes.get(f.name) || 0) + 1);
-    });
-    Object.keys(data).forEach(name => {
-        if (UNSAFE_KEYS.includes(name) || radios.has(name) || boxes.get(name) > 1) return;
-        // eslint-disable-next-line security/detect-object-injection
-        kept[name] = data[name];
-    });
-    return kept;
-}
 
 class DraftManager {
     constructor() {
@@ -77,7 +58,10 @@ class DraftManager {
                 djLog(`[DraftMode] Loaded draft: ${draftKey} (${age}s old)`, draftData.data);
             }
 
-            if (draftData.format !== DRAFT_FORMAT) return _withoutLegacyGroups(draftData.data);
+            if (draftData.format !== DRAFT_FORMAT) {
+                localStorage.removeItem(`djust_draft_${draftKey}`);
+                return null;
+            }
             return draftData.data;
         } catch (error) {
             console.error(`[DraftMode] Failed to load draft ${draftKey}:`, error);
@@ -226,11 +210,14 @@ function _installDraftListeners() {
  * counts as restored, so a saved value cannot land on it later). `atInit`
  * restores every field, as the page-load restore always did.
  */
-function syncDraftFields(atInit) {
-    if (!document.querySelector('[data-draft-enabled]')) return;
+function syncDraftFields(atInit, changes) {
+    // #4001: after a patch, only the fields it inserted or re-attributed (a
+    // rename makes a new field); a field it left alone was synced before.
+    const fields = changes ? _scanSet('[data-draft="true"]', changes) : null;
+    if (fields ? fields.length === 0 : !document.querySelector('[data-draft-enabled]')) return;
     _installDraftListeners();
     const savedByKey = new Map();
-    document.querySelectorAll('[data-draft="true"]').forEach(field => {
+    (fields || document.querySelectorAll('[data-draft="true"]')).forEach(field => {
         if (_draftRestored.get(field) === field.name) return;
         // Renamed since it was last seen: a new field, so what the user typed
         // under the old name says nothing about this one.
@@ -314,8 +301,10 @@ function initDraftMode() {
 // the page must not wipe a draft the user started after the submit.
 const _draftClearApplied = new WeakSet();
 
-function applyDraftClearFlag() {
-    document.querySelectorAll('[data-draft-enabled]').forEach(function (root) {
+function applyDraftClearFlag(changes) {
+    // #4001: data-draft-clear comes and goes with a patch, which inserts the
+    // draft root or changes its attributes: a change record names it.
+    _scanSet('[data-draft-enabled]', changes).forEach(function (root) {
         if (!root.hasAttribute('data-draft-clear')) {
             _draftClearApplied.delete(root);
             return;

@@ -12,6 +12,8 @@
       "name": "Environment Check",
       "status": "pending",
       "verdict": null,
+      "run_as": "inline",
+      "model": "haiku",
       "checklist": [
         {
           "action": "git fetch origin",
@@ -44,6 +46,8 @@
       "name": "Change Detection",
       "status": "pending",
       "verdict": null,
+      "run_as": "inline",
+      "model": "haiku",
       "checklist": [
         {
           "action": "git diff --name-only against target",
@@ -60,6 +64,8 @@
       "name": "Conflict Check",
       "status": "pending",
       "verdict": null,
+      "run_as": "inline",
+      "model": "haiku",
       "checklist": [
         {
           "action": "git diff --check",
@@ -80,6 +86,7 @@
       "name": "Planning",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "checklist": [
         {
           "action": "VERIFY ARTIFACT BEFORE PLANNING (#1210, v0.9.5 retro Action Tracker #191): for feature work, write a failing test or doc-snippet exercising the desired behavior so the plan reflects what users will observe; for security work, read the actual code at any cited line and confirm the alert's premise. Plan can ONLY lock in design AFTER the artifact exists. The reproducer-first discipline is generalizable from PR #1206 (bugfix) to feature work too — the artifact pins the contract.",
@@ -190,6 +197,7 @@
       "name": "Test Execution",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -211,6 +219,7 @@
       "name": "Self-Review",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -289,6 +298,7 @@
       "name": "Security Check",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "skip_if": "DOCS_ONLY",
       "checklist": [
         {
@@ -314,6 +324,7 @@
       "name": "Documentation",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "checklist": [
         {
           "action": "read .pipeline-state/<branch>-plan.md to understand what was built and needs documenting",
@@ -374,6 +385,7 @@
       "name": "Commit & PR",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "checklist": [
         {
           "action": "read .pipeline-state/<branch>-changes.txt for list of files modified by implementation",
@@ -432,6 +444,7 @@
       "name": "Code Review",
       "status": "pending",
       "verdict": null,
+      "model": "opus",
       "run_as": "subagent",
       "subagent_prompt": "You are reviewing PR #{pr_number}. Project: {project_path}. PR targets {pr_target_branch}. BUDGET (#1211, v0.9.5 retro Action Tracker #192): cap your final review comment at 350 words. Feature PRs allow exploration of edge cases tied to the planned feature only — do NOT spelunk for additional edge cases beyond what the plan scope covers. For security-related changes, enumerate at most the attack shapes the plan documented. PR #1201's reviewer stalled at the 10-min watchdog mid-tangent on backslash-injection; tight scoped reviews find real gaps without watchdog risk. Step 0: Read .pipeline-state/*-plan.md for the original plan. Step 1: Run git diff {pr_target_branch}...HEAD, read changed files. Check docs/PULL_REQUEST_CHECKLIST.md if exists — use as review framework. Step 2: Cross-ref plan vs implementation — verify every planned deliverable was implemented. Step 2b: Cross-ref the plan's test list against actual test files — every test the plan specified must exist. Step 3: Review for correctness, security (XSS, injection, secrets exposure — only the shapes the plan documented), testing gaps, code quality (print vs logging, except:pass), docs, perf, architecture. Flag auto-reject triggers. Step 3b (claims, #3739): for every measured number, 'every/never/only' statement and 'the cause' claim in the PR body, changelog fragments and docstrings, re-run the command or open the file:line that would show it; a claim you cannot reproduce is a finding (pattern unverified-claim). Step 3c (baselines, #3753): if a baseline, snapshot or ratchet file changed (a CSV, a JSON scoreboard, a count pinned in a test), diff it per row and classify every row that moved as an artifact of the fix or a real regression, with the reason; a regenerated baseline is not evidence by itself. Step 4: Do NOT run the whole suite locally (tests/local_load_guard.py refuses it outside CI; CI runs the full matrix on the PR head): read the head's CI result with `gh pr checks {pr_number}`, and run only the tests the diff adds or changes (nice -n 10, -n 2 at most), then report pass/fail. Step 5: Decide APPROVE/REQUEST_CHANGES/COMMENT. Step 6 MANDATORY: Post review to GitHub with gh pr review {pr_number} --comment --body '<formatted review under 350 words>'. If REQUEST_CHANGES use --request-changes. Save to pr/feedback/ if dir exists. Step 7: Output verdict.",
       "checklist": [
@@ -495,6 +508,8 @@
       "name": "Review Verdict",
       "status": "pending",
       "verdict": null,
+      "run_as": "inline",
+      "model": "haiku",
       "note": "Verdict is determined by the Code Review subagent above. If APPROVE, proceed to Merge. If REQUEST_CHANGES, fix issues, re-commit, re-push, re-run Code Review.",
       "checklist": [
         {
@@ -512,6 +527,7 @@
       "name": "Merge PR",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "run_as": "subagent",
       "subagent_prompt": "Merge PR #{pr_number} in {project_path}. Step 0: Run 'gh pr checks {pr_number}' — verify CI green. If pre-existing failure, document with gh pr comment before merging. Step 1: Run gh pr merge {pr_number} --squash --delete-branch. Do NOT run gh pr review --approve (GitHub blocks self-approval). Output PR_MERGED or MERGE_FAILED.",
       "checklist": [
@@ -536,6 +552,7 @@
       "name": "Retrospective",
       "status": "pending",
       "verdict": null,
+      "model": "sonnet",
       "run_as": "subagent",
       "subagent_prompt": "Write retrospective for feature: {task_description}. Project: {project_path}. PR #{pr_number}. Run 'gh pr view {pr_number} --json commits,title,body' to get PR details (branch deleted after merge). Rate quality 1-5, what went well, lessons learned, improvements. STEP A (MANDATORY): use the Write tool to create pr/feedback/retro-{pr_number}.md with the full retro body — DO NOT use bash heredoc (`cat > file <<EOF`), which fails silently under zsh `set -o noclobber` and leaves stale content (#1245). The Write tool bypasses shell redirection. STEP B (MANDATORY): post via `gh pr comment {pr_number} --body-file pr/feedback/retro-{pr_number}.md` — DO NOT use `--body \"$(cat ...)\"`, which dutifully posts whatever the file currently contains (e.g., a leftover Stage 11 review) when STEP A silently failed. The `--body-file` form passes the file path directly; gh re-reads it at post time. STEP C (MANDATORY): verify with `gh pr view {pr_number} --json comments` that at least one comment matches the audit-script retro-marker regex — see `scripts/lib/retro_markers.py:RETRO_MARKER_REGEX` for the canonical pattern (single source of truth per #1249). The regex matches headings/sentinels like `Retrospective`, `Quality: <digit>`, `Lessons learned`, `RETRO_COMPLETE`, `What went well` (case-insensitive). MANDATORY: Append to .pipeline-log.md (create if needed, ensure in .gitignore). Your FINAL output line MUST be exactly 'RETRO_COMPLETE'.",
       "checklist": [

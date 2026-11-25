@@ -1,0 +1,1 @@
+- `run_pre_mount_auth` no longer resolves and binds the tenant a second time on an explicit view that mounts: the tenant is resolved once, before authorization.

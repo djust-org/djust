@@ -210,7 +210,10 @@
 
     function _onError(e) {
         const detail = (e && e.detail) || {};
-        if (detail.code === 'state_error' && detail.transient === true) {
+        // #4164: a reconnect that restored an older state than the page
+        // showed, and changes not saved yet, are notices of the same kind.
+        const notice = detail.code === 'state_error' || detail.code === 'state_not_restored';
+        if (notice && detail.transient === true) {
             _showSaving(detail);
             return;
         }

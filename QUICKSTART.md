@@ -83,11 +83,11 @@ class CounterView(LiveView):
     count = state(0)
 
     @event_handler()
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
 
     @event_handler()
-    def decrement(self, **kwargs):
+    def decrement(self):
         self.count -= 1
 ```
 
@@ -131,15 +131,21 @@ Write `dj-view="myapp.views.MyView"` yourself only when you need to name a speci
 
 ### Event Handler Parameters
 
-All event handlers receive metadata from the client (such as `_targetElement`). Always include `**kwargs` in your handler signature:
+Under the strict policy (the `LIVEVIEW_CONFIG` line in Setup) a handler's
+signature is the event's contract. Annotate each parameter. The browser sends
+the element's `dj-value-*` attributes, and generated values such as an input's
+`value` only when the handler declares them:
 
 ```python
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str):
     self.query = value
 ```
 
-Without `**kwargs`, you will get a validation error when the handler is called.
+`<input dj-input="search">` calls it with the input's text, and
+`<button dj-click="remove" dj-value-item-id="{{ item.id }}">` calls
+`remove(self, item_id: int)` with a converted id. See
+[Events](docs/website/core-concepts/events.md#typed-event-parameters-strict-policy).
 
 ### 3. Add a URL
 
@@ -191,21 +197,22 @@ Visit **http://localhost:8000/counter/** -- the buttons update the count instant
 
 ### "Validation error on event handler"
 
-**Cause:** The handler signature is missing `**kwargs`. The client sends metadata parameters (like `_targetElement`) that your handler must accept.
+**Cause:** The event's arguments do not match the handler's signature: the
+binding sends an argument the handler does not declare (a `dj-value-*` name),
+leaves out one it requires, or sends a value its annotation cannot convert.
 
-**Fix:** Add `**kwargs` to every event handler:
+**Fix:** Make the two agree. Declare every argument the binding sends, with an
+annotation, and give a default only to one some binding leaves out:
 
 ```python
-# Before (breaks)
+# Template: <button dj-click="remove" dj-value-item-id="{{ item.id }}">
 @event_handler()
-def increment(self):
-    self.count += 1
-
-# After (works)
-@event_handler()
-def increment(self, **kwargs):
-    self.count += 1
+def remove(self, item_id: int):
+    self.items = [i for i in self.items if i["id"] != item_id]
 ```
+
+`python manage.py check` reports a binding its handler would reject
+(`djust.T020`).
 
 ## Next Steps
 

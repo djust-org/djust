@@ -12,6 +12,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { openContracts } from './_open_contracts.js';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
@@ -44,7 +45,7 @@ function makeCtx(canvas) {
 
 function createEnv(bodyHtml, { dpr = 2, resizeObserver, requestAnimationFrame = true } = {}) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body><div dj-root>${bodyHtml}</div></body></html>`,
+        `<!DOCTYPE html><html><body><div dj-root dj-view="test.V">${bodyHtml}</div>${openContracts(bodyHtml)}</body></html>`,
         { url: 'http://localhost:8000/test/', runScripts: 'dangerously', pretendToBeVisual: true },
     );
     const { window } = dom;
@@ -67,6 +68,8 @@ function createEnv(bodyHtml, { dpr = 2, resizeObserver, requestAnimationFrame = 
     } catch (_e) {
         // client.js may throw on DOM APIs jsdom lacks; hooks still load.
     }
+    // The page's contract block is read at init, which this env does not fire.
+    try { window.djust._installPageParameterContracts(); } catch (_e) { /* no page */ }
     window.djust.handleEvent = (name, params) => { env.sent.push({ name, params }); };
     return env;
 }
@@ -508,6 +511,7 @@ describe('Save', () => {
         env.click('save');
         expect(env.window.djust._strictBinding).toHaveBeenCalledTimes(1);
         expect(env.sent).toEqual([]);
+        expect(env.status()).toMatch(/could not be sent/); // never "Signature saved" for a frame that did not leave
     });
 
     it('falls back to the hook pushEvent when the client API is absent', async () => {
@@ -559,12 +563,25 @@ describe('Save', () => {
         expect(env.status()).toMatch(/^This signature is too detailed to send \(the limit is 2 KB\)/);
     });
 
-    it('the cap is data-max-bytes, 200 KB by default and at least 1 KB', async () => {
+    it('the cap is data-max-bytes, 60,000 by default and at most, and at least 1 KB (#4205)', async () => {
         const dflt = await boot(PAD({ maxBytes: 'nope' }), { dpr: 1, width: 400 });
         dflt.draw([[10, 10], [50, 50]]);
-        dflt.sizer = () => 204800 - 22;
+        dflt.sizer = () => 60000 - 22;
+        dflt.click('save');
+        // Under the strict collector's 65,536-character text bound, so the frame is really sent.
+        expect(dflt.sent).toHaveLength(1);
+        expect(dflt.hidden()).not.toBe('');
+        expect(dflt.status()).toBe('Signature saved');
+        dflt.sizer = () => 60000 + 1000;
         dflt.click('save');
         expect(dflt.sent).toHaveLength(1);
+        expect(dflt.status()).toMatch(/too detailed to send \(the limit is 59 KB\)/);
+        const big = await boot(PAD({ maxBytes: 200000 }), { dpr: 1, width: 400 });
+        big.draw([[10, 10], [50, 50]]);
+        big.sizer = () => 100000;
+        big.click('save');
+        expect(big.sent).toEqual([]); // a declared cap above the strict limit is clamped
+        expect(big.status()).toMatch(/too detailed to send/);
         const tiny = await boot(PAD({ maxBytes: 5 }), { dpr: 1, width: 400 });
         tiny.draw([[10, 10], [50, 50]]);
         tiny.sizer = () => 800;
@@ -603,10 +620,9 @@ describe('"Message too large"', () => {
     it('says what is wrong when it cannot be made to fit', async () => {
         const env = await boot(PAD(), { dpr: 1, width: 400 });
         env.draw([[10, 10], [50, 50]]);
-        env.sizer = () => 70000;
+        env.sizer = () => 59000;
         env.click('save');
-        tooLarge(env, 70100);
-        expect(env.sent).toHaveLength(1);
+        tooLarge(env, 59100);
         expect(env.status()).toMatch(/too detailed for the server's message limit/);
     });
 

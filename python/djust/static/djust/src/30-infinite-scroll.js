@@ -27,6 +27,9 @@
 
 (function initInfiniteScrollModule() {
     const STATE = new WeakMap();
+    // The containers in STATE, countable (#4001): a patch on a page that
+    // tracks none skips the rescan.
+    const TRACKED = new Set();
     const DEFAULT_THRESHOLD = 0.1;
 
     function parseFloatAttr(el, name, fallback) {
@@ -49,10 +52,13 @@
         if (window.djust && typeof window.djust.handleEvent === 'function') {
             try {
                 // ADR-036: `edge` is a generated value; a strict handler gets it
-                // only when declared (plus its dj-value-* arguments).
-                const strictParams = window.djust._strictBinding(container, eventName, { edge }, []);
+                // only when declared (plus its dj-value-* arguments). The event
+                // carries no owner context, so the server runs it on the page's
+                // view: resolve that view's contract (pageOwner, #4225).
+                const strictParams = window.djust._strictBinding(container, eventName, { edge }, [],
+                    null, true);
                 if (strictParams !== false) {
-                    const sent = strictParams || { edge };
+                    const sent = strictParams;
                     if (typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(sent, container);
                     window.djust.handleEvent(eventName, sent);
                 }
@@ -124,6 +130,7 @@
         });
 
         STATE.set(container, state);
+        TRACKED.add(container);
         observeSentinels(state);
     }
 
@@ -179,10 +186,12 @@
         if (!state) return;
         if (state.observer) state.observer.disconnect();
         STATE.delete(container);
+        TRACKED.delete(container);
     }
 
     window.djust = window.djust || {};
     window.djust.initInfiniteScroll = initInfiniteScroll;
+    window.djust._infiniteScrollTracked = () => TRACKED.size;
     window.djust.resetViewport = resetViewport;
     window.djust.teardownInfiniteScroll = teardownInfiniteScroll;
 })();

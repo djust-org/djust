@@ -44,7 +44,7 @@ class ChatView(LiveView):
         return {**super().get_context_data(**kwargs), "messages": self.messages}
 
     @event_handler()
-    async def send_message(self, content="", **kwargs):
+    async def send_message(self, content: str):
         self.messages.append({"role": "user", "content": content})
         self.is_streaming = True
         await self.push_state()  # render now, so the stream target exists
@@ -84,7 +84,7 @@ render; see [`mount()`](../api-reference/liveview.md#mountrequest-kwargs).
 
 ## Core Methods
 
-All streaming methods are `async` and require a WebSocket connection.
+All streaming methods are `async` and work over a WebSocket or SSE connection; on the HTTP fallback they are a no-op (the page shows the final render). The same holds for `push_state()`: over a WebSocket or SSE connection it sends the current render to the client at once, and on the HTTP fallback it logs a warning and does nothing.
 
 ### `stream_text(stream_name, text, mode="append", target=None)`
 
@@ -228,7 +228,7 @@ class AIChat(LiveView):  # streaming is built in — no StreamingMixin needed
         return {**super().get_context_data(**kwargs), "messages": self.messages}
 
     @event_handler()
-    async def ask(self, content="", **kwargs):
+    async def ask(self, content: str):
         if self.is_streaming:
             return
 

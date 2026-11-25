@@ -428,13 +428,12 @@ class TestWizardContext:
         assert ctx["total_steps"] == 3
         assert ctx["current_step"]["index"] == 0
 
-    # Stays legacy (split from the explicit migration): the walk-published *_choices names are the legacy wizard context (deletion step 7).
     @pytest.mark.django_db
     def test_context_flat_choices_exposed(self, get_request):
-        """ChoiceField choices exposed as <field>_choices top-level var."""
+        """ChoiceField choices exposed as <field>_choices top-level var (explicit since #4177)."""
 
         class ChoiceStepView(WizardMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             wizard_steps = [{"name": "s", "title": "S", "form_class": StatusForm}]
             template = "<div dj-root></div>"
 

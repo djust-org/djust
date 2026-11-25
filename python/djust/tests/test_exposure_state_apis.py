@@ -1,13 +1,11 @@
 """Direct state API boundaries while ADR-038 construction remains gated."""
 
 import json
-import traceback
 from types import SimpleNamespace
 
 import pytest
 
 from djust import LiveView
-from djust._exposure import ExposureError
 from djust.decorators import state
 
 
@@ -46,122 +44,25 @@ def test_get_state_exports_only_client_grants_and_detaches_values(view, settings
     assert "_state_transient_value" not in view.__dict__
 
 
-@pytest.mark.parametrize("method", ["get_state"])
-@pytest.mark.parametrize("policy", [None, "typo", 0])
-def test_unknown_policy_never_selects_legacy_export(view, method, policy):
-    view.exposure_policy = policy
-    with pytest.raises(ExposureError):
-        getattr(view, method)()
-
-
-@pytest.mark.parametrize("method", ["get_state"])
-def test_export_failure_is_redacted_without_legacy_fallback(view, method):
-    def secret_factory():
-        raise RuntimeError("FACTORY_SECRET_SENTINEL")
-
-    class BrokenView(LiveView):
-        exposure_policy = "explicit"
-        value = state(default_factory=secret_factory, persist="client", client=True)
-
-    broken = object.__new__(BrokenView)
-    broken.public_note = "FALLBACK_SENTINEL"
-    with pytest.raises(ExposureError) as error:
-        getattr(broken, method)()
-    assert "SENTINEL" not in str(error.value)
-    assert "SENTINEL" not in "".join(traceback.format_exception(error.value))
-    assert error.value.__suppress_context__
-
-
-@pytest.mark.parametrize("method", ["get_state"])
-@pytest.mark.parametrize("bad", [object(), float("nan"), "x" * 65536])
-def test_declared_values_still_require_bounded_exact_json(view, method, bad):
-    view.snapshot_value = {"nested": bad}
-    with pytest.raises(ExposureError):
-        getattr(view, method)()
-
-
-@pytest.mark.parametrize("method", ["_get_private_state"])
-@pytest.mark.parametrize("policy", ["explicit", "invalid", None])
-def test_legacy_private_and_component_exporters_reject_nonlegacy(view, method, policy):
-    view.exposure_policy = policy
-    with pytest.raises(ExposureError):
-        getattr(view, method)()
-
-
-@pytest.mark.parametrize("method", ["_restore_private_state"])
-@pytest.mark.parametrize("policy", ["explicit", "invalid", None])
-def test_raw_restore_is_rejected_before_reading_payload_or_assigning(view, method, policy):
-    class HostilePayload(dict):
-        def items(self):
-            raise AssertionError("Raw restore must not inspect unverified input")
-
-    view.exposure_policy = policy
-    before = dict(view.__dict__)
-    with pytest.raises(ExposureError):
-        getattr(view, method)(HostilePayload(snapshot_value={"page": 9}, _private_note="changed"))
-    assert view.__dict__ == before
-
-
-class _LegacyLiveView(LiveView):
-    """A bare LiveView under the legacy policy, whatever the framework default is."""
-
-    exposure_policy = "legacy"
-
-
-def test_legacy_direct_api_behavior_remains_available():
-    legacy = object.__new__(_LegacyLiveView)
-    legacy.public_value = [1]
-    legacy._private_value = "private"
-    legacy._user_private_keys = {"_private_value"}
-    assert legacy.get_state() == {"public_value": [1]}
-    assert legacy._get_private_state() == {"_private_value": "private"}
-    legacy._restore_private_state({"_private_value": "restored"})
-    assert legacy._private_value == "restored"
-
-
-def test_audio_private_restore_rejects_before_filtering_payload():
-    from djust.audio import AudioMixin
-
-    class AudioView(AudioMixin, LiveView):
-        exposure_policy = "explicit"
-
-    class HostilePayload(dict):
-        def items(self):
-            raise AssertionError("Audio restore must not inspect unverified input")
-
-    view = object.__new__(AudioView)
-    with pytest.raises(ExposureError):
-        view._restore_private_state(HostilePayload(_audio_cursor=5))
-    assert view.__dict__ == {}
-
-
-@pytest.mark.parametrize("method", ["get_state"])
-def test_inherited_grants_cannot_widen_exports(method):
-    class Inherited(ExportView):
-        pass
-
-    view = object.__new__(Inherited)
-    with pytest.raises(ExposureError):
-        getattr(view, method)()
-    assert view.__dict__ == {}
-
-
-@pytest.mark.parametrize("method", ["get_state"])
 @pytest.mark.parametrize("error_type", [RuntimeError, AttributeError])
-def test_policy_lookup_failure_does_not_disclose_exception(method, error_type):
-    class BrokenPolicy(LiveView):
-        @property
-        def exposure_policy(self):
-            raise error_type("POLICY_SECRET_SENTINEL")
+def test_policy_descriptor_is_refused_without_evaluating_it(error_type):
+    """A descriptor stated as ``exposure_policy`` is refused when its class is
+    created; it is never evaluated, so its exception cannot be disclosed."""
+    from django.core.exceptions import ImproperlyConfigured
 
-    with pytest.raises(ExposureError) as error:
-        getattr(object.__new__(BrokenPolicy), method)()
+    with pytest.raises(ImproperlyConfigured) as error:
+
+        class BrokenPolicy(LiveView):
+            @property
+            def exposure_policy(self):
+                raise error_type("POLICY_SECRET_SENTINEL")
+
+    assert "a value of type property" in str(error.value)
     assert "SENTINEL" not in str(error.value)
 
 
-def test_broken_policy_descriptor_cannot_enable_legacy_debug_fallback():
-    from djust._exposure import explicit_debug_projection, uses_legacy_exposure
-    from djust.observability.views import _lenient_assigns
+def test_broken_policy_descriptor_has_no_debug_fallback():
+    from djust._exposure import _read_exposure_policy, explicit_debug_projection
 
     class BrokenPolicy:
         @property
@@ -170,10 +71,20 @@ def test_broken_policy_descriptor_cannot_enable_legacy_debug_fallback():
 
     view = BrokenPolicy()
     view.public_note = "UNDECLARED_SECRET_SENTINEL"
-    assert not uses_legacy_exposure(view)
     assert explicit_debug_projection(view) == {"_djust_projection_error": "State unavailable"}
-    assert "SENTINEL" not in json.dumps(_lenient_assigns(view))
-    # Genuinely undeclared: reads as the default policy, which is explicit, so
-    # an object that never asked for the legacy export is not given it.
-    assert not uses_legacy_exposure(object())
-    assert not uses_legacy_exposure(None)
+    # Genuinely undeclared: reads as the default policy, which is explicit.
+    assert _read_exposure_policy(object()) == "explicit"
+    assert _read_exposure_policy(None) == "explicit"
+
+
+@pytest.mark.parametrize("policy", ["legacy", "", None, 1])
+def test_a_policy_other_than_explicit_is_refused_value_free(policy):
+    from djust._exposure import ExposureError, _read_exposure_policy, explicit_debug_projection
+
+    class Stated:
+        exposure_policy = policy
+
+    with pytest.raises(ExposureError) as error:
+        _read_exposure_policy(Stated())
+    assert str(error.value) == "Explicit state policy required"
+    assert explicit_debug_projection(Stated()) == {"_djust_projection_error": "State unavailable"}

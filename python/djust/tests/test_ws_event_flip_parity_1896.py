@@ -32,11 +32,10 @@ Harness lifted from ``test_ws_send_version_1788.py`` /
 from __future__ import annotations
 
 import pytest
-from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust.components.base import LiveComponent
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 
 from ._ws_frames import drain_extra, has_type, receive_until
 
@@ -73,11 +72,6 @@ async def _drain_available(communicator, *, until):
     return frames + await drain_extra(communicator)
 
 
-class _ScopeSession:
-    def __init__(self, key):
-        self.session_key = key
-
-
 async def _connect_and_mount(view_path: str, url: str = "/parity/"):
     """Connect a ``WebsocketCommunicator`` and mount ``view_path``.
 
@@ -85,19 +79,10 @@ async def _connect_and_mount(view_path: str, url: str = "/parity/"):
     """
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
-    from django.contrib.sessions.backends.db import SessionStore
-
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
-    def _create_session():
-        s = SessionStore()
-        s.create()
-        return s.session_key
-
-    session_key = await sync_to_async(_create_session)()
-
-    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    communicator.scope["session"] = _ScopeSession(session_key)
+    communicator = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
@@ -136,30 +121,21 @@ class _Widget(LiveComponent):
 class ComponentParentView(LiveView):
     """Parent hosting a LiveComponent (``component_id`` routing target)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.ComponentParentView" '
         'dj-id="0"><h1>parent {{ parent_n }}</h1><p>last={{ last_label }}</p></div>'
     )
 
-    def mount(self, request, **kwargs):
-        self.parent_n = 0
-        self.last_label = "none"
-        # Instance-attr LiveComponent: the context mixin's get_context_data
-        # walks self.__dict__, finds it, and registers it into _components
-        # under its component_id ("w1") — the registry component_id routing
-        # resolves against.
-        self.widget = _Widget("w1")
+    parent_n = state(0)
+    last_label = state("none")
+    # A class-level LiveComponent: an explicit view binds it under the attribute
+    # name ("widget"), the id component_id routing resolves against.
+    widget = _Widget("w1")
 
     def handle_component_event(self, component_id, event, data):
         if event == "relabelled":
             self.last_label = data.get("label", "")
-
-    def get_context_data(self, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        ctx["parent_n"] = self.parent_n
-        ctx["last_label"] = self.last_label
-        return ctx
 
 
 class ActivityView(LiveView):
@@ -172,15 +148,16 @@ class ActivityView(LiveView):
     ``_djust_activities`` map the tag populates).
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.ActivityView" '
         'dj-id="0">n={{ n }} opens={{ opens }}</div>'
     )
 
+    n = state(0)
+    opens = state(0)
+
     def mount(self, request, **kwargs):
-        self.n = 0
-        self.opens = 0
         self.set_activity_visible("panel", False)
 
     @event_handler()
@@ -196,23 +173,19 @@ class ActivityView(LiveView):
         self.set_activity_visible("panel", True)
         self.opens += 1
 
-    def get_context_data(self, **kwargs):
-        return {"n": self.n, "opens": self.opens, "view": self}
-
 
 class RefView(LiveView):
     """Drives all three event-response handlers for the ref-echo test:
     a noop (no state change), a patch (text change), an html_update
     (``_force_full_html``)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.RefView" '
         'dj-id="0"><p>n={{ n }}</p></div>'
     )
 
-    def mount(self, request, **kwargs):
-        self.n = 0
+    n = state(0)
 
     @event_handler()
     def noop_event(self, **kwargs):
@@ -227,22 +200,18 @@ class RefView(LiveView):
         self.n += 1
         self._force_full_html = True  # discard patches → html_update frame
 
-    def get_context_data(self, **kwargs):
-        return {"n": self.n}
-
 
 class ForceView(LiveView):
     """Force-full-html on the FIRST event, normal patch on the SECOND —
     proves the flag is consumed (not sticky)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896.ForceView" '
         'dj-id="0"><p>n={{ n }}</p></div>'
     )
 
-    def mount(self, request, **kwargs):
-        self.n = 0
+    n = state(0)
 
     @event_handler()
     def force_once(self, **kwargs):
@@ -253,29 +222,22 @@ class ForceView(LiveView):
     def plain_bump(self, **kwargs):
         self.n += 1  # no _force_full_html → normal patch
 
-    def get_context_data(self, **kwargs):
-        return {"n": self.n}
-
 
 class _DebugProbeView(LiveView):
     """A view with a public assign so ``get_debug_update()`` yields a non-empty
     variables dump for the #1908 ``_debug``-payload unit tests."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896._DebugProbeView" '
         'dj-id="0"><p>n={{ n }}</p></div>'
     )
 
-    def mount(self, request, **kwargs):
-        self.n = 0
+    n = state(0)
 
     @event_handler()
     def bump(self, **kwargs):
         self.n += 1
-
-    def get_context_data(self, **kwargs):
-        return {"n": self.n}
 
 
 _ALLOWED = "djust.tests.test_ws_event_flip_parity_1896"
@@ -332,7 +294,7 @@ class TestComponentIdRouting:
                 {
                     "type": "event",
                     "event": "relabel",
-                    "params": {"component_id": "w1", "label": "DONE"},
+                    "params": {"component_id": "widget", "label": "DONE"},
                     "ref": 5,
                 }
             )
@@ -646,7 +608,7 @@ class TestResidualFoldObservability:
         return WSConsumerTransport(_FakeConsumer())
 
     class _V:
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template_name = "tmpl.html"
 
     def test_dje053_warning_fires_on_no_patches_with_baseline(self, caplog):
@@ -745,15 +707,17 @@ class TestResidualFoldObservability:
             )
         assert mock_emit.called, "the full-HTML-update signal must be emitted"
         snap = mock_emit.call_args.kwargs.get("context_snapshot")
-        assert snap == {"count": 5, "name": "x"}, (
-            "the no_patches signal must carry the context snapshot built from the "
-            f"threaded context dict (#1908 item 2); got {snap!r}"
+        # The snapshot is built from the threaded dict (#1908 item 2), and an explicit
+        # view's debug tooling never receives the dict's values: it is empty, not None.
+        assert snap == {}, (
+            "an explicit view's no_patches signal must carry an empty context "
+            f"snapshot, never the threaded values (#1908 item 2); got {snap!r}"
         )
 
     def test_no_patches_context_snapshot_none_when_no_context(self):
         """GATE-OFF (#1468): with NO ``context`` threaded (the old behavior), the
         ``no_patches`` snapshot stays ``None`` — proving the snapshot comes from the
-        threaded dict, not some incidental source."""
+        threaded dict (empty for an explicit view), not some incidental source."""
         from unittest.mock import patch as _patch
 
         t = self._make_transport()
@@ -921,7 +885,7 @@ class TestResidualFoldObservability:
     def test_dead_extract_methods_removed_from_consumer(self):
         """#1921: the bespoke ``LiveViewConsumer._extract_cache_config`` /
         ``_extract_optimistic_rules`` were dead post-mount-flip (#1920 deleted the
-        handle_mount body that called them; runtime.py owns the live copies). Pin
+        _mount_page body that called them; runtime.py owns the live copies). Pin
         that they are GONE from the consumer so they cannot silently return."""
         from djust.websocket import LiveViewConsumer
 
@@ -961,15 +925,14 @@ class _BackgroundView(LiveView):
     background work that updates state + clears the flag (the @background
     pattern)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="djust.tests.test_ws_event_flip_parity_1896._BackgroundView" '
         'dj-id="0"><p>val={{ val }} loading={{ loading }}</p></div>'
     )
 
-    def mount(self, request, **kwargs):
-        self.val = 0
-        self.loading = False
+    val = state(0)
+    loading = state(False)
 
     @event_handler()
     def go(self, **kwargs):
@@ -980,9 +943,6 @@ class _BackgroundView(LiveView):
             self.loading = False
 
         self.start_async(_work)
-
-    def get_context_data(self, **kwargs):
-        return {"val": self.val, "loading": self.loading}
 
 
 @pytest.mark.django_db

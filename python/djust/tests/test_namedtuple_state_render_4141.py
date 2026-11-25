@@ -7,7 +7,7 @@ state (after an event). A direct render was right, which is why it read as a tag
 
 Every page below is compared with Django's own rendering of the same template and the same
 context, on the first paint, after an event over the WebSocket, after a reconnect, and after a
-fallback POST; with both exposure policies.
+fallback POST; on the explicit policy (its legacy twin was deleted with the legacy policy, #4194).
 """
 
 from __future__ import annotations
@@ -59,8 +59,7 @@ def _context(count: int) -> dict:
 
 
 class _Columns(LiveView):
-    # A shared base, never routed: each subclass below states the policy it tests. Stated here
-    # too so the module-level exposure guard (tests/unit/test_exposure_policy_pin_guard.py) holds.
+    # A shared base, never routed: each subclass below states the policy it tests.
     exposure_policy = "explicit"
     template = "<div dj-root>" + BODY + "</div>"
 
@@ -80,11 +79,7 @@ class ExplicitColumns(_Columns):
         return {name: getattr(self, name) for name in _context(0)}
 
 
-class LegacyColumns(_Columns):
-    exposure_policy = "legacy"
-
-
-VIEWS = [ExplicitColumns, LegacyColumns]
+VIEWS = [ExplicitColumns]
 
 
 _DJANGO = Engine(
@@ -164,9 +159,7 @@ def test_the_first_paint_and_a_fallback_post_keep_the_fields(view_class):
         html = body.get("html") or ""
         if not html:  # a patch answer: render the view's current state instead
             pytest.fail("fallback POST answered without html: %r" % sorted(body))
-        # Legacy saves nothing between requests: each stateless POST mounts, then one event.
-        expected = count if view_class is ExplicitColumns else 1
-        assert (_paragraph(html), _header(html)) == _expected(expected)
+        assert (_paragraph(html), _header(html)) == _expected(count)
 
 
 async def _rendered_after(comm: Any) -> str:
@@ -195,8 +188,8 @@ async def test_an_event_and_a_reconnect_keep_the_fields(view_class):
             await comm.disconnect()
         again, mount = await harness.mount_view(view_class, key)
         try:
-            # Explicit: the saved count (1) over mount(); legacy saves nothing (0).
-            count = 1 if view_class is ExplicitColumns else 0
+            # The saved count (1) wins over mount().
+            count = 1
             assert (_paragraph(mount["html"]), _header(mount["html"])) == _expected(count)
             frame = await harness.event(again, "inc")
             assert frame["type"] != "error", frame

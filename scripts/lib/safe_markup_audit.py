@@ -189,7 +189,7 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (LT, "rendered_stamped = _stamp_view_id(rendered_inner, view_id)"),
     ),
     (LT, "live_render"): S(
-        2,
+        1,
         "ids and the CSP nonce are escape()'d, lazy['trigger'] is checked against ('flush', 'visible'), the child body is a template render stamped by _stamp_view_id. The one formerly raw piece, lazy['placeholder'], goes through conditional_escape since #3819: a marked-safe value is markup, a plain str is text (Django's own rule)",
         (LT, 'if lazy_config["trigger"] not in ("flush", "visible"):'),
         (
@@ -464,14 +464,14 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (RH, "breadcrumb_content = content[:idx]"),
         (RH, "e_custom_class = attr_text(str(custom_class))"),
     ),
-    (RH, "DataTableHandler.render"): S(
+    (RH, "DataTableHandler.render_kwargs"): S(
         1,
-        "everything the guard cannot see through is the row URL: _row_href(row, key) is str(url_attr(_row_text(row, key), honor_safe=False)) (the one URL rule every component uses, #3887/#3894), placed only inside the quoted data-href / href of a row or a link cell; the guard judges an escaper's output returned through a helper again where it lands and does not follow str() of it. The nested _dbtn(val, label) (density toggle) is proved since #3845 (its only call sites pass literals); the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is escaped (attr_text / escape in an attribute, conditional_escape in text: #4009) or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",
+        "the one implementation of the tag since #3869 (render parses the Rust engine's operands, the Django engine's simple tag hands render_kwargs the same operands as Python values), so one sink serves both engines. Everything the guard cannot see through is the row URL: _row_href(row, key) is str(url_attr(_row_text(row, key), honor_safe=False)) (the one URL rule every component uses, #3887/#3894), placed only inside the quoted data-href / href of a row or a link cell; the guard judges an escaper's output returned through a helper again where it lands and does not follow str() of it. The nested _dbtn(val, label) (density toggle) is proved since #3845 (its only call sites pass literals); the rest of the table (cells, toolbar, search, pagination, footer) is proved by the guard: every kw value is escaped (attr_text / escape in an attribute, conditional_escape in text: #4009) or int()-coerced where it is read, the footer aggregates are sum/min/max/round/len of float() values",
         (RH, "return str(url_attr(_row_text(row, key), honor_safe=False))", "_row_href"),
         (
             RH,
             "row_attrs += f' data-href=\"{_row_href(row, row_url)}\" {_ROW_NAV_A11Y}'",
-            "DataTableHandler.render._render_row",
+            "DataTableHandler.render_kwargs._render_row",
         ),
         (RH, "vals.append(float(v))"),
         (RH, "agg_val = round(sum(vals) / len(vals), 2)"),
@@ -522,7 +522,9 @@ RESOURCED: dict[str, tuple[str, ...]] = {
     ),
 }
 
-#: Directories the scan skips: tests, and ``djust/theming`` (its list lives in the guard's own test).
+#: Directories the scan skips: tests, and ``djust/theming``, whose audited sites are listed in
+#: ``python/tests/test_safe_markup_guard_3766.py`` (``AUDITED``); the two lists together are every
+#: flagged function of the package (``test_safe_markup_audit_3774.TestScanSet``, #4212).
 EXCLUDED_PARTS = frozenset({"tests", "theming"})
 
 

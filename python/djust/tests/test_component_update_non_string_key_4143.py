@@ -11,8 +11,22 @@ from __future__ import annotations
 from djust.components.ui.divider_simple import Divider
 
 
+class _NativeDivider:
+    """A stand-in native renderer: the in-tree Rust classes are gone (#4002), the hook stays."""
+
+    def __init__(self, text: str = "", style: str = "solid", margin: str = "md") -> None:
+        self.text = text
+
+    def render(self) -> str:
+        return "<hr data-text=%r>" % self.text
+
+
+class NativeDivider(Divider):
+    _rust_impl_class = _NativeDivider
+
+
 def _divider_with_a_non_string_key() -> Divider:
-    divider = Divider(text="before")
+    divider = NativeDivider(text="before")
     vars(divider)[1] = "one"  # not an attribute name
     return divider
 

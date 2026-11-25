@@ -1,16 +1,17 @@
 /**
  * #4186: the framework's own markup passes event arguments as dj-value-*, so a
- * strict handler (ADR-036) receives them, and a legacy one receives the same.
+ * strict handler (ADR-036) receives them.
  *
  * The elements come from tests/js/fixtures/framework_dj_value_4186.json, which
  * python/djust/tests/test_framework_dj_value_4186.py pins to what the framework
  * renders now. Each one is fired through the bundled client, as a browser would,
- * under a strict contract, a legacy contract, and no contract (a lazy or
- * unmounted root, where the client keeps legacy collection): the arguments the
- * Python side binds to the handler are exactly what the client sends.
+ * under a strict contract and no contract (a lazy or unmounted root, where
+ * the client sends the dj-value-* arguments only): the arguments the Python
+ * side binds to the handler are exactly what the client sends.
  */
 import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { packManifest } from './_parameter_manifest.js';
 const { readFileSync } = await vi.importActual('node:fs');
 
 const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
@@ -24,7 +25,7 @@ const strict = names => ({policy: 'strict', coerce_types: true, parameters: name
 
 function setup(body, handlers) {
     const contracts = handlers === undefined ? undefined :
-        {version: 1, owners: [{view_id: null, component_id: null, handlers}]};
+        packManifest({version: 1, owners: [{view_id: null, component_id: null, handlers}]});
     const block = contracts === undefined ? '' :
         `<script type="application/json" data-djust-parameter-contracts>${JSON.stringify({view: 'app.Page', contracts})}</script>`;
     const dom = new JSDOM(`<!DOCTYPE html><html><body><div dj-view="app.Page">${body}</div>${block}</body></html>`,
@@ -92,24 +93,16 @@ describe('framework elements send their dj-value-* arguments', () => {
         } finally { dom.window.close(); }
     });
 
-    it.each(fixture.elements.map(e => [e.id, e]))('%s: a legacy handler receives the same arguments', async (_id, entry) => {
-        const dom = setup('', {[entry.event]: {policy: 'legacy'}});
-        try {
-            fire(dom, place(dom, entry), entry);
-            await settle();
-            expect(sent(dom)).toHaveLength(1);
-            expect(sent(dom)[0].event).toBe(entry.event);
-            expect(sent(dom)[0].params).toMatchObject(expected(entry));
-        } finally { dom.window.close(); }
-    });
-
-    it.each(fixture.elements.map(e => [e.id, e]))('%s: with no contract the client sends the same arguments', async (_id, entry) => {
+    it.each(fixture.elements.map(e => [e.id, e]))('%s: with no contract the client sends its dj-value-* arguments only', async (_id, entry) => {
         const dom = setup('', undefined);
         try {
             fire(dom, place(dom, entry), entry);
             await settle();
-            expect(sent(dom)).toHaveLength(1);
-            expect(sent(dom)[0].params).toMatchObject(expected(entry));
+            // A framework-marked optional key (a component's identity `name`) is
+            // sent only when the handler declares it.
+            const optional = ((entry.attrs.find(([n]) => n === 'data-djust-optional') || [])[1] || '').split(/\s+/);
+            const params = Object.fromEntries(Object.entries(entry.params).filter(([k]) => !optional.includes(k)));
+            expect(sent(dom)).toEqual([{event: entry.event, params}]);
         } finally { dom.window.close(); }
     });
 });
@@ -135,14 +128,6 @@ describe('a data-table trigger filled by data-table.js', () => {
         });
         try {
             expect(sent(dom)).toEqual([{event: 'on_table_visibility', params: {value: 'name'}}]);
-        } finally { dom.window.close(); }
-    });
-
-    it('reaches a legacy on_table_visibility as value', async () => {
-        const dom = await toggleRoleColumn({on_table_visibility: {policy: 'legacy'}});
-        try {
-            expect(sent(dom)).toHaveLength(1);
-            expect(sent(dom)[0].params).toMatchObject({value: 'name'});
         } finally { dom.window.close(); }
     });
 });

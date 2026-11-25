@@ -537,7 +537,7 @@ async def test_a_navigation_waits_for_every_running_handler():
         # The navigation is blocked waiting for the view's running turn.
         await _spin_until(lambda: lane.waiting() == 1, "the navigation to wait on the lane")
         # The view is still mounted and its handler has not ended: the navigation waits.
-        assert getattr(VIEWS["w"], "_djust_waiters_closed", False) is False
+        assert getattr(VIEWS["w"], "_djust_child_disposed", False) is False
         assert ("hold-end", "w") not in ORDER, "the navigation released a view mid-handler"
         RELEASE.set()
         await _until(communicator, "mount")
@@ -1092,8 +1092,12 @@ async def test_release_forgets_an_overflowed_upload_with_no_accepted_chunks(monk
         await _spin_until(lambda: lane.queued() == 2, "the register and unmount")
         RELEASE.set()
         await _spin_until(lambda: "up" not in consumer._slot_map(), "the view's release")
-        assert consumer._pending_uploads == {}
-        assert consumer._aborted_uploads == {}
+        # The release flushes the view's deferred state (#4164) before it
+        # forgets the uploads: wait for the whole release, not its first step.
+        await _spin_until(
+            lambda: consumer._pending_uploads == {} and consumer._aborted_uploads == {},
+            "the release to forget the upload",
+        )
     finally:
         RELEASE.set()
         await communicator.disconnect()

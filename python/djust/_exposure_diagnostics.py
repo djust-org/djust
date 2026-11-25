@@ -5,15 +5,19 @@ carry the restriction across async and sync_to_async work without sharing it
 with another request, connection or sibling mount.
 """
 
+import logging
+import sys
 import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
-from typing import Any, Awaitable, Callable, Iterator, TypeVar
+from typing import Any, Awaitable, Callable, Iterator, Optional, TypeVar
 
-from ._exposure import ExposureError, states_exposure_policy, uses_legacy_exposure
+from ._exposure import ExposureError, states_exposure_policy
 
 PROTECTED_FAILURE = "Protected view operation failed"
+
+_log = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
@@ -58,11 +62,10 @@ def diagnostic_scope() -> Iterator[None]:
 def diagnostics_policy_allows(owner: Any) -> bool:
     """Whether this owner's failures may carry exception details.
 
-    A legacy owner always may, and so may an owner that states no policy at
-    all (see below). Under ``DEBUG`` every owner may, explicit ones
-    included: errors then read like Django's own DEBUG output, with the
+    An owner that states no policy at all may (see below). Under ``DEBUG``
+    every owner may: errors then read like Django's own DEBUG output, with the
     exception, traceback and technical error page (decision D-a, revised
-    2026-09-22). In production a nonlegacy owner's failures are value-free.
+    2026-09-22). In production a view's failures are value-free.
     Debug tooling projections (debug panel, bug capture) and SQL
     parameter capture are not error destinations and stay redacted.
     """
@@ -72,10 +75,7 @@ def diagnostics_policy_allows(owner: Any) -> bool:
         # no policy, so it restricts nothing. It grants nothing either: every
         # caller pairs it with the owners that do exist (the view, its class,
         # an enclosing restricted scope), and any one of those still makes the
-        # failure value-free. Reading it as the default policy would instead
-        # hide a legacy view's failures whenever one of these stood beside it.
-        return True
-    if uses_legacy_exposure(owner):
+        # failure value-free.
         return True
     try:
         from django.conf import settings
@@ -86,7 +86,7 @@ def diagnostics_policy_allows(owner: Any) -> bool:
 
 
 def restrict_diagnostics(view: Any) -> None:
-    """A nonlegacy owner makes the current diagnostic scope value-free,
+    """An owner makes the current diagnostic scope value-free,
     unless ``DEBUG`` is on (see :func:`diagnostics_policy_allows`)."""
     if not diagnostics_policy_allows(view):
         _details_allowed.set(False)
@@ -132,6 +132,55 @@ def diagnostics_allowed() -> bool:
     return _details_allowed.get() is True
 
 
+def server_exception_detail_enabled() -> bool:
+    """Whether ``LIVEVIEW_CONFIG["log_exception_detail"]`` is on (#4180).
+
+    The opt-in reaches server sinks only: log records and the
+    ``got_request_exception`` signal read by error trackers. It never grants
+    details to a client frame or an HTTP response, so
+    :func:`diagnostics_allowed` and :func:`exception_details_allowed_for` do
+    not consult it. An unreadable config reads as off.
+    """
+    try:
+        from .config import get_config
+
+        return get_config().get("log_exception_detail", False) is True
+    except Exception:  # noqa: BLE001 — an unreadable config grants nothing
+        return False
+
+
+def send_request_exception(exc: BaseException, request: Any = None) -> None:
+    """Send ``got_request_exception`` while ``exc`` is the handled exception.
+
+    Receivers (Sentry's, for one) read ``sys.exc_info()``. WebSocket and SSE
+    turns have no Django request, so ``request`` is ``None`` there. A failing
+    receiver is logged with static text and never breaks the error path.
+
+    Receivers run inline, as Django runs them for a request; on the WebSocket
+    and SSE that is the event loop, so a receiver must be quick (an error
+    tracker's, which queues the event, is). Re-raising ``exc`` to make it the
+    handled exception leaves its context and traceback as they were.
+    """
+    from django.core.signals import got_request_exception
+
+    try:
+        if sys.exc_info()[1] is exc:
+            got_request_exception.send(sender=None, request=request)
+        else:
+            context, cause = exc.__context__, exc.__cause__
+            suppress, traceback = exc.__suppress_context__, exc.__traceback__
+            try:
+                raise exc
+            except type(exc):
+                got_request_exception.send(sender=None, request=request)
+            finally:
+                exc.__context__, exc.__cause__ = context, cause
+                exc.__suppress_context__ = suppress
+                exc.__traceback__ = traceback
+    except Exception:  # noqa: BLE001 — a broken receiver must not break the error path
+        _log.warning("got_request_exception receiver failed")
+
+
 def log_failure(
     log: Any,
     exc: BaseException,
@@ -146,11 +195,13 @@ def log_failure(
     call does not consult ``diagnostics_allowed()``, and undeclared state can
     occur in an exception's message and traceback. ``msg``/``args``/``level`` are
     what the call site passed to its logger and ``traceback=True`` stands for
-    ``logger.exception``, so output is unchanged wherever details are allowed.
+    ``logger.exception``, so output is unchanged wherever details are allowed,
+    or when ``LIVEVIEW_CONFIG['log_exception_detail']`` is on (server log only,
+    #4180).
     """
     from ._exposure import ExposureConfigurationError
 
-    if diagnostics_allowed():
+    if diagnostics_allowed() or server_exception_detail_enabled():
         getattr(log, level)(msg, *args, exc_info=exc if traceback else None)
     elif isinstance(exc, ExposureConfigurationError):
         # Framework-authored and value-free (``protected_http_outcome`` lets
@@ -174,9 +225,9 @@ def log_failure_for(
 ) -> None:
     """:func:`log_failure` for code that runs outside a runtime turn.
 
-    Opens a scope restricted to each owner — any nonlegacy owner restricts, none
-    grants — so background tasks, consumer hooks and SSE flushes that have no
-    turn scope of their own still log value-free for a nonlegacy owner.
+    Opens a scope restricted to each owner — any owner restricts, none grants —
+    so background tasks, consumer hooks and SSE flushes that have no turn scope
+    of their own still log value-free outside ``DEBUG``.
     """
     with diagnostic_scope():
         for owner in owners:
@@ -188,8 +239,9 @@ def exception_details_allowed_for(owners: tuple[Any, ...]) -> bool:
     """Whether exception text may reach a non-log destination for these owners.
 
     The counterpart of :func:`log_failure_for` for sinks that are not log calls
-    (a client push, a stored error field): any nonlegacy owner, or an enclosing
-    restricted scope, makes the answer False; no owner grants details.
+    (a client push, a stored error field): any view owner outside ``DEBUG``, or
+    an enclosing restricted scope, makes the answer False; no owner grants
+    details.
     """
     with diagnostic_scope():
         for owner in owners:
@@ -205,7 +257,7 @@ def owned_diagnostic_scope(
     For transport entry points that run view code without a runtime turn of
     their own (the WebSocket ``receive`` verbs outside ``dispatch_message``).
     Whatever view the owner holds when a catch consults ``diagnostics_allowed``
-    restricts it, and a nested mount scope that fails for a nonlegacy view
+    restricts it, and a nested mount scope that fails for a view
     carries its restriction here.
     """
 
@@ -230,7 +282,7 @@ def _generic_server_error(request: Any, log: Any) -> Any:
 
 
 def protected_http_outcome(exc: BaseException) -> str:
-    """Classify a nonlegacy owner's escaping HTTP failure (ADR-038 D-a).
+    """Classify an owner's escaping HTTP failure (ADR-038 D-a).
 
     ``"raise"``: ``Http404`` and ``PermissionDenied`` keep Django's 404/403
     handling, which renders no frames or locals. ``"bad_request"``: the
@@ -252,8 +304,13 @@ def protected_http_outcome(exc: BaseException) -> str:
     return "server_error"
 
 
-def protected_server_error(request: Any, log: Any, outcome: str = "server_error") -> Any:
-    """ADR-038 D-a: the HTTP/SSE response for a nonlegacy owner's failure.
+def protected_server_error(
+    request: Any,
+    log: Any,
+    outcome: str = "server_error",
+    exc: Optional[BaseException] = None,
+) -> Any:
+    """ADR-038 D-a: the HTTP/SSE response for an owner's failure.
 
     Call it after the failing ``except`` block has exited. It logs a static
     line, sends ``got_request_exception`` while a fresh value-free
@@ -263,14 +320,24 @@ def protected_server_error(request: Any, log: Any, outcome: str = "server_error"
     which shows the exception and its frames' locals, is never rendered. An
     ``outcome`` of ``"bad_request"`` (see :func:`protected_http_outcome`)
     returns a plain 400 instead, without the signal, as Django does.
+
+    ``exc`` is passed only under ``LIVEVIEW_CONFIG["log_exception_detail"]``
+    (#4180): the log line then carries the traceback, and the signal is sent
+    with the real exception. The response stays generic either way.
     """
     from django.core.signals import got_request_exception
     from django.http import HttpResponseBadRequest
 
-    log.error(PROTECTED_FAILURE)
+    if exc is not None:
+        log.error("%s", PROTECTED_FAILURE, exc_info=(type(exc), exc, exc.__traceback__))
+    else:
+        log.error(PROTECTED_FAILURE)
     if outcome == "bad_request":
         # Django sends no signal for a 400 either.
         return HttpResponseBadRequest("<h1>Bad Request (400)</h1>", content_type="text/html")
+    if exc is not None:
+        send_request_exception(exc, request)
+        return _generic_server_error(request, log)
     try:
         raise ExposureError(PROTECTED_FAILURE) from None
     except ExposureError:

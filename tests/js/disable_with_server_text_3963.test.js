@@ -14,7 +14,7 @@
  * for an unchanged label).
  */
 import { describe, expect, it } from 'vitest';
-import { legacy, setup, submit } from './_form_events_harness.js';
+import { anyArgs, setup, submit } from './_form_events_harness.js';
 
 // Whitespace between elements, as a server-rendered page has it. Significant
 // child paths (the patch addressing): root -> [p, form]; form -> [button];
@@ -29,7 +29,7 @@ const PARAGRAPH = [0, 0];
 const BUTTON = [1, 0];
 const LABEL = [1, 0, 0];
 
-const handlers = { advance: legacy() };
+const handlers = { advance: anyArgs() };
 
 async function press(patches, extra = {}) {
     const t = setup(STEPS, handlers, () => ({ patches, ...extra }));

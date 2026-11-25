@@ -14,6 +14,8 @@ Not shipped — lives under ``tests/`` purely to generate the committed JSON
 fixtures consumed by ``tests/js/vdom_client_faithful_diff.test.js``.
 """
 
+from typing import Any
+
 from djust import LiveView
 from djust.decorators import event_handler
 from djust import state
@@ -144,11 +146,11 @@ class KanbanTabsView(LiveView):
     # --- event handlers ---
 
     @event_handler
-    def switch_tab(self, tab):
+    def switch_tab(self, tab: int):
         self.active_tab = int(tab)
 
     @event_handler
-    def move_card(self, card_id, to_column, to_index=0):
+    def move_card(self, card_id: str, to_column: str, to_index: Any = 0):
         """Move a card to ``to_column`` at ``to_index`` (cross-column move).
 
         Uses an IMMUTABLE update — new column dicts + new ``cards`` lists — so

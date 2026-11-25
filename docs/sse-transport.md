@@ -108,7 +108,9 @@ used instead of the plain HTTP fallback.
 
 ### 1. Register URL patterns
 
-Add the SSE endpoints to your Django `urlpatterns`:
+A project made with `djust new` already routes them (#4216); `djust init`
+prints the lines when yours does not (#4242). In any other project, add the SSE
+endpoints to your Django `urlpatterns`:
 
 ```python
 # urls.py
@@ -172,6 +174,15 @@ advanced features are **not available** over SSE:
 For file uploads over SSE, implement a separate standard Django file upload
 endpoint and call it directly from your template.
 
+## Slow clients
+
+A session's queued frames are bounded in bytes by
+`LIVEVIEW_CONFIG["max_outbound_buffer_bytes"]` (default 4 MiB, `0` = no
+limit). When a client reads so slowly that the backlog passes it, the backlog
+is dropped and the stream ends; `EventSource` reconnects with the same id and
+the reconnect mount resyncs the page. The limits of every transport are in
+[Reconnection: slow clients and outbound limits](website/guides/reconnection.md#slow-clients-and-outbound-limits).
+
 ## Multi-process deployments
 
 SSE sessions are stored **in-process** in a Python dict. In multi-worker
@@ -179,12 +190,22 @@ deployments (e.g. `gunicorn -w 4`) the SSE stream GET and the event POST
 requests **must be routed to the same worker process**.
 
 Configure your load balancer with session affinity (sticky sessions) based on
-the session UUID in the URL path. Example nginx configuration:
+the session UUID in the URL path, with one upstream entry per process (here,
+one single-worker server per port). Hash the UUID itself, not the whole URL:
+the stream GET carries a query string and the POSTs go to `.../message/`, so
+`hash $request_uri` sends them to different processes (about half of all
+sessions with two backends). Example nginx configuration:
 
 ```nginx
+# The <uuid> of /djust/sse/<uuid>/ and /djust/sse/<uuid>/message/;
+# other requests keep their own key.
+map $uri $djust_sse_session {
+    ~^/djust/sse/(?<sid>[^/]+)/ $sid;
+    default $request_uri;
+}
+
 upstream djust_app {
-    # Sticky by the /djust/sse/<uuid>/ path segment
-    hash $request_uri consistent;
+    hash $djust_sse_session consistent;
     server 127.0.0.1:8000;
     server 127.0.0.1:8001;
 }

@@ -183,7 +183,7 @@ class AdminTailwindAdapter(TailwindAdapter):
         field_class = self.FIELD_CLASS_INVALID if has_errors else self.SELECT_CLASS
 
         html = f'<select name="{field_name}" id="id_{field_name}" class="{field_class}" '
-        html += f"dj-change=\"validate_field('{field_name}', value)\">"
+        html += 'dj-change="validate_field">'
         html += '<option value="">---------</option>'
 
         for opt in options:
@@ -213,11 +213,8 @@ class AdminTailwindAdapter(TailwindAdapter):
 
         html = f'<select name="{field_name}" id="id_{field_name}" class="{field_class}" '
         html += 'multiple size="6" '
-        # dj-change handler for M2M - extracts selected option values as array
-        dj_change = (
-            f"validate_field('{field_name}', Array.from(this.selectedOptions).map(o => o.value))"
-        )
-        html += f'dj-change="{dj_change}">'
+        # The client sends a <select multiple>'s selected values as a list.
+        html += 'dj-change="validate_field">'
 
         for opt in options:
             selected = "selected" if opt["value"] in selected_values else ""
@@ -256,10 +253,30 @@ class AdminTailwindAdapter(TailwindAdapter):
 
         html = f'<input type="{input_type}" name="{field_name}" id="id_{field_name}" '
         html += f'value="{escape(formatted_value)}" class="{field_class}" '
-        html += f"dj-change=\"validate_field('{field_name}', value)\""
+        html += 'dj-change="validate_field"'
         if field.required:
             html += " required"
         html += " />"
+        return html
+
+    def _render_null_boolean(
+        self, field: forms.Field, field_name: str, value: Any, has_errors: bool
+    ) -> str:
+        """A nullable boolean as Django's three-way select (``NullBooleanSelect``): Unknown, Yes,
+        No. A checkbox has no "unknown", so an untouched Save stored None over True (#4218)."""
+        if value in (True, "true", "True", "1", 1):
+            current = "true"
+        elif value in (False, "false", "False", "0", 0):
+            current = "false"
+        else:
+            current = "unknown"
+        field_class = self.FIELD_CLASS_INVALID if has_errors else self.SELECT_CLASS
+        html = f'<select name="{field_name}" id="id_{field_name}" class="{field_class}" '
+        html += 'dj-change="validate_field">'
+        for option, label in (("unknown", "Unknown"), ("true", "Yes"), ("false", "No")):
+            selected = " selected" if option == current else ""
+            html += f'<option value="{option}"{selected}>{label}</option>'
+        html += "</select>"
         return html
 
     def _render_standard_field(
@@ -271,16 +288,24 @@ class AdminTailwindAdapter(TailwindAdapter):
         **kwargs: Any,
     ) -> str:
         """Render standard input/textarea/select field."""
+        if isinstance(field, forms.NullBooleanField):
+            return self._render_null_boolean(field, field_name, value, has_errors)
         field_class = self.get_field_class(field, has_errors)
         field_type = self._get_field_type(field)
         if field_type == "checkbox_multiple":
             # The base adapter renders this as a checkbox group; the admin
             # keeps its select (many-to-many fields take the options path).
             field_type = "select"
+        elif field_type == "radio":
+            # One radio per choice, the current value checked (Django's RadioSelect). The admin
+            # renders the label itself, so the group is named by aria-label.
+            return self._render_choice_group(
+                field, field_name, value, has_errors, "radio", **{**kwargs, "render_label": False}
+            )
 
         if field_type == "textarea":
             html = f'<textarea name="{field_name}" id="id_{field_name}" class="{field_class}" '
-            html += f'rows="4" dj-input="validate_field(\'{field_name}\', value)"'
+            html += 'rows="4" dj-input="validate_field"'
             if field.required:
                 html += " required"
             html += f">{escape(str(value) if value else '')}</textarea>"
@@ -290,7 +315,8 @@ class AdminTailwindAdapter(TailwindAdapter):
             checked = "checked" if value else ""
             html = f'<input type="checkbox" name="{field_name}" id="id_{field_name}" '
             html += f'class="{self.CHECKBOX_CLASS}" {checked} '
-            html += f"dj-change=\"validate_field('{field_name}', this.checked)\""
+            # The client sends a lone checkbox's checked state as the value.
+            html += 'dj-change="validate_field"'
             if field.required:
                 html += " required"
             html += " />"
@@ -298,7 +324,7 @@ class AdminTailwindAdapter(TailwindAdapter):
 
         elif field_type == "select":
             html = f'<select name="{field_name}" id="id_{field_name}" class="{field_class}" '
-            html += f"dj-change=\"validate_field('{field_name}', value)\">"
+            html += 'dj-change="validate_field">'
 
             if not field.required:
                 html += '<option value="">---------</option>'
@@ -313,14 +339,26 @@ class AdminTailwindAdapter(TailwindAdapter):
             return html
 
         else:
-            # Standard input field
+            # Standard input field. A zero is a value (``0`` bedrooms), not an empty field: in
+            # the change form's <form> an emptied required input would block every Save.
+            shown = "" if value is None else str(value)
             html = f'<input type="{field_type}" name="{field_name}" id="id_{field_name}" '
-            html += f'value="{escape(str(value) if value else "")}" class="{field_class}" '
-            html += f"dj-input=\"validate_field('{field_name}', value)\""
+            html += f'value="{escape(shown)}" class="{field_class}" '
+            html += 'dj-input="validate_field"'
+            # The constraints Django's widget carries (a DecimalField's ``step``, a CharField's
+            # ``maxlength``): without its ``step`` a number input refuses "1.5", and the form
+            # would not submit.
+            for name in _CONSTRAINT_ATTRS:
+                if name in field.widget.attrs:
+                    html += f' {name}="{escape(str(field.widget.attrs[name]))}"'
             if field.required:
                 html += " required"
             html += " />"
             return html
+
+
+#: Widget attributes that are input constraints the browser enforces on submit.
+_CONSTRAINT_ATTRS = ("step", "min", "max", "maxlength", "minlength")
 
 
 def register_admin_adapters() -> None:

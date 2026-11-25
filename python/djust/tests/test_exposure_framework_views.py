@@ -75,6 +75,8 @@ EXPLICIT = {
     "components/gallery/live_views.py:OverlayGalleryView",
     "components/gallery/live_views.py:TypographyGalleryView",
     "components/interactive_examples.py:DropdownMenuExample",
+    # Built per request by the function-based @live_view decorator (#4183).
+    "live_view.py:DynamicLiveView",
     # #4185: a documented base class; a subclass lists what its own template
     # reads in get_context_data() (test_a_terminal_subclass_* below).
     "components/ttyd/terminal.py:TtydTerminalView",
@@ -84,18 +86,11 @@ EXPLICIT = {
     "theming/gallery/live_views.py:InteractiveDropdownCatalogueView",
 }
 
-#: Shipped views pinned to the legacy policy (``exposure_policy = "legacy"`` in
+#: Shipped views pinned to the legacy policy (``exposure_policy = "explicit"`` in
 #: the class body, so a changed default does not convert them), each with what
 #: it relies on that explicit exposure does not offer yet. Not a place for
 #: "not converted yet".
-LEGACY = {
-    "live_view.py:DynamicLiveView": (
-        "The class the function-based @live_view decorator builds per request. The "
-        "decorated function returns its locals and they are set as view attributes "
-        "for the attribute walk to render; there is no declared context to give it "
-        "until #4183 rewrites the decorator."
-    ),
-}
+LEGACY = {}
 
 
 #: Built inside a function on each call, so there is no class to import.
@@ -235,12 +230,6 @@ class PublicExplicitPage(LiveView):
     template = "<div dj-root>public</div>"
 
 
-class PublicLegacyPage(LiveView):
-    exposure_policy = "legacy"
-    login_required = False
-    template = "<div dj-root>public</div>"
-
-
 class GatedExplicitPage(LiveView):
     exposure_policy = "explicit"
     login_required = True
@@ -282,8 +271,6 @@ def test_a_public_explicit_route_is_in_an_anonymous_visitors_route_map(settings)
     settings.ROOT_URLCONF = MODULE
     routes = _anonymous_route_map()
     assert routes.get("/routes/public-explicit/") == MODULE + ".PublicExplicitPage"
-    # The legacy control: the two policies agree.
-    assert routes.get("/routes/public-legacy/") == MODULE + ".PublicLegacyPage"
 
 
 def test_a_gated_explicit_route_stays_out_of_an_anonymous_route_map(settings):
@@ -303,7 +290,6 @@ def test_only_djusts_own_wrapper_object_is_looked_through():
     # marker would be inherited by any decorator around it. Identity is not.
     assert not is_protected_http_entry(_passthrough(entry))
     assert not is_protected_http_entry(login_required(entry))
-    assert not is_protected_http_entry(PublicLegacyPage.as_view())
     assert not is_protected_http_entry(None) and not is_protected_http_entry(3)
 
 
@@ -357,7 +343,7 @@ class LoggingTerminal(TtydTerminalView):
         super().mount(request, **kwargs)
         self.session_log = []
 
-    def on_ttyd_connect(self, timestamp="", user_agent="", **kwargs):
+    def on_ttyd_connect(self, timestamp: str = "", user_agent: str = "", **kwargs):
         super().on_ttyd_connect(timestamp=timestamp, user_agent=user_agent, **kwargs)
         self.session_log.append("Connected at %s" % timestamp)
 
@@ -387,7 +373,6 @@ urlpatterns = [
     path("ttyd-logging/", LoggingTerminal.as_view()),
     path("ttyd-explicit/", ExplicitTerminal.as_view()),
     path("routes/public-explicit/", PublicExplicitPage.as_view()),
-    path("routes/public-legacy/", PublicLegacyPage.as_view()),
     path("routes/gated-explicit/", GatedExplicitPage.as_view()),
     path("routes/login-decorated-explicit/", login_required(DecoratedExplicitPage.as_view())),
     path("routes/wrapped-explicit/", _passthrough(DecoratedExplicitPage.as_view())),
@@ -679,15 +664,7 @@ class WhoExplicitPage(LiveView):
         self.event_who = _who(self.request)
 
 
-class WhoLegacyPage(WhoExplicitPage):
-    exposure_policy = "legacy"
-
-
 class WhoGatedExplicitPage(WhoExplicitPage):
-    login_required = True
-
-
-class WhoGatedLegacyPage(WhoLegacyPage):
     login_required = True
 
 
@@ -731,13 +708,11 @@ _EVENT_ANSWERS = ("patch", "html_update", "noop", "error", "permission_denied", 
 
 #: (stack, the browser's session is logged in) -> the principal a PUBLIC view
 #: sees at mount and at an event, and whether a ``login_required`` view mounts.
-#: The legacy column is ``main``'s behaviour and must not move. "none" is a
-#: request with no ``user`` attribute at all.
 _PRINCIPALS = {
-    ("session-only", False): {"explicit": "anonymous", "legacy": "none", "gated": False},
-    ("session-only", True): {"explicit": "root", "legacy": "none", "gated": False},
-    ("djust(auth)", True): {"explicit": "root", "legacy": "root", "gated": True},
-    ("auth(djust)", True): {"explicit": "root", "legacy": "root", "gated": True},
+    ("session-only", False): {"explicit": "anonymous", "gated": False},
+    ("session-only", True): {"explicit": "root", "gated": False},
+    ("djust(auth)", True): {"explicit": "root", "gated": True},
+    ("auth(djust)", True): {"explicit": "root", "gated": True},
 }
 
 
@@ -748,13 +723,12 @@ async def _browser(django_user_model, logged_in: bool) -> Client:
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("stack, logged_in", sorted(_PRINCIPALS))
 async def test_a_public_view_has_one_principal_for_mount_and_event(
-    site_urls, django_user_model, stack, logged_in, policy
+    site_urls, django_user_model, stack, logged_in
 ):
-    expected = _PRINCIPALS[(stack, logged_in)][policy]
-    view = MODULE + (".WhoExplicitPage" if policy == "explicit" else ".WhoLegacyPage")
+    expected = _PRINCIPALS[(stack, logged_in)]["explicit"]
+    view = MODULE + ".WhoExplicitPage"
     browser = await _browser(django_user_model, logged_in)
     async with _StackSocket(stack, _session_cookie(browser)) as ws:
         mounted = await ws.answer(
@@ -770,13 +744,12 @@ async def test_a_public_view_has_one_principal_for_mount_and_event(
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("stack, logged_in", sorted(_PRINCIPALS))
 async def test_a_login_required_view_is_admitted_exactly_where_it_was(
-    site_urls, django_user_model, stack, logged_in, policy
+    site_urls, django_user_model, stack, logged_in
 ):
     admitted = _PRINCIPALS[(stack, logged_in)]["gated"]
-    view = MODULE + (".WhoGatedExplicitPage" if policy == "explicit" else ".WhoGatedLegacyPage")
+    view = MODULE + ".WhoGatedExplicitPage"
     browser = await _browser(django_user_model, logged_in)
     async with _StackSocket(stack, _session_cookie(browser)) as ws:
         mounted = await ws.answer(

@@ -3,267 +3,146 @@ Tests for debug state size visualization functionality.
 
 Tests _debug_state_sizes() method in PostProcessingMixin and its integration
 with get_debug_info() and get_debug_update().
+
+An explicit view reports a size only for a field declared ``client=True``: the
+debug projection never walks the instance, never reports a ``sys.getsizeof``
+memory figure, and reads every other field as ``"[redacted]"`` with no size.
 """
 
 import json
-import sys
+
 from djust import LiveView
+from djust.decorators import state
+
+
+def _size(value):
+    """The projected size: compact JSON, UTF-8 encoded as is."""
+    return len(json.dumps(value, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
 
 
 class TestDebugStateSizes:
     """Test _debug_state_sizes() method and state size reporting."""
 
     def test_debug_state_sizes_basic(self):
-        """Test basic state size calculation for simple types."""
+        """A client field reports its serialized size; the memory figure is never reported."""
 
         class SimpleView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
-            def mount(self, request, **kwargs):
-                self.count = 42
-                self.name = "test"
-                self.items = [1, 2, 3]
+            count = state(42, client=True)
+            name = state("test", client=True)
+            items = state(default_factory=lambda: [1, 2, 3], client=True)
 
         view = SimpleView()
-        view.mount(None)
 
         sizes = view._debug_state_sizes()
 
-        # Should include public attributes
-        assert "count" in sizes
-        assert "name" in sizes
-        assert "items" in sizes
+        assert set(sizes) == {"count", "name", "items"}
+        for field in ("count", "name", "items"):
+            assert set(sizes[field]) == {"memory", "serialized"}
+            assert sizes[field]["memory"] is None
+        assert sizes["count"]["serialized"] == _size(42)
+        assert sizes["items"]["serialized"] == _size([1, 2, 3])
 
-        # Should have memory and serialized keys
-        assert "memory" in sizes["count"]
-        assert "serialized" in sizes["count"]
-        assert "memory" in sizes["name"]
-        assert "serialized" in sizes["name"]
-
-        # Should be positive integers
-        assert sizes["count"]["memory"] > 0
-        assert sizes["count"]["serialized"] > 0
-
-    def test_debug_state_sizes_excludes_private(self):
-        """Test that private attributes are excluded from size report."""
+    def test_debug_state_sizes_report_only_declared_fields(self):
+        """Undeclared and private attributes, and a field with no ``client=True`` grant,
+        carry no size: the report is the declared fields, redacted unless granted."""
 
         class PrivateView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
+            shown = state("visible", client=True)
+            held = state("SIZE_SENTINEL")
+
             def mount(self, request, **kwargs):
-                self.public_var = "visible"
+                self.public_var = "undeclared"
                 self._private_var = "hidden"
-                self.__double_private = "also hidden"
 
         view = PrivateView()
         view.mount(None)
 
         sizes = view._debug_state_sizes()
 
-        assert "public_var" in sizes
-        assert "_private_var" not in sizes
-        assert "__double_private" not in sizes
-        assert "_PrivateView__double_private" not in sizes  # name-mangled
+        assert set(sizes) == {"shown", "held"}
+        assert sizes["shown"]["serialized"] > 0
+        assert sizes["held"] == {"memory": None, "serialized": None}
+        assert "SIZE_SENTINEL" not in json.dumps(sizes)
 
-    def test_debug_state_sizes_excludes_callables(self):
-        """Test that methods are excluded from size report."""
+    def test_debug_state_sizes_follow_declaration_order(self):
+        """The size report keys are the declared fields, in declaration order."""
 
-        class MethodView(LiveView):
-            exposure_policy = "legacy"
+        class OrderedView(LiveView):
+            exposure_policy = "explicit"
             template_name = "test.html"
 
-            def mount(self, request, **kwargs):
-                self.count = 0
-                self.handler = self.increment  # method reference
+            zebra = state(1, client=True)
+            alpha = state(2, client=True)
+            middle = state(3, client=True)
 
-            def increment(self):
-                self.count += 1
+        sizes = OrderedView()._debug_state_sizes()
 
-        view = MethodView()
-        view.mount(None)
-
-        sizes = view._debug_state_sizes()
-
-        assert "count" in sizes
-        assert "handler" not in sizes  # callable excluded
-        assert "increment" not in sizes  # method excluded
-        assert "mount" not in sizes  # inherited method excluded
-
-    def test_debug_state_sizes_handles_nonserializable(self):
-        """Test handling of objects that cannot be JSON serialized."""
-
-        class ComplexObject:
-            pass
-
-        class NonSerializableView(LiveView):
-            exposure_policy = "legacy"
-            template_name = "test.html"
-
-            def mount(self, request, **kwargs):
-                self.simple = "test"
-                self.complex = ComplexObject()
-
-        view = NonSerializableView()
-        view.mount(None)
-
-        sizes = view._debug_state_sizes()
-
-        # Simple should have both sizes
-        assert sizes["simple"]["memory"] > 0
-        assert sizes["simple"]["serialized"] > 0
-
-        # Complex has memory and serialized > 0 because json.dumps(default=str)
-        # converts any object to its string repr — serialization never fails.
-        assert sizes["complex"]["memory"] > 0
-        assert sizes["complex"]["serialized"] > 0
-
-    def test_debug_state_sizes_sorted_output(self):
-        """Test that size report keys are sorted alphabetically."""
-
-        class UnsortedView(LiveView):
-            exposure_policy = "legacy"
-            template_name = "test.html"
-
-            def mount(self, request, **kwargs):
-                self.zebra = 1
-                self.alpha = 2
-                self.middle = 3
-
-        view = UnsortedView()
-        view.mount(None)
-
-        sizes = view._debug_state_sizes()
-        keys = list(sizes.keys())
-
-        # Should be alphabetically sorted
-        assert keys == ["alpha", "middle", "zebra"]
+        assert list(sizes) == ["zebra", "alpha", "middle"]
 
     def test_debug_state_sizes_serialized_byte_accuracy(self):
-        """Test that serialized size accurately reflects UTF-8 byte count."""
+        """The serialized size is the UTF-8 byte count of the projected JSON."""
 
         class StringView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
-            def mount(self, request, **kwargs):
-                self.ascii = "test"  # 4 bytes
-                self.unicode = "tëst"  # 5 bytes (ë is 2 bytes in UTF-8)
-                self.emoji = "😀"  # 4 bytes
+            ascii = state("test", client=True)
+            unicode = state("tëst", client=True)  # ë is 2 bytes in UTF-8
+            emoji = state("😀", client=True)
 
-        view = StringView()
-        view.mount(None)
+        sizes = StringView()._debug_state_sizes()
 
-        sizes = view._debug_state_sizes()
-
-        # JSON serialized size includes quotes and escaping.
-        # json.dumps escapes non-ASCII to \uXXXX by default (ensure_ascii=True).
-        # "test" → '"test"' = 6 bytes
-        assert sizes["ascii"]["serialized"] == len('"test"'.encode())
-
-        # "tëst" → '"t\\u00ebst"' = 11 bytes (ë → \u00eb = 6 chars)
-        import json
-
-        assert sizes["unicode"]["serialized"] == len(json.dumps("tëst").encode())
-
-        # "😀" → '"\\ud83d\\ude00"' = 14 bytes (emoji → two \uXXXX surrogates)
-        assert sizes["emoji"]["serialized"] == len(json.dumps("😀").encode())
+        # The compact JSON text, with its quotes, in UTF-8 as written.
+        assert sizes["ascii"]["serialized"] == len('"test"'.encode())  # 6 bytes
+        assert sizes["unicode"]["serialized"] == len('"tëst"'.encode())  # 7 bytes
+        assert sizes["emoji"]["serialized"] == len('"😀"'.encode())  # 6 bytes
 
     def test_debug_state_sizes_in_get_debug_info(self):
         """Test that state_sizes is included in get_debug_info() response."""
 
         class InfoView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
-            def mount(self, request, **kwargs):
-                self.count = 100
+            count = state(100, client=True)
 
         view = InfoView()
-        view.mount(None)
 
         debug_info = view.get_debug_info()
 
         assert "state_sizes" in debug_info
         assert "count" in debug_info["state_sizes"]
-        assert debug_info["state_sizes"]["count"]["memory"] > 0
-        assert debug_info["state_sizes"]["count"]["serialized"] > 0
+        assert debug_info["state_sizes"]["count"]["serialized"] == _size(100)
 
     def test_debug_state_sizes_in_get_debug_update(self):
         """Test that state_sizes is included in get_debug_update() response."""
 
         class UpdateView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
-            def mount(self, request, **kwargs):
-                self.count = 0
+            count = state(0, client=True)
 
         view = UpdateView()
-        view.mount(None)
 
-        view.count = 42  # Update state
+        view.count = 4242  # Update state
 
         debug_update = view.get_debug_update()
 
         assert "state_sizes" in debug_update
-        assert "count" in debug_update["state_sizes"]
-
-    def test_debug_state_sizes_memory_uses_getsizeof(self):
-        """Test that memory size uses sys.getsizeof."""
-
-        class MemoryView(LiveView):
-            exposure_policy = "legacy"
-            template_name = "test.html"
-
-            def mount(self, request, **kwargs):
-                self.small = 1
-                self.large = [i for i in range(1000)]
-
-        view = MemoryView()
-        view.mount(None)
-
-        sizes = view._debug_state_sizes()
-
-        # Large list should have significantly more memory than small int
-        assert sizes["large"]["memory"] > sizes["small"]["memory"]
-
-        # Verify memory matches sys.getsizeof
-        assert sizes["small"]["memory"] == sys.getsizeof(1)
-        assert sizes["large"]["memory"] == sys.getsizeof(view.large)
-
-    def test_debug_state_sizes_with_default_fallback(self):
-        """Test that default=str fallback handles edge case objects."""
-
-        from datetime import datetime
-
-        class DateView(LiveView):
-            exposure_policy = "legacy"
-            template_name = "test.html"
-
-            def mount(self, request, **kwargs):
-                self.now = datetime(2024, 1, 1, 12, 0, 0)
-
-        view = DateView()
-        view.mount(None)
-
-        sizes = view._debug_state_sizes()
-
-        # datetime should be serializable via default=str
-        assert "now" in sizes
-        assert sizes["now"]["memory"] > 0
-        assert sizes["now"]["serialized"] > 0
-
-        # Serialized form should include str() representation
-        serialized = json.dumps(view.now, default=str)
-        assert sizes["now"]["serialized"] == len(serialized.encode("utf-8"))
+        assert debug_update["state_sizes"]["count"]["serialized"] == _size(4242)
 
     def test_debug_state_sizes_empty_view(self):
-        """Test size report for view with no public state variables."""
+        """Test size report for a view that declares no state."""
 
         class EmptyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
             def mount(self, request, **kwargs):

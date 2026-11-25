@@ -63,8 +63,7 @@ def test_missing_executable_fails_setup(tmp_path):
         generator._run_cmd(["missing-tool"], tmp_path)
 
 
-@pytest.mark.parametrize("entrypoint", [cli.cmd_new, cli.cmd_startproject])
-def test_cli_reports_failed_setup_without_success_message(entrypoint, capsys):
+def test_cli_reports_failed_setup_without_success_message(capsys):
     with (
         patch.object(
             generator,
@@ -73,7 +72,7 @@ def test_cli_reports_failed_setup_without_success_message(entrypoint, capsys):
         ),
         pytest.raises(SystemExit) as exc,
     ):
-        entrypoint(argparse.Namespace(name="child"))
+        cli.cmd_new(argparse.Namespace(name="child"))
     assert exc.value.code == 1
     output = capsys.readouterr().out
     assert "install failed" in output
@@ -218,7 +217,10 @@ def test_bare_project_has_a_placeholder_and_no_demo(tmp_path):
     assert "class ChildView(LiveView)" in views
     assert "theme_packs" not in views
     assert "add_item" not in views
-    assert "from django.urls import path\n" in (project / "child" / "urls.py").read_text()
+    urls = (project / "child" / "urls.py").read_text()
+    assert "djust.theming.urls" not in urls
+    # Bare still serves every transport: the SSE views are routed (#4216).
+    assert 'path("djust/", include(sse_urlpatterns))' in urls
     assert 'dj-click="ping"' in index
     assert "theme_head" not in base
     assert '"djust.components"' not in (project / "child" / "settings.py").read_text()

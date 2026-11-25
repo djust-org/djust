@@ -1,4 +1,4 @@
-{% extends "djust_admin/base.html" %}
+{% extends "djust_admin/base.html" %}{% load djust_attrs %}
 {% load djust_admin_tags %}
 
 {% block breadcrumb_items %}
@@ -10,11 +10,6 @@
 {% endblock %}
 
 {% block content %}
-<!-- Redirect on save -->
-{% if redirect_url %}
-<script>window.location.href = "{{ redirect_url|escapejs }}";</script>
-{% endif %}
-
 <div class="max-w-4xl mx-auto">
     <!-- Header -->
     <div class="mb-6">
@@ -42,8 +37,16 @@
     </div>
     {% endif %}
 
-    <!-- Form -->
-    <div class="bg-white shadow rounded-lg">
+    {% if save_errors %}
+    <div class="mb-4 rounded-md bg-red-50 p-4" role="alert">
+        {% for error in save_errors %}
+        <p class="text-sm font-medium text-red-800">{{ error }}</p>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <!-- Form: every Save submits the values on the page (#4218) -->
+    <form dj-submit="save" class="bg-white shadow rounded-lg">
         {% for fieldset in fieldsets %}
         <div class="{% if not forloop.first %}border-t border-gray-200{% endif %}">
             {% if fieldset.name %}
@@ -65,27 +68,15 @@
         <div class="px-4 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between rounded-b-lg">
             <div>
                 {% if object_pk and has_delete_permission %}
-                <a href="{{ delete_url }}"
+                <a href="{{ delete_url|djust_url_attr }}"
                    class="text-red-600 hover:text-red-800 text-sm font-medium">
                     Delete
                 </a>
                 {% endif %}
             </div>
-            <div class="flex items-center space-x-3">
-                <button type="button"
-                        dj-click="save_and_add_another()"
-                        class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                        {% if is_saving %}disabled{% endif %}>
-                    Save and add another
-                </button>
-                <button type="button"
-                        dj-click="save_and_continue()"
-                        class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
-                        {% if is_saving %}disabled{% endif %}>
-                    Save and continue editing
-                </button>
-                <button type="button"
-                        dj-click="save()"
+            {# Save is first in the document so that Enter in a field means Save, as in Django's admin. #}
+            <div class="flex flex-row-reverse items-center space-x-3 space-x-reverse">
+                <button type="submit"
                         class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                         {% if is_saving %}disabled{% endif %}>
                     {% if is_saving %}
@@ -98,8 +89,18 @@
                     Save
                     {% endif %}
                 </button>
+                <button type="submit" name="save_and_continue" value="1"
+                        class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        {% if is_saving %}disabled{% endif %}>
+                    Save and continue editing
+                </button>
+                <button type="submit" name="save_and_add_another" value="1"
+                        class="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                        {% if is_saving %}disabled{% endif %}>
+                    Save and add another
+                </button>
             </div>
         </div>
-    </div>
+    </form>
 </div>
 {% endblock %}

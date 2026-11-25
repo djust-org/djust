@@ -49,7 +49,7 @@ for the framework-side gaps that are explicitly deferred.
 The component library ships with ARIA markup on its interactive and feedback
 components. The table below is the accurate, per-component summary of what each
 component emits as of 1.0 — these are *guarantees*, each backed by a test in
-`python/djust/components/tests/test_component_aria.py`.
+`python/djust/tests/components/test_component_aria.py`.
 
 | Component | Roles / ARIA emitted |
 |-----------|----------------------|
@@ -609,7 +609,7 @@ class OrderView(LiveView):
     status = state("")
 
     @event_handler()
-    def save(self, **kwargs):
+    def save(self):
         self.status = "Order saved"
         self.push_commands(JS.focus("#order-summary"))
 ```

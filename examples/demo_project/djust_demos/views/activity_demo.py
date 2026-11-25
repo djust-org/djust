@@ -7,6 +7,7 @@ inactive panels via the HTML ``hidden`` attribute, but their DOM subtree
 is preserved. No re-render, no state loss.
 """
 
+from djust import state
 from djust.decorators import event_handler
 from djust_shared.views import BaseViewWithNavbar
 
@@ -16,18 +17,16 @@ class ActivityDemoView(BaseViewWithNavbar):
 
     template_name = "demos/activity_demo.html"
 
-    def mount(self, request, **kwargs):
-        # Server-side "active tab" is the single source of visibility truth.
-        # Every panel still renders — the inactive ones just get the
-        # ``hidden`` attribute on their wrapper.
-        self.active_tab = "profile"
-
-        # Per-panel public state. Each panel uses its own assigns so a
-        # handler that only updates one tab doesn't re-render the others.
-        self.profile_name = ""
-        self.profile_email = ""
-        self.notes_text = ""
-        self.counter = 0
+    # Server-side "active tab" is the single source of visibility truth.
+    # Every panel still renders — the inactive ones just get the ``hidden``
+    # attribute on their wrapper. Each panel keeps its own fields so a handler
+    # that only updates one tab doesn't re-render the others; persist="server"
+    # keeps them across the HTTP fallback and a reconnect.
+    active_tab = state("profile", persist="server")
+    profile_name = state("", persist="server")
+    profile_email = state("", persist="server")
+    notes_text = state("", persist="server")
+    counter = state(0, persist="server")
 
     @event_handler
     def switch_tab(self, tab: str = "", **kwargs):

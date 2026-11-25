@@ -141,11 +141,6 @@ pub enum Node {
         assignments: Vec<(String, String)>, // var_name, expression
         nodes: Vec<Node>,
     },
-    ReactComponent {
-        name: String,
-        props: Vec<(String, String)>,
-        children: Vec<Node>,
-    },
     /// Custom template tag handled by a Python callback.
     ///
     /// This is used for Django-specific tags like `{% url %}` and `{% static %}`
@@ -576,8 +571,7 @@ macro_rules! child_lists {
             | Node::Spaceless { nodes }
             | Node::AutoEscape { nodes, .. }
             | Node::Filter { nodes, .. } => [Some(nodes), None],
-            Node::ReactComponent { children, .. }
-            | Node::BlockCustomTag { children, .. }
+            Node::BlockCustomTag { children, .. }
             | Node::PartialDef { children, .. }
             | Node::Language { children, .. }
             | Node::Timezone { children, .. }
@@ -932,7 +926,7 @@ pub fn template_hash_hex(source: &str) -> String {
 ///
 /// Recurses into all Node variants that can hold child nodes:
 /// `If`, `For`, `Block`, `With`, `Spaceless`, and the BlockCustomTag /
-/// ReactComponent children. Variants that can't hold child Nodes
+/// PartialDef children. Variants that can't hold child Nodes
 /// (Text, Variable, Static, etc.) are leaves and don't recurse.
 pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &mut usize) {
     let mut includes = 0usize;
@@ -1007,9 +1001,6 @@ fn assign_marker_ids_inner(
             | Node::Timezone { children, .. }
             | Node::Localize { children, .. }
             | Node::LocalTime { children, .. } => {
-                assign_marker_ids_inner(children, prefix, counter, includes);
-            }
-            Node::ReactComponent { children, .. } => {
                 assign_marker_ids_inner(children, prefix, counter, includes);
             }
             // Leaf or non-AST-bearing variants — no recursion needed.
@@ -1139,9 +1130,7 @@ fn resolve_cycle_nodes(
             | Node::LocalTime { children, .. } => {
                 resolve_cycle_nodes(children, prefix, state)?;
             }
-            Node::BlockCustomTag { children, .. }
-            | Node::PartialDef { children, .. }
-            | Node::ReactComponent { children, .. } => {
+            Node::BlockCustomTag { children, .. } | Node::PartialDef { children, .. } => {
                 resolve_cycle_nodes(children, prefix, state)?;
             }
             // `{% ifchanged %}` is BOTH an id consumer and a container, so it
@@ -1191,6 +1180,24 @@ fn line_at(spans: &[Span], source: &str, i: usize) -> usize {
         .filter(|&&b| b == b'\n')
         .count()
         + 1
+}
+
+/// The error for a capitalized `<Name ...>` tag (#4006).
+fn capitalized_tag_error(name: &str, line: Option<usize>) -> DjangoRustError {
+    let at = line.map(|n| format!(" on line {n}")).unwrap_or_default();
+    if name.starts_with("Rust") {
+        return DjangoRustError::TemplateError(format!(
+            "<{name} /> component tags were removed in djust 2.0{at}. \
+             Use a djust component template tag or a Python component instead."
+        ));
+    }
+    DjangoRustError::TemplateError(format!(
+        "<{name}>{at} is a capitalized (JSX-style) component tag. React component tags were removed in \
+         djust 2.0 with djust.react and ReactMixin (#4006). Mount the widget with a JavaScript hook \
+         instead: dj-hook=\"{name}\" on an ordinary element, with the hook registered in \
+         window.djust.hooks (https://docs.djust.org/guides/hooks/). Write HTML element names in \
+         lowercase (<button>, not <Button>)."
+    ))
 }
 
 /// Django's invalid-tag diagnostic, including the terminators accepted by
@@ -2484,35 +2491,10 @@ fn parse_token_inner(
             }
         }
 
-        Token::JsxComponent {
+        Token::CapitalizedTag(name) => Err(capitalized_tag_error(
             name,
-            props,
-            children,
-            ..
-        } => {
-            // `<RustButton …/>`-style tags rendered `djust_components::ui`
-            // server-side until 2.0. Refuse them by name rather than turning
-            // them into React placeholders that render as an empty div.
-            if name.starts_with("Rust") {
-                return Err(DjangoRustError::TemplateError(format!(
-                    "<{name} /> component tags were removed in djust 2.0. \
-                     Use a djust component template tag or a Python component instead."
-                )));
-            }
-            // Convert token children to Node children for React components
-            let mut child_nodes = Vec::new();
-            for child in children {
-                if let Token::Text(text) = child {
-                    child_nodes.push(Node::Text(text.clone()));
-                }
-            }
-
-            Ok(Some(Node::ReactComponent {
-                name: name.clone(),
-                props: props.clone(),
-                children: child_nodes,
-            }))
-        }
+            Some(line_at(spans, source, *i)),
+        )),
 
         // Inline comments create no Django node. Block comments do, and
         // therefore count as content for the extends must-be-first rule.
@@ -2932,7 +2914,7 @@ fn collect_nested_raw_source(
                 content.push_str(text);
                 content.push_str("#}");
             }
-            _ => {}
+            Token::CapitalizedTag(name) => return Err(capitalized_tag_error(name, None)),
         }
         j += 1;
     }
@@ -3136,13 +3118,118 @@ pub fn extract_template_variables(
 /// chokepoint every producer flows through, so the for-loop transfer and the
 /// tag-operand walk cannot drift from it (#1646).
 fn settle_paths(paths: &mut Vec<String>) {
-    drop_index_segments(paths);
+    settle_index_segments(paths);
     // After the index segments are gone, so that `rows.0.items` and
     // `rows.items` are the same iterable when a key is matched to it.
     resolve_item_key_paths(paths);
+    // Before the whole reads: a length read the rows are read beside settles
+    // into the plain list path, which those rules then see (#3862).
+    resolve_length_reads(paths);
     resolve_whole_reads(paths);
     paths.sort();
     paths.dedup();
+}
+
+/// [`drop_index_segments`], except for an index read off a related manager's
+/// `all` that is ONLY ever read by index (#3862 item 1).
+///
+/// `{{ u.groups.all.0.name }}` reads one row. Erased to `groups.all.name` it
+/// was the same path as `{% for g in u.groups.all %}{{ g.name }}`, so the
+/// serializers built every row of the relation for one name. Kept, the path
+/// `groups.all.0.name` tells them to read `all()[:1]` (a `LIMIT`, or a slice of
+/// a prefetched cache), and the largest index read is the slice's bound.
+///
+/// The index is kept only where it is the WHOLE story of that `all`: every path
+/// through it reads an index and then a field of the row there. Any other read
+/// of the same `all` (a loop over it, `|length`, `.count`, an item key) needs the
+/// rows as a list,
+/// and a list and an indexed read cannot share one path-tree node, so the
+/// index is dropped there as before. Not for an `all` read straight off the
+/// root (`{{ qs.all.0.name }}`): a top-level QuerySet's own `all` is answered
+/// from its serialized rows (#4270), which already are the list.
+fn settle_index_segments(paths: &mut Vec<String>) {
+    // Every index that does not directly follow a relation's `all` goes, as
+    // before; the ones that do are candidates.
+    let after_all = |segments: &[&str], at: usize| {
+        at >= 2 && segments[at - 1] == "all" && is_index_segment(segments[at])
+    };
+    for path in paths.iter_mut() {
+        if !path.split('.').any(is_index_segment) {
+            continue;
+        }
+        let segments: Vec<&str> = path.split('.').collect();
+        *path = segments
+            .iter()
+            .enumerate()
+            .filter(|(at, segment)| !is_index_segment(segment) || after_all(&segments, *at))
+            .map(|(_, segment)| *segment)
+            .collect::<Vec<_>>()
+            .join(".");
+    }
+    paths.retain(|path| !path.is_empty());
+    // Drop the candidates a non-indexed read of the same `all` refuses, until
+    // none is left: dropping an outer index can merge an inner `all` with
+    // another read of it.
+    loop {
+        let mut refused: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for path in paths.iter() {
+            let segments: Vec<&str> = path.split('.').collect();
+            for at in 0..segments.len() {
+                if !after_all(&segments, at) {
+                    continue;
+                }
+                let prefix = segments[..at].join(".");
+                if paths
+                    .iter()
+                    .any(|other| reads_all_unindexed(other, &prefix))
+                {
+                    refused.insert(prefix);
+                }
+            }
+        }
+        if refused.is_empty() {
+            // The row at a kept index read WHOLE (`{{ u.groups.all.0 }}`,
+            // #4326) is its text: `groups.all.0.__str__`, which the serializers
+            // answer with the row's identity map, as for `{{ g }}` in a loop.
+            for path in paths.iter_mut() {
+                let segments: Vec<&str> = path.split('.').collect();
+                if segments.len() >= 3 && after_all(&segments, segments.len() - 1) {
+                    path.push('.');
+                    path.push_str(ROW_TEXT_PATH);
+                }
+            }
+            return;
+        }
+        for path in paths.iter_mut() {
+            let segments: Vec<&str> = path.split('.').collect();
+            let rebuilt: Vec<&str> = segments
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| {
+                    !(after_all(&segments, *at) && refused.contains(&segments[..*at].join(".")))
+                })
+                .map(|(_, segment)| *segment)
+                .collect();
+            if rebuilt.len() != segments.len() {
+                *path = rebuilt.join(".");
+            }
+        }
+    }
+}
+
+/// Does `path` read the `all` at `prefix` other than as "an index, then a field
+/// of the row there, or the row there whole"? (See [`settle_index_segments`].)
+fn reads_all_unindexed(path: &str, prefix: &str) -> bool {
+    if path == prefix {
+        return true;
+    }
+    let Some(rest) = path
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix('.'))
+    else {
+        return false;
+    };
+    !rest.split('.').next().is_some_and(is_index_segment)
 }
 
 fn drop_index_segments(paths: &mut Vec<String>) {
@@ -3158,9 +3245,20 @@ fn drop_index_segments(paths: &mut Vec<String>) {
     paths.retain(|path| !path.is_empty());
 }
 
-/// The item-key reads (`dictsort:'k'`, `{% regroup x by k %}`) that
-/// [`extract_template_variables`] files and that nothing ELSE in the template
-/// reads, per root (#3919).
+/// The item-key reads (`dictsort:'k'`, `dictsortreversed:'k'`, the
+/// `djust_item_key` filter) that [`extract_template_variables`] files and that
+/// nothing ELSE in the template reads, per root (#3919).
+///
+/// `{% regroup x by k %}` is NOT one of these (#4264): it resolves its
+/// attribute with `Variable`, which DOES call a method, so a method key groups
+/// by the called value and the JIT must keep it. Regroup keys are skipped here
+/// ([`RegroupKeysSkipped`]) but still filed by [`extract_template_variables`].
+/// Accepted edge: the same method key used by BOTH a `dictsort` and a
+/// `{% regroup %}` on one root stays key-only (dropped), so the regroup groups
+/// under `None`; one row set cannot satisfy both Django behaviors. (Unless the
+/// regroup's source IS that dictsort, `{% regroup users|dictsort:'k' by k %}`:
+/// Django's dictsort fails first and renders the empty result, which the dropped
+/// key reproduces.)
 ///
 /// Django's `dictsort` resolves its key with `_property_resolver`, which never
 /// CALLS what it finds, so a method or a related manager named as a key orders
@@ -3171,14 +3269,49 @@ fn drop_index_segments(paths: &mut Vec<String>) {
 pub fn extract_item_key_only_reads(
     template: &str,
 ) -> Result<std::collections::HashMap<String, Vec<String>>> {
-    use std::collections::HashMap;
-
     let tokens = crate::lexer::tokenize(template)?;
     let nodes = parse(&tokens)?;
+    Ok(item_key_only_reads_from_nodes(&nodes))
+}
+
+/// The item-key reads ([`extract_item_key_only_reads`]'s kind) that something ELSE in the
+/// template ALSO reads, per root (#4267): `{% for u in users|dictsort:'get_username' %}
+/// {{ u.get_username }}` gives `{"users": ["get_username"]}`.
+///
+/// The JIT keeps such a key in the row (the template prints it), so when it names a method
+/// the row holds the CALLED value where Django's `dictsort` sees an uncalled one. The JIT
+/// files those keys as method keys (`djust.serialization.CalledName`) and the engine's
+/// `dictsort` reads them as Django does. Only these templates pay for it.
+pub fn extract_printed_item_key_reads(
+    template: &str,
+) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    let tokens = crate::lexer::tokenize(template)?;
+    let nodes = parse(&tokens)?;
+    Ok(item_key_reads_from_nodes(&nodes, true))
+}
+
+/// [`extract_item_key_only_reads`] over parsed nodes (a seam for tests: a
+/// `{% regroup %}` handler is registered from Python, so a Rust test builds the
+/// node by hand).
+fn item_key_only_reads_from_nodes(
+    nodes: &[Node],
+) -> std::collections::HashMap<String, Vec<String>> {
+    item_key_reads_from_nodes(nodes, false)
+}
+
+/// The item-key reads per root that something else in the template also reads
+/// (`also_read`, [`extract_printed_item_key_reads`]) or that nothing else reads.
+fn item_key_reads_from_nodes(
+    nodes: &[Node],
+    also_read: bool,
+) -> std::collections::HashMap<String, Vec<String>> {
+    use std::collections::HashMap;
+
     let mut variables: HashMap<String, Vec<String>> = HashMap::new();
     {
         let _walk = RawBodyWalk::enter();
-        extract_from_nodes(&nodes, &mut variables);
+        let _regroup = RegroupKeysSkipped::enter();
+        extract_from_nodes(nodes, &mut variables);
     }
     let mut out = HashMap::new();
     for (root, mut paths) in variables {
@@ -3189,7 +3322,7 @@ pub fn extract_item_key_only_reads(
             .iter()
             .filter_map(|path| path.split_once(ITEM_KEY_MARK))
             .map(|(list_path, key)| format!("{list_path}{key}"))
-            .filter(|key| !read.contains(key))
+            .filter(|key| read.contains(key) == also_read)
             .collect();
         if keys.is_empty() {
             continue;
@@ -3198,7 +3331,82 @@ pub fn extract_item_key_only_reads(
         keys.dedup();
         out.insert(root, keys);
     }
-    Ok(out)
+    out
+}
+
+thread_local! {
+    /// Set while [`extract_item_key_only_reads`] walks a template.
+    static SKIP_REGROUP_ITEM_KEYS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Leave `{% regroup %}` keys out of the item-key reads (#4264).
+struct RegroupKeysSkipped {
+    previous: bool,
+}
+
+impl RegroupKeysSkipped {
+    fn enter() -> Self {
+        Self {
+            previous: SKIP_REGROUP_ITEM_KEYS.with(|flag| flag.replace(true)),
+        }
+    }
+}
+
+impl Drop for RegroupKeysSkipped {
+    fn drop(&mut self) {
+        SKIP_REGROUP_ITEM_KEYS.with(|flag| flag.set(self.previous));
+    }
+}
+
+/// The paths each context name reads ITSELF, per root (#4258).
+///
+/// The same walk as [`extract_template_variables`], except that a `{% for %}`
+/// loop variable's paths are NOT filed under the iterable. The JIT serializer
+/// needs that transfer (a row's fields), but it makes
+/// `{% for o in qs %}{{ o.first }}{% endfor %}` indistinguishable from
+/// `{{ qs.first }}`. This map tells them apart: the first files `first` under
+/// `o` only. A `{% with x=qs %}` alias keeps its transfer, since the alias IS
+/// the value. There is no scoping: a loop variable that shadows a context name
+/// (`{% for qs in groups %}{{ qs.first }}`) still files `first` under `qs`.
+pub fn extract_own_reads(template: &str) -> Result<std::collections::HashMap<String, Vec<String>>> {
+    use std::collections::HashMap;
+
+    let tokens = crate::lexer::tokenize(template)?;
+    let nodes = parse(&tokens)?;
+    let mut variables: HashMap<String, Vec<String>> = HashMap::new();
+    {
+        let _walk = RawBodyWalk::enter();
+        let _own = OwnReadsWalk::enter();
+        extract_from_nodes(&nodes, &mut variables);
+    }
+    for paths in variables.values_mut() {
+        settle_paths(paths);
+    }
+    Ok(variables)
+}
+
+thread_local! {
+    /// Set while [`extract_own_reads`] walks a template.
+    static SKIP_LOOP_TRANSFER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Skip the `{% for %}` loop-variable transfer for [`extract_own_reads`].
+struct OwnReadsWalk {
+    previous: bool,
+}
+
+impl OwnReadsWalk {
+    fn enter() -> Self {
+        Self {
+            previous: SKIP_LOOP_TRANSFER.with(|flag| flag.replace(true)),
+        }
+    }
+}
+
+impl Drop for OwnReadsWalk {
+    fn drop(&mut self) {
+        SKIP_LOOP_TRANSFER.with(|flag| flag.set(self.previous));
+    }
 }
 
 thread_local! {
@@ -3513,8 +3721,22 @@ fn extract_from_nodes(
         match node {
             Node::Located { nodes, .. } => extract_from_nodes(nodes, variables),
             Node::Variable(var_expr, filters, _in_attr) => {
-                // Extract from variable: {{ variable.path }}
-                extract_from_operand(var_expr, variables);
+                // Extract from variable: {{ variable.path }}. A relation's
+                // `all` piped straight into `length` is read for its row count
+                // only (#3862 item 3).
+                let head = var_expr.trim();
+                if filters.first().is_some_and(|(name, _)| name == "length")
+                    && is_relation_all_head(head)
+                {
+                    let mut local = std::collections::HashMap::new();
+                    extract_from_operand(head, &mut local);
+                    file_length_read(head, &mut local);
+                    for (root, paths) in local {
+                        variables.entry(root).or_default().extend(paths);
+                    }
+                } else {
+                    extract_from_operand(var_expr, variables);
+                }
                 // Extract from filter args: {{ a|default:fallback }} — `fallback`
                 // must be tracked as a dependency too, otherwise a nested
                 // {% if %}{{ x|default:dynamic }}{% endif %} silently drops
@@ -3586,7 +3808,10 @@ fn extract_from_nodes(
                     .trim();
                 record_iterated(iterable, variables);
                 let single_var = var_names.len() == 1;
-                for var_name in var_names {
+                // `extract_own_reads` (#4258) keeps a row's reads on the loop
+                // variable only: the iterable did not read them itself.
+                let transfer = !SKIP_LOOP_TRANSFER.with(|flag| flag.get());
+                for var_name in var_names.iter().filter(|_| transfer) {
                     if let Some(loop_var_paths) = variables.get(var_name) {
                         // Transfer paths from loop variable to iterable (but keep loop var)
                         // Prepend the iterable suffix so paths are correctly nested.
@@ -3639,6 +3864,23 @@ fn extract_from_nodes(
                 let mut body = HashMap::new();
                 extract_from_nodes(nodes, &mut body);
                 for (name, expr) in assignments {
+                    // `{% with n=u.groups.all|length %}` binds a COUNT (#4326):
+                    // a length read of the relation, and what the body reads
+                    // off `n` is read off an integer, not the relation.
+                    let parts = crate::filter_lexer::split_pipes(expr);
+                    let head = parts.first().copied().unwrap_or(expr).trim();
+                    if is_relation_all_head(head)
+                        && parts.get(1).is_some_and(|spec| {
+                            crate::filter_lexer::scan_filter_spec(spec.trim()).0 == "length"
+                        })
+                    {
+                        let mut local = HashMap::new();
+                        extract_from_operand(expr, &mut local);
+                        file_length_read(head, &mut local);
+                        merge_without_whole_reads(local, variables);
+                        body.remove(name);
+                        continue;
+                    }
                     // Binding is not a read of the value whole: what the body
                     // does with the alias decides that, below (#3911).
                     extract_without_whole_reads(expr, variables);
@@ -3671,18 +3913,6 @@ fn extract_from_nodes(
                 for (root, paths) in body {
                     variables.entry(root).or_default().extend(paths);
                 }
-            }
-            Node::ReactComponent {
-                props,
-                children,
-                name: _,
-            } => {
-                // Extract from component props
-                for (_prop_name, prop_value) in props {
-                    extract_from_operand(prop_value, variables);
-                }
-                // Recurse into children
-                extract_from_nodes(children, variables);
             }
             Node::AssignTag { args, name: _ } => {
                 // Extract variable references from the assign tag's
@@ -3896,8 +4126,19 @@ fn extract_from_nodes(
                 true_expr,
                 condition,
                 false_expr,
-                filters: _,
+                filters,
             } => {
+                // The filters apply to the chosen arm, and their ARGUMENTS
+                // are reads like a `{{ }}`'s (#787): `{{ a if c else b|add:x }}`
+                // parses the trailing `|add:x` onto the node, and without
+                // this `x` was never a dependency, so a partial render or the
+                // loop item store (#4325) kept the bytes built with the old
+                // `x`.
+                for (_name, arg) in filters {
+                    if let Some(arg) = arg {
+                        extract_from_filter_arg(arg, variables);
+                    }
+                }
                 // The condition is an EXPRESSION, not an operand (#2745): the
                 // renderer evaluates it with `evaluate_condition_for_if`, the
                 // same machinery as `{% if %}`, so `x > y` / `x and y` are
@@ -3982,7 +4223,20 @@ fn extract_from_variable(
     } else {
         // Has a path (e.g., "lease.property.name")
         let path = parts[1..].join(".");
-        variables.entry(root).or_default().push(path);
+        // The value at the path is read whole too (`{{ p.content_type }}`):
+        // settled into `content_type.__str__` when the same path is also read
+        // by field (`{{ p.content_type.model }}`), so the nested dict the
+        // serializers build carries the object's text (#4269). Not after an
+        // index (`rows.0` is a row, filed as the root's own read) or a
+        // relation method (`all` / `first` / `last`, whose rows and methods
+        // the serializers build their own way).
+        let last = parts[parts.len() - 1];
+        let whole = !is_index_segment(last) && !matches!(last, "all" | "first" | "last");
+        let entry = variables.entry(root).or_default();
+        if whole {
+            entry.push(format!("{path}.{WHOLE_READ_MARK}"));
+        }
+        entry.push(path);
     }
 }
 
@@ -4193,6 +4447,9 @@ fn record_regroup_item_key(
     args: &[String],
     variables: &mut std::collections::HashMap<String, Vec<String>>,
 ) {
+    if SKIP_REGROUP_ITEM_KEYS.with(|flag| flag.get()) {
+        return;
+    }
     // The second argument is `by`: the handler's `validate_at_parse` refuses
     // `{% regroup x y z %}` ("second argument to 'regroup' tag must be 'by'")
     // before extraction runs, so a tag that reaches here has it.
@@ -4226,14 +4483,30 @@ const ITERATED_MARK_STR: &str = "\u{4}";
 /// time (`dictsort:key`, #3910). Followed by the context VARIABLE that names it.
 const WHOLE_ROW_MARK: char = '\u{5}';
 
+/// A related manager's `all` is read for its LENGTH or truthiness only
+/// (`{{ u.groups.all|length }}`, `{% if u.groups.all %}`, #3862 item 3).
+/// Settled by [`resolve_length_reads`].
+const LENGTH_READ_MARK: char = '\u{6}';
+const LENGTH_READ_MARK_STR: &str = "\u{6}";
+
 /// Every mark this extractor files in the path channel; none is a path.
-const PATH_MARKS: [char; 5] = [
+const PATH_MARKS: [char; 6] = [
     ITEM_KEY_MARK,
     WHOLE_READ_MARK,
     ITEM_WHOLE_MARK,
     ITERATED_MARK,
     WHOLE_ROW_MARK,
+    LENGTH_READ_MARK,
 ];
+
+/// The path a related manager's `all` files when the template reads only how
+/// many rows it has (`groups.all.__len__`, #3862 item 3). The serializers
+/// (`serialize_queryset`, the Python codegen) answer it with a list of that
+/// many `None`s, counted by the QuerySet (`count()`, which a prefetched cache
+/// answers without a query), so no row is built into text: `str(row)` per row
+/// was the cost, and a `__str__` that reads a relation ran a query per row.
+/// Never an attribute read.
+pub const LENGTH_PATH: &str = "__len__";
 
 /// The path a row's TEXT is read through: a row read whole AND by field is
 /// serialized with `__str__` beside its fields, the key a serialized model
@@ -4272,10 +4545,11 @@ fn merge_without_whole_reads(
     variables: &mut std::collections::HashMap<String, Vec<String>>,
 ) {
     for (root, paths) in local {
-        variables
-            .entry(root)
-            .or_default()
-            .extend(paths.into_iter().filter(|path| path != WHOLE_READ_MARK_STR));
+        variables.entry(root).or_default().extend(
+            paths
+                .into_iter()
+                .filter(|path| !path.ends_with(WHOLE_READ_MARK)),
+        );
     }
 }
 
@@ -4426,6 +4700,88 @@ fn resolve_whole_reads(paths: &mut Vec<String>) {
     *paths = plain;
 }
 
+/// Settle the length reads in one root's paths (see [`LENGTH_READ_MARK`]).
+///
+/// A length read of `P` (`P` ends in `all`) becomes `P.__len__` ([`LENGTH_PATH`])
+/// when nothing else reads `P`: no loop over it, no field of its rows, no
+/// method of it, no item key. Otherwise the rows are serialized anyway and the
+/// list they make answers `|length` and `{% if %}` as well, so the read is the
+/// plain path `P` it always was.
+fn resolve_length_reads(paths: &mut Vec<String>) {
+    if !paths.iter().any(|path| path.ends_with(LENGTH_READ_MARK)) {
+        return;
+    }
+    let (marked, mut rest): (Vec<String>, Vec<String>) = std::mem::take(paths)
+        .into_iter()
+        .partition(|path| path.ends_with(LENGTH_READ_MARK));
+    let mut settled = Vec::with_capacity(marked.len());
+    for path in &marked {
+        // `groups.all.<mark>`: the prefix keeps its trailing dot.
+        let prefix = &path[..path.len() - LENGTH_READ_MARK.len_utf8()];
+        let Some(list) = prefix.strip_suffix('.') else {
+            continue;
+        };
+        let read_otherwise = rest
+            .iter()
+            .any(|other| other == list || other.starts_with(prefix));
+        settled.push(if read_otherwise {
+            list.to_string()
+        } else {
+            format!("{prefix}{LENGTH_PATH}")
+        });
+    }
+    rest.extend(settled);
+    *paths = rest;
+}
+
+/// Is `head` a relation's `all` read off a value (`u.groups.all`): three or
+/// more plain name segments, the last `all`? Only such a read is a candidate
+/// for [`LENGTH_READ_MARK`]: a top-level QuerySet's own `all` (`qs.all`) is
+/// answered from its serialized rows (#4270).
+fn is_relation_all_head(head: &str) -> bool {
+    let segments: Vec<&str> = head.split('.').collect();
+    segments.len() >= 3
+        && segments.last() == Some(&"all")
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && (is_index_segment(segment)
+                    || (!segment.starts_with('_')
+                        && segment.chars().all(|c| c.is_alphanumeric() || c == '_')))
+        })
+        && !is_index_segment(segments[0])
+}
+
+/// The tokens [`extract_from_expression`] reads names from.
+fn condition_tokens(expr: &str) -> Vec<&str> {
+    expr.split(|c: char| c.is_whitespace() || "()[]{}=!<>&+-*/%,".contains(c))
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Does a condition only TEST its operands (`and` / `or` / `not`), so that a
+/// bare operand is read for its truthiness? A comparison, `in` or `is` reads
+/// the value itself. Conservative: any `=`, `<`, `>` or `!` anywhere, quoted or
+/// not, says no.
+fn condition_tests_truthiness_only(expr: &str) -> bool {
+    !expr.contains(['=', '<', '>', '!'])
+        && !expr
+            .split(|c: char| c.is_whitespace() || c == '(' || c == ')')
+            .any(|word| word == "in" || word == "is")
+}
+
+/// File a length read of `head` in place of the plain read of it that
+/// [`extract_from_operand`] filed into `local` (one occurrence).
+fn file_length_read(head: &str, local: &mut std::collections::HashMap<String, Vec<String>>) {
+    if let Some((root, path)) = head.split_once('.') {
+        if let Some(paths) = local.get_mut(root) {
+            if let Some(at) = paths.iter().position(|p| p == path) {
+                paths.remove(at);
+            }
+        }
+    }
+    record_marked_read(head, LENGTH_READ_MARK_STR, local);
+}
+
 /// Settle the item-key reads in one root's paths (see [`ITEM_KEY_MARK`]).
 ///
 /// A key is kept only when the same iterable's items are read by field
@@ -4470,6 +4826,25 @@ fn extract_from_condition(
 ) {
     let mut local = std::collections::HashMap::new();
     extract_from_expression(expr, &mut local);
+    // `{% if u.groups.all %}` and `{% if u.groups.all|length > 1 %}` read how
+    // many rows there are, not the rows (#3862 item 3).
+    let truthiness_only = condition_tests_truthiness_only(expr);
+    for token in condition_tokens(expr) {
+        let parts = crate::filter_lexer::split_pipes(token);
+        let Some(head) = parts.first().map(|part| part.trim()) else {
+            continue;
+        };
+        if !is_relation_all_head(head) {
+            continue;
+        }
+        let length_read = match parts.get(1) {
+            None => truthiness_only,
+            Some(spec) => crate::filter_lexer::scan_filter_spec(spec.trim()).0 == "length",
+        };
+        if length_read {
+            file_length_read(head, &mut local);
+        }
+    }
     merge_without_whole_reads(local, variables);
 }
 
@@ -4504,12 +4879,7 @@ fn extract_from_expression(
     // half was entered as a context name spelled `default:b` while the real
     // dependency `b` was never recorded at all. Keeping the operand whole lets
     // `extract_from_operand` split it the way the RENDERER does.
-    let tokens: Vec<&str> = expr
-        .split(|c: char| c.is_whitespace() || "()[]{}=!<>&+-*/%,".contains(c))
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    for token in tokens {
+    for token in condition_tokens(expr) {
         // Check if this looks like a variable path (contains dots)
         if token.contains('.') && !token.starts_with('"') && !token.starts_with('\'') {
             extract_from_operand(token, variables);
@@ -7074,7 +7444,6 @@ mod dep_tests {
             Node::DjustAudio => "DjustAudio",
             Node::Static(_) => "Static",
             Node::With { .. } => "With",
-            Node::ReactComponent { .. } => "ReactComponent",
             Node::CustomTag { .. } => "CustomTag",
             Node::PartialCall { .. } => "PartialCall",
             Node::PartialDef { .. } => "PartialDef",
@@ -7164,11 +7533,6 @@ mod dep_tests {
             Node::With {
                 assignments: vec![("x".into(), "y".into())],
                 nodes: vec![],
-            },
-            Node::ReactComponent {
-                name: "MyComp".into(),
-                props: vec![("foo".into(), "bar".into())],
-                children: vec![],
             },
             Node::CustomTag {
                 name: "url".into(),
@@ -7756,5 +8120,455 @@ mod tag_context_tests {
             let cache = slot.as_ref().expect("the outer cache is back");
             assert_eq!(cache.tokens_ptr, outer.as_ptr() as usize);
         });
+    }
+}
+
+#[cfg(test)]
+mod own_reads_tests_4258 {
+    use super::{
+        extract_from_nodes, extract_item_key_only_reads, extract_own_reads,
+        extract_template_variables, item_key_only_reads_from_nodes, parse, record_regroup_item_key,
+        Node, RegroupKeysSkipped,
+    };
+
+    fn paths(template: &str, root: &str) -> Option<Vec<String>> {
+        extract_own_reads(template).unwrap().get(root).cloned()
+    }
+
+    #[test]
+    fn extract_own_reads_loop_row_read_stays_on_the_loop_variable() {
+        let t = "{% for o in orders %}{{ o.first }}{% endfor %}{{ orders.query }}";
+        assert_eq!(paths(t, "orders"), Some(vec!["query".to_string()]));
+        assert_eq!(paths(t, "o"), Some(vec!["first".to_string()]));
+        // The JIT's map still transfers the row read onto the iterable.
+        let full = extract_template_variables(t).unwrap();
+        assert!(full["orders"].contains(&"first".to_string()));
+    }
+
+    #[test]
+    fn extract_own_reads_keeps_the_with_alias_transfer() {
+        let t = "{% with x=orders %}{{ x.count }}{% endwith %}";
+        assert_eq!(paths(t, "orders"), Some(vec!["count".to_string()]));
+    }
+
+    #[test]
+    fn extract_own_reads_with_inside_loop_does_not_reach_the_iterable() {
+        let t = "{% for o in orders %}{% with y=o %}{{ y.first }}{% endwith %}{% endfor %}";
+        assert_eq!(paths(t, "o"), Some(vec!["first".to_string()]));
+        let orders = paths(t, "orders").unwrap_or_default();
+        assert!(!orders.iter().any(|p| p.starts_with("first")), "{orders:?}");
+    }
+
+    #[test]
+    fn extract_own_reads_direct_nested_read() {
+        let t = "{{ orders.first.name }}";
+        assert_eq!(paths(t, "orders"), Some(vec!["first.name".to_string()]));
+    }
+
+    #[test]
+    fn extract_own_reads_flag_is_restored_after_the_walk() {
+        let t = "{% for o in orders %}{{ o.first }}{% endfor %}";
+        let _ = extract_own_reads(t).unwrap();
+        let full = extract_template_variables(t).unwrap();
+        assert!(full["orders"].contains(&"first".to_string()));
+    }
+
+    // `regroup` is a handler registered from Python, so a Rust test cannot parse a
+    // `{% regroup %}` template: the guard is exercised on the recorder itself. The
+    // template-level behavior (extractor output on a real regroup template) is pinned
+    // by python/tests/test_jit_row_shape_differential_3911.py.
+    fn regroup_args() -> Vec<String> {
+        ["users", "by", "get_username", "as", "g"]
+            .iter()
+            .map(|a| a.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn regroup_key_is_recorded_unless_the_key_only_walk_skips_it_4264() {
+        let mut variables = std::collections::HashMap::new();
+        record_regroup_item_key(&regroup_args(), &mut variables);
+        assert!(!variables.is_empty(), "the full walk files the regroup key");
+
+        let mut skipped = std::collections::HashMap::new();
+        {
+            let _guard = RegroupKeysSkipped::enter();
+            record_regroup_item_key(&regroup_args(), &mut skipped);
+        }
+        assert!(skipped.is_empty(), "{skipped:?}");
+
+        // The guard is restored on drop, and nests.
+        let mut again = std::collections::HashMap::new();
+        record_regroup_item_key(&regroup_args(), &mut again);
+        assert_eq!(again, variables);
+        let outer = RegroupKeysSkipped::enter();
+        {
+            let _inner = RegroupKeysSkipped::enter();
+        }
+        let mut still_skipped = std::collections::HashMap::new();
+        record_regroup_item_key(&regroup_args(), &mut still_skipped);
+        assert!(still_skipped.is_empty());
+        drop(outer);
+    }
+
+    #[test]
+    fn printed_item_key_reads_are_the_sort_keys_the_template_also_reads_4267() {
+        let source = "{% for u in users|dictsort:'get_username' %}{{ u.get_username }}{% endfor %}\
+                      {% for u in users|dictsortreversed:'email' %}{{ u.pk }}{% endfor %}\
+                      {% for g in groups %}{% for u in g.user_set.all|dictsort:'get_full_name' %}\
+                      {{ u.get_full_name }}{% endfor %}{% endfor %}";
+        let printed = super::extract_printed_item_key_reads(source).unwrap();
+        assert_eq!(
+            printed.get("users"),
+            Some(&vec!["get_username".to_string()])
+        );
+        assert_eq!(
+            printed.get("groups"),
+            Some(&vec!["user_set.all.get_full_name".to_string()])
+        );
+        let only = super::extract_item_key_only_reads(source).unwrap();
+        assert_eq!(only.get("users"), Some(&vec!["email".to_string()]));
+        assert!(
+            super::extract_printed_item_key_reads("{{ u.get_username }}")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn item_key_only_reads_from_nodes_skips_a_hand_built_regroup_4264() {
+        let tokens = crate::lexer::tokenize(
+            "{% for u in users|dictsort:'get_username' %}{{ u }}{% endfor %}",
+        )
+        .unwrap();
+        let mut nodes = parse(&tokens).unwrap();
+        // Same root, a different key: the regroup is not a key-only read.
+        nodes.push(Node::CustomTag {
+            name: "regroup".to_string(),
+            args: ["users", "by", "get_full_name", "as", "g"]
+                .iter()
+                .map(|a| a.to_string())
+                .collect(),
+        });
+        let keys = item_key_only_reads_from_nodes(&nodes);
+        assert_eq!(keys.get("users"), Some(&vec!["get_username".to_string()]));
+
+        // A regroup alone reports nothing; the full walk still files its key.
+        let only = vec![nodes.pop().unwrap()];
+        assert!(item_key_only_reads_from_nodes(&only).is_empty());
+        let mut full = std::collections::HashMap::new();
+        extract_from_nodes(&only, &mut full);
+        assert!(
+            full.values().flatten().any(|p| p.contains("get_full_name")),
+            "{full:?}"
+        );
+    }
+
+    #[test]
+    fn item_key_only_reads_still_reports_a_dictsort_key_4264() {
+        let dictsort = "{% for u in users|dictsort:'get_username' %}{{ u }}{% endfor %}";
+        let keys = extract_item_key_only_reads(dictsort).unwrap();
+        assert_eq!(keys.get("users"), Some(&vec!["get_username".to_string()]));
+        // The walk restores the regroup guard: the full walk is unchanged by it.
+        let before = extract_template_variables(dictsort).unwrap();
+        let _ = extract_item_key_only_reads(dictsort).unwrap();
+        assert_eq!(before, extract_template_variables(dictsort).unwrap());
+        let mut variables = std::collections::HashMap::new();
+        record_regroup_item_key(&regroup_args(), &mut variables);
+        assert!(!variables.is_empty());
+    }
+
+    // #4269: a nested value read whole AND by field carries its text.
+    fn full_paths(template: &str, root: &str) -> Vec<String> {
+        extract_template_variables(template)
+            .unwrap()
+            .get(root)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn strs(paths: &[&str]) -> Vec<String> {
+        paths.iter().map(|p| p.to_string()).collect()
+    }
+
+    #[test]
+    fn a_nested_value_read_whole_and_by_field_files_its_text_4269() {
+        let t = "{% for p in perms %}{{ p.content_type }} {{ p.content_type.model }}{% endfor %}";
+        assert_eq!(
+            full_paths(t, "perms"),
+            strs(&["content_type", "content_type.__str__", "content_type.model"])
+        );
+        assert_eq!(
+            full_paths("{{ p.content_type }}{{ p.content_type.app_label }}", "p"),
+            strs(&[
+                "content_type",
+                "content_type.__str__",
+                "content_type.app_label"
+            ])
+        );
+        // Read whole alone: no text path, the leaf ships the text already.
+        assert_eq!(
+            full_paths(
+                "{% for p in perms %}{{ p.content_type }}{% endfor %}",
+                "perms"
+            ),
+            strs(&["content_type"])
+        );
+        // A filter argument prints the value too.
+        assert_eq!(
+            full_paths("{{ x|default:p.owner }}{{ p.owner.name }}", "p"),
+            strs(&["owner", "owner.__str__", "owner.name"])
+        );
+    }
+
+    #[test]
+    fn a_nested_value_used_but_not_printed_files_no_text_4269() {
+        // Iterated: the whole read of the path is the list, not a row.
+        assert_eq!(
+            full_paths("{% for x in p.items %}{{ x.name }}{% endfor %}", "p"),
+            strs(&["items", "items.name"])
+        );
+        assert_eq!(
+            full_paths(
+                "{{ p.items }}{% for x in p.items %}{{ x.name }}{% endfor %}",
+                "p"
+            ),
+            strs(&["items", "items.name"])
+        );
+        // A condition tests the value; it does not print it.
+        assert_eq!(
+            full_paths(
+                "{% if p.content_type %}{{ p.content_type.model }}{% endif %}",
+                "p"
+            ),
+            strs(&["content_type", "content_type.model"])
+        );
+        // A `{% with %}` binding is not a read either.
+        assert_eq!(
+            full_paths("{% with c=p.content_type %}{{ c.model }}{% endwith %}", "p"),
+            strs(&["content_type", "content_type.model"])
+        );
+        // An index is the root's own row read, unchanged.
+        assert_eq!(
+            full_paths("{{ rows.0 }}{{ rows.0.name }}", "rows"),
+            strs(&["name"])
+        );
+        // A relation method builds its own rows.
+        assert_eq!(
+            full_paths("{{ u.groups.first }}{{ u.groups.first.name }}", "u"),
+            strs(&["groups.first", "groups.first.name"])
+        );
+        assert_eq!(
+            full_paths("{{ u.groups.last }}{{ u.groups.last.name }}", "u"),
+            strs(&["groups.last", "groups.last.name"])
+        );
+        assert_eq!(
+            full_paths("{{ u.groups.all }}{{ u.groups.all.count }}", "u"),
+            strs(&["groups.all", "groups.all.count"])
+        );
+        // The marks never reach the item-key or own-read maps.
+        let t = "{% for p in perms %}{{ p.content_type }}{{ p.content_type.model }}{% endfor %}";
+        assert!(extract_item_key_only_reads(t).unwrap().is_empty());
+        assert_eq!(
+            paths(t, "p"),
+            Some(strs(&[
+                "content_type",
+                "content_type.__str__",
+                "content_type.model"
+            ]))
+        );
+    }
+
+    // #3862 item 1: an index read off a relation's `all` survives extraction
+    // when every read of that `all` is an index and then a field of the row.
+    #[test]
+    fn an_index_off_a_relation_all_survives_when_it_is_the_only_read_3862() {
+        let t = "{% for u in users %}{{ u.groups.all.0.name }}{% endfor %}";
+        assert_eq!(full_paths(t, "users"), strs(&["groups.all.0.name"]));
+        assert_eq!(
+            full_paths("{{ u.groups.all.0.name }}{{ u.groups.all.2.id }}", "u"),
+            strs(&["groups.all.0.name", "groups.all.2.id"])
+        );
+        // Reached through a list index and a container: only the `all` index stays.
+        assert_eq!(
+            full_paths("{{ d.users.0.groups.all.1.name }}", "d"),
+            strs(&["users.groups.all.1.name"])
+        );
+        // A nested relation's `all`, both indexed.
+        assert_eq!(
+            full_paths("{{ u.groups.all.0.permissions.all.1.codename }}", "u"),
+            strs(&["groups.all.0.permissions.all.1.codename"])
+        );
+    }
+
+    #[test]
+    fn an_index_off_a_relation_all_is_dropped_beside_any_other_read_3862() {
+        // A loop over the same `all` needs every row: the index goes, as before.
+        assert_eq!(
+            full_paths(
+                "{{ u.groups.all.0.name }}{% for g in u.groups.all %}{{ g.id }}{% endfor %}",
+                "u"
+            ),
+            strs(&["groups.all", "groups.all.id", "groups.all.name"])
+        );
+        // A method or a length read of the same `all`.
+        assert_eq!(
+            full_paths("{{ u.groups.all.0.name }}{{ u.groups.all.count }}", "u"),
+            strs(&["groups.all.count", "groups.all.name"])
+        );
+        assert_eq!(
+            full_paths("{{ u.groups.all.0.name }}{{ u.groups.all|length }}", "u"),
+            strs(&["groups.all", "groups.all.name"])
+        );
+        // An index that does not follow `all`, or a top-level `all`, is dropped.
+        assert_eq!(full_paths("{{ rows.0.name }}", "rows"), strs(&["name"]));
+        assert_eq!(full_paths("{{ qs.all.0.name }}", "qs"), strs(&["all.name"]));
+        // An outer index refused, the inner one merged with a loop is refused too.
+        assert_eq!(
+            full_paths(
+                "{{ u.a.all.0.b.all.1.c }}{% for x in u.a.all %}{% for y in x.b.all %}{{ y.d }}{% endfor %}{% endfor %}",
+                "u"
+            ),
+            strs(&["a.all", "a.all.b.all", "a.all.b.all.c", "a.all.b.all.d"])
+        );
+    }
+
+    // #3862 item 3: a relation's `all` read only for its length or truthiness.
+    #[test]
+    fn a_length_only_read_of_a_relation_all_files_the_length_path_3862() {
+        for t in [
+            "{% for u in users %}{{ u.groups.all|length }}{% endfor %}",
+            "{% for u in users %}{% if u.groups.all %}Y{% endif %}{% endfor %}",
+            "{% for u in users %}{% if not u.groups.all %}N{% endif %}{% endfor %}",
+            "{% for u in users %}{% if u.groups.all and u.is_active %}Y{% endif %}{% endfor %}",
+            "{% for u in users %}{% if u.groups.all|length > 1 %}Y{% endif %}{% endfor %}",
+            "{% for u in users %}{{ u.groups.all|length|add:1 }}{% endfor %}",
+        ] {
+            let paths = full_paths(t, "users");
+            assert!(
+                paths.contains(&"groups.all.__len__".to_string())
+                    && !paths.contains(&"groups.all".to_string()),
+                "{t}: {paths:?}"
+            );
+        }
+        assert_eq!(
+            full_paths(
+                "{% if u.groups.all %}{{ u.groups.all|length }}{% endif %}",
+                "u"
+            ),
+            strs(&["groups.all.__len__"])
+        );
+        // Through a container.
+        assert_eq!(
+            full_paths(
+                "{% for x in d.users %}{{ x.groups.all|length }}{% endfor %}",
+                "d"
+            ),
+            strs(&["users", "users.groups.all.__len__"])
+        );
+    }
+
+    #[test]
+    fn a_length_read_beside_a_row_read_stays_the_plain_list_3862() {
+        // The rows are serialized anyway: the list answers `|length` too.
+        for (t, want) in [
+            (
+                "{{ u.groups.all|length }}{% for g in u.groups.all %}{{ g }}{% endfor %}",
+                vec!["groups.all"],
+            ),
+            (
+                "{% if u.groups.all %}{% for g in u.groups.all %}{{ g.name }}{% endfor %}{% endif %}",
+                vec!["groups.all", "groups.all.name"],
+            ),
+            (
+                "{{ u.groups.all|length }}{{ u.groups.all.count }}",
+                vec!["groups.all", "groups.all.count"],
+            ),
+            ("{{ u.groups.all|length }}{{ u.groups.all|join:',' }}", vec!["groups.all"]),
+        ] {
+            assert_eq!(full_paths(t, "u"), strs(&want), "{t}");
+        }
+        // Not a length read: the rows (or their text) are read.
+        for t in [
+            "{{ u.groups.all|join:',' }}",
+            "{{ u.groups.all|first }}",
+            "{% if g in u.groups.all %}Y{% endif %}",
+            "{% if u.groups.all == x %}Y{% endif %}",
+            "{% if u.groups.all|first %}Y{% endif %}",
+            "{{ u.groups.all }}",
+        ] {
+            let paths = full_paths(t, "u");
+            assert!(paths.contains(&"groups.all".to_string()), "{t}: {paths:?}");
+            assert!(
+                !paths.iter().any(|p| p.contains("__len__")),
+                "{t}: {paths:?}"
+            );
+        }
+        // A top-level QuerySet's own `all` (two segments) is left alone.
+        assert_eq!(full_paths("{{ qs.all|length }}", "qs"), strs(&["all"]));
+        // The mark never reaches the item-key or own-read maps as a mark.
+        let t = "{{ u.groups.all|length }}";
+        assert!(extract_item_key_only_reads(t).unwrap().is_empty());
+        assert_eq!(paths(t, "u"), Some(strs(&["groups.all.__len__"])));
+    }
+
+    // #4326: the row at a kept index read whole files its text.
+    #[test]
+    fn the_row_at_an_index_read_whole_files_its_text_4326() {
+        assert_eq!(
+            full_paths("{{ u.groups.all.0 }}{{ u.groups.all.0.name }}", "u"),
+            strs(&["groups.all.0.__str__", "groups.all.0.name"])
+        );
+        assert_eq!(
+            full_paths("{{ u.groups.all.0 }}", "u"),
+            strs(&["groups.all.0.__str__"])
+        );
+        assert_eq!(
+            full_paths("{% if u.groups.all.1 %}Y{% endif %}", "u"),
+            strs(&["groups.all.1.__str__"])
+        );
+        // Beside a loop the rows are a list, as before.
+        assert_eq!(
+            full_paths(
+                "{{ u.groups.all.0 }}{% for g in u.groups.all %}{{ g.id }}{% endfor %}",
+                "u"
+            ),
+            strs(&["groups.all", "groups.all.id"])
+        );
+    }
+
+    // #4326: `{% with n=u.groups.all|length %}` binds a count.
+    #[test]
+    fn a_with_bound_length_is_a_length_read_4326() {
+        assert_eq!(
+            full_paths(
+                "{% with n=u.groups.all|length %}{{ n }}{% if n > 1 %}M{% endif %}{% endwith %}",
+                "u"
+            ),
+            strs(&["groups.all.__len__"])
+        );
+        assert_eq!(
+            full_paths(
+                "{% for u in users %}{% with n=u.groups.all|length %}{{ n }}{% endwith %}{% endfor %}",
+                "users"
+            ),
+            strs(&["groups.all.__len__"])
+        );
+        // Beside a row read of the same `all`, the plain list.
+        assert_eq!(
+            full_paths(
+                "{% with n=u.groups.all|length %}{{ n }}{% endwith %}{{ u.groups.all|join:',' }}",
+                "u"
+            ),
+            strs(&["groups.all"])
+        );
+        // An alias of the relation itself is unchanged.
+        assert_eq!(
+            full_paths(
+                "{% with gs=u.groups.all %}{{ gs|length }}{% endwith %}",
+                "u"
+            ),
+            strs(&["groups.all"])
+        );
     }
 }

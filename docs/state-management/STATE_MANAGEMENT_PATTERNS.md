@@ -126,7 +126,7 @@ class ProductSearchView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)  # Wait 500ms after last keystroke
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         """
         Typed: p-y-t-h-o-n (6 keystrokes in 2 seconds)
         Default (300ms element debounce): one request per pause
@@ -190,13 +190,13 @@ class CounterView(LiveView):
     count = state(0)
 
     @event_handler
-    def increment(self, **kwargs):
+    def increment(self):
         if self.count >= 100:
             return  # Server enforces the upper bound
         self.count += 1
 
     @event_handler
-    def decrement(self, **kwargs):
+    def decrement(self):
         self.count = max(0, self.count - 1)  # Server enforces the lower bound
 ```
 
@@ -268,7 +268,7 @@ class BlogPostEditor(DraftModeMixin, LiveView):
     tags = state("")
 
     @event_handler
-    def publish_post(self, title: str = "", body: str = "", tags: str = "", **kwargs):
+    def publish_post(self, title: str = "", body: str = "", tags: str = ""):
         BlogPost.objects.create(
             title=title,
             body=body,
@@ -346,7 +346,7 @@ class TemperatureDashboard(LiveView):
 
     @event_handler
     @throttle(interval=0.1)  # At most ~10 updates/second while dragging
-    def update_temperature(self, value: int = 0, **kwargs):
+    def update_temperature(self, value: int = 0):
         """dj-input sends the slider position as `value`."""
         self.temperature = max(0, min(120, value))
         self.celsius = round((self.temperature - 32) * 5/9, 1)
@@ -410,7 +410,7 @@ class LanguageAutocomplete(LiveView):
     @event_handler
     @cache(ttl=600, key_params=["value"])  # Cache for 10 minutes, keyed on the text
     @debounce(wait=0.3)                    # Debounce typing
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         """
         User types "python":
         1. First time: Query database → cache result
@@ -489,7 +489,7 @@ class ColorSliderView(LiveView):
 
     @event_handler
     @throttle(interval=0.1)  # At most one request per 100ms while dragging
-    def update_hue(self, value: int = 0, **kwargs):
+    def update_hue(self, value: int = 0):
         """dj-input sends the slider position as `value`."""
         self.hue = max(0, min(360, value))
         self.server_count += 1
@@ -548,7 +548,7 @@ class FormSubmitView(LiveView):
     """
 
     @event_handler
-    def save_data(self, title: str = "", **kwargs):
+    def save_data(self, title: str = ""):
         """
         During execution:
         - Button disabled and very transparent (opacity: 0.25)
@@ -631,7 +631,7 @@ Ensure loading states are announced:
 # BAD: 5 seconds is way too long!
 @event_handler
 @debounce(wait=5.0)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     """
     User waits 5 seconds after typing → frustrating!
     Sweet spot: 300-500ms
@@ -645,7 +645,7 @@ def search(self, value: str = "", **kwargs):
 # BAD: Caching real-time stock prices
 @event_handler
 @cache(ttl=300)
-def get_stock_price(self, symbol: str = "", **kwargs):
+def get_stock_price(self, symbol: str = ""):
     """
     Stock prices change every second!
     Don't cache data that changes frequently.
@@ -658,7 +658,7 @@ def get_stock_price(self, symbol: str = "", **kwargs):
 ```python
 # BAD: No server-side permission check
 @event_handler
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int = 0):
     """
     item_id comes from the client and can be any value.
     ALWAYS validate on the server.

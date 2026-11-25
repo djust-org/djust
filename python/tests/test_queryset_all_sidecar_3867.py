@@ -67,14 +67,12 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
         thing = _Thing()
 
         class _V(LiveView):
-            exposure_policy = "legacy"
-
-            def mount(self, request, **kwargs):
-                self.thing = thing
+            exposure_policy = "explicit"
 
             def get_context_data(self, **kwargs):
                 ctx = super().get_context_data(**kwargs)
-                self.__dict__["_all_method_rows"]["thing"] = _KEPT_ROWS
+                ctx["thing"] = thing
+                self.__dict__.setdefault("_all_method_rows", {})["thing"] = _KEPT_ROWS
                 return ctx
 
         _V.template = "<div dj-root>{{ thing }}</div>"
@@ -89,14 +87,12 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
         read. Rows kept under any other name (``ghost``) are not handed to the engine."""
 
         class _V(LiveView):
-            exposure_policy = "legacy"
-
-            def mount(self, request, **kwargs):
-                self.users = _users()
+            exposure_policy = "explicit"
 
             def get_context_data(self, **kwargs):
                 ctx = super().get_context_data(**kwargs)
-                self.__dict__["_all_method_rows"]["ghost"] = _GHOST_ROWS
+                ctx["users"] = _users()
+                self.__dict__.setdefault("_all_method_rows", {})["ghost"] = _GHOST_ROWS
                 return ctx
 
         _V.template = f"<div dj-root>{MIXED['count-then-loop']}</div>"
@@ -107,17 +103,20 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
 
     @pytest.mark.parametrize("name", ["count-then-loop", "loop-then-count"])
     def test_a_queryset_inside_a_container_keeps_no_rows(self, world, name) -> None:
-        """Y6: ``ctx.users`` is not a name in the context (the context holds ``ctx``), so no sidecar
-        entry can answer it and its rows are not kept (they hold evaluated models). The same mixed
-        read on a top-level name keeps them."""
+        """Y6: ``ctx.users`` is not a name in the context (the context holds ``ctx``), so no rows
+        are kept under it. Since #4326 the mixed read is answered by a raw twin of the CONTAINER,
+        kept under ``ctx`` (a context name), built from the rows the JIT fetched. The same mixed
+        read on a top-level name keeps its rows under that name."""
         from djust.testing import LiveViewTestClient
 
         def kept(source: str, attr: str, value) -> dict:
             class _V(LiveView):
-                exposure_policy = "legacy"
+                exposure_policy = "explicit"
 
-                def mount(self, request, **kwargs):
-                    setattr(self, attr, value())
+                def get_context_data(self, **kwargs):
+                    ctx = super().get_context_data(**kwargs)
+                    ctx[attr] = value()
+                    return ctx
 
             _V.template = f"<div dj-root>{source}</div>"
             client = LiveViewTestClient(_V)
@@ -127,5 +126,7 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
 
         nested = MIXED[name].replace("in users", "in ctx.users")
         assert nested != MIXED[name]
-        assert kept(nested, "ctx", lambda: {"users": _users()}) == {}
+        twin = kept(nested, "ctx", lambda: {"users": _users()})
+        assert set(twin) == {"ctx", "__djust_nested_twins__"}, twin
+        assert list(twin["ctx"]["users"]) == list(_users())
         assert "users" in kept(MIXED[name], "users", _users)  # control: a top-level name is kept

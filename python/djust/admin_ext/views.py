@@ -13,9 +13,10 @@ from urllib.parse import urlencode
 from django.contrib.admin.forms import AdminAuthenticationForm
 from django.contrib.auth import logout
 from django.contrib.auth.views import LoginView as DjangoLoginView
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.core.paginator import Paginator
 from django.db.models import ForeignKey, OneToOneField, Q
+from django.forms import CheckboxInput
 from django.http import Http404, HttpRequest, HttpResponse, HttpResponseRedirect
 from django.urls import Resolver404, resolve, reverse
 from djust import LiveView
@@ -25,6 +26,15 @@ from .._log_utils import sanitize_for_log
 from .forms import AdminFormMixin
 
 logger = logging.getLogger(__name__)
+
+#: The change form's submit buttons other than the plain Save (which goes to the change list).
+_SAVE_BUTTONS = ("save_and_continue", "save_and_add_another")
+
+#: Shown when a Save arrives without the form's values (#4218).
+SAVE_NOT_RECEIVED = (
+    "The form's values did not arrive with Save, so nothing was saved. "
+    "Reload the page and try again."
+)
 
 # Global registry for admin view configurations
 # This avoids storing non-serializable objects on view instances
@@ -108,12 +118,16 @@ def _serialize_widget_slots(
     """Convert a list of LiveView widget classes into the dict shape
     that ``_change_form_widgets.html`` / ``_change_list_widgets.html``
     expect. Each entry carries the dotted ``view_path`` so
-    ``{% live_render %}`` can resolve it.
+    ``{% live_render %}`` can resolve it, and the slot's ``view_id``: a stable
+    id, so that over a socket the widget is the same live child on every
+    re-render of the page (its state kept, ``mount()`` run once) rather than a
+    new ``child_N`` mounted on each parent event (#4223).
     """
     out: List[Dict[str, Any]] = []
-    for widget_cls in widget_classes:
+    for position, widget_cls in enumerate(widget_classes, start=1):
         entry = {
             "view_path": f"{widget_cls.__module__}.{widget_cls.__name__}",
+            "view_id": f"djust_admin_widget_{position}",
             "label": getattr(widget_cls, "label", ""),
             "size": getattr(widget_cls, "size", "md"),
         }
@@ -676,17 +690,28 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             raise PermissionDenied("You do not have permission to save this object.")
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
-        readonly_fields = self._model_admin.get_readonly_fields(self.request, self.object)
+        readonly_fields = set(self._model_admin.get_readonly_fields(self.request, self.object))
 
+        # Each shown field is an input when the form has it (the editable ones), or text read
+        # from the row when it is readonly; an excluded field is not on the page (#4218).
         fieldsets_data: List[Dict[str, Any]] = []
         for fieldset_name, fieldset_options in self._model_admin.get_fieldsets(
             self.request, self.object
         ):
             fields_data: List[Dict[str, Any]] = []
             for field_name in fieldset_options.get("fields", []):
-                if self.form_instance and field_name in self.form_instance.fields:
+                if field_name in readonly_fields:
+                    readonly_html = self._readonly_field_html(field_name)
+                    if readonly_html is not None:
+                        # A callable entry is not serializable view state: name it (#4244).
+                        fields_data.append(
+                            {
+                                "name": getattr(field_name, "__name__", str(field_name)),
+                                "html": readonly_html,
+                            }
+                        )
+                elif self.form_instance and field_name in self.form_instance.fields:
                     field_info = self.get_field_info(field_name)
-                    is_readonly = field_name in readonly_fields
 
                     field_html = self.as_live_field(
                         field_name,
@@ -698,7 +723,6 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
                         is_datetime=field_info.get("is_datetime", False),
                         is_time=field_info.get("is_time", False),
                         input_type=field_info.get("input_type"),
-                        readonly=is_readonly,
                         render_label=True,
                         render_errors=True,
                         render_help_text=True,
@@ -734,6 +758,7 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             "object_pk": object_pk,
             "is_saving": self.is_saving,
             "save_success": self.save_success,
+            "save_errors": self._save_errors(),
             "fieldsets": fieldsets_data,
             "has_delete_permission": self._model_admin.has_delete_permission(
                 self.request, self.object
@@ -747,11 +772,110 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
             "change_form_widgets": change_form_widgets,
         }
 
+    def _readonly_field_html(self, field_name: Any) -> Optional[str]:
+        """A readonly entry, as text (it is not a form field, #4218).
+
+        A model field is read from the row. Any other ``readonly_fields`` entry -- a
+        ModelAdmin method, a model attribute/method or a callable -- is shown as Django's
+        admin shows it (#4244): the label from ``short_description`` /
+        ``@admin.display(description=...)`` or the name, the value from calling it with
+        the object. See ``_readonly_callable_html``.
+        """
+        from django.core.exceptions import FieldDoesNotExist
+        from django.utils.html import escape
+
+        from djust.frameworks import get_adapter
+        from djust.serialization import model_field_value_withheld
+
+        if not isinstance(field_name, str):
+            return self._readonly_callable_html(field_name)
+        try:
+            model_field = self._model._meta.get_field(field_name)
+        except FieldDoesNotExist:
+            return self._readonly_callable_html(field_name)
+        obj = self.object
+        value: Any = None
+        if obj is not None and not model_field_value_withheld(self._model, field_name):
+            if getattr(model_field, "choices", None):
+                value = getattr(obj, f"get_{field_name}_display", lambda: None)()
+            else:
+                value = getattr(obj, field_name, None)
+            if isinstance(value, bool):
+                value = "Yes" if value else "No"
+        adapter = get_adapter("admin_tailwind")
+        label = str(getattr(model_field, "verbose_name", field_name)).capitalize()
+        return (
+            f'<div class="{adapter.WRAPPER_CLASS}">'  # type: ignore[attr-defined]
+            f'<span class="{adapter.LABEL_CLASS}">{escape(label)}</span>'  # type: ignore[attr-defined]
+            f'<div class="mt-1">{adapter._render_readonly(field_name, value)}</div>'  # type: ignore[attr-defined]
+            "</div>"
+        )
+
+    def _readonly_callable_html(self, name: Any) -> Optional[str]:
+        """A readonly entry that is not a model field, rendered as Django's admin does (#4244).
+
+        Escaping: the label and the value go through ``format_html`` (``conditional_escape``),
+        so a plain string returned by the method is escaped; a value the ModelAdmin author
+        marked safe (``format_html`` / ``mark_safe``) renders as HTML, exactly as Django's
+        read-only field display in ``django.contrib.admin.helpers``. The callable runs only with the object this view
+        already authorized, never on the add page (shown as ``-``). Unlike a model field,
+        ``model_field_value_withheld`` does not apply: the method is developer code that shows
+        what it chooses (Django parity). A name that resolves to nothing stays off the page.
+        """
+        from django.contrib.admin.utils import display_for_value, label_for_field, lookup_field
+        from django.utils.html import format_html
+        from django.utils.text import capfirst
+
+        from djust.frameworks import get_adapter
+
+        try:
+            label = label_for_field(name, self._model, self._model_admin)
+        except AttributeError:
+            logger.debug("readonly field %s resolves to nothing; not shown", sanitize_for_log(name))
+            return None
+        obj = self.object
+        empty: Any = "-"
+        get_empty = getattr(self._model_admin, "get_empty_value_display", None)
+        if callable(get_empty):
+            empty = get_empty()
+        display: Any = empty
+        if obj is not None:
+            # Django's admin read-only field display shows the empty value when the lookup
+            # raises these, instead of failing the page (e.g. a method touching a missing
+            # related row).
+            try:
+                _f, attr, value = lookup_field(name, obj, self._model_admin)
+            except (AttributeError, ValueError, ObjectDoesNotExist):
+                display = empty
+            else:
+                if getattr(attr, "boolean", False):
+                    display = "Yes" if value else ("No" if value is not None else empty)
+                else:
+                    display = display_for_value(value, empty)
+        adapter = get_adapter("admin_tailwind")
+        html: str = format_html(
+            '<div class="{}"><span class="{}">{}</span>'
+            '<div class="mt-1"><p class="py-2 text-gray-900">{}</p></div></div>',
+            adapter.WRAPPER_CLASS,  # type: ignore[attr-defined]
+            adapter.LABEL_CLASS,  # type: ignore[attr-defined]
+            capfirst(label),
+            display,
+        )
+        return html
+
+    def _save_errors(self) -> List[str]:
+        """What a failed Save tells the person: the refusal, and the form's own errors."""
+        errors = [self.error_message] if getattr(self, "error_message", "") else []
+        form_errors = getattr(self, "form_errors", None)
+        if isinstance(form_errors, (list, tuple)):
+            errors.extend(str(error) for error in form_errors)
+        return errors
+
     @event_handler
     def update_field(self, field: str, value: Any) -> None:
         """Handle field value change."""
         self.save_success = False
-        self.validate_field(field_name=field, value=value)
+        self.validate_field(field=field, value=value)
 
     def form_valid(self, form: Any) -> None:
         self._check_save_permission()
@@ -761,36 +885,82 @@ class ModelDetailView(AdminBaseMixin, AdminFormMixin, LiveView):
     def form_invalid(self, form: Any) -> None:
         self.save_success = False
 
-    @event_handler
-    def save(self, redirect: bool = True) -> None:
-        """Save the form."""
+    # The change form is one ``<form dj-submit="save">``: every Save carries the values on the
+    # page, so what is saved is what the person sees, whether or not each field's live
+    # ``validate_field`` event arrived (#4218). The handlers take strict parameters whatever the
+    # project's policy: the pressed button then arrives as its own ``name=value`` on every
+    # transport (ADR-036; under the legacy policy its only channel was ``_target``, which the
+    # HTTP fallback does not carry).
+
+    @event_handler(parameter_policy="strict")
+    def save(self, **form_values: Any) -> None:
+        """Save the submitted form, then go where the pressed button says (the change list)."""
+        then = None
+        for button in _SAVE_BUTTONS:
+            if form_values.pop(button, None) is not None:
+                then = button
+        self._save_submitted(form_values, then)
+
+    @event_handler(parameter_policy="strict")
+    def save_and_continue(self, **form_values: Any) -> None:
+        """Save the submitted form and stay on the page."""
+        self._save_submitted(form_values, "save_and_continue")
+
+    @event_handler(parameter_policy="strict")
+    def save_and_add_another(self, **form_values: Any) -> None:
+        """Save the submitted form and go to a new add page."""
+        self._save_submitted(form_values, "save_and_add_another")
+
+    def _save_submitted(self, form_values: Dict[str, Any], then: Optional[str]) -> None:
+        """Save the values a Save carried. A Save that carries none of the form's fields saves
+        nothing and says so: saving the values the server already holds would report "saved"
+        for edits that never arrived (#4218)."""
         self._check_save_permission()
         self.is_saving = True
         self.save_success = False
         self.redirect_url = None
+        self.error_message = ""
 
-        self.submit_form()
-
-        if self.save_success and redirect:
-            self.redirect_url = reverse(
-                f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}_changelist"
+        # The form holds only the fields the page lets the person edit (``_create_form``): a
+        # value sent for any other name (readonly, excluded, not shown) is not the form's.
+        fields = self._create_form().fields
+        received = {name: value for name, value in form_values.items() if name in fields}
+        if fields and not received:
+            logger.warning(
+                "djust admin: a Save for %s carried none of the form's values; nothing was saved",
+                sanitize_for_log(self._model._meta.label),
             )
+            self.error_message = SAVE_NOT_RECEIVED
+            self.is_saving = False
+            return
 
+        # A field the submission leaves out means what it means in a native post: an unchecked
+        # checkbox is not in the form data, and is False.
+        for name, form_field in fields.items():
+            if name not in received and isinstance(form_field.widget, CheckboxInput):
+                received[name] = False
+        adding = self.object is None or getattr(self.object, "pk", None) is None
+        self.submit_form(**received)
+
+        if not self.save_success:
+            self.is_saving = False
+            return
+        info = (
+            f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}"
+        )
+        if then == "save_and_continue":
+            # Staying on an add page would add the row again on the next Save (the HTTP fallback
+            # builds the page afresh): go to the new object's change page, as Django does.
+            if adding and self.object is not None:
+                self.redirect_url = reverse(f"{info}_change", args=[self.object.pk])
+        else:
+            page = "add" if then == "save_and_add_another" else "changelist"
+            self.redirect_url = reverse(f"{info}_{page}")
+        if self.redirect_url:
+            # Navigation every transport carries; the template's former inline
+            # ``<script>`` read a ``redirect_url`` the context never held.
+            self.live_redirect(self.redirect_url)
         self.is_saving = False
-
-    @event_handler
-    def save_and_continue(self) -> None:
-        """Save and stay on the same page."""
-        self.save(redirect=False)
-
-    @event_handler
-    def save_and_add_another(self) -> None:
-        """Save and redirect to add another."""
-        self.save(redirect=False)
-        if self.save_success:
-            self.redirect_url = reverse(
-                f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}_add"
-            )
 
 
 class ModelCreateView(ModelDetailView):
@@ -830,8 +1000,12 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
         self.object_str = str(self.object)
 
     def get_object(self) -> Any:
-        """The object being deleted."""
-        return getattr(self, "object", None)
+        """The row being deleted, loaded by its key through the ModelAdmin's queryset.
+
+        Not ``self.object``: over the HTTP fallback that is the view's restored state, not a
+        model instance, and the object permission (``has_delete_permission(request, obj)``) and
+        the delete read the row (#4218)."""
+        return self._model_admin.get_object(self.request, self.object_id)
 
     def has_object_permission(self, request: Any, obj: Any) -> bool:
         """The confirmation page and the delete need the ModelAdmin delete permission."""
@@ -852,14 +1026,22 @@ class ModelDeleteView(AdminBaseMixin, LiveView):
     @event_handler
     def confirm_delete(self) -> None:
         """Confirm and execute deletion."""
-        if not self._model_admin.has_delete_permission(self.request, self.object):
+        # The row by its key (``get_object``). An event has already been authorized against it
+        # (the view's object permission is ``has_delete_permission(request, row)``); the check
+        # here is for a direct call, and reads the same row.
+        obj = self.get_object()
+        if obj is None:
+            raise Http404("No such object.")
+        if not self._model_admin.has_delete_permission(self.request, obj):
             raise PermissionDenied("You do not have permission to delete this object.")
         self.is_deleting = True
-        self.object.delete()
+        obj.delete()
         self.redirect_url = reverse(
             f"{self._admin_site.name}:{self._model._meta.app_label}_{self._model._meta.model_name}_changelist"
         )
         self.is_deleting = False
+        # Navigation every transport carries; the template's inline ``<script>`` never ran.
+        self.live_redirect(self.redirect_url)
 
 
 class LoginView(_AdminRegistryMixin, DjangoLoginView):

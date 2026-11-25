@@ -7,7 +7,8 @@ designed for users with visual impairments or low vision conditions.
 
 from typing import Dict
 
-from .presets import ColorScale, ThemeTokens, ThemePreset
+from .presets import ThemePreset
+from ._types import ColorScale, ThemeTokens
 
 
 class HighContrastPresets:

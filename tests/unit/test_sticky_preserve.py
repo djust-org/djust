@@ -33,6 +33,7 @@ import pytest
 from django.template import Context, Template, TemplateSyntaxError
 
 from djust.live_view import LiveView
+from djust.testing import with_live_session
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +82,7 @@ def _elements_with_attr(html: str, attr: str) -> List[Tuple[str, Dict[str, str]]
 class _StickyAudioPlayer(LiveView):
     """Sticky child — mimics an audio player preserved across navigation."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "audio-player"
     template = '<div><button dj-click="play">Play {{ current_track }}</button></div>'
@@ -96,7 +97,7 @@ class _StickyAudioPlayer(LiveView):
 class _StickyAlsoPreserved(LiveView):
     """Second sticky child — multi-sticky coexistence test."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "chat-widget"
     template = "<div><span>Chat {{ msg }}</span></div>"
@@ -108,7 +109,7 @@ class _StickyAlsoPreserved(LiveView):
 class _NonStickyChild(LiveView):
     """A regular (non-sticky) child — should be discarded on live_redirect."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div><button dj-click="click">Ephemeral</button></div>'
 
     def mount(self, request, **kwargs):
@@ -121,7 +122,7 @@ class _NonStickyChild(LiveView):
 class _StickyButClassFalse(LiveView):
     """Class does NOT set ``sticky = True`` — the tag kwarg must error."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div>nope</div>"
 
     def mount(self, request, **kwargs):
@@ -131,10 +132,10 @@ class _StickyButClassFalse(LiveView):
 class _StickyAdminOnly(LiveView):
     """Sticky + permission-gated — for the auth re-check test."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "admin-widget"
-    permission_required = "auth.admin"
+    permission_required = "auth.view_user"
     template = "<div>admin only</div>"
 
     def mount(self, request, **kwargs):
@@ -147,7 +148,7 @@ class _StickyAdminOnly(LiveView):
 
 
 class _ParentWithSticky(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -161,7 +162,7 @@ class _ParentWithSticky(LiveView):
 
 
 class _ParentWithNonSticky(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -175,7 +176,7 @@ class _ParentWithNonSticky(LiveView):
 
 
 class _ParentWithMultipleSticky(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -189,7 +190,7 @@ class _ParentWithMultipleSticky(LiveView):
 
 
 class _ParentWithStickyAndAdmin(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -418,34 +419,31 @@ class TestMultipleSticky:
 # ---------------------------------------------------------------------------
 
 
-class _FakeUser:
-    """Minimal authenticated-user stand-in for auth-recheck tests.
+def _saved_user(name, perms=()):
+    """A saved user holding ``perms`` (``app_label.codename``), fresh from the database.
 
-    Using a real Django ``User`` requires DB access + a ContentType
-    fixture for ``auth.Permission``; the sticky auth re-check only
-    inspects ``has_perms`` and ``is_authenticated``, so a fake is
-    sufficient AND keeps these tests DB-free.
+    The sticky auth re-check reads ``has_perms`` and ``is_authenticated``; a real user with a
+    real permission is what an explicit child's reuse identity needs.
     """
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import Permission
 
-    is_authenticated = True
-
-    def __init__(self, perms: set[str] | None = None):
-        self._perms = set(perms or ())
-
-    def has_perm(self, perm):
-        return perm in self._perms
-
-    def has_perms(self, perms):
-        return all(p in self._perms for p in perms)
+    user = get_user_model().objects.create_user(name, password="pw")
+    for perm in perms:
+        app_label, codename = perm.split(".")
+        user.user_permissions.add(
+            Permission.objects.get(content_type__app_label=app_label, codename=codename)
+        )
+    return get_user_model().objects.get(pk=user.pk)
 
 
+@pytest.mark.django_db
 class TestAuthRecheckRevoked:
     def test_auth_recheck_unmounts_sticky_on_permission_removal(self, rf):
         """Sticky uses ``permission_required``; strip the perm mid-session
         and verify the child is NOT in the post-redirect survivor map."""
-        user = _FakeUser(perms={"auth.admin"})
-        request = rf.get("/")
-        request.user = user
+        user = _saved_user("admin-1", perms={"auth.view_user"})
+        request = with_live_session(rf.get("/"), user)
         parent = _ParentWithStickyAndAdmin()
         parent.request = request
         parent.mount(request)
@@ -453,8 +451,7 @@ class TestAuthRecheckRevoked:
         assert "admin-widget" in parent._child_views
 
         # Now strip the permission and redirect.
-        new_request = rf.get("/other/")
-        new_request.user = _FakeUser(perms=set())  # perm revoked
+        new_request = with_live_session(rf.get("/other/"), _saved_user("admin-2"))  # no perm
         survivors = parent._preserve_sticky_children(new_request)
         # Permission revoked — sticky MUST be dropped.
         assert "admin-widget" not in survivors
@@ -465,11 +462,11 @@ class TestAuthRecheckRevoked:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.django_db
 class TestAuthRecheckRetained:
     def test_auth_recheck_passes_when_permission_retained(self, rf):
-        user = _FakeUser(perms={"auth.admin"})
-        request = rf.get("/")
-        request.user = user
+        user = _saved_user("admin-1", perms={"auth.view_user"})
+        request = with_live_session(rf.get("/"), user)
         parent = _ParentWithStickyAndAdmin()
         parent.request = request
         parent.mount(request)
@@ -477,8 +474,7 @@ class TestAuthRecheckRetained:
         assert "admin-widget" in parent._child_views
 
         # Redirect — permission retained.
-        new_request = rf.get("/other/")
-        new_request.user = user
+        new_request = with_live_session(rf.get("/other/"), user)
         survivors = parent._preserve_sticky_children(new_request)
         assert "admin-widget" in survivors
 
@@ -627,7 +623,7 @@ class TestStickyHoldOrdering:
     """
 
     def test_sticky_hold_frame_sent_before_mount_frame(self):
-        """Drive the real ``handle_mount`` through an in-memory fake
+        """Drive the real ``_mount_page`` through an in-memory fake
         consumer with ``sticky_preserved`` supplied. Assert the index
         of the ``sticky_hold`` payload in the ``send_json`` call list
         is LESS than the index of the ``mount`` payload."""
@@ -646,10 +642,10 @@ class TestStickyHoldOrdering:
 
         consumer = _FakeConsumer()
 
-        # Minimal inline fake that satisfies the handle_mount contract.
+        # Minimal inline fake that satisfies the _mount_page contract.
         # We synthesize the "mount" frame + the pre-mount sticky_hold
         # emission path by invoking the block directly — running the
-        # full handle_mount would require the Rust renderer and a
+        # full _mount_page would require the Rust renderer and a
         # channel layer. The block under test is deterministic and
         # small: render HTML -> scan slots -> send sticky_hold ->
         # send mount. We test the SEND ORDER in that exact shape by
@@ -679,10 +675,8 @@ class TestStickyHoldOrdering:
         # Replicate the site-under-test inline (keeps the assertion
         # anchored to the ORDER contract without needing the full
         # Rust renderer). This is exactly the sequence
-        # ``handle_mount`` emits when ``sticky_preserved`` is non-empty.
+        # ``_mount_page`` emits when ``sticky_preserved`` is non-empty.
         async def _emit_sequence():
-            from djust.websocket import _find_sticky_slot_ids
-
             matched = _find_sticky_slot_ids(html)
             survivors_final: dict = {}
             for sid, c in sticky_preserved.items():
@@ -709,7 +703,7 @@ class TestStickyHoldOrdering:
         )
 
     def test_handle_mount_emits_sticky_hold_when_preserved_dict_provided(self):
-        """When ``sticky_preserved`` is passed to ``handle_mount``, the
+        """When ``sticky_preserved`` is passed to ``_mount_page``, the
         sticky_hold frame is included in the outbound frame sequence.
         This locks the PARAMETER contract — if the kwarg is dropped in
         a future refactor, this test fails."""
@@ -717,9 +711,9 @@ class TestStickyHoldOrdering:
 
         from djust.websocket import LiveViewConsumer
 
-        sig = inspect.signature(LiveViewConsumer.handle_mount)
+        sig = inspect.signature(LiveViewConsumer._mount_page)
         assert "sticky_preserved" in sig.parameters, (
-            "handle_mount must accept sticky_preserved kwarg so the "
+            "_mount_page must accept sticky_preserved kwarg so the "
             "live_redirect path can request pre-mount sticky_hold emission."
         )
         # Default must be None so normal mounts don't trip the sticky branch.
@@ -809,13 +803,13 @@ class TestLiveRedirectRequestResolverMatch:
 
 
 # ---------------------------------------------------------------------------
-# Self-review Fix #4: handle_mount failure drains staged stickys
+# Self-review Fix #4: _mount_page failure drains staged stickys
 # ---------------------------------------------------------------------------
 
 
 class TestHandleLiveRedirectMountCleansStickyOnFailure:
     """Regression test for Fix #4 — a render/auth failure in the NEW
-    view's ``handle_mount`` MUST drain any staged sticky children so
+    view's ``_mount_page`` MUST drain any staged sticky children so
     their background work / async tasks clean up. Without this, the
     stickys sit on ``self._sticky_preserved`` with zombie tasks
     running against a detached view."""
@@ -844,7 +838,7 @@ class TestHandleLiveRedirectMountCleansStickyOnFailure:
                 self._tick_task = None
                 self.view_instance = None
 
-            async def handle_mount(self, data, sticky_preserved=None, state_snapshot=None):  # type: ignore[override]
+            async def _mount_page(self, data, sticky_preserved=None, state_snapshot=None):  # type: ignore[override]
                 # Simulate a render-time failure AFTER preserved
                 # children are staged — e.g. Rust renderer raised,
                 # auth on the new view denied mid-way, etc.
@@ -865,7 +859,7 @@ class TestHandleLiveRedirectMountCleansStickyOnFailure:
 
         # Pre-stage stickys directly (simulates the outcome of
         # _preserve_sticky_children). handle_live_redirect_mount runs
-        # the staging step, then the wrapped handle_mount — we monkey-
+        # the staging step, then the wrapped _mount_page — we monkey-
         # patch the staging step via a parent-view mock.
         child_a = _FakeChild("audio")
         child_b = _FakeChild("chat")
@@ -917,7 +911,7 @@ class _StrictSticky(LiveView):
     attribute path covered by ``TestAuthRecheckRevoked``.
     """
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "strict-widget"
     template = "<div>strict</div>"
@@ -930,7 +924,7 @@ class _StrictSticky(LiveView):
 
 
 class _ParentWithStrictSticky(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -980,7 +974,7 @@ class TestOnStickyUnmountCancelsAsync:
         calls: list[str] = []
 
         class _StickyWithAsync(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             sticky = True
             sticky_id = "async-widget"
             template = "<div>async</div>"
@@ -1013,7 +1007,7 @@ class TestOnStickyUnmountCancelsAsync:
         never break the disconnect / redirect loop."""
 
         class _StickyWithBrokenCancel(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             sticky = True
             sticky_id = "broken-async"
             template = "<div>broken</div>"
@@ -1045,11 +1039,11 @@ class TestDisconnectDrainsStickyPreserved:
     """Regression test for Fix F2 — the WS disconnect path must call
     ``_on_sticky_unmount`` on any sticky child left in
     ``self._sticky_preserved`` (narrow window during a live_redirect where
-    the old view has staged survivors but ``handle_mount`` of the new view
+    the old view has staged survivors but ``_mount_page`` of the new view
     has not yet reattached them).
 
     Without this drain, a disconnect that lands between
-    ``_preserve_sticky_children`` and a successful ``handle_mount`` would
+    ``_preserve_sticky_children`` and a successful ``_mount_page`` would
     leak each sticky child's background tasks on a zombie consumer.
     """
 

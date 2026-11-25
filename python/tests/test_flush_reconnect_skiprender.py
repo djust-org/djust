@@ -93,17 +93,6 @@ class TestDynamicFlushCallback:
         await view.flush_push_events()
         assert consumer2.flush_called
 
-    @pytest.mark.asyncio
-    async def test_private_alias_uses_dynamic_lookup(self):
-        """_flush_pending_push_events (private alias) also uses dynamic lookup."""
-        view = _PushView()
-        consumer = _FakeConsumer()
-        view._ws_consumer = consumer
-        view.push_event("test", {"data": 1})
-
-        await view._flush_pending_push_events()
-        assert consumer.flush_called
-
 
 # ---------------------------------------------------------------------------
 # #700: Auto-skip render for push_commands-only handlers

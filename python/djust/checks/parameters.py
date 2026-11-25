@@ -1,12 +1,10 @@
 """djust event parameter contract checks, ``djust.V016``, ``V018`` and ``V031`` (ADR-036).
 
-A strict-policy handler's declaration problems surface at startup instead of
-on the first event. Each check calls the runtime's own resolvers
-(``get_handler_parameter_policy`` and ``get_strict_handler_contract``) on the
-same bound shape dispatch uses, so the check and the runtime share one cached
-contract and cannot disagree. Legacy-policy handlers are never reported:
-legacy is the default and its behavior is unchanged. The project-level policy
-value is ``djust.C022`` in ``configuration.py``. V016 also covers ADR-034
+A handler's declaration problems surface at startup instead of on the first
+event. Each check calls the runtime's own resolver
+(``get_strict_handler_contract``) on the same bound shape dispatch uses, so
+the check and the runtime share one cached contract and cannot disagree.
+V016 also covers ADR-034
 output-subscription callbacks, whose payload is bound by the same strict
 contract with the source component as trusted framework context. Handlers
 are found by ``_parameter_metadata.declared_handlers``, the discovery dispatch
@@ -74,36 +72,25 @@ def _handler_messages(
     name: str,
     member: Any,
     function: types.FunctionType,
-    project_policy_valid: bool,
     first_report: bool,
     recovery: Optional["_Recovery"] = None,
 ) -> list[CheckMessage]:
     from djust._parameter_contract import ContractError
-    from djust.validation import get_handler_parameter_policy, get_strict_handler_contract
+    from djust.validation import get_strict_handler_contract
 
     messages: list[CheckMessage] = []
     label = _label(cls, name, function)
     file_path, line_number = _location(function)
-    decorators = getattr(function, "_djust_decorators", {})
-    own_policy = decorators.get("event_handler", decorators.get("server_function", {})).get(
-        "parameter_policy"
-    )
     if recovery is not None:
         if recovery.report_here(cls, name) and not _is_check_suppressed("djust.V031"):
-            message = _v031(recovery, function, label, project_policy_valid)
+            message = _v031(recovery, function, label)
             if message is not None:
                 messages.append(message)
         if recovery.envelope:
             # The "_" names are also a V016 reserved-name error under strict;
             # V031 names the replacement, so the declaration is reported once.
             return messages
-    if own_policy is None and not project_policy_valid:
-        return messages  # djust.C022 reports the project value once.
-
     try:
-        policy = get_handler_parameter_policy(function)
-        if policy != "strict":
-            return messages
         handler = _bound(member, function, cls)
         contract = get_strict_handler_contract(handler)
     except ContractError as exc:
@@ -114,7 +101,7 @@ def _handler_messages(
                     "Strict dispatch rejects every call to this handler until its "
                     "declaration is fixed. Supported inputs are str, int, float, bool, "
                     "Decimal, UUID, date, Optional[T], list[T] and dict[str, T]; use explicit Any "
-                    "for unchecked input, or parameter_policy='legacy' to opt out.",
+                    "for unchecked input.",
                     label,
                     function,
                 )
@@ -266,25 +253,14 @@ def _v031(
     recovery: _Recovery,
     function: Any,
     label: str,
-    project_policy_valid: bool,
 ) -> Optional[CheckMessage]:
     """``djust.V031``: a dj-auto-recover handler that cannot receive its values.
 
     Either it still takes the 1.x ``_form_values`` / ``_data_attrs`` envelope,
-    which strict dispatch never delivers (an error under strict, a warning
-    under legacy, which 2.0 removes); or it declares the 2.0 parameters in a
+    which strict dispatch never delivers; or it declares the 2.0 parameters in a
     way the browser cannot fill: positional-only (the browser sends them by
-    name), or under the legacy policy (which sends only the envelope).
+    name).
     """
-    from djust._parameter_contract import ContractError
-    from djust.validation import get_handler_parameter_policy
-
-    policy: Optional[str] = None
-    if project_policy_valid or _own_policy(function) is not None:
-        try:
-            policy = get_handler_parameter_policy(function)
-        except ContractError:
-            policy = None  # djust.C022 reports the project value.
     file_path, line_number = _location(function)
     name = inspect.unwrap(function).__name__
     target = (
@@ -294,30 +270,25 @@ def _v031(
     )
     envelope = recovery.envelope
     if envelope:
-        strict = policy == "strict"
         how = []
         if recovery.declared:
             how.append("declares %s" % " / ".join(recovery.declared))
         if recovery.read:
             how.append("reads %s from **kwargs" % " / ".join(recovery.read))
-        return (DjustError if strict else DjustWarning)(
+        return DjustError(
             "%s: %s %s, which %s."
             % (
                 label,
                 target,
                 " and ".join(how),
-                "strict dispatch never delivers, so the event is refused"
-                if strict
-                else "only the legacy parameter policy delivers, and 2.0 removes it",
+                "strict dispatch never delivers, so the event is refused",
             ),
             hint=(
                 "Declare the values as parameters: def %s(self, %s). form_values "
                 "holds each named control (a str, a bool for a lone checkbox, a "
                 "list of str for a checkbox group or a multiple select) and "
                 "data_attrs the container's data-* attributes. Declare only the "
-                "one you use; the browser sends only declared names. The handler "
-                "needs the strict policy (parameter_policy='strict', or "
-                "event_parameter_policy='strict' for the project)." % (name, _RECOVERY_SIGNATURE)
+                "one you use; the browser sends only declared names." % (name, _RECOVERY_SIGNATURE)
             ),
             id="djust.V031",
             fix_hint="Replace %s with `%s` on `%s`."
@@ -326,46 +297,21 @@ def _v031(
             line_number=line_number,
         )
     parameters = _recovery_parameters(function)
-    if policy == "strict":
-        positional = [p.name for p in parameters if p.kind is inspect.Parameter.POSITIONAL_ONLY]
-        if not positional:
-            return None
-        return DjustError(
-            "%s: %s declares %s positional-only, but the browser sends the recovery "
-            "values by name; the event is refused." % (label, target, " / ".join(positional)),
-            hint=(
-                "Move the parameters after the '/' (or drop the '/') so they can be "
-                "passed by name: def %s(self, %s)." % (name, _RECOVERY_SIGNATURE)
-            ),
-            id="djust.V031",
-            fix_hint="Make %s keyword-passable on `%s`." % (", ".join(positional), label),
-            file_path=file_path,
-            line_number=line_number,
-        )
-    if policy != "legacy":
+    positional = [p.name for p in parameters if p.kind is inspect.Parameter.POSITIONAL_ONLY]
+    if not positional:
         return None
     return DjustError(
-        "%s: %s declares %s but runs under the legacy parameter policy, which sends "
-        "the values only as _form_values / _data_attrs; the event is refused."
-        % (label, target, " / ".join(p.name for p in parameters)),
+        "%s: %s declares %s positional-only, but the browser sends the recovery "
+        "values by name; the event is refused." % (label, target, " / ".join(positional)),
         hint=(
-            "Recovery values arrive as declared parameters only under the strict "
-            "policy. Add parameter_policy='strict' to the handler's @event_handler, "
-            "or set LIVEVIEW_CONFIG['event_parameter_policy'] = 'strict'."
+            "Move the parameters after the '/' (or drop the '/') so they can be "
+            "passed by name: def %s(self, %s)." % (name, _RECOVERY_SIGNATURE)
         ),
         id="djust.V031",
-        fix_hint='Add `parameter_policy="strict"` to the `@event_handler` on `%s`.' % label,
+        fix_hint="Make %s keyword-passable on `%s`." % (", ".join(positional), label),
         file_path=file_path,
         line_number=line_number,
     )
-
-
-def _own_policy(function: Any) -> Optional[str]:
-    decorators = getattr(function, "_djust_decorators", {})
-    policy = decorators.get("event_handler", decorators.get("server_function", {})).get(
-        "parameter_policy"
-    )
-    return policy if isinstance(policy, str) else None
 
 
 def _owner_classes() -> Iterator[tuple[type, Callable[[type], bool], bool]]:
@@ -399,17 +345,10 @@ def _owner_classes() -> Iterator[tuple[type, Callable[[type], bool], bool]]:
 
 @register("djust")
 def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """``djust.V016``, ``V018`` and ``V031``: strict-policy handler declarations (ADR-036)."""
-    from djust._parameter_contract import ContractError
+    """``djust.V016``, ``V018`` and ``V031``: handler parameter declarations (ADR-036)."""
     from djust._parameter_metadata import declared_handlers
-    from djust.validation import get_project_parameter_policy
 
     _RECOVERY_BINDINGS.clear()
-    try:
-        get_project_parameter_policy()
-        project_policy_valid = True
-    except ContractError:
-        project_policy_valid = False
 
     entries = [
         (cls, name, member, function)
@@ -449,7 +388,6 @@ def check_event_parameter_contracts(app_configs: Any, **kwargs: Any) -> list[Che
                 name,
                 member,
                 function,
-                project_policy_valid,
                 primary[function] is cls,
                 recovery.get(function),
             )

@@ -19,7 +19,7 @@ format!("#c{}:{}", python_float_repr(real), python_float_repr(imag))
 Some(EqClass::Mapping) => format!("m{}", e.repr),
 _ => format!("o{value:?}"),
 Err(_) => format!("d{text}"),
-Value::String(s) | Value::SafeString(s) => format!("s{s}"),
+Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => format!("s{s}"),
 other => format!("o{other:?}"),
 return "#nan".to_string();
 return "#0".to_string();
@@ -106,6 +106,10 @@ Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
 loop_dict.insert("parentloop".into(), parentloop);
 loop_dict.insert("length".into(), Value::Integer(len_values));
 let parent_if_loop_path = ctx.dj_if_loop_path().to_string();
+let env = format!(
+let site = format!(
+.flatten()
+.flatten();
 ctx.set_dj_if_loop_path(format!("{parent_if_loop_path}-{index}"));
 loop_dict.insert("counter0".into(), Value::Integer(counter as i64));
 loop_dict.insert("counter".into(), Value::Integer(counter as i64 + 1));
@@ -121,6 +125,7 @@ format!("{base}.{index}.{i}"),
 Some(html) => R::from(html),
 cache.insert(hash, html.to_string())
 item_html.to_string(),
+store.store(key, index, hash, html.to_string());
 other => Err(DjangoRustError::TemplateError(format!(
 format!(
 let kind = filters::python_type_name(&other).to_owned();
@@ -135,11 +140,6 @@ std::sync::Arc::from(resolved_nodes.as_slice())
 "Recursive named partials selected by dynamic includes are unsupported for LiveViews".to_string(),
 output.identify(&format!("include:{}", name));
 Ok((String::new()).into())
-output.push_str(&format!("<div data-react-component=\"{name}\""));
-ctx_value.to_string()
-ctx_value.to_string()
-format!(
-output.push_str(&filters::html_escape_attr(&format!(
 .map(|v| v.to_string())
 Ok((format!(
 .into())
@@ -241,39 +241,27 @@ context.set("p".to_string(), Value::String("<b>".to_string()));
 args: vec!["p".into(), "'F'".into()],
 asvar: Some("v".into()),
 args: vec!["p".into(), "'F'".into()],
-'d' => result.push_str(&dt.format("%d").to_string()), // 01-31
-'j' => result.push_str(&dt.format("%-d").to_string()), // 1-31
-'D' => result.push_str(&dt.format("%a").to_string()), // Mon
-'l' => result.push_str(&dt.format("%A").to_string()), // Monday
-'m' => result.push_str(&dt.format("%m").to_string()), // 01-12
-'n' => result.push_str(&dt.format("%-m").to_string()), // 1-12
-'M' => result.push_str(&dt.format("%b").to_string()), // Jan
-'F' => result.push_str(&dt.format("%B").to_string()), // January
-'Y' => result.push_str(&dt.format("%Y").to_string()), // 2024
-'y' => result.push_str(&dt.format("%y").to_string()), // 24
-'H' => result.push_str(&dt.format("%H").to_string()), // 00-23
-'i' => result.push_str(&dt.format("%M").to_string()), // 00-59
-'s' => result.push_str(&dt.format("%S").to_string()), // 00-59
-'G' => result.push_str(&dt.format("%-H").to_string()), // 0-23
-'g' => result.push_str(&dt.format("%-I").to_string()), // 1-12
-'A' => result.push_str(&dt.format("%p").to_string()), // AM/PM
-let hour = dt.format("%-I").to_string().parse::<u32>().unwrap_or(0);
-let minute = dt.format("%M").to_string();
-let ampm = if dt.format("%P").to_string() == "am" {
-result.push_str(&format!("{} {}", hour, ampm));
-result.push_str(&format!("{}:{} {}", hour, minute, ampm));
-'w' => result.push_str(&dt.format("%w").to_string()), // 0 (Sun) - 6 (Sat)
-'W' => result.push_str(&dt.format("%V").to_string()), // ISO week number
-let day = dt.format("%-d").to_string().parse::<u32>().unwrap_or(0);
-let month = dt.format("%-m").to_string().parse::<u32>().unwrap_or(1);
-let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
-result.push_str(&days.to_string());
-let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
-'e' => result.push_str(&dt.format("%Z").to_string()),
-'c' => result.push_str(&dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()),
-'r' => result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string()),
-'U' => result.push_str(&dt.timestamp().to_string()),
-'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
+let name = |spec: &str| dt.strftime(spec).to_string();
+'d' => result.push_str(&format!("{:02}", dt.day())), // 01-31
+'j' => result.push_str(&dt.day().to_string()),       // 1-31
+'m' => result.push_str(&format!("{:02}", dt.month())), // 01-12
+'n' => result.push_str(&dt.month().to_string()),       // 1-12
+'Y' => result.push_str(&format!("{:04}", dt.year())), // 2024
+'y' => result.push_str(&format!("{:02}", i32::from(dt.year()).rem_euclid(100))), // 24
+'H' => result.push_str(&format!("{:02}", dt.hour())), // 00-23
+'i' => result.push_str(&format!("{:02}", dt.minute())), // 00-59
+'s' => result.push_str(&format!("{:02}", dt.second())), // 00-59
+'G' => result.push_str(&dt.hour().to_string()),       // 0-23
+'g' => result.push_str(&hour12.to_string()),          // 1-12
+result.push_str(&format!("{} {}", hour12, ampm));
+result.push_str(&format!("{}:{:02} {}", hour12, dt.minute(), ampm));
+'w' => result.push_str(&dt.weekday().to_sunday_zero_offset().to_string()), // 0 (Sun) - 6 (Sat)
+'W' => result.push_str(&format!("{:02}", dt.date().iso_week_date().week())), // ISO week number
+result.push_str(&dt.date().days_in_month().to_string());
+'c' => result.push_str(&format!(
+'r' => result.push_str(&format!(
+'U' => result.push_str(&dt.timestamp().as_second().to_string()),
+'N' => result.push_str(&format!("{}.", name("%b"))), // Month abbrev AP style
 type_name: "User".to_string(),
 display: "u0".to_string().into(),
 repr: "u0".to_string(),
@@ -301,8 +289,6 @@ Some("fr".to_string())
 let nodes = vec![Node::Text("Hello".to_string())];
 let nodes = vec![Node::Variable("name".to_string(), vec![], false)];
 context.set("name".to_string(), Value::String("World".to_string()));
-"name".to_string(),
-Value::String("it's \"q\" <b> a\\b\n".to_string()),
 context.set("show".to_string(), Value::Bool(true));
 "items".to_string(),
 Value::String("a".to_string()),
@@ -708,6 +694,7 @@ PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
 PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 Some("[]".to_string())
 let prefix = format!("{key}.");
+let prefix = format!("{key}.");
 let open = format!("<{tag} ");
 let close = format!("</{tag}>");
 for children in node.child_lists().into_iter().flatten() {
@@ -720,7 +707,6 @@ LAZY_SOURCE_FILES.insert(path.to_owned(), (modified, metadata.len(), source.clon
 for list in children.into_iter().flatten() {
 format!("{values:?}")
 keys.insert(operand.to_owned());
-let identity = current.unwrap_or(source).to_owned();
 source.to_owned(),
 let identity = current_name.unwrap_or(source).to_owned();
 source.to_owned(),
@@ -772,11 +758,7 @@ let str_repr = value.str()?.to_string();
 return Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind());
 let str_repr = value.str()?.to_string();
 Ok(str_repr.into_pyobject(py)?.to_owned().into_any().unbind())
-.entry(part.to_string())
-current.entry(part.to_string()).or_insert(PathNode::Leaf);
-.entry(part.to_string())
-current.entry(part.to_string()).or_insert(PathNode::Leaf);
-.entry(part.to_string())
+let entry_name = (*part).to_string();
 out.insert(name.to_string());
 marks.insert(format!("{prefix}.{WHOLE_MARK}"));
 dict.set_item("__str__", value.str()?.to_string())?;
@@ -793,6 +775,23 @@ let old_raw = &old_html[entry.html_start..old_html_end];
 text_node_index[entry_idx].html_end = new_html_end;
 e.html_start = (e.html_start as isize + delta_add) as usize;
 e.html_end = (e.html_end as isize + delta_add) as usize;
+let mut i = text_node_index.partition_point(|e| e.html_start <= pfx);
+if pfx > text_node_index[i].html_end {
+if old_bytes.get(entry.html_end) != Some(&b'<') {
+let new_start = usize::try_from(entry.html_start as isize + shift).ok()?;
+let old_raw = old_html.get(entry.html_start..entry.html_end)?;
+if entry.html_end >= tail_start && shift == final_shift {
+if old_bytes.get(entry.html_end..)? != new_bytes.get(new_end..)? {
+let next_new_start = usize::try_from(next.html_start as isize + shift).ok()?;
+if next.html_start < entry.html_end
+|| old_bytes.get(entry.html_end..next.html_start)?
+let start = (entry.html_start as isize + delta) as usize;
+let old_run_len = entry.html_end - entry.html_start;
+entry.html_start = start;
+entry.html_end = start + new_run_len;
+entry.html_end =
+(entry.html_end as isize + (start as isize - entry.html_start as isize)) as usize;
+entry.html_start = start;
 offsets.extend(span.close.map(|(s, e)| [s, e]).into_iter().flatten());
 offsets.extend(stamp.flatten());
 PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Template parsing error: {e}"))
@@ -845,6 +844,9 @@ slow.set_changed_keys(vec!["label".to_string(), "highlight_id".to_string()]);
 .map(|x| x["path"].to_string())
 view.set_changed_keys(vec!["highlight_id".to_string()]);
 view.set_changed_keys(vec!["rows".to_string()]);
+view.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
+slow.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
+view.set_changed_keys(vec!["label".to_string(), "rows".to_string()]);
 let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
 view.set_changed_keys(vec!["label".to_string()]);
 view.set_changed_keys(vec!["rows".to_string()]);

@@ -3,9 +3,9 @@
 ``@action`` records a failure as ``_action_state[name]["error"]``, which the
 action context provider renders as ``{{ name.error }}``. It stored
 ``str(exc)``, so exception text (which can carry view state or query values)
-reached the rendered HTML and the patch frame. For nonlegacy views it now
+reached the rendered HTML and the patch frame. For an explicit view it now
 stores a generic message, unless the handler raised the declared user-facing
-``ActionError``. Legacy views are unchanged.
+``ActionError`` (the control: its text does reach the page).
 
 Driven through a real runtime mount and event dispatch; the assertions read
 the WebSocket frames and the view's rendered HTML.
@@ -28,7 +28,7 @@ CALLS = []
 
 
 class ActionErrorView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><p id='err'>[{{ save.error }}]</p></div>"
 
     @action
@@ -42,11 +42,8 @@ class ActionErrorView(LiveView):
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["plain", "user"])
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_action_error_text_reaching_render(monkeypatch, kind, policy):
+async def test_action_error_text_reaching_render(kind):
     CALLS.clear()
-    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(ActionErrorView, "exposure_policy", policy)
     request = await sync_to_async(make_request)()
     runtime, transport = await mount(request, ActionErrorView, view=__name__ + ".ActionErrorView")
     transport.sent.clear()
@@ -59,14 +56,12 @@ async def test_action_error_text_reaching_render(monkeypatch, kind, policy):
     assert not any(frame.get("type") == "error" for frame in transport.sent), transport.sent
     frames = json.dumps(transport.sent)
     html = await sync_to_async(runtime.view_instance.render)()
-    legacy = policy == "legacy"
     if kind == "user":
-        # A declared user-facing message is shown under every policy.
+        # The control: a declared user-facing message is shown.
         assert USER_TEXT in frames
         assert "[" + USER_TEXT + "]" in html
     else:
-        assert (SENTINEL in frames) == legacy
-        assert (SENTINEL in html) == legacy
-        if not legacy:
-            assert "Action failed" in frames
-            assert "[Action failed]" in html
+        assert SENTINEL not in frames
+        assert SENTINEL not in html
+        assert "Action failed" in frames
+        assert "[Action failed]" in html

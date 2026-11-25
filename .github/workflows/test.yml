@@ -117,6 +117,10 @@ jobs:
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
       rust_skip: ${{ steps.scope.outputs.rust_skip }}
+      # The python-tests shard list, and the test files a pull request runs (empty: every
+      # root). See "Select the Python tests this pull request can affect" below.
+      python_shards: ${{ steps.select.outputs.python_shards }}
+      python_paths: ${{ steps.select.outputs.python_paths }}
     steps:
       # Full history so the base and head shas (and the merge-base) are
       # reachable; the docs shim does the same.
@@ -145,6 +149,39 @@ jobs:
               echo "event $EVENT_NAME is not scoped -- running everything"
               { echo "docs_only=false"; echo "rust_skip=false"; } >> "$GITHUB_OUTPUT" ;;
           esac
+
+      # Pull-request CI runs only the Python test files the change can affect
+      # (`scripts/select-tests.py --ci`): its direct consumers, plus the whole-tree merge
+      # gates, plus the doc scanners when a doc changed, as one shard. Everything else runs
+      # the whole fast tier as FULL_SHARDS shards: the merge queue, pushes, the nightly, a
+      # PR labelled `full-tests`, and any PR the selector answers FULL (dependencies, the
+      # test harness, a file no test names...). So a consumer the selection misses fails in
+      # the merge queue, before merge, one run later. FULL_SHARDS is the one place the shard
+      # count lives; tests/test_ci_python_test_shards.py pins everything that reads it.
+      - name: Select the Python tests this pull request can affect
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FULL_TESTS: ${{ contains(github.event.pull_request.labels.*.name, 'full-tests') }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BRANCH: ${{ github.head_ref }}
+          FULL_SHARDS: '[1, 2, 3, 4, 5, 6, 7, 8]'
+        run: |
+          set -euo pipefail
+          sel=FULL
+          if [ "$EVENT_NAME" = pull_request ] && [ "$FULL_TESTS" != true ]; then
+            # The selector prints FULL when it cannot decide; a crash counts as FULL too.
+            sel=$(python3 scripts/select-tests.py --ci --from "$PR_BASE_SHA" --to "$PR_HEAD_SHA" --branch "$PR_BRANCH") || sel=FULL
+          fi
+          if [ -z "$sel" ] || [ "$sel" = FULL ] || [ "$sel" = NONE ]; then
+            echo "python-tests: every root, $FULL_SHARDS shards"
+            { echo "python_shards=$FULL_SHARDS"; echo "python_paths="; } >> "$GITHUB_OUTPUT"
+          else
+            paths=$(echo "$sel" | tr '\n' ' ')
+            echo "python-tests: $(echo "$sel" | wc -l) selected file(s), one shard"
+            { echo "python_shards=[1]"; echo "python_paths=$paths"; } >> "$GITHUB_OUTPUT"
+          fi
 
   # Rust tests - runs in parallel
   rust-tests:
@@ -344,7 +381,19 @@ jobs:
   # evidence the matrix has value: PRs #450 / #452 shipped real 3.14-support
   # fixes, so it moved, it was not dropped.
   #
-  # SHARDED 4-way with pytest-split. Measured on the last completed run
+  # SHARDED 8-way with pytest-split (4-way until 2026-11). At 4 shards the
+  # slowest shard set PR wall-clock: on three green PR runs (44409752989,
+  # 44426375378, 44459632440) the pytest steps took 506-1028s, 589-936s and
+  # 449-654s, with shard CPU totals as uneven as 1562s vs 3473s. Most of the
+  # spread is the seeded sweep sample (tests/sweep_sample.py), which picks
+  # different cases each commit and so cannot be balanced from recorded
+  # durations. Replaying those runs' measured per-test times through
+  # `least_duration` puts the busiest shard at about 60% of its 4-shard load
+  # with 8 shards. The cost is one more checkout, install and collection per
+  # shard (about 1-2 minutes of runner time each); runner queue wait on these
+  # runs was 2-3s, so the extra jobs do not wait for capacity.
+  #
+  # Originally sharded 4-way. Measured on the last completed run
   # before sharding (run 33681681995): this job was 1191s, of which 1005s
   # was the pytest step (21773 items on the runner's 4 xdist workers), 139s
   # was `uv sync` + `maturin develop` (rust-cache full hit; the ~67s of cargo
@@ -352,7 +401,7 @@ jobs:
   # lint/type/doc checks. Every other job in this workflow is <= 4 min, so
   # the whole workflow's wall-clock WAS this one step.
   #
-  # Each shard runs `--splits 4 --group N` against the committed
+  # Each shard runs `--splits 8 --group N` against the committed
   # `.test_durations` (pytest-split balances the groups by recorded
   # duration; `-n auto` still parallelises inside the shard). When the file
   # is missing or stale, pytest-split falls back to splitting by test COUNT
@@ -393,17 +442,19 @@ jobs:
         # nightly and on a manual run (#4074). What only runs on Django 6 is covered before
         # merge by `python-tests-django6-only` below, from the skips these 5.2 shards record.
         django-version: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["5.2","6.0","6.1"]') || fromJSON('["5.2"]') }}
-        group: [1, 2, 3, 4]
-    name: python-tests (py${{ matrix.python-version }}, Django ${{ matrix.django-version }}, shard ${{ matrix.group }}/4)
+        # FULL_SHARDS (the changes job), or [1] for a pull request's selected tests.
+        group: ${{ fromJSON(needs.changes.outputs.python_shards) }}
+    name: python-tests (py${{ matrix.python-version }}, Django ${{ matrix.django-version }}, shard ${{ matrix.group }})
     # Installs the extension python-build compiled for this interpreter rather
     # than building it per shard. `needs` waits for every python-build cell;
     # a failed build skips the shards, and a skipped python-tests is not
     # "success", so the test-summary gate still fails.
-    # No `if` of its own: python-build is skipped on a docs/changelog-only
-    # change and a job whose needed job is skipped is skipped (it would need an
-    # explicit `always()` not to be). The same holds for every other job that
-    # needs python-build.
-    needs: python-build
+    # Its `if` repeats python-build's: a job that needs a skipped job is skipped
+    # anyway (it would need an explicit `always()` not to be), but a job that
+    # needs `changes` directly names its skip output (tests/test_ci_change_scope.py).
+    needs: [changes, python-build]
+    # Needs `changes` for the shard list. Skipped on a docs-only change, as python-build is.
+    if: needs.changes.outputs.docs_only != 'true'
     # The extension (built in python-build) is NOT given rust-tests'
     # CARGO_PROFILE_* override — measured, and it is a LOSS here. Tried on this job and reverted: the build step did drop
     # 118s -> 89s, but the test steps rose 104 -> 112s and 72 -> 91s, so the
@@ -511,7 +562,7 @@ jobs:
       # tests/test_ci_python_test_roots.py pins all three roots so the omission
       # cannot silently return.
       #
-      # Sharded: `--splits 4 --group N` selects this shard's quarter of that
+      # Sharded: `--splits 8 --group N` selects this shard's eighth of that
       # ONE collection; all three roots stay in the single invocation, so the
       # #2032 pin above still holds per shard.
       #
@@ -524,7 +575,7 @@ jobs:
       # measured on the committed file, 280/278/328/193s (1.70x) becomes
       # 270/270/270/270s (1.00x). Both algorithms give an unrecorded test the
       # average duration, and both collect the whole suite and deselect the
-      # other groups, so the union of the four shards is unchanged.
+      # other groups, so the union of the shards is unchanged.
       #
       # `--store-durations --clean-durations` records THIS RUNNER's times.
       # The split reads the durations file at configure time and the cache
@@ -591,7 +642,7 @@ jobs:
           sort -u -o "$status" "$status"
           echo "$(wc -l < "$out") changed path(s)"
 
-      - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }}/4)
+      - name: Run Python tests (parallel with pytest-xdist, shard ${{ matrix.group }})
         # PR fast tier: pull requests skip the duration-derived `slow` tier
         # (tests/slow_tier.py — > 1s in .test_durations: ~1.6% of tests,
         # ~82% of recorded time). Pushes to main (never cancelled, see the
@@ -603,7 +654,10 @@ jobs:
         # per file (local fast tier 205-222s -> 132s on 12 cores).
         # Pinned by tests/test_ci_pr_fast_tier.py.
         env:
-          DJUST_COLLECTED_FLOOR: "1"
+          # Off for a pull request's selected tests: the floor counts the whole collection.
+          DJUST_COLLECTED_FLOOR: ${{ needs.changes.outputs.python_paths == '' && '1' || '0' }}
+          PYTEST_PATHS: ${{ needs.changes.outputs.python_paths }}
+          SHARDS: ${{ needs.changes.outputs.python_shards }}
           # A merge-queue entry has no PR labels, so it is treated like an
           # unlabelled PR (fast tier, 3.12 only): the push to main that follows
           # the merge still runs the slow tier (3.12; other interpreters nightly).
@@ -621,7 +675,10 @@ jobs:
           # tests/skip_ledger.py: every skipped node id, for python-tests-django6-only.
           DJUST_RECORD_SKIPS: ${{ runner.temp }}/skipped.txt
         run: |
-          PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -v -n auto --dist loadfile -m "$PYTEST_MARK" -o faulthandler_timeout=1800 --splits 4 --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
+          splits=$(python3 -c 'import json, sys; print(len(json.loads(sys.argv[1])))' "$SHARDS")
+          # $PYTEST_PATHS is a pull request's selected files (word-split on purpose); empty, every root.
+          # shellcheck disable=SC2086
+          PYTHONPATH=. .venv/bin/python -m pytest ${PYTEST_PATHS:-tests/ python/tests/ python/djust/tests/} -v -n auto --dist loadfile -m "$PYTEST_MARK" -o faulthandler_timeout=1800 --splits "$splits" --group ${{ matrix.group }} --splitting-algorithm least_duration --durations-path .test_durations --store-durations --clean-durations
 
       # Ancillary to the gate, so it may never fail the job: the merge gate is
       # the pytest step above, and a flaky artifact upload must not block a
@@ -630,8 +687,8 @@ jobs:
       # interpreters' worth of 4 MB artifacts buys nothing.
       # `always()` matters more than it looks. The pytest step above is what
       # fails when `.test_durations` has drifted, and the documented repair is
-      # `make test-durations-from-ci RUN=<id>` — which needs all FOUR shard
-      # artifacts and refuses to merge three. Without `always()` the shard
+      # `make test-durations-from-ci RUN=<id>` — which needs every shard's
+      # artifact and refuses to merge a partial set. Without `always()` the shard
       # that fails the drift gate is exactly the shard that uploads nothing,
       # so the repair deadlocks on the one run that needed it.
       - name: Upload this shard's runner-recorded durations (#2584)
@@ -784,21 +841,29 @@ jobs:
           echo "UV_PYTHON=$UV_PYTHON" >> "$GITHUB_ENV"
           scripts/ci-install-prebuilt-djust.sh "$RUNNER_TEMP/djust-wheel"
 
-      # All four shard lists must be there: a shard that died before writing one would make
-      # this job quietly run a quarter less. tests/skip_ledger.py refuses an empty list.
+      # Every shard's list must be there: a shard that died before writing one would make
+      # this job quietly run an eighth less. tests/skip_ledger.py refuses an empty list.
       - name: Run on Django 6.1 the tests Django 5.2 skipped
         env:
           PYTEST_MARK: ${{ ((github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'full-tests')) || github.event_name == 'merge_group') && 'not nightly and not slow' || 'not nightly' }}
           DJUST_ONLY_IDS_FILE: ${{ runner.temp }}/skipped-on-5.2.txt
+          SHARDS: ${{ needs.changes.outputs.python_shards }}
+          SELECTED: ${{ needs.changes.outputs.python_paths != '' }}
           DJUST_SWEEP_SAMPLE: '1'
           DJUST_SWEEP_SEED: ${{ github.sha }}-django6-only
         run: |
+          expected=$(python3 -c 'import json, sys; print(len(json.loads(sys.argv[1])))' "$SHARDS")
           lists=$(find "$RUNNER_TEMP/skipped" -name skipped.txt | wc -l)
-          if [ "$lists" -ne 4 ]; then
-            echo "::error::expected 4 skip lists from the Django 5.2 shards, found $lists"
+          if [ "$lists" -ne "$expected" ]; then
+            echo "::error::expected $expected skip lists from the Django 5.2 shards, found $lists"
             exit 1
           fi
           cat "$RUNNER_TEMP"/skipped/*/skipped.txt | sort -u > "$DJUST_ONLY_IDS_FILE"
+          # A pull request's selected tests may skip nothing; the full run always skips some.
+          if [ "$SELECTED" = true ] && [ ! -s "$DJUST_ONLY_IDS_FILE" ]; then
+            echo "the selected tests skipped nothing on Django 5.2"
+            exit 0
+          fi
           echo "$(wc -l < "$DJUST_ONLY_IDS_FILE") test(s) skipped on Django 5.2"
           PYTHONPATH=. .venv/bin/python -m pytest tests/ python/tests/ python/djust/tests/ -n auto --dist loadfile -m "$PYTEST_MARK" -rs -q -o faulthandler_timeout=1800
 
@@ -1378,6 +1443,23 @@ jobs:
             --cov-report=json:coverage-security.json \
             --cov-fail-under=75
 
+      # The safe-markup guard's browser (jsdom) rows and differential (#4212). They skip
+      # where node + jsdom are missing, and no other Python job installs them, so they
+      # never ran; DJUST_REQUIRE_BROWSER_ORACLE turns that skip into a failure here.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install JavaScript dependencies (jsdom)
+        run: npm ci
+
+      - name: Run the safe-markup guard's browser rows
+        run: |
+          DJUST_REQUIRE_BROWSER_ORACLE=1 PYTHONPATH=. .venv/bin/python -m pytest \
+            python/tests/test_safe_markup_position_3864.py -k browser -q -p no:cacheprovider
+
       - name: Upload security coverage report
         if: always()
         uses: actions/upload-artifact@v7
@@ -1448,6 +1530,16 @@ jobs:
           cd ../..
         env:
           PYTHONPATH: .
+
+      # The demo project's own tests (rentals views and components, #4187):
+      # nothing else ran them, so a failing escape test went unnoticed. Same
+      # command as `make demo-tests` (which also puts ../../python first, for a
+      # worktree; here the installed prebuilt wheel is djust).
+      - name: Run the demo project's own tests (BLOCKING)
+        run: |
+          cd examples/demo_project
+          PYTHONPATH=../.. uv run --no-sync python -m pytest -p no:cacheprovider -o addopts= \
+            --rootdir=. --ds=demo_project.settings djust_rentals/tests djust_rentals/components/tests djust_shared/tests.py -q
 
   # The benchmark-gated job tests/benchmarks/conftest.py has claimed exists
   # since it was written (#2156). It did not: a grep for `--benchmark-only`

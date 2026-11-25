@@ -74,93 +74,45 @@ The leading underscore is a naming convention for intermediate data (QuerySets, 
 
 ### State Serialization Rules
 
-**Critical**: state that is persisted must be JSON-serializable. Under explicit exposure, the default, that means the fields you declare with `state(..., persist="server")` or `persist="client"`, and they take JSON primitives only (strings, numbers, booleans, `None`, lists and dicts of them); see [Declaring state](../state/explicit-exposure.md#declaring-state). The tables below were written for the legacy policy, where every public attribute was saved between events, and still describe a view that states `exposure_policy = "legacy"`.
+**Persisted state is JSON.** The fields you declare with
+`state(..., persist="server")` or `persist="client"` take JSON primitives only
+(strings, numbers, booleans, `None`, lists and dicts of them); see
+[Declaring state](../state/explicit-exposure.md#declaring-state). Store a date
+as an ISO string, a `Decimal` as a string and a model as its primary key, and
+load the object again in `handle_restore()` or `get_context_data()`.
 
-#### What's Serializable
-
-These types are safe to store in state:
-
-| Type | Examples | Notes |
-|------|----------|-------|
-| Primitives | `str`, `int`, `float`, `bool`, `None` | ✓ Always safe |
-| Collections | `list`, `dict`, `tuple`, `set` | ✓ Safe if contents are serializable |
-| Django models | `User`, `Product`, etc. | ✓ Serialized via JIT (Rust-backed) |
-| Django QuerySets | `Product.objects.filter(...)` | ✓ Hand to the template in `get_context_data()` |
-| Date/time | `datetime`, `date`, `time` | ✓ Auto-converted to ISO strings |
-| UUID | `uuid.UUID` | ✓ Auto-converted to string |
-| Decimal | `decimal.Decimal` | ✓ Auto-converted to string |
-
-#### What's NOT Serializable
-
-These types will cause serialization failures:
-
-| Type | Examples | Impact |
-|------|----------|--------|
-| Service instances | `boto3.client()`, `PaymentService()` | ✗ Converts to useless string `"<Client object at 0x...>"` |
-| API sessions | `requests.Session()`, `httpx.Client()` | ✗ Loses connection, headers, state |
-| Database connections | `connection.cursor()` | ✗ Can't serialize socket |
-| File handles | `open(...)`, `io.BytesIO()` | ✗ Can't serialize file descriptor |
-| Threads/locks | `threading.Thread()`, `threading.Lock()` | ✗ Not transferable across processes |
-| Cached methods | `@cached_property` results with services | ✗ If cached value is non-serializable |
-
-#### Detection & Prevention
-
-djust provides multiple layers of protection:
-
-**1. Runtime validation (`LIVEVIEW_CONFIG['strict_serialization']`, opt-in)**
-
-djust always *warns* about non-serializable state. It *raises* on two
-independent paths, so "warn-only" is not the whole story:
-
-* `LIVEVIEW_CONFIG['strict_serialization'] = True` — opt-in, default `False`
-  (`python/djust/serialization.py`).
-* `DEBUG = True` — `LiveView.get_state()` raises `TypeError` for a
-  non-serializable attribute (`python/djust/live_view.py:1240-1241`). Only
-  the test utilities call `get_state()`, so this surfaces in tests, not on
-  the live render path. The render path warns and converts the value to a
-  string unless `strict_serialization` is on:
+**Everything else is a plain attribute, and stays on the server.** A service
+client, an API session, a model instance or a QuerySet set on `self` is not
+rendered, not sent to the browser and not part of the declared state: a
+handler reads it, and the template sees it only when `get_context_data()`
+returns it. Over the WebSocket it lives as long as the connection. The
+page-POST fallback rebuilds the view on every request from what it could save,
+and a value it cannot save (a client object, a QuerySet) makes it run
+`mount()` again, so `mount()` creates it again
+([What the page-POST fallback keeps](http-only-mode.md#what-the-page-post-fallback-keeps-between-events)).
+So creating a service in `mount()` is fine:
 
 ```python
 class MyView(LiveView):
     def mount(self, request, **kwargs):
-        self.client = boto3.client('s3')  # ✗ warning (or TypeError if strict)
-```
-
-```
-LiveView state contains non-serializable value: S3 (from botocore.client).
-This will be converted to a string...
-```
-
-**2. System check V006**
-
-```bash
-python manage.py check --tag djust
-```
-
-Static analysis detects service instantiation patterns in `mount()` methods.
-
-**3. Best practice: Helper method pattern**
-
-Instead of storing services in state, create them on-demand:
-
-```python
-# ✗ BAD: Stores service in state
-class MyView(LiveView):
-    def mount(self, request, **kwargs):
-        self.s3_client = boto3.client('s3')  # Gets serialized to string!
+        self._s3 = boto3.client("s3")  # server memory only; never serialized
 
     @event_handler
-    def upload(self, **kwargs):
-        self.s3_client.upload_file(...)  # AttributeError: str has no upload_file
+    def upload(self):
+        self._s3.upload_file(...)
+```
 
-# ✓ GOOD: Helper method creates on-demand
+**Helper method pattern.** A client that is cheap to build can also be created
+where it is used, which keeps `mount()` small:
+
+```python
 class MyView(LiveView):
     def _get_s3_client(self):
-        """Create S3 client on-demand. Not stored in state."""
+        """Create S3 client on-demand."""
         return boto3.client('s3')
 
     @event_handler
-    def upload(self, **kwargs):
+    def upload(self):
         client = self._get_s3_client()
         client.upload_file(...)  # Works every time
 ```
@@ -208,7 +160,7 @@ class ProductListView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str):
         """Phase 3: Event handlers update state and refresh."""
         self.search_query = value
         self._refresh_products()
@@ -259,7 +211,7 @@ fallback):
 
 ```python
 @event_handler
-def delete_product(self, pk: int, **kwargs):
+def delete_product(self, pk: int):
     Product.objects.filter(pk=pk).delete()  # nothing else to do: the list re-reads
 ```
 
@@ -390,8 +342,8 @@ djust does not recognise only makes the decision "read everything again".
 from djust import event_handler
 
 @event_handler
-def select_service(self, service_id="", **kwargs):
-    """**kwargs keeps a legacy dj-click handler open to extra dj-value-* keys."""
+def select_service(self, service_id: str):
+    """dj-value-service-id="keycloak" arrives as service_id="keycloak"."""
     if service_id not in SERVICES_BY_ID:
         return
     self.selected_service_id = service_id
@@ -400,21 +352,22 @@ def select_service(self, service_id="", **kwargs):
 Key rules:
 
 1. **`@event_handler` is required** — without it, the method won't be discoverable as an event handler
-2. **Declare what the binding sends** — under the legacy policy `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names. `manage.py check` reports a binding its handler would reject (`djust.T020`). Under the strict policy a closed signature is the contract (see [Typed event parameters](../core-concepts/events.md#typed-event-parameters-strict-policy))
+2. **Declare what the binding sends, with annotations** — the signature is the event's contract (the strict parameter policy, the default since djust 2.0; see [Typed event parameters](../core-concepts/events.md#typed-event-parameters-strict-policy)). The browser sends `value`, `field` and form fields only to a handler that declares them, so no `**kwargs` is needed. `manage.py check` reports a binding its handler would reject (`djust.T020`)
 3. **Give defaults only where a binding may omit a parameter** — a default added just to survive a malformed event hides a bug
 4. **Use `value` for input/change events** — `dj-input` and `dj-change` send the input value as `value`
 
 ### Passing parameters from templates
 
-Use `data-*` attributes. Kebab-case converts to snake_case automatically:
+Use `dj-value-*` attributes. Kebab-case converts to snake_case automatically:
 
 ```html
-<button dj-click="select_service" data-service-id="keycloak">
+<button dj-click="select_service" dj-value-service-id="keycloak">
     Select Keycloak
 </button>
 ```
 
-`data-service-id` → `service_id` parameter.
+`dj-value-service-id` → `service_id` parameter. `data-*` attributes are not
+sent to the handler.
 
 ### Template event binding reference
 
@@ -427,13 +380,13 @@ Use `data-*` attributes. Kebab-case converts to snake_case automatically:
     <option value="all">All</option>
 </select>
 
-<!-- Click with data attributes -->
-<button dj-click="delete_item" data-item-id="{{ item.id }}">Delete</button>
+<!-- Click with an argument -->
+<button dj-click="delete_item" dj-value-item-id="{{ item.id }}">Delete</button>
 
 <!-- Confirmation dialog -->
 <button dj-click="delete_item"
         dj-confirm="Are you sure?"
-        data-item-id="{{ item.id }}">
+        dj-value-item-id="{{ item.id }}">
     Delete
 </button>
 
@@ -459,37 +412,37 @@ Decorators modify event handler behavior. Stack them in the right order:
 # Search with debouncing (wait for user to stop typing)
 @event_handler
 @debounce(wait=0.5)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str):
     self.search_query = value
     self._refresh_results()
 
 # Scroll tracking with throttling (limit call rate)
 @event_handler
 @throttle(interval=0.1)
-def on_scroll(self, scroll_y: int = 0, **kwargs):
+def on_scroll(self, scroll_y: int = 0):
     self.scroll_position = scroll_y
 
 # Like button: the server round-trip updates the UI
 @event_handler
-def like_post(self, post_id: int = 0, **kwargs):
+def like_post(self, post_id: int = 0):
     Post.objects.filter(id=post_id).update(likes=F("likes") + 1)
 
 # Autocomplete with client-side caching
 @event_handler
 @cache(ttl=300, key_params=["query"])
-def autocomplete(self, query: str = "", **kwargs):
+def autocomplete(self, query: str = ""):
     self.suggestions = City.objects.filter(name__istartswith=query)[:10]
 
 # Admin-only action with permission check
 @event_handler
 @permission_required("myapp.delete_item")
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int = 0):
     Item.objects.filter(id=item_id).delete()
 
 # Rate-limited action
 @event_handler
 @rate_limit(rate=5, burst=3)
-def expensive_operation(self, **kwargs):
+def expensive_operation(self):
     pass
 ```
 
@@ -686,7 +639,7 @@ class ChatView(LiveView):
         return {**super().get_context_data(**kwargs), "messages": self.messages}
 
     @event_handler
-    def send_message(self, content="", **kwargs):
+    def send_message(self, content: str):
         msg = Message.objects.create(content=content, user=self.request.user)
         self.messages = [msg]  # Only the new message
 ```
@@ -806,10 +759,22 @@ Use `dj-loading.*` attributes for zero-JS loading indicators:
 
 The `Large LiveView state detected ... (threshold: 100KB)` warning measures the
 whole snapshot the state backend stores for a view, not just the attributes you
-assign. (Since 2.0 no view's renderer is stored in the backend, so the warning
-only fires for a snapshot code stores there itself; what follows still
-describes what a view holds in memory per connection.) The snapshot holds three
-things, and the warning prints each one's size:
+assign.
+
+**Since 2.0 nothing of a view is stored in the state backend** (#4281): a page
+GET makes no backend call, so this warning never fires for a page load or a
+turn of a view, only for a snapshot your own code stores there. A page's size is
+bounded where 2.0 persists state instead: `persist="server"` fields at 64 KB
+encoded, and automatic state with a WARNING past 100 KB
+(`DJUST_AUTOMATIC_STATE_WARN_KB`) and a refused change past 512 KB
+(`DJUST_AUTOMATIC_STATE_MAX_KB`); a refused change reports `state_too_large`.
+To budget it in a test, assert on `djust.testing.persisted_state(view).automatic_bytes`
+(the encoded size of what the view would persist) rather than wrapping the
+backend. It describes an explicit view (the default): a legacy view raises
+`TypeError`, and a state over its limit raises `StateLimitExceeded`, as the save
+would. What follows still describes what a view holds in memory per
+connection, which nothing measures. The snapshot holds three things, and the
+warning prints each one's size:
 
 | Part | What it is | Grows with |
 | --- | --- | --- |
@@ -946,10 +911,10 @@ auth. Practices to follow:
 - **Test WebSocket auth with a raw client** (`WebsocketCommunicator` or the
   `websockets` library), not just a browser — a browser follows the redirect and
   can mask a gap in your auth setup.
-- Auth is **mount-time** by default. To also reject events after a *mid-session*
-  logout or permission change, enable a per-event re-check:
-  `LIVEVIEW_CONFIG['reauth_on_event'] = True` (default OFF — it costs one session
-  read per event).
+- Auth runs at mount and again on **every event and server turn**, against a
+  freshly loaded session, so a *mid-session* logout or permission change
+  refuses the next event. (The 1.3 opt-in `reauth_on_event` is refused at
+  startup in 2.0.)
 - Set **`LIVEVIEW_ALLOWED_MODULES`** to restrict which view classes a client may
   mount over the WebSocket; per-view `check_view_auth` remains the real gate.
 - **Non-LiveView endpoints** — a plain `django.views.View` (e.g. an OAuth
@@ -975,7 +940,7 @@ def mount(self, request, **kwargs):
 
 @event_handler
 @permission_required("myapp.delete_item")
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int = 0):
     item = Item.objects.get(id=item_id)
     # Object-level check
     if item.owner != self.request.user:
@@ -991,7 +956,7 @@ Always validate user input in event handlers:
 
 ```python
 @event_handler
-def select_service(self, service_id="", **kwargs):
+def select_service(self, service_id: str):
     if service_id not in VALID_SERVICE_IDS:
         return  # Reject invalid input silently
 
@@ -1073,12 +1038,12 @@ class MyView(LiveView):
     modal_data = state(default={})
 
     @event_handler
-    def open_modal(self, item_id="", **kwargs):
+    def open_modal(self, item_id: int):
         self.modal_data = get_item_data(item_id)
         self.show_modal = True
 
     @event_handler
-    def close_modal(self, **kwargs):
+    def close_modal(self):
         self.show_modal = False
         self.modal_data = {}
 ```
@@ -1101,18 +1066,18 @@ class MyView(LiveView):
     active_tab = state(default="overview")
 
     @event_handler
-    def switch_tab(self, tab_name="", **kwargs):
+    def switch_tab(self, tab_name: str):
         if tab_name in ("overview", "settings", "logs"):
             self.active_tab = tab_name
 ```
 
 ```html
 <div class="tabs">
-    <button dj-click="switch_tab" data-tab-name="overview"
+    <button dj-click="switch_tab" dj-value-tab-name="overview"
             class="{% if active_tab == 'overview' %}active{% endif %}">
         Overview
     </button>
-    <button dj-click="switch_tab" data-tab-name="settings"
+    <button dj-click="switch_tab" dj-value-tab-name="settings"
             class="{% if active_tab == 'settings' %}active{% endif %}">
         Settings
     </button>
@@ -1159,7 +1124,7 @@ class MyView(LiveView):
     toast_message = state(default="")
 
     @event_handler
-    def save_item(self, **kwargs):
+    def save_item(self):
         try:
             save_to_database()
             self.toast_message = "Saved successfully!"
@@ -1183,7 +1148,7 @@ on the client with `dj-loading.*` instead:
 ```python
 class MyView(LiveView):
     @event_handler
-    def load_data(self, **kwargs):
+    def load_data(self):
         self.data = expensive_api_call()
 ```
 
@@ -1326,15 +1291,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 @event_handler
-def my_handler(self, **kwargs):
-    logger.debug("Handler called with %s", kwargs)
+def my_handler(self, item_id: int):
+    logger.debug("my_handler called for item %s", item_id)
 ```
 
 ---
 
 ## Navigation
 
-For in-view navigation (tabs, filters, pagination), use `dj-patch` instead of `dj-click` with data attributes. This gives you URL updates, browser history, and bookmarkable state for free.
+For in-view navigation (tabs, filters, pagination), use `dj-patch` instead of `dj-click` with `dj-value-*` arguments. This gives you URL updates, browser history, and bookmarkable state for free.
 
 | Directive | Use for |
 |---|---|
@@ -1393,45 +1358,45 @@ See `DEPLOYMENT.md` for the full production checklist (ASGI setup, static files,
 
 ## Common Pitfalls
 
-### Service Instances in State
+### Service Instances in Declared State
 
-**Problem:** Storing service instances (AWS clients, API sessions, database connections) in LiveView state.
+**Problem:** Declaring a service instance (an AWS client, an API session, a
+database connection) as view state with `state()`.
 
 **Why it's wrong:**
-- Service instances aren't JSON-serializable — they contain connections, sockets, internal state
-- During serialization, they convert to useless strings: `"<Client object at 0x...>"`
-- On the next event, methods fail: `AttributeError: 'str' object has no attribute 'upload_file'`
-- Silent failure makes debugging extremely difficult
+- Declared state that is persisted (`persist="server"` or `persist="client"`)
+  takes JSON primitives only, and a client holds connections, sockets and
+  internal state
+- Declared state is part of what the view renders, saves and compares on every
+  turn; a client object is none of those
 
 **Solution:**
-Use the helper method pattern to create services on-demand:
+Keep it a plain attribute, set in `mount()`, or create it on demand with a
+helper method. A plain attribute stays on the server and is never serialized:
 
 ```python
-# ❌ Don't do this
+# ✅ A plain attribute, created in mount()
 class PaymentView(LiveView):
     def mount(self, request, **kwargs):
-        self.stripe_client = stripe.Client(api_key=settings.STRIPE_KEY)
-        # After serialization: self.stripe_client becomes a string!
+        self._stripe = stripe.Client(api_key=settings.STRIPE_KEY)
 
     @event_handler
-    def charge_card(self, amount: int = 0, **kwargs):
-        self.stripe_client.charges.create(amount=amount)  # AttributeError!
+    def charge_card(self, amount: int):
+        self._stripe.charges.create(amount=amount)
 
-# ✅ Do this instead
+# ✅ Or created where it is used
 class PaymentView(LiveView):
     def _get_stripe_client(self):
-        """Create Stripe client on-demand. Not stored in state."""
+        """Create Stripe client on-demand."""
         return stripe.Client(api_key=settings.STRIPE_KEY)
 
     @event_handler
-    def charge_card(self, amount: int = 0, **kwargs):
+    def charge_card(self, amount: int):
         client = self._get_stripe_client()
         client.charges.create(amount=amount)  # Works every time
 ```
 
 **Related:**
-- Runtime check: warns and stringifies the value when serialization fails; raises `TypeError` with `strict_serialization=True`
-- System check: `djust.V006` detects service patterns via AST analysis
 - Guide: [Working with External Services](services.md)
 
 ### Missing `dj-root`
@@ -1592,7 +1557,7 @@ Use `@debounce` to wait for user to stop typing:
 ```python
 # ❌ Don't do this
 @event_handler
-def search(self, value: str = "", **kwargs):
+def search(self, value: str):
     """Runs once per input event: every keystroke with dj-debounce="0\""""
     self.search_query = value
     self._refresh_results()  # Database query on every event!
@@ -1600,7 +1565,7 @@ def search(self, value: str = "", **kwargs):
 # ✅ Do this instead
 @event_handler
 @debounce(wait=0.5)  # Wait 500ms after typing stops
-def search(self, value: str = "", **kwargs):
+def search(self, value: str):
     """Fires 500ms after user stops typing"""
     self.search_query = value
     self._refresh_results()  # Only queries when typing stops
@@ -1709,16 +1674,15 @@ Always add `data-key` to list items:
 - `djust.V007`, which recommended the catch-all, is retired (ADR-037)
 
 **Solution:**
-Declare the parameters the template sends. Under the default legacy parameter
-policy, `dj-input`, `dj-change` and `dj-submit` also send `field` and `_target`,
-so a legacy handler for them keeps a catch-all such as `**form_data`, and
-`manage.py check` reports one that does not (`djust.T020`). The strict policy
-(ADR-036) sends only the names the handler declares:
+Declare the parameters the template sends, with annotations. The browser sends
+a handler only the generated values it declares (`value`, `field`, form
+fields), so it needs no catch-all, and `manage.py check` compares the template
+bindings with the signature (`djust.T020`):
 
 ```python
 # ❌ Don't do this
 @event_handler
-def delete_item(self, item_id: int = 0, **kwargs):
+def delete_item(self, item_id: int = 0):
     Item.objects.filter(id=item_id).delete()
 
 # ✅ Do this instead
@@ -1727,31 +1691,28 @@ def delete_item(self, item_id: int):
     Item.objects.filter(id=item_id).delete()
 ```
 
-### No Default Values for Handler Parameters
+### Defaults That Hide a Missing Argument
 
-**Problem:** Handler parameters without defaults.
+**Problem:** A default on a parameter every binding sends.
 
 **Why it's wrong:**
-- Breaks if client doesn't send the parameter
-- Not defensive against missing data
-- Harder to test
+- A binding that forgot the argument runs the handler with the default instead
+  of failing, so the bug is silent
+- The default says the argument is optional when it is not
 
 **Solution:**
-Provide sensible defaults:
+Give a default only to an argument some binding leaves out:
 
 ```python
-# ❌ Don't do this
+# ❌ Don't do this: dj-input always sends value
 @event_handler
-def search(self, query: str, **kwargs):
-    self.results = search_products(query)
+def search(self, value: str = ""):
+    self.results = search_products(value)
 
-# ✅ Do this instead
+# ✅ Do this instead: required, and an optional filter keeps its default
 @event_handler
-def search(self, query: str = "", **kwargs):
-    if not query:
-        self.results = []
-    else:
-        self.results = search_products(query)
+def search(self, value: str, category: str = "all"):
+    self.results = search_products(value, category=category) if value else []
 ```
 
 ### Exposing Sensitive Data
@@ -1787,10 +1748,10 @@ See the [Security Guide](../advanced/security.md) for more details.
 When building a djust LiveView:
 
 - [ ] Declare state with `state(default=...)` at the class level
-- [ ] Never store service instances in state — use helper methods instead
+- [ ] Persist only JSON in declared state; keep service instances as plain attributes or helper methods
 - [ ] Add `dj-view` to the template root element (`dj-root` is optional)
 - [ ] Use `@event_handler` on all event handlers
-- [ ] Declare the parameters each binding sends (`manage.py check` reports `djust.T020`); keep `**kwargs` on legacy `dj-input`/`dj-change`/`dj-submit` handlers, or declare `field`/`_target`
+- [ ] Declare the parameters each binding sends, annotated (`manage.py check` reports `djust.T020`); pass arguments with `dj-value-*`, not `data-*`
 - [ ] Use `value` as the parameter name for `dj-input`/`dj-change`
 - [ ] Store QuerySets in private variables (`self._items`)
 - [ ] Keep the QuerySet, not `list(qs)`, when the rows can change: a held QuerySet is read again after a write; a list is a snapshot

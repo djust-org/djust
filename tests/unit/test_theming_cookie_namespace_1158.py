@@ -14,7 +14,7 @@ Fix
 theming cookies to be read/written as `<ns>_djust_theme`,
 `<ns>_djust_theme_preset`, `<ns>_djust_theme_pack`, `<ns>_djust_theme_layout`.
 
-Read order: namespaced first, fall back to unprefixed for one-time migration.
+With a namespace set only the namespaced cookie is read (#4207).
 Write order: only namespaced (handled by `theme.js` reading
 `window.__djust_theme_cookie_prefix` injected by `theme_head.html`).
 
@@ -59,24 +59,21 @@ def test_namespaced_cookie_wins_when_namespace_set():
 
 
 @pytest.mark.django_db
-def test_namespace_set_falls_back_to_unprefixed_when_namespaced_missing():
-    """Migration window: when the namespaced cookie hasn't been written yet
-    (first request after upgrade), fall back to the unprefixed cookie so
-    users don't lose their existing theme on upgrade."""
+def test_namespace_set_ignores_unprefixed_cookie_when_namespaced_missing():
+    """#4207: with a namespace set only the namespaced cookie is read. The
+    one-time migration fallback to the unprefixed cookie is gone, so another
+    project's ``djust_theme_pack`` on the same host never selects this pack."""
     from djust.theming.manager import ThemeManager
 
     rf = RequestFactory()
     req = rf.get("/")
-    # Only the legacy unprefixed cookie is present.
     req.COOKIES["djust_theme_pack"] = "aurora"
     req.session = {}
 
     mgr = ThemeManager(request=req)
-    mgr.config = dict(mgr.config, cookie_namespace="djust_org", enable_client_override=True)
+    mgr.config = dict(mgr.config, cookie_namespace="ns", enable_client_override=True)
     state = mgr.get_state()
-    assert state.pack == "aurora", (
-        f"unprefixed fallback must apply when namespaced cookie missing; got pack={state.pack!r}"
-    )
+    assert state.pack != "aurora", f"unprefixed cookie must be ignored; got pack={state.pack!r}"
 
 
 @pytest.mark.django_db

@@ -177,13 +177,9 @@ class WaiterMixin:
             raise
 
     def _waiters_refused(self) -> bool:
-        """Whether this view takes no new waiters: a disposed explicit child,
-        or a root view discarded by navigation or a closed connection
-        (``_close_waiters``, #3236)."""
-        return bool(
-            getattr(self, "_djust_child_disposed", False)
-            or getattr(self, "_djust_waiters_closed", False)
-        )
+        """Whether this view takes no new waiters: a disposed view (explicit
+        release or child disposal)."""
+        return bool(getattr(self, "_djust_child_disposed", False))
 
     def _notify_waiters(self, event_name: str, kwargs: Dict[str, Any]) -> None:
         """
@@ -296,17 +292,3 @@ class WaiterMixin:
         for waiter in pending:
             if not waiter.future.done():
                 cancel_on_owner_loop(waiter.future)
-
-    def _close_waiters(self, reason: str = "view_unmount") -> None:
-        """
-        Cancel every pending waiter and refuse later ones.
-
-        For a root view that is being discarded: replaced by navigation, or
-        its connection closed. The cancel alone is a one-time snapshot; the
-        view's background work keeps running and could register a new waiter
-        afterwards, which nothing would ever cancel (#3236 review M2). Once
-        closed, ``wait_for_event`` raises ``CancelledError`` at once, as it
-        does for a disposed explicit child.
-        """
-        self._djust_waiters_closed = True
-        self._cancel_all_waiters(reason=reason)

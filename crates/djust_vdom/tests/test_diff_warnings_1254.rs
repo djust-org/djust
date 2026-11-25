@@ -13,7 +13,7 @@
 //! never saw them. Promoting them to `tracing::warn!` puts them in the
 //! standard log stream and makes them surfaceable via `RUST_LOG=warn`.
 
-use djust_vdom::{diff, VNode};
+use djust_vdom::{diff, key_by_id, parse_html, VNode};
 use std::sync::{Arc, Mutex};
 use tracing::field::{Field, Visit};
 use tracing::{Event, Subscriber};
@@ -251,4 +251,41 @@ fn test_clean_keyed_diff_emits_no_warnings() {
             .map(|e| (&e.level, &e.message))
             .collect::<Vec<_>>()
     );
+}
+
+fn dje_050_count(old_html: &str, new_html: &str) -> usize {
+    let mut old = parse_html(old_html).expect("parses");
+    let mut new = parse_html(new_html).expect("parses");
+    key_by_id(&mut old);
+    key_by_id(&mut new);
+    run_with_capture(|| {
+        let _patches = diff(&old, &new);
+    })
+    .iter()
+    .filter(|e| e.level == "WARN" && e.message.contains("DJE-050"))
+    .count()
+}
+
+/// #4228: with the opt-in `key_by_id`, a parent mixing id-keyed and id-less
+/// children (a `<label>` beside an `<input id>`) is expected; no DJE-050.
+#[test]
+fn test_dje_050_not_emitted_for_id_derived_keys_4228() {
+    let n = dje_050_count(
+        r#"<form><label>Name</label><input id="name"><p>x</p></form>"#,
+        r#"<form><div>err</div><label>Name</label><input id="name"><p>x</p></form>"#,
+    );
+    assert_eq!(n, 0, "id-derived keys must not trigger DJE-050");
+}
+
+/// #4228: an explicit `dj-key` mixed with unkeyed siblings still warns with
+/// the opt-in on, including an explicit key that starts with the `#` prefix.
+#[test]
+fn test_dje_050_still_emitted_for_explicit_keys_with_id_keys_4228() {
+    for key in ["a", "#a"] {
+        let n = dje_050_count(
+            &format!(r#"<ul><li dj-key="{key}">a</li><li id="b">b</li></ul>"#),
+            &format!(r#"<ul><li dj-key="{key}">a</li><li id="b">b</li><li>c</li></ul>"#),
+        );
+        assert!(n > 0, "explicit dj-key={key:?} mix must still emit DJE-050");
+    }
 }

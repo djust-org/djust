@@ -25,6 +25,20 @@ setting, and there is no supported way to do it.
 ``plain_sub_ids``           ``_collect_sub_ids`` is not run over a changed
                             attribute that is plain data and is itself a
                             context value.
+``snapshot_fingerprints``   The Rust sync takes the post-event snapshot's
+                            walk of an exact dict / list / tuple attribute
+                            (its fingerprint, and whether it is plain data)
+                            instead of walking it again, when no application
+                            code ran between the two (#3999).
+``list_item_deltas``        A list the handler changed in a few rows, in
+                            place, is sent to Rust as those rows
+                            (``update_state_items``), not converted and sent
+                            whole (#4325).
+``loop_item_render``        Rust's ``{% for %}`` reuses an item's output
+                            from the previous render when the item at that
+                            index hashes the same and nothing else the body
+                            reads changed (``LoopItemStore``, #4325). Off:
+                            every item renders.
 ``unchanged_save_skip``     The automatic state (#4107) is not written to the
                             session when its encoding equals what the store
                             already holds (or, with nothing stored, what
@@ -34,17 +48,17 @@ setting, and there is no supported way to do it.
                             frame without waiting for storage, and a flush
                             writes the view later (design: save frequency).
                             Off: every turn saves before its frame, as with
-                            the interval at 0 (the default).
+                            the interval at 0.
 ``compact_fingerprints``    A structural fingerprint keeps a ``str`` / ``int``
                             / ``bytes`` / ``None`` leaf as the value itself and
                             a dict's items as one flat tuple, in place of a
                             tuple per leaf and per item (#3998). Off: the wide
                             encoding ``main`` had.
-``shared_fingerprints``     A context value's fingerprint that equals the one
-                            the dirty baseline holds for the same attribute is
-                            stored as that same object, and an unchanged key
-                            keeps the object it had, so a socket holds one
-                            tree where it held two (#3998).
+``digest_fingerprints``     What a view keeps between turns for change
+                            detection (the dirty baseline, the last render's
+                            fingerprints, the request-scoped ones) is a 16-byte
+                            digest of each fingerprint, not the fingerprint
+                            tree (#3998). Off: the trees themselves.
 ==========================  ==================================================
 
 The last two change what a socket holds between turns, not what a turn does;
@@ -62,9 +76,12 @@ ALL: FrozenSet[str] = frozenset(
         "request_scoped_changes",
         "serializable_by_type",
         "plain_sub_ids",
+        "snapshot_fingerprints",
+        "list_item_deltas",
+        "loop_item_render",
         "unchanged_save_skip",
         "compact_fingerprints",
-        "shared_fingerprints",
+        "digest_fingerprints",
         "deferred_save",
     }
 )

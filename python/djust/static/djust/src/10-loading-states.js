@@ -90,7 +90,9 @@ const globalLoadingManager = {
     },
 
     // Scan and register all elements with dj-loading attributes
-    scanAndRegister() {
+    // `changes` (#4001): after a patch, only the elements it inserted or
+    // re-attributed; one it left alone is registered already.
+    scanAndRegister(changes) {
         this.syncPending();
         // Clean up entries for elements no longer in the DOM (e.g. after morphdom/patches)
         this.registeredElements.forEach((_config, element) => {
@@ -109,7 +111,7 @@ const globalLoadingManager = {
             '[dj-loading\\.for]'
         ].join(',');
 
-        const loadingElements = document.querySelectorAll(selectors);
+        const loadingElements = _scanSet(selectors, changes);
         loadingElements.forEach(element => {
             // Skip elements already registered — preserves originalState captured
             // before loading started (client-side loading modifies DOM styles,

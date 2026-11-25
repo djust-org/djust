@@ -335,11 +335,6 @@ fn node_references_block_super(node: &Node) -> bool {
         Node::BlockCustomTag { args, children, .. } => {
             any_expr(args.iter().map(String::as_str)) || nodes_reference_block_super(children)
         }
-        Node::ReactComponent {
-            props, children, ..
-        } => {
-            any_expr(props.iter().map(|(_, v)| v.as_str())) || nodes_reference_block_super(children)
-        }
         // `{% blocktranslate with s=block.super %}` — the operands are in
         // `args`, and the BODY is raw source that can name it in a placeholder.
         Node::RawBlockCustomTag { args, body, .. } => {
@@ -1417,11 +1412,6 @@ fn node_to_template_string(node: &Node, state: &mut FlattenPartials) -> String {
         Node::CsrfToken => "{% csrf_token %}".to_string(),
         Node::DjustAudio => "{% djust_audio %}".to_string(),
         Node::Static(operand) => format!("{{% static {operand} %}}"),
-        Node::ReactComponent { .. } => {
-            // React components should be preserved as-is if possible
-            // For now, skip them as they're handled separately
-            String::new()
-        }
         Node::CustomTag { name, args } => {
             // Reconstruct custom tag: {% tagname arg1 arg2 %}
             let mut result = format!("{{% {name}");
@@ -1663,24 +1653,30 @@ pub fn resolve_template_inheritance(
         ))
     })?;
 
-    resolve_inheritance_with_loader(source, &loader)
+    resolve_inheritance_with_loader(source, &loader, Some(template_path))
 }
 
 /// [`resolve_template_inheritance`] for a template whose SOURCE is in hand (a
 /// `from_string` template, or a file the caller already read): its parents are
 /// loaded from `template_dirs`. What `DjustTemplateBackend` extracts the JIT's
 /// variable paths from, so a read in a parent template is a read (#3920).
+///
+/// `template_name` is the name that source was loaded as, when it has one: a relative
+/// `{% extends "./base.html" %}` / `{% include "../x.html" %}` in it, and in each parent, resolves
+/// against the name of the template that holds it, as Django resolves it (#4265).
 pub fn resolve_template_inheritance_from_source(
     source: &str,
     template_dirs: &[std::path::PathBuf],
+    template_name: Option<&str>,
 ) -> Result<String> {
     let loader = FilesystemTemplateLoader::new(template_dirs.to_vec());
-    resolve_inheritance_with_loader(source.to_owned(), &loader)
+    resolve_inheritance_with_loader(source.to_owned(), &loader, template_name)
 }
 
 fn resolve_inheritance_with_loader(
     source: String,
     loader: &FilesystemTemplateLoader,
+    template_name: Option<&str>,
 ) -> Result<String> {
     // Parse initial template (use `parse_with_source` so the
     // boundary-marker ID prefix is derived from this template's
@@ -1698,8 +1694,9 @@ fn resolve_inheritance_with_loader(
         return Ok(source);
     }
 
-    // Build inheritance chain
-    let chain = build_inheritance_chain(nodes, loader, 10)?;
+    // Build inheritance chain. With the child's own name, its relative references (and each
+    // parent's, threaded down) resolve against the template that holds them (#4265).
+    let chain = build_inheritance_chain_from(nodes, loader, 10, template_name, None)?;
 
     // Get merged template nodes
     let root_nodes = chain.get_root_nodes();
@@ -2571,6 +2568,111 @@ mod tests {
             "Base wrapper should be replaced by middle's, got: {}",
             result
         );
+    }
+
+    // -- #4265: relative references resolve against the file that holds them -----------------
+
+    fn write(dir: &std::path::Path, name: &str, source: &str) {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, source).unwrap();
+    }
+
+    #[test]
+    fn relative_extends_and_a_chain_of_them_resolve_against_each_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "dir1/one.html",
+            "{% extends \"./dir2/two.html\" %}{% block b %}1{% endblock %}",
+        );
+        write(
+            dir.path(),
+            "dir1/dir2/two.html",
+            "{% extends \"../three.html\" %}{% block b %}2{% endblock %}",
+        );
+        write(
+            dir.path(),
+            "dir1/three.html",
+            "<main>{% block b %}3{% endblock %}</main>",
+        );
+        // a decoy a name resolved against the wrong directory would find
+        write(dir.path(), "three.html", "WRONG");
+        let out =
+            resolve_template_inheritance("dir1/one.html", &[dir.path().to_path_buf()]).unwrap();
+        assert!(
+            out.contains("<main>{% block b %}1{% endblock %}</main>"),
+            "got: {out}"
+        );
+        assert!(!out.contains("WRONG"), "got: {out}");
+    }
+
+    #[test]
+    fn relative_includes_in_the_child_and_in_a_parent_are_named_against_their_own_file() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "a/child.html", "{% extends \"../base/layout.html\" %}{% block b %}{% include \"./p.html\" %}{% endblock %}");
+        write(dir.path(), "a/p.html", "child-p");
+        write(
+            dir.path(),
+            "base/layout.html",
+            "<main>{% block b %}{% endblock %}{% include \"./q.html\" %}</main>",
+        );
+        write(dir.path(), "base/q.html", "parent-q");
+        let out =
+            resolve_template_inheritance("a/child.html", &[dir.path().to_path_buf()]).unwrap();
+        assert!(out.contains("{% include \"a/p.html\" %}"), "got: {out}");
+        assert!(out.contains("{% include \"base/q.html\" %}"), "got: {out}");
+    }
+
+    #[test]
+    fn a_relative_extends_that_leaves_the_template_root_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "a/child.html",
+            "{% extends \"../../base.html\" %}",
+        );
+        write(dir.path(), "base.html", "x");
+        let err =
+            resolve_template_inheritance("a/child.html", &[dir.path().to_path_buf()]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("points outside the file hierarchy"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn a_source_with_a_name_resolves_against_it_and_one_without_looks_in_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "sub/base.html",
+            "<main>{% block b %}{% endblock %}</main>",
+        );
+        let source = "{% extends \"./base.html\" %}{% block b %}x{% endblock %}";
+        let dirs = [dir.path().to_path_buf()];
+        let named =
+            resolve_template_inheritance_from_source(source, &dirs, Some("sub/c.html")).unwrap();
+        assert!(
+            named.contains("<main>{% block b %}x{% endblock %}</main>"),
+            "got: {named}"
+        );
+        // no name: nothing to be relative to, so the name is left as written and the loader joins
+        // it to the template ROOT (as before #4265; Django has no equivalent). It is a lookup
+        // inside the root, never a path outside it.
+        assert!(resolve_template_inheritance_from_source(source, &dirs, None).is_err());
+        write(
+            dir.path(),
+            "base.html",
+            "<main>ROOT{% block b %}{% endblock %}</main>",
+        );
+        let unnamed = resolve_template_inheritance_from_source(source, &dirs, None).unwrap();
+        assert!(unnamed.contains("ROOT"), "got: {unnamed}");
+        // ... and a name always wins over that decoy
+        let named =
+            resolve_template_inheritance_from_source(source, &dirs, Some("sub/c.html")).unwrap();
+        assert!(!named.contains("ROOT"), "got: {named}");
     }
 }
 

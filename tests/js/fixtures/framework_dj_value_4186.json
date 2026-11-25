@@ -28,6 +28,10 @@
       "tag": "tr",
       "attrs": [
         [
+          "data-row-key",
+          "1"
+        ],
+        [
           "dj-click",
           "open_row"
         ],
@@ -223,6 +227,10 @@
           "grp"
         ],
         [
+          "data-djust-optional",
+          "name"
+        ],
+        [
           "dj-click",
           "pick"
         ],
@@ -310,7 +318,7 @@
       "id": "data_table.visibility",
       "template": "{% data_table rows=rows columns=columns column_visibility=True %}",
       "event": "on_table_visibility",
-      "html": "<div class=\"data-table-wrapper data-table-container\" role=\"grid\" aria-label=\"Data table\" data-visibility-event=\"on_table_visibility\"><div class=\"data-table-toolbar\"><div class=\"data-table-visibility-dropdown\"><button type=\"button\" class=\"data-table-visibility-btn\">&#9776; Columns</button><div class=\"data-table-visibility-menu\"><label class=\"data-table-visibility-item\"><input type=\"checkbox\" checked data-col-key=\"name\"> Name</label><label class=\"data-table-visibility-item\"><input type=\"checkbox\" checked data-col-key=\"role\"> Role</label></div></div></div><table class=\"data-table\"><thead><tr><th class=\"sortable\" role=\"columnheader\" aria-sort=\"none\" dj-click=\"on_table_sort\" dj-value-value=\"name\" data-col-key=\"name\">Name</th><th class=\"sortable\" role=\"columnheader\" aria-sort=\"none\" dj-click=\"on_table_sort\" dj-value-value=\"role\" data-col-key=\"role\">Role</th></tr><tr><th><input type=\"text\" class=\"data-table-filter\" aria-label=\"Filter Name\" placeholder=\"Filter...\" value=\"\" dj-input=\"on_table_filter\" dj-value-column=\"name\"></th><th><select class=\"data-table-filter\" aria-label=\"Filter Role\" dj-input=\"on_table_filter\" dj-value-column=\"role\"><option value=\"\">All</option><option value=\"admin\">admin</option><option value=\"user\">user</option></select></th></tr></thead><tbody><tr data-row-key=\"1\"><td>Ann</td><td>admin</td></tr><tr data-row-key=\"2\"><td>Bob</td><td>user</td></tr></tbody></table><button class=\"data-table-visibility-trigger\" hidden dj-click=\"on_table_visibility\"></button></div>"
+      "html": "<div class=\"data-table-wrapper data-table-container\" role=\"grid\" aria-label=\"Data table\" data-visibility-event=\"on_table_visibility\"><div class=\"data-table-toolbar\"><div class=\"data-table-visibility-dropdown\"><button type=\"button\" class=\"data-table-visibility-btn\">&#9776; Columns</button><div class=\"data-table-visibility-menu\"><label class=\"data-table-visibility-item\"><input type=\"checkbox\" checked data-col-key=\"name\"> Name</label><label class=\"data-table-visibility-item\"><input type=\"checkbox\" checked data-col-key=\"role\"> Role</label></div></div></div><table class=\"data-table\"><thead><tr><th class=\"sortable\" role=\"columnheader\" tabindex=\"0\" aria-sort=\"none\" dj-click=\"on_table_sort\" dj-value-value=\"name\" data-col-key=\"name\">Name</th><th class=\"sortable\" role=\"columnheader\" tabindex=\"0\" aria-sort=\"none\" dj-click=\"on_table_sort\" dj-value-value=\"role\" data-col-key=\"role\">Role</th></tr><tr><th><input type=\"text\" class=\"data-table-filter\" aria-label=\"Filter Name\" placeholder=\"Filter...\" value=\"\" dj-input=\"on_table_filter\" dj-value-column=\"name\"></th><th><select class=\"data-table-filter\" aria-label=\"Filter Role\" dj-input=\"on_table_filter\" dj-value-column=\"role\"><option value=\"\">All</option><option value=\"admin\">admin</option><option value=\"user\">user</option></select></th></tr></thead><tbody><tr data-row-key=\"1\"><td>Ann</td><td>admin</td></tr><tr data-row-key=\"2\"><td>Bob</td><td>user</td></tr></tbody></table><button class=\"data-table-visibility-trigger\" hidden dj-click=\"on_table_visibility\"></button></div>"
     }
   ]
 }

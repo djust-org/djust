@@ -15,6 +15,8 @@ execution — see ADR-002 Phase 1a.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
+from .._surviving_work import refuse_if_disposed
+
 if TYPE_CHECKING:
     from djust.js import JSChain
 
@@ -50,6 +52,7 @@ class PushEventMixin:
                 self.push_event("flash", {"message": "Saved!", "type": "success"})
                 self.push_event("scroll_to", {"selector": "#result"})
         """
+        refuse_if_disposed(self, "push events")
         if payload is None:
             payload = {}
         self._pending_push_events.append((event, payload))
@@ -149,9 +152,12 @@ class PushEventMixin:
 
         Resolves the flush dynamically from ``_ws_consumer`` so that it
         works after WebSocket reconnects without re-wiring anything (#698).
+        Over SSE the queued events are drained and sent, in order, through
+        the session's runtime transport while that session still serves
+        this view (#4256).
 
-        No-op if no consumer is available (e.g. in tests or
-        HTTP fallback mode).
+        No-op if neither is available (e.g. in tests, or on the HTTP
+        fallback, where the queued events ride the POST response instead).
 
         Usage::
 
@@ -172,11 +178,19 @@ class PushEventMixin:
         flush_fn = getattr(consumer, "_flush_push_events", None)
         if flush_fn is not None:
             await flush_fn()
+            return
+        if consumer is not None:
+            return
+        from .._live_target import sse_runtime_for
 
-    # Backward-compatible private alias used by TutorialMixin and tests.
-    async def _flush_pending_push_events(self) -> None:
-        """Alias for :meth:`flush_push_events` — kept for internal use."""
-        await self.flush_push_events()
+        runtime = sse_runtime_for(self)
+        if runtime is None:
+            return  # HTTP fallback / tests: events stay queued for the response
+        send = runtime.transport.send
+        # Drain (never iterate in place): the SSE turn end drains too, so each
+        # event is sent exactly once.
+        for name, payload in self._drain_push_events():
+            await send({"type": "push_event", "event": name, "payload": payload})
 
     def clear_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
         """Drop the push events queued so far in this turn, and return them.

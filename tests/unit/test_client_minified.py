@@ -1,8 +1,10 @@
 """Tests for pre-minified client.js distribution (v0.6.0 P1).
 
 Verifies that the script-injection in ``_inject_client_script``:
-- Uses ``client.min.js`` in production (``DEBUG=False``).
-- Uses ``client.js`` in development (``DEBUG=True``) for debuggability.
+- Uses the minified bundle in production (``DEBUG=False``).
+- Uses the readable bundle in development (``DEBUG=True``) for debuggability.
+  Since #4007 the injected bundle is the core one (``client-core[.min].js``);
+  ``tests/unit/test_client_chunks_4007.py`` covers the bundle choice.
 - Honors an explicit ``DJUST_CLIENT_JS_MINIFIED`` override in settings.
 - Ships the ``.min.js``, ``.gz``, and (when brotli available) ``.br``
   sibling files in the static tree after a build.
@@ -125,7 +127,9 @@ def test_production_uses_minified_client_js():
     view = _FakeView()
     injected = view._inject_client_script("<html><body></body></html>")
     src = _extract_client_src(injected)
-    assert src.endswith("client.min.js"), f"expected client.min.js in production; got {src!r}"
+    assert src.endswith("client-core.min.js"), (
+        f"expected client-core.min.js in production; got {src!r}"
+    )
 
 
 @override_settings(DEBUG=True)
@@ -134,8 +138,8 @@ def test_debug_uses_unminified_client_js():
     view = _FakeView()
     injected = view._inject_client_script("<html><body></body></html>")
     src = _extract_client_src(injected)
-    assert src.endswith("client.js") and not src.endswith(".min.js"), (
-        f"expected client.js in debug; got {src!r}"
+    assert src.endswith("client-core.js") and not src.endswith(".min.js"), (
+        f"expected client-core.js in debug; got {src!r}"
     )
 
 
@@ -145,7 +149,7 @@ def test_explicit_override_forces_minified_in_debug():
     view = _FakeView()
     injected = view._inject_client_script("<html><body></body></html>")
     src = _extract_client_src(injected)
-    assert src.endswith("client.min.js"), f"override should force minified; got {src!r}"
+    assert src.endswith("client-core.min.js"), f"override should force minified; got {src!r}"
 
 
 @override_settings(DEBUG=False, DJUST_CLIENT_JS_MINIFIED=False)
@@ -154,7 +158,7 @@ def test_explicit_override_forces_raw_in_production():
     view = _FakeView()
     injected = view._inject_client_script("<html><body></body></html>")
     src = _extract_client_src(injected)
-    assert src.endswith("client.js") and not src.endswith(".min.js"), (
+    assert src.endswith("client-core.js") and not src.endswith(".min.js"), (
         f"override should force raw; got {src!r}"
     )
 

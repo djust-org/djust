@@ -142,6 +142,21 @@ class WithSticky(Plain):
     )
 
 
+#: The #4211 hold: ``reached`` once the held step is entered, ``gate`` to let it go on.
+HOLD: Dict[str, asyncio.Event] = {}
+
+
+async def _absorbing_wait(gate: asyncio.Event) -> None:
+    """Wait for ``gate``, swallowing a cancellation meanwhile: the step goes on
+    after a teardown cancelled it, as one that does not reach an await that the
+    cancellation stops it at (asgiref's ``SyncToAsync`` keeps awaiting a thread
+    that already started)."""
+    try:
+        await asyncio.shield(gate.wait())
+    except asyncio.CancelledError:
+        await gate.wait()
+
+
 #: Switches the background-work views below flip while their work runs.
 FLAGS: Dict[str, Any] = {"deny": False}
 
@@ -175,6 +190,52 @@ class Revocable(Plain):
     def _fail_bg(self):
         self.request.session["late"] = "yes"
         raise RuntimeError("the work failed after writing")
+
+    @event_handler()
+    def ok_bg(self, **kwargs):
+        self.start_async(self._ok_bg, name="w")
+
+    def _ok_bg(self):
+        self.request.session["late"] = "yes"
+        return "done"
+
+    @event_handler()
+    def held_ok_bg(self, **kwargs):
+        self.start_async(self._held_bg, False, name="w")
+
+    @event_handler()
+    def held_fail_bg(self, **kwargs):
+        self.start_async(self._held_bg, True, name="w")
+
+    async def _held_bg(self, fail):
+        # A DB session must not load on the loop.
+        await sync_to_async(self.request.session.__setitem__)("late", "yes")
+        HOLD["reached"].set()
+        await _absorbing_wait(HOLD["gate"])
+        if fail:
+            raise RuntimeError("the work failed after writing")
+        return "done"
+
+    @event_handler()
+    def armed_ok_bg(self, **kwargs):
+        self.start_async(self._armed_ok_bg, name="w")
+
+    def _armed_ok_bg(self):
+        # Arms the #4211 save hold (:func:`_held_save_start`) for the result's commit.
+        HOLD["armed"] = True
+        self.request.session["late"] = "yes"
+        return "done"
+
+    @event_handler()
+    def armed_inc_bg(self, **kwargs):
+        self.start_async(self._armed_inc_bg, name="w")
+
+    def _armed_inc_bg(self):
+        # Changes the view only, so its result's save is deferred (interval set).
+        HOLD["armed"] = True
+        HOLD["view"] = self
+        self.count += 1
+        return "done"
 
 
 class RevocableHandled(Revocable):
@@ -262,6 +323,10 @@ def _tab_and_saves(monkeypatch):
 
 
 def _url(view: type) -> str:
+    # A view of another module's test (#4168) names its own page.
+    own = getattr(view, "page_url", None)
+    if own:
+        return own
     return {
         WithComponent: "/with-component/",
         WithSticky: "/with-sticky/",
@@ -302,9 +367,9 @@ def _background_settled() -> Iterator[asyncio.Event]:
     """An event set once the runtime has finished with a background task's result, whether it
     stored it, rendered it or discarded it.
 
-    A socket closed before then tears the owner down while the work may still run, and whether
-    such work's session writes are kept is not decided yet (nondeterministic today). So a test
-    of what the work stores waits for this before it closes the connection.
+    A socket closed before then tears the owner down while the work may still run, and such work
+    keeps nothing (#4211). So a test of what finished work stores waits for this before it closes
+    the connection.
     """
     from djust.runtime import ViewRuntime
 
@@ -343,7 +408,7 @@ async def _ws_mount(view: type, key: str) -> Any:
     await comm.send_json_to(
         {
             "type": "mount",
-            "view": f"{MODULE}.{view.__name__}",
+            "view": f"{view.__module__}.{view.__qualname__}",
             "url": _url(view),
             "tab": harness.TAB,
         }
@@ -404,7 +469,11 @@ async def sse_turns(
     stream = await sync_to_async(request)(
         "GET",
         f"/djust/sse/{sid}/",
-        {"view": f"{MODULE}.{view.__name__}", "_djust_url": _url(view), "_djust_tab": harness.TAB},
+        {
+            "view": f"{view.__module__}.{view.__qualname__}",
+            "_djust_url": _url(view),
+            "_djust_tab": harness.TAB,
+        },
     )
     response = await DjustSSEStreamView().get(stream, session_id=sid)
     assert response.status_code == 200
@@ -462,8 +531,8 @@ INTERVALS = [pytest.param(0, id="interval-0"), pytest.param(30, id="interval-30"
 
 
 def _settings(interval: int, **extra: Any) -> Any:
-    if interval:
-        extra["DJUST_STATE_SAVE_INTERVAL"] = interval
+    # 0 is stated: unset, the interval is 2 seconds (#4164).
+    extra["DJUST_STATE_SAVE_INTERVAL"] = interval
     return harness.ws_settings(MODULE, ROOT_URLCONF=MODULE, **extra)
 
 
@@ -589,15 +658,12 @@ async def _one_more(transport: str, client: Any, name: str) -> None:
 @pytest.mark.parametrize("transport", TRANSPORTS)
 async def test_a_turn_that_does_not_write_the_session_adds_no_save(transport, interval):
     """``nothing`` changes nothing; ``read_only`` reads a list from the session
-    without changing it. Neither adds a session save on any transport. The one
-    save of a fallback request with an interval set is the holder claim the
-    restore writes (``_save_policy.holder_claims``), which Django's
-    ``SessionMiddleware`` stores; it was there before #4162 and is the same
-    for both handlers."""
+    without changing it. Neither adds a session save on any transport. A
+    fallback request with an interval set claims its tab only with a save that
+    changes the stored state (#4164 item 2), so it adds none either."""
     with _settings(interval):
         _client, counts = await turns(transport, Plain, ["nothing", "read_only", "nothing"])
-    claim = 1 if transport == "http" and interval else 0
-    assert counts == [claim, claim, claim]
+    assert counts == [0, 0, 0]
 
 
 @pytest.mark.parametrize("interval", INTERVALS)
@@ -643,8 +709,11 @@ async def test_background_work_writes_the_session_after_the_reply(interval):
             await harness.event(comm, "later")
             await receive_until(
                 comm,
+                # No render frame when the result changed nothing the template
+                # reads (#4123): the batch's ``async_complete`` ends it then.
                 lambda frames: any(
-                    f.get("type") in ("patch", "noop", "html_update") for f in frames
+                    f.get("type") in ("patch", "noop", "html_update", "async_complete")
+                    for f in frames
                 ),
                 what="the background result",
             )
@@ -753,9 +822,14 @@ async def _ws_background(view: type, name: str) -> Any:
     comm = await _ws_mount(view, key)
     try:
         await harness.event(comm, name)
+        # A result that changed nothing the template reads sends no render
+        # frame (#4123); the batch's ``async_complete`` is then its outcome.
         frames = await receive_until(
             comm,
-            lambda got: any(f.get("source") == "async" or f.get("type") == "error" for f in got),
+            lambda got: any(
+                f.get("source") == "async" or f.get("type") in ("error", "async_complete")
+                for f in got
+            ),
             what="the background outcome",
             allow_close=True,
         )
@@ -809,8 +883,8 @@ async def test_failed_work_keeps_what_it_wrote(transport, view):
     kept, with or without ``handle_async_result`` and on every transport (the
     fallback runs the work inside its request and always kept it). The work's
     other effects stand as well; only the view's state is not saved."""
-    # The work is finished with before the connection closes: closing it while the work still
-    # ran raced this test (what such work keeps is not decided yet, #4162).
+    # The work is finished with before the connection closes: work the teardown cancels keeps
+    # nothing (decided by #4211, pinned below).
     with _settings(0), _background_settled() as settled:
         client, _ = await turns(transport, view, ["fail_bg"], settled=settled)
         seen = await sync_to_async(_read)(client)
@@ -853,3 +927,219 @@ def test_fallback_keeps_a_write_made_during_the_request():
         assert response.status_code == 200, response.content[:300]
         seen = _read(client)
     assert seen == {"cart": ["a"], "gone": 1, "other": "kept"}
+
+
+# -- #4211: work cancelled by a disconnect keeps nothing -------------------------------------
+
+
+@contextlib.contextmanager
+def _held_result_authorization() -> Iterator[None]:
+    """Hold the result's authorization (the call from the result step,
+    ``complete``) until ``HOLD["gate"]``, absorbing the teardown's
+    cancellation. It stands in for any await after the result's authorization
+    that does not stop at the cancellation."""
+    import sys
+
+    from djust.runtime import ViewRuntime
+
+    real = ViewRuntime.authorize_explicit_turn
+
+    async def held(self: Any, view: Any, *args: Any, **kwargs: Any) -> Any:
+        from_result = sys._getframe(1).f_code.co_name == "complete"
+        outcome = await real(self, view, *args, **kwargs)
+        if from_result:
+            HOLD["reached"].set()
+            await _absorbing_wait(HOLD["gate"])
+        return outcome
+
+    with mock.patch.object(ViewRuntime, "authorize_explicit_turn", held):
+        yield
+
+
+async def _teardown_while_held(transport: str, view: type, event_name: str) -> Any:
+    """Send ``event_name``, wait for the hold, tear the connection down, release
+    the hold and wait until the runtime is done with the result. Returns the
+    client and the saves made after the teardown."""
+    from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+
+    HOLD.update(reached=asyncio.Event(), gate=asyncio.Event())
+    with _background_settled() as settled:
+        client = await sync_to_async(_page)(view)
+        key = _key(client)
+        if transport == "ws":
+            comm = await _ws_mount(view, key)
+            try:
+                await harness.event(comm, event_name)
+                await asyncio.wait_for(HOLD["reached"].wait(), HANG_S)
+            finally:
+                await comm.disconnect()
+        else:
+            from django.contrib.auth import get_user
+            from django.utils.functional import SimpleLazyObject
+
+            def request(method: str, target: str, body: Any) -> Any:
+                factory = RequestFactory()
+                if method == "GET":
+                    made = factory.get(target, data=body)
+                else:
+                    made = factory.post(
+                        target, data=json.dumps(body), content_type="application/json"
+                    )
+                made.session = SessionStore(key)
+                made.user = SimpleLazyObject(lambda: get_user(made))
+                made.tenant = None
+                return made
+
+            sid = str(uuid.uuid4())
+            stream = await sync_to_async(request)(
+                "GET",
+                f"/djust/sse/{sid}/",
+                {
+                    "view": f"{view.__module__}.{view.__qualname__}",
+                    "_djust_url": _url(view),
+                    "_djust_tab": harness.TAB,
+                },
+            )
+            response = await DjustSSEStreamView().get(stream, session_id=sid)
+            assert response.status_code == 200
+            body = {"type": "event", "event": event_name, "params": {}}
+            posted = await sync_to_async(request)("POST", f"/djust/sse/{sid}/message/", body)
+            answer = await DjustSSEMessageView().post(posted, session_id=sid)
+            assert answer.status_code in (200, 202, 204), answer.content
+            await asyncio.wait_for(HOLD["reached"].wait(), HANG_S)
+            session = _sse_sessions.pop(sid)
+            session.shutdown()
+        saves = len(SAVES)
+        HOLD["gate"].set()
+        await _settle(settled)
+        held = HOLD.get("save")
+        if held is not None:
+            # A save whose start was held runs on after the turn stopped waiting.
+            await asyncio.wait({held}, timeout=HANG_S)
+        return client, len(SAVES) - saves
+
+
+@pytest.mark.parametrize(
+    "view",
+    [Revocable, RevocableHandled, ResultHandlerRaises],
+    ids=["plain", "handled", "handler-raises"],
+)
+@pytest.mark.parametrize("arm", ["fail_bg", "ok_bg"])
+@pytest.mark.parametrize("transport", ["ws", "sse"])
+async def test_cancelled_result_keeps_nothing(transport, arm, view):
+    """#4211: the disconnect's teardown cancelled the work after its result was
+    authorized; the result step goes on, but stores no session write (and no
+    state, no frame): the work no longer belongs to a live view."""
+    with _settings(0), _held_result_authorization():
+        client, saves_after = await _teardown_while_held(transport, view, arm)
+        seen = await sync_to_async(_read)(client)
+    assert "late" not in seen, seen
+    assert saves_after == 0
+
+
+@pytest.mark.parametrize("interval", INTERVALS)
+async def test_cancelled_result_keeps_nothing_with_deferred_saves(interval):
+    """#4211: nor does the disconnect's flush of deferred state store it."""
+    with _settings(interval), _held_result_authorization():
+        client, saves_after = await _teardown_while_held("ws", Revocable, "fail_bg")
+        seen = await sync_to_async(_read)(client)
+    assert "late" not in seen, seen
+    assert saves_after == 0
+
+
+@pytest.mark.parametrize("arm", ["held_ok_bg", "held_fail_bg"])
+@pytest.mark.parametrize("transport", ["ws", "sse"])
+async def test_work_finishing_after_teardown_keeps_nothing(transport, arm):
+    """#4211, the issue's ordering: the work itself is held until the teardown
+    has happened, then finishes (or fails). What it wrote is not stored."""
+    with _settings(0):
+        client, saves_after = await _teardown_while_held(transport, Revocable, arm)
+        seen = await sync_to_async(_read)(client)
+    assert "late" not in seen, seen
+    assert saves_after == 0
+
+
+@contextlib.contextmanager
+def _held_save_start() -> Iterator[None]:
+    """Hold the start of the next save the work arms (``HOLD["armed"]``) on the
+    loop until ``HOLD["gate"]``: the root save's thread step queued behind a
+    busy sync thread while the disconnect's teardown lands (#4211 review S1)."""
+    from djust import runtime
+
+    real = runtime._spawn_save
+
+    def spawn(run: Any) -> Any:
+        if not HOLD.pop("armed", None):
+            return real(run)
+
+        async def held() -> None:
+            HOLD["reached"].set()
+            await HOLD["gate"].wait()
+            await real(run)
+
+        HOLD["save"] = asyncio.ensure_future(held())
+        return HOLD["save"]
+
+    with mock.patch.object(runtime, "_spawn_save", spawn):
+        yield
+
+
+@contextlib.contextmanager
+def _held_deferred_check() -> Iterator[None]:
+    """Hold the deferred path's binding check (its one thread step) the work
+    arms, absorbing the teardown's cancellation (#4211 review S1)."""
+    from djust import runtime
+
+    real = runtime.sync_to_async
+
+    def s2a(func: Any, *args: Any, **kwargs: Any) -> Any:
+        wrapped = real(func, *args, **kwargs)
+        if getattr(func, "__name__", "") != "check" or not HOLD.pop("armed", None):
+            return wrapped
+
+        async def held(*a: Any, **kw: Any) -> Any:
+            HOLD["reached"].set()
+            await _absorbing_wait(HOLD["gate"])
+            return await wrapped(*a, **kw)
+
+        return held
+
+    with mock.patch.object(runtime, "sync_to_async", s2a):
+        yield
+
+
+@pytest.mark.parametrize("transport", ["ws", "sse"])
+async def test_success_save_started_after_teardown_keeps_nothing(transport):
+    """#4211 review S1: the result's commit passed its checks, but its save's
+    thread step started only after the disconnect's teardown. The save checks
+    the work still belongs to the live view as its first step: nothing is
+    stored."""
+    HOLD.pop("save", None)
+    with _settings(0), _held_save_start():
+        client, saves_after = await _teardown_while_held(transport, Revocable, "armed_ok_bg")
+        seen = await sync_to_async(_read)(client)
+    HOLD.pop("save", None)
+    assert "late" not in seen, seen
+    assert saves_after == 0
+
+
+async def test_deferred_success_after_teardown_keeps_nothing():
+    """#4211 review S1, the deferred-save path: the work is cancelled
+    (``cancel_async_all``: its generation moves on, the view stays live) while
+    the result's binding check waits for its thread. The result leaves no
+    change owed, so the close's flush stores nothing of it."""
+    HOLD.update(reached=asyncio.Event(), gate=asyncio.Event())
+    with _settings(30), _held_deferred_check(), _background_settled() as settled:
+        client = await sync_to_async(_page)(Revocable)
+        comm = await _ws_mount(Revocable, _key(client))
+        try:
+            # The starting turn changes nothing; let any flush it owes run first.
+            await harness.event(comm, "armed_inc_bg")
+            await asyncio.wait_for(HOLD["reached"].wait(), HANG_S)
+            HOLD.pop("view").cancel_async_all()
+            HOLD["gate"].set()
+            await _settle(settled)
+            SAVES.clear()
+        finally:
+            await comm.disconnect()
+    assert SAVES == []

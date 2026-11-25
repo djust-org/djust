@@ -26,7 +26,6 @@ dom.window.eval(clientCode);
 
 const {
     collectDjValues,
-    extractTypedParams,
 } = dom.window.djust;
 
 const document = dom.window.document;
@@ -159,30 +158,6 @@ describe('dj-value-* static event parameters', () => {
         });
     });
 
-    describe('extractTypedParams integration', () => {
-        it('merges dj-value-* with data-* attributes', () => {
-            const el = document.createElement('button');
-            el.setAttribute('data-page:int', '1');
-            el.setAttribute('dj-value-id:int', '42');
-
-            const params = extractTypedParams(el);
-
-            expect(params.page).toBe(1);
-            expect(params.id).toBe(42);
-        });
-
-        it('dj-value-* takes precedence over data-*', () => {
-            const el = document.createElement('button');
-            el.setAttribute('data-id', 'from-data');
-            el.setAttribute('dj-value-id', 'from-dj-value');
-
-            const params = extractTypedParams(el);
-
-            expect(params.id).toBe('from-dj-value');
-        });
-
-    });
-
     describe('typical usage patterns', () => {
         it('delete button with item context', () => {
             // <button dj-click="delete" dj-value-id:int="42" dj-value-type="soft">
@@ -191,7 +166,7 @@ describe('dj-value-* static event parameters', () => {
             el.setAttribute('dj-value-id:int', '42');
             el.setAttribute('dj-value-type', 'soft');
 
-            const params = extractTypedParams(el);
+            const params = collectDjValues(el);
 
             expect(params.id).toBe(42);
             expect(params.type).toBe('soft');
@@ -204,7 +179,7 @@ describe('dj-value-* static event parameters', () => {
             el.setAttribute('dj-value-row-id:int', '7');
             el.setAttribute('dj-value-category', 'users');
 
-            const params = extractTypedParams(el);
+            const params = collectDjValues(el);
 
             expect(params.row_id).toBe(7);
             expect(params.category).toBe('users');
@@ -216,7 +191,7 @@ describe('dj-value-* static event parameters', () => {
             el.setAttribute('dj-click', 'toggle');
             el.setAttribute('dj-value-expanded:bool', 'true');
 
-            const params = extractTypedParams(el);
+            const params = collectDjValues(el);
 
             expect(params.expanded).toBe(true);
         });

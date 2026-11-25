@@ -20,7 +20,7 @@ from djust.websocket import _snapshot_assigns
 class _PrivateStateView(LiveView):
     """Minimal view that sets private state post-init."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

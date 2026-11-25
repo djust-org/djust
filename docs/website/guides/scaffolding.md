@@ -179,8 +179,7 @@ uvx djust@latest new myapp --bare
 # Add djust to an existing Django project (run beside manage.py)
 uvx djust@latest init
 
-# Legacy entrypoints, mirroring Django's own names
-python -m djust startproject myproject
+# Add an app to an existing project, mirroring Django's own name
 python -m djust startapp myapp
 ```
 
@@ -256,7 +255,9 @@ to run before `make dev`.
 marked settings block (apps, `ASGI_APPLICATION`, and a channel layer; it does
 not edit `TEMPLATES` unless you pass `--templates`), a djust `asgi.py` (only when the existing one is
 Django's default for the same settings module), the `djust`, `channels`, and
-`uvicorn[standard]` packages, and a final `manage.py check`. A package the
+`uvicorn[standard]` packages, and a final `manage.py check`. It does not edit
+`urls.py`: when the URLconf does not route djust's SSE transport
+(`djust.sse.sse_urlpatterns`), `init` prints the lines to add. A package the
 project already declares keeps its specifier: on a uv project `init` runs
 `uv add` only for the ones missing from `[project].dependencies`, and on a
 `requirements.txt` project it appends only the missing lines. A declared
@@ -281,10 +282,10 @@ Exit status is `0` on success, `1` when `init` refused before writing, and
 [installation guide](../getting-started/installation.md#add-djust-to-an-existing-project)
 describes each change.
 
-### `startproject` and `startapp`
+### `startapp`
 
-`python -m djust startproject` is a deprecated alias for `djust new`.
-Use `djust new` for a complete project. `python -m djust startapp myapp`
+`python -m djust startproject` was removed in 2.0: use `djust new` for a
+complete project. `python -m djust startapp myapp`
 generates an app with a starter view and template inside an existing project;
 you still need to register the app and include its URLs.
 

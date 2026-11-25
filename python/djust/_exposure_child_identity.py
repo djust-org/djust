@@ -52,7 +52,7 @@ def child_reuse_identity(
     ``live_redirect`` (#4149): the same child schema and class, slot, mount
     inputs, session, user, tenant and nesting depth, but neither the route nor
     the ancestors' classes and inputs. The ancestry is still validated, and an
-    owner-bound subtree (no session, or a legacy ancestor) still matches only
+    owner-bound subtree (no session) still matches only
     under the same root instance, so it never carries to another page.
     """
     try:
@@ -90,11 +90,9 @@ def child_reuse_identity(
             seen.add(id(current))
             classes.append(type(current))
             policy = getattr(current, "exposure_policy", None)
-            if type(policy) is not str or policy not in ("explicit", "legacy"):
+            if type(policy) is not str or policy != "explicit":
                 raise ExposureError("Invalid ancestor exposure policy")
-            legacy = policy == "legacy"
-            owner_bound = owner_bound or legacy
-            schema = None if legacy else ExposureContract.from_view_class(type(current)).schema
+            schema = ExposureContract.from_view_class(type(current)).schema
             ancestor = getattr(current, "_parent_view", None)
             current_slot = None
             ancestor_inputs = None
@@ -108,11 +106,10 @@ def child_reuse_identity(
                     or registry.get(current_slot) is not current
                 ):
                     raise ExposureError("Unregistered child reuse ancestry")
-                if not legacy:
-                    encoded = getattr(current, "_explicit_child_mount_inputs", None)
-                    if type(encoded) is not str or len(encoded) > contract.limits.max_bytes:
-                        raise ExposureError("Invalid ancestor mount inputs")
-                    ancestor_inputs = clone_json_state(json.loads(encoded))
+                encoded = getattr(current, "_explicit_child_mount_inputs", None)
+                if type(encoded) is not str or len(encoded) > contract.limits.max_bytes:
+                    raise ExposureError("Invalid ancestor mount inputs")
+                ancestor_inputs = clone_json_state(json.loads(encoded))
             lineage.append([schema, current_slot, ancestor_inputs])
             root = current
             current = ancestor

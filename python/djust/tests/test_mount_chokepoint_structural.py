@@ -37,7 +37,7 @@ modules (websocket.py, sse.py, runtime.py and their siblings):
    helper, ``djust.auth.core.run_pre_mount_auth`` (#1853). Post-#1887 (ADR-022
    Iter 1) the legacy SSE mount (``_sse_mount_view``) was DELETED and SSE now
    mounts via ``runtime.py`` ``dispatch_mount``, so the LIVE mount modules are
-   ``websocket.py`` ``handle_mount`` + ``runtime.py`` ``dispatch_mount`` (via
+   ``websocket.py`` ``_mount_page`` + ``runtime.py`` ``dispatch_mount`` (via
    ``_check_auth``); SSE inherits the sequence through the runtime. Both route
    their pre-mount auth+tenant orchestration through that single helper, so a
    future edit cannot reorder the steps or drop one on one path without both
@@ -196,16 +196,20 @@ class TestDynamicImportChokepoint:
 # internals (decorators.py, formsets.py, live_view default-assigns).
 _VIEW_TARGET_NAMES = {"view", "view_instance", "component"}
 
-# Only the exact developer-returned dictionary application is sanctioned.
+# Only the exact developer-returned dictionary application is sanctioned: the
+# function view's own callables (its event handlers) and the LiveView settings
+# it returns (login_required, template ...) set on the view it built for this
+# request; its other values are context, not attributes (#4183).
 # Match its AST and lexical scope, not moving line numbers or an entire function.
 _DEVELOPER_STATE_APPLICATION = ast.parse("""
 view = DynamicLiveView()
 result = func(request, *args, **kwargs)
 if isinstance(result, dict):
+    _refuse_function_view_access_hooks(func, result)
+    DynamicLiveView._djust_function_context = _function_view_context(result, DynamicLiveView)
+    configuration = _function_view_configuration(result)
     for key, value in result.items():
-        if not callable(value):
-            setattr(view, key, value)
-        else:
+        if callable(value) or key in configuration:
             setattr(view, key, value)
 """).body
 
@@ -295,17 +299,17 @@ class TestSetattrChokepoint:
         )
 
     def test_whitelisted_setattr_sites_still_present(self):
-        """Require both exact developer-dict sites, independent of line shifts."""
+        """Require the exact developer-dict site, independent of line shifts."""
         tree = _parse(_PKG_DIR / "live_view.py")
         sanctioned = _sanctioned_setattr_lines(tree)
-        assert len(sanctioned) == 2
+        assert len(sanctioned) == 1
         assert sanctioned <= set(_find_unsafe_setattrs(tree))
 
     def test_sanctioned_sites_allow_line_shifts(self):
         source = (_PKG_DIR / "live_view.py").read_text()
         original = _sanctioned_setattr_lines(ast.parse(source))
         shifted = _sanctioned_setattr_lines(ast.parse("\n" * 19 + source))
-        assert len(original) == 2
+        assert len(original) == 1
         assert shifted == {line + 19 for line in original}
 
     def test_client_payload_is_not_sanctioned(self):
@@ -315,7 +319,7 @@ class TestSetattrChokepoint:
         mutated = source.replace(old, "result = request.POST")
         tree = ast.parse(mutated)
         assert not _sanctioned_setattr_lines(tree)
-        assert len(list(_find_unsafe_setattrs(tree))) == 2
+        assert len(list(_find_unsafe_setattrs(tree))) == 1
 
     def test_adjacent_setattr_is_not_sanctioned(self):
         source = (_PKG_DIR / "live_view.py").read_text()
@@ -324,7 +328,7 @@ class TestSetattrChokepoint:
         mutated = source.replace(old, "            setattr(view, key, request.POST)\n" + old)
         tree = ast.parse(mutated)
         sanctioned = _sanctioned_setattr_lines(tree)
-        assert len(sanctioned) == 2
+        assert len(sanctioned) == 1
         assert len(set(_find_unsafe_setattrs(tree)) - sanctioned) == 1
 
     def test_same_block_in_wrong_scope_is_not_sanctioned(self):
@@ -333,7 +337,7 @@ class TestSetattrChokepoint:
         assert source.count(old) == 1
         tree = ast.parse(source.replace(old, "def transport_handler("))
         assert not _sanctioned_setattr_lines(tree)
-        assert len(list(_find_unsafe_setattrs(tree))) == 2
+        assert len(list(_find_unsafe_setattrs(tree))) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -442,7 +446,7 @@ class TestFactoryGetChokepoint:
         """Pin the known client-URL request-build sites as validated (count-test).
 
         Post-#1919 (ADR-022 Iter 3 Phase 3.3b, THE MOUNT FLIP) the bespoke WS
-        ``handle_mount`` body — which carried one of websocket.py's two validated
+        ``_mount_page`` body — which carried one of websocket.py's two validated
         ``factory.get`` sites — was deleted; the mount request is now built by
         ``runtime.py`` ``_build_request`` (already pinned). websocket.py therefore
         keeps exactly ONE validated client-URL build site:
@@ -537,7 +541,7 @@ _MOUNT_ORCHESTRATION_PINS = {
     # 4a — the shared pre-mount auth+tenant sequence. Post-#1887 (ADR-022 Iter 1)
     # the legacy SSE mount (``_sse_mount_view``) was deleted: SSE mounts via
     # ``runtime.py`` ``dispatch_mount``. Post-#1919 (ADR-022 Iter 3 Phase 3.3b, THE
-    # MOUNT FLIP) the bespoke WS ``handle_mount`` body was deleted too — the WS
+    # MOUNT FLIP) the bespoke WS ``_mount_page`` body was deleted too — the WS
     # mount now routes through the SAME ``dispatch_mount`` (via ``_check_auth`` →
     # ``run_pre_mount_auth``). So websocket.py no longer carries its OWN
     # ``run_pre_mount_auth`` reference; it inherits the sequence through the
@@ -555,7 +559,7 @@ _MOUNT_ORCHESTRATION_PINS = {
     # validated_host_from_scope (reconstructed-Host binding) is referenced in
     # runtime.py (the WS ``on_view_instantiated`` hook stamps it + ``_build_request``
     # uses it). websocket.py still DEFINES the helper but no longer Load-references
-    # it post-#1919 (the bespoke ``handle_mount`` site that did was deleted).
+    # it post-#1919 (the bespoke ``_mount_page`` site that did was deleted).
     "validated_host_from_scope": {"runtime.py": 1},
 }
 
@@ -603,7 +607,7 @@ class TestMountOrchestrationChokepoint:
         is ``runtime.py`` — it references the shared ``run_pre_mount_auth``
         sequence, the object-permission family (``enforce_object_permission``), and
         ``validated_host_from_scope`` (reconstructed-Host binding). The bespoke WS
-        ``handle_mount`` body that used to carry these was deleted; the WS mount now
+        ``_mount_page`` body that used to carry these was deleted; the WS mount now
         inherits them all through ``dispatch_mount`` (the #1646 mount convergence
         COMPLETE).
 
@@ -642,7 +646,7 @@ class TestMountOrchestrationChokepoint:
 
         Post-#1887 (ADR-022 Iter 1) the legacy SSE mount (``_sse_mount_view``) was
         deleted; SSE mounts through ``runtime.py`` ``dispatch_mount``. Post-#1919
-        (ADR-022 Iter 3 Phase 3.3b, THE MOUNT FLIP) the bespoke WS ``handle_mount``
+        (ADR-022 Iter 3 Phase 3.3b, THE MOUNT FLIP) the bespoke WS ``_mount_page``
         body was deleted too — the WS mount routes through the SAME
         ``dispatch_mount`` (via ``_check_auth``). So the single LIVE mount module is
         now ``runtime.py``; websocket.py + sse.py both inherit the shared sequence
@@ -728,7 +732,7 @@ class TestMountOrchestrationChokepoint:
         enforce_object_permission; pin those so a future removal re-opens finding
         #10/#11/#12 on the API transport. The SSE mount's check moved into the
         runtime under #1887; the WS mount's check moved into the runtime under
-        #1919 (THE MOUNT FLIP deleted the bespoke ``handle_mount`` body that held
+        #1919 (THE MOUNT FLIP deleted the bespoke ``_mount_page`` body that held
         the WS ``check_object_permission`` inner step — the WS mount now runs the
         runtime's ``enforce_object_permission`` post-mount check via
         ``dispatch_mount``). websocket.py is therefore NOT pinned here anymore — the

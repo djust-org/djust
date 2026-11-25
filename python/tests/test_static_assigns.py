@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import Mock
 from django.test import RequestFactory
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.websocket import _snapshot_assigns
 
 
@@ -28,35 +28,32 @@ def _mock_rust_view() -> Mock:
 class StaticView(LiveView):
     """View with static_assigns configured."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div data-djust-root>{{ demos }} {{ count }}</div>"
     static_assigns = ["demos"]
 
-    def mount(self, request, **kwargs):
-        self.demos = "<h1>Big static HTML</h1>"
-        self.count = 0
+    demos = state("<h1>Big static HTML</h1>")
+    count = state(0)
 
 
 class OverlappingView(LiveView):
     """View with overlapping static and temporary assigns (invalid)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div data-djust-root>{{ items }}</div>"
     static_assigns = ["items"]
     temporary_assigns = {"items": []}
 
-    def mount(self, request, **kwargs):
-        self.items = ["a", "b"]
+    items = state(default_factory=lambda: ["a", "b"])
 
 
 class NoStaticView(LiveView):
     """View without static_assigns (baseline)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div data-djust-root>{{ count }}</div>"
 
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = state(0)
 
 
 # ---------------------------------------------------------------------------
@@ -91,17 +88,6 @@ class TestStaticAssignsContext:
         assert "demos" in context
         assert context["demos"] == "<h1>Big static HTML</h1>"
         assert "count" in context
-
-    def test_subsequent_render_excludes_static_assigns(self, mock_request):
-        """After _static_assigns_sent is set, static assigns should be excluded."""
-        view = StaticView()
-        view.mount(mock_request)
-        # Simulate first sync setting the flag
-        view._static_assigns_sent = True
-        context = view.get_context_data()
-        assert "demos" not in context
-        assert "count" in context
-        assert context["count"] == 0
 
     def test_no_static_assigns_always_included(self, mock_request):
         """Views without static_assigns should always include all keys."""
@@ -178,12 +164,23 @@ class TestStaticAssignsSentFlag:
 # ---------------------------------------------------------------------------
 
 
+class SnapshotStaticView(LiveView):
+    """Plain attributes: change detection walks every attribute, declared or not."""
+
+    exposure_policy = "explicit"
+    static_assigns = ["demos"]
+
+
+class SnapshotPlainView(LiveView):
+    exposure_policy = "explicit"
+
+
 class TestSnapshotAssigns:
     """Test that _snapshot_assigns skips static assign keys."""
 
     def test_snapshot_skips_static_keys(self):
         """Static assign keys should be excluded from snapshot."""
-        view = StaticView()
+        view = SnapshotStaticView()
         view.demos = "<h1>Big HTML</h1>"
         view.count = 42
 
@@ -194,7 +191,7 @@ class TestSnapshotAssigns:
 
     def test_snapshot_includes_all_without_static(self):
         """Without static_assigns, all public keys should be in snapshot."""
-        view = NoStaticView()
+        view = SnapshotPlainView()
         view.count = 7
 
         snapshot = _snapshot_assigns(view)
@@ -204,7 +201,7 @@ class TestSnapshotAssigns:
     def test_user_private_attrs_in_snapshot(self):
         """User-defined ``_``-prefixed attrs ARE in the snapshot (#1281).
         Only ``static_assigns`` and framework-internal attrs are excluded."""
-        view = StaticView()
+        view = SnapshotStaticView()
         view.demos = "html"
         view.count = 1
         view._private = "secret"

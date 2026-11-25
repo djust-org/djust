@@ -11,8 +11,6 @@ the view received:
   ``dj-disable-with`` effect, one value-free ``djust:error``;
 - ``dj-input`` and ``dj-submit`` send only the generated values the strict
   handler declares (ADR-036 Q1), and never ``_target`` (Q2);
-- a legacy handler on the same page still receives ``data-*`` and
-  ``dj-value-*`` values;
 - a hand-crafted message with a forged ``component`` key never reaches the
   handler.
 
@@ -158,11 +156,7 @@ async def run(browser, transport, failures):
     if last("save") != {"title": "Title"}:
         failures.append(f"{label}: strict dj-submit sent {last('save')!r}")
 
-    # 5. The legacy control still receives dj-value-* and data-* values.
-    await click("#strict-legacy")
-    await expect("#strict-result", "legacy:mode,row")
-
-    # 6. A hand-crafted forged message never reaches the handler.
+    # 5. A hand-crafted forged message never reaches the handler.
     if transport == "http":
         status = await page.evaluate(
             """async () => (await fetch(location.href, {method: 'POST',
@@ -178,8 +172,8 @@ async def run(browser, transport, failures):
                 params: {item_id: '8', component: 'forged'}, ref: 9999})"""
         )
         await page.wait_for_timeout(800)
-    await expect("#strict-result", "legacy:mode,row")
-    await expect("#strict-calls", "4")
+    await expect("#strict-result", "save:Title")
+    await expect("#strict-calls", "3")
 
     watch.check(transport, label, failures)
     await context.close()

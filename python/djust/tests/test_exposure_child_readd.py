@@ -37,7 +37,7 @@ class ToggleParent(LiveView):
 
 
 class LegacyToggleChild(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "legacy-menu"
     template = "<div>Legacy={{ count }}</div>"
@@ -50,7 +50,7 @@ class LegacyToggleChild(LiveView):
 
 
 class LegacyToggleParent(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<div dj-root>{% load live_tags %}{% if show_child %}{% live_render "
         f'"{MODULE}.LegacyToggleChild" sticky=True %}}'

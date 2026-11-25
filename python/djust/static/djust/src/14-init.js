@@ -77,8 +77,63 @@ function autoStampRootAttributes() {
 
 window.djust._autoStampRootAttributes = autoStampRootAttributes;
 
+// #4236: a page whose root is marked data-djust-transport="http" (a @live_view
+// function view: no class a socket can mount) uses the HTTP fallback directly.
+function _pageUsesHttpTransport(containers) {
+    for (const container of containers) {
+        if (container.getAttribute('data-djust-transport') === 'http') return true;
+    }
+    return false;
+}
+
+// HTTP-only mode: a disabled WS instance, so sendEvent() falls through to HTTP.
+// ``httpOnly`` marks the transport as chosen (no refused mount behind it).
+function _startHttpOnlyTransport() {
+    liveViewWS = new LiveViewWebSocket();
+    liveViewWS.enabled = false;
+    liveViewWS.httpOnly = true;
+    window.djust.liveViewInstance = liveViewWS;
+}
+
+// Start the page's transport for its eager containers; false when there are none.
+// Shared by the first load and a TurboNav load (#4236).
+function _startPageTransport(eagerContainers) {
+    if (eagerContainers.length === 0) return false;
+    const wsEnabled = window.DJUST_USE_WEBSOCKET !== false;
+    const sseAvailable = typeof window.djust.LiveViewSSE !== 'undefined' && typeof EventSource !== 'undefined';
+    if (_pageUsesHttpTransport(eagerContainers)) {
+        if (globalThis.djustDebug) console.log('[LiveView] HTTP transport (data-djust-transport="http")');
+        _startHttpOnlyTransport();
+    } else if (wsEnabled) {
+        liveViewWS = new LiveViewWebSocket();
+        window.djust.liveViewInstance = liveViewWS;
+        // Wire SSE fallback: if WebSocket exhausts all reconnect attempts AND
+        // the SSE transport is available, switch over automatically.
+        if (sseAvailable) {
+            liveViewWS.onTransportFailed = () => _switchToSSETransport();
+        }
+        liveViewWS.connect();
+        liveViewWS.startHeartbeat();
+    } else if (sseAvailable) {
+        // use_websocket: false but SSE is available — skip WebSocket entirely
+        if (globalThis.djustDebug) console.log('[LiveView] WebSocket disabled, using SSE transport directly');
+        _switchToSSETransport();
+    } else {
+        if (globalThis.djustDebug) console.log('[LiveView] HTTP-only mode (use_websocket: false)');
+        _startHttpOnlyTransport();
+    }
+    return true;
+}
+
 // Initialize on load (support both normal page load and dynamic script injection via TurboNav)
+// #4007: under the core bundle the page's client chunks load first, so a page
+// that uses one binds and connects exactly as with the single bundle. With no
+// chunk needed (and always under the full bundle) init runs synchronously.
 function djustInit() {
+    _djustWithChunks(document, _djustInitNow);
+}
+
+function _djustInitNow() {
     if (globalThis.djustDebug) console.log('[LiveView] Initializing...');
 
     // Initialize lazy hydration manager
@@ -107,41 +162,9 @@ function djustInit() {
         lazyHydrationManager.register(container);
     });
 
-    // Only initialize WebSocket if there are eager containers AND WebSocket is enabled
-    const wsEnabled = window.DJUST_USE_WEBSOCKET !== false;
-    const sseAvailable = typeof window.djust.LiveViewSSE !== 'undefined' && typeof EventSource !== 'undefined';
-
-    if (eagerContainers.length > 0 && wsEnabled) {
-        // Initialize WebSocket
-        liveViewWS = new LiveViewWebSocket();
-        window.djust.liveViewInstance = liveViewWS;
-
-        // Wire SSE fallback: if WebSocket exhausts all reconnect attempts AND
-        // the SSE transport is available, switch over automatically.
-        if (sseAvailable) {
-            liveViewWS.onTransportFailed = () => _switchToSSETransport();
-        }
-
-        liveViewWS.connect();
-
-        // Start heartbeat
-        liveViewWS.startHeartbeat();
-    } else if (eagerContainers.length > 0 && !wsEnabled && sseAvailable) {
-        // use_websocket: false but SSE is available — skip WebSocket entirely
-        if (globalThis.djustDebug) console.log('[LiveView] WebSocket disabled, using SSE transport directly');
-        _switchToSSETransport();
-    } else if (eagerContainers.length > 0 && !wsEnabled) {
-        // HTTP-only mode: create WS instance but disable it so sendEvent() falls through to HTTP
-        liveViewWS = new LiveViewWebSocket();
-        liveViewWS.enabled = false;
-        window.djust.liveViewInstance = liveViewWS;
-        if (globalThis.djustDebug) console.log('[LiveView] HTTP-only mode (use_websocket: false)');
-    } else if (lazyContainers.length > 0) {
+    if (!_startPageTransport(eagerContainers) && lazyContainers.length > 0) {
         if (globalThis.djustDebug) console.log('[LiveView] Deferring WebSocket connection until lazy elements are needed');
     }
-
-    // Initialize React counters (if any)
-    initReactCounters();
 
     // Bind initial events
     bindLiveViewEvents();
@@ -178,7 +201,7 @@ function djustInit() {
     if (pendingTurboReinit) {
         if (globalThis.djustDebug) console.log('[LiveView] Processing pending turbo:load reinit');
         pendingTurboReinit = false;
-        reinitLiveViewForTurboNav();
+        _djustWithChunks(document, reinitLiveViewForTurboNav);
     }
 }
 

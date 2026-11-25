@@ -652,7 +652,6 @@ fn node_is_element_bearing(node: &Node) -> bool {
         | Node::PartialCall { .. }
         | Node::PartialDef { .. }
         | Node::Include { .. }
-        | Node::ReactComponent { .. }
         | Node::CustomTag { .. }
         | Node::BlockCustomTag { .. }
         | Node::RawBlockCustomTag { .. }
@@ -1327,7 +1326,7 @@ fn ifchanged_key(value: &Value) -> String {
             Ok(f) => numeric_key(f),
             Err(_) => format!("d{text}"),
         },
-        Value::String(s) | Value::SafeString(s) => format!("s{s}"),
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => format!("s{s}"),
         other => format!("o{other:?}"),
     }
 }
@@ -1640,10 +1639,7 @@ fn text_loses_a_member(value: &Value) -> bool {
             // A key that is not text (`{1: "a"}`) is text in JSON, where `1` and `"1"` are the
             // same key: the handler must read the keys as they are (#3895).
             Value::Object(map) => {
-                if map
-                    .keys()
-                    .any(|key| !matches!(key, djust_core::ObjectKey::Str(_)))
-                {
+                if map.keys().any(|key| key.as_str().is_none()) {
                     return true;
                 }
                 pending.extend(map.values());
@@ -2304,7 +2300,12 @@ fn resolve_custom_tag_arg(arg: &str, context: &Context) -> TagArg {
 /// anyone vouched for.
 fn tag_arg(value: &Value, safe: bool) -> TagArg {
     let text = value_to_arg_string(value);
-    if safe && matches!(value, Value::String(_) | Value::SafeString(_)) {
+    if safe
+        && matches!(
+            value,
+            Value::String(_) | Value::SafeString(_) | Value::ModelName(_)
+        )
+    {
         TagArg::marked(text)
     } else {
         TagArg::plain(text)
@@ -2497,7 +2498,7 @@ fn resolve_tag_operand_value(expr: &str, context: &Context) -> Option<Value> {
 /// that declares no policy is untouched.
 fn value_channel_arg_string(v: &Value) -> String {
     match v {
-        Value::String(s) | Value::SafeString(s) => {
+        Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
             serde_json::to_string(s).unwrap_or_else(|_| s.clone())
         }
         // JSON `true` / `false`, not Python's `True` / `False` (#2463).
@@ -2859,6 +2860,93 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
     Ok((output, fragments))
 }
 
+/// Can rendering `node` bind a name that a LATER sibling reads (#4124)?
+///
+/// The partial renderer's latch question, kept apart from "does this node
+/// read keys we cannot name" (the `"*"` dependency). Conservative by
+/// construction: every node kind not proven binding-free answers `true`,
+/// and a container answers `true` when anything inside it does — Django's
+/// `{% if %}` renders its body in the enclosing context, so an
+/// `{% if %}{% url 'x' as u %}{% endif %}` binds `u` for what follows.
+///
+/// Binding-free leaves: plain text and variables, and an inline custom tag
+/// whose handler either cannot return bindings at all, or declared
+/// `BINDS_ONLY_AS_VAR` and is used without an `as` operand.
+pub fn node_may_bind_names(node: &Node) -> bool {
+    let any = |nodes: &[Node]| nodes.iter().any(node_may_bind_names);
+    match node {
+        Node::Located {
+            nodes,
+            registry_namespace,
+            ..
+        } => {
+            // Handler flags live in the template's registry namespace, the
+            // one the render itself enters for this node.
+            let _namespace = crate::registry_scope::NamespaceGuard::enter(*registry_namespace);
+            any(nodes)
+        }
+        Node::Text(_)
+        | Node::Variable(..)
+        | Node::Comment
+        | Node::Load(_)
+        | Node::CsrfToken
+        | Node::DjustAudio
+        | Node::Static(_)
+        | Node::Now(_)
+        | Node::TemplateTag(_)
+        | Node::InlineIf { .. } => false,
+        Node::WidthRatio { asvar, .. } | Node::FirstOf { asvar, .. } => asvar.is_some(),
+        Node::Cycle { name, .. } => name.is_some(),
+        Node::CustomTag { name, args } => {
+            if !crate::registry::tag_handler_returns_bindings(name) {
+                false
+            } else if crate::registry::tag_handler_binds_only_as_var(name) {
+                // Any `as` operand at all, not only Django's `bits[-2]`:
+                // a false positive costs a re-render, a false negative a
+                // stale page.
+                args.iter().any(|arg| arg == "as")
+            } else {
+                true
+            }
+        }
+        Node::BlockCustomTag { name, children, .. } => {
+            crate::registry::block_handler_returns_bindings(name) || any(children)
+        }
+        Node::If {
+            true_nodes,
+            false_nodes,
+            ..
+        } => any(true_nodes) || any(false_nodes),
+        Node::For {
+            nodes, empty_nodes, ..
+        } => any(nodes) || any(empty_nodes),
+        Node::IfChanged {
+            nodes, else_nodes, ..
+        } => any(nodes) || any(else_nodes),
+        Node::BlockSuperScope { super_nodes, nodes } => any(super_nodes) || any(nodes),
+        Node::Block { nodes, .. }
+        | Node::With { nodes, .. }
+        | Node::Spaceless { nodes }
+        | Node::AutoEscape { nodes, .. }
+        | Node::Filter { nodes, .. } => any(nodes),
+        // Context-mutating or not statically knowable: an assign tag, a
+        // raw-block bridge, an include (the included template is not in
+        // view here), partials, cycle resets, locale scopes, an unknown tag.
+        Node::AssignTag { .. }
+        | Node::RawBlockCustomTag { .. }
+        | Node::Include { .. }
+        | Node::PartialCall { .. }
+        | Node::PartialDef { .. }
+        | Node::ResetCycle { .. }
+        | Node::Extends(_)
+        | Node::UnsupportedTag { .. }
+        | Node::Language { .. }
+        | Node::Timezone { .. }
+        | Node::Localize { .. }
+        | Node::LocalTime { .. } => true,
+    }
+}
+
 /// Partial render: only re-render nodes whose deps overlap `changed_keys`.
 ///
 /// Returns `(full_html, new_fragments, changed_indices)`.
@@ -2877,11 +2965,18 @@ pub fn render_nodes_partial<L: TemplateLoader>(
     let mut changed = Vec::new();
     let mut context_may_have_changed = false;
     for (i, node) in nodes.iter().enumerate() {
-        // Wildcard nodes may bind names used by later siblings, including
-        // through nested control flow or custom tags. Their effects cannot
-        // be inferred from the caller's changed input keys. Re-evaluate
-        // following dynamic nodes; literal text remains reusable.
-        context_may_have_changed |= node_deps.get(i).is_none_or(|deps| deps.contains("*"));
+        // A wildcard node READS keys we cannot name, so it always re-renders
+        // itself. Only a node that may also BIND names (an assign tag, an
+        // `as <var>` form, a bridged tag that may write the context, an
+        // include, …) can change what later siblings read; those effects
+        // cannot be inferred from the caller's changed input keys, so the
+        // following dynamic nodes re-evaluate. An inline `{% url %}` /
+        // `{% static %}` / `{% now %}` / simple tag without `as` reads
+        // unknown keys but binds nothing, and no longer latches (#4124).
+        // Literal text remains reusable either way.
+        context_may_have_changed |= node_deps
+            .get(i)
+            .is_none_or(|deps| deps.contains("*") && node_may_bind_names(node));
         let needs_render = node_deps.get(i).is_none_or(|deps| {
             (context_may_have_changed && !deps.is_empty())
                 || deps.contains("*")
@@ -3797,7 +3892,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // closed. Empty for a non-normalised operand, where the loop
             // mapping is the (legitimate) channel.
             let (iterable_value, normalised, derived_grants) = match iterable_value {
-                Value::String(s) | Value::SafeString(s) => (
+                Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => (
                     Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
                     true,
                     Vec::new(),
@@ -4027,6 +4122,56 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             })
                             .unwrap_or(false);
 
+                        // The index-keyed per-item store (#4325): serves an
+                        // item's output from the previous render when the item
+                        // at that index hashes the same and nothing else its
+                        // output reads changed (see `loop_cache::LoopItemStore`).
+                        // Outermost loops only, an untracked render, a body the
+                        // content cache did not take, an iterable with no safety
+                        // mark under it and no Python object under a loop name.
+                        let item_slot: Option<u64> = if loop_caching_enabled
+                            || R::TRACKED
+                            || normalised
+                            || context.get("forloop").is_some()
+                        {
+                            None
+                        } else {
+                            crate::loop_cache::with_active_item_store(|store| {
+                                if !iterable.contains('|')
+                                    && (context.has_safety_marks_under(iterable)
+                                        || context
+                                            .has_safety_marks_under(&context.alias_path(iterable)))
+                                {
+                                    return None;
+                                }
+                                if context.raw_py_objects().is_some_and(|objects| {
+                                    objects.contains_key("forloop")
+                                        || var_names.iter().any(|v| objects.contains_key(v))
+                                }) {
+                                    return None;
+                                }
+                                let env = format!(
+                                    "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{:?}\u{1f}{}",
+                                    ctx.autoescape(),
+                                    ctx.string_if_invalid(),
+                                    dj_if_markers_enabled(ctx),
+                                    ctx.auto_call(),
+                                    crate::timezone::active_timezone_name(),
+                                    djust_core::locale::number_format(),
+                                    djust_core::locale::unlocalized_number_format(),
+                                    USE_L10N_STACK.with(|stack| stack.borrow().last().copied()),
+                                    django_6_or_later(),
+                                );
+                                let site = format!(
+                                    "{iterable}\u{1f}{reversed}\u{1f}{parent_if_loop_path}\u{1f}{}\u{1f}{}",
+                                    ctx.dj_if_id_namespace(),
+                                    ctx.dj_if_include_path(),
+                                );
+                                store.begin_loop(nodes, var_names, &site, &env, len_values as usize)
+                            })
+                            .flatten()
+                        };
+
                         // No per-iteration `{% cycle %}` counter here any more (#2556):
                         // cycle state is per NODE per RENDER on the `Context`'s
                         // shared store, which the `ctx` clone above already
@@ -4034,6 +4179,30 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         // render of the node — Django's model — and a
                         // `{% resetcycle %}` in the body can reach it.
                         for (counter, (index, item)) in indices_and_items.into_iter().enumerate() {
+                            // #4325: the stored output of this index, when the
+                            // item hashes as it did. Not plain data: rendered
+                            // as usual, and the slot is emptied.
+                            let mut item_hash: Option<u128> = None;
+                            if let Some(key) = item_slot {
+                                let found = crate::loop_cache::with_active_item_store(|store| {
+                                    match store.item_hash(&item) {
+                                        Some(hash) => Some((hash, store.lookup(key, index, hash))),
+                                        None => {
+                                            store.forget(key, index);
+                                            None
+                                        }
+                                    }
+                                })
+                                .flatten();
+                                match found {
+                                    Some((_, Some(html))) => {
+                                        output.push_str(&html);
+                                        continue;
+                                    }
+                                    Some((hash, None)) => item_hash = Some(hash),
+                                    None => {}
+                                }
+                            }
                             // Set the per-iteration dj-if loop path (#1832).
                             // Composes for nested loops: an inner For reads this
                             // (non-empty) path and appends its own `-<index>`,
@@ -4327,7 +4496,23 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                                 let item_html = match cached {
                                     Some(html) => R::from(html),
                                     None => {
+                                        // A read through a live object is not in `hash`
+                                        // (train/2.0-ah review B2/B3): the render
+                                        // sidecar walk (a row's relation, #4069) and a
+                                        // handle on an opaque carrier (a #3936 state
+                                        // model handle, a row a relation walk returned)
+                                        // hash as `str(o)` at most. Every resolve of
+                                        // such a binding goes through
+                                        // `Context::walk_from_handle`, which counts it,
+                                        // a custom filter's operand included. That item
+                                        // is emitted as rendered and stored in neither
+                                        // cache; a temporal handle is not counted.
+                                        let live_before = djust_core::context::live_read_count();
                                         let html = render_nodes_output::<L, R>(nodes, ctx, loader)?;
+                                        if djust_core::context::live_read_count() != live_before {
+                                            output.append(&html);
+                                            continue;
+                                        }
                                         crate::loop_cache::with_active_cache(|cache| {
                                             cache.insert(hash, html.to_string())
                                         });
@@ -4393,6 +4578,20 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                                     // resulting subtree.
                                     output.append(&item_html);
                                 }
+                            } else if let (Some(key), Some(hash)) = (item_slot, item_hash) {
+                                // #4325: render, and store unless the render
+                                // read anything live from Python.
+                                let live_before = djust_core::context::live_read_count();
+                                let html = render_nodes_output::<L, R>(nodes, ctx, loader)?;
+                                let pure = djust_core::context::live_read_count() == live_before;
+                                crate::loop_cache::with_active_item_store(|store| {
+                                    if pure {
+                                        store.store(key, index, hash, html.to_string());
+                                    } else {
+                                        store.forget(key, index);
+                                    }
+                                });
+                                output.append(&html);
                             } else {
                                 output.append(&render_nodes_output::<L, R>(nodes, ctx, loader)?);
                             }
@@ -4488,7 +4687,10 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 let object = template_object(&value)?;
                 let candidates: Vec<Value> = if object.is_some() || !value.is_truthy() {
                     Vec::new()
-                } else if let Value::String(name) | Value::SafeString(name) = &value {
+                } else if let Value::String(name)
+                | Value::SafeString(name)
+                | Value::ModelName(name) = &value
+                {
                     if literal {
                         crate::inheritance::construct_relative_path_allow_recursion(
                             origin.as_deref(),
@@ -4526,7 +4728,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                     // Validate each candidate only when it is reached; a later
                     // invalid name cannot invalidate an earlier successful one.
                     let name = match candidate {
-                        Value::String(name) | Value::SafeString(name) => name,
+                        Value::String(name) | Value::SafeString(name) | Value::ModelName(name) => {
+                            name
+                        }
                         other => {
                             let kind = filters::python_type_name(&other).to_owned();
                             if kind == "bytes" {
@@ -4768,69 +4972,6 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                 // is valid in tests where only a fragment is rendered)
                 Ok((String::new()).into())
             }
-        }
-
-        Node::ReactComponent {
-            name,
-            props,
-            children,
-        } => {
-            // Render React component as data attributes for client-side hydration
-            let mut output = R::default();
-            output.push_str(&format!("<div data-react-component=\"{name}\""));
-
-            // Add props as data attributes
-            if !props.is_empty() {
-                output.push_str(" data-react-props='");
-                let props_json: Vec<String> = props
-                    .iter()
-                    .map(|(k, v)| {
-                        // Resolve Django template variable syntax: {{ var.path }}
-                        let resolved_value = if v.starts_with("{{") && v.ends_with("}}") {
-                            // Extract variable name from {{ ... }}
-                            let var_name = v.trim_start_matches("{{").trim_end_matches("}}").trim();
-
-                            // Try to resolve from context
-                            if let Some(ctx_value) = context.get(var_name) {
-                                ctx_value.to_string()
-                            } else {
-                                // Keep the original template syntax for Python-side resolution
-                                v.clone()
-                            }
-                        } else if let Some(ctx_value) = context.get(v) {
-                            // Direct variable reference (no {{ }})
-                            ctx_value.to_string()
-                        } else {
-                            v.clone()
-                        };
-                        // serde_json escapes backslashes and control
-                        // characters, not just `"`.
-                        format!(
-                            "{}:{}",
-                            serde_json::Value::String(k.clone()),
-                            serde_json::Value::String(resolved_value)
-                        )
-                    })
-                    .collect();
-                // The attribute is single-quoted: escape `'` along with the
-                // rest, or a prop value can close it. Readers see the JSON
-                // again after entity decoding (`dataset`, `html.unescape`).
-                output.push_str(&filters::html_escape_attr(&format!(
-                    "{{{}}}",
-                    props_json.join(",")
-                )));
-                output.push_str("'");
-            }
-
-            output.push_str(">");
-
-            // Render children
-            for child in children {
-                output.append(&render_node_output::<L, R>(child, context, loader)?);
-            }
-
-            output.push_str("</div>");
-            Ok(output)
         }
 
         Node::CsrfToken => {
@@ -5219,7 +5360,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
 
         Node::Now(format) => {
             // {% now "Y-m-d" %} → current date/time
-            let now = chrono::Local::now();
+            // The process-local zone, as chrono's `Local` read it before
+            // #4222: `TZ`, then `/etc/localtime`.
+            let now = jiff::Zoned::now();
             Ok((django_date_format(&now, format)).into())
         }
 
@@ -5673,8 +5816,8 @@ fn evaluate_condition(condition: &str, context: &Context) -> Result<bool> {
                     .items
                     .as_ref()
                     .is_some_and(|items| items.iter().any(|item| values_equal(&needle, item)))),
-                Value::String(s) | Value::SafeString(s) => {
-                    if let Value::String(n) | Value::SafeString(n) = &needle {
+                Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
+                    if let Value::String(n) | Value::SafeString(n) | Value::ModelName(n) = &needle {
                         Ok(s.contains(n.as_str()))
                     } else {
                         return Ok(false);
@@ -6489,9 +6632,10 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // one. `(Float, Float)` keeps its epsilon — a separate question (#1079).
         (Value::Integer(a), Value::Float(b)) => int_eq_float(*a, *b),
         (Value::Float(a), Value::Integer(b)) => int_eq_float(*b, *a),
-        (Value::String(a) | Value::SafeString(a), Value::String(b) | Value::SafeString(b)) => {
-            a == b
-        }
+        (
+            Value::String(a) | Value::SafeString(a) | Value::ModelName(a),
+            Value::String(b) | Value::SafeString(b) | Value::ModelName(b),
+        ) => a == b,
         // Two sequences of the SAME kind: same length, pairwise equal (#2335).
         // Without this arm two lists fell to `_ => false` and were never equal
         // — not even to themselves — so `{% if a == b %}` silently took the
@@ -6895,9 +7039,10 @@ fn try_compare(a: &Value, b: &Value) -> Option<i32> {
         // Allow comparing integers and floats
         (Value::Integer(a), Value::Float(b)) => order_floats(*a as f64, *b),
         (Value::Float(a), Value::Integer(b)) => order_floats(*a, *b as f64),
-        (Value::String(a) | Value::SafeString(a), Value::String(b) | Value::SafeString(b)) => {
-            Some(a.cmp(b) as i32)
-        }
+        (
+            Value::String(a) | Value::SafeString(a) | Value::ModelName(a),
+            Value::String(b) | Value::SafeString(b) | Value::ModelName(b),
+        ) => Some(a.cmp(b) as i32),
         // Lexicographic, as Python orders two sequences of the same kind
         // (#2335): the first differing element decides, and if one is a prefix
         // of the other the shorter is smaller. The mirror of the `values_equal`
@@ -7279,7 +7424,7 @@ impl ToF64 for Value {
             // accepts `_` between digits, so `{% widthratio "1_0" 2 100 %}` is
             // 500 in Django, and a bare `parse::<f64>()` refused it and
             // rendered nothing.
-            Value::String(s) | Value::SafeString(s) => {
+            Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {
                 crate::filters::strip_python_underscores(s.trim())
                     .and_then(|cleaned| cleaned.parse::<f64>().ok())
             }
@@ -7292,14 +7437,21 @@ impl ToF64 for Value {
     }
 }
 
-/// Convert Django date format characters to chrono strftime format.
+/// Render `{% now %}`'s Django date format characters.
 ///
-/// Django uses PHP-style single-character format codes (e.g., "Y" for 4-digit year).
-/// This converts the most common ones to chrono's strftime equivalents.
-fn django_date_format(dt: &chrono::DateTime<chrono::Local>, django_fmt: &str) -> String {
+/// Django uses PHP-style single-character format codes (e.g., "Y" for 4-digit
+/// year). Each arm reproduces what the chrono `strftime` specifier it used
+/// before #4222 printed, byte for byte; the jiff port changed the library, not
+/// the output.
+fn django_date_format(dt: &jiff::Zoned, django_fmt: &str) -> String {
     let mut result = String::new();
     let chars = django_fmt.chars();
     let mut escaped = false;
+    let hour12 = match dt.hour() % 12 {
+        0 => 12,
+        h => h,
+    };
+    let name = |spec: &str| dt.strftime(spec).to_string();
 
     for c in chars {
         if escaped {
@@ -7313,53 +7465,46 @@ fn django_date_format(dt: &chrono::DateTime<chrono::Local>, django_fmt: &str) ->
         }
         match c {
             // Day
-            'd' => result.push_str(&dt.format("%d").to_string()), // 01-31
-            'j' => result.push_str(&dt.format("%-d").to_string()), // 1-31
-            'D' => result.push_str(&dt.format("%a").to_string()), // Mon
-            'l' => result.push_str(&dt.format("%A").to_string()), // Monday
+            'd' => result.push_str(&format!("{:02}", dt.day())), // 01-31
+            'j' => result.push_str(&dt.day().to_string()),       // 1-31
+            'D' => result.push_str(&name("%a")),                 // Mon
+            'l' => result.push_str(&name("%A")),                 // Monday
             // Month
-            'm' => result.push_str(&dt.format("%m").to_string()), // 01-12
-            'n' => result.push_str(&dt.format("%-m").to_string()), // 1-12
-            'M' => result.push_str(&dt.format("%b").to_string()), // Jan
-            'F' => result.push_str(&dt.format("%B").to_string()), // January
+            'm' => result.push_str(&format!("{:02}", dt.month())), // 01-12
+            'n' => result.push_str(&dt.month().to_string()),       // 1-12
+            'M' => result.push_str(&name("%b")),                   // Jan
+            'F' => result.push_str(&name("%B")),                   // January
             // Year
-            'Y' => result.push_str(&dt.format("%Y").to_string()), // 2024
-            'y' => result.push_str(&dt.format("%y").to_string()), // 24
+            'Y' => result.push_str(&format!("{:04}", dt.year())), // 2024
+            'y' => result.push_str(&format!("{:02}", i32::from(dt.year()).rem_euclid(100))), // 24
             // Time
-            'H' => result.push_str(&dt.format("%H").to_string()), // 00-23
-            'i' => result.push_str(&dt.format("%M").to_string()), // 00-59
-            's' => result.push_str(&dt.format("%S").to_string()), // 00-59
-            'G' => result.push_str(&dt.format("%-H").to_string()), // 0-23
-            'g' => result.push_str(&dt.format("%-I").to_string()), // 1-12
-            'A' => result.push_str(&dt.format("%p").to_string()), // AM/PM
+            'H' => result.push_str(&format!("{:02}", dt.hour())), // 00-23
+            'i' => result.push_str(&format!("{:02}", dt.minute())), // 00-59
+            's' => result.push_str(&format!("{:02}", dt.second())), // 00-59
+            'G' => result.push_str(&dt.hour().to_string()),       // 0-23
+            'g' => result.push_str(&hour12.to_string()),          // 1-12
+            'A' => result.push_str(if dt.hour() < 12 { "AM" } else { "PM" }),
             'P' => {
                 // Django's P format: "1 a.m.", "noon", "midnight"
-                let hour = dt.format("%-I").to_string().parse::<u32>().unwrap_or(0);
-                let minute = dt.format("%M").to_string();
-                let ampm = if dt.format("%P").to_string() == "am" {
-                    "a.m."
-                } else {
-                    "p.m."
-                };
-                if minute == "00" {
-                    if hour == 12 && ampm == "p.m." {
+                let ampm = if dt.hour() < 12 { "a.m." } else { "p.m." };
+                if dt.minute() == 0 {
+                    if dt.hour() == 12 {
                         result.push_str("noon");
-                    } else if hour == 12 && ampm == "a.m." {
+                    } else if dt.hour() == 0 {
                         result.push_str("midnight");
                     } else {
-                        result.push_str(&format!("{} {}", hour, ampm));
+                        result.push_str(&format!("{} {}", hour12, ampm));
                     }
                 } else {
-                    result.push_str(&format!("{}:{} {}", hour, minute, ampm));
+                    result.push_str(&format!("{}:{:02} {}", hour12, dt.minute(), ampm));
                 }
             }
             // Week/day-of-week
-            'w' => result.push_str(&dt.format("%w").to_string()), // 0 (Sun) - 6 (Sat)
-            'W' => result.push_str(&dt.format("%V").to_string()), // ISO week number
+            'w' => result.push_str(&dt.weekday().to_sunday_zero_offset().to_string()), // 0 (Sun) - 6 (Sat)
+            'W' => result.push_str(&format!("{:02}", dt.date().iso_week_date().week())), // ISO week number
             'S' => {
                 // English ordinal suffix: st, nd, rd, th
-                let day = dt.format("%-d").to_string().parse::<u32>().unwrap_or(0);
-                let suffix = match day {
+                let suffix = match dt.day() {
                     1 | 21 | 31 => "st",
                     2 | 22 => "nd",
                     3 | 23 => "rd",
@@ -7369,38 +7514,46 @@ fn django_date_format(dt: &chrono::DateTime<chrono::Local>, django_fmt: &str) ->
             }
             't' => {
                 // Days in the month (28-31)
-                let month = dt.format("%-m").to_string().parse::<u32>().unwrap_or(1);
-                let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
-                let days = match month {
-                    1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-                    4 | 6 | 9 | 11 => 30,
-                    2 => {
-                        if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
-                            29
-                        } else {
-                            28
-                        }
-                    }
-                    _ => 30,
-                };
-                result.push_str(&days.to_string());
+                result.push_str(&dt.date().days_in_month().to_string());
             }
             'L' => {
                 // Leap year: True or False
-                let year = dt.format("%Y").to_string().parse::<i32>().unwrap_or(2000);
-                let is_leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-                result.push_str(if is_leap { "True" } else { "False" });
+                result.push_str(if dt.date().in_leap_year() {
+                    "True"
+                } else {
+                    "False"
+                });
             }
-            // Timezone
-            'e' => result.push_str(&dt.format("%Z").to_string()),
+            // Timezone: chrono's `%Z` on a `Local` time printed the numeric
+            // offset (`+01:00`), not an abbreviation.
+            'e' => result.push_str(&filters::format_offset(dt.offset(), true)),
             // ISO 8601
-            'c' => result.push_str(&dt.format("%Y-%m-%dT%H:%M:%S%:z").to_string()),
+            'c' => result.push_str(&format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}{}",
+                dt.year(),
+                dt.month(),
+                dt.day(),
+                dt.hour(),
+                dt.minute(),
+                dt.second(),
+                filters::format_offset(dt.offset(), true)
+            )),
             // RFC 2822
-            'r' => result.push_str(&dt.format("%a, %d %b %Y %H:%M:%S %z").to_string()),
+            'r' => result.push_str(&format!(
+                "{}, {:02} {} {:04} {:02}:{:02}:{:02} {}",
+                name("%a"),
+                dt.day(),
+                name("%b"),
+                dt.year(),
+                dt.hour(),
+                dt.minute(),
+                dt.second(),
+                filters::format_offset(dt.offset(), false)
+            )),
             // Unix timestamp
-            'U' => result.push_str(&dt.timestamp().to_string()),
+            'U' => result.push_str(&dt.timestamp().as_second().to_string()),
             // Other
-            'N' => result.push_str(&dt.format("%b.").to_string()), // Month abbrev AP style
+            'N' => result.push_str(&format!("{}.", name("%b"))), // Month abbrev AP style
             _ => result.push(c), // Pass through unrecognized chars (colons, spaces, etc.)
         }
     }
@@ -7825,25 +7978,6 @@ mod tests {
         context.set("name".to_string(), Value::String("World".to_string()));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "World");
-    }
-
-    /// React props are JSON inside a single-quoted attribute: the JSON is
-    /// built by an encoder and the whole value is entity-escaped.
-    #[test]
-    fn react_component_props_are_encoded_json_in_an_escaped_attribute() {
-        let tokens = tokenize(r#"<Greeting who="{{ name }}" />"#).unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set(
-            "name".to_string(),
-            Value::String("it's \"q\" <b> a\\b\n".to_string()),
-        );
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(
-            result,
-            "<div data-react-component=\"Greeting\" data-react-props='{&quot;who&quot;:\
-             &quot;it&#x27;s \\&quot;q\\&quot; &lt;b&gt; a\\\\b\\n&quot;}'></div>"
-        );
     }
 
     #[test]
@@ -8290,7 +8424,11 @@ mod tests {
         .map(|(k, v)| {
             (
                 djust_core::ObjectKey::Str(k.chars().collect()),
-                Value::String(v.chars().collect()),
+                if k == "__model__" {
+                    Value::ModelName(v.chars().collect())
+                } else {
+                    Value::String(v.chars().collect())
+                },
             )
         })
         .collect();
@@ -9006,7 +9144,11 @@ mod tests {
                 .map(|(k, v)| {
                     (
                         djust_core::ObjectKey::Str(k.chars().collect()),
-                        Value::String(v.chars().collect()),
+                        if k == "__model__" {
+                            Value::ModelName(v.chars().collect())
+                        } else {
+                            Value::String(v.chars().collect())
+                        },
                     )
                 })
                 .collect(),

@@ -14,6 +14,8 @@ Client side: an existing frame field. ``async_pending: true`` keeps loading on
 tests/js/loading-states.test.js and tests/js/sse.test.js.
 """
 
+import json
+
 import pytest
 from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
@@ -97,14 +99,6 @@ async def _mounted(view="SpinnerView"):
     return socket
 
 
-class LegacySpinnerView(SpinnerView):
-    """An unhandled failure ends a legacy view's loading state with a
-    ``source="async"`` frame naming the event; an explicit view ends it with
-    the opaque ``async_complete`` batch frame (no callback names)."""
-
-    exposure_policy = "legacy"  # legacy subject: the named source=async error frame
-
-
 async def _frames(socket, until):
     """Frames until ``until(frames)`` holds (event-driven, #3130), then any
     others before the socket goes quiet. The trailing window can only miss a
@@ -170,14 +164,23 @@ async def test_reply_without_work_does_not_announce_it():
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_failing_work_without_handler_still_ends_loading():
-    """The announced loading state must end even when the work raises."""
+    """The announced loading state must end even when the work raises: an
+    explicit view ends it with the opaque ``async_complete`` frame of the
+    reply's ``async_batch``, which names neither a callback nor the failure."""
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
-        socket = await _mounted("LegacySpinnerView")
+        socket = await _mounted()
         try:
-            frames = await _event(socket, "start_failing", 3, work=True)
-            assert _reply(frames, 3).get("async_pending") is True
-            results = [f for f in frames if f.get("source") == "async"]
-            assert results and results[-1]["event_name"] == "start_failing", frames
+            await socket.send_json_to(
+                {"type": "event", "event": "start_failing", "params": {}, "ref": 3}
+            )
+            frames = await _frames(
+                socket, lambda seen: any(f.get("type") == "async_complete" for f in seen)
+            )
+            reply = _reply(frames, 3)
+            assert reply.get("async_pending") is True, frames
+            (complete,) = [f for f in frames if f.get("type") == "async_complete"]
+            assert complete["async_batch"] == reply["async_batch"], frames
+            assert "background work failed" not in json.dumps(frames), frames
         finally:
             await socket.disconnect()
 
@@ -218,34 +221,3 @@ async def test_cancelled_work_still_ends_the_loading_state():
             assert ends, f"nothing ends start_slow's loading state: {frames}"
         finally:
             await socket.disconnect()
-
-
-@pytest.mark.asyncio
-async def test_consumer_cancel_path_sends_the_settle_frame_only_for_an_event():
-    """``_run_async_work`` (tick / push / notify / released activity events):
-    a cancelled task still sends the ``source="async"`` frame when an event
-    owns it, and nothing when no event does."""
-    from unittest.mock import MagicMock
-
-    for event_name, expected in (("go", 1), (None, 0)):
-        consumer = LiveViewConsumer()
-        sent = []
-
-        async def send_json(msg, _sent=sent):
-            _sent.append(msg)
-
-        consumer.send_json = send_json
-        view = MagicMock()
-        # A bare MagicMock has no readable exposure policy, which ADR-038
-        # treats as nonlegacy (fail closed). This pins the legacy path.
-        view.exposure_policy = "legacy"  # legacy subject: the legacy cancelled-task path
-        view._async_cancelled = {"job"}
-        view.render_with_diff = MagicMock(return_value=("<div dj-root>x</div>", "[]", 2))
-        for drain in ("push_events", "navigation", "accessibility", "flash"):
-            setattr(view, f"_drain_{drain}", MagicMock(return_value=[]))
-        consumer.view_instance = view
-        await consumer._run_async_work("job", lambda: None, (), {}, event_name=event_name)
-        async_frames = [m for m in sent if m.get("source") == "async"]
-        assert len(async_frames) == expected, sent
-        if expected:
-            assert async_frames[0]["event_name"] == "go"

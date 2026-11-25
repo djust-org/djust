@@ -111,8 +111,8 @@ class MultiViewGuarded(LiveView):
     """A lazy view only a signed-in user with a permission may open (#3252): for an anonymous
     visitor it is refused in its own container; the rest of the page stays live.
     For a signed-in user it answers a click, and when that user's authority is
-    revoked mid-session (``reauth_on_event`` is on in the demo settings) the next
-    click is refused in this container alone."""
+    revoked mid-session (every event is re-authorized) the next click is refused
+    in this container alone."""
 
     exposure_policy = "explicit"
     pings = state(0, persist="server")

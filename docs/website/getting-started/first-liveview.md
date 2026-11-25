@@ -25,6 +25,11 @@ Add `"myapp"` to `INSTALLED_APPS` in your project's settings, and add
 (`djust init` does not; without the setting, installed apps are allowed). Keep the existing
 entries. The URL step below connects this app to the site.
 
+The handlers below are written for the strict event parameter policy, the default
+since djust 2.0: a handler declares,
+with annotations, exactly the arguments its events carry, and the browser
+sends it nothing else.
+
 ## 1. Create the View
 
 Create `myapp/views.py`:
@@ -39,11 +44,11 @@ class CounterView(LiveView):
     count = state(0)
 
     @event_handler()
-    def increment(self, **kwargs):
+    def increment(self):
         self.count += 1
 
     @event_handler()
-    def decrement(self, **kwargs):
+    def decrement(self):
         self.count -= 1
 ```
 
@@ -80,7 +85,7 @@ Create `myapp/templates/myapp/counter.html`:
 
 **Template requirements:**
 
-- `{% load live_tags %}` and `{% djust_client_config %}` emit client config meta tags; djust auto-injects the client JS (~87 KB gz) into every LiveView response
+- `{% load live_tags %}` and `{% djust_client_config %}` emit client config meta tags; djust auto-injects the client JS (~90 KB gz) into every LiveView response
 - `dj-root` marks the reactive region — only this subtree is patched on updates. It is the only root attribute you write; djust stamps `dj-view` onto it server-side with the dotted path of the view rendering the page, which is what connects the page to the WebSocket session
 - (Write `dj-view="myapp.views.MyView"` yourself only to name a specific view — an embedded or sticky view, or a template shared by several views. It is a literal path; there is no `dj_view_id` variable)
 - `dj-click="increment"` binds a click event to the `increment` handler
@@ -132,7 +137,7 @@ For text inputs, use `dj-input` (fires on the `input` event, debounced 300 ms by
 
 ```python
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str):
     """The 'value' parameter receives the current input value."""
     self.query = value
 ```
@@ -144,12 +149,12 @@ def search(self, value: str = "", **kwargs):
 
 ## Passing Data from the DOM
 
-Use `data-*` attributes to pass data to event handlers:
+Use `dj-value-*` attributes to pass data to event handlers:
 
 ```python
 @event_handler()
-def delete_item(self, item_id: int = 0, **kwargs):
-    """data-item-id="5" becomes item_id=5 (auto-converted to int)."""
+def delete_item(self, item_id: int):
+    """dj-value-item-id="5" becomes item_id=5 (converted by the annotation)."""
     self.items = [i for i in self.items if i["id"] != item_id]
 ```
 
@@ -157,7 +162,7 @@ def delete_item(self, item_id: int = 0, **kwargs):
 {% for item in items %}
 <li>
     {{ item.name }}
-    <button dj-click="delete_item" data-item-id="{{ item.id }}">Delete</button>
+    <button dj-click="delete_item" dj-value-item-id="{{ item.id }}">Delete</button>
 </li>
 {% endfor %}
 ```

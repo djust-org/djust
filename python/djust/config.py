@@ -27,16 +27,25 @@ DEFAULT_MAX_FORM_DATA_SIZE = 2_621_440
 #: 100x Django's field limit; at the per-member cost of an event (~0.7 us in the state sync, measured
 #: in #3844) it keeps an event at the cap to ~70 ms where the size limit alone allowed ~1.8 s.
 DEFAULT_MAX_FORM_MEMBERS = 100_000
+#: ``max_outbound_buffer_bytes`` (#3658): 4 MiB of frames waiting for one slow client.
+DEFAULT_MAX_OUTBOUND_BUFFER_BYTES = 4 * 1024 * 1024
 #: The three form-data limits (#3834, #3844). Every one is a non-negative integer (``0`` = no limit),
 #: validated when the config loads AND when a value is written in code (``set`` / ``update``, #3858).
 _FORM_LIMIT_KEYS = ("max_form_fields", "max_form_data_size", "max_form_members")
+#: Non-negative integer limits validated like the form limits (``0`` = no limit).
+_INT_LIMIT_KEYS = _FORM_LIMIT_KEYS + ("max_outbound_buffer_bytes",)
 
 #: The project-wide default of ``LiveView.http_status_of_state`` (#3706): a mapping of a state name to
 #: the HTTP status the page answers for it. Validated like the form limits, on load and on every
 #: ``set`` / ``update`` that names it; a bad value is the default (no map, the page answers 200).
 _STATUS_MAP_KEY = "http_status_of_state"
 #: Every key whose written value is sanitized, so what a reload replays is what is stored (#3858).
-_SANITIZED_KEYS = _FORM_LIMIT_KEYS + (_STATUS_MAP_KEY,)
+#: On/off switches whose value must be a real ``bool`` (train/2.0-ai review N1): ``bool("false")``
+#: is ``True``, so a kill-switch read from an environment variable would silently stay on.
+_BOOL_SWITCH_KEYS = ("state_models_as_handles", "log_exception_detail")
+_FALSE_SPELLINGS = frozenset({"false", "0", "no", "off"})
+_TRUE_SPELLINGS = frozenset({"true", "1", "yes", "on"})
+_SANITIZED_KEYS = _INT_LIMIT_KEYS + (_STATUS_MAP_KEY,) + _BOOL_SWITCH_KEYS
 
 
 def valid_http_status_map(value: Any) -> bool:
@@ -170,13 +179,22 @@ class LiveViewConfig:
         # How many views one WebSocket may host besides the page view: the
         # ``dj-lazy`` and ``mount_batch`` views, each a view of its own (#3252).
         "max_views_per_connection": 64,
+        # Bytes of outbound frames one connection may have waiting while the
+        # client reads slowly (#3658). Past it a WebSocket is closed with 1013
+        # and an SSE stream is ended, and the client reconnects and resyncs.
+        # The frame next in line is not counted, so one large frame is always sent. 0 = no limit.
+        "max_outbound_buffer_bytes": DEFAULT_MAX_OUTBOUND_BUFFER_BYTES,
         # ``event_security`` was removed in 2.0 (#4101): only @event_handler
         # methods are client events, on every transport. "open" / "warn" fail
         # startup (``djust._removed_settings``); "strict" is accepted and ignored.
-        # ADR-036: opt-in predictable signature binding and bounded conversion.
-        "event_parameter_policy": "legacy",
         # LiveView transport mode
         "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
+        # Which client bundle the LiveView injects (#4007). "core" (default):
+        # client-core.js, which loads the optional chunks (uploads, virtual
+        # list, cursor overlay, tutorial bubble, service worker) only when the
+        # page uses them (at load or when a patch renders them). "full":
+        # client.js, every module up front, nothing loaded later.
+        "client_bundle": "core",
         # WebSocket per-message compression advisory flag (v0.6.0).
         # permessage-deflate negotiation actually happens in the ASGI
         # server — Uvicorn/Daphne both support it by default. This flag
@@ -237,21 +255,6 @@ class LiveViewConfig:
         # strict (``components.utils.csp_strict``). Setting both to different
         # values is reported by the system check ``djust.C039``.
         "csp_strict_styles": False,
-        # Re-check auth on every WS event (#1777, threat model T3, defense-in-depth).
-        # Auth normally runs only at mount; with this OFF (default) an
-        # authenticated user who logs out / loses a permission mid-session keeps
-        # dispatching events on the open socket until they reconnect (the
-        # connect-time scope user is cached). When True, handle_event re-resolves
-        # the user from the session (channels.auth.get_user) and re-runs the
-        # view's login_required/permission_required check, closing 4403 on
-        # failure. Default OFF: it costs one session read per event — opt in for
-        # high-security apps that want mid-session deauth enforced on the live path.
-        "reauth_on_event": False,
-        # Seconds a passed reauth_on_event check also covers server-originated
-        # turns (tick, server_push, db_notify, presence, async results) on one
-        # socket, so ticking views do not read the session store every tick.
-        # 0 re-checks every turn. Only used when reauth_on_event is on.
-        "reauth_server_turn_interval": 5.0,
         # Hot Reload (Development)
         "hot_reload": True,  # Enable hot reload in development (requires DEBUG=True)
         "hot_reload_watch_dirs": None,  # Directories to watch (None = auto-detect BASE_DIR)
@@ -260,6 +263,14 @@ class LiveViewConfig:
         # Set to False if you orchestrate the file watcher externally (e.g.
         # watchfiles wrapping uvicorn) and want full manual control.
         "hot_reload_auto_enable": True,
+        # Tag libraries (``{% load %}`` names) whose tags never mount a child
+        # view with ``{% live_render %}``. A live mount of an explicit
+        # ``template_name`` page skips the full page-shell render when no
+        # template of the page can mount one (#4295); a ``{% load %}`` of any
+        # other library that registers tags keeps that render (#4298). A library
+        # can also vouch for itself with ``register.djust_childless = True``
+        # (#4302); inclusion-tag templates are not scanned either way.
+        "childless_tag_libraries": [],
         # Once-a-day notice of newer releases / security advisories on the
         # dev server and in ``manage.py check``. Cached, silent on failure,
         # never runs with DEBUG=False. See docs/website/guides/update-check.md.
@@ -291,6 +302,20 @@ class LiveViewConfig:
         # ``.count`` (never capped, one query), and one that needs one row
         # ``.first`` / ``.exists``.
         "queryset_all_row_cap": 100_000,
+        # A to-many relation the template reads only through a method
+        # (``.all.count``, ``.all.first.name``, ``.count``, ``.exists``), by index
+        # (``.all.0.name``) or for its length (``.all|length``, ``{% if %}``)
+        # needs at most a row of it, yet the JIT prefetched the WHOLE relation for
+        # every parent row (#4326). This is the most queries that may replace that
+        # one prefetch query: when the QuerySet is sliced and (parent rows) x
+        # (distinct light reads of the relation: ``count``, ``exists``,
+        # ``all.1`` ... each one query per row) is at most this, the relation is
+        # not prefetched and each parent row runs its own ``COUNT`` / ``LIMIT``.
+        # Otherwise (unsliced, more parents or reads) the prefetch stays. The
+        # default ``1`` never adds a query: it replaces one query with one; raise
+        # it to trade a few queries for not loading large relations, ``0`` always
+        # prefetches.
+        "queryset_light_relation_max_parents": 1,
         # Serialization behavior (issue #292)
         # When False (default): non-serializable values are converted via str() fallback with a warning log
         # When True: non-serializable values raise TypeError with actionable error message
@@ -312,6 +337,25 @@ class LiveViewConfig:
         # after a streak of low-hit renders (#3071; see
         # RustBridgeMixin._LOOP_CACHE_BYPASS_AFTER).
         "loop_render_cache_enabled": True,
+        # #3936 / #3949 (ADR-027 addendum): hand the renderer a floored model
+        # HANDLE for each state key holding a model (a Model, a QuerySet, a
+        # list of models), bound for the render only. A filtered rebinding
+        # (``{% with q=user|default:user %}{{ q.groups.count }}``), a custom
+        # filter or tag and ``pprint`` then see the model as the Django backend
+        # does, not its serialized dict. State, change detection and the wire
+        # keep the dict. A key the flag-off path already answers (QuerySet
+        # methods, JIT-walked rows) keeps that path. Default ON since 2.0
+        # (#3936 / #3949, maintainer decision 2026-11-22). ``False`` is the
+        # kill-switch: every state model renders from its serialized dict again
+        # (a filtered rebinding of one then renders empty on an explicit view,
+        # and a custom filter or tag is handed a ``dict``).
+        "state_models_as_handles": True,
+        # Keep exception text and tracebacks of an explicit view's failures in
+        # production server logs and fire Django's ``got_request_exception``
+        # (error trackers such as Sentry) on every transport (#4180). Server log
+        # and error-tracker sinks only: client frames and HTTP responses stay
+        # generic either way. Off by default.
+        "log_exception_detail": False,
         # Seconds one page-POST fallback request waits, in total, for the
         # ``start_async`` / ``@background`` work it runs before answering
         # (#3634). ``None`` (default) = no deadline: a task that does not return
@@ -611,7 +655,7 @@ class LiveViewConfig:
         Run when the config loads and again on every ``set`` / ``update`` that names one (#3858): a
         ``'abc'`` written in code made every form event raise ``TypeError``, ``-5`` refused everything,
         and ``3.7`` / ``True`` were accepted as limits. A bad value is the default, never "no limit"."""
-        for key in _FORM_LIMIT_KEYS:
+        for key in _INT_LIMIT_KEYS:
             val = target.get(key)
             if isinstance(val, bool) or not isinstance(val, int) or val < 0:
                 logger.warning(
@@ -621,6 +665,31 @@ class LiveViewConfig:
                     self._defaults[key],
                 )
                 target[key] = self._defaults[key]
+
+    def _validate_bool_switches(self, target: Dict[str, Any]) -> None:
+        """Make each on/off switch in *target* a real ``bool`` (review N1).
+
+        A string or ``0`` / ``1`` spelling of a boolean (``"false"``, ``"0"``, ``"off"``, from an
+        environment-driven settings file) is read as that boolean, with a warning; anything else is
+        the default, with a warning. ``bool(value)`` would turn ``"false"`` into ``True``."""
+        for key in _BOOL_SWITCH_KEYS:
+            if key not in target:
+                continue
+            val = target[key]
+            if isinstance(val, bool):
+                continue
+            text = str(val).strip().lower() if isinstance(val, (str, int)) else None
+            if text in _FALSE_SPELLINGS or text in _TRUE_SPELLINGS:
+                parsed = text in _TRUE_SPELLINGS
+                logger.warning(
+                    "%s=%r is not a bool; read as %s. Set True or False.", key, val, parsed
+                )
+            else:
+                parsed = self._defaults[key]
+                logger.warning(
+                    "Invalid %s=%r (must be True or False). Using default %s.", key, val, parsed
+                )
+            target[key] = parsed
 
     def _validate_status_map(self, target: Dict[str, Any]) -> None:
         """Replace ``http_status_of_state`` in *target* by the default (no map) when it is not a mapping
@@ -644,6 +713,7 @@ class LiveViewConfig:
         # A limit that is not a non-negative integer is the default, never "no limit" (#3834).
         self._validate_form_limits(target)
         self._validate_status_map(target)
+        self._validate_bool_switches(target)
 
         # Validate rate_limit values
         defaults = self._defaults["rate_limit"]
@@ -746,6 +816,7 @@ class LiveViewConfig:
                 # the sanitized value and not the one written (#3858, #3706).
                 self._validate_form_limits(new)
                 self._validate_status_map(new)
+                self._validate_bool_switches(new)
                 value = new[key]
             self._record_programmatic(key, value)
             self._config = new
@@ -827,6 +898,7 @@ class LiveViewConfig:
             new.update(_detached(config_dict))
             self._validate_form_limits(new)  # the same rule ``set()`` applies (#3858)
             self._validate_status_map(new)
+            self._validate_bool_switches(new)
             for key, value in config_dict.items():
                 self._record_programmatic(key, new[key] if key in _SANITIZED_KEYS else value)
             self._config = new

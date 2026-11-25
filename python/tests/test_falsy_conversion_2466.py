@@ -725,6 +725,8 @@ class TestTheFalsinessRuleStillHasONEDefinition:
                 "Float",
                 "String",
                 "SafeString",
+                # #3947: the model-name marker, a string variant (not a falsy carrier).
+                "ModelName",
                 "List",
                 "Tuple",
                 "NamedTuple",

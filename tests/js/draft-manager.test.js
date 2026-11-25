@@ -141,13 +141,24 @@ describe('DraftManager', () => {
             const data = { title: 'Test Article' };
             const draftData = {
                 data,
-                timestamp: Date.now()
+                timestamp: Date.now(),
+                format: 2
             };
             mockLocalStorage['djust_draft_article_1'] = JSON.stringify(draftData);
 
             const loaded = manager.loadDraft('article_1');
 
             expect(loaded).toEqual(data);
+        });
+
+        it('discards a draft saved in an older format and removes it from storage (#4207)', () => {
+            mockLocalStorage['djust_draft_article_1'] = JSON.stringify({
+                data: { title: 'Old', choice: 'b' },
+                timestamp: Date.now()
+            });
+
+            expect(manager.loadDraft('article_1')).toBeNull();
+            expect(localStorage.removeItem).toHaveBeenCalledWith('djust_draft_article_1');
         });
 
         it('should return null if draft not found', () => {

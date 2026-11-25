@@ -56,24 +56,17 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
 @pytest.mark.parametrize("case,sentinel", CASES)
-def test_value_quoting_log_lines_follow_the_turn(
-    monkeypatch, settings, caplog, policy, case, sentinel
-):
+def test_value_quoting_log_lines_follow_the_turn(monkeypatch, settings, caplog, case, sentinel):
     settings.DEBUG = False  # DEBUG re-raises assign errors instead of logging
     with caplog.at_level(logging.DEBUG), diagnostic_scope():
-        restrict_diagnostics(_Owner(policy))
+        restrict_diagnostics(_Owner("explicit"))
         if case == "assign":
             _assign_failure()
         elif case == "suspense":
             _suspense_failure(monkeypatch)
         else:
             _stream_failure()
-    if policy == "legacy":
-        # Unchanged legacy behaviour; also proves the catch ran.
-        assert sentinel in caplog.text
-    else:
-        assert sentinel not in caplog.text
-        assert "FACTORY_SENTINEL" not in caplog.text
-        assert "Protected view operation failed" in caplog.text
+    assert sentinel not in caplog.text
+    assert "FACTORY_SENTINEL" not in caplog.text
+    assert "Protected view operation failed" in caplog.text

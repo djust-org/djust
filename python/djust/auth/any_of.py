@@ -13,8 +13,8 @@ handler decorator) takes:
       permission_required = ["runs.view_run", AnyOf("runs.review", "runs.approve")]
 
 Every place djust evaluates or reports the spec goes through this module, so
-the view check, the handler check, ``reauth_on_event``, the client route map
-and ``djust_audit`` agree on what it means.
+the view check, the handler check, the per-turn re-authorization, the client
+route map and ``djust_audit`` agree on what it means.
 
 :class:`AnyOf` is a tuple, so code that predates it and reads the spec as a
 tuple of permissions (``user.has_perms(tuple(spec))``) requires every member:

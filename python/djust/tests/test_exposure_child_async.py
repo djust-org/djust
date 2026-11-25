@@ -9,6 +9,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from djust import LiveView, event_handler
 from djust._exposure_children import child_state_key
 from djust.tests.test_exposure_child_events import EventChild, mount
+from djust._parameter_metadata import expand_parameter_manifest
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -35,12 +36,11 @@ async def drain_owned_tasks(child):
 
 @pytest.mark.parametrize("explicit", [False, True])
 async def test_background_contract_failure_withholds_html_and_completes_batch(
-    monkeypatch, explicit, caplog
+    monkeypatch, explicit, caplog, settings
 ):
     from djust.tests.test_runtime_child_routing_1892 import (
         _StickyChildView,
-        _make_runtime_with_view,
-        _make_sticky_parent,
+        _mounted_sticky_parent,
     )
 
     started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -54,16 +54,17 @@ async def test_background_contract_failure_withholds_html_and_completes_batch(
 
         self.start_async(work, name="contract-failure")
 
-    monkeypatch.setattr(EventChild if explicit else _StickyChildView, "begin", begin, raising=False)
     if explicit:
+        monkeypatch.setattr(EventChild, "begin", begin, raising=False)
         runtime, transport, _ = await mount()
         child_id = "menu"
         child = runtime.view_instance._get_child_view(child_id)
     else:
-        parent, child = _make_sticky_parent()
-        runtime, transport = _make_runtime_with_view(parent)
+        settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = ["djust.tests.test_runtime_child_routing_1892"]
+        parent, child, runtime, transport = await _mounted_sticky_parent()
+        monkeypatch.setattr(_StickyChildView, "begin", begin, raising=False)
         runtime._parameter_contract_view = "tests.Parent"
-        child_id = "child-1"
+        child_id = "child"
 
     original_send = transport.send
 
@@ -149,14 +150,11 @@ async def test_background_batch_acknowledges_only_after_all_child_tasks(monkeypa
 
 
 @pytest.mark.parametrize("shape", ["sync", "async", "returned-coroutine"])
-@pytest.mark.parametrize("strict", [False, True])
-async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(
-    monkeypatch, shape, strict
-):
+async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(monkeypatch, shape):
     calls = []
     root_calls = []
 
-    @event_handler(parameter_policy="strict" if strict else "legacy")
+    @event_handler
     def begin(self):
         def finish():
             calls.append(self)
@@ -190,16 +188,13 @@ async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(
         assert "Count=4" in frames[0]["html"]
         assert "SERVER_SENTINEL" not in str(frames)
         assert not transport.errors
-        if strict:
-            owner = next(
-                owner
-                for owner in frames[0]["parameter_contracts"]["owners"]
-                if owner["view_id"] == "menu"
-            )
-            assert owner["handlers"]["begin"]["policy"] == "strict"
-            assert frames[0]["parameter_contract_view"] == runtime._parameter_contract_view
-        else:
-            assert "parameter_contracts" not in frames[0]
+        owner = next(
+            owner
+            for owner in expand_parameter_manifest(frames[0]["parameter_contracts"])
+            if owner["view_id"] == "menu"
+        )
+        assert owner["handlers"]["begin"]["policy"] == "strict"
+        assert frames[0]["parameter_contract_view"] == runtime._parameter_contract_view
         stored = await sync_to_async(SessionStore(request.session.session_key).load)()
         assert stored[child_state_key(request.path, ("menu",))]["state"]["values"]["count"] == 4
     finally:

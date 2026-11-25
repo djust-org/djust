@@ -876,6 +876,14 @@ CLASS_ATTRIBUTES: List[Dict[str, Any]] = [
         "example": "params_form_fallback = 'fields'",
     },
     {
+        "name": "sw_cacheable",
+        "type": "bool",
+        "default": "False",
+        "description": "Let the opt-in service worker cache this page's HTML (VDOM and shell "
+        "caches); only for a page that renders the same HTML for everyone (#4176)",
+        "example": "sw_cacheable = True",
+    },
+    {
         "name": "http_status_of_state",
         "type": "Mapping[str, int]",
         "default": "{}",

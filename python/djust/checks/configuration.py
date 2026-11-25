@@ -610,35 +610,87 @@ def _check_worker_threads(errors: list[CheckMessage]) -> None:
         )
 
 
-def _check_event_parameter_policy(errors: list[CheckMessage]) -> None:
-    """C022 — the ADR-036 project parameter policy must be "legacy" or "strict".
+def _check_unsupplied_names_mode(errors: list[CheckMessage]) -> None:
+    """C043 -- ``DJUST_UNSUPPLIED_NAMES`` must be "debug", "warn" or "error" (#4279).
 
-    Dispatch resolves every handler without its own ``parameter_policy`` through
-    the same resolver this check calls, and rejects the event when the value is
-    invalid. Legacy is the default, so an absent key never reports anything.
+    The render path falls back to "debug" on a bad value (and logs once), so a typo
+    would silently turn the strictness off; this makes it fail at startup.
     """
-    from djust._parameter_contract import ContractError
-    from djust.config import config
-    from djust.validation import get_project_parameter_policy
+    from django.conf import settings
 
-    if _is_check_suppressed("djust.C022"):
+    from djust._exposure_unsupplied import SETTING, _normalised_mode, invalid_mode_message
+
+    if _is_check_suppressed("djust.C043"):
         return
-    try:
-        get_project_parameter_policy()
-    except ContractError:
+    if not hasattr(settings, SETTING):
+        return
+    value = getattr(settings, SETTING)
+    if _normalised_mode(value) is None:
         errors.append(
             DjustError(
-                "LIVEVIEW_CONFIG['event_parameter_policy'] is %s; it must be 'legacy' or 'strict'."
-                % repr(config.get("event_parameter_policy"))[:80],
+                invalid_mode_message(value),
                 hint=(
-                    "Every event handler that does not declare its own parameter_policy "
-                    "inherits this value, so each of their events is rejected until it "
-                    "is fixed. Remove the key to keep the 'legacy' default."
+                    "An invalid value is ignored at render time (it behaves as "
+                    '"debug"), so the strictness you meant to set is off.'
                 ),
-                id="djust.C022",
-                fix_hint="Set `LIVEVIEW_CONFIG['event_parameter_policy']` to `'legacy'` or `'strict'`.",
+                id="djust.C043",
+                fix_hint='Set `DJUST_UNSUPPLIED_NAMES` to `"debug"`, `"warn"` or `"error"`.',
             )
         )
+
+
+def _check_childless_inclusion_tags(errors: list[CheckMessage]) -> None:
+    """C044 -- an ``inclusion_tag`` in a childless library (#4302).
+
+    Childless means ``register.djust_childless = True`` or a name in
+    ``LIVEVIEW_CONFIG['childless_tag_libraries']``.
+
+    The page-shell scan reads the page's own templates, not the template an
+    inclusion tag renders, so a ``{% live_render %}`` there would not be seen.
+    DEBUG only: it resolves every installed tag library.
+    """
+    from django.conf import settings
+
+    if not settings.DEBUG or _is_check_suppressed("djust.C044"):
+        return
+    try:
+        from djust import template_libraries
+
+        from djust.runtime import _project_childless_libraries
+
+        vouched = set(_project_childless_libraries())
+        names = sorted({*template_libraries._library_map(), *vouched})
+    except Exception:  # noqa: BLE001 — a broken library map is not this check's job
+        return
+    for name in names:
+        try:
+            found = template_libraries._find_library(name)
+        except Exception:  # noqa: BLE001 — an unloadable library is not this check's job
+            continue
+        if name not in vouched and getattr(found, "djust_childless", False) is not True:
+            continue
+        tags = getattr(found, "tags", None)
+        if not isinstance(tags, dict):
+            continue
+        for tag, fn in sorted(tags.items()):
+            if "InclusionNode" not in getattr(getattr(fn, "__code__", None), "co_names", ()):
+                continue
+            errors.append(
+                DjustWarning(
+                    "Tag library %r is childless but %r is an inclusion tag." % (name, tag),
+                    hint=(
+                        "The page-shell scan does not follow inclusion templates, so a "
+                        "{%% live_render %%} in the template of {%% %s %%} would not be "
+                        "registered. Drop the marker, or make sure the inclusion template "
+                        "never mounts a child view." % tag
+                    ),
+                    id="djust.C044",
+                    fix_hint=(
+                        "Drop `%s` from the childless marker or setting, or keep "
+                        "`{%% live_render %%}` out of the template `%s` renders." % (name, tag)
+                    ),
+                )
+            )
 
 
 def _check_ws_path(errors: list[CheckMessage]) -> None:
@@ -815,7 +867,6 @@ def _views_saving_state(LiveView: type) -> tuple[list[str], list[str]]:
     """Project LiveViews whose state is saved between requests, and those whose
     ``automatic_state`` is not ``True``, ``False`` or ``None`` (C034 / C035)."""
     from djust import _automatic_state
-    from djust._exposure import uses_legacy_exposure
 
     saving, invalid = [], []
     for cls in _walk_subclasses(LiveView):
@@ -827,11 +878,7 @@ def _views_saving_state(LiveView: type) -> tuple[list[str], list[str]]:
             invalid.append(name)
             continue
         on = _automatic_state.project_saving_enabled() if value is None else value
-        try:
-            legacy = uses_legacy_exposure(cls)
-        except Exception:  # noqa: BLE001 — an unreadable policy is the V-checks' report
-            legacy = False
-        if on and not legacy:
+        if on:
             saving.append(name)
     return sorted(set(saving)), sorted(set(invalid))
 
@@ -1341,6 +1388,54 @@ def _check_in_memory_channel_layer(errors: list[CheckMessage]) -> None:
                 "(suppress djust.C032)."
             ),
             id="djust.C032",
+            fix_hint=(
+                "Set `CHANNEL_LAYERS = {'default': {'BACKEND': "
+                "'channels_redis.core.RedisChannelLayer', 'CONFIG': {'hosts': [REDIS_URL]}}}`."
+            ),
+        )
+    )
+
+
+def _check_state_flush_reach(errors: list[CheckMessage]) -> None:
+    """C046 (info) — a reconnect cannot ask another process to save (#4164).
+
+    With the save interval on (the default, 2 seconds) a reconnect whose
+    stored state is behind what the page showed asks the tab's old connection
+    to save first. A connection in the same process is asked directly; one in
+    another process only through a channel layer shared between processes.
+    With no layer or an in-memory one, a reconnect that lands on another
+    process restores what was last saved, up to one interval behind, and the
+    old connection's later save is refused. Whether the site runs more than
+    one process cannot be seen from settings, so this is information, with
+    ``DEBUG`` off only.
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C046") or not _is_production():
+        return
+    try:
+        from djust import _save_policy
+    except ImportError:
+        return
+    if _save_policy.state_save_interval() <= 0:
+        return
+    layers = getattr(settings, "CHANNEL_LAYERS", None)
+    config = layers.get("default") if isinstance(layers, dict) else None
+    backend = config.get("BACKEND") if isinstance(config, dict) else None
+    if backend is not None and backend not in _IN_MEMORY_LAYERS:
+        return
+    errors.append(
+        DjustInfo(
+            "The state save interval is on and CHANNEL_LAYERS['default'] is %s: a reconnect "
+            "that lands on another process cannot ask the tab's old connection to save, "
+            "so it restores the last save, up to %s seconds behind what the page showed."
+            % (backend or "not set", _save_policy.state_save_interval()),
+            hint=(
+                "With more than one process, use a channel layer shared between them "
+                "(channels_redis). With one process, ignore this (suppress djust.C046), "
+                "or set DJUST_STATE_SAVE_INTERVAL = 0 to save every turn before its reply."
+            ),
+            id="djust.C046",
             fix_hint=(
                 "Set `CHANNEL_LAYERS = {'default': {'BACKEND': "
                 "'channels_redis.core.RedisChannelLayer', 'CONFIG': {'hosts': [REDIS_URL]}}}`."
@@ -2021,8 +2116,11 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # C024 -- DJUST_EXPLICIT_STATE_SAVE_TIMEOUT out of range (#3200)
     _check_explicit_state_save_timeout(errors)
 
-    # C022 -- ADR-036 project event parameter policy
-    _check_event_parameter_policy(errors)
+    # C043 -- DJUST_UNSUPPLIED_NAMES is not "debug" / "warn" / "error" (#4279)
+    _check_unsupplied_names_mode(errors)
+
+    # C044 -- inclusion tag in a djust_childless library (#4302, DEBUG only)
+    _check_childless_inclusion_tags(errors)
 
     # C025 -- DJUST_WS_PATH is not a root-relative path (#3186)
     _check_ws_path(errors)
@@ -2056,6 +2154,8 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # C032 / C033 -- in-memory channel layer, memory presence backend (#4104)
     _check_in_memory_channel_layer(errors)
     _check_memory_presence_backend(errors)
+    # C046 -- a reconnect cannot ask another process to save (#4164)
+    _check_state_flush_reach(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)

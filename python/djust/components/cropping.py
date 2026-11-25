@@ -9,7 +9,7 @@ This module is what a ``crop_event`` handler uses::
     from djust.components.cropping import CropError, crop_image
 
     @event_handler()
-    def save_crop(self, x=None, y=None, width=None, height=None, **kwargs):
+    def save_crop(self, x: Any = None, y: Any = None, width: Any = None, height: Any = None, **kwargs):
         try:
             cropped = crop_image(self.photo.file, x, y, width, height)
         except CropError:

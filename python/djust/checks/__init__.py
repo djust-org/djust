@@ -12,6 +12,7 @@ Registers checks with Django's check framework that also run via
 - Accessibility (Y0xx) -- template ARIA/WCAG scanning
 - Event parameters (V016, V018, V031) -- ADR-036 strict handler contracts
 - Event bindings (T019-T022, T023) -- ADR-037 template bindings against their owners
+- Upgrade (V034, V035, V037, T029) -- what a 1.3 project must change before 2.0.0
 - Serialization floor (T024) -- user fields a template reads that djust never serializes
 - Document-root placement (T025) -- dj-view / dj-root on <html>, <head> or <body>
 - Shared template library names (T026) -- a tag or filter two loaded libraries register
@@ -40,6 +41,7 @@ from . import (  # noqa: F401  (imported for @register side effects + re-export)
     accounts,
     parameters,
     bindings,
+    upgrade,
     assets,
     sbom,
     ai_discovery,
@@ -60,6 +62,7 @@ for _mod in (
     accounts,
     parameters,
     bindings,
+    upgrade,
     assets,
     sbom,
     ai_discovery,

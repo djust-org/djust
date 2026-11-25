@@ -32,11 +32,6 @@ class Page(LiveView):
     template = "<div dj-root></div>"
 
 
-class LegacyPage(LiveView):
-    exposure_policy = "legacy"
-    template = "<div dj-root></div>"
-
-
 class StickyChild(LiveView):
     exposure_policy = "explicit"
     login_required = True
@@ -51,16 +46,9 @@ class StickyChild(LiveView):
         super()._on_sticky_unmount()
 
 
-class LegacyStickyChild(LiveView):
-    exposure_policy = "legacy"
-    login_required = True
-    template = "<div dj-root></div>"
-
-
 urlpatterns = [
     path("page/", Page.as_view()),
     path("next/", Page.as_view()),
-    path("legacy/", LegacyPage.as_view()),
 ]
 
 
@@ -136,55 +124,6 @@ async def test_a_live_session_keeps_its_user(staged):
     assert consumer._runtime._replacement_sessions == {}
 
 
-async def test_a_redirect_to_a_legacy_page_keeps_the_scope_user(staged):
-    """Legacy mounts do not re-derive the user (#3201 is explicit-only), so
-    neither does the sticky re-check for a legacy TARGET, even from an
-    explicit page, and no replacement session is minted."""
-    user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
-    consumer = _consumer(Page(), scope_session, user)
-
-    request = await _redirect_request(consumer, "/legacy/")
-
-    assert request.user == user
-    assert consumer._runtime._replacement_sessions == {}
-
-
-async def test_a_legacy_page_redirecting_to_an_explicit_page_rechecks_as_anonymous(staged):
-    """#3229 review B3: the new mount's user depends on the page being OPENED.
-    The first fix checked the page being left."""
-    user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
-    consumer = _consumer(LegacyPage(), scope_session, user)
-
-    request = await _redirect_request(consumer)
-
-    assert request.resolver_match.func.view_class is Page
-    assert request.user.is_authenticated is False
-
-
-async def test_legacy_login_required_sticky_does_not_survive_into_an_anonymous_explicit_page(
-    staged,
-):
-    """The reviewer's end-to-end probe: legacy sticky children reattach under
-    any parent, so a legacy page's login_required sticky child must be
-    re-checked as the user the explicit target mounts as."""
-    user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
-    parent, child = LegacyPage(), LegacyStickyChild()
-    child.sticky, child.sticky_id = True, "child"
-    parent._register_child("child", child)
-    consumer = _consumer(parent, scope_session, user)
-    consumer._view_group = consumer._tick_task = None
-    consumer._flush_all_pending = AsyncMock()
-    consumer._resolve_view_path_from_url = lambda url: None
-
-    async def mount(*args, **kwargs):
-        consumer.view_instance = Page()
-
-    consumer.handle_mount = mount
-    await consumer.handle_live_redirect_mount({"url": "/next/", "view": __name__ + ".Page"})
-
-    assert not consumer._sticky_preserved
-
-
 async def test_login_required_sticky_child_does_not_survive_a_vanished_session(staged):
     """End to end through ``handle_live_redirect_mount`` and the real helpers."""
     user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
@@ -199,7 +138,7 @@ async def test_login_required_sticky_child_does_not_survive_a_vanished_session(s
     async def mount(*args, **kwargs):
         consumer.view_instance = Page()
 
-    consumer.handle_mount = mount
+    consumer._mount_page = mount
     await consumer.handle_live_redirect_mount({"url": "/next/", "view": __name__ + ".Page"})
 
     assert not consumer._sticky_preserved
@@ -217,11 +156,11 @@ async def test_a_request_the_helper_could_not_build_is_left_alone(staged):
 async def test_back_navigation_rechecks_as_the_user_of_the_view_actually_mounted(staged):
     """#3229 re-review R2: with a ``state_snapshot`` the mount keeps the
     client's ``view`` and ignores what the URL maps to. The re-check must
-    decide from that view too: url=<legacy page> + view=<explicit page>
-    mounts the explicit page anonymous, so a legacy login_required sticky
+    decide from that view too: url=<one page> + view=<another>
+    mounts the view's page anonymous, so a login_required sticky
     child must not survive (the reviewer's probe)."""
     user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
-    parent, child = LegacyPage(), LegacyStickyChild()
+    parent, child = Page(), StickyChild()
     child.sticky, child.sticky_id = True, "child"
     parent._register_child("child", child)
     consumer = _consumer(parent, scope_session, user)
@@ -233,9 +172,9 @@ async def test_back_navigation_rechecks_as_the_user_of_the_view_actually_mounted
         mounted.append(data["view"])
         consumer.view_instance = Page()
 
-    consumer.handle_mount = mount
+    consumer._mount_page = mount
     await consumer.handle_live_redirect_mount(
-        {"url": "/legacy/", "view": __name__ + ".Page", "state_snapshot": {"view_slug": "x"}}
+        {"url": "/page/", "view": __name__ + ".Page", "state_snapshot": {"view_slug": "x"}}
     )
 
     assert mounted == [__name__ + ".Page"]
@@ -243,12 +182,12 @@ async def test_back_navigation_rechecks_as_the_user_of_the_view_actually_mounted
 
 
 async def test_an_unresolvable_target_rechecks_as_anonymous(staged):
-    """A view path the mount's resolver refuses is treated as explicit: the
+    """A view path the mount's resolver refuses is treated as anonymous: the
     re-check can then only drop sticky children, never keep one."""
     user, scope_session = await sync_to_async(_user_and_session)(vanished=True)
-    consumer = _consumer(LegacyPage(), scope_session, user)
-    request = consumer._build_live_redirect_request({"url": "/legacy/"})
+    consumer = _consumer(Page(), scope_session, user)
+    request = consumer._build_live_redirect_request({"url": "/page/"})
     await consumer._rederive_live_redirect_user(
-        request, {"url": "/legacy/", "view": "not.allowed.View", "state_snapshot": {"v": 1}}
+        request, {"url": "/page/", "view": "not.allowed.View", "state_snapshot": {"v": 1}}
     )
     assert request.user.is_authenticated is False

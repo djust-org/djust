@@ -5,7 +5,8 @@ from unittest.mock import Mock
 
 from django.test import RequestFactory, override_settings
 
-from djust import LiveView
+from djust._exposure import ExposureError
+from djust import LiveView, state
 
 
 def _mock_rust_view() -> Mock:
@@ -23,11 +24,10 @@ def _mock_rust_view() -> Mock:
 class DateView(LiveView):
     """Minimal view for testing DATE_FORMAT injection."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ some_date|date }}</div>"
 
-    def mount(self, request, **kwargs):
-        self.some_date = "2026-04-13"
+    some_date = state("2026-04-13")
 
 
 @pytest.fixture
@@ -83,15 +83,19 @@ class TestDateFormatInjection:
 
     @override_settings(DATE_FORMAT="Y/m/d")
     def test_explicit_context_not_overridden(self, mock_request):
-        """If get_context_data already has DATE_FORMAT, don't override it."""
+        """An explicit view may not supply DATE_FORMAT: the framework's value would be
+        silently deferred to, so the render is refused (ADR-038 E2-1)."""
 
         class ExplicitDateView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root>{{ some_date|date }}</div>"
 
-            def mount(self, request, **kwargs):
-                self.some_date = "2026-04-13"
-                self.DATE_FORMAT = "d/m/Y"
+            some_date = state("2026-04-13")
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["DATE_FORMAT"] = "d/m/Y"
+                return ctx
 
         view = ExplicitDateView()
         view.mount(mock_request)
@@ -102,10 +106,10 @@ class TestDateFormatInjection:
         mock_rust_view.mark_safe_keys = Mock()
         view._rust_view = mock_rust_view
 
-        view._sync_state_to_rust()
+        with pytest.raises(ExposureError, match="Explicit context provider collision"):
+            view._sync_state_to_rust()
 
-        ctx = mock_rust_view.update_state.call_args[0][0]
-        assert ctx["DATE_FORMAT"] == "d/m/Y"
+        mock_rust_view.update_state.assert_not_called()
 
     def test_no_injection_when_rust_view_missing(self, mock_request):
         """If _rust_view is None, _sync_state_to_rust is a no-op."""

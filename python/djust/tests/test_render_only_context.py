@@ -4,24 +4,20 @@ Reported downstream (Point Guard, djust 1.3.0rc11):
 
 - N-35: no public way to give a template a model that djust renders (through
   the JIT, by the template's paths) but never persists. The mechanism existed
-  as private ``djust.forms`` hooks (``_djust_render_only_context`` /
-  ``_djust_render_only_context_keys``). ``get_render_only_context()`` is the
-  public hook.
+  as a private ``djust.forms`` hook (``_djust_render_only_context``).
+  ``get_render_only_context()`` is the public hook.
 - N-31: the HTTP GET saved a QuerySet that a ``get_context_data()`` override
   put in the context as a list of dicts with EVERY column of each row.
 - Phase 2 decision 185: the GET saved the whole context but its render-only
   keys, so content an override added (a chat's messages, a run's preview)
   landed in ``django_session``.
 
-2.0 removed the legacy view's session save, so nothing of it is saved; the lazy
-child's save (``_lazy_containers.py``) still keeps only what the base
-``get_context_data()`` built from the view's attributes.
+2.0 removed the legacy view's session save, so nothing of it is saved.
 """
 
 from __future__ import annotations
 
 import json
-import pathlib
 
 import pytest
 from django.contrib.auth.models import User
@@ -73,7 +69,7 @@ def _post(view_class, get_request, event, path="/ro/"):
 class OverrideAddsView(LiveView):
     """N-31 / decision 185: an override adds a QuerySet and content."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="tests.OverrideAddsView">'
         "{{ count }} {{ secret_note }}"
@@ -98,7 +94,7 @@ class OverrideAddsView(LiveView):
 class RenderOnlyView(LiveView):
     """N-35: the public hook."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="tests.RenderOnlyView">'
         "{{ count }} {{ owner.username }} {{ note }}"
@@ -159,19 +155,6 @@ def test_fallback_post_saves_no_key_an_override_added(people):
 # ---------------------------------------------------------------------------
 
 
-def test_render_only_values_render_and_go_through_the_jit(people):
-    view = RenderOnlyView()
-    view.mount(None)
-
-    context = view.get_context_data()
-
-    assert context["owner"]["username"] == "n35-ada"
-    assert "email" not in context["owner"]
-    assert [row["username"] for row in context["people"]] == ["n35-ada", "n35-grace"]
-    assert all("email" not in row for row in context["people"])
-    assert context["note"] == SECRET
-
-
 def test_get_and_post_never_save_render_only_values(people):
     _view, request, html = _get(RenderOnlyView)
     assert "<i>n35-ada</i><i>n35-grace</i>" in html and SECRET in html
@@ -199,39 +182,3 @@ def test_a_render_only_key_wins_over_an_attribute_and_is_not_saved(people):
 
 def test_default_hook_is_empty():
     assert LiveView().get_render_only_context() == {}
-
-
-def test_legacy_unsaved_keys_without_a_recorded_render():
-    """A view whose override never calls super() keeps the old behaviour."""
-    from djust.mixins.context import legacy_unsaved_keys
-
-    class NoSuper(LiveView):
-        exposure_policy = "legacy"
-        template = "<div dj-root>{{ a }}</div>"
-
-        def get_context_data(self, **kwargs):
-            return {"a": 1, "b": 2}
-
-    view = NoSuper()
-    assert legacy_unsaved_keys(view, view.get_context_data()) == frozenset()
-
-
-# ---------------------------------------------------------------------------
-# The socket turn's save (runtime.py) filters the same way
-# ---------------------------------------------------------------------------
-
-
-def test_every_legacy_save_site_filters_through_legacy_unsaved_keys():
-    """One producer (#1646): the legacy save sites use the same filter. The
-    runtime's per-event save and the page GET / POST saves were removed in 2.0;
-    the lazy child's save is the one left."""
-    package = pathlib.Path(__file__).resolve().parents[1]
-    expected = {
-        "mixins/request.py": 0,
-        "runtime.py": 0,
-        "_lazy_containers.py": 1,
-    }
-    for relative, count in expected.items():
-        source = (package / relative).read_text()
-        assert source.count("legacy_unsaved_keys(") == count, relative
-        assert "legacy_render_only_keys(" not in source, relative

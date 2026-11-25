@@ -21,219 +21,122 @@ import pytest
 # first importer, whichever worker or order runs this file.
 import django.contrib.staticfiles.storage  # noqa: F401  -- import for its side effect
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler, debounce, cache
 
 
 class TestGetDebugInfo:
     """Test LiveView.get_debug_info() method"""
 
-    def test_basic_handler_extraction(self):
-        """Test that event handlers are extracted with correct metadata"""
+    def test_the_explicit_projection_has_its_shape(self):
+        """An explicit view reports its class and its ``state()`` variables only.
+
+        Handler signatures and the template are not part of the projection (typed public
+        handler metadata is the parameter contracts', ADR-036/037): ``handlers`` is empty
+        and ``template`` is ``None`` however many handlers the view has.
+        """
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
-            count = 0
+            count = state(0, client=True)
 
-            @event_handler
-            def increment(self, amount: int = 1):
+            @event_handler()
+            def increment(self, amount: int = 1, **kwargs):
                 """Increment the counter"""
                 self.count += amount
 
-            @event_handler
-            def decrement(self):
+            @event_handler()
+            def decrement(self, **kwargs):
                 """Decrement the counter"""
                 self.count -= 1
 
-        view = MyView()
-        debug_info = view.get_debug_info()
+        debug_info = MyView().get_debug_info()
 
-        # Check structure
-        assert "view_class" in debug_info
-        assert "handlers" in debug_info
-        assert "variables" in debug_info
-        assert "template" in debug_info
-
-        # Check view class name
         assert debug_info["view_class"] == "MyView"
+        assert debug_info["handlers"] == {}
+        assert debug_info["template"] is None
+        assert set(debug_info["variables"]) == {"count"}
 
-        # Check template
-        assert debug_info["template"] == "test.html"
-
-        # Check handlers
-        assert "increment" in debug_info["handlers"]
-        assert "decrement" in debug_info["handlers"]
-
-        # Check increment handler details
-        increment = debug_info["handlers"]["increment"]
-        assert increment["name"] == "increment"
-        assert increment["description"] == "Increment the counter"
-        assert len(increment["params"]) == 1
-        assert increment["params"][0]["name"] == "amount"
-        assert increment["params"][0]["type"] == "int"
-        assert increment["params"][0]["required"] is False
-        assert increment["params"][0]["default"] == "1"
-
-        # Check decrement handler details
-        decrement = debug_info["handlers"]["decrement"]
-        assert decrement["name"] == "decrement"
-        assert decrement["description"] == "Decrement the counter"
-        assert len(decrement["params"]) == 0
-
-    def test_handler_with_decorators(self):
-        """Test that decorator metadata is included"""
+    def test_handler_decorators_are_still_extracted(self):
+        """The decorator metadata the client reads (``window.handlerMetadata``) is kept."""
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
 
             @debounce(wait=0.5)
-            @event_handler
-            def search(self, query: str = ""):
+            @event_handler()
+            def search(self, query: str = "", **kwargs):
                 """Search for items"""
                 pass
 
             @cache(ttl=300)
-            @event_handler
-            def fetch_data(self, id: int = 0):
+            @event_handler()
+            def fetch_data(self, id: int = 0, **kwargs):
                 """Fetch data with caching"""
                 pass
 
-        view = MyView()
-        debug_info = view.get_debug_info()
+        metadata = MyView()._extract_handler_metadata()
 
-        # Check search has debounce decorator
-        search = debug_info["handlers"]["search"]
-        assert "debounce" in search["decorators"]
-        assert search["decorators"]["debounce"]["wait"] == 0.5
-
-        # Check fetch_data has cache decorator
-        fetch = debug_info["handlers"]["fetch_data"]
-        assert "cache" in fetch["decorators"]
-        assert fetch["decorators"]["cache"]["ttl"] == 300
+        assert metadata["search"]["debounce"]["wait"] == 0.5
+        assert metadata["fetch_data"]["cache"]["ttl"] == 300
 
     def test_variable_extraction(self):
-        """Test that public variables are extracted"""
+        """A ``client=True`` field shows its value; any other shows ``redacted``."""
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
-            count = 42
-            message = "Hello World"
-            items = [1, 2, 3]
+            count = state(42, client=True)
+            message = state("Hello World")
+            items = state(default_factory=lambda: [1, 2, 3], client=True)
 
-            @event_handler
-            def increment(self):
+            @event_handler()
+            def increment(self, **kwargs):
                 pass
 
-        view = MyView()
-        debug_info = view.get_debug_info()
+        variables = MyView().get_debug_info()["variables"]
 
-        # Check variables
-        variables = debug_info["variables"]
-        assert "count" in variables
-        assert "message" in variables
-        assert "items" in variables
-
-        # Check variable details
+        assert set(variables) == {"count", "message", "items"}
         assert variables["count"]["name"] == "count"
         assert variables["count"]["type"] == "int"
         assert variables["count"]["value"] == "42"
+        assert variables["items"]["type"] == "list"
 
         assert variables["message"]["name"] == "message"
-        assert variables["message"]["type"] == "str"
-        assert variables["message"]["value"] == "'Hello World'"
+        assert variables["message"]["type"] == "redacted"
+        assert "Hello World" not in json.dumps(variables)
 
-    def test_private_attributes_excluded(self):
-        """Test that private attributes are not included"""
+    def test_undeclared_attributes_are_not_variables(self):
+        """Only ``state()`` fields are reported: a plain or private attribute never is."""
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
-            count = 0
+            count = state(0, client=True)
+            plain = "not declared"
             _private = "secret"
 
-            def _private_method(self):
+            @event_handler()
+            def public_method(self, **kwargs):
                 pass
 
-            @event_handler
-            def public_method(self):
-                pass
+        debug_info = MyView().get_debug_info()
 
-        view = MyView()
-        debug_info = view.get_debug_info()
-
-        # Private variable should not be in variables
-        assert "_private" not in debug_info["variables"]
-
-        # Private method should not be in handlers
-        assert "_private_method" not in debug_info["handlers"]
-
-        # Public method should be in handlers
-        assert "public_method" in debug_info["handlers"]
-
-    def test_undecorated_method_not_shown(self):
-        """Test that public methods without @event_handler are NOT shown (#193)
-
-        The debug panel matches the runtime event_security policy: only
-        @event_handler-decorated methods are displayed.
-        """
-
-        class MyView(LiveView):
-            exposure_policy = "legacy"
-            template_name = "test.html"
-
-            def plain_method(self):
-                """Not an event handler"""
-                pass
-
-            @event_handler
-            def real_handler(self):
-                """A real event handler"""
-                pass
-
-        view = MyView()
-        debug_info = view.get_debug_info()
-
-        # Undecorated method should NOT appear
-        assert "plain_method" not in debug_info["handlers"]
-        # Decorated method should appear
-        assert "real_handler" in debug_info["handlers"]
-
-    def test_base_view_methods_excluded(self):
-        """Test that inherited Django View methods are not listed as handlers (#193)"""
-
-        class MyView(LiveView):
-            exposure_policy = "legacy"
-            template_name = "test.html"
-
-            @event_handler
-            def my_handler(self):
-                pass
-
-        view = MyView()
-        debug_info = view.get_debug_info()
-
-        # Django View and LiveView base methods should be excluded
-        assert "dispatch" not in debug_info["handlers"]
-        assert "setup" not in debug_info["handlers"]
-        assert "get_context_data" not in debug_info["handlers"]
-        assert "mount" not in debug_info["handlers"]
-
-        # Decorated handler should be included
-        assert "my_handler" in debug_info["handlers"]
+        assert set(debug_info["variables"]) == {"count"}
+        assert "secret" not in json.dumps(debug_info)
+        assert "not declared" not in json.dumps(debug_info)
 
     def test_long_value_truncation(self):
         """Test that long variable values are truncated"""
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
-            long_string = "x" * 200  # 200 character string
+            long_string = state("x" * 200, client=True)  # 200 character string
 
-        view = MyView()
-        debug_info = view.get_debug_info()
+        debug_info = MyView().get_debug_info()
 
         # Check that value is truncated to 100 chars + "..."
         value = debug_info["variables"]["long_string"]["value"]
@@ -244,7 +147,7 @@ class TestGetDebugInfo:
         """Test when template_name is not set"""
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_string = "<div>Hello</div>"
 
             @event_handler
@@ -334,17 +237,17 @@ class TestDebugInfoInjection:
         mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_string = """
             <html>
             <head><title>Test</title></head>
             <body><h1>Test</h1></body>
             </html>
             """
-            count = 0
+            count = state(0, client=True)
 
-            @event_handler
-            def increment(self):
+            @event_handler()
+            def increment(self, **kwargs):
                 """Increment counter"""
                 self.count += 1
 
@@ -396,7 +299,7 @@ class TestDebugInfoInjection:
         assert "handlers" in debug_info
         assert "variables" in debug_info
         assert debug_info["view_class"] == "MyView"
-        assert "increment" in debug_info["handlers"]
+        assert debug_info["handlers"] == {}  # an explicit view's handler metadata is not injected
 
     @patch("django.conf.settings")
     def test_script_tags_follow_the_static_url_not_a_literal(self, mock_settings):
@@ -423,7 +326,7 @@ class TestDebugInfoInjection:
         mock_settings.STATIC_URL = "/cdn/"
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_string = "<html><head></head><body></body></html>"
 
         with override_settings(STATIC_URL="/cdn/"):
@@ -443,7 +346,7 @@ class TestDebugInfoInjection:
         mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_string = """
             <html>
             <head><title>Test</title></head>
@@ -481,7 +384,7 @@ class TestDebugInfoInjection:
         mock_settings.STATIC_URL = "/static/"
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_string = """
             <html>
             <head>
@@ -514,57 +417,6 @@ class TestDebugInfoInjection:
         assert debug_css_pos < head_end  # CSS should be before </head>
 
 
-class TestDebugPanelMetadata:
-    """Test that debug panel receives correct metadata"""
-
-    @patch("django.conf.settings")
-    def test_handler_params_in_debug_info(self, mock_settings):
-        """Test that handler parameters are correctly serialized"""
-        mock_settings.DEBUG = True
-        mock_settings.STATIC_URL = "/static/"
-
-        class MyView(LiveView):
-            exposure_policy = "legacy"
-            template_string = "<div>Test</div>"
-
-            @event_handler
-            def search(self, query: str = "", limit: int = 10, **kwargs):
-                """Search with query and limit"""
-                pass
-
-        view = MyView()
-
-        # Test _inject_client_script directly
-        test_html = "<div>Test</div>"
-        html = view._inject_client_script(test_html)
-
-        # Extract debug info
-        import re
-
-        match = re.search(r"window\.DJUST_DEBUG_INFO = ({.*?});", html, re.DOTALL)
-        debug_info = json.loads(match.group(1))
-
-        # Check search handler
-        search = debug_info["handlers"]["search"]
-        assert search["description"] == "Search with query and limit"
-        assert search["accepts_kwargs"] is True
-        assert len(search["params"]) == 2
-
-        # Check query parameter
-        query_param = search["params"][0]
-        assert query_param["name"] == "query"
-        assert query_param["type"] == "str"
-        assert query_param["required"] is False
-        assert query_param["default"] == ""
-
-        # Check limit parameter
-        limit_param = search["params"][1]
-        assert limit_param["name"] == "limit"
-        assert limit_param["type"] == "int"
-        assert limit_param["required"] is False
-        assert limit_param["default"] == "10"
-
-
 class TestAttachDebugPayload:
     """Test LiveViewConsumer._attach_debug_payload() method"""
 
@@ -573,7 +425,7 @@ class TestAttachDebugPayload:
         from unittest.mock import MagicMock
 
         class TestView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
             count = 0
 
@@ -710,7 +562,7 @@ class TestDebugPanelSvgEscaping:
         """Verify that DJUST_DEBUG_INFO JSON injection doesn't double-escape."""
 
         class MyView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template_name = "test.html"
             name = "O'Brien & Sons"  # Contains characters that need escaping
 

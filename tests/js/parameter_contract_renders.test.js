@@ -1,24 +1,25 @@
 /** Applied DOM frames, not receipt, own render-contract refresh. */
 import { describe, expect, it, vi } from 'vitest';
 import {JSDOM} from 'jsdom';
+import { packManifest } from './_parameter_manifest.js';
 // The raw bundle, not the coverage run's instrumented copy: this test splices
 // a hook in at a literal source line, which instrumentation rewrites.
 const { readFileSync } = await vi.importActual('node:fs');
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 const seam = 'window.djust.collectDjValues = collectDjValues;';
-const reinit = 'function reinitAfterDOMUpdate(scope) {';
+const reinit = 'function reinitAfterDOMUpdate(scope, changes) {';
 for (const marker of [seam, reinit]) {
     if (source.split(marker).length !== 2) throw new Error('Missing render-contract test seam');
 }
-const manifest = type => ({version: 1, owners: [
+const manifest = type => (packManifest({version: 1, owners: [
     {view_id: null, component_id: null, handlers: {choose: {
         policy: 'strict', coerce_types: true, parameters: [{
             name: 'value', type, kind: 'positional_or_keyword', required: true,
             reduced_checking: false,
         }],
     }}},
-]});
+]}));
 function setup(name) {
     const dom = new JSDOM('<div dj-root dj-view="app.Page"><span>old</span><div data-djust-embedded="child"></div></div>',
         {runScripts: 'dangerously', url: 'http://localhost/'});

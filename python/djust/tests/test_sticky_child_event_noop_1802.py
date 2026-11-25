@@ -27,10 +27,9 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from asgiref.sync import sync_to_async
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +40,7 @@ from djust.decorators import event_handler
 class NotificationsView(LiveView):
     """Sticky child with a state-mutating ``dismiss`` handler (issue repro)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "notifications"
     template = (
@@ -52,25 +51,21 @@ class NotificationsView(LiveView):
         "</div>"
     )
 
-    def mount(self, request, **kwargs):
-        self.notifications = [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}]
+    notifications = state(default_factory=lambda: [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}])
 
     @event_handler()
-    def dismiss(self, id="", **kwargs):
+    def dismiss(self, id: int = 0, **kwargs):
         try:
             t = int(id)
         except (TypeError, ValueError):
             return
         self.notifications = [n for n in self.notifications if n["id"] != t]
 
-    def get_context_data(self, **kwargs):
-        return {"notifications": self.notifications, "view": self}
-
 
 class HomeView(LiveView):
     """Parent page embedding the sticky child via ``{% live_render sticky=True %}``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="djust.tests.test_sticky_child_event_noop_1802.HomeView" '
@@ -80,12 +75,6 @@ class HomeView(LiveView):
         "sticky=True %}"
         "</div>"
     )
-
-    def mount(self, request, **kwargs):
-        pass
-
-    def get_context_data(self, **kwargs):
-        return {"view": self}
 
 
 # ---------------------------------------------------------------------------
@@ -103,28 +92,14 @@ async def _receive_until(communicator, wanted_type, *, tries=6, timeout=30):
     return last
 
 
-class _ScopeSession:
-    def __init__(self, key):
-        self.session_key = key
-
-
 async def _connect_and_mount(view_path: str, url: str):
     """Connect a WebsocketCommunicator and mount ``view_path``. Returns
     (communicator, mount_response)."""
     from channels.testing import WebsocketCommunicator
-    from django.contrib.sessions.backends.db import SessionStore
-
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
-    def _create_session():
-        s = SessionStore()
-        s.create()
-        return s.session_key
-
-    session_key = await sync_to_async(_create_session)()
-
-    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    communicator.scope["session"] = _ScopeSession(session_key)
+    communicator = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
@@ -261,7 +236,10 @@ def test_handle_event_autoskip_snapshots_target_view_source():
     """
     import djust.runtime as rt_mod
 
-    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_sticky_child_event)
+    # #4179 split the dispatch: resolution here, the run in ``_run_child_event``.
+    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_sticky_child_event) + inspect.getsource(
+        rt_mod.ViewRuntime._run_child_event
+    )
     # The child (target_view) is resolved from the registry and is the handler +
     # render subject — NOT the parent self.view_instance.
     assert "target_view = all_children.get(view_id)" in source, (

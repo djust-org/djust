@@ -73,7 +73,7 @@ class _FakeConsumer(LiveViewConsumer):
         self.scope = {"path": "/", "query_string": b"", "session": None}
         self.channel_name = "integration-channel"
         # Wire-version + rate-limiter attrs the runtime mount path reads (#1919
-        # THE MOUNT FLIP: handle_mount is now a thin shim over
+        # THE MOUNT FLIP: _mount_page is now a thin shim over
         # ViewRuntime.dispatch_mount, constructed in _get_runtime with
         # rate_limiter=self._rate_limiter). The fake drives the runtime path now.
         self._last_sent_version = 0

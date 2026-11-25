@@ -42,7 +42,7 @@ class MyView(LiveView):
     error = state("")
 
     @event_handler()
-    def generate(self, **kwargs):
+    def generate(self):
         self.loading = True              # Sent to client immediately
         self.start_async(self._do_work)  # Runs after response sent
 
@@ -89,7 +89,7 @@ class ReportView(LiveView):  # AsyncWorkMixin is built into LiveView
     generating = state(False)
 
     @event_handler()
-    def generate_report(self, **kwargs):
+    def generate_report(self):
         self.generating = True
         self.start_async(self._generate)
 
@@ -118,7 +118,7 @@ from djust.decorators import background
 class ContentView(LiveView):
     @event_handler
     @background
-    def generate_content(self, prompt: str = "", **kwargs):
+    def generate_content(self, prompt: str = ""):
         self.generating = True
         self.content = call_llm(prompt)
         self.generating = False
@@ -133,7 +133,7 @@ Can combine with other decorators:
 @event_handler
 @debounce(wait=0.5)
 @background
-def auto_save(self, **kwargs):
+def auto_save(self):
     self.save_draft()
 ```
 

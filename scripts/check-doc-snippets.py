@@ -116,6 +116,13 @@ _SKIP_MARKER = "<!-- doc-snippet-check: skip -->"
 # Use it for deliberately-wrong "❌ Wrong" anti-pattern examples.
 _ANTIPATTERN_MARKER = "<!-- doc-snippet-check: anti-pattern -->"
 
+# HTML-comment marker (#4188): the block is 1.3 code a migration guide shows
+# as the thing being replaced (``exposure_policy = "legacy"``, ``data-*``
+# arguments, untyped handlers). It is still syntax/import checked (part a);
+# like an anti-pattern it is opted out of the part-(c) verdict, and
+# ``tests/test_doc_snippets_execute.py`` does not run it under the 2.0 rules.
+_BEFORE_MARKER = "<!-- doc-snippet-check: before -->"
+
 # Logger-call receiver names. A doc snippet has no logger config to
 # introspect, so f-string logging is keyed on these conventional receiver
 # names (djust's convention is `logger = logging.getLogger(__name__)`).
@@ -150,6 +157,9 @@ def extract_python_blocks(path: Path) -> list[tuple[int, str, str | None]]:
       - ``"anti-pattern"`` — the block is preceded by the
         `<!-- doc-snippet-check: anti-pattern -->` comment; part (c)
         skips it but parts (a)/(b) still process it.
+      - ``"before"`` — the block is preceded by the
+        `<!-- doc-snippet-check: before -->` comment: 1.3 code a migration
+        guide replaces. Treated as ``"anti-pattern"`` here.
     Blocks immediately preceded by the `<!-- doc-snippet-check: skip -->`
     marker line are omitted entirely.
     """
@@ -174,6 +184,8 @@ def extract_python_blocks(path: Path) -> list[tuple[int, str, str | None]]:
                 marker: str | None = None  # dropped below
             elif prev == _ANTIPATTERN_MARKER:
                 marker = "anti-pattern"
+            elif prev == _BEFORE_MARKER:
+                marker = "before"
             else:
                 marker = None
             if prev != _SKIP_MARKER:
@@ -412,7 +424,7 @@ def check_security_style(*docs: Path) -> tuple[list[str], list[str]]:
     warnings: list[str] = []
     for doc in docs:
         for start_line, code, marker in extract_python_blocks(doc):
-            if marker == "anti-pattern":
+            if marker in ("anti-pattern", "before"):
                 continue  # opted out of the style verdict (still parsed by part a)
             loc = f"{doc.name}:{start_line}"
             try:
@@ -520,6 +532,11 @@ _SIZE_MARKER_RE = re.compile(r"<!--\s*size-claim:\s*([\w-]+)\s*-->", re.IGNORECA
 _SIZE_ARTIFACT_BY_MARKER = {
     "unminified": ("unminified", "gz_kb"),
     "shipped": ("shipped", "kb"),
+    # #4007: the injected client is a core bundle plus chunks loaded on use.
+    # `full` names the single bundle (client.min.js, the `shipped` section);
+    # `core` names client-core.min.js. A claim about either says which.
+    "full": ("shipped", "kb"),
+    "core": ("core", "kb"),
 }
 _SIZE_HISTORICAL_MARKER = "size-claim: historical"
 _SIZE_MARKER_VALUES = frozenset({*_SIZE_ARTIFACT_BY_MARKER, "historical"})

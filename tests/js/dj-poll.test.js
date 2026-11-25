@@ -9,6 +9,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { withContracts } from './_open_contracts.js';
 import { readFileSync } from 'fs';
 import { setTimeout as nativeSleep } from 'node:timers/promises';
 
@@ -22,7 +23,7 @@ const clientCode = readFileSync('./python/djust/static/djust/client.js', 'utf-8'
  */
 function createTestEnv(bodyHtml) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body>${bodyHtml}</body></html>`,
+        `<!DOCTYPE html><html><body>${withContracts(bodyHtml)}</body></html>`,
         { runScripts: 'dangerously', url: 'http://localhost/' }
     );
 
@@ -177,9 +178,9 @@ describe('dj-poll', () => {
         expect(newEl._djustPollIntervalId).not.toBe(firstId);
     });
 
-    it('should extract data-* params and include them in poll requests', async () => {
+    it('should send dj-value-* arguments in poll requests', async () => {
         const dom = createTestEnv(
-            '<div dj-view="app.PollView"><div dj-poll="refresh" dj-poll-interval="100" data-room-id:int="42"></div></div>'
+            '<div dj-view="app.PollView"><div dj-poll="refresh" dj-poll-interval="100" dj-value-room-id:int="42"></div></div>'
         );
         initClient(dom);
 

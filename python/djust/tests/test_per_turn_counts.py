@@ -128,12 +128,30 @@ class SmallTable(Table):
     items = state(default_factory=list)
 
 
+class IfTable(Table):
+    """``Table`` with a ``{% if %}`` in the row, as the benchmark's table has:
+    the content-hash loop cache refuses that body, the item store takes it."""
+
+    exposure_policy = "explicit"
+    template = (
+        '<div dj-root><p>{{ title }}</p><table>{% for row in items %}<tr id="row-{{ row.id }}">'
+        "<td>{{ row.sku }}</td><td>{{ row.qty }}</td>"
+        "<td>{% if row.active %}on{% else %}off{% endif %}</td></tr>{% endfor %}</table></div>"
+    )
+
+
 async def turn(monkeypatch, view_class, event_name, *off) -> Dict[str, Any]:
     """The counts of ONE *event_name* turn on a warmed-up *view_class*."""
     with monkeypatch.context() as spies:
         counts = harness.counting(spies)
         key = await harness.new_session_key_async()
-        with harness.shortcuts(monkeypatch, *off), harness.ws_settings(MODULE):
+        # Counted with the save before the reply (the work a turn does when it
+        # saves; the default interval, #4164, moves it to the flush), unless
+        # the test states an interval.
+        from django.conf import settings
+
+        pinned = {"DJUST_STATE_SAVE_INTERVAL": getattr(settings, "DJUST_STATE_SAVE_INTERVAL", 0)}
+        with harness.shortcuts(monkeypatch, *off), harness.ws_settings(MODULE, **pinned):
             for name in off:
                 assert not _per_turn.on(name), f"{name} was not turned off"
             comm, _mount = await harness.mount_view(view_class, key)
@@ -264,36 +282,100 @@ async def test_the_theme_preset_list_is_not_in_the_state(monkeypatch):
 
 
 async def test_one_changed_cell_walks_the_list_three_times_not_four(monkeypatch):
+    """Two snapshot walks and one conversion walk that builds no fingerprint.
+
+    The sync takes the post-event snapshot's walk of the list as its
+    fingerprint and as its "is this plain data" answer (``snapshot_fingerprints``),
+    so the only walk it makes is the conversion for Rust (``convert_for_render``).
+    """
     size = harness.nodes(make_rows(ROWS))
     now = await turn(monkeypatch, Table, "cell")
-    off = await turn(monkeypatch, Table, "cell", "plain_sub_ids")
+    off = await turn(monkeypatch, Table, "cell", "plain_sub_ids", "snapshot_fingerprints")
     assert now["reply"] == off["reply"] == "patch"
-    # Before and after the handler, and once to fingerprint + convert for Rust.
+    # Before and after the handler, and once to convert for Rust.
     assert now["snapshot_assigns.calls"] == 2
-    assert now["fingerprint_and_convert.nodes"] == size
-    walked = now["fingerprint.snapshot.nodes"] + now["fingerprint_and_convert.nodes"]
-    assert 3 * size <= walked < 3 * size + 500
-    # The fourth walk, collecting the id of every object under the list, is gone.
+    assert 2 * size <= now["fingerprint.snapshot.nodes"] < 2 * size + 500
+    # The conversion walks the changed row only (``list_item_deltas``, #4325).
+    assert now["convert_for_render.nodes"] == harness.nodes(make_rows(ROWS)[0])
+    assert now.get("fingerprint_and_convert.calls", 0) == 0
+    assert now.get("fingerprint.sync.calls", 0) == 0
+    # No walk collects the id of every object under the list.
     assert now.get("collect_sub_ids.calls", 0) == 0
     assert off["collect_sub_ids.calls"] == 1
     assert off["collect_sub_ids.ids"] > ROWS
-    # Nothing else moved: the same key, the same bytes, the same fused walk.
-    assert now["sent_keys"] == off["sent_keys"] == [["items"]]
-    assert now["update_state.bytes"] == off["update_state.bytes"]
+    # The same key is reported changed; it reaches Rust as one row.
+    assert now["changed_keys"] == off["changed_keys"] == [["items"]]
+    assert off["sent_keys"] == [["items"]] and now["sent_keys"] == [[]]
+    assert now["update_state_items.rows"] == 1
     assert off["fingerprint_and_convert.nodes"] == size
-    assert now.get("fingerprint.sync.calls", 0) == off.get("fingerprint.sync.calls", 0) == 0
+    assert off.get("convert_for_render.calls", 0) == 0
 
 
-async def test_an_unrelated_change_still_fingerprints_the_list(monkeypatch):
-    """Left as it is, on purpose: a turn that does not change the list walks it
-    three times (twice for the snapshots, once in the sync). The sync's walk is
-    not replaced by the post-event snapshot's fingerprint, because
-    ``get_context_data`` runs between the two and may change the list
+async def test_snapshot_fingerprints_gate_off(monkeypatch):
+    """Off, the sync fingerprints and converts the list in one fused walk again,
+    and still skips the id walk because the fused walk found it plain (#3999's
+    first shortcut, ``plain_sub_ids``)."""
+    size = harness.nodes(make_rows(ROWS))
+    now = await turn(monkeypatch, Table, "cell")
+    off = await turn(monkeypatch, Table, "cell", "snapshot_fingerprints")
+    assert off["fingerprint_and_convert.nodes"] == size
+    assert off.get("convert_for_render.calls", 0) == 0
+    assert off.get("collect_sub_ids.calls", 0) == now.get("collect_sub_ids.calls", 0) == 0
+    # Without the snapshot's walks there is no row delta either: the list goes whole.
+    assert off["sent_keys"] == [["items"]]
+    assert off.get("update_state_items.calls", 0) == 0
+    assert now["changed_keys"] == off["changed_keys"] == [["items"]]
+    assert now["snapshot_assigns.calls"] == off["snapshot_assigns.calls"] == 2
+
+
+async def test_plain_sub_ids_gate_off_with_the_snapshot_walk(monkeypatch):
+    """The snapshot's plain answer is used only under ``plain_sub_ids``: off,
+    the id walk comes back even though the snapshot walk is reused."""
+    off = await turn(monkeypatch, Table, "cell", "plain_sub_ids")
+    assert off["collect_sub_ids.calls"] == 1
+    assert off.get("fingerprint_and_convert.calls", 0) == 0
+    assert off["changed_keys"] == [["items"]]
+
+
+async def test_list_item_deltas_gate_off(monkeypatch):
+    """One changed cell reaches Rust as one row (#4325); off, the whole list is
+    converted and sent. The page Rust renders is the same either way
+    (``test_per_turn_oracle.py`` compares the frames)."""
+    size = harness.nodes(make_rows(ROWS))
+    now = await turn(monkeypatch, Table, "cell")
+    off = await turn(monkeypatch, Table, "cell", "list_item_deltas")
+    assert now["update_state_items.calls"] == 1 and now["update_state_items.rows"] == 1
+    assert off.get("update_state_items.calls", 0) == 0
+    assert off["convert_for_render.nodes"] == size
+    assert off["sent_keys"] == [["items"]]
+    sent_now = now["update_state.bytes"] + now["update_state_items.bytes"]
+    assert 50 * sent_now < off["update_state.bytes"]
+    assert now["changed_keys"] == off["changed_keys"] == [["items"]]
+
+
+async def test_loop_item_render_gate_off(monkeypatch):
+    """One changed cell re-renders one loop item in Rust; the other rows come
+    from the per-item store (#4325). Off, every item renders. The frames are
+    the same either way (``test_per_turn_oracle.py``)."""
+    now = await turn(monkeypatch, IfTable, "cell")
+    off = await turn(monkeypatch, IfTable, "cell", "loop_item_render")
+    assert now["loop_item_store.hits"] == ROWS - 1
+    assert now["loop_item_store.misses"] == 1
+    assert off.get("loop_item_store.hits", 0) == 0
+
+
+async def test_an_unrelated_change_does_not_walk_the_list_in_the_sync(monkeypatch):
+    """A turn that does not change the list walks it twice (the two snapshots).
+    The sync compares the post-event snapshot's fingerprint of the list with the
+    last render's instead of walking it a third time. A view whose
+    ``get_context_data`` runs between the two does not get this
     (``test_per_turn_invalidation.py`` pins that case)."""
     size = harness.nodes(make_rows(ROWS))
     now = await turn(monkeypatch, Table, "retitle")
-    assert now["sent_keys"] == [["title"]]
-    assert now["fingerprint.sync.nodes"] == size
+    off = await turn(monkeypatch, Table, "retitle", "snapshot_fingerprints")
+    assert now["sent_keys"] == off["sent_keys"] == [["title"]]
+    assert now.get("fingerprint.sync.calls", 0) == 0
+    assert off["fingerprint.sync.nodes"] == size
     assert now.get("collect_sub_ids.ids", 0) <= 1
 
 
@@ -301,11 +383,11 @@ async def test_the_walk_grows_with_the_list_and_no_faster(monkeypatch):
     """A quarter of the rows is a quarter of the walk: counted, not timed."""
     big = await turn(monkeypatch, Table, "cell")
     small = await turn(monkeypatch, SmallTable, "cell")
-    ratio = big["fingerprint_and_convert.nodes"] / small["fingerprint_and_convert.nodes"]
+    ratio = big["fingerprint.snapshot.nodes"] / small["fingerprint.snapshot.nodes"]
     assert 3.9 < ratio < 4.1
 
     def total(counts: Dict[str, Any]) -> int:
-        nodes: int = counts["fingerprint.snapshot.nodes"] + counts["fingerprint_and_convert.nodes"]
+        nodes: int = counts["fingerprint.snapshot.nodes"] + counts["convert_for_render.nodes"]
         return nodes
 
     assert 3.8 < total(big) / total(small) < 4.1
@@ -353,27 +435,39 @@ async def test_an_unchanged_turn_neither_serializes_nor_writes_the_saved_state(m
 
 
 async def test_the_compact_fingerprint_is_a_third_of_the_wide_one(monkeypatch):
-    """Counted, not weighed on a scale: the bytes of the fingerprint tuples a
-    socket holds for 1,000 rows. Each leaf was a 3-tuple and each dict item a
-    2-tuple; a leaf is now the value and a dict's items one flat tuple."""
+    """Counted, not weighed on a scale: the bytes of the fingerprint tuples
+    for 1,000 rows, held as trees (``digest_fingerprints`` off, so there is a
+    tree to weigh). Each leaf was a 3-tuple and each dict item a 2-tuple; a
+    leaf is now the value and a dict's items one flat tuple. With digests on,
+    the encoding changes what a turn allocates, not what the socket keeps."""
     now = await turn(monkeypatch, Table, "cell")
     wide = await turn(monkeypatch, Table, "cell", "compact_fingerprints")
     assert wide["reply"] == now["reply"] == "patch"
-    assert wide["fingerprints.retained_bytes"] > 3 * now["fingerprints.retained_bytes"]
     # The walk itself is the same walk: no node more, none fewer.
-    assert wide["fingerprint_and_convert.nodes"] == now["fingerprint_and_convert.nodes"]
+    assert wide["convert_for_render.nodes"] == now["convert_for_render.nodes"]
     assert wide["fingerprint.snapshot.nodes"] == now["fingerprint.snapshot.nodes"]
+    # What is kept is a digest either way.
+    assert wide["fingerprints.retained_bytes"] == now["fingerprints.retained_bytes"]
+    compact_trees = await turn(monkeypatch, Table, "cell", "digest_fingerprints")
+    wide_trees = await turn(
+        monkeypatch, Table, "cell", "compact_fingerprints", "digest_fingerprints"
+    )
+    assert (
+        wide_trees["fingerprints.retained_bytes"] > 3 * compact_trees["fingerprints.retained_bytes"]
+    )
 
 
-async def test_one_fingerprint_tree_is_held_where_two_were(monkeypatch):
-    """The dirty baseline and the last render's fingerprint of the rows are
-    built from the same row tuples, so the second costs one changed row and a
-    tuple of references. Turned off, the socket holds two whole trees."""
+async def test_a_digest_is_held_where_two_trees_were(monkeypatch):
+    """The dirty baseline and the last render's fingerprint of the rows are a
+    16-byte digest each (#3998). Turned off, the socket holds the two trees,
+    each larger than the rows; the turn sends the same keys either way."""
     now = await turn(monkeypatch, Table, "cell")
-    apart = await turn(monkeypatch, Table, "cell", "shared_fingerprints")
-    assert apart["reply"] == now["reply"] == "patch"
-    assert apart["fingerprints.retained_bytes"] > 1.8 * now["fingerprints.retained_bytes"]
-    assert apart["sent_keys"] == now["sent_keys"]
+    trees = await turn(monkeypatch, Table, "cell", "digest_fingerprints")
+    assert trees["reply"] == now["reply"] == "patch"
+    assert trees["sent_keys"] == now["sent_keys"]
+    # The baseline's entries and two digests: under 2 KB for 1,000 rows.
+    assert now["fingerprints.retained_bytes"] < 2048, now["fingerprints.retained_bytes"]
+    assert trees["fingerprints.retained_bytes"] > 100 * now["fingerprints.retained_bytes"]
 
 
 async def test_a_deferred_turn_saves_nothing_before_its_frame(monkeypatch):

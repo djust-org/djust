@@ -235,6 +235,28 @@ def _request_principal(request: Any) -> tuple[str, str]:
     return user_id, tenant_id
 
 
+def principal_digest(session: str, user: str, tenant: str) -> str:
+    """A comparison token for one principal: session, user and tenant (#4175).
+
+    Not a signature or an authorization proof; the inputs are already
+    canonical identifiers (see :class:`StateBinding`).
+    """
+    encoded = json.dumps([session, user, tenant], separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def request_principal_digest(request: Any) -> str:
+    """:func:`principal_digest` of a plain HTTP request (the upload status
+    endpoint, #4175). Raises :class:`ExposureError` as :func:`request_binding`
+    does when the request's principal cannot be derived."""
+    user_id, tenant_id = _request_principal(request)
+    session = getattr(request, "session", None)
+    session_key = getattr(session, "session_key", None)
+    if type(session_key) is not str or not session_key:
+        raise ExposureError("Upload owner check requires an established session")
+    return principal_digest(session_key, user_id, tenant_id)
+
+
 def request_binding(request: Any) -> "StateBinding":
     """Bind an established server session to the current principal and route.
 
@@ -400,15 +422,7 @@ def _with_stored_rows(
 def _declared_adapter(
     view: Any, request: Any, *, create: bool = False
 ) -> "ServerStateSession | None":
-    """The strict adapter for declared ``persist="server"`` fields.
-
-    A legacy view has no declared server state (the constructor refuses the
-    grant), so it has no adapter; its state is the automatic kind only (#4107).
-    """
-    from ._exposure import uses_legacy_exposure
-
-    if uses_legacy_exposure(view):
-        return None
+    """The strict adapter for declared ``persist="server"`` fields."""
     return server_state_adapter(view, request, create=create)
 
 
@@ -562,8 +576,8 @@ def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
     sets are disjoint (a field that states ``persist`` is never automatic).
 
     Invalid configuration and storage failures still propagate. Only a rejected
-    envelope (schema/identity/expiry) becomes a cache miss. Never hydrate a legacy
-    session dictionary or log rejected values. Caller performs fresh object auth
+    envelope (schema/identity/expiry) becomes a cache miss. Never hydrate an
+    unversioned session dictionary or log rejected values. Caller performs fresh object auth
     before dispatch/render after applying these values.
     """
     from . import _automatic_state
@@ -623,6 +637,11 @@ class StateBinding:
                 value.encode("utf-8")
             except UnicodeEncodeError:
                 raise ExposureError("State binding contains an invalid encoding") from None
+
+    @property
+    def principal(self) -> str:
+        """:func:`principal_digest` of this binding's session, user and tenant."""
+        return principal_digest(self.session, self.user, self.tenant)
 
     @property
     def digest(self) -> str:

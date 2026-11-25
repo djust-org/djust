@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'node:fs';
-import { legacy, setup } from './_form_events_harness.js';
+import { anyArgs, setup } from './_form_events_harness.js';
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
@@ -61,15 +61,15 @@ describe('secret fields stay out of drafts, auto-recover and _collectFormData', 
         expect(win.document.querySelector('input[name="pw"]').value).toBe('hunter2');
     });
 
-    it('the dj-auto-recover envelope carries no password value', async () => {
-        const t = setup(`<div dj-auto-recover="restore_state">${FIELDS}</div>`, { restore_state: legacy() });
+    it('the dj-auto-recover form_values carry no password value', async () => {
+        const t = setup(`<div dj-auto-recover="restore_state">${FIELDS}</div>`, { restore_state: anyArgs() });
         t.win.djust._isReconnect = true;
         t.win.djust._processAutoRecover();
         await t.settle();
         const sent = t.sent().find(s => s.event === 'restore_state');
         const raw = JSON.stringify(sent.params);
         for (const secret of SECRETS) expect(raw).not.toContain(secret);
-        expect(sent.params._form_values.user).toBe('ann');
+        expect(sent.params.form_values.user).toBe('ann');
     });
 
     it('_collectFormData skips a password field', () => {

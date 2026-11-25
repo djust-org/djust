@@ -28,7 +28,8 @@ from djust.theming.a11y_exemptions import (
     SOLVED_PAIR_KEYS,
 )
 from djust.theming.css_generator import ThemeCSSGenerator as CSSGenerator
-from djust.theming.presets import THEME_PRESETS, ColorScale, ThemeTokens
+from djust.theming.presets import THEME_PRESETS
+from djust.theming import ColorScale, ThemeTokens
 
 pytestmark = pytest.mark.theming
 

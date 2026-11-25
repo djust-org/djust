@@ -26,7 +26,7 @@ PATH = "/unknown-event/"
 
 
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="' + MOD + '.Page">'
         '<p><span id="r">{{ received }}</span> {{ count }}</p>'

@@ -265,7 +265,13 @@ def handle_exception(
         'error'
     """
     import logging as logging_module
-    from .._exposure_diagnostics import diagnostics_allowed
+    from .._exposure_diagnostics import (
+        PROTECTED_FAILURE,
+        diagnostics_allowed,
+        log_failure,
+        send_request_exception,
+        server_exception_detail_enabled,
+    )
 
     if expose_details is not True or not diagnostics_allowed():
         # Do not stringify the exception or pass exc_info/extra to a logger:
@@ -274,7 +280,43 @@ def handle_exception(
         protected_logger = (
             logger if logger is not None else logging_module.getLogger("djust.security")
         )
-        protected_logger.error("Protected view operation failed")
+        from .._exposure import ExposureConfigurationError
+
+        if isinstance(exception, ExposureConfigurationError):
+            # Framework-authored and value-free, like ``log_failure``'s same branch:
+            # the operator needs the reason (an unsupported SESSION_ENGINE, #4092).
+            protected_logger.error("Protected view operation failed: %s", exception)
+        else:
+            protected_logger.error("Protected view operation failed")
+            if server_exception_detail_enabled():
+                # #4180: the operator opted in to exception detail in server
+                # sinks (the log and error trackers). The client answer below
+                # stays generic, and the observability ring buffer is not a
+                # server log, so ``record_traceback`` is not called.
+                from .log_sanitizer import sanitize_for_log
+
+                protected_parts = []
+                if view_class:
+                    protected_parts.append(f"view={sanitize_for_log(str(view_class))}")
+                if event_name:
+                    protected_parts.append(f"event={sanitize_for_log(event_name)}")
+                try:
+                    safe_text = sanitize_for_log(str(exception))
+                except Exception:  # noqa: BLE001 — a raising __str__ must not break the error path
+                    safe_text = "<unprintable exception>"
+                # Through ``log_failure``, which reads the same opt-in: no raw
+                # exception-carrying logger call (test_log_exposure_pin).
+                log_failure(
+                    protected_logger,
+                    exception,
+                    "%s (%s): %s: %s" if protected_parts else "%s%s: %s: %s",
+                    PROTECTED_FAILURE,
+                    ", ".join(protected_parts),
+                    type(exception).__name__,
+                    safe_text,
+                    traceback=True,
+                )
+                send_request_exception(exception)
         return {
             "type": "error",
             "error": GENERIC_ERROR_MESSAGES.get(error_type, GENERIC_ERROR_MESSAGES["default"]),
@@ -360,6 +402,10 @@ def handle_exception(
             safe_exc,
             exc_info=True,
         )
+
+    if server_exception_detail_enabled():
+        # #4180: the signal fires whatever the owner's policy.
+        send_request_exception(exception)
 
     # Create and return safe response
     return create_safe_error_response(

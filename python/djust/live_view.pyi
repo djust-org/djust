@@ -59,6 +59,7 @@ class LiveView(
     state_attribute: str = "state"
     params_form: Optional[type] = None
     params_form_fallback: str = "initial"
+    sw_cacheable: bool = False
     _component_bindings: dict[str, object]
     _components: dict[str, LiveComponent]
     _component_subscriptions: tuple[SubscriptionBinding, ...]

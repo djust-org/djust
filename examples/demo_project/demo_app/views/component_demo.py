@@ -26,7 +26,7 @@ class UserListComponent(LiveComponent):
                 <a href="#"
                    class="list-group-item list-group-item-action {% if user.id == selected_id %}active{% endif %}"
                    dj-click="select_user"
-                   data-id="{{ user.id }}">
+                   dj-value-id="{{ user.id }}">
                     <div class="d-flex w-100 justify-content-between">
                         <h6 class="mb-1">{{ user.name }}</h6>
                         <small>{{ user.role }}</small>
@@ -132,7 +132,7 @@ class TodoComponent(LiveComponent):
                                        type="checkbox"
                                        {% if item.completed %}checked{% endif %}
                                        dj-change="toggle_todo"
-                                       data-id="{{ item.id }}">
+                                       dj-value-id="{{ item.id }}">
                                 <label class="form-check-label {% if item.completed %}text-decoration-line-through text-muted{% endif %}">
                                     {{ item.title }}
                                 </label>

@@ -202,7 +202,7 @@ profiling candidate, provided stateful tags and exception outcomes stay equivale
 
 ## Measurement workflow
 
-1. Download step timings and all four `test-durations-shard-*` artifacts from a
+1. Download step timings and every `test-durations-shard-*` artifact from a
    successful run. Separate job setup, execution, queue time, and aggregate test
    duration.
 2. Reproduce the largest avoidable cost in an isolated worktree with its own uv

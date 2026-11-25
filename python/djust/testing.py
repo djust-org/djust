@@ -52,14 +52,32 @@ import inspect
 import os
 import re
 import time
+from dataclasses import dataclass
 from uuid import uuid4
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Type
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Type,
+)
 
 from django.core.exceptions import PermissionDenied
 from django.test import RequestFactory
 
 # Live sessions and real transports for tests of explicit views (#4191).
+if TYPE_CHECKING:
+    from .live_view import LiveView
+
+from ._exposure_unsupplied import (  # noqa: F401 - re-exported public API, listed in __all__
+    UnsuppliedTemplateNameError,
+)
 from ._testing_live import (  # re-exported public API, listed in __all__
     LivePage,
     LiveSocket,
@@ -94,6 +112,11 @@ __all__ = [
     "assert_all_routed_liveviews_allowlisted",
     "XSS_PAYLOADS",
     "LiveViewSmokeTest",
+    "PersistedState",
+    "persisted_state",
+    "rendered_state",
+    # Raised by a render under DJUST_UNSUPPLIED_NAMES = "error" (#4279).
+    "UnsuppliedTemplateNameError",
 ]
 
 if "pytest" in __import__("sys").modules:
@@ -354,6 +377,105 @@ class EventRejectedError(NoHandlerFoundError):
     as an event. ``raise_on_missing=False`` returns the envelope instead, with
     ``error`` set to the transports' answer and ``code="event_rejected"``.
     """
+
+
+@dataclass(frozen=True)
+class PersistedState:
+    """What an explicit view would save, by destination (#4280).
+
+    ``server`` is the ``state(persist="server")`` fields and component records (the
+    session envelope); ``snapshot`` the ``persist="client"`` fields (the signed
+    back-navigation snapshot); ``client`` the ``client=True`` fields (what ``get_state()``
+    hands the browser). ``automatic`` is everything automatic state (#4107) saves under a
+    public name: the declared ``state()`` fields without ``persist=`` (including
+    ``render=False`` ones) and the undeclared public attributes a view set in ``mount()``
+    or a handler, encoded as stored;
+    ``automatic_private`` its underscore twin and ``automatic_components`` its component
+    records. ``automatic_bytes`` is the encoded size of all of it, the figure the
+    ``DJUST_AUTOMATIC_STATE_*_KB`` limit and warning use. Values are detached copies.
+    """
+
+    server: Dict[str, Any]
+    snapshot: Dict[str, Any]
+    client: Dict[str, Any]
+    automatic: Dict[str, Any]
+    automatic_private: Dict[str, Any]
+    automatic_components: Dict[str, Any]
+    automatic_bytes: int
+
+    @property
+    def names(self) -> FrozenSet[str]:
+        """Every name saved anywhere: assert a value is absent with ``name not in state.names``."""
+        return frozenset().union(
+            self.server,
+            self.snapshot,
+            self.client,
+            self.automatic,
+            self.automatic_private,
+            self.automatic_components,
+        )
+
+
+def persisted_state(view: "LiveView") -> PersistedState:
+    """The state an explicit view would persist, split by destination (#4280).
+
+    A read-only projection: it does not touch the session and saves nothing. Use it to
+    assert that a value a page only reads (rows loaded for the render, a secret) is in no
+    destination: ``assert "secret_rows" not in persisted_state(view).names``. A value
+    returned only from ``get_context_data()`` is in none, because it is computed again for
+    every render.
+
+    Over its limit the automatic state raises
+    ``StateLimitExceeded``, as a save would (but an over-limit ``persist="server"``
+    projection raises ``ExposureError``, where a real save drops the component records and
+    saves without them); with ``automatic_state = False`` (or
+    ``DJUST_AUTOMATIC_STATE = False``) the ``automatic*`` fields are empty and the size 0.
+    Calling it spends the once-per-class "large state" / "not saved" notices, so a test that
+    calls it first hides them from a later real save in the same process.
+    """
+    from . import _automatic_state
+    from ._exposure import explicit_state_projection
+
+    server = explicit_state_projection(view, "server")
+    snapshot = explicit_state_projection(view, "snapshot")
+    client = explicit_state_projection(view, "client")
+    automatic: Dict[str, Any] = {}
+    private: Dict[str, Any] = {}
+    components: Dict[str, Any] = {}
+    size = 0
+    if _automatic_state.saving_enabled(view):
+        projection = _automatic_state.project(view)
+        automatic = dict(projection.public)
+        private = dict(projection.private)
+        components = dict(projection.components)
+        size = len(projection.text.encode("utf-8"))
+    return PersistedState(server, snapshot, client, automatic, private, components, size)
+
+
+def rendered_state(view: "LiveView") -> Dict[str, Any]:
+    """The state the last render handed the template engine (#4291).
+
+    A detached copy of the renderer's state after the last render: every name the template
+    could read, as the template reads it. Renders merge into that state (a name a later render
+    no longer supplies keeps its last value), so it is the accumulated state, not only what the
+    last sync sent (a Model / QuerySet / model list reduced to
+    the fields the template names, under explicit exposure). Use it to assert that a render
+    hands the template only what it reads, for data minimization:
+    ``assert "email" not in rendered_state(view)["person"]``.
+
+    It is not ``view.get_state()``, which under explicit exposure returns only
+    ``state(client=True)`` fields, nor :func:`persisted_state`, which is what a save keeps.
+    Mutating the returned dict changes nothing in the view.
+
+    Raises:
+        RuntimeError: If the view has not rendered yet (no renderer state to read).
+    """
+    import copy
+
+    rust_view = getattr(view, "_rust_view", None)
+    if rust_view is None:
+        raise RuntimeError("The view has not rendered yet; call render() first.")
+    return copy.deepcopy(dict(rust_view.get_state()))
 
 
 class LiveViewTestClient:
@@ -766,6 +888,7 @@ class LiveViewTestClient:
                 "validation_details": {
                     "expected_params": validation["expected"],
                     "provided_params": validation["provided"],
+                    "missing_params": validation.get("missing", []),
                     "type_errors": validation["type_errors"],
                 },
                 "state_before": state_before,
@@ -1005,6 +1128,26 @@ class LiveViewTestClient:
                 pass
 
         return state
+
+    def persisted_state(self) -> PersistedState:
+        """What the mounted view would persist, by destination (see :func:`persisted_state`).
+
+        Raises:
+            RuntimeError: If view not mounted
+        """
+        if not self._mounted or not self.view_instance:
+            raise RuntimeError("View not mounted. Call client.mount() first.")
+        return persisted_state(self.view_instance)
+
+    def rendered_state(self) -> Dict[str, Any]:
+        """What the last render handed the template engine (see :func:`rendered_state`).
+
+        Raises:
+            RuntimeError: If view not mounted, or not rendered yet
+        """
+        if not self._mounted or not self.view_instance:
+            raise RuntimeError("View not mounted. Call client.mount() first.")
+        return rendered_state(self.view_instance)
 
     def render(self, engine: str = "rust") -> str:
         """

@@ -59,7 +59,7 @@ def _make_view_cls(name="V", slug="dispatch.v", body=None):
     body = body or {}
     attrs = {"api_name": slug}
     attrs.update(body)
-    return type(name, (LiveView,), {"exposure_policy": "legacy", **attrs})
+    return type(name, (LiveView,), {"exposure_policy": "explicit", **attrs})
 
 
 def test_404_when_view_slug_unknown(authenticated_request_factory):
@@ -152,6 +152,23 @@ def test_400_on_missing_required_param(authenticated_request_factory):
     body = json.loads(resp.content)
     assert body["error"] == "invalid_params"
     assert "details" in body
+
+
+def test_400_names_the_missing_parameter_of_a_strict_handler(authenticated_request_factory):
+    # #4287: the ADR-API envelope carries ``missing`` like the other transports.
+    class V(LiveView):
+        exposure_policy = "explicit"
+        api_name = "dispatch.strictmissing"
+
+        @event_handler(expose_api=True, parameter_policy="strict")
+        def greet(self, name: str):
+            return f"hello {name}"
+
+    register_api_view("dispatch.strictmissing", V)
+    request, _ = authenticated_request_factory({})
+    resp = dispatch_api(request, "dispatch.strictmissing", "greet")
+    assert resp.status_code == 400
+    assert json.loads(resp.content)["details"]["missing"] == ["name"]
 
 
 def test_200_happy_path_with_coercion_and_diff(authenticated_request_factory):

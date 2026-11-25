@@ -16,19 +16,21 @@ from __future__ import annotations
 import re
 
 import pytest
+from django.test import override_settings
 
 from djust import LiveView
 from djust.components.base import BoundComponent
 from djust.components.descriptors import Carousel, Dropdown, Modal, Sheet, Tooltip
 from djust.decorators import is_event_handler
 from djust.testing import LiveViewTestClient
+from djust.tests._live_session import amount_on_runtime
 from djust.tests.test_component_dj_attr_parity_3669 import _django, _rust
 
 _ENGINES = {"django": _django, "rust": _rust}
 
 
 class ModalPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     dialog = Modal(is_open=True)
 
     def mount(self, request, **kwargs):
@@ -36,7 +38,7 @@ class ModalPage(LiveView):
 
 
 class SheetPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     panel = Sheet(is_open=True)
 
     def mount(self, request, **kwargs):
@@ -44,7 +46,7 @@ class SheetPage(LiveView):
 
 
 class CarouselPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     slides = Carousel(total=3)
 
     def mount(self, request, **kwargs):
@@ -109,7 +111,7 @@ def test_each_default_event_is_answered_by_alias_and_by_the_bound_component(
     page = type(
         "Page_%s" % event,
         (LiveView,),
-        {"exposure_policy": "legacy", "first": descriptor(**{attr: start})},
+        {"exposure_policy": "explicit", "first": descriptor(**{attr: start})},
     )
     # The view-level alias, auto-resolving the single instance.
     view = page()
@@ -130,7 +132,7 @@ def test_each_default_event_is_answered_by_alias_and_by_the_bound_component(
 
 def test_alias_needs_one_instance_or_a_component_id():
     class TwoModals(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         a = Modal(is_open=True)
         b = Modal(is_open=True)
 
@@ -147,7 +149,7 @@ def test_an_app_handler_of_the_same_name_wins():
     from djust.decorators import event_handler
 
     class Own(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         dialog = Modal(is_open=True)
 
         @event_handler
@@ -161,7 +163,7 @@ def test_an_app_handler_of_the_same_name_wins():
 
 
 class RuntimeModalPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0"><p>{{ dialog.is_open }}</p></div>'
     dialog = Modal(is_open=True)
 
@@ -169,7 +171,7 @@ class RuntimeModalPage(LiveView):
         pass
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("params", [{"component_id": "dialog"}, {}])
 async def test_the_runtime_dispatches_the_tag_event_with_and_without_component_id(params):
@@ -180,11 +182,10 @@ async def test_the_runtime_dispatches_the_tag_event_with_and_without_component_i
     from djust.tests.test_bound_component_skip_gate_2900 import MockTransport
 
     view = RuntimeModalPage()
-    view.mount(None)
-    view.render_with_diff()
     transport = MockTransport()
     runtime = ViewRuntime(transport)
-    runtime.view_instance = view
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        await amount_on_runtime(runtime, view)
     await runtime.dispatch_event(
         {"type": "event", "event": "close_modal", "params": params, "ref": 1}
     )

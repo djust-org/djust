@@ -14,7 +14,7 @@ Usage::
             self.toast = push_toast("Saved!", type="success")
 
         @event_handler
-        def delete(self, item_id):
+        def delete(self, item_id: Any):
             state = confirm_action(
                 message=f"Delete item {item_id}?",
                 risk="high",

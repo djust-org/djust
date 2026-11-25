@@ -114,7 +114,7 @@ container.addEventListener('dj-viewport', (e) => {
 });
 ```
 
-The named event is also sent to the server via `window.djust.handleEvent(event, { edge })`, over whichever transport is active (WebSocket, SSE or HTTP).
+The named event is also sent to the server via `window.djust.handleEvent(event, { edge })`, over whichever transport is active (WebSocket, SSE or HTTP). It carries no component or child context, so it runs on the page's view even when the element sits inside a component or a `{% live_render %}` child, and the browser follows that view's handler contract (#4225). A handler under the strict parameter policy receives `edge` only when it declares it, plus the container's `dj-value-*` arguments.
 
 ## Stream `limit` — Cap DOM growth
 
@@ -131,12 +131,12 @@ class ChatView(LiveView):
         self.stream("messages", Message.recent(50), limit=50)
 
     @event_handler
-    def load_older(self, **kwargs):
+    def load_older(self):
         older = Message.before(self.oldest_id, 50)
         self.stream("messages", older, at=0, limit=50)  # prepends; prunes bottom
 
     @event_handler
-    def load_newer(self, **kwargs):
+    def load_newer(self):
         newer = Message.after(self.newest_id, 50)
         self.stream("messages", newer, limit=50)  # appends; prunes top
 ```
@@ -155,7 +155,7 @@ A handler whose only effect is a stream call renders like any other change:
 
 ```python
 @event_handler
-def new_message(self, **kwargs):
+def new_message(self):
     self.stream_insert("messages", Message.latest())   # nothing else assigned
 ```
 

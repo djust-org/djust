@@ -5,7 +5,6 @@ members = [
     "crates/djust_templates",
     "crates/djust_vdom",
     "crates/djust_live",
-    "crates/djust_components",
     # Vendored copy of crates.io `markup5ever_rcdom`, which has no 0.40 release
     # (#3011). Path-vendored under the SAME crate name so consumers need no
     # source change. See the crate's PROVENANCE.md.
@@ -14,7 +13,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "2.0.0-rc.1"
+version = "2.0.0-rc.5"
 edition = "2021"
 authors = ["djust contributors"]
 license = "MIT"
@@ -47,13 +46,13 @@ markup5ever_rcdom = { path = "crates/markup5ever_rcdom_vendored" }
 # Pulled in by the vendored rcdom (`tendril::StrTendril`, `xml5ever::interface::ElemName`).
 tendril = "0.5"
 xml5ever = "0.40"
-chrono = "0.4"  # DateTime handling for timesince filter
-# Timezone database for USE_TZ/TIME_ZONE parity (#2209). Bundles compiled
-# tzdata: +1.16 MB raw on the extension, +136 KB compressed (what a wheel
-# actually ships). Measured before adopting — a fixed UTC offset would have
-# been free but is wrong across a DST boundary, which a single render can
-# straddle (Jan renders -0500, Aug -0400 for the same zone).
-chrono-tz = "0.10"
+# Date/time arithmetic and the timezone database for USE_TZ/TIME_ZONE parity
+# (#2209), one crate for both since #4222 replaced chrono + chrono-tz (both
+# RustSec-unmaintained). `tzdb-bundle-always` compiles the IANA database into
+# the extension, so a zone name never depends on the host's /usr/share/zoneinfo;
+# `tz-system` is kept only for `{% now %}`'s process-local zone (Django's
+# `datetime.now()` under USE_TZ=False), which chrono's `Local` also read.
+jiff = { version = "0.2.42", default-features = false, features = ["std", "tz-system", "tzdb-bundle-always"] }
 # Unicode normalization for `Truncator.chars`'s NFC + combining-class skip and
 # `slugify`'s NFKD ASCII fold (#2319). NFC needs canonical decomposition,
 # canonical ordering AND the composition-exclusion set; there is no

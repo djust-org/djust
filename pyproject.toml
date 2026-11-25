@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "djust"
-version = "2.0.0rc1"
+version = "2.0.0rc5"
 description = "Phoenix LiveView-style reactive components for Django with Rust-powered performance. Real-time UI updates over WebSocket, no JavaScript build step required."
 authors = [{name = "djust contributors"}]
 readme = "README.md"
@@ -198,11 +198,10 @@ include = ["python/djust/djust.cdx.json"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-testpaths = ["python/tests", "python/djust/tests", "tests/unit", "tests/e2e", "tests/integration"]
+testpaths = ["tests", "python/tests", "python/djust/tests"]
 pythonpath = [".", "examples/demo_project"]
 DJANGO_SETTINGS_MODULE = "demo_project.settings"
 addopts = [
-    "--verbose",
     "--strict-markers",
     "--tb=short",
     "--ignore=tests/playwright",  # Manual tests, not for CI
@@ -225,14 +224,6 @@ markers = [
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-filterwarnings = [
-    # About 1,850 test and example views state exposure_policy = "legacy" on
-    # purpose (docs/plans/2.0-exposure-flip.md, PR 0d), and each statement
-    # raises this one deprecation when its class is created. Only that message
-    # is ignored; the tests of the warning itself use pytest.warns, which
-    # overrides this. Remove the entry with the "legacy" arm (PR 11).
-    'ignore:exposure_policy = "legacy" \(stated on:DeprecationWarning',
-]
 
 [tool.ruff]
 line-length = 100
@@ -289,6 +280,17 @@ ignore_errors = true
 [[tool.mypy.overrides]]
 module = ["yaml", "requests"]
 ignore_missing_imports = true
+
+# numpy is NOT a djust dependency, but typed dev deps reach it (pytest's
+# _pytest.python_api TYPE_CHECKING import; fakeredis.model). numpy >= 2.5 stubs
+# use the 3.12 `type` statement, which aborts the whole run under
+# python_version = "3.11" (#4254). follow_imports is ignored for .pyi stubs
+# unless follow_imports_for_stubs is set, so a plain skip does nothing. If
+# another library's 3.12-only stubs fail the same way, add it to this list.
+[[tool.mypy.overrides]]
+module = ["numpy"]
+follow_imports = "skip"
+follow_imports_for_stubs = true
 
 # --------------------------------------------------------------------------- #
 # STRICT ISLANDS — modules enforced under full strict rules. Each is verified to

@@ -7,6 +7,435 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0rc5] - 2026-11-24
+
+> **Upgrading from rc4.** Two live-mount performance fixes and no behaviour
+> change to check. A page that loads `djust_components`, `djust_flash`,
+> `theme_tags` or a filter-only tag library now also skips the extra
+> page-shell render that rc4 introduced the skip for (#4298); a project can
+> name its own child-free libraries in
+> `LIVEVIEW_CONFIG['childless_tag_libraries']`. With `DEBUG` off a mount no
+> longer rebuilds the view's template twice (#4299). As in rc4,
+> `exposure_policy = "legacy"` and opt-in strict parameters still work and
+> are removed before 2.0.0 final (#4171, #4189). See the
+> [2.0 migration guide](docs/website/guides/migrating-to-2.0.md).
+
+### Fixed
+
+- **A live mount still rendered the whole page when it loaded djust's component, flash or theme tags (#4298).** The #4295 page-shell skip treated every `{% load %}` outside Django's own libraries as one that might embed a child view. It now also clears `djust_components`, `djust_flash` and `theme_tags` (and reads the templates they render, so an overridden one that embeds a child still keeps the render), a library that registers only filters, the filters loaded with `{% load name from library %}`, and libraries a project lists in the new `LIVEVIEW_CONFIG['childless_tag_libraries']`.
+- **Every live mount ran the whole `get_template()` pipeline twice (#4299).** With `DEBUG` off, a `template_name` view's `get_template()` result is now kept per view class, template name, template directories and template text, and cleared with the other render caches (and by a template edit the hot-reload watcher sees). A page-shell render that #4295 skips no longer calls `get_template()` first, and the mount frame's `cache_config` and `handler_config` share one decorator scan.
+
+## [2.0.0rc4] - 2026-11-24
+
+> **Upgrading from rc3.** Under explicit exposure, a Model, model list or
+> QuerySet that the template reads only plain fields off now reaches the
+> renderer reduced to those fields, as on 1.x, instead of every concrete
+> column (#4290). If you passed values through
+> `self.serialize_for_template()` to get that shape, the workaround is no
+> longer needed. New in rc4: `djust.testing.rendered_state(view)` shows what
+> a render handed the template engine (#4291). Two performance fixes:
+> `serialize_for_template()` reads the cached template source (#4294), and a
+> live mount skips re-rendering a page shell that holds no child view
+> (#4295). As in rc3,
+> `exposure_policy = "legacy"` and opt-in strict parameters still work and
+> are removed before 2.0.0 final (#4171, #4189). See the
+> [2.0 migration guide](docs/website/guides/migrating-to-2.0.md).
+
+### Added
+
+- **`djust.testing.rendered_state(view)` and `LiveViewTestClient.rendered_state()`** return a detached copy of the state the last render handed the template engine, so a data-minimization test no longer reads the private `view._rust_view.get_state()`. `get_state()` under explicit exposure returns only `client=True` fields, and `persisted_state()` answers what a save keeps, not what the renderer received (#4291).
+
+### Fixed
+
+- **Explicit exposure no longer hands the renderer every field of a Model or row list the template reads only columns off.** A top-level Model, model list or QuerySet whose relations the template does not walk now goes through the template-path JIT, as on 1.x, so the renderer's state (and its snapshot) carries the fields the template names, not every concrete column less `djust_exclude_fields`. A single Model whose relations or methods the template walks keeps its normalized fields, and one the template reads nothing off keeps only its identity keys; a row list read with no field path (`{% regroup %}`, `{{ rows.0 }}`) keeps whole rows, as the JIT gives it (#2736). A `dictsort:<variable>` naming a non-column keeps the normalized rows. The migration guide notes the change (#4290).
+- **`template_paths()` and `serialize_for_template()` read the cached template source.** With `DEBUG` off they used to resolve the `{% extends %}` chain and re-inline every `{% include %}` on each call, so a `get_context_data()` that calls `serialize_for_template()` per key paid one full template resolution per key on every render. They now read the per-template source cache every internal caller uses. With `DEBUG` on, the unsupplied-name notice (#4279) reads the template once per render, not twice, and once per view class while hot reload is running (its template refresh forgets the copy); `DJUST_UNSUPPLIED_NAMES = "error"` still reads it once per render (#4294).
+- **A live mount no longer renders the whole page shell when nothing in it can mount a child view.** An explicit-exposure view whose page shell comes from `template_name` rendered the full page on every WebSocket mount, only to register child views outside `dj-root`, and discarded the HTML. The mount now reads the page's template files (the `template_name` file, each `{% extends %}` parent and each `{% include %}` partial) and skips that render when none names `live_render`, every `extends` / `include` names a template that resolves, and none loads a tag library beyond Django's `static`, `i18n`, `l10n`, `tz`, `cache`, `humanize` and djust's `live_tags`. An engine's `builtins`, a djust tag handler registered outside djust, or a view that overrides `get_template()` keeps the full render. The answer is cached per template while render caches are on (#4295).
+
+## [2.0.0rc3] - 2026-11-24
+
+> **Upgrading from rc2.** Two behaviour changes to check. `set_changed_keys()`
+> now sends a diff instead of the whole page (#4286); call
+> `request_full_render()` where a handler really needs full HTML. Strict
+> parameter refusals now name the rule that failed and add
+> `missing_params` to `validation_details` (#4287). New in rc3:
+> `DJUST_UNSUPPLIED_NAMES = "error"` makes a template name the view never
+> supplies fail under test instead of rendering blank (#4279), and
+> `djust.testing.persisted_state(view)` shows what an explicit view would save
+> (#4280). As in rc2, explicit exposure is the default and an attribute set on
+> `self` without `state(...)` renders empty with no error;
+> `exposure_policy = "legacy"` and opt-in strict parameters still work in rc3
+> and are removed before 2.0.0 final (#4171, #4189). See the
+> [2.0 migration guide](docs/website/guides/migrating-to-2.0.md).
+
+### Added
+
+- **`DJUST_UNSUPPLIED_NAMES` makes an unsupplied template name fail under test (#4279).** Added `DJUST_UNSUPPLIED_NAMES` (`"debug"` default, `"warn"`, `"error"`): `"error"` raises `UnsuppliedTemplateNameError` on every render of an explicit view whose template reads a name the view holds but nothing supplies, so a test run (where `DEBUG` is off and the `djust.exposure` notice never fires) fails instead of rendering blank; `"warn"` logs whatever `DEBUG` is. Names a context processor supplies (`user`, `messages`, ...) are not reported. The value is case-insensitive; an invalid one is a new `djust.C043` error at `manage.py check` and, at render time, is logged once and behaves as `"debug"`. `UnsuppliedTemplateNameError` is importable from `djust.testing`.
+- **`djust.testing.persisted_state(view)` shows what an explicit view would save (#4280).** Added `djust.testing.persisted_state(view)` and `LiveViewTestClient.persisted_state()`: the state an explicit view would save, split by destination (`server`, `snapshot`, `client`, automatic state and its size), read-only. `_get_private_state()` raises on an explicit view; this is the replacement for asserting that a value a page only reads is not persisted.
+
+### Changed
+
+- **HTTP-fallback pages with `{% dj_flash %}` or other `dj-update="ignore"` regions are answered with patches (#4283).** Since #4108 any render that held `dj-update` got the whole page for every fallback event, and `{% dj_flash %}` renders a `dj-update="ignore"` container, so most apps with flash messages never got patches. The DOM shape on both sides now leaves an ignored element's children out (the client owns them), and an answer is the whole page only when a patch would address the ignored element itself. `dj-update="append"`, `"prepend"`, `"replace"` and `dj-virtual` still select the whole page. A client built before this change computes the old shape for such a page and keeps getting whole pages.
+- **`set_changed_keys()` now sends a diff, not the whole page (#4286).** Both forms still force the turn to render past the unchanged-state skip (and still win over `skip_render()`), but the render is diffed and sent as a `patch` on the view route (a handler reached through a `component_id` event still answers with the full-HTML `component_event` frame), without the DJE-053 warning, so focus, a caret and an open native dialog survive it. A full-HTML render already required by the framework (a restore, a dropped save) is not downgraded. `request_full_render()` (and assigning `self._force_full_html = True`) still sends full HTML.
+- **Strict parameter errors say which rule failed (#4287).** A refused strict event now names the rule (a required argument is missing, an undeclared argument was sent, a value was supplied both positionally and by name, too many positional arguments, a positional-only name sent by keyword) and the declared parameters involved, but never a value, an undeclared key or a count of them. `validation_details` gains `missing_params` (declared names, `[]` when none), and the server logs the undeclared key names at DEBUG on the `djust.validation` logger.
+
+### Fixed
+
+- **A tick, push or `db_notify` turn whose session save hits a database error now logs a warning instead of being treated as a logout and dropped silently (#4274).** Django's database session store raises `UpdateError` for any database error on the update, not only for a deleted row. djust now checks whether the session row still exists: only a row that is gone is a logout (dropped quietly, as before); otherwise `Session writes of a <source> turn were not stored` is logged at WARNING.
+- **Under explicit exposure, the queries a render makes after `get_context_data()` now run inside `LIVEVIEW_CONFIG["sync_turn_wrapper"]`'s `"render"` step, and count toward a `"render"` query budget (#4276).** A QuerySet returned from `get_context_data()` was evaluated after the wrapped call returned (the explicit JIT, the rows listed for the template), and a relation the template follows on a model (`{{ me.groups.count }}`) was read by the Rust render, both with no wrapper scope: a row-level security wrapper saw none of the caller's rows. `_sync_state_to_rust()` and the `render()` / `render_full_template()` / `render_with_diff()` methods are now the `"render"` step as a whole; the steps inside nest, so one render enters the wrapper once. Template-time hooks (`{% live_form %}`, `{% live_field %}`, `{{ component }}`, a sticky `{% live_render %}`) therefore also run under `"render"` now, and an HTTP page GET enters `"render"` three times (its `get_context_data()` together with the context processors and the normalizing of the context's models, whose `@property` methods may query; the page render; the diff-baseline render). A background render (an async result, a push) and a sticky recovery render are one `"render"` step each. A wrapper that suppresses a render's exception now makes the render raise `RuntimeError` instead of returning `None`. A view near its `"render"` budget may now report over.
+- **`template_paths()` follows an `{% include %}` inside `{% tab %}` and `{% split_pane %}` bodies (#4277).** Fixed `template_paths()` (and the JIT serializer, T027 and the unsupplied-name notice that read it) missing a `{% include %}` inside `{% tab %}` and `{% split_pane %}` bodies. Component bodies are now followed for path extraction; every other opaque raw-block body keeps its skip. The `{% pane %}` separator no longer makes a whole `split_pane` body contribute nothing.
+- **`djust.T027` follows `{% extends %}` chains, includes and `get_context_data()` overrides that return a local (#4278).** `djust.T027` no longer skips a view silently because its template uses `{% extends %}` or because its `get_context_data()` returns a local (`ctx = super().get_context_data(**kwargs); ctx["x"] = ...; return ctx`, including `ctx.update(...)` and `ctx.setdefault(...)`). A `template_name` view is read through its `{% extends %}` chain and `{% include %}` partials, so a name read only in a base template or an include is reported (without a line number); names a mixin's provider contract renders (such as `TenantMixin`'s `tenant`) count as supplied, as does every name a configured `TEMPLATES` context processor supplies (`user`, `messages`, a project processor's keys). The Info message names up to five skipped views. What the check still cannot follow (an override that passes the context to a helper, an inline `template` with `{% extends %}`) is counted in one `djust.T027` Info message. Expect new T027 warnings on projects whose views extend a base template: they are real names that render empty.
+- **A whole-page answer no longer drops changes to top-level children without an `id` when the render holds a `dj-update` element (#4283).** `applyDjUpdateElements` updated only the root's top-level children that carry an `id`, so on a page with `{% dj_flash %}` (a `dj-update="ignore"` container) a toggled `<p>` never appeared, on the HTTP fallback and on WebSocket `html` frames alike. The answer is now morphed as a whole, as one without `dj-update` is: an ignored container keeps the client's children, an append/prepend container its accumulated rows (also when id-less siblings before its wrapper are added or removed), and a focused field its typed text. A `dj-update` container the new render no longer contains is now removed, where the old pass kept it. The HTTP fallback also detects client-owned regions by attribute instead of by text, so `dj-update` written in a page's content (a code sample) no longer turns patch answers off.
+- **A named component no longer breaks a strict handler that does not declare `name` (#4285).** A component's identity `name` (`{% toggle_group name=... %}`, or `Component(name=...)` through `event_attrs`) is now marked `data-djust-optional="name"`, and the strict client sends it only when the handler declares `name` or has a `**` catch-all, as it already does for generated `value`, `field` and `key`. `toggle_group` stamped `dj-value-name` even when unnamed, so every toggle group refused a strict handler without `name`. The server contract is unchanged: an undeclared `name` that is sent, such as a hand-written `dj-value-name`, is still refused, and legacy handlers still receive it.
+- **An open `{% modal native=True %}` stays open across a full-page update (#4286).** A full-page `html_update` (from `request_full_render()`, a restore or a recovery) morphed the `<dialog>` against server HTML that never carries `open`, so the client removed it and the dialog closed. The morph now keeps `open` on a `<dialog dj-dialog="open">`; a server close (`dj-dialog="close"`) still closes it, and a `<dialog>` without `dj-dialog` behaves as before.
+
+### Documentation
+
+- **The 2.0 migration guide and the best-practices guide say that a page GET no longer stores the view in the state backend, so the `Large LiveView state` warning no longer fires for page loads, and where a view's size is bounded now (#4281).** The removal itself shipped in 2.0.0rc1 (the legacy Rust render cache, exposure-flip row 8). What a view persists is bounded instead: `persist="server"` fields at 64 KB, automatic state with a warning at 100 KB and a refusal at 512 KB (`state_too_large`). A budget test measures `djust.testing.persisted_state(view).automatic_bytes` (#4280; an explicit view: a legacy view raises `TypeError`, and a state over its limit raises `StateLimitExceeded`).
+- **Migration guide: `page_title` is reserved, and a field named `state` shadows `state()` (#4282).** Migration guide: `page_title` is a framework setting that explicit exposure never supplies to the template (set `self.page_title` for the tab, return it from `get_context_data()` for `{{ page_title }}`), and a `state()` field named `state` shadows `state()` for the rest of the class body (`TypeError: 'StateProperty' object is not callable`).
+
+## [2.0.0rc2] - 2026-11-22
+
+> **Upgrading from 1.x: declare what your templates read.** Explicit exposure
+> is the default in 2.0 (since rc1). An attribute a view sets on `self` in
+> `mount()` or a handler, such as `self.items = ...`, stays on the server
+> unless the class declares it with `state(...)`
+> (`items = state(default_factory=list)`), so `{{ items }}` renders empty, with no
+> error. Declare each value the template reads with `state(...)`, or supply
+> derived values from `get_context_data()`. `exposure_policy = "legacy"`
+> still works in rc2 with a `DeprecationWarning`, and is removed before
+> 2.0.0 final (#4171). See `docs/website/state/explicit-exposure.md` and
+> the [2.0 migration guide](docs/website/guides/migrating-to-2.0.md).
+
+### Added
+
+- New system check `djust.S015` (Warning): a model's explicit `get_*()` method or `@property` (its own or inherited, such as `AbstractUser.get_full_name`) that reads a field the model lists in `djust_exclude_fields`. The field is hidden but the computed value is still serialized, so `{{ user.get_full_name }}` renders the `last_name` a custom `User` excluded. The check parses the members' source (`self.<field>`, `getattr(self, "<field>")`, up to three `self.<helper>` hops) and calls nothing; suppress with `DJUST_CONFIG = {"suppress_checks": ["S015"]}`. (#3955)
+- **`dj-auto-recover` handlers work under the strict parameter policy (#4178).** A recovery handler declares what it receives, `def restore(self, form_values: dict[str, Any], data_attrs: dict[str, str])`, and the browser sends only the dictionaries it declares (plus the container's `dj-value-*` arguments) after a WebSocket or SSE reconnect, including from a container inside a LiveComponent or an embedded child view, whose recovery event reaches the page's view. The values are validated by the handler's contract under the same limits as every event argument. Strict contracts accept a new annotation for this, `dict[str, T]`: a JSON object with string keys whose values are checked as `T`. New check `djust.V031` reports a recovery handler that still reads `_form_values` / `_data_attrs` (warning under the legacy policy, error under strict), declares the new names under the legacy policy or positional-only, and names the new signature; it is reported once per handler declaration, also covers a handler a computed `dj-auto-recover="{{ handler }}"` may name when it reads the `_` names, and leaves handlers no recovery binding targets (and LiveComponent handlers) to `djust.V016`. See [Reconnection](docs/website/guides/reconnection.md#custom-recovery-with-dj-auto-recover).
+
+- **`djust.testing` publishes live-session test helpers for explicit views (#4191).**
+  An explicit view binds to a saved server session at mount and reads it,
+  and its user, again on every turn. So a test with a stub user, a bare
+  consumer or a request without a saved session is refused. The helper the
+  framework's own tests used for this was private. `djust.testing` now
+  exports helpers that send every request through the project's own stack,
+  so a test written with them fails where production would refuse:
+  - `open_live_page(url, *, user=None, client=None, **extra)` does the page
+    GET through the project's middleware, with a client that enforces CSRF,
+    and returns a `LivePage`.
+  - `LivePage.post_event()` sends the HTTP fallback POST as the browser
+    does: the page's tab, its CSRF token, and the last answer's render
+    digest, so it gets patches. `full=True` asks for the whole page.
+  - `await LivePage.connect()` mounts the view over a `WebsocketCommunicator`
+    through the project's `ASGI_APPLICATION`, falling back to a bare consumer
+    when none is set.
+  - `await LivePage.connect_sse()` mounts the view over the project's own
+    SSE URLs and middleware, and fails with how to route them when they are
+    not routed.
+  - The returned `LiveSocket` / `LiveSSE` give `send_event()` (the answer
+    matched by `ref`), `receive()`, `receive_nothing()` and `frames`. A
+    receive timeout leaves the connection usable.
+  - `live_session()` and `with_live_session()` give a hand-built
+    communicator, ASGI scope or request a saved session and user, recording
+    the backend `force_login` would.
+  - `close_live_pages()` and the autouse pytest fixture `djust_live_pages`
+    release what a failed test left open.
+
+  `SSESession` gains `_skip_close_linger`: the helper's stream close skips
+  the grace period for its own session, instead of patching a module
+  global. See "Real sessions and transports" in the testing guide.
+
+### Changed
+
+- **`{% data_table %}` is one implementation on both engines (#3869).** Under Django's template engine the tag now renders the native table the Rust engine always drew: `data_table` is a simple tag that hands the same operands to `DataTableHandler` (`render_data_table`, rows and columns converted as the Rust engine hands them, so a model row is its serialised dict and the exposure floor holds). Every feature the tag documented but `table.html` never drew now works under DjangoTemplates (`expandable` draws `dj-click="on_table_expand"`, `editable_columns`, `exportable`, `reorderable`, `column_visibility`, `density_toggle`, `group_by`, `copyable`, `importable`, `row_drag`, `editable_rows`, `resizable`, frozen columns, virtual scroll, footer aggregations, conditional formatting ...). **The markup changes**: it is the native table's (no whitespace between elements, `data-row-key` on rows, the handler's classes and wrappers; the parity harness measured class, attribute and text differences in all 176 variants), so CSS or tests written against the old `table.html` markup may need new selectors. The parity row for `data_table` is `IDENTICAL` (it differed in all 176 variants). A `lazy` string or a `str` with `__html__` as a cell is text on both engines now (only `mark_safe` keeps markup in a cell); a row that is not a mapping (a string, `None`) is omitted on both engines (under the Django engine `table.html` drew an empty row for it); a generator or set of rows or columns is still read. The native header gained what the Django template had: a sortable `<th>` is keyboard-focusable (`tabindex="0"`), the sort-direction glyph is a decorative `<span class="data-table-sort-glyph" aria-hidden="true">`, and the loading skeleton has `aria-live="polite"` (the Rust engine's table lacked all three). Tests in `python/djust/tests/test_data_table_single_impl_3869.py`.
+- **A `Component` drawn through its `template` now escapes a marked-safe value in an ordinary text slot, as its Rust instance does (#3932).** `Alert(text=mark_safe("<b>x</b>"))` printed `&lt;b&gt;x&lt;/b&gt;` from the Rust instance and `<b>x</b>` from the template path (a lazy string, or a class with no crate twin such as `Checkbox`), so the same value printed as markup or as text depending on which path the constructor picked. The template path now escapes a `{{ }}` in ordinary text whatever the value is marked as (`{{ v|safe }}` too), except the names a class lists in the new `Component.markup_slots`: `Modal` (`body`, `footer`), `Tooltip` (`content`) and `Offcanvas` (`body`), which escape a plain string in their constructors (`Offcanvas` since this change) and document `mark_safe` markup. A `{% %}` tag in ordinary text is not a slot and is left as it is: a marked-safe value that `{% firstof %}`, `{% cycle %}` or `{% blocktranslate %}` prints keeps its markup, and the once-per-class warning names the tag. To print markup from your own `Component` subclass, add the parameter to `markup_slots` or use a `LiveComponent`; `LiveComponent` and `BoundComponent` inline templates are unchanged and keep markup in a text slot. Tests in `python/djust/tests/test_component_hybrid_rawtext_and_live_templates_3913_3914.py` and `python/djust/tests/test_ui_simple_components_escaping.py`. The framework's own asset markup is the exception: the `AssetTags` that `Component.asset_tags()` (and `djust.assets.tags.asset_tags()`) returns still prints as markup in ordinary text, so the documented `{{ asset_tags }}` pattern of the vendored-assets guide keeps loading its library (test in `python/djust/tests/test_assets_tags.py`).
+- **`LIVEVIEW_CONFIG["state_models_as_handles"]` now defaults to `True`.** A model, model list or QuerySet held as LiveView state is handed to the template as a floored handle for the render. A filtered rebinding (`{% with q=user|default:user %}{{ q.groups.count }}`) and a filtered loop operand read relations as Django does, and custom filters and tags receive the floor proxy (see #3949). State, change detection, the state backend and the client payload keep the serialized dict. Set it to `False` to restore the 1.x dict (kill-switch). A key the dict path already answers keeps it: a QuerySet whose `count` / `exists` / `first` / `last` the template reads, and rows the JIT serialized with the relations the template walks (prefetched, `queryset_all_row_cap` applied), so the overlay adds no query. A model inside a dict held in state keeps its dict (top-level keys only). A state model whose `__str__` returns a `SafeString` still prints escaped on a LiveView (a related model reached by a walk, `{{ u.groups.first }}`, prints as Django prints it, as before). A legacy view whose QuerySet relation `.all()` raises a database error now raises it out of the render, as Django does, instead of logging it and rendering the rows without it. Per-sync cost (`_sync_state_to_rust`, median of 30, a loop reading one column, flag off → on): a QuerySet of 100 rows, explicit 12.25 → 12.86 ms, legacy 0.88 → 1.43 ms; of 1,000 rows, explicit 110.8 → 118.0 ms, legacy 3.96 → 9.07 ms (each row becomes a handle at every sync); a held list costs the same. (#3936)
+- **Behavior change: a custom filter or tag handed a LiveView state model receives the floor proxy, not a `dict`** (`LIVEVIEW_CONFIG["state_models_as_handles"]`, default `True` since 2.0, the render-time handle overlay of the ADR-027 addendum), as on `DjustTemplateBackend`:
+  - attribute access works (`value.pk`, `value.get_full_name()`, a relation walk) and dict-style access (`value["name"]`, `.get`, `.items`, `isinstance(value, dict)`) stops working;
+  - a Django-library tag that prints its operand writes the model's text on a LiveView, as on the other entries;
+  - a native tag's argument (`data_table`, `table_cell`) is still the floored dict text.
+  Set `state_models_as_handles` to `False` to keep handing custom code the dict (kill-switch). The floor holds as before: `password`, `DJUST_SENSITIVE_FIELDS`, `djust_exclude_fields` and `_`-prefixed names stay unreadable, and a key whose floor cannot be built renders from its dict. Two exceptions keep the `dict`: a model inside a dict held in state (top-level keys only), and a `QuerySet` key the template also reads `count` / `exists` / `first` / `last` off or whose rows' relations it walks (its JIT rows are kept, so no query is added; a custom callable handed that key or one of its rows gets `dict`s). The proxy's methods stay callable from Python; `alters_data` is enforced only in templates. The ADR's actor-entry item is moot: `use_actors` was removed in 2.0. (#3949)
+- **Wizards render the flat `<field>_choices` names under explicit exposure
+  (#4177).** `WizardMixin` exposes each choice field of the current step as
+  `form_choices.<field>` and as a flat name such as `borough_choices`. The flat
+  names were provided only on a legacy view, so on an explicit view a template
+  that read `{{ borough_choices }}` rendered nothing. They now render on every
+  view, over the page GET, the HTTP fallback, WebSocket and SSE, with no
+  template change, including for steps from `get_wizard_steps()` and for
+  fields a form adds in `__init__`. A flat name never replaces a name the
+  context already holds (a declared `state()` field, or `form_choices` itself
+  for a field named `form`), and a view's own `get_context_data()` can still
+  set one after `super()`.
+- **A `dj-auto-recover` target is no longer forced to the legacy parameter policy (#4178).** ADR-036 decision R1 is superseded: dispatch, the public parameter contract and the template binding check treat a recovery handler under its own policy, so a strict handler receives `form_values` / `data_attrs` instead of the 1.x `_form_values` / `_data_attrs`. A handler under the strict policy that still reads the `_` names is refused at runtime and reported by `djust.V031`; under the legacy policy (the default until strict becomes the default) it keeps receiving the 1.x envelope. `djust.V019`, which warned that a strict declaration on a recovery handler was ignored, is retired, and the per-render scan of the HTML for recovery targets is gone.
+- **`@live_view` function views use explicit exposure (#4183).** The view the
+  decorator builds no longer states `exposure_policy = "legacy"`: the values
+  the decorated function returns are its `get_context_data()`, and the
+  callables it returns stay its event handlers, which may use the strict
+  parameter policy (`@event_handler(parameter_policy="strict")`). Nothing
+  changes in the decorated function. Names that start with an underscore, other
+  callables and the request are left out of the template, as before. A
+  returned LiveView setting (`login_required`, `permission_required`,
+  `login_url`, `template`, `template_name` ...) still configures the view and
+  is applied before its access checks, so a required login or permission is
+  enforced on the page GET and the HTTP fallback as before (the function body
+  itself runs first, on every request); such a setting is no longer also a
+  template name. A returned `check_permissions`, `get_object` or `on_mount`
+  now raises `ImproperlyConfigured` before the page renders or a handler runs:
+  djust reads these only from a `LiveView` class, so before 2.0 they were
+  silently ignored and the page was not protected; subclass `LiveView`, or
+  return `login_required` / `permission_required`. A returned `view`,
+  `csrf_token`, `DATE_FORMAT` or `TIME_FORMAT` is left out of the template
+  context, so the template reads djust's own value where 1.x rendered the
+  function's (keeping the function's would refuse the explicit render), and a
+  returned `exposure_policy` is ignored. What a function view does on
+  each transport is unchanged: it renders
+  on the page GET and answers an event over the HTTP fallback POST, running the
+  function again for every request, so nothing is kept between requests; a
+  WebSocket or SSE mount is refused with `View not found`, because the class it
+  names is built inside the request. Use a `LiveView` class for a page that
+  keeps state or uses a socket.
+- **djust's own classes no longer state a legacy mode.** The admin change list and change form (`ModelListView`, `ModelDetailView`, and `ModelCreateView` built on it) and the ttyd terminal base class `TtydTerminalView` use explicit exposure, and the component `Meta.event` view-level alias (`toggle_dropdown`, `toggle_modal`, `set_tab` ...) is no longer pinned to the legacy parameter policy: it follows the project's policy. Their pages and frames over WebSocket, SSE and the HTTP fallback are the same as before. Under a project-wide strict policy the alias now compiles as a strict handler: its `component_id` is a framework-supplied argument, bound only when it is empty or names a component the view class declares (the rule the transports already apply before an event reaches the alias), and the page publishes the alias's strict contract (`value`, `**kwargs`), so the client sends it `dj-value-*` arguments, not `data-*`. Developer-visible differences: a `TtydTerminalView` subclass whose template reads its own attributes (`session_log`, `terminal_connected`) lists them in `get_context_data()` built on `super()`, or they render empty (`djust.T027` names each); an admin `change_list_widgets` / `change_form_widgets` view that still states `exposure_policy = "legacy"` makes the admin page fail to render (migrate the widget; the new Error-level check `djust.V032` names the admin slot and the widget, and the page's `ExposureError` names the widget class); the alias's published handler metadata reads `parameter_policy: null` instead of `"legacy"`. The T027 hint and the unsupplied-name log no longer suggest `exposure_policy = "legacy"`. (#4185)
+
+- **The framework's own components pass event arguments as `dj-value-*`, not
+  `data-*` (#4186).** A strict event handler (`event_parameter_policy =
+  "strict"`, which #4189 makes the default) receives only `dj-value-*` arguments,
+  so the arguments djust's component tags and templates sent as `data-*` never
+  reached one. Every such argument is now a `dj-value-*`: the component tags,
+  the native `data_table` and its Python template (and the arguments
+  `data-table.js` and `data-grid.js` fill in before a click), the pagination
+  and toast templates, the theming dropdown, modal, nav group and tabs, the
+  table and tabs components, and the `djust new` scaffold. A legacy handler
+  receives the same arguments as before, because the client collects
+  `dj-value-*` under both policies:
+
+  ```html
+  <!-- 1.3 -->
+  <th dj-click="on_table_sort" data-value="name">
+  <!-- 2.0 -->
+  <th dj-click="on_table_sort" dj-value-value="name">
+  ```
+
+  If your CSS, JavaScript or tests select a framework element by one of those
+  attributes, select the `dj-value-*` instead: for example
+  `[data-value="b"]` on a combobox option is now `[dj-value-value="b"]`.
+  `data-*` attributes that are not arguments (`data-component-id`,
+  `data-field` on a form field, `data-open`, `data-row-key`, and the other
+  markers listed in `python/djust/tests/test_framework_dj_value_4186.py`) are
+  unchanged.
+  - The `data_table` filter and expression inputs now send their column. They
+    carried it as `data-column`, which an input event never collects under
+    either policy, so `on_table_filter` received no column from a browser and
+    ignored every column filter, and `on_table_expression` ignored every
+    expression. `on_table_expression` takes the column as `column` (the old
+    `{column, expression}` JSON in `value` still works), and `on_table_filter`
+    no longer reads a `data-column` key out of `**kwargs`.
+  - The file tree sends `name` and `type` as `dj-value-*`; its rows keep
+    `data-name`, which the `FileTree` hook reads.
+  - A clickable `data_table` row also sends its key as `row_key`
+    (`dj-value-row-key`), which differs from `value` when
+    `row_click_value_key` is not the row key; a data card grid card sends its
+    `category`. A legacy handler received both before, from `data-row-key` and
+    `data-category`, which stay as markers.
+  - Markers that repeat the event's `value` (`data-date` on a calendar day,
+    `data-density` on a density button, `data-theme-mode` on a theme toggle,
+    `data-col-key` on a sortable header) stay `data-*`, so a strict handler
+    does not receive them: under strict, read `value`.
+
+- **The demo project runs on explicit exposure and strict event parameters
+  (#4187).** No demo view states the legacy exposure policy any more, and
+  `manage.py check` with `event_parameter_policy = "strict"` reports no
+  V016, T019, T020 or V029 on the demo apps. Each page declares its state with
+  `state()` (`persist="server"` where a handler changes it), builds its
+  presentation components in `get_context_data()`, types its handler
+  parameters and passes event arguments as `dj-value-*` instead of `data-*`.
+  The rentals pages compute their lists from declared filter inputs on every
+  render, and read their rows on every render or keep a row's id rather than
+  the row, because the HTTP fallback restores a saved model instance as its
+  field dict (`examples/demo_project/djust_rentals/views/_rows.py`). The
+  performance demo keeps its item list in private attributes `mount()`
+  creates, not a `persist="server"` field, which a thousand items outgrow.
+  The tenant demo reads its tenant from the path (`/demos/tenant/<tenant_id>/`):
+  the SSE event request carries the mounted path but not its query string, so
+  a `?tenant=` tenant was the default on SSE events and they were refused.
+  `tests/integration/test_demo_explicit_4187.py` drives each migrated page's
+  main interaction over the WebSocket, SSE and the HTTP fallback, then
+  reconnects and checks the declared state.
+  - Removed from the demo: the legacy twin of the exposure matrix
+    (`/demos/exposure-legacy/`), the strict-parameters page's legacy handler,
+    and the two React demo pages (`djust.react` itself is #4006). The
+    exposure-matrix playwright script now runs the explicit view only; under
+    `DEBUG` its own error frame is the harness control, and in either mode the
+    failing handler's `E5_LOG_CONTROL` line must be in the server log before a
+    "not in the log" check counts.
+  - The demo's own tests (`djust_rentals/tests` and its component tests) now
+    run in CI's `demo-checks` job, and locally with `make demo-tests`. Nothing
+    ran them before, so the demo's `StatusBadge`, which put its icon into the
+    markup unescaped, failed its own escaping test unnoticed; it now escapes
+    the icon with `format_html`. No demo page passed an icon from user input.
+    The shared demo UI components (`examples/demo_project/djust_shared/components/ui.py`) render
+    with `format_html` too: a value documented as HTML (`Card.content`,
+    `Section.content`, `Button.icon_svg`, `Button.extra_attrs`) is markup only
+    when the caller marks it safe.
+- Startup (`ready()`) now raises `ImproperlyConfigured` when `QuerySet._fetch_all` or Django's / `functools`' `cached_property.__get__`, which held-row refresh (#4112) wraps to note which view filled a value, has a different signature on the installed Django, instead of recording nothing and keeping stale rows. The `QuerySet._fetch_all` wrapper stays: the checkpoint alternative costs one refresh-everything on each view's first write. (#4210)
+- **djust admin: `ModelDetailView.save()` takes the submitted form, not `redirect`.** `save`, `save_and_continue` and `save_and_add_another` now receive the change form's values (`**form_values`) and save those; a call that carries none of the form's fields saves nothing and shows "nothing was saved". A subclass that overrides `save(self, redirect=...)`, or calls `self.save(redirect=False)`, now fails that way instead of saving: use `save_and_continue(**form_values)` for the save that stays on the page, or call it with the values to save. (#4218)
+
+### Fixed
+
+- On an explicit view (the default policy), a loop row's relation walk over a QuerySet or model list supplied by `get_context_data()` now renders what Django renders: `{% for u in users %}{{ u.groups.count }}` / `{% for g in u.groups.all %}` / `{{ u.groups }}` / `{{ users.0.groups.all.0.name }}` and a reverse accessor (`g.user_set.all`) rendered empty. The native render now keeps the evaluated rows (never the QuerySet, so `{{ users.query }}` stays unreachable) for a name whose rows the template walks past their columns, floored like every sidecar value, with no extra query for the outer QuerySet. Those names also go through the template-aware JIT on an explicit view, as on legacy, so a loop over a filtered operand (`users|slice:':2'`, `dictsort`, `{% with first=users|first %}`), a QuerySet nested in a dict or a list of dicts, and the configured row cap render what legacy renders. (#4069)
+- A diff render (`render_with_diff`, every event) no longer replays a stale loop item whose body read through a live object: a loop row's relation (`{% for u in users %}{{ u.groups.count }}`), a row a relation walk returned (`{% for p in u.user_permissions.all %}{{ p.codename }}`), or a state model handle (`{% for x in us %}{{ x.email }}` with `state_models_as_handles` on). The loop render cache keyed such an item by its loop binding only (a model handle hashes as its `__str__`), so a changed relation or field kept the first render's text. An item that reads through the render sidecar or an object handle is now rendered every time and never cached. (#4069)
+- A component built without an explicit `component_id` during a render of a view (for example a navbar built in `get_context_data`) now gets the same default id on every render, derived from the view's class, the component's class and its position in that render, so a page that uses one can get HTTP fallback patches instead of the whole page. Two components of one class in one render keep different ids. A component built in `mount()` of a root view gets the same kind of id (never equal to a render-built one); one built in an event handler, `handle_params`, an `async def` mount or an embedded child's mount keeps its random id. The id includes the child's `view_id`, so two children of one class on a page do not share ids, and it is never an id the view still holds from an earlier render (a lazily built component keeps a random one). (#4114)
+- With `LIVEVIEW_CONFIG["worker_threads"]` on, a tick and a `db_notify` turn now run as one hop on the session's thread for both exposure policies, as the server-push turn does since #4152: the stale-connection check, an explicit view's authorization, the hook and the render share the hop; an explicit view's state is saved before the frame and a failed save withholds the frame. A `db_notify` message no longer takes Channels' separate connection-check hop. A view with an `async def` `handle_info`, `handle_tick` or `check_permissions` keeps the previous path. (#4166)
+- **A `{% live_render ... lazy=True %}` child now handles events over the WebSocket and SSE (#4167).** Only the page GET filled lazy slots, so the socket's view never held the child and its events answered "Embedded view not found"; each socket re-render also queued another fill nothing ran. On a live connection the child is now mounted, authorized and registered like a child without `lazy=` (a refused one shows `Lazy child <id> failed.`); the page GET still defers it.
+- A handler's session-only write (including an in-place change) is now stored over WebSocket and SSE for legacy-exposure views, for `handle_tick`, server-push handlers and `handle_info` turns that render nothing (both policies), and for `handle_params` on `url_change`. Legacy saves are merged with other requests' writes and best-effort (a failed save is logged; the frame still goes); a legacy socket mount reads the session once to track it. Changes made through `session.items()` / `.values()` are still not seen: assign the key. (#4168)
+- **SSE reconnect keeps what the user had typed for form recovery and `dj-auto-recover` (#4178).** The SSE reconnect mount replaced the page's markup with the server's defaults before recovery read it, so form recovery replayed nothing and a `dj-auto-recover` handler received the empty form. The SSE mount now saves the values before the mount and puts them back afterwards, as the WebSocket mount does.
+- A `cached_property` filled in a thread that does not carry the step's context (a plain `threading.Thread` a handler started) now makes the view's read set unknown, so a later write to the table it read refreshes the view instead of answering with the old rows. Provenance is the context that filled the property, not when it ran; a thread that carries the context (`sync_to_async`, `copy_context().run`) stays recorded. (#4210)
+- Background work cancelled by a disconnect keeps nothing: once the connection's teardown has cancelled `start_async()` / `@background` work, its result stores no session write, no view state and sends no frame, on the WebSocket and SSE alike. Previously a result whose cancellation did not interrupt it could still store the work's session writes after the teardown (when the work failed, or its `handle_async_result` raised). (#4211)
+- **A project made with `djust new` did not serve the SSE transport (#4216).**
+  Its URLconf routed the page but not djust's SSE views, so a client that fell
+  back to SSE got a 404 at `/djust/sse/<id>/`. Every scaffold, `--bare` and
+  `--from-schema` included, now routes `path("djust/", include(sse_urlpatterns))`,
+  so a fresh project serves a view over WebSocket, SSE and the HTTP fallback.
+  An existing project adds that line to its root URLconf. New cases in
+  `python/djust/tests/test_scaffold_sse_4216.py` generate each kind of project,
+  run its `manage.py check`, mount its index view over SSE and send one event
+  over that session. The SSE guide's nginx example hashed `$request_uri`, which
+  sends a session's stream GET and its `message/` POSTs to different processes;
+  it now hashes the session id.
+- **`python/djust/components/tests/` ran in no CI job (#4217).** It sat under no
+  pytest root, and CI passes its three roots explicitly (which overrides
+  `testpaths`), so its 153 tests never ran. The directory moved to
+  `python/djust/tests/components/`, where every job, the shard splitter and the
+  test selector already look; all 153 pass there. The retro-marker tests
+  (4, also never collected) moved to `tests/test_retro_markers.py`. `testpaths` now equals the
+  CI roots (`tests`, `python/tests`, `python/djust/tests`), so a bare `pytest`
+  runs what CI runs, and `tests/test_ci_python_test_roots.py` fails on any
+  tracked test-shaped file outside those roots that is not listed with a reason.
+
+- **Admin change form: typing in a field was refused, and Save reported success without saving it.** `AdminFormMixin.validate_field` overrode `FormMixin.validate_field` without `@event_handler`, so on the explicit-exposure admin views every keystroke was refused; Save then saved the stored values and showed "Changes saved successfully". `validate_field` is now a declared handler with strict parameters (`field: str`, `value: Any`), and the admin's field widgets bind it by name alone (`dj-input="validate_field"` / `dj-change="validate_field"`), so the client sends the field's name and value (a checkbox's checked state, a multiple select's list) instead of the junk positional tokens `'value'` / `'this.checked'` the adapters used to emit. The change form is now one `<form dj-submit="save">`: every Save button submits the values on the page, so what is saved is what the person sees, whether or not each field's live event arrived, and an unchecked checkbox saves `False` as in a native post. A Save that carries none of the form's values saves nothing and says so on the page ("nothing was saved"), never "saved". `save`, `save_and_continue` and `save_and_add_another` take the submitted values (`**form_values`) with strict parameters whatever the project's policy, so the pressed button arrives as its own `name=value` on the WebSocket, SSE and the HTTP fallback alike; `save()` no longer takes `redirect` (`save_and_continue` is the save that stays on the page). After Save and Save-and-add-another the page navigates with `live_redirect` on every transport; the template's inline redirect `<script>` read a `redirect_url` the page context never held, so it never ran. (#4218)
+
+  "Save and continue editing" on an add page goes to the new row's change page, as in Django; it used to stay on the add page, so over the HTTP fallback (which builds the page afresh) the next Save added the row again. The change form is Django's admin form: only the fields the ModelAdmin shows (`fieldsets` / `fields`) that its form declares, less `readonly_fields` and `exclude`, are form fields. A readonly field is shown as text read from the row and is not bound or saved, so a Save no longer writes the value the page was loaded with over a change made since, and an add page whose readonly field is required on the model can be saved. An excluded field, or one a custom `ModelAdmin.form` declares but the admin does not show, is not on the page and a forged frame cannot write it. A nullable boolean (`BooleanField(null=True)`) is Django's three-way select (Unknown / Yes / No): as a checkbox, a Save that did not touch it stored None over a stored True. A choice field drawn with `RadioSelect` renders one radio per choice with the stored value checked (it rendered one unchecked required radio, which kept the form from submitting). A number input carries the constraints Django's widget gives it (a `DecimalField`'s `step`, so "1.5" is not refused; `min`, `max`, `maxlength`), and a stored zero is shown as `0` rather than emptied.
+
+- **Admin widgets were mounted again on every parent event and lost their state.** `_change_form_widgets.html` and `_change_list_widgets.html` embedded each `change_form_widgets` / `change_list_widgets` view with `{% live_render %}` and no `view_id`, so over the WebSocket and SSE every re-render of the page mounted the widget again under a new `child_N` id: `mount()` ran again, its `state()` restarted, and an event sent to the old id got "Embedded view not found". Each widget slot now passes a stable `view_id` (`djust_admin_widget_1`, `_2`, ... in list order), so the explicit child is reused while its inputs are unchanged and `mount()` runs once. The HTTP fallback renders the same id on the page GET and on every POST (it was `child_1` on the GET and a new number on each POST). Other `{% live_render %}` uses are unchanged: the framework's id assignment is untouched. (#4223)
+- **`djust.T027` no longer counts a local dict's keys as supplied context (#4224).** Following a view's `get_context_data()` through `super()` (#4185), the check counted any `name["key"] = ...` in an override as supplying `key`, including writes to an unrelated local dict and assignments inside a nested helper function, so it stayed quiet about names nothing supplies. A key now counts only when it is written into the dict the override returns (a returned literal, or a local bound to `super().get_context_data(...)` or a literal that is returned or spread into the returned literal, `return {**ctx, ...}`), and nested functions are not read. Shipped example: a subclass of the admin change list (`ModelListView`) whose template reads its own `choices` attribute is warned again; the change list wrote `filter_data["choices"]` on a per-filter dict. Over the demo project the check's output is unchanged (no warnings before or after); across every djust and demo class only `ModelListView`'s supplied set changed (it lost `choices`).
+- **Directives the server runs on the page's view follow the page view's strict handler contract inside a component or an embedded child (#4225).** `dj-viewport-top` / `dj-viewport-bottom`, `dj-mutation`, `dj-copy-event`, `dj-dialog-close-event` and the JS-command `push` send no component or child id, so the server runs them on the page's view wherever the element sits. The browser looked the handler up under the nearest component or `{% live_render %}` child instead (`dj-viewport`, `push`), or did not apply the strict contract at all (`dj-mutation`, `dj-copy-event`, `dj-dialog-close-event`), and sent the 1.x payload a strict page handler refuses. Each now resolves the page view's contract, as `dj-auto-recover` does since #4178: a strict handler receives the generated values it declares (`edge`; `mutation`, `attrs`, `added`, `removed`; `text`) plus the element's `dj-value-*` arguments, over WebSocket, SSE and the HTTP fallback. A legacy or unlisted handler keeps its payload unchanged, and a binding that carries owner context (`dj-click` in a component) still uses the component's or child's contract. The binding check (`djust.T020`) now models `dj-mutation`'s payload as the client sends it: `mutation` and `attrs` when `dj-mutation-attr` names an attribute, `mutation`, `added` and `removed` otherwise. It listed only `mutation`, so a legacy handler that does not accept the other names, which the server refuses, was not reported; a strict handler that requires a name its element never sends is now reported. A test reads the generated names from the client source for every directive above, so the server's list and the client's stay the same.
+- **`stream_to`, `stream_text`, `stream_start` and the other stream operations now reach SSE clients (#4232).** They returned early unless a WebSocket consumer was attached, so a view served over the SSE transport logged "no WebSocket consumer attached" and the client received nothing. Stream operations now go out over the live transport, WebSocket or SSE, and an SSE client sees the same frames as a WebSocket one, including for views mounted in a slot. The HTTP fallback has no push channel, so stream operations remain a no-op there. 2 regression tests in `tests/integration/test_stream_sse_parity_4232.py`.
+- **The datatable demo's "Add sample products", "Clear" and "Toggle inactive" buttons work again (#4234).** Their click handlers were lost when the demo was ported to `djust_demos`, so every click was rejected with "Event rejected". `ProductDataTableView` now defines `add_sample_products`, `clear_products` and `toggle_inactive`, keeps the rows between clicks, and pushes the updated products and stats to the table. 3 regression tests in `tests/unit/test_datatable_demo_buttons_4234.py`.
+- **`@live_view` function views no longer open a socket they cannot mount (#4236).** The page's root now carries `data-djust-transport="http"`, so the client sends events over the HTTP fallback directly instead of opening a WebSocket (and then SSE) whose mount is refused with `View not found`, and the console no longer blames `LIVEVIEW_ALLOWED_MODULES`. That warning is also no longer shown on `use_websocket: False` pages, and a TurboNav load now honours `use_websocket: False`.
+- **`{{ qs.count }}` and `{{ qs.exists }}` on a QuerySet render their value on the native renderer instead of an empty string (#4241).** This covers a QuerySet in the context of a `LiveView`, with explicit or legacy exposure, and `{% if qs.exists %}`. The value is answered from the rows already fetched for the page, so reading either costs no more queries than `{{ qs|length }}`, and the sidecar still hides fields such as `password` and refuses methods like `delete`. 8 regression tests in `python/tests/test_queryset_count_exists_4241.py`.
+- **`djust init` now tells you when the project does not route djust's SSE transport (#4242).** The URLconf (`ROOT_URLCONF`) was never looked at, so an initialised project whose client fell back to SSE got a 404 on the stream with no hint why. `init` still does not edit `urls.py`; when `djust.sse.sse_urlpatterns` is not routed it reports the step as skipped and prints the import and `path("djust/", include(sse_urlpatterns))` line to add, in the dry run too. A routed project stays quiet and the exit code is unchanged. 4 regression tests in `python/djust/tests/test_djust_init_sse_4242.py`.
+- **The admin change form shows `readonly_fields` entries that name a `ModelAdmin` method, a model attribute or a callable (#4244).** Such entries were silently dropped from the page, and a method name also listed in `ModelAdmin.fields` made the change page fail with a 500. They now render as Django's admin does: label from `short_description` or `@admin.display`, value HTML-escaped, `Yes`/`No` for boolean displays, and `-` on the add page without calling the method. 6 regression cases in `python/djust/tests/test_admin_readonly_callable_4244.py`.
+- **The pre-push hook no longer attempts a whole-suite run when test selection falls back (#4253).** When `scripts/select-tests.py` answered `FULL`, printed no selection or could not run, the hook ran every test root, which the local load guard refuses without the developer's approval, so such a push could never pass. It now runs the bounded early tier plus the files the targeted selection names, and says that CI runs the rest; `DJUST_PREPUSH_FULL=1` still forces every root, under the guard's approval. A `.test_durations` change no longer forces `FULL`: the tests that read it are selected. 5 regression tests in `tests/unit/test_prepush_bounded_fallback_4253.py`.
+- **`push_state()` and `flush_push_events()` now reach SSE clients (#4256).** Both returned early unless a WebSocket consumer was attached, so over the SSE transport `push_state()` logged "no WebSocket consumer attached" and sent nothing, and events flushed mid-task in a `@background` handler (including `TutorialMixin` steps) arrived only when the task ended. Both now go out over the live transport, WebSocket or SSE; an SSE `push_state()` frame carries the version SSE clients expect, and each flushed event is sent once. On the HTTP fallback `push_state()` is still a no-op, and queued events still ride the response to the request. 3 regression tests in `tests/integration/test_push_sse_parity_4256.py`.
+- **A loop row field named `count`, `exists`, `first` or `last` no longer makes the context QuerySet readable on the native renderer (#4258).** The #4241 change kept a QuerySet for the render sidecar when the template read one of those names anywhere under it, and a loop row's field (`{% for o in qs %}{{ o.first }}{% endfor %}`) counted as a read of `qs`, so `{{ qs.query }}` in the same template rendered the SQL. The QuerySet is now kept only when the template reads the method on the QuerySet's own name, directly or through a `{% with %}` alias or a filter argument. 7 regression tests in `python/tests/test_queryset_method_binding_4258.py`.
+- **Pull-request CI's test selection always includes the test files with a strict xfail (#4259).** A fix can make a strict `xfail` pass, which fails the test, through code the test file never imports or names, so the selection missed it and the failure surfaced only in the merge queue. `scripts/select-tests.py --ci` now adds every file with `xfail(..., strict=True)` to a selection; they do not turn an empty selection into a run, and do not change a `FULL` answer. 2 new tests in `tests/unit/test_select_tests.py`.
+- A mount the socket refuses because `SESSION_ENGINE` cannot hold `persist="server"` state now logs the reason (the engine found and the supported ones) behind "Protected view operation failed", as the GET, the HTTP fallback and the SSE route already did; it was value-free only. The same applies to any framework configuration error (`ExposureConfigurationError`) caught by `handle_exception`. (#4262)
+- **A loop sorted by a method key on an explicit view renders as Django does, and `{% regroup ... by <method> %}` calls the method on a legacy view too.** `{% for u in users|dictsort:'get_username' %}` (also `dictsortreversed`, a `{% with %}` alias, or a variable naming a method or a dotted path) now renders the empty loop Django renders; before, an explicit view sorted the rows by the called value. With JIT serialization on, such a name takes the JIT as it does on a legacy view; a variable naming a column or a property stays on the normalized rows and sorts as before. A `{% regroup users by get_username as g %}` on a legacy view grouped everything under `None`; it now groups by the called value. (Known and unchanged: a method key the template also prints, `dictsort:'get_username'` beside `{{ u.get_username }}`, still sorts where Django renders empty; and a `dictsort` and a `{% regroup %}` by the same method key on one root group under `None`.) (#4264)
+- **A component's `template_name` file can `{% include %}` a template by a relative `./` or `../` name (#4265).** A `LiveComponent` or descriptor (`BoundComponent`) `template_name` file without `{% extends %}` failed with a "Template not found" error on `{% include "./part.html" %}` (the same name worked in a file with `{% extends %}` and in Django's own engine). The file's own name is now given to the engine, so the name resolves against the file. The "not scanned" hybrid-attribute warning also read such a name by its raw text, which the loader joins to the template root, so it counted the wrong file (a slot-holding target went unreported; a slot-free relative `{% extends %}` target was reported); it now resolves the name against the file, and counts a relative name in an inline `template` (which has no file to be relative to). Tests in `python/djust/tests/test_component_hybrid_rawtext_and_live_templates_3913_3914.py` (`TestRelativeNamesInATemplateNameFile`, `TestRelativeIncludeNamesInTheWarning`).
+- **An embedded `{% live_render %}` child whose `template_name` file includes a partial by a relative name keeps that partial's `dj-model` fields and re-renders (#4265).** The allowlist walker and the child's re-render (`render_embedded_child_html`) both read the file's source with no template name, so `{% include "./part.html" %}` did not resolve: the partial's fields were silently refused and the first `dj-model` update that re-rendered the child failed. Both now name the include against the child's `template_name`. Tests in `python/djust/tests/test_live_render_relative_include_allowlist_4265.py`.
+- **A LiveView `template_name` file can `{% extends %}` and `{% include %}` by relative `./` / `../` names, at every level of the chain (#4265).** The Rust inheritance resolver (`resolve_template_inheritance`, behind a LiveView's `get_template()`, an embedded `{% live_render %}` child, JIT extraction and `runtime.template_source`) was started with no name for the child, so `{% extends "./base.html" %}` searched the template roots and raised "Template not found". It now resolves each relative name against the file that holds it, as Django does (including refusing a name that leaves the template root), and a flattened parent's `{% include "./q.html" %}` is named against the parent's directory. Tests in `python/djust/tests/test_liveview_relative_extends_4265.py` and the `inheritance` module of `djust_templates`.
+- **Admin delete page: deleting over the HTTP fallback failed with a server error, and no transport left the page.** `ModelDeleteView` used `self.object`, which over the HTTP fallback is the view's restored state rather than a model instance: the delete raised `'dict' object has no attribute 'delete'`, and a `has_delete_permission(request, obj)` that reads the row could not. `ModelDeleteView.get_object()` now loads the row by its key through the ModelAdmin's queryset, so the per-event object permission and the delete both get the row on every transport. After deleting, the page navigates to the change list with `live_redirect` on the WebSocket, SSE and the HTTP fallback alike; the template's inline redirect `<script>` never ran after a re-render. (#4218)
+
+### Security
+
+- **A Component's hybrid template judges a URL whose character reference is completed by the slot (#3923).** `href="&#10{{ s }}"` with `6;avascript:...`, or `href="javascript&{{ s }}"` with `colon;...`, printed a value the browser reads as `javascript:`: each literal was decoded before the slot's text was joined to it, and a literal ending in `&` counted as fixing the value. The value is now decoded as it is printed (the literal text and the slot's escaped text together) before the scheme check, a literal ending in an unfinished character reference no longer fixes the value, and a dotted or filtered slot after one is listed in the warning as escaped but not judged. Text a block or a printing tag (`{% now %}`, `{% cycle %}`) may print before a literal is part of that value too: `{% if x %}&{% endif %}#{{ s }}` no longer counts the `#` as fixing it, in a value of a shape the paths are not followed for (a `{% now %}`, more than 64 paths) as in one they are. Regression tests in `python/djust/tests/test_hybrid_attrs_charref_join_3923.py`.
+- **More URL shapes of a Component's hybrid template are judged (#3924).** A URL value with more than 64 paths (seven independent `{% if %}` blocks before the slot), or a `{% now %}` before the slot, was escaped but printed as given, so `javascript:` got through with a warning; such a value whose slots are plain names is now judged slot by slot and fails closed. Identical paths count once, so most values stay under the cap and are judged exactly. Each value of a `{% cycle %}` of literals is judged as a branch, and `{% cycle ... as c %}`, which prints, no longer hides its text from the check (`{% cycle 'javascript' 'x' as c %}{{ s }}` printed `javascript:` with no warning). A dotted, filtered, loop or `with` slot, and a slot after `{% firstof %}` or a `{% cycle %}` of variables, stay escaped and named by the warning, by decision. Regression tests in `python/djust/tests/test_hybrid_attrs_unjudged_shapes_3924.py`.
+- **A `LiveComponent` / `BoundComponent` `template_name` file's own source now follows the attribute and raw-text escaping rule (#3933).** Only an inline `template` was read by `harden_context`; a file went to `render_to_string` or the LiveView engine entry as written, so `<a href="{{ url }}">` with a state value `javascript:alert(1)`, or a marked-safe value in `title="{{ v }}"` / `<textarea>{{ v }}</textarea>`, printed unescaped there. Both classes now draw the file through one helper (`_render_template_file`): the file's own attribute slots are escaped whatever the value is marked as, a URL is checked against the scheme allowlist, and `<textarea>` / `<title>` / comment text is escaped. A text slot keeps its markup. Content the file gets from `{% extends %}` (the parent's slots) or `{% include %}` is not scanned and is named by the same once-per-class warning as for an inline template. A file whose source the backend does not expose is drawn as before and named once. A function component's file (`@component(template_name=...)`) and the suspense fallback are unchanged. The dj-if ids of a file with attribute slots change once on upgrade (they hash the rewritten source). Tests in `python/djust/tests/test_component_hybrid_rawtext_and_live_templates_3913_3914.py` (`TestTemplateNameFile`).
+- A dict from user data that carries `__str__`, `__model__` and `pk` (a stored JSON column, an API payload) is no longer read as a serialized model by `pprint`, `json_script`, `.items` / `.keys` / `.values`, iteration, `in`, `pluralize` or `stringformat`. The model marker is now the TYPE of the `__model__` value: `serialization.model_identity` stamps a `ModelName` (a `str` subclass; the JSON the client receives is byte-identical), the Rust engine reads it as its own value kind, and only that makes a map a model. The binary state encoding carries the marker under a new tag, and a user map shaped like that tag is escaped, so data cannot mint it through a state round trip. `serialization.is_serialized_model_map` checks the same type. State written by an earlier build reads its model maps as dicts until the next sync restamps them. (#3947)
+- **Marked-safe values are escaped in the attributes of the admin, allauth / djust_auth, bug-capture replay and gallery templates (#4157).** Django's autoescape leaves a value marked safe as it is, so a value marked safe for text could close an attribute of these pages and add another. Every attribute slot of the `djust_admin`, `allauth/elements`, `djust_auth`, `templates/djust/bug_capture/replay.html`, `djust_components/gallery` and `djust_theming/gallery` templates now uses `|force_escape`, and a URL attribute (`href`, `action`, `src`, `formaction`) goes through the new `djust_url_attr` filter (`{% load djust_attrs %}`), which escapes once and turns a `javascript:` / `vbscript:` / `data:` URL into `#` (the `data_url_attr` rule). A quoted string argument of a `dj-click` / `dj-change` handler (the admin list's `sort_by(...)` / `apply_filter(...)`) goes through the new `djust_handler_arg` filter, which backslash-escapes `\ ' "` for the client's argument parser before escaping HTML: `force_escape` alone is decoded by the browser first, so a `'` in a name ended the argument string. Its filters bridge to the Rust engine on `{% load %}`, so a child template that extends another can use it. The #4009 sweep now covers these templates twice: a static pass over every `{{ }}` in a start tag, and a render of each page with every value the marked-safe payload (Django, and the Rust engine for the LiveView admin pages); both find nothing. Regression tests in `python/tests/test_marked_safe_attribute_sweep_4009.py` (`TestEveryPageTemplate`).
+- **The HTTP API and `@server_function` endpoints answer a `PermissionDenied` with the fixed message "Permission denied" (#4170).** The exception's text no longer reaches the caller on any view, under any policy, DEBUG included; it goes to the server log only. This matches WebSocket and SSE, which always answer `PermissionDenied` with a fixed "Permission denied"; other error detail still follows ADR-038 D-a (revised): detailed under DEBUG, value-free in production. A test now pins every HTTP response body (`JsonResponse`, `HttpResponse*`, `StreamingHttpResponse`, the API error envelope) and client frame that interpolates an exception, package-wide, including a one-step flow through a local name; a new site fails until it is fixed or classified with its reason.
+- **The safe-markup guard closes the follow-ups of #3864's second review (#4212).** A slice or a `strip` / `replace` of a URL checker's output (`safe_url(x)[1:]`) reads as escaped text, not as a checked URL, so it is refused at the start of a URL. `format_html` / `format_html_join` arguments are placed for a format string held in a name, a parameter default or a branch, and after `*args` / `**kwargs` (a format string the guard cannot read, with arguments, is reported). An HTML-escaped value or a URL checker's output (`safe_url`, `url_attr`) in a `style` attribute is reported (CSS: `safe_css_*` is the rule there; a relative URL `safe_url` accepts can hold `)` and `;`): the guard reads a checked URL and a CSS escaper's output as two classes, each fitting its own attribute value. A nested format spec has a behavioural row, three call-binding mechanisms no verdict depended on are removed, a test pins that the audit's findings do not depend on which files are scanned together, and CI's `security-tests` job installs jsdom and runs the browser-oracle rows with `DJUST_REQUIRE_BROWSER_ORACLE=1`, where a missing oracle fails instead of skipping. Rows in `python/tests/test_safe_markup_position_3864.py`.
+- **SSE events no longer lose the page's query string during authorization (#4231).** An explicit view that resolves state from the query (for example a `TenantMixin` view reading `?tenant=`) resolved a different tenant on an SSE event than it did at mount, so the identity binding no longer matched and the first event was refused with "Event authorization failed". The event request now takes the query from the trusted mount request, as the WebSocket and HTTP fallback already did; the query on the SSE message POST itself is still ignored, and a changed tenant is still refused. 6 regression tests in `python/djust/tests/test_sse_event_query_string_4231.py`.
+- **With `reauth_on_event`, the SSE per-event auth re-check sees the page's route, as the WebSocket and HTTP fallback do (#4255).** On a legacy-exposure view with `login_required` or `permission_required`, the SSE re-check ran against the raw `/djust/sse/<id>/message/` POST, so a `check_permissions` that reads `request.path` or `request.GET` was shown a different path and query than at mount and could decide the event differently from the other transports. The re-check now keeps the live POST's user and session and takes the path, resolver match, slot and page query from the mount request; an SSE navigation or slot mount turn uses the destination page's request. The query on the message POST itself never counts, and a principal revoked mid-session is still denied. 8 regression tests in `python/djust/tests/test_sse_reauth_mount_request_4255.py`.
+
+### Documentation
+
+- **The website examples are explicit and strict, and the doc-snippet test
+  runs them that way (#4188).** Every example in `docs/website` uses the 2.0
+  spellings: explicit exposure, typed handler parameters without a `**kwargs`
+  that only absorbed what the browser sent, and event arguments passed as
+  `dj-value-*` instead of `data-*`. `exposure_policy = "legacy"` appears only
+  in the migration guide, as the thing being replaced, and in check `V028`,
+  which reports it. Pages that changed what they teach:
+  - *Events* teaches the strict rules (the signature is the contract; the
+    browser sends `value`, `field`, form fields and keys only to a handler that
+    declares them), `field` in place of `_target`, and a new
+    "Event arguments (`dj-value-*`)" section with the strict wire hints
+    (`:int`, `:float`, `:bool`, `:list`, `:json`). `data-*` attributes are not
+    arguments.
+  - *Explicit exposure* no longer offers the legacy policy as a way to keep a
+    view working; "Migrating a view" points at the migration guide, which now
+    carries the 2.0 pre-release stopgap.
+  - *Best practices*: a service client kept as a plain attribute is fine under
+    explicit exposure (only declared, persisted state must be JSON); defaults
+    only for arguments a binding may leave out.
+  - *Loading states*: the `create_task()` example drops
+    `cancel_async_on_disconnect`, which only acts on a legacy view. The
+    `LiveView` reference says so, and the migration guide's "Defaults that
+    changed" lists it: an explicit view's background work is cancelled when
+    the connection closes or the user navigates away.
+  - *Installation*, *Your first LiveView* and `QUICKSTART.md` set
+    `LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}` and say why: the
+    guides' examples are written for it, and it is still an opt-in on 2.0.0rc1.
+    The quick start no longer tells you to add `**kwargs` to every handler.
+  - *Authentication*: a strict form handler that declares `username` is never
+    sent the password.
+  - *HTTP-only mode*, *interactive components* and the check pages `T027`,
+    `V016` and `V026` no longer advise stating a legacy policy. The cheat
+    sheet, *navigation* and *forms* pass arguments as `dj-value-*` and
+    describe only strict handlers.
+
+  `tests/test_doc_snippets_execute.py` now runs every block under the strict
+  parameter policy, holds every handler a block declares to `djust.V016` even
+  when it is not fired, refuses a view or handler that states the legacy
+  policy, fires a handler that needs arguments with what its template binding
+  sends, `test_docs_pass_event_arguments_as_dj_value` scans every website
+  page for a `data-*` event argument, and
+  `test_dj_value_arguments_match_the_documented_handler` checks that each
+  `dj-value-*` argument a page's markup sends is a parameter of the handler the
+  page defines. A block a migration guide shows as 1.3
+  code is marked `<!-- doc-snippet-check: before -->`: parsed, not executed,
+  and allowed only in the migration guide and `docs/API_STABILITY.md`.
+
+### Removed
+
+- **djust_components/table.html and the filters only it used are removed (#3869).** A project override of djust_components/table.html (the documented way to change the row-click script's `/static/` prefix) no longer has any effect: `{% data_table %}` is drawn by the native handler on both engines. Removed with it: the template filters `table_cell`, `table_href`, `table_has_href`, `table_width` and `table_width_attrs` (a template that used them outside `table.html` must read the row itself).
+- **Removed time-travel debugging (#4184, owner decision 2026-11-15).**
+  Recording and Share worked on explicit views (a redacted, read-only
+  history); jumping back, restoring one component and forward replay worked
+  only on legacy views. Removed: the view attributes `time_travel_enabled` and
+  `time_travel_excluded_fields`; the module `djust.time_travel` (with
+  `TimeTravelBuffer` and `EventSnapshot`); `djust.bug_capture.encode_view_state`
+  (it read the buffer); `djust.serialization.decimal_tags_to_strings` (its only
+  caller was the buffer's display); the WebSocket frames `time_travel_jump`,
+  `time_travel_component_jump`, `forward_replay` and `bug_capture_share` and
+  the server frames `time_travel_state`, `time_travel_event` and
+  `bug_capture_share_result`; the client events `djust:time-travel-state`,
+  `djust:time-travel-event` and `djust:bug-capture-share-result` (the new
+  Share replaces the last: it copies the blob itself and dispatches nothing);
+  the debug panel's Time Travel tab; the `LIVEVIEW_CONFIG` / `DJUST_CONFIG`
+  keys `time_travel_enabled` and `time_travel_max_events`; and system checks
+  `djust.C501`, `djust.C502` and `djust.V014`. **Lost:** stepping the view back,
+  restoring one component, forward replay with edited parameters. **Kept:** the
+  per-event history (the debug panel's State tab lists each event with the
+  state after it and what changed), the Events tab's "Replay this event", and
+  bug-capture Share, now on the State tab: it builds the `djbug1.` blob in the
+  browser from that history, with the event's real patches (the old button
+  re-rendered after the fact and sent `[]`), leaving out the names in
+  `LIVEVIEW_CONFIG['bug_capture_default_scrub']`. The replay viewer, snapshot
+  store and `djust replay` CLI are unchanged. Nothing that turned the feature
+  on is ignored: the two view attributes are refused with
+  `ImproperlyConfigured` when the class is created, the two config keys at
+  startup, `from djust import time_travel` and
+  `from djust.bug_capture import encode_view_state` raise `ImportError` naming
+  the replacement, and an older client that sends a removed frame gets the
+  standard `Unknown message type` error on a connection that keeps working.
+  Signed back-navigation snapshots and `persist=` state on a reconnect are a
+  different feature and are unchanged.
+- **Removed the `reset_view_state` and `eval_handler` debug endpoints (#4184,
+  with the legacy policy).** They worked only on views that state
+  `exposure_policy = "legacy"` (every other view got `409`). Removed with them:
+  `djust.observability.dry_run` (`DryRunContext`, `DryRunViolation`) and the
+  MCP tools `eval_handler` and `reset_view_state`. The read-only observability
+  endpoints and their MCP tools stay.
+
 ## [2.0.0rc1] - 2026-11-16
 
 ### Added

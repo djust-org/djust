@@ -48,7 +48,6 @@ PAGES = ROOT / "python/djust/theming/templatetags/theme_pages.py"
 THEMING_TEST = "python/tests/test_theming_url_allowlist_3677.py"
 HARDENING_TEST = "python/tests/test_theming_url_hardening_3749.py"
 REVIEW_TEST = "python/tests/test_theming_url_review_3765.py"
-AVATAR_RS = ROOT / "crates/djust_components/src/simple/avatar.rs"
 
 AVATAR = "python/tests/test_avatar_src_scheme_3665.py"
 SINKS = "python/tests/test_image_url_sinks_3665.py"

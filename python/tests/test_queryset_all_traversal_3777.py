@@ -67,12 +67,15 @@ def _body(html: str) -> str:
 
 
 def _liveview_render(source: str, context: dict) -> str:
+    # #4069: the default (explicit) policy, context supplied by
+    # ``get_context_data`` -- the shape an explicit view has.
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
-        def mount(self, request, **kwargs):
-            for name, value in context.items():
-                setattr(self, name, value)
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx.update(context)
+            return ctx
 
     _V.template = f"<div dj-root>{source}</div>"
     client = LiveViewTestClient(_V)
@@ -201,13 +204,17 @@ class TestSerializeQuerysetKeepsTheRows3777:
         ]
 
     def test_an_indexed_all_path_is_a_list_of_row_dicts(self, world) -> None:
-        """The List arm: ``serialize_queryset`` is public, and a caller's path
-        may spell the step with an index. The template extractor never emits
-        one for ``u.groups.all.0.name`` (it extracts ``groups.all.name``;
-        measured), so only a direct call reaches this arm — which is why the
-        template cases above cannot pin it (a gate-off of the arm left them
-        green)."""
+        """The List arm: a path that spells the step with an index. Since #3862
+        the extractor keeps the index for ``u.groups.all.0.name`` (when nothing
+        else reads that ``all``), and the arm reads ``all()[:index + 1]``: the
+        rows up to the largest index named, in the relation's order."""
         out = _rust.serialize_queryset(list(User.objects.order_by("pk")), ["groups.all.0.name"])
+        assert [[g["name"] for g in row["groups"]["all"]] for row in out] == [
+            ["staff"],
+            ["staff"],
+            [],
+        ]
+        out = _rust.serialize_queryset(list(User.objects.order_by("pk")), ["groups.all.1.name"])
         assert [[g["name"] for g in row["groups"]["all"]] for row in out] == [
             ["staff", "ops"],
             ["staff"],
@@ -271,13 +278,15 @@ class TestACalledAllStillHonoursTheCallGuard3777:
 # The two entries that are not a template call: HTTP GET and WS mount
 # ---------------------------------------------------------------------------
 class UsersGroupsView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = """<div dj-view="test_queryset_all_traversal_3777.UsersGroupsView">
     {% for u in users %}<p>{{ u.username }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]</p>{% endfor %}</div>"""
 
-    def mount(self, request, **kwargs):
-        self.users = User.objects.all().order_by("pk")
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["users"] = User.objects.all().order_by("pk")
+        return ctx
 
 
 def _expected_paragraphs() -> list[str]:
@@ -292,13 +301,13 @@ def _paragraphs(html: str) -> list[str]:
 
 
 def test_http_get_renders_the_related_rows(transactional_db) -> None:
-    from django.contrib.sessions.middleware import SessionMiddleware
     from django.test import RequestFactory
+
+    from djust.testing import with_live_session
 
     staff = Group.objects.create(name="staff")
     User.objects.create(username="solo").groups.add(staff)
-    request = RequestFactory().get("/users-groups/")
-    SessionMiddleware(lambda request: None).process_request(request)
+    request = with_live_session(RequestFactory().get("/users-groups/"))
     response = UsersGroupsView.as_view()(request)
     assert response.status_code == 200
     got = _paragraphs(response.content.decode())
@@ -311,6 +320,7 @@ async def test_websocket_mount_renders_the_related_rows(transactional_db) -> Non
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
 
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
     @database_sync_to_async
@@ -321,7 +331,7 @@ async def test_websocket_mount_renders_the_related_rows(transactional_db) -> Non
 
     expected = await seed()
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        communicator = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             connected, _ = await communicator.connect()
             assert connected

@@ -21,13 +21,14 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { withContracts } from './_open_contracts.js';
 import { readFileSync } from 'fs';
 
 const clientCode = readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 
 function createTestEnv(bodyHtml) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body>${bodyHtml}</body></html>`,
+        `<!DOCTYPE html><html><body>${withContracts(bodyHtml)}</body></html>`,
         { runScripts: 'dangerously', url: 'http://localhost/' }
     );
 
@@ -51,7 +52,7 @@ function createTestEnv(bodyHtml) {
             var body = {};
             try { body = JSON.parse((opts && opts.body) || "{}"); } catch(e) {}
             window._testFetchCalls.push({ eventName: eventName, body: body });
-            return { ok: true, json: async function() { return { patches: [], version: window._mockVersion }; } };
+            return { ok: true, json: async function() { return { patches: [], version: window._mockVersion, ...(() => { const s = document.querySelector('script[data-djust-parameter-contracts]'); if (!s) return {}; const m = JSON.parse(s.textContent); return {parameter_contracts: m.contracts, parameter_contract_view: m.view}; })() }; } };
         };
     `);
 
@@ -101,10 +102,10 @@ describe('#2869: dj-mouseenter / dj-mouseleave wiring', () => {
         expect(eventNames(dom)).toEqual(['dim']);
     });
 
-    it('carries data-* params and inline args in the frame', async () => {
+    it('carries dj-value-* params and inline args in the frame, never data-*', async () => {
         const dom = createTestEnv(
             '<div dj-view="app.V">'
-            + '<div id="card" dj-mouseenter="preview(7)" data-id:int="42" data-section="alpha">card</div>'
+            + '<div id="card" dj-mouseenter="preview(7)" dj-value-id:int="42" dj-value-section="alpha" data-leak="x">card</div>'
             + '</div>'
         );
         initClient(dom);
@@ -116,6 +117,7 @@ describe('#2869: dj-mouseenter / dj-mouseleave wiring', () => {
         expect(getFetchCalls(dom)[0].body._args).toEqual([7]);
         expect(getFetchCalls(dom)[0].body.id).toBe(42);
         expect(getFetchCalls(dom)[0].body.section).toBe('alpha');
+        expect(getFetchCalls(dom)[0].body).not.toHaveProperty('leak');
     });
 
     it('routes the event to the embedded child view (view_id from the stamp)', async () => {

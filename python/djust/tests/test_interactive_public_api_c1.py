@@ -14,16 +14,18 @@ import pytest
 from django.test import override_settings
 
 from djust import LiveView
+from djust.decorators import state
 from djust.components.interactive import DropdownMenu
 
 CALLS: list = []
 
 
 class MenusPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ menu }}{{ other }}<p>{{ result }}</p></div>"
     menu = DropdownMenu(label="Project", items=[{"label": "Edit", "value": "edit"}])
     other = DropdownMenu(label="Account", items=[{"label": "Settings", "value": "settings"}])
+    result = state("initial")
 
     def mount(self, request, **kwargs):
         self.result = "initial"

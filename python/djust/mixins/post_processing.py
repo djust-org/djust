@@ -1,13 +1,11 @@
 """
-PostProcessingMixin - Debug info, React hydration, and client script injection for LiveView.
+PostProcessingMixin - Debug info and client script injection for LiveView.
 """
 
 import json
 import logging
 import re
-import sys
-from typing import TYPE_CHECKING, Any, Dict, List, cast
-from .._class_snapshot import attribute_names
+from typing import Any, Dict, List, cast
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +19,8 @@ _RCDATA_RE = re.compile(
     r"<(title|textarea)(?=[\s/>])[^<>]*>.*?(?:</\1[^<>]*>|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
+
+
 # A tag name ends at whitespace, "/" or ">": ``<body-shell>`` is not ``<body>``.
 # End tags may carry junk before ">" (``</head foo>``), as browsers accept.
 # ``[^<>]*`` (not ``[^>]*``) keeps a tag from spanning into the next one, and
@@ -29,6 +29,21 @@ _HEAD_CLOSE_RE = re.compile(r"</head(?=[\s/>])[^<>]*>", re.IGNORECASE)
 _BODY_OPEN_RE = re.compile(r"<body(?=[\s/>])", re.IGNORECASE)
 _BODY_CLOSE_TAG_RE = re.compile(r"</body(?=[\s/>])[^<>]*>", re.IGNORECASE)
 _HTML_CLOSE_TAG_RE = re.compile(r"</html(?=[\s/>])[^<>]*>", re.IGNORECASE)
+
+# The client chunks scripts/build-client.sh builds (CHUNK_SPECS) and
+# static/djust/src/13c-chunk-loader.js loads (#4007). Kept in step by
+# tests/unit/test_client_chunks_4007.py.
+CLIENT_CHUNKS = ("uploads", "virtual-list", "cursor-overlay", "tutorial", "service-worker")
+
+
+def _static_url(path: str) -> str:
+    """``static(path)``, or ``/static/<path>`` when staticfiles cannot resolve it."""
+    from django.templatetags.static import static
+
+    try:
+        return str(static(path))
+    except (ValueError, AttributeError):
+        return f"/static/{path}"
 
 
 def _mask_document_text(html: str) -> str:
@@ -70,58 +85,6 @@ def _find_html_close(masked: str) -> int:
     return found
 
 
-_MISSING = object()
-
-
-def _property_types() -> tuple:
-    import functools
-
-    from django.utils.functional import cached_property as django_cached_property
-
-    return (property, functools.cached_property, django_cached_property)
-
-
-def _read_debug_attr(view: Any, name: str) -> "tuple[Any, Dict[str, Any] | None]":
-    """Read one attribute for the legacy debug panel (#3103).
-
-    Returns ``(value, None)`` for a readable attribute, ``(_MISSING, None)``
-    when it does not exist, or ``(_MISSING, placeholder)`` when the panel lists
-    the name without a value. A property is code, not state: running it could
-    raise anything or query the database on every debug render, so it is
-    listed as not evaluated (a cached property already computed is state and
-    is read from the instance). Any other descriptor that raises is reported
-    as unavailable with its exception type, and the rest of the panel renders.
-    """
-    import inspect
-
-    instance_dict = getattr(view, "__dict__", {})
-    if name not in instance_dict:
-        try:
-            static = inspect.getattr_static(view, name)
-        except AttributeError:
-            static = _MISSING
-        if isinstance(static, _property_types()) or getattr(
-            static, "_djust_framework_derived", False
-        ):
-            return _MISSING, {
-                "name": name,
-                "type": "property",
-                "value": "<property: not evaluated>",
-                "size_bytes": 0,
-            }
-    try:
-        return getattr(view, name), None
-    except AttributeError:
-        return _MISSING, None
-    except Exception as exc:  # noqa: BLE001 -- any descriptor may raise; report it, keep going
-        return _MISSING, {
-            "name": name,
-            "type": "unavailable",
-            "value": "<unavailable: %s>" % type(exc).__name__,
-            "size_bytes": 0,
-        }
-
-
 def bug_capture_scrub() -> List[str]:
     """``LIVEVIEW_CONFIG['bug_capture_default_scrub']`` as a clean list of names.
 
@@ -143,15 +106,7 @@ def bug_capture_scrub() -> List[str]:
 
 
 class PostProcessingMixin:
-    """Post-processing: get_debug_info, _hydrate_react_components, _inject_client_script."""
-
-    if TYPE_CHECKING:
-        # Cooperating method supplied by the host class (LiveView via
-        # ContextMixin.get_context_data, mixins/context.py). Declared type-only
-        # so the strict-island mypy run resolves it on the mixin without a
-        # runtime change — this mixin is never instantiated standalone.
-        def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
-        def _extract_handler_metadata(self) -> Dict[str, Dict[str, Any]]: ...
+    """Post-processing: get_debug_info, _inject_client_script."""
 
     def get_debug_info(self) -> Dict[str, Any]:
         """
@@ -161,203 +116,40 @@ class PostProcessingMixin:
             Dict with debug information
         """
         from .._exposure import explicit_debug_projection
-
-        explicit = explicit_debug_projection(self)
-        if explicit is not None:
-            # Do not inspect arbitrary descriptors or handler default values.
-            # Typed public handler metadata will be supplied by ADR-036/037.
-            from ..config import config
-
-            return {
-                **self._explicit_debug_update(explicit),
-                "handlers": {},
-                "template": None,
-                "config": {
-                    "maxHistory": config.get("debug_panel_max_history", 50),
-                    "bugCaptureScrub": bug_capture_scrub(),
-                },
-            }
-        from .._parameter_metadata import _event_methods
-        from ..validation import get_handler_signature_info
-
-        handlers = {}
-        variables = {}
-
-        # Exactly the handlers dispatch resolves (ADR-037 D1), never a second
-        # discovery: only @event_handler-decorated methods are callable.
-        decorators = self._extract_handler_metadata()
-        for name, method in sorted(_event_methods(self).items()):
-            sig_info = get_handler_signature_info(method)
-            handlers[name] = {
-                "name": name,
-                "params": sig_info["params"],
-                "description": sig_info["description"],
-                "accepts_kwargs": sig_info["accepts_kwargs"],
-                "decorators": decorators.get(name, {}),
-            }
-
-        for name in attribute_names(self):  # dir() races class writes (#3151)
-            if name.startswith("_") or name in handlers:
-                continue
-
-            attr, placeholder = _read_debug_attr(self, name)
-            if placeholder is not None:
-                variables[name] = placeholder
-                continue
-            if attr is _MISSING:
-                continue
-
-            if callable(attr) and hasattr(attr, "__func__"):
-                continue  # A method, not a state variable.
-
-            elif (
-                not callable(attr)
-                and not isinstance(attr, type)
-                and not hasattr(attr, "__module__")
-            ):
-                try:
-                    from django import forms
-
-                    if isinstance(attr, forms.Form):
-                        continue
-
-                    type_name = type(attr).__name__
-
-                    try:
-                        serialized = json.dumps(attr, default=str)
-                        size_bytes = len(serialized.encode("utf-8"))
-                    except (TypeError, ValueError):
-                        size_bytes = sys.getsizeof(attr)
-
-                    value_repr = repr(attr)
-                    if len(value_repr) > 100:
-                        value_repr = value_repr[:100] + "..."
-
-                    variables[name] = {
-                        "name": name,
-                        "type": type_name,
-                        "value": value_repr,
-                        "size_bytes": size_bytes,
-                    }
-                except Exception:
-                    logger.debug("Failed to collect debug panel variable '%s'", name)
-
         from ..config import config
 
-        max_history = config.get("debug_panel_max_history", 50)
-
+        # Do not inspect arbitrary descriptors or handler default values.
+        # Typed public handler metadata will be supplied by ADR-036/037.
         return {
-            "view_class": self.__class__.__name__,
-            "handlers": handlers,
-            "variables": variables,
-            "state_sizes": self._debug_state_sizes(),
-            "template": self.template_name if hasattr(self, "template_name") else None,
-            "config": {"maxHistory": max_history, "bugCaptureScrub": bug_capture_scrub()},
+            **self._explicit_debug_update(explicit_debug_projection(self)),
+            "handlers": {},
+            "template": None,
+            "config": {
+                "maxHistory": config.get("debug_panel_max_history", 50),
+                "bugCaptureScrub": bug_capture_scrub(),
+            },
         }
 
     def _debug_state_sizes(self) -> Dict[str, Dict[str, Any]]:
         """Return size breakdown of public state variables for debug toolbar."""
         from .._exposure import explicit_debug_projection
 
-        explicit = explicit_debug_projection(self)
-        if explicit is not None:
-            return cast(
-                Dict[str, Dict[str, Any]], self._explicit_debug_update(explicit)["state_sizes"]
-            )
-        # #762: Filter framework-internal attrs from the observability payload
-        # so state_sizes reflects user-owned reactive state, not framework config.
-        from ..live_view import _FRAMEWORK_INTERNAL_ATTRS
-
-        sizes: Dict[str, Dict[str, Any]] = {}
-        for attr_name in sorted(vars(self)):
-            if attr_name.startswith("_"):
-                continue
-            if attr_name in _FRAMEWORK_INTERNAL_ATTRS:
-                continue
-            value = getattr(self, attr_name)
-            if callable(value):
-                continue
-            try:
-                serialized = json.dumps(value, default=str)
-                sizes[attr_name] = {
-                    "memory": sys.getsizeof(value),
-                    "serialized": len(serialized.encode("utf-8")),
-                }
-            except (TypeError, ValueError):
-                sizes[attr_name] = {
-                    "memory": sys.getsizeof(value),
-                    "serialized": None,
-                }
-        return sizes
+        return cast(
+            Dict[str, Dict[str, Any]],
+            self._explicit_debug_update(explicit_debug_projection(self))["state_sizes"],
+        )
 
     def get_debug_update(self) -> Dict[str, Any]:
         """
         Get a slim debug payload for event responses (skip static handler metadata).
 
-        Unlike get_debug_info() which includes handler signatures (~20KB+),
-        this returns only the parts that change per event: variables and view class.
-        Handlers are static and only sent on initial mount via get_debug_info().
+        Unlike get_debug_info(), which also carries the config and the (empty)
+        handler map, this returns only the parts that change per event:
+        variables and view class.
         """
         from .._exposure import explicit_debug_projection
 
-        explicit = explicit_debug_projection(self)
-        if explicit is not None:
-            return self._explicit_debug_update(explicit)
-        # #762: Filter framework-internal attrs from the observability payload.
-        from ..live_view import _FRAMEWORK_INTERNAL_ATTRS
-
-        variables = {}
-
-        for name in attribute_names(self):  # dir() races class writes (#3151)
-            if name.startswith("_"):
-                continue
-            if name in _FRAMEWORK_INTERNAL_ATTRS:
-                continue
-
-            attr, placeholder = _read_debug_attr(self, name)
-            if placeholder is not None:
-                variables[name] = placeholder
-                continue
-            if attr is _MISSING:
-                continue
-
-            if callable(attr):
-                continue
-            if isinstance(attr, type) or hasattr(attr, "__module__"):
-                continue
-
-            try:
-                from django import forms
-
-                if isinstance(attr, forms.Form):
-                    continue
-
-                type_name = type(attr).__name__
-
-                try:
-                    serialized = json.dumps(attr, default=str)
-                    size_bytes = len(serialized.encode("utf-8"))
-                except (TypeError, ValueError):
-                    size_bytes = sys.getsizeof(attr)
-
-                value_repr = repr(attr)
-                if len(value_repr) > 100:
-                    value_repr = value_repr[:100] + "..."
-
-                variables[name] = {
-                    "name": name,
-                    "type": type_name,
-                    "value": value_repr,
-                    "size_bytes": size_bytes,
-                }
-            except Exception:
-                logger.debug("Failed to collect debug panel variable '%s'", name)
-
-        return {
-            "view_class": self.__class__.__name__,
-            "variables": variables,
-            "state_sizes": self._debug_state_sizes(),
-        }
+        return self._explicit_debug_update(explicit_debug_projection(self))
 
     def _explicit_debug_update(self, projection: Dict[str, Any]) -> Dict[str, Any]:
         """Format already-bounded debug primitives, never inspect the view again."""
@@ -376,50 +168,6 @@ class PostProcessingMixin:
             # Sizes describe the exported value only; hidden values are not read.
             sizes[name] = {"memory": None, "serialized": None if redacted else size}
         return {"view_class": type(self).__name__, "variables": variables, "state_sizes": sizes}
-
-    def _hydrate_react_components(self, html: str) -> str:
-        """
-        Post-process HTML to hydrate React component placeholders.
-        """
-        from ..react import react_components
-        import html as html_module
-        import json as json_module
-
-        pattern = r'<div data-react-component="([^"]+)" data-react-props=\'([^\']+)\'>(.*?)</div>'
-
-        def replace_component(match: "re.Match[str]") -> str:
-            component_name = match.group(1)
-            # The renderer entity-escapes the attribute value.
-            props_json = html_module.unescape(match.group(2))
-            children = match.group(3)
-
-            try:
-                props = json_module.loads(props_json)
-            except json_module.JSONDecodeError:
-                props = {}
-
-            # The template renderer already resolved `{{ var }}` props from
-            # the view context. Don't resolve again here: a resolved value is
-            # user data, and one that reads `{{ other }}` must stay literal.
-            resolved_props = props
-
-            renderer = react_components.get(component_name)
-
-            if renderer:
-                rendered_content = renderer(resolved_props, children)
-                # Single-quoted attribute: escape `'` too, not only `"`.
-                resolved_props_json = html_module.escape(
-                    json_module.dumps(resolved_props), quote=True
-                )
-                return f"<div data-react-component=\"{component_name}\" data-react-props='{resolved_props_json}'>{rendered_content}</div>"
-            else:
-                return match.group(0)
-
-        from .._render_provenance import sub
-
-        html = sub(pattern, replace_component, html, flags=re.DOTALL)
-
-        return html
 
     def _inject_client_script(self, html: str) -> str:
         """Inject the LiveView client JavaScript into the HTML"""
@@ -481,17 +229,28 @@ class PostProcessingMixin:
         # ``DJUST_CLIENT_JS_MINIFIED`` in settings (bool) takes precedence
         # over the DEBUG heuristic if an operator wants to test the
         # minified file locally.
-        client_js_name = "djust/client.js"
+        #
+        # #4007: the default is the CORE bundle, which loads the optional
+        # chunks (CLIENT_CHUNKS) only when the page uses them. Their static()
+        # URLs ride on the script tag as data-djust-chunks, so a hashed
+        # ManifestStaticFilesStorage name is used; the loaded <script> takes
+        # this tag's nonce. ``client_bundle: "full"`` injects every module.
         use_min = getattr(settings, "DJUST_CLIENT_JS_MINIFIED", not settings.DEBUG)
-        if use_min:
-            client_js_name = "djust/client.min.js"
-        try:
-            client_js_url = static(client_js_name)
-        except (ValueError, AttributeError):
-            client_js_url = f"/static/{client_js_name}"
+        suffix = ".min.js" if use_min else ".js"
+        full_bundle = config.get("client_bundle", "core") == "full"
+        client_js_name = ("djust/client" if full_bundle else "djust/client-core") + suffix
+        client_js_url = _static_url(client_js_name)
+
+        chunks_attr = ""
+        if not full_bundle:
+            chunk_urls = {
+                name: _static_url(f"djust/chunks/{name}{suffix}") for name in CLIENT_CHUNKS
+            }
+            chunks_attr = f' data-djust-chunks="{escape(json.dumps(chunk_urls, sort_keys=True))}"'
 
         script = (
-            f'<script src="{client_js_url}" defer data-turbo-track="reload"{nonce_attr}></script>'
+            f'<script src="{escape(client_js_url)}" defer data-turbo-track="reload"'
+            f"{chunks_attr}{nonce_attr}></script>"
         )
 
         # Official adapters (ADR-025 milestone C). Opt-in via

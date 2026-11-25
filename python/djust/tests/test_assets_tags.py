@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import logging
 
 import pytest
@@ -12,6 +13,20 @@ from djust.assets.tags import asset_tags, asset_url, clear_integrity_cache
 from djust.tests._asset_fixtures import write_asset
 
 CONTENT = b"console.log(1);\n"
+
+
+@pytest.fixture(autouse=True)
+def release_component_classes():
+    """Drop the ``Component`` subclasses a test defined before the next test runs (#4262).
+
+    A class defined inside a test function sits in a reference cycle, so it stays in
+    ``Component.__subclasses__()`` until the cycle collector happens to run. Meanwhile
+    ``check_required_assets`` (B007) walks every subclass, and the classes here name
+    ``test-lib``, which no manifest declares: a later test that asserts the startup checks
+    are clean (``test_component_batch5_map_picker_2985``) failed or passed with GC timing.
+    """
+    yield
+    gc.collect()
 
 
 def _settings(tmp_path, **extra):
@@ -224,6 +239,29 @@ def test_documented_component_rendering_patterns(tmp_path):
         own = chart.render()
     assert page == tag
     assert own == f"<div>{tag}<canvas></canvas></div>"
+
+
+def test_only_asset_markup_keeps_its_markup_in_a_component_text_slot(tmp_path):
+    """#3932 escapes a marked-safe value in a ``Component``'s ordinary text slot; the framework's
+    ``AssetTags`` is the one value printed as markup there, and only in ordinary text: in a
+    ``<textarea>`` it is text like any other value."""
+    from django.utils.safestring import mark_safe
+
+    from djust.components.base import Component
+
+    class Widget(Component):
+        requires_assets = ("test-lib",)
+        template = "<div>{{ a }}</div><div>{{ b }}</div><textarea>{{ a }}</textarea>"
+
+        def get_context_data(self):
+            return {"a": self.asset_tags(), "b": mark_safe("".join([self.asset_tags()]))}
+
+    tag = f'<script src="/static/testlib/lib.js" integrity="{sri(CONTENT)}"></script>'
+    with _settings(tmp_path):
+        out = str(Widget().render())
+    assert out.count("<script") == 1, out
+    assert out.startswith(f"<div>{tag}</div><div>&lt;script"), out
+    assert "<textarea>&lt;script" in out, out
 
 
 class BucketStorage:

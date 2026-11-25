@@ -1,6 +1,6 @@
 """Render context is not permission to persist a Rust view across requests.
 
-No view (explicit or, since 2.0, legacy) keeps its Rust view in the state backend.
+No view keeps its Rust view in the state backend.
 """
 
 from types import SimpleNamespace
@@ -13,7 +13,7 @@ from djust.state_backends.memory import InMemoryStateBackend
 
 
 class CachedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<p>{{ display }}</p>"
 
 
@@ -48,25 +48,11 @@ def test_explicit_render_state_never_enters_shared_backend(backend, rf, transpor
 
 
 @pytest.mark.parametrize("transport", ["http", "ws"])
-def test_legacy_render_state_never_enters_shared_backend_either(backend, rf, transport):
-    """2.0 removed the legacy render cache: a legacy view's Rust view is its
-    own, as an explicit view's is, and a second view on the same session and
-    page starts from nothing."""
-    legacy = initialize("legacy", transport, rf)
-    legacy._rust_view.update_state({"display": "LEGACY_RENDER_SENTINEL"})
-    assert "LEGACY_RENDER_SENTINEL" in legacy._rust_view.render()
-    assert backend._cache == {}
-    again = initialize("legacy", transport, rf)
-    assert again._rust_view is not legacy._rust_view
-    assert "LEGACY_RENDER_SENTINEL" not in again._rust_view.render()
-
-
-@pytest.mark.parametrize("transport", ["http", "ws"])
-def test_explicit_rendering_does_not_even_resolve_a_legacy_backend(
+def test_explicit_rendering_does_not_even_resolve_a_shared_backend(
     backend, rf, transport, monkeypatch
 ):
     def forbidden():
-        raise AssertionError("Legacy backend must not be consulted")
+        raise AssertionError("The shared backend must not be consulted")
 
     monkeypatch.setattr("djust.state_backends.get_backend", forbidden)
     view = initialize("explicit", transport, rf)
@@ -81,20 +67,7 @@ def test_unknown_render_policy_rejects_before_backend_access(backend, rf, policy
     assert backend._cache == {}
 
 
-def test_policy_transition_cannot_reuse_shared_legacy_renderer(backend, rf):
-    view = initialize("legacy", "http", rf)
-    view._rust_view.update_state({"display": "LEGACY_TRANSITION_SENTINEL"})
-    legacy_renderer = view._rust_view
-    view.exposure_policy = "explicit"
-    view._initialize_rust_view()
-    assert view._rust_view is not legacy_renderer
-    assert "LEGACY_TRANSITION_SENTINEL" not in view._rust_view.render()
-    view._rust_view.update_state({"display": "EXPLICIT_TRANSITION_SENTINEL"})
-    assert "EXPLICIT_TRANSITION_SENTINEL" not in legacy_renderer.render()
-
-
 def test_renderer_policy_marker_is_framework_state(backend, rf):
-    view = initialize("legacy", "http", rf)
+    view = initialize("explicit", "http", rf)
     view._snapshot_user_private_attrs()
     assert "_rust_view_explicit" in view._framework_attrs
-    assert "_rust_view_explicit" not in view._get_private_state()

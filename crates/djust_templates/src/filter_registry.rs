@@ -867,8 +867,14 @@ pub(crate) fn apply_django_builtin_filter_keeping(
         let raw = match items {
             Some(items) => {
                 let list = PyList::empty(py);
+                // `dictsort` reads a called method's key as the method Django sees (#4267).
+                let sorts = matches!(name, "dictsort" | "dictsortreversed");
                 for item in items {
-                    list.append(djust_core::value_into_handler_pyobject(py, item.clone())?)?;
+                    list.append(if sorts {
+                        djust_core::value_into_sort_row_pyobject(py, item.clone())?
+                    } else {
+                        djust_core::value_into_handler_pyobject(py, item.clone())?
+                    })?;
                 }
                 list.into_any()
             }

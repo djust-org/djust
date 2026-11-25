@@ -580,25 +580,6 @@ def test_wizard_step(db_cluster, survival):
     )
 
 
-def test_legacy_view(db_cluster, survival):
-    browser = Browser(db_cluster)
-    socket_a, _ = _open(browser, "A", "/legacy/", V + "LegacyCounterView")
-    socket_a.event("increment")
-    probe = probe_from(socket_a.event("increment"))
-    survival.observe("state", "legacy", "same", _kept(probe["count"], 2))
-    socket_a.close()
-    socket_b = browser.socket("B")
-    probe = probe_from(socket_b.mount(V + "LegacyCounterView", "/legacy/", reconnect_from=socket_a))
-    survival.observe(
-        "state", "legacy", "ws", "lost: `mount()` value" if probe["count"] == 0 else "?"
-    )
-    socket_b.close()
-    counts = [_post(browser, node, "/legacy/", "increment")[1]["count"] for node in ("A", "B")]
-    survival.observe(
-        "state", "legacy", "http", "lost: every request runs `mount()`" if counts == [1, 1] else "?"
-    )
-
-
 def test_components(db_cluster, survival):
     browser = Browser(db_cluster)
     socket_a, probe = _open(browser, "A", "/component/", V + "ComponentView")
@@ -881,7 +862,12 @@ def test_push_with_in_memory_layer(db_cluster, survival):
     # B's own push reaches B; A's push from before it never does.
     assert browser.get("B", "/_mn/push/?value=2")[0] == 200
     got_b = probe_from(on_b.until(lambda f: f.get("source") == "broadcast"))
-    after = probe_from(on_b.event("probe"))
+    # The push frame already brought B's page up to date, so a probe that
+    # changes nothing answers with an empty patch list (#4303): no patch means
+    # the page still shows what the push frame put there.
+    frames = on_b.event("probe")
+    assert [f for f in frames if f.get("type") == "error"] == [], frames
+    after = probe_from(frames) or got_b
     survival.observe(
         "sessions",
         "push_memory",
@@ -1068,3 +1054,76 @@ def test_session_cost_per_event(db_cluster, survival):
         }
         for column, value in observed.items():
             survival.observe("cost", row, column, str(value))
+
+
+# ---------------------------------------------------------------------------
+# Save modes (#4164 item 7)
+# ---------------------------------------------------------------------------
+
+PLAIN = V + "PlainCounterView"
+#: The interval of the ``interval`` rows: longer than any test, so nothing
+#: is saved by the timer.
+MODE_INTERVALS = {"immediate": 0, "interval": 60}
+
+
+def _two_plain_events(cluster: Cluster):
+    browser = Browser(cluster)
+    status, body, _ = browser.get("A", "/plain/")
+    assert status == 200, body[:300]
+    socket_a = browser.socket("A")
+    assert kinds(socket_a.mount(PLAIN, "/plain/")) == ["mount"]
+    socket_a.event("increment")
+    socket_a.event("increment")
+    return browser, socket_a
+
+
+def _reconnect_plain(browser: Browser, socket_a, cluster: Cluster):
+    socket_b = browser.socket("B")
+    mounted = socket_b.mount(PLAIN, "/plain/", reconnect_from=socket_a)
+    probe = probe_from(mounted)
+    notices = [frame.get("code") for frame in socket_b.drain(1.0) if frame.get("type") == "error"]
+    socket_b.close()
+    assert probe["mounted_pid"] == cluster["B"].pid
+    return probe["plain_attr"], notices
+
+
+@pytest.mark.parametrize("mode", sorted(MODE_INTERVALS))
+def test_save_mode_graceful_stop(mode, survival):
+    survival.scope(rows=[mode])
+    with Cluster("db", "memory", None, save_interval=MODE_INTERVALS[mode]) as cluster:
+        browser, socket_a = _two_plain_events(cluster)
+        cluster["A"].terminate()
+        assert socket_a.recv() is None
+        count, notices = _reconnect_plain(browser, socket_a, cluster)
+    assert notices == []
+    survival.observe(
+        "savemode",
+        mode,
+        "graceful",
+        {
+            "immediate": "every change restored",
+            "interval": "every change restored: the socket's close saves",
+        }[mode]
+        if count == 2
+        else "restored %s" % count,
+    )
+
+
+@pytest.mark.parametrize("mode", sorted(MODE_INTERVALS))
+def test_save_mode_kill(mode, survival):
+    survival.scope(rows=[mode])
+    with Cluster("db", "memory", None, save_interval=MODE_INTERVALS[mode]) as cluster:
+        browser, socket_a = _two_plain_events(cluster)
+        cluster["A"].kill()
+        assert socket_a.recv() is None
+        count, notices = _reconnect_plain(browser, socket_a, cluster)
+    if count == 2 and notices == []:
+        outcome = "every change restored"
+    elif count == 0 and notices == ["state_not_restored"]:
+        outcome = (
+            "the last save, at most the interval behind; the page is told its most recent "
+            "changes could not be restored"
+        )
+    else:
+        outcome = "restored %s, notices %s" % (count, notices)
+    survival.observe("savemode", mode, "kill", outcome)

@@ -17,10 +17,8 @@
  * trigger each write entry-point, and assert the cookie jar contains the
  * namespaced name and NOT the unprefixed legacy name.
  *
- * Sub-item (d): the write path also fires `Max-Age=0` on the legacy
- * unprefixed cookie name when a namespace is configured, so old cookies
- * left over from before the namespace was set don't sit in the jar
- * forever.
+ * Sub-item (d), deleting the unprefixed cookie on a namespaced write, was
+ * removed in #4207: with a namespace the unprefixed cookies are never read.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -134,47 +132,20 @@ describe('#1169(c) — namespaced cookie WRITE side', () => {
     });
 });
 
-describe('#1169(d) — legacy unprefixed cookie cleanup on namespaced write', () => {
-    it('setPack deletes the legacy djust_theme_pack cookie when prefix is set', () => {
+describe('#4207 — an unprefixed cookie is left alone on a namespaced write', () => {
+    it('setPack and setPreset do not delete the unprefixed cookies (another project owns them)', () => {
         const dom = createThemingDom('myapp_');
-        // Pre-seed the legacy cookie (simulating a stale value left from
-        // before the namespace config was added).
-        dom.window.document.cookie = 'djust_theme_pack=old_legacy_value; path=/';
-        // Sanity check the seed.
-        expect(parseCookies(dom.window.document.cookie)['djust_theme_pack']).toBe('old_legacy_value');
+        dom.window.document.cookie = 'djust_theme_pack=other_project; path=/';
+        dom.window.document.cookie = 'djust_theme_preset=other_preset; path=/';
 
         const tm = dom.window.djustTheme;
         tm.setPack('nyc_core');
-
-        const jar = parseCookies(dom.window.document.cookie);
-        expect(jar['myapp_djust_theme_pack']).toBe('nyc_core');
-        // Legacy cookie deleted via Max-Age=0 — must NOT be in the jar.
-        expect(jar['djust_theme_pack']).toBeUndefined();
-    });
-
-    it('setPreset deletes the legacy djust_theme_preset cookie when prefix is set', () => {
-        const dom = createThemingDom('myapp_');
-        dom.window.document.cookie = 'djust_theme_preset=stale_legacy; path=/';
-        expect(parseCookies(dom.window.document.cookie)['djust_theme_preset']).toBe('stale_legacy');
-
-        const tm = dom.window.djustTheme;
+        expect(parseCookies(dom.window.document.cookie)['myapp_djust_theme_pack']).toBe('nyc_core');
         tm.setPreset('rose');
 
         const jar = parseCookies(dom.window.document.cookie);
         expect(jar['myapp_djust_theme_preset']).toBe('rose');
-        expect(jar['djust_theme_preset']).toBeUndefined();
-    });
-
-    it('legacy cleanup does NOT fire when prefix is empty (back-compat)', () => {
-        // With no namespace, the "namespaced" name and the "legacy" name
-        // are identical. The cleanup must be inert in this configuration —
-        // otherwise it would Max-Age=0 the cookie we just wrote.
-        const dom = createThemingDom('');
-        const tm = dom.window.djustTheme;
-        tm.setPack('nyc_core');
-
-        const jar = parseCookies(dom.window.document.cookie);
-        // The single (unprefixed) cookie must still hold the value.
-        expect(jar['djust_theme_pack']).toBe('nyc_core');
+        expect(jar['djust_theme_pack']).toBe('other_project');
+        expect(jar['djust_theme_preset']).toBe('other_preset');
     });
 });

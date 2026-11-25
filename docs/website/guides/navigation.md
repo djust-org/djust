@@ -47,7 +47,7 @@ class ProductListView(LiveView):
         return []  # your query, filtered by self.category and self.page
 
     @event_handler()
-    def filter_by_category(self, category="all", **kwargs):
+    def filter_by_category(self, category: str):
         self.live_patch(params={"category": category, "page": 1})
 ```
 
@@ -144,7 +144,9 @@ initial values (`category="all"`, `page=1`) and the template gets the messages:
 ```
 
 `params_errors` is a plain dict, `{field: [messages]}`, with errors that belong to
-no field under `"__all__"`. It is `{}` when the URL is valid, so a message never
+no field under `"__all__"`. Under explicit exposure (the default) the template sees it
+only if the view declares it: `params_errors = state(default_factory=dict)`. Without
+that line the dict is set on the view but `{{ params_errors }}` renders empty. It is `{}` when the URL is valid, so a message never
 outlives the URL that caused it. (A form instance placed in a template context is
 rendered to `{field: html}`, so it has no `.errors` to read; that is why the
 messages are a separate dict.)
@@ -289,14 +291,12 @@ Things to know:
   `manage.py check` reports one that does (V023).
 - A `ModelChoiceField` is fine: validation runs on a worker thread on the socket paths.
 - A view declares what it renders ([explicit exposure](../state/explicit-exposure.md) is the
-  default), so to show the messages declare `params_errors = state(default_factory=dict)` and
-  pass it to `get_context_data()`.
+  default), so to show the messages declare `params_errors = state(default_factory=dict)`; the
+  declaration alone is enough.
 - A `params_form` that is not a form class raises `ImproperlyConfigured` on the first
   request; `manage.py check` reports it first (V023).
 - `params_form`, `params_form_fallback`, `http_status_of_state` and `state_attribute` are
-  framework class attributes: a view cannot declare a `state()` field under those names, and
-  a view with `exposure_policy = "legacy"` that assigns one on the instance does not publish
-  it as state.
+  framework class attributes: a view cannot declare a `state()` field under those names.
 
 **Testing a view with `params_form`.** `LiveViewTestClient` calls `handle_params()` after
 `mount()` the way the transports do, through the same form. Give the first call a query
@@ -441,8 +441,8 @@ Back re-mounts the page: `mount()` runs, then the view's declared
 `state(..., persist="server")` fields come back from the session and its
 `persist="client", client=True` fields from the signed token the browser
 holds, and `handle_restore()` runs. Anything not declared is what `mount()`
-set. (In 1.x a legacy view with `enable_state_snapshot = True` saved its whole
-public state on every event and Back restored that copy; 2.0 removed it.)
+set. (1.x's `enable_state_snapshot = True`, which saved the whole public
+state, is gone; see [Migrating to djust 2.0](migrating-to-2.0.md#5-what-does-not-survive).)
 
 #### What the save writes to the session
 
@@ -490,15 +490,28 @@ or without `handle_async_result()`, as its other side effects stand; only the
 view's state is not saved. A turn that does not write the session adds no
 session write.
 
-On the HTTP fallback the session is now tracked from the start of the request,
-for a legacy view too. Its saves merge: a key another request stores while this
+The same holds for `handle_tick()`, a server-push handler and `handle_info()`
+when their turn renders nothing (nothing changed, or `_skip_render`), and for
+`handle_params()` on a client-side URL change, under either exposure policy.
+A legacy view (`exposure_policy = "legacy"`) stores its handlers' session
+writes over WebSocket and SSE too (#4168), merged as above, and best-effort: a
+save that fails is logged and the frame still goes. Its handlers write through
+the session object of the socket's mount, which the mount reads once to track
+it, so they read values as of the mount, not what another request stored
+since. A socket mounted without a session cookie (an anonymous visitor with
+no session yet) stores nothing: the browser could never receive the new
+session's key, so the writes stay on that socket's session object. A change
+through `.items()` or `.values()` is still not seen on any transport: assign
+the key.
+
+On the HTTP fallback the session is tracked from the start of the request.
+Its saves merge: a key another request stores while this
 one is handled survives, where the whole-session save before let it be
 overwritten. That costs one session read per fallback request that saves
 (`db`: one more `SELECT`, 3 to 4 statements for a turn that changes state), and
 a turn that assigns a session key now makes two writes (djust's merged save,
 then Django's own `SessionMiddleware` save) instead of one. An in-place change
-is stored there now, for a legacy view as well. Over WebSocket and SSE a
-legacy view still saves nothing after an event, its session writes included.
+is stored there too.
 
 Right before it writes, the save reads the session as storage holds it **now**
 and applies those changes to that copy. When two writers change the same key,
@@ -705,11 +718,11 @@ class SearchView(LiveView):  # navigation is built in — no NavigationMixin nee
             ).order_by(self.sort)
 
     @event_handler()
-    def search(self, value="", **kwargs):
+    def search(self, value: str):
         self.live_patch(params={"q": value, "sort": self.sort})
 
     @event_handler()
-    def change_sort(self, sort="relevance", **kwargs):
+    def change_sort(self, sort: str):
         self.live_patch(params={"q": self.query, "sort": sort})
 ```
 
@@ -750,7 +763,7 @@ This is **the most common mistake** when building multi-view djust apps. Using `
 ```python
 # Anti-pattern: Handler does nothing but navigate
 @event_handler()
-def go_to_item(self, item_id, **kwargs):
+def go_to_item(self, item_id: int):
     self.live_redirect(f"/items/{item_id}/")  # Wasteful round-trip!
 ```
 
@@ -781,17 +794,17 @@ Use handlers for navigation only when navigation depends on **server-side logic*
 
 ### Anti-Pattern: Don't Use `dj-click` for Tab/View Switching
 
-Using `dj-click` with data attributes like `data-view` or `data-tab` to switch between sections within a view is fragile and loses URL state. Use `dj-patch` instead.
+Using `dj-click` with an argument like `dj-value-view` or `dj-value-tab` to switch between sections within a view is fragile and loses URL state. Use `dj-patch` instead.
 
 **The anti-pattern:**
 
 ```html
-<button dj-click="switch_view" data-view="settings">Settings</button>
+<button dj-click="switch_view" dj-value-view="settings">Settings</button>
 ```
 
 ```python
 @event_handler()
-def switch_view(self, view="", **kwargs):
+def switch_view(self, view: str):
     self.active_view = view
     self._load_data()
 ```

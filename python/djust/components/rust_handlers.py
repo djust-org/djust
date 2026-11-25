@@ -14,9 +14,13 @@ bridge lacks a capability the tag needs, and each kept twin is pinned against it
 * the core layout tags (``app_shell``, ``app_sidebar``, ``app_header``, ``app_content``): the
   root-proof protocol (``_render_root_parts``, ``core_root_layout_object`` in
   ``crates/djust_templates/src/registry.rs``), which a bridged node cannot take part in;
-* the inclusion tags ``badge``, ``avatar``, ``progress``, ``pagination``, ``data_table``: through the
-  bridge each use renders an inclusion template through the backend, measured 4 to 8x slower (and
-  ``data_table`` carries native-only features whose fate is #3869);
+* the inclusion tags ``badge``, ``avatar``, ``progress``, ``pagination``: through the
+  bridge each use renders an inclusion template through the backend, measured 4 to 8x slower;
+* ``data_table``: the one implementation on both engines (#3869). The Django engine's tag is a
+  simple tag that calls :func:`render_data_table`, which hands :class:`DataTableHandler` the same
+  operands the Rust engine does, so a template draws the same table (and every native feature:
+  expandable rows, editable columns, export ...) under either engine; there is no
+  ``djust_components/table.html``;
 * the block tags whose Django node reads its children (``accordion``, ``sidebar``, ``nav_menu``,
   ``toolbar``, ``filter_bar``, ``form_array``, ``page_header``) and their child tags: the bridge can
   only serve them by handing the body to Django's engine, which cannot compile a Rust-only tag
@@ -34,6 +38,7 @@ import math
 import re as _re_filters
 from collections.abc import Mapping
 from html.parser import HTMLParser
+from types import MappingProxyType
 from typing import Any, cast
 
 from django.utils.functional import Promise
@@ -679,8 +684,20 @@ def _with_typed(text_value: object, typed_value: object) -> object:
 
 
 class DataTableHandler:
+    """``{% data_table %}``: the one implementation of the tag (#3869).
+
+    The Rust engine calls :meth:`render` with its resolved operands; the Django engine's
+    ``data_table`` simple tag calls :func:`render_data_table`, which hands :meth:`render_kwargs` the
+    same operands as Python values. Both engines draw the same markup.
+    """
+
     def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), context)
+
+    def render_kwargs(self, kw: dict[str, object], context: dict[str, object]) -> str:
+        """Draw the table from its operands ``kw``, as :func:`_parse_args` reads them. ``context``
+        is the render context: ``TYPED_ARGS_KEY`` in it carries what the text of ``rows`` /
+        ``columns`` lost (#3895); ``rows`` / ``columns`` absent from ``kw`` are read from it."""
         rows = _passed_or_context(kw, "rows", context, default=[])
         columns = _passed_or_context(kw, "columns", context, default=[])
         sort_by = conditional_escape(str(kw.get("sort_by", "")))
@@ -1067,7 +1084,7 @@ class DataTableHandler:
                 f' aria-label="Data table" aria-busy="true"{wrapper_attrs_str}>'
                 f"{toolbar_html}"
                 f"{search_html}"
-                f'<div class="data-table-loading skeleton-table">'
+                f'<div class="data-table-loading skeleton-table" aria-live="polite">'
                 f"{skeleton_rows}"
                 f"</div>"
                 f"{row_nav_script}"
@@ -1132,13 +1149,17 @@ class DataTableHandler:
             if sortable:
                 active = " active" if key == sort_by else ""
                 if key == sort_by:
-                    arrow = " &#8595;" if sort_desc else " &#8593;"
+                    # The direction glyph is decorative: the state is ``aria-sort`` (#3869).
+                    glyph = "&#8595;" if sort_desc else "&#8593;"
+                    arrow = (
+                        f' <span class="data-table-sort-glyph" aria-hidden="true">{glyph}</span>'
+                    )
                     aria_sort = "descending" if sort_desc else "ascending"
                 else:
                     arrow = ""
                     aria_sort = "none"
                 header_cells.append(
-                    f'<th class="sortable{active}{frozen_cls}" role="columnheader"'
+                    f'<th class="sortable{active}{frozen_cls}" role="columnheader" tabindex="0"'
                     f' aria-sort="{aria_sort}"'
                     f' dj-click="{sort_event}" dj-value-value="{key}"{width_attr}{extra_attrs}>'
                     f"{col_label}{arrow}</th>"
@@ -1924,6 +1945,50 @@ class DataTableHandler:
         )
 
 
+_PYTHON_SCALARS = (str, Promise, int, float, type(None), decimal.Decimal, tuple, *STANDIN_TYPES)
+
+
+def _python_operand(value: object) -> object:
+    """One argument of the Django engine's ``{% data_table %}`` as the Rust engine hands it to
+    :class:`DataTableHandler`: a scalar, a tuple, a lazy string through ``plain_operand``, and a
+    list, dict, QuerySet, model or other object as the JSON-able value the engine's JSON text for
+    it decodes to (``normalize_django_value``, the normalizer every context goes through, which
+    keeps the serialization floor: a model is its floored dict, never its attributes). A date, a
+    ``Decimal``, a ``UUID`` and the like take their ``str``, as they do in the engine's text."""
+    if isinstance(value, _PYTHON_SCALARS):
+        return plain_operand(value)
+    from djust.serialization import normalize_django_value
+
+    return _json.loads(_json.dumps(normalize_django_value(value), default=str))
+
+
+def _materialised(value: object) -> object:
+    """``rows`` / ``columns`` given as a generator, a set, a QuerySet or another iterable is the
+    list of its items (the Django engine's table read any iterable)."""
+    if isinstance(value, (str, bytes, list, tuple, Mapping)) or not hasattr(value, "__iter__"):
+        return value
+    return list(cast("Any", value))
+
+
+def render_data_table(**params: object) -> str:
+    """The Django engine's ``{% data_table %}``: the same table the Rust engine draws (#3869).
+
+    ``params`` are the tag's arguments as Python values. What the JSON text of ``rows`` /
+    ``columns`` loses (a ``mark_safe`` cell, ``NaN``, a namedtuple column) is handed back from the
+    original value exactly as the Rust engine's typed channel does (``TYPED_ARGS_KEY``, #3895).
+    """
+    for key in ("rows", "columns"):
+        if key in params:
+            params[key] = _materialised(params[key])
+    kw = {key: _python_operand(value) for key, value in params.items()}
+    typed = {
+        key: params[key]
+        for key in ("rows", "columns")
+        if isinstance(params.get(key), (list, tuple))
+    }
+    return DataTableHandler().render_kwargs(kw, {TYPED_ARGS_KEY: typed})
+
+
 class PageHeaderActionsHandler:
     """Block handler for {% page_header_actions %}...{% endpage_header_actions %}"""
 
@@ -2658,6 +2723,10 @@ NATIVE_BLOCK_HANDLERS = [
 #: keep their native twins (see the module docstring). Pinned by
 #: ``test_raw_body_tags_are_exactly_the_bridged_tags_that_read_their_children``.
 RAW_BODY_TAGS = frozenset({"split_pane", "tabs"})
+
+#: Separator tokens of a raw-body tag (``{% pane %}`` inside ``{% split_pane %}``). For template path
+#: extraction the segments are one body rendered with the same context, so the separator is dropped.
+RAW_BODY_SEGMENT_TAGS: Mapping[str, str] = MappingProxyType({"split_pane": "pane"})
 
 
 def _checked_raw_handler(name: str, compile_func: Any, library: Any) -> Any:

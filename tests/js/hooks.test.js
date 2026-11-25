@@ -205,7 +205,8 @@ describe('hooks', () => {
     });
 
     describe('notifyHooksReconnected', () => {
-        it('calls reconnected() on all active hooks', () => {
+        // #3656: reconnected() goes to the hooks that got disconnected().
+        it('calls reconnected() on all hooks that got disconnected()', () => {
             const { window, document } = createEnv('<div dj-hook="MyHook" dj-view="test"></div>');
             const reconnectedFn = vi.fn();
 
@@ -214,6 +215,7 @@ describe('hooks', () => {
             };
 
             window.djust.mountHooks(document);
+            window.djust.notifyHooksDisconnected();
             window.djust.notifyHooksReconnected();
 
             expect(reconnectedFn).toHaveBeenCalledTimes(1);

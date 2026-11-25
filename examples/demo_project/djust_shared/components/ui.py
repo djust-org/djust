@@ -3,7 +3,17 @@ Reusable UI components for demo app.
 
 These are stateless presentational components that render common UI patterns
 like code blocks, hero sections, cards, etc.
+
+These render with ``format_html``: every text value (titles, labels, icons,
+hrefs, CSS values) is escaped. A value documented as HTML (``Card.content``,
+``Section.content``, ``Button.icon_svg``, ``Button.extra_attrs``) is inserted
+as HTML only when it is already marked safe (``format_html(...)``,
+``mark_safe`` on a literal, or another component's render); a plain string is
+escaped like any other value.
 """
+
+from django.utils.html import format_html, format_html_join
+from django.utils.safestring import mark_safe
 
 from djust.components.base import Component
 from typing import Optional, List, Dict
@@ -46,37 +56,34 @@ class CodeBlock(Component):
         self.theme = theme
 
     def render(self) -> str:
-        import html
-
-        # HTML escape the code to prevent XSS and highlight.js security warnings
-        # This escapes <, >, &, quotes, etc. to their HTML entities
-        escaped_code = html.escape(self.code)
-
-        # NOTE: We do NOT need to escape Django template syntax ({{ }}) here because:
-        # 1. This method returns a plain Python string (not a template)
-        # 2. The string is inserted into templates with |safe filter
-        # 3. Django's template engine doesn't process strings marked as safe
-        # 4. The {{ }} in code examples are just literal characters in the HTML
-
+        # NOTE: The code is escaped like every other value, so a code example's
+        # {{ }} and <tags> are literal characters in the HTML.
         header = ""
         if self.show_header:
             badge = self.language.upper() if self.language else "CODE"
-            file_label = self.filename or f"{self.language}"
-            header = f"""
+            file_label = self.filename or self.language
+            header = format_html(
+                """
                 <div class="code-header-modern">
-                    <span>{file_label}</span>
-                    <span class="code-badge-modern">{badge}</span>
+                    <span>{}</span>
+                    <span class="code-badge-modern">{}</span>
                 </div>
+            """,
+                file_label,
+                badge,
+            )
+
+        return format_html(
             """
-
-        return f"""
             <div class="code-block-modern">
-                {header}
-                <pre><code class="language-{self.language}">{escaped_code}</code></pre>
+                {}
+                <pre><code class="language-{}">{}</code></pre>
             </div>
-        """
-
-
+        """,
+            header,
+            self.language,
+            self.code,
+        )
 class HeroSection(Component):
     """
     Hero section with icon, title, and subtitle.
@@ -105,27 +112,31 @@ class HeroSection(Component):
     def render(self) -> str:
         icon_html = ""
         if self.icon:
-            icon_html = f'<div class="text-5xl">{self.icon}</div>'
+            icon_html = format_html('<div class="text-5xl">{}</div>', self.icon)
 
         subtitle_html = ""
         if self.subtitle:
-            subtitle_html = f'<p class="hero-subtitle">{self.subtitle}</p>'
+            subtitle_html = format_html('<p class="hero-subtitle">{}</p>', self.subtitle)
 
-        return f"""
-            <section class="hero-section" style="padding: {self.padding};">
+        return format_html(
+            """
+            <section class="hero-section" style="padding: {};">
                 <div class="container mx-auto px-4">
                     <div class="max-w-4xl mx-auto text-center">
                         <div class="flex items-center justify-center gap-3 mb-4">
-                            {icon_html}
-                            <h1 class="hero-title" style="font-size: 2.5rem; margin-bottom: 0;">{self.title}</h1>
+                            {}
+                            <h1 class="hero-title" style="font-size: 2.5rem; margin-bottom: 0;">{}</h1>
                         </div>
-                        {subtitle_html}
+                        {}
                     </div>
                 </div>
             </section>
-        """
-
-
+        """,
+            self.padding,
+            icon_html,
+            self.title,
+            subtitle_html,
+        )
 class Card(Component):
     """
     Modern card with optional header.
@@ -134,7 +145,7 @@ class Card(Component):
         card = Card(
             title="Live Demo",
             subtitle="Click buttons to see instant updates",
-            content="<p>Card content here</p>",
+            content=format_html("<p>{}</p>", text),  # markup: marked safe
             header_color="rgba(59, 130, 246, 0.03)"
         )
     """
@@ -159,29 +170,40 @@ class Card(Component):
         if self.show_header:
             subtitle_html = ""
             if self.subtitle:
-                subtitle_html = f'''
+                subtitle_html = format_html(
+                    """
                     <p class="text-sm m-0 mt-2" style="color: var(--color-text-muted);">
-                        {self.subtitle}
+                        {}
                     </p>
-                '''
+                """,
+                    self.subtitle,
+                )
 
-            header = f'''
-                <div class="p-4 border-b" style="border-color: var(--color-border); background: {self.header_color};">
-                    <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">{self.title}</h3>
-                    {subtitle_html}
+            header = format_html(
+                """
+                <div class="p-4 border-b" style="border-color: var(--color-border); background: {};">
+                    <h3 class="text-xl font-bold m-0" style="color: var(--color-text);">{}</h3>
+                    {}
                 </div>
-            '''
+            """,
+                self.header_color,
+                self.title or "",
+                subtitle_html,
+            )
 
-        return f'''
+        # content is HTML only when marked safe; a plain string is escaped.
+        return format_html(
+            """
             <div class="demo-card-modern">
-                {header}
+                {}
                 <div class="p-4" style="background: var(--color-bg-elevated);">
-                    {self.content}
+                    {}
                 </div>
             </div>
-        '''
-
-
+        """,
+            header,
+            self.content,
+        )
 class FeatureCard(Component):
     """
     Feature card with icon, title, and description.
@@ -201,19 +223,22 @@ class FeatureCard(Component):
         self.description = description
 
     def render(self) -> str:
-        return f'''
+        return format_html(
+            """
             <div>
-                <div class="text-2xl mb-2">{self.icon}</div>
+                <div class="text-2xl mb-2">{}</div>
                 <h4 class="font-semibold mb-1" style="color: var(--color-text); font-size: 1rem;">
-                    {self.title}
+                    {}
                 </h4>
                 <p class="text-sm" style="color: var(--color-text-muted);">
-                    {self.description}
+                    {}
                 </p>
             </div>
-        '''
-
-
+        """,
+            self.icon,
+            self.title,
+            self.description,
+        )
 class FeatureGrid(Component):
     """
     Grid layout for feature cards.
@@ -231,18 +256,22 @@ class FeatureGrid(Component):
         self.columns = columns
 
     def render(self) -> str:
-        features_html = "\n".join([f.render() for f in self.features])
+        # Each feature's render is already escaped (and marked safe); anything
+        # else in the list is escaped here.
+        features_html = format_html_join("\n", "{}", ((f.render(),) for f in self.features))
 
-        return f'''
+        return format_html(
+            """
             <div class="feature-card-modern p-4">
                 <h3 class="text-lg font-bold mb-3" style="color: var(--color-text);">How It Works</h3>
-                <div class="grid grid-cols-1 md:grid-cols-{self.columns} gap-4">
-                    {features_html}
+                <div class="grid grid-cols-1 md:grid-cols-{} gap-4">
+                    {}
                 </div>
             </div>
-        '''
-
-
+        """,
+            self.columns,
+            features_html,
+        )
 class Button(Component):
     """
     Modern button with icon support.
@@ -256,7 +285,7 @@ class Button(Component):
             text="Custom",
             event="action",
             variant="primary",
-            icon_svg='<path d="..."></path>'
+            icon_svg=mark_safe('<path d="..."></path>')  # markup: marked safe
         )
     """
 
@@ -286,38 +315,49 @@ class Button(Component):
 
         # Support both short icon names and custom SVG paths
         if icon and icon in self.ICON_PATHS:
-            self.icon_svg = self.ICON_PATHS[icon]
+            # A constant of this class, not a value: its markup is trusted.
+            self.icon_svg = mark_safe(self.ICON_PATHS[icon])
         else:
             self.icon_svg = icon_svg
 
         self.extra_attrs = extra_attrs or ""
 
     def render(self) -> str:
-        css_class = f"btn-{self.variant}-modern"
+        css_class = "btn-%s-modern" % self.variant
 
         icon_html = ""
         if self.icon_svg:
-            icon_html = f'''
+            # icon_svg is HTML only when marked safe (the ICON_PATHS are).
+            icon_html = format_html(
+                """
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    {self.icon_svg}
+                    {}
                 </svg>
-            '''
+            """,
+                self.icon_svg,
+            )
 
-        return f'''
-            <button dj-click="{self.event}" class="{css_class}" {self.extra_attrs}>
-                {icon_html}
-                <span>{self.text}</span>
+        # extra_attrs is markup only when marked safe; a plain string is escaped.
+        return format_html(
+            """
+            <button dj-click="{}" class="{}" {}>
+                {}
+                <span>{}</span>
             </button>
-        '''
-
-
+        """,
+            self.event,
+            css_class,
+            self.extra_attrs,
+            icon_html,
+            self.text,
+        )
 class Section(Component):
     """
     Section wrapper with optional title and subtitle.
 
     Usage:
         section = Section(
-            content="<div>Section content</div>",
+            content=format_html("<div>{}</div>", text),  # markup: marked safe
             title="Features",
             subtitle="Everything you need"
         )
@@ -343,23 +383,34 @@ class Section(Component):
         if self.title:
             subtitle_html = ""
             if self.subtitle:
-                subtitle_html = f'<p class="section-subtitle-modern">{self.subtitle}</p>'
+                subtitle_html = format_html(
+                    '<p class="section-subtitle-modern">{}</p>', self.subtitle
+                )
 
-            header = f'''
-                <h2 class="section-title-modern">{self.title}</h2>
-                {subtitle_html}
-            '''
+            header = format_html(
+                """
+                <h2 class="section-title-modern">{}</h2>
+                {}
+            """,
+                self.title,
+                subtitle_html,
+            )
 
-        return f'''
-            <section class="section-modern" style="padding: {self.padding};">
-                <div class="container mx-auto px-4" style="max-width: {self.max_width};">
-                    {header}
-                    {self.content}
+        # content is HTML only when marked safe; a plain string is escaped.
+        return format_html(
+            """
+            <section class="section-modern" style="padding: {};">
+                <div class="container mx-auto px-4" style="max-width: {};">
+                    {}
+                    {}
                 </div>
             </section>
-        '''
-
-
+        """,
+            self.padding,
+            self.max_width,
+            header,
+            self.content,
+        )
 class BackButton(Component):
     """
     Back button navigation component.
@@ -374,13 +425,17 @@ class BackButton(Component):
         self.text = text
 
     def render(self) -> str:
-        return f'''
+        return format_html(
+            """
             <div class="text-center mt-4">
-                <a href="{self.href}" class="btn-secondary-modern">
+                <a href="{}" class="btn-secondary-modern">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path>
                     </svg>
-                    <span>{self.text}</span>
+                    <span>{}</span>
                 </a>
             </div>
-        '''
+        """,
+            self.href,
+            self.text,
+        )

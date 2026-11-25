@@ -116,7 +116,6 @@ a channel layer every process shares. See
 | The URL carries a value (`?tab=z`) for an undeclared attribute a handler also set | n/a (no mount, so `handle_params()` does not run again) | the URL wins when it changed; the same URL keeps the handler's value<br><sub>`test_held_model_and_handle_params`</sub> | the URL wins when it changed; the same URL keeps the handler's value<br><sub>`test_held_model_and_handle_params`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: `handle_params()` has the last word when the URL changed since the state was saved; while it is the same URL, the handler's value is kept. |
 | `FormMixin` input and errors, mid-validation | kept<br><sub>`test_form_mid_validation`</sub> | input and errors restored<br><sub>`test_form_mid_validation`</sub> | input and errors restored<br><sub>`test_form_mid_validation`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: input and errors are saved, except password and other sensitive fields. |
 | `WizardMixin` step and answers | kept<br><sub>`test_wizard_step`</sub> | kept: the step and the answers<br><sub>`test_wizard_step`</sub> | restored: the step and the answers<br><sub>`test_wizard_step`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: the step and the answers are saved. |
-| `exposure_policy = "legacy"` view attribute | kept<br><sub>`test_legacy_view`</sub> | lost: every request runs `mount()`<br><sub>`test_legacy_view`</sub> | lost: `mount()` value<br><sub>`test_legacy_view`</sub> | n/a (same mount path as the reconnect to another process) | Migrate the view to explicit exposure: a legacy view's state is not saved. |
 | `LiveComponent` state | kept<br><sub>`test_components`</sub> | kept: the event reaches the component and its state carries<br><sub>`test_components`</sub> | restored<br><sub>`test_components`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: its state is saved with the view's. |
 | Interactive component (ADR-034 `DropdownMenu`) open state | kept<br><sub>`test_components`</sub> | kept: the event reaches the menu and its state carries<br><sub>`test_components`</sub> | restored: open, with the same component id<br><sub>`test_components`</sub> | n/a (same mount path as the reconnect to another process) | Nothing: its state is saved with the view's declared server state; `persist=False` on the declaration opts out. |
 | `start_async()` work in flight | result delivered<br><sub>`test_async_work_in_flight`</sub> | n/a (the HTTP fallback waits for the work inside the request) | result lost; a persisted in-progress flag stays set<br><sub>`test_async_work_in_flight`</sub> | n/a (the work dies with its process; same as the reconnect) | Clear a persisted in-progress flag in `handle_restore()`; restart the work. |
@@ -128,6 +127,28 @@ a channel layer every process shares. See
 The HTTP fallback builds a new view for every request from the saved state
 (running `mount()` only when nothing is saved or something could not be
 saved), then `handle_params()` and `handle_restore()`, then the event.
+
+## When state is saved: before the reply, or on an interval
+
+With [`DJUST_STATE_SAVE_INTERVAL`](../state/save-frequency.md) above 0 (2
+seconds by default), a WebSocket or SSE turn answers first and its state
+reaches storage later: no later than the interval, at the socket's close,
+before a navigation, and at the ASGI `lifespan` shutdown. The rows above are
+measured with `DJUST_STATE_SAVE_INTERVAL = 0` (saves before every reply);
+this table is what changes with an interval.
+
+<!-- BEGIN GENERATED survival-savemode: python -m tests.integration.multinode.survival_table --write -->
+|  | Graceful stop (SIGTERM under uvicorn), reconnect to another process | Process killed (SIGKILL), reconnect to another process | What the app author must do |
+|---|---|---|---|
+| Saved before every reply: `DJUST_STATE_SAVE_INTERVAL = 0`, a view with a `persist="server"` or `persist="client"` field, `DJUST_STATE_STORE_STRICT`, a turn marked `save=True` or calling `save_state()` | every change restored<br><sub>`test_save_mode_graceful_stop`</sub> | every change restored<br><sub>`test_save_mode_kill`</sub> | Nothing: storage holds what the page showed before the page shows it. |
+| Saved on an interval (the default): `DJUST_STATE_SAVE_INTERVAL` above 0, 2 seconds unless set (WebSocket and SSE turns) | every change restored: the socket's close saves<br><sub>`test_save_mode_graceful_stop`</sub> | the last save, at most the interval behind; the page is told its most recent changes could not be restored<br><sub>`test_save_mode_kill`</sub> | Stop with a server that closes its sockets or runs `lifespan` (see the deployment guide's per-server table). Mark a turn that must survive a kill `save=True`. |
+<!-- END GENERATED survival-savemode -->
+
+A graceful stop keeps everything only under a server that closes its sockets
+or runs `lifespan` on SIGTERM: uvicorn and gunicorn with `UvicornWorker` do,
+hypercorn waits for the clients to leave, daphne does neither (the
+[deployment guide](deployment.md#what-a-graceful-stop-keeps-per-server) has the
+per-server table).
 
 ## Sessions, sockets and messages
 

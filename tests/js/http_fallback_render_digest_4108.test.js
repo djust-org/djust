@@ -131,6 +131,21 @@ describe('render token', () => {
             expect((await bump(page, whole(4, 'd4'))).digest).toBe('d3');
         } finally { page.close(); }
     });
+
+    it('a whole page chosen for its size is not a miss (#4229)', async () => {
+        const page = await loadPage(PAGE('d0'));
+        try {
+            const sent = [];
+            for (let i = 1; i <= 4; i++) {
+                sent.push((await bump(page, {...whole(i, `d${i}`), whole_page: 'size'})).digest);
+            }
+            // The server matched every token: none is withheld.
+            expect(sent).toEqual(['d0', 'd1', 'd2', 'd3']);
+            // And it starts the miss count again: one real miss after it is not two.
+            await bump(page, whole(5, 'd5'));
+            expect((await bump(page, whole(6, 'd6'))).digest).toBe('d5');
+        } finally { page.close(); }
+    });
 });
 
 describe('the shape of the DOM', () => {
@@ -577,7 +592,9 @@ describe('elements moved or replaced without changing the layout', () => {
             const page = await loadPage(
                 html.replace('<head></head>', `<head><meta name="djust-render-digest" content="d0.${shape}"></head>`),
                 '/',
-                {hooks: {Sorter: {updated() { reorder(this.el.ownerDocument); }}}},
+                // updateOn: the patch below changes another list, and since #4001
+                // only a hook that asks for every render hears of it.
+                {hooks: {Sorter: {updateOn: 'render', updated() { reorder(this.el.ownerDocument); }}}},
             );
             try {
                 if (!hooked) arrange(page, () => reorder(page.win.document));

@@ -104,7 +104,7 @@ class ProductSearchView(LiveView):
         self.results = Product.objects.filter(in_stock=True)[:20]
 
     @event_handler  # Required: undecorated handlers are rejected by default
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         """Handle search input. dj-input sends the text as `value`."""
         query = value
         self.query = query
@@ -227,7 +227,7 @@ class ProductSearchView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)  # ← Wait 500ms after last keystroke
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         """Handle search input (debounced)."""
         query = value
         self.query = query
@@ -309,7 +309,7 @@ class ProductSearchView(LiveView):
     @event_handler
     @debounce(wait=0.5)
     @cache(ttl=60, key_params=["value"])  # ← Cache for 60 seconds, keyed on the text
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         """Handle search input (debounced + cached)."""
         query = value
         self.query = query
@@ -513,13 +513,13 @@ class ProductSearchView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)  # No @cache: update_category reads self.query (see Part 4)
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         """Handle search input."""
         self.query = value
         self._run_search()
 
     @event_handler
-    def update_category(self, value: str = "", **kwargs):
+    def update_category(self, value: str = ""):
         """Handle category selection. dj-change sends the choice as `value`."""
         self.category = value
         self._run_search()
@@ -683,25 +683,25 @@ class ProductSearchView(LiveView):
 
     @event_handler
     @debounce(wait=0.5)  # Wait 500ms after last keystroke
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         """Handle search input. dj-input sends the text as `value`."""
         self.query = value
         self._run_search()
 
     @event_handler
-    def update_category(self, value: str = "", **kwargs):
+    def update_category(self, value: str = ""):
         """Handle category selection."""
         self.category = value
         self._run_search()
 
     @event_handler
-    def update_sort(self, value: str = "name", **kwargs):
+    def update_sort(self, value: str = "name"):
         """Handle sort selection."""
         self.sort = value if value in self.SORTS else "name"
         self._run_search()
 
     @event_handler
-    def clear_filters(self, **kwargs):
+    def clear_filters(self):
         """Clear all filters."""
         self.query = ""
         self.category = ""
@@ -832,7 +832,7 @@ class ProductSearchView(LiveView):
 **Performance:**
 
 - **Server requests**: 1 per query (after 500ms silence)
-- **Bundle size**: ~87 KB gzipped (`client.min.js`, served automatically)
+- **Bundle size**: ~90 KB gzipped (`client.min.js`, served automatically)
 
 ## Next Steps
 
@@ -874,7 +874,7 @@ You've built a fully-featured Product Search with:
 2. **Add a Favorite Toggle**
    ```python
    @event_handler
-   def toggle_favorite(self, product_id: int = 0, **kwargs):
+   def toggle_favorite(self, product_id: int = 0):
        # Send the id from the template: dj-click="toggle_favorite" dj-value-product_id="{{ product.id }}"
        # For an instant heart flip, use a JS Command chain ending in push()
        pass
@@ -885,7 +885,7 @@ You've built a fully-featured Product Search with:
    @event_handler
    @debounce(wait=0.3)
    @cache(ttl=300, key_params=["value"])
-   def autocomplete(self, value: str = "", **kwargs):
+   def autocomplete(self, value: str = ""):
        self.suggestions = list(Product.objects.filter(
            name__icontains=value
        ).values_list('name', flat=True)[:5])
@@ -897,7 +897,7 @@ You've built a fully-featured Product Search with:
 
    @event_handler
    @throttle(interval=1.0)
-   def load_more(self, **kwargs):
+   def load_more(self):
        self.page += 1  # Track the page on the server; initialise self.page in mount()
        # Load next page
    ```

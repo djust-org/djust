@@ -22,13 +22,16 @@ from djust.decorators import event_handler
 
 
 class QuietPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ menu }}<p>{{ count }}</p></div>"
     menu = DropdownMenu(label="Menu", items=[{"label": "One", "value": "one"}], visibility="client")
 
     def mount(self, request, **kwargs):
         self.count = 0
         self._hidden = 0
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "count": self.count}
 
     @event_handler()
     def bump(self):

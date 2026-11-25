@@ -8,7 +8,6 @@ per-frame savings:
   ``@permission_required``, nor for the object-permission check when the
   view does not override ``get_object`` (both are pure metadata checks
   then); any pool setting;
-* the handler's ``inspect.signature`` is computed once per function;
 * a free render lock is taken without arming a ``wait_for`` timer;
 * pool on: Channels' per-frame ``close_old_connections`` hop is replaced by
   a check the session's thread runs before its next task;
@@ -19,7 +18,6 @@ per-frame savings:
 from __future__ import annotations
 
 import asyncio
-import gc
 import json
 import threading
 
@@ -308,58 +306,6 @@ async def test_permission_and_object_checks_still_hop_when_they_can_touch_the_db
 
 
 # ---------------------------------------------------------------------------
-# Signature cache
-# ---------------------------------------------------------------------------
-
-
-def test_the_handler_signature_is_computed_once_per_function(monkeypatch):
-    import inspect
-
-    from djust import validation
-
-    calls = []
-    real = inspect.signature
-
-    def counting(obj, *a, **k):
-        calls.append(obj)
-        return real(obj, *a, **k)
-
-    class _V:
-        def handler(self, amount: int = 0, **kwargs):
-            pass
-
-    monkeypatch.setattr(validation.inspect, "signature", counting)
-    a, b = _V(), _V()
-    for v in (a, b, a):
-        result = validation.validate_handler_params(v.handler, {"amount": "3"}, "handler")
-        assert result["valid"], result
-    assert len(calls) == 1, "one signature per function, shared by instances"
-    bound = validation._handler_signature(a.handler)
-    unbound = validation._handler_signature(_V.handler)
-    assert "self" not in bound.parameters and "self" in unbound.parameters
-
-
-def test_the_signature_cache_does_not_keep_functions_alive():
-    from djust import validation
-
-    def make():
-        def handler(self, x=1):
-            pass
-
-        return handler
-
-    import weakref
-
-    fn = make()
-    validation._handler_signature(fn)
-    assert fn in validation._SIGNATURES
-    ref = weakref.ref(fn)
-    del fn
-    gc.collect()
-    assert ref() is None, "the cache kept the function alive"
-
-
-# ---------------------------------------------------------------------------
 # Render lock
 # ---------------------------------------------------------------------------
 
@@ -490,50 +436,6 @@ async def test_a_tick_that_forces_a_render_renders(pool):
     assert frame.get("source") == "tick", frame
 
 
-def test_type_hints_are_resolved_once_and_failures_are_not_cached(monkeypatch):
-    from djust import validation
-
-    calls = []
-    real = validation.get_type_hints
-
-    def counting(obj, *a, **k):
-        calls.append(obj)
-        return real(obj, *a, **k)
-
-    monkeypatch.setattr(validation, "get_type_hints", counting)
-
-    class _V:
-        def handler(self, amount: int = 0, **kwargs):
-            pass
-
-        def broken(self, x: "NotDefinedAnywhere3095" = None, **kwargs):  # noqa: F821
-            pass
-
-    v = _V()
-    for _ in range(3):
-        assert validation.coerce_parameter_types(v.handler, {"amount": "3"}) == {"amount": 3}
-    assert len(calls) == 1
-    calls.clear()
-    for _ in range(2):
-        # Unresolvable: params come back unchanged, and it is retried each time.
-        assert validation.coerce_parameter_types(v.broken, {"x": "1"}) == {"x": "1"}
-    assert len(calls) == 2
-
-
-def test_the_near_miss_warning_still_fires_once_with_the_fast_key_path(caplog):
-    from djust import validation
-
-    class _V:
-        def handler(self, field_name: str = "", **kwargs):
-            pass
-
-    validation._NEAR_MISS_WARNED.clear()
-    with caplog.at_level("WARNING", logger="djust.validation"):
-        for _ in range(3):
-            validation.validate_handler_params(_V().handler, {"fieldname": "x"}, "handler")
-    assert caplog.text.count("similarly-named 'field_name'") == 1
-
-
 # ---------------------------------------------------------------------------
 # djust.layers group_send: no task per member
 # ---------------------------------------------------------------------------
@@ -641,24 +543,6 @@ async def test_a_tick_skip_does_not_leak_into_the_next_tick(pool):
             await comm.disconnect()
     assert first.get("source") == second.get("source") == "tick"
     assert "1" in json.dumps(first["patches"]) and "2" in json.dumps(second["patches"])
-
-
-def test_a_handler_changed_after_first_use_is_resolved_again():
-    """The caches follow the function: changed annotations or defaults give
-    the same result as without a cache."""
-    from djust import validation
-
-    class _V:
-        def handler(self, x: int = 0, **kwargs):
-            pass
-
-    v = _V()
-    assert validation.coerce_parameter_types(v.handler, {"x": "3"}) == {"x": 3}
-    _V.handler.__annotations__["x"] = str  # mutated in place
-    assert validation.coerce_parameter_types(v.handler, {"x": "3"}) == {"x": "3"}
-    assert validation._handler_type_hints(v.handler) == {"x": str}
-    _V.handler.__defaults__ = (7,)
-    assert validation._handler_signature(v.handler).parameters["x"].default == 7
 
 
 @pytest.mark.asyncio

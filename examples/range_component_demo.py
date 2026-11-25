@@ -5,7 +5,7 @@ Demo showing Range component usage.
 This demonstrates various use cases for the Range (Slider) component.
 """
 
-from djust._rust import RustRange
+from djust.components.ui import Range
 
 print("=" * 70)
 print("Range Component Demo - Various Use Cases")
@@ -15,7 +15,7 @@ print()
 # Example 1: Basic Volume Slider
 print("1. Basic Volume Slider")
 print("-" * 70)
-volume_slider = RustRange(
+volume_slider = Range(
     name="volume",
     label="Volume",
     value=75,
@@ -30,7 +30,7 @@ print()
 # Example 2: Brightness Control
 print("2. Brightness Control (0-100)")
 print("-" * 70)
-brightness = RustRange(
+brightness = Range(
     name="brightness",
     label="Screen Brightness",
     value=80,
@@ -42,7 +42,7 @@ print()
 # Example 3: Opacity Slider (Decimal)
 print("3. Opacity Slider (0.0-1.0)")
 print("-" * 70)
-opacity = RustRange(
+opacity = Range(
     name="opacity",
     label="Opacity",
     value=0.7,
@@ -58,7 +58,7 @@ print()
 # Example 4: Temperature Control (Negative values)
 print("4. Temperature Control (-10 to 40°C)")
 print("-" * 70)
-temperature = RustRange(
+temperature = Range(
     name="temperature",
     label="Room Temperature",
     value=22.5,
@@ -74,7 +74,7 @@ print()
 # Example 5: Zoom Level
 print("5. Zoom Level (10% - 200%)")
 print("-" * 70)
-zoom = RustRange(
+zoom = Range(
     name="zoom",
     label="Zoom Level",
     value=100,
@@ -90,7 +90,7 @@ print()
 # Example 6: Disabled Slider
 print("6. Disabled Slider (Locked Setting)")
 print("-" * 70)
-locked = RustRange(
+locked = Range(
     name="locked_setting",
     label="System Volume (Locked)",
     value=50,
@@ -103,7 +103,7 @@ print()
 # Example 7: Price Range Filter
 print("7. Price Range Filter")
 print("-" * 70)
-price = RustRange(
+price = Range(
     name="max_price",
     label="Maximum Price",
     value=500,
@@ -119,7 +119,7 @@ print()
 # Example 8: Quality Slider
 print("8. Quality Slider")
 print("-" * 70)
-quality = RustRange(
+quality = Range(
     name="quality",
     label="Image Quality",
     value=80,

@@ -123,8 +123,9 @@ def reload_request_session(mounted: Any) -> Any:
 def authorize_event(view: Any, request: Any, binding: StateBinding) -> Any:
     """Authorize a fresh request against immutable mounted identity.
 
-    The SSE endpoint path is not the view route. Copy routing metadata from the
-    trusted mount, while retaining the current request's principal/session/host.
+    The SSE endpoint path is not the view route. Copy routing metadata (path,
+    resolver match, slot and query string) from the trusted mount, while
+    retaining the current request's principal/session/host.
     TenantMixin resolvers run again instead of using their mount-time cache.
     Exceptions deliberately propagate to the runtime's static denial envelope.
     """
@@ -170,6 +171,27 @@ async def aauthorize_event(view: Any, request: Any, binding: StateBinding) -> An
     return request
 
 
+def apply_mount_route(request: Any, mounted: Any) -> None:
+    """Give an already-copied live ``request`` the route of the ``mounted`` request.
+
+    The principal (user, session, cookies, headers) stays the live request's;
+    the route -- path, resolver match, slot target and page query -- comes
+    from the request the view was mounted and authorized under. An SSE event
+    arrives as a POST to /djust/sse/<id>/message/, whose own path and query
+    never count (#4231, #4255). The caller must pass a copy: ``copy`` is
+    shallow, so ``GET`` is copied and ``META`` re-assigned rather than
+    mutating the live request's (or the mount's) objects.
+    """
+    request.path = mounted.path
+    request.path_info = mounted.path_info
+    # A view beside the page view (#3252) is bound to its own slot.
+    request._djust_slot_target = getattr(mounted, "_djust_slot_target", None)
+    request.resolver_match = mounted.resolver_match
+    # The page query is routing metadata too (#4231).
+    request.GET = mounted.GET.copy()
+    request.META = {**request.META, "QUERY_STRING": mounted.META.get("QUERY_STRING", "")}
+
+
 def _event_request(view: Any, request: Any, binding: StateBinding) -> Any:
     """The fresh, identity-checked request :func:`authorize_event` authorizes."""
     if request is None or binding is None:
@@ -182,12 +204,7 @@ def _event_request(view: Any, request: Any, binding: StateBinding) -> Any:
     # The turn's saves merge what this session object changes into the stored
     # session, so a write another request made meanwhile survives (#3347).
     track_session(session)
-    mounted = view._djust_mount_request
-    request.path = mounted.path
-    request.path_info = mounted.path_info
-    # A view beside the page view (#3252) is bound to its own slot.
-    request._djust_slot_target = getattr(mounted, "_djust_slot_target", None)
-    request.resolver_match = mounted.resolver_match
+    apply_mount_route(request, view._djust_mount_request)
     resolver = getattr(view, "resolve_tenant", None)
     if callable(resolver):
         request.tenant = resolver(request)

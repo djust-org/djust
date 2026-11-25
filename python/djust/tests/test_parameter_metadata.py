@@ -20,9 +20,9 @@ class StrictOwner:
         raise AssertionError("must not inspect a property")
 
 
-class LegacyOwner:
-    @event_handler(parameter_policy="legacy")
-    def choose(self, value="SECRET_DEFAULT", **kwargs):
+class DefaultedOwner:
+    @event_handler
+    def choose(self, value: str = "SECRET_DEFAULT", **kwargs):
         raise AssertionError("must not execute")
 
 
@@ -32,31 +32,34 @@ def manifest(root):
     return parameter_contract_manifest(root)
 
 
+def owners_of(data):
+    from djust._parameter_metadata import expand_parameter_manifest
+
+    return expand_parameter_manifest(data)
+
+
 def test_same_named_handlers_remain_owned_and_defaults_are_absent():
-    left, right = StrictOwner(), LegacyOwner()
+    left, right = StrictOwner(), DefaultedOwner()
     root = SimpleNamespace(_components={"left": left, "right": right}, _child_views={})
     data = manifest(root)
-    owners = {(o["view_id"], o["component_id"]): o["handlers"] for o in data["owners"]}
+    owners = {(o["view_id"], o["component_id"]): o["handlers"] for o in owners_of(data)}
     assert owners[(None, "left")]["choose"]["policy"] == "strict"
-    assert owners[(None, "right")]["choose"] == {"policy": "legacy"}
+    assert owners[(None, "right")]["choose"]["policy"] == "strict"
+    assert owners[(None, "right")]["choose"]["parameters"][0]["type"] == "str"
     assert owners[(None, "left")]["choose"]["parameters"][0]["type"] == "int"
     assert "SECRET" not in json.dumps(data)
 
 
 def test_embedded_view_is_distinct_from_root_and_component():
     root = StrictOwner()
-    root._components = {"same": LegacyOwner()}
-    root._child_views = {"same": LegacyOwner()}
+    root._components = {"same": DefaultedOwner()}
+    root._child_views = {"same": DefaultedOwner()}
     data = manifest(root)
-    assert [(o["view_id"], o["component_id"]) for o in data["owners"]] == [
+    assert [(o["view_id"], o["component_id"]) for o in owners_of(data)] == [
         (None, None),
         (None, "same"),
         ("same", None),
     ]
-
-
-def test_legacy_only_tree_does_not_change_wire_protocol():
-    assert manifest(LegacyOwner()) is None
 
 
 def test_rpc_and_undecorated_methods_are_not_dom_event_contracts():
@@ -68,7 +71,7 @@ def test_rpc_and_undecorated_methods_are_not_dom_event_contracts():
         def ordinary(self):
             pass
 
-    assert set(manifest(Owner())["owners"][0]["handlers"]) == {"choose"}
+    assert set(owners_of(manifest(Owner()))[0]["handlers"]) == {"choose"}
 
 
 def test_shadowing_and_instance_handlers_match_python_resolution():
@@ -105,7 +108,7 @@ def test_bound_descriptor_methods_use_bound_signature_without_state_values():
     left, right = page.left, page.right
     assert left is not right
     data = manifest(page)
-    components = [entry for entry in data["owners"] if entry["component_id"]]
+    components = [entry for entry in owners_of(data) if entry["component_id"]]
     assert len(components) == 2
     for entry in components:
         assert [p["name"] for p in entry["handlers"]["choose"]["parameters"]] == ["value"]
@@ -116,7 +119,7 @@ def test_disposed_children_are_not_advertised():
     child = StrictOwner()
     child._djust_child_disposed = True
     root._child_views = {"gone": child}
-    assert len(manifest(root)["owners"]) == 1
+    assert len(owners_of(manifest(root))) == 1
 
 
 def test_wrapper_method_precedence_hides_descriptor_handler():
@@ -136,29 +139,22 @@ def test_wrapper_method_precedence_hides_descriptor_handler():
     from djust.decorators import is_event_handler
 
     assert not is_event_handler(page.menu.get)
-    assert manifest(page) is None
+    assert all(
+        "get" not in owner["handlers"]
+        for owner in owners_of(manifest(page))
+        if owner["component_id"] == "menu"
+    )
 
 
 def test_rebuilding_manifest_tracks_removal_and_returns_detached_metadata():
     root = StrictOwner()
     root._components = {"menu": StrictOwner()}
     first = manifest(root)
-    first["owners"][0]["handlers"]["choose"]["parameters"][0]["type"] = "CORRUPTED"
+    first["contracts"][0]["parameters"][0]["type"] = "CORRUPTED"
     root._components.clear()
     second = manifest(root)
     assert len(second["owners"]) == 1
-    assert second["owners"][0]["handlers"]["choose"]["parameters"][0]["type"] == "int"
-
-
-def test_new_manifest_limits_do_not_reject_legacy_only_mounts():
-    from djust._parameter_contract import ContractError
-
-    root = LegacyOwner()
-    root._components = {str(index): LegacyOwner() for index in range(1025)}
-    assert manifest(root) is None
-    root._components["0"] = StrictOwner()
-    with pytest.raises(ContractError, match="declaration limit"):
-        manifest(root)
+    assert owners_of(second)[0]["handlers"]["choose"]["parameters"][0]["type"] == "int"
 
 
 def test_bound_instance_shadowing_including_none_matches_dispatch():
@@ -177,7 +173,11 @@ def test_bound_instance_shadowing_including_none_matches_dispatch():
     page = Page()
     bound = page.menu
     object.__setattr__(bound, "choose", None)
-    assert manifest(page) is None
+    assert all(
+        "choose" not in owner["handlers"]
+        for owner in owners_of(manifest(page))
+        if owner["component_id"] == "menu"
+    )
 
     @event_handler(parameter_policy="strict")
     def replacement(value: str):
@@ -185,7 +185,7 @@ def test_bound_instance_shadowing_including_none_matches_dispatch():
 
     object.__setattr__(bound, "choose", replacement)
     data = manifest(page)
-    menu = next(o for o in data["owners"] if o["component_id"] == "menu")
+    menu = next(o for o in owners_of(data) if o["component_id"] == "menu")
     assert menu["handlers"]["choose"]["parameters"][0]["type"] == "str"
 
 

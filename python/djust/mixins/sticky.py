@@ -29,7 +29,7 @@ import itertools
 import logging
 import re
 import uuid
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 from .._mapping import mapping_items
 
@@ -109,6 +109,14 @@ class StickyChildRegistry:
     # Populated by ``_init_sticky``; declared here for type checkers.
     _child_views: Dict[str, Any]
 
+    #: The ``{% live_render %}`` inputs of an explicit sticky child that may
+    #: change without remounting it (#4181). They are left out of the child's
+    #: identity (reuse, carry across ``live_redirect``, state binding): a change
+    #: to one reaches :meth:`_on_sticky_update`, and the child keeps its state.
+    #: A change to any other input remounts the child. ``mount()`` still gets
+    #: every input.
+    sticky_update_inputs: Tuple[str, ...] = ()
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -147,18 +155,24 @@ class StickyChildRegistry:
             return preferred
         per_render = self.__dict__.get("_render_child_ids")
         if per_render is not None:
+            # Ids handed out in this render that are not registered (yet): a
+            # lazy slot registers its child only when filled, so the registry
+            # alone would give an eager twin the same id (#4173 review).
+            assigned = self.__dict__.setdefault("_render_assigned_ids", set())
             if identity:
                 # A callable is only run here: over a socket the id is the
                 # counter's and the (possibly large) arguments are not hashed.
                 base = f"child_{identity() if callable(identity) else identity}"
                 candidate, n = base, 1
-                while candidate in registry:
+                while candidate in registry or candidate in assigned:
                     n += 1
                     candidate = f"{base}_{n}"
+                assigned.add(candidate)
                 return candidate
             while True:
                 candidate = f"child_{next(per_render)}"
-                if candidate not in registry:
+                if candidate not in registry and candidate not in assigned:
+                    assigned.add(candidate)
                     return candidate
         return f"child_{next(_view_id_counter)}"
 
@@ -174,26 +188,28 @@ class StickyChildRegistry:
         event carrying a child's ``view_id`` can be routed to that child (#3104).
 
         Called by the HTTP request methods immediately before each render of a
-        legacy parent, never over a socket: there children live across renders
-        and the process-wide counter keeps their ids unique. A child of a
-        previous render of this request (an auto-numbered, non-sticky, legacy
-        one: a throwaway) is dropped from the registry so the next render
-        reuses its id; pinned, sticky and explicit children are left alone.
+        parent (#4173), never over a socket: there
+        children live across renders and the process-wide counter keeps their
+        ids unique. A child of a previous render of this request (an
+        auto-numbered, non-sticky one: a throwaway) is dropped from the
+        registry so the next render reuses its id; an explicit one is also
+        disposed with its subtree. Pinned and sticky children are left alone.
         """
-        from .._exposure import uses_legacy_exposure
-
         self.__dict__["_render_child_ids"] = itertools.count(1)
+        self.__dict__["_render_assigned_ids"] = set()
         registry = getattr(self, "_child_views", None)
         if type(registry) is not dict:
             return
         for view_id in [
             vid
             for vid, child in registry.items()
-            if _AUTO_VIEW_ID.fullmatch(vid)
-            and uses_legacy_exposure(child)
-            and getattr(child, "sticky", False) is not True
+            if _AUTO_VIEW_ID.fullmatch(vid) and getattr(child, "sticky", False) is not True
         ]:
-            registry.pop(view_id, None)
+            child = registry.pop(view_id, None)
+            if child is not None:
+                from .._child_lifecycle import dispose_child_subtree
+
+                dispose_child_subtree(child)
 
     # ------------------------------------------------------------------
     # Registration
@@ -231,36 +247,16 @@ class StickyChildRegistry:
     def _unregister_child(self, view_id: str) -> None:
         """Drop ``view_id`` from the registry and tear the child down.
 
-        An explicit child is disposed with its subtree. A legacy child has its
-        waiters closed and its own embedded children unregistered
-        (``release_legacy_child``, #3244), then its cleanup hook runs. The hook
-        (optional on the child) is wrapped so a buggy hook can't break the
-        disconnect loop — we log and continue.
+        The child is disposed with its subtree (``dispose_child_subtree``).
         """
         if not hasattr(self, "_child_views"):
             return
         child = self._child_views.pop(view_id, None)
         if child is None:
             return
-        from .._exposure import uses_legacy_exposure
+        from .._child_lifecycle import dispose_child_subtree
 
-        if not uses_legacy_exposure(child):
-            from .._child_lifecycle import dispose_child_subtree
-
-            dispose_child_subtree(child)
-            return
-        from .._child_lifecycle import release_legacy_child
-
-        # Its waiters and nested children first (#3244), then the app hook.
-        release_legacy_child(child)
-        cleanup = getattr(child, "_cleanup_on_unregister", None)
-        if callable(cleanup):
-            try:
-                from .._child_lifecycle import call_teardown_hook
-
-                call_teardown_hook(child, cleanup)
-            except Exception:  # noqa: BLE001 — defensive: never break disconnect
-                logger.exception("child view %s _cleanup_on_unregister raised", view_id)
+        dispose_child_subtree(child)
 
     # ------------------------------------------------------------------
     # Queries (used by the consumer's event-dispatch path)
@@ -311,12 +307,7 @@ class StickyChildRegistry:
             try:
                 cancel_all()
             except Exception:  # noqa: BLE001 — cleanup hook must not raise
-                from .._exposure import uses_legacy_exposure
-
-                if uses_legacy_exposure(self):
-                    logger.exception("sticky _on_sticky_unmount: cancel_async_all() failed")
-                else:
-                    logger.error("Explicit sticky async cleanup failed")
+                logger.error("Explicit sticky async cleanup failed")
         return None
 
     def _on_sticky_update(self, changed: Dict[str, Any]) -> None:
@@ -331,6 +322,8 @@ class StickyChildRegistry:
             class Sidebar(LiveView):
                 sticky = True
                 sticky_id = "sidebar"
+                sticky_update_inputs = ("section",)
+                section = state("home")
 
                 def mount(self, request, section="home", **kwargs):
                     self.section = section
@@ -359,13 +352,16 @@ class StickyChildRegistry:
           every render; the hook must be idempotent.
         * Private by name, so no client event can name it: it is reachable
           only from the ``{% live_render %}`` tag, never over the socket.
-        * Not called for a sticky preserved across ``live_redirect``: that
-          child is not rendered again, the browser keeps its DOM.
+        * A child carried across ``live_redirect`` is called with the
+          destination's changed updatable inputs, and re-rendered to the
+          browser after the mount frame.
         * A child that does not override it keeps today's behaviour: the new
           values are ignored and djust logs a warning naming them.
-        * A child with ``exposure_policy = "explicit"`` is remounted when its
-          inputs change (they are part of its reuse identity), so this is
-          never reached for one.
+        * A child receives only the
+          inputs named in its ``sticky_update_inputs``. Every other input is
+          part of its identity: a change to one remounts the child (its
+          ``persist="server"`` state is not restored either), so this is
+          never reached for it.
 
         The default does nothing.
         """
@@ -411,13 +407,7 @@ class StickyChildRegistry:
             sticky_id = getattr(child, "sticky_id", None) or _view_id
             if not _authorized(child):
                 from .._child_lifecycle import discard_sticky_child
-                from .._exposure import uses_legacy_exposure
 
-                if uses_legacy_exposure(child):
-                    logger.info(
-                        "Sticky child %s auth denied for new request; discarding",
-                        sticky_id,
-                    )
                 discard_sticky_child(child)
                 continue
             # ``_authorized`` already set ``child.request`` to the new request

@@ -169,7 +169,7 @@ from djust import LiveView  # noqa: E402
 
 
 class DataListView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = """<div dj-view="test_jit_data_regressions.DataListView">
     {% for entry in entries %}<section>
@@ -180,8 +180,10 @@ class DataListView(LiveView):
     {% if entry.document %}<a href="{{ entry.document.url }}">file</a>{% else %}<b>no-document</b>{% endif %}
     </section>{% endfor %}</div>"""
 
-    def mount(self, request, **kwargs):
-        self.entries = DataEntry.objects.all().order_by("pk")
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["entries"] = DataEntry.objects.all().order_by("pk")
+        return ctx
 
 
 @pytest.fixture
@@ -236,10 +238,11 @@ def test_http_model_list(data_rows, force_codegen, monkeypatch):
 async def test_websocket_model_list(data_rows):
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
-        communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        communicator = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
         try:
             connected, _ = await communicator.connect()
             assert connected

@@ -343,18 +343,69 @@ const _scopedRegistry = new Map();
 let _scopedDelegationInstalled = false;
 
 /**
+ * Does a patch's change record (#4001) add, remove or re-mark a LiveView root?
+ * Then the governed-roots set is stale and only a full scan is correct. The
+ * selector is wider than _refreshScopedGovernorRoots' (it also matches
+ * <html>/<head>), which only sends more updates down the full path.
+ */
+function _changesTouchRoots(changes) {
+    const sel = '[dj-view], [dj-root]';
+    const hit = (n) => n.nodeType === 1 && (n.matches(sel) || n.querySelector(sel) !== null);
+    if (changes.inserted.some(hit) || changes.removed.some(hit)) return true;
+    for (const names of changes.attrs.values()) {
+        if (names.has('dj-view') || names.has('dj-root')) return true;
+    }
+    return false;
+}
+
+/**
+ * The elements matching `selector` that a patch's change record (#4001)
+ * covers: inside an inserted subtree (its root included) or with a changed
+ * attribute. An element the patch did not insert and whose attributes it did
+ * not change is as it was at the last scan, so its binding is too.
+ */
+function _changedMatches(changes, selector) {
+    const out = new Set();
+    changes.inserted.forEach(function(r) {
+        if (r.matches(selector)) out.add(r);
+        r.querySelectorAll(selector).forEach(function(el) { out.add(el); });
+    });
+    changes.attrs.forEach(function(_names, el) {
+        if (el.isConnected && el.matches(selector)) out.add(el);
+    });
+    return Array.from(out);
+}
+
+/**
+ * The elements a bind loop visits (#4001): with a change record, the ones it
+ * covers (see _changedMatches); without one, every match under `root` (the
+ * document by default), as every bind loop scanned before.
+ */
+function _scanSet(selector, changes, root) {
+    return changes ? _changedMatches(changes, selector) : (root || document).querySelectorAll(selector);
+}
+
+/**
  * Scan the DOM for elements with dj-window-[event] / dj-document-[event] attributes
  * and register them in the scoped registry for delegated dispatch.
+ *
+ * `changes` (#4001): what a patch batch changed (see _summarizeMutations).
+ * With it, only the inserted subtrees and the elements whose attributes
+ * changed are scanned: an untouched element's attributes are as they were at
+ * the last scan, and its registry entry with them. Eviction still visits the
+ * whole registry (its size is the number of declaring elements, not the page).
  */
-function _scanScopedElements() {
+function _scanScopedElements(changes) {
     const scopedPrefixes = ['dj-window-', 'dj-document-'];
     const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+    const scoped = changes && changes.scoped && !_changesTouchRoots(changes);
     // Refresh the shared governed-roots set first: the registry eviction
     // below and the orphan sweep both judge staleness against it, and the
     // set must describe the CURRENT DOM on every bind. Root-selection rules
     // (every root, outermost only, MUST match the sweep's set) live on
-    // _refreshScopedGovernorRoots (#2110, #2832).
-    _refreshScopedGovernorRoots();
+    // _refreshScopedGovernorRoots (#2110, #2832). A scoped scan keeps the set:
+    // _changesTouchRoots established that no root came, went or changed.
+    if (!scoped) _refreshScopedGovernorRoots();
 
     // Clear stale entries through the SAME predicate the orphan sweep uses
     // (#2832): the element left the DOM, the server dropped the attribute,
@@ -438,6 +489,18 @@ function _scanScopedElements() {
         }
     }
 
+    if (scoped) {
+        changes.inserted.forEach(function(r) {
+            if (!_isGovernedByScopedRoots(r)) return;
+            scanElement(r);
+            r.querySelectorAll('*').forEach(scanElement);
+        });
+        changes.attrs.forEach(function(_names, el) {
+            if (el.isConnected && _isGovernedByScopedRoots(el)) scanElement(el);
+        });
+        return;
+    }
+
     if (_scopedGovernorRoots.length === 0) {
         // No LiveView root on the page — fall back to the whole document.
         // `document` itself has no .attributes (scanning it would throw), and
@@ -513,20 +576,7 @@ function _installScopedDelegation() {
                         const strictParams = _strictBinding(entry.element, entry.parsed.name,
                             generated, entry.parsed.args, entry.element);
                         if (strictParams === false) return;
-                        if (strictParams) {
-                            handleEvent(entry.parsed.name, strictParams);
-                            return;
-                        }
-
-                        const params = extractTypedParams(entry.element);
-                        addEventContext(params, entry.element);
-                        Object.assign(params, generated);
-
-                        if (entry.parsed.args.length > 0) {
-                            params._args = entry.parsed.args;
-                        }
-
-                        handleEvent(entry.parsed.name, params);
+                        handleEvent(entry.parsed.name, strictParams);
                     });
                 }, evtType === 'scroll' || evtType === 'resize' ? { passive: true } : false);
             })(prefix, target, evtType);
@@ -716,25 +766,9 @@ function getFieldName(element) {
 }
 
 /**
- * Build standard form event params with component context.
- * Used by change, input, blur, focus event handlers.
- * @param {HTMLElement} element - Form element that triggered the event
- * @param {any} value - Current value of the field
- * @returns {Object} - Params object with value, field, and optional component_id
- */
-function buildFormEventParams(element, value) {
-    const fieldName = getFieldName(element);
-    const params = { value, field: fieldName };
-    // Merge dj-value-* attributes from the triggering element
-    Object.assign(params, collectDjValues(element));
-    addEventContext(params, element);
-    return params;
-}
-
-/**
  * ADR-036 strict collection for a form-field binding (change, input, blur,
  * focus): generated `value` and `field`, dj-value-* from the field itself.
- * Returns strict params, null for a legacy binding, or false when rejected.
+ * Returns the params, or false when rejected.
  */
 function _strictFormBinding(handlerString, field, value) {
     const parsed = parseEventHandler(handlerString || '');
@@ -873,14 +907,9 @@ async function _handleDjClick(element, e) {
         optimisticUpdateId = window.djust.optimistic.applyOptimisticUpdate(element, parsed.name);
     }
 
-    // Extract all data-* attributes with type coercion support
-    const params = strictParams || extractTypedParams(element);
-
-    // Add positional arguments from handler syntax if present
-    // e.g., dj-click="set_period('month')" -> params._args = ['month']
-    if (!strictParams && parsed.args.length > 0) {
-        params._args = parsed.args;
-    }
+    // dj-value-* arguments and positional ones (dj-click="set_period('month')"
+    // -> params._args = ['month']), collected by the strict binder above.
+    const params = strictParams;
 
     addEventContext(params, element);
 
@@ -933,10 +962,13 @@ function _handleDjCopy(element, e) {
         element.textContent = feedbackText;
         setTimeout(function() { element.textContent = original; }, 1500);
 
-        // Optional server event for analytics
+        // Optional server event for analytics. It carries no owner context,
+        // so the server runs it on the page's view: a strict handler there
+        // gets `text` only when declared (#4225).
         const copyEvent = element.getAttribute('dj-copy-event');
         if (copyEvent) {
-            handleEvent(copyEvent, markSlotOf({ text: textToCopy }, element));
+            const strict = _strictBinding(element, copyEvent, { text: textToCopy }, [], null, true);
+            if (strict !== false) handleEvent(copyEvent, markSlotOf(strict, element));
         }
     });
 }
@@ -981,7 +1013,7 @@ function _changeValue(field) {
 // as protocol: `event` / `params` switch the HTTP fallback's flat body to its
 // {event, params} envelope (a button named `event` re-routed the call),
 // `component_id` / `view_id` address a component or embedded view,
-// `csrfmiddlewaretoken` is the form's own token field; `_`-names (_target) fail
+// `csrfmiddlewaretoken` is the form's own token field; `_`-names (the 1.x target key) fail
 // the identifier rule, and the prototype keys are UNSAFE_KEYS.
 const _SUBMITTER_NAME = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 const _SUBMITTER_RESERVED = ['event', 'params', 'component_id', 'view_id', 'csrfmiddlewaretoken', ...UNSAFE_KEYS];
@@ -1026,11 +1058,9 @@ function _submitParams(form, submitter) {
 async function _handleDjSubmit(element, e) {
     e.preventDefault();
 
-    // ADR-036: form fields are generated values; a strict handler receives
-    // only the fields it declares (all of them with **form_data), no _target.
-    // The pressed button is one of them (#3958): _target does not exist under
-    // strict (Q2), and a legacy handler's closed signature would reject a new
-    // field, so legacy keeps _target alone.
+    // ADR-036: form fields are generated values; a handler receives only the
+    // fields it declares (all of them with **form_data), no 1.x target key. The
+    // pressed button is one of them (#3958).
     const strictParams = _strictBinding(element, element.getAttribute('dj-submit'),
         _submitParams(element, e.submitter), []);
     if (strictParams === false) return;
@@ -1072,20 +1102,9 @@ async function _handleDjSubmit(element, e) {
     // so it always resolves regardless of error.
     _setFormPending(element, true);
 
-    let params;
-    if (strictParams) {
-        params = strictParams;
-    } else {
-        params = _submitParams(element, null);
-
-        // Merge dj-value-* attributes from the form element
-        Object.assign(params, collectDjValues(element));
-    }
+    const params = strictParams;
 
     addEventContext(params, element);
-
-    // _target: include submitter name if available (legacy only, ADR-036 Q2)
-    if (!strictParams) params._target = (e.submitter && (e.submitter.name || e.submitter.id)) || null;
 
     // Pass target element for optimistic updates (Phase 3)
     params._targetElement = element;
@@ -1120,16 +1139,8 @@ async function _handleDjChange(element, e) {
     const parsedChange = parseEventHandler(changeHandler);
 
     const value = changeValue;
-    const params = strictParams || buildFormEventParams(e.target, value);
-
-    // Add positional arguments from handler syntax if present
-    // e.g., dj-change="toggle_todo(3)" -> params._args = [3]
-    if (!strictParams && parsedChange.args.length > 0) {
-        params._args = parsedChange.args;
-    }
-
-    // _target: include triggering field's name (or id, or null); legacy only
-    if (!strictParams) params._target = e.target.name || e.target.id || null;
+    // Positional arguments (dj-change="toggle_todo(3)" -> _args) are in params.
+    const params = strictParams;
 
     // Add target element for loading state (consistent with other handlers)
     params._targetElement = e.target;
@@ -1167,13 +1178,7 @@ async function _handleDjInput(element, e) {
     const inputHandler = element.getAttribute('dj-input');
     const parsedInput = parseEventHandler(inputHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
-    if (!strictParams && parsedInput.args.length > 0) {
-        params._args = parsedInput.args;
-    }
-
-    // _target: include triggering field's name (or id, or null); legacy only
-    if (!strictParams) params._target = e.target.name || e.target.id || null;
+    const params = strictParams;
 
     markSlotOf(params, element);
     await handleEvent(parsedInput.name, params);
@@ -1200,10 +1205,7 @@ async function _handleDjBlur(element, e) {
     const blurHandler = element.getAttribute('dj-blur');
     const parsedBlur = parseEventHandler(blurHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
-    if (!strictParams && parsedBlur.args.length > 0) {
-        params._args = parsedBlur.args;
-    }
+    const params = strictParams;
     markSlotOf(params, element);
     await handleEvent(parsedBlur.name, params);
 }
@@ -1229,10 +1231,7 @@ async function _handleDjFocus(element, e) {
     const focusHandler = element.getAttribute('dj-focus');
     const parsedFocus = parseEventHandler(focusHandler);
 
-    const params = strictParams || buildFormEventParams(e.target, _fieldValue(e.target));
-    if (!strictParams && parsedFocus.args.length > 0) {
-        params._args = parsedFocus.args;
-    }
+    const params = strictParams;
     markSlotOf(params, element);
     await handleEvent(parsedFocus.name, params);
 }
@@ -1291,13 +1290,10 @@ async function _handleDjPaste(element, e) {
         }
     }
 
-    const params = strictPaste || payload;
-    if (!strictPaste) {
-        if (parsedPaste.args.length > 0) params._args = parsedPaste.args;
-        // Owner context, like every other binding: a paste inside a component or
-        // an embedded child reaches that owner, not the root view.
-        addEventContext(params, element);
-    }
+    // Collected above (a clipboard exists here); the element's owner context
+    // is attached by the binder, so a paste inside a component or an embedded
+    // child reaches that owner.
+    const params = strictPaste;
 
     // Suppress the default paste only when the element opts in
     // with dj-paste-suppress. Otherwise let the browser also
@@ -1403,10 +1399,7 @@ async function _handleDjKeyboard(element, e, eventType, attrName) {
         return; // User cancelled
     }
 
-    const params = strictParams || keyGenerated;
-
-    // Merge dj-value-* attributes from the element
-    if (!strictParams) Object.assign(params, collectDjValues(element));
+    const params = strictParams;
 
     addEventContext(params, e.target);
 
@@ -1632,7 +1625,8 @@ function _nativeObservationReady() {
     if (navigator.onLine === false) return false;
     if (!liveViewWS) return !findPageViewContainer();
     if (!liveViewWS.enabled) {
-        return window.DJUST_USE_WEBSOCKET === false && !liveViewWS.eventSource;
+        return (liveViewWS.httpOnly === true || window.DJUST_USE_WEBSOCKET === false)
+            && !liveViewWS.eventSource;
     }
     const connection = liveViewWS.ws || liveViewWS.eventSource;
     return !!(liveViewWS.viewMounted && connection && connection.readyState === 1);
@@ -1657,7 +1651,7 @@ async function _flushNativeObservation(element, record) {
     record.dirty = false;
     record.sending = true;
     ++record.sequence;
-    const params = Object.assign(strictParams || generated, {_targetElement: element, _skipLoading: true});
+    const params = Object.assign(strictParams, {_targetElement: element, _skipLoading: true});
     addEventContext(params, element);
     try {
         await handleEvent(record.handler, params);
@@ -1673,10 +1667,10 @@ async function _flushNativeObservation(element, record) {
     }
 }
 
-function _bindNativeDropdownObservers(root) {
+function _bindNativeDropdownObservers(root, changes) {
     const selector = '[data-dj-native-dropdown]';
-    const elements = Array.from(root.querySelectorAll(selector));
-    if (root.matches && root.matches(selector)) elements.unshift(root);
+    const elements = Array.from(_scanSet(selector, changes, root));
+    if (!changes && root.matches && root.matches(selector)) elements.unshift(root);
     elements.forEach(element => {
         let record = _nativeDropdownObservers.get(element);
         const handler = element.getAttribute('data-dj-observe-toggle');
@@ -1720,9 +1714,12 @@ function _bindNativeDropdownObservers(root) {
 
 window.addEventListener('online', () => _bindNativeDropdownObservers(document));
 
-function bindLiveViewEvents(scope) {
+function bindLiveViewEvents(scope, changes) {
     const root = scope || getLiveViewRoot() || document;
-    _bindNativeDropdownObservers(root);
+    // #4001: `changes` (a patch's change record, reinitAfterDOMUpdate decides
+    // when it applies) narrows every bind loop below to what the patch
+    // inserted or re-attributed. Without it each loop scans as before.
+    _bindNativeDropdownObservers(root, changes);
 
     // Install delegated listeners on the LiveView root element.
     // Only install on actual [dj-view]/[dj-root] elements, NOT on document.body
@@ -1733,12 +1730,12 @@ function bindLiveViewEvents(scope) {
 
     // Bind upload handlers (dj-upload, dj-upload-drop, dj-upload-preview)
     if (window.djust.uploads) {
-        window.djust.uploads.bindHandlers(scope);
+        window.djust.uploads.bindHandlers(scope, changes);
     }
 
     // Bind navigation directives (dj-patch, dj-navigate)
     if (window.djust.navigation) {
-        window.djust.navigation.bindDirectives(scope);
+        window.djust.navigation.bindDirectives(scope, changes);
     }
 
     // === Per-element scanning section (only for non-delegable events) ===
@@ -1749,8 +1746,8 @@ function bindLiveViewEvents(scope) {
     const pollSelector = '[dj-poll]';
     // The scan root itself can carry the poll (`<div dj-root dj-poll="...">`):
     // querySelectorAll sees only its descendants.
-    const pollElements = Array.from(root.querySelectorAll(pollSelector));
-    if (typeof root.matches === 'function' && root.matches(pollSelector)) pollElements.unshift(root);
+    const pollElements = Array.from(_scanSet(pollSelector, changes, root));
+    if (!changes && typeof root.matches === 'function' && root.matches(pollSelector)) pollElements.unshift(root);
     pollElements.forEach(element => {
         const pollHandler = element.getAttribute('dj-poll');
         if (!pollHandler) return;
@@ -1788,20 +1785,19 @@ function bindLiveViewEvents(scope) {
                 return;
             }
             if (document.hidden) return;
-            // Strict: routing context lets the owner that resolved the contract receive it.
-            const strictParams = _strictBinding(element, parsed.name, {}, [], element);
-            if (strictParams === false) return;
-            if (strictParams) {
-                handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
-                return;
+            // A poll inside an embedded child view (`{% live_render %}`) is that
+            // child's and carries its view_id. A component owns its poll only
+            // when its contract lists the handler; otherwise the poll reaches
+            // the host view, with no component_id.
+            let hostPoll = false;
+            if (!getEmbeddedViewId(element) && getComponentId(element)) {
+                try { hostPoll = !_resolveParameterContract(element, parsed.name).contract; } catch { hostPoll = false; }
             }
-            // A poll inside an embedded child view (`{% live_render %}`) is
-            // that child's: it carries the child's view_id, as the strict
-            // path above does. A component's poll still reaches its host.
-            const params = Object.assign(extractTypedParams(element), { _skipLoading: true });
-            const embeddedViewId = getEmbeddedViewId(element);
-            if (embeddedViewId) params.view_id = embeddedViewId;
-            handleEvent(parsed.name, markSlotOf(params, element));
+            const strictParams = hostPoll
+                ? _strictBinding(element, parsed.name, {}, [], null, true)
+                : _strictBinding(element, parsed.name, {}, [], element);
+            if (strictParams === false) return;
+            handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
         };
 
         const intervalId = setInterval(firePoll, interval);
@@ -1834,10 +1830,10 @@ function bindLiveViewEvents(scope) {
     // registry entries for elements that left the DOM, so repeated calls are
     // safe and cheap. Without this, a dj-window-keydown.escape on patch-inserted
     // content would silently never bind (#1996).
-    _scanScopedElements();
+    _scanScopedElements(changes);
 
     // --- Feature 2: dj-click-away ---
-    document.querySelectorAll('[dj-click-away]').forEach(element => {
+    _scanSet('[dj-click-away]', changes).forEach(element => {
         const handlerName = element.getAttribute('dj-click-away');
         if (_isHandlerBound(element, 'click-away')) {
             // #2845 — a surviving element keeps both its listener and its
@@ -1861,7 +1857,7 @@ function bindLiveViewEvents(scope) {
             // dj-confirm support
             if (!checkDjConfirm(element)) return;
 
-            const params = strictParams || extractTypedParams(element);
+            const params = strictParams;
             addEventContext(params, element);
 
             await handleEvent(handlerName, params);
@@ -1872,7 +1868,7 @@ function bindLiveViewEvents(scope) {
     });
 
     // --- Feature 3: dj-shortcut ---
-    document.querySelectorAll('[dj-shortcut]').forEach(element => {
+    _scanSet('[dj-shortcut]', changes).forEach(element => {
         const attrValue = element.getAttribute('dj-shortcut');
         const allowInInput = element.hasAttribute('dj-shortcut-in-input');
 
@@ -1946,9 +1942,8 @@ function bindLiveViewEvents(scope) {
                 const shortcutGenerated = {key: e.key, code: e.code, shortcut: binding.comboString};
                 const strictParams = _strictBinding(element, binding.handler, shortcutGenerated, []);
                 if (strictParams === false) return;
-                const params = strictParams || extractTypedParams(element);
+                const params = strictParams;
                 addEventContext(params, element);
-                if (!strictParams) Object.assign(params, shortcutGenerated);
 
                 await handleEvent(binding.handler, params);
                 return; // Fire first match only
@@ -1971,7 +1966,7 @@ function bindLiveViewEvents(scope) {
     // element actually entered/left, so moving from a parent into its child
     // fires neither the parent's leave nor its enter — the entire reason
     // these directives use these event types rather than mouseover/mouseout.
-    document.querySelectorAll('[dj-mouseenter], [dj-mouseleave]').forEach(element => {
+    _scanSet('[dj-mouseenter], [dj-mouseleave]', changes).forEach(element => {
         for (let mi = 0; mi < 2; mi++) {
             const attrName = mi === 0 ? 'dj-mouseenter' : 'dj-mouseleave';
             const attrValue = element.getAttribute(attrName);
@@ -2001,10 +1996,7 @@ function bindLiveViewEvents(scope) {
                 const strictParams = _strictBinding(element, parsed.name, {}, parsed.args);
                 if (strictParams === false) return;
                 if (!checkDjConfirm(element)) return;
-                const params = strictParams || extractTypedParams(element);
-                if (!strictParams && parsed.args.length > 0) {
-                    params._args = parsed.args;
-                }
+                const params = strictParams;
                 addEventContext(params, element);
                 await handleEvent(parsed.name, params);
             };
@@ -2026,23 +2018,23 @@ function bindLiveViewEvents(scope) {
 
     // Re-scan dj-loading attributes after DOM updates so dynamically
     // added elements (e.g. inside modals) get registered.
-    globalLoadingManager.scanAndRegister();
+    globalLoadingManager.scanAndRegister(changes);
 
     // dj-mounted: fire event for elements that have entered the DOM after
     // initial mount. Uses WeakSet to track already-fired elements so each
     // DOM node only triggers once (replaced nodes are new objects and will fire again).
     if (window.djust._mountReady) {
-        document.querySelectorAll('[dj-mounted]').forEach(el => {
+        _scanSet('[dj-mounted]', changes).forEach(el => {
             if (_mountedElements.has(el)) return;
             _mountedElements.add(el);
 
             const handlerName = el.getAttribute('dj-mounted');
             if (!handlerName) return;
 
-            // Collect dj-value-* and data-* params from the mounted element
+            // Collect dj-value-* params from the mounted element
             const strictParams = _strictBinding(el, handlerName, {}, []);
             if (strictParams === false) return;
-            const params = strictParams || extractTypedParams(el);
+            const params = strictParams;
             addEventContext(params, el);
 
             handleEvent(handlerName, params);
@@ -2408,7 +2400,7 @@ function clearOptimisticState(eventName) {
  *
  * Call this after any operation that replaces or morphs DOM content
  * (html_update, html_recovery, TurboNav, embedded view update, etc.)
- * instead of manually calling initReactCounters +
+ * instead of manually calling
  * bindLiveViewEvents + updateHooks + bindModelElements individually.
  */
 // WeakSet to track elements that have already been scrolled into view.
@@ -2416,57 +2408,93 @@ function clearOptimisticState(eventName) {
 // will scroll again — correct behavior for newly inserted content.
 const _scrolledElements = new WeakSet();
 
-function reinitAfterDOMUpdate(scope) {
-    initReactCounters();
-    bindLiveViewEvents(scope);
+function reinitAfterDOMUpdate(scope, changes) {
+    // #4001: `changes` is what the patches just applied changed (applyPatches'
+    // collector). With it, every rescan below visits the inserted subtrees and
+    // changed elements instead of the page, and hooks hear only of changes to
+    // their own element or subtree. The page is scanned as before when there is
+    // no record (mount, morph, navigation), when the patch added, removed or
+    // re-marked a LiveView root, and on the first render after a reconnect.
+    // A batch applied without a record since the last rescan (child and sticky
+    // views, cached answers) also forces one full scan, which binds what it
+    // inserted and refreshes the governed-roots set.
+    const pendingFull = window.djust._fullRescanPending;
+    window.djust._fullRescanPending = false;
+    const scoped = changes && changes.scoped && !pendingFull && !window.djust._isReconnect
+        && !_changesTouchRoots(changes) ? changes : null;
+    // A page-wide scan covers what was inserted between patches; collect anew
+    // from here (#4001 review: the next scoped record includes what follows).
+    if (!scoped && (!scope || scope === document) && typeof _ambientReset === 'function') _ambientReset();
+    bindLiveViewEvents(scope, scoped);
     // A clear_draft() from an event handler arrives in a patch (#2971).
-    applyDraftClearFlag();
+    applyDraftClearFlag(scoped);
     // A data-draft field this update inserted is restored and saved from its
     // first render, not only the ones present at init (#3351).
-    syncDraftFields();
+    syncDraftFields(false, scoped);
     // Extract any new colocated hook definitions (<script type="djust/hook">)
     // from the freshly-patched DOM BEFORE we mount/update hooks so definitions
-    // are visible to mountHooks().
+    // are visible to updateHooks().
     if (window.djust.extractColocatedHooks) {
-        window.djust.extractColocatedHooks(scope || document);
+        if (scoped) scoped.inserted.forEach((r) => window.djust.extractColocatedHooks(r));
+        else window.djust.extractColocatedHooks(scope || document);
     }
-    if (window.djust.mountHooks) {
-        // updateHooks scans for [dj-hook] — scope it too
-        const hookRoot = scope || getLiveViewRoot();
-        hookRoot.querySelectorAll('[dj-hook]').forEach(el => {
-            // Delegate to the hook system's per-element logic
-            if (window.djust.mountHooks) window.djust.mountHooks(el);
-        });
-    }
-    updateHooks();
+    // One pass over the document: destroyed() for hooks that left, then
+    // updated() / mounted() in document order. A separate mount sweep here
+    // gave a nested hook inserted by the update mounted() AND updated() in
+    // the same update (#3656).
+    updateHooks(undefined, scoped);
 
     // dj-model: an input this update inserted (or whose dj-model attributes it
     // changed) is bound here, not only at init (#3334). Idempotent: the bind
     // guard is a JS property on the element, never a DOM attribute a morph
     // would strip, so an unchanged input is skipped on every pass.
-    if (window.djust.bindModelElements) window.djust.bindModelElements(scope || document);
+    if (window.djust.bindModelElements) window.djust.bindModelElements(scope || document, scoped);
 
     // {% djust_offline_indicator %} text / status class for any indicator
-    // this update inserted (#3051, 52-offline-state.js).
-    if (window.djust._syncOfflineIndicators) window.djust._syncOfflineIndicators(scope || document);
+    // this update inserted (#3051, 52-offline-state.js), or whose content or
+    // attributes it rewrote.
+    if (window.djust._syncOfflineIndicators) {
+        if (scoped) {
+            const indicators = new Set(_changedMatches(scoped, '.djust-offline-indicator'));
+            scoped.touched.forEach((el) => {
+                const ind = el.closest('.djust-offline-indicator');
+                if (ind) indicators.add(ind);
+            });
+            indicators.forEach((el) => window.djust._syncOfflineIndicators(el));
+        } else {
+            window.djust._syncOfflineIndicators(scope || document);
+        }
+    }
 
     // dj-virtual / dj-viewport-*: re-scan after VDOM morph so new containers
     // get observers and existing ones pick up new first/last children. For
     // dj-virtual, existing containers must ALSO be refreshed so stream-
     // appended items render (initVirtualLists short-circuits on already-
     // tracked containers; refreshVirtualList is the re-window path).
+    // #4001: a patch on a page that tracks none and inserts none skips both.
     const reinitScope = scope || document;
-    if (window.djust.initVirtualLists) window.djust.initVirtualLists(reinitScope);
-    if (window.djust.refreshVirtualList) {
-        reinitScope.querySelectorAll('[dj-virtual]').forEach((el) => {
-            window.djust.refreshVirtualList(el);
-        });
+    // #4007: a chunked feature (dj-virtual, CursorOverlay, tutorial bubble)
+    // this update rendered for the first time loads its chunk now; the
+    // chunk's ready handler runs its init once it has loaded.
+    _djustLoadChunksFor(reinitScope, scoped);
+    const tracked = (fn) => (typeof fn === 'function' ? fn() : 0);
+    if (!scoped || tracked(window.djust._virtualListsTracked) > 0
+            || _changedMatches(scoped, '[dj-virtual], [data-dj-virtual-shell]').length > 0) {
+        if (window.djust.initVirtualLists) window.djust.initVirtualLists(reinitScope);
+        if (window.djust.refreshVirtualList) {
+            reinitScope.querySelectorAll('[dj-virtual]').forEach((el) => {
+                window.djust.refreshVirtualList(el);
+            });
+        }
     }
-    if (window.djust.initInfiniteScroll) window.djust.initInfiniteScroll(reinitScope);
+    if (window.djust.initInfiniteScroll && (!scoped || tracked(window.djust._infiniteScrollTracked) > 0
+            || _changedMatches(scoped, '[dj-viewport-top], [dj-viewport-bottom]').length > 0)) {
+        window.djust.initInfiniteScroll(reinitScope);
+    }
 
     // dj-scroll-into-view: auto-scroll elements into view after DOM updates
     const scrollRoot = scope || document;
-    scrollRoot.querySelectorAll('[dj-scroll-into-view]').forEach(el => {
+    _scanSet('[dj-scroll-into-view]', scoped, scrollRoot).forEach(el => {
         if (_scrolledElements.has(el)) return;
         _scrolledElements.add(el);
 
@@ -2502,7 +2530,6 @@ function reinitAfterDOMUpdate(scope) {
  * #4178: `form_values` and `data_attrs` are generated values (ADR-036 Q1). A
  * strict handler receives the ones it declares, plus the container's
  * dj-value-* arguments, validated by its contract like any event argument.
- * A legacy handler keeps the 1.x `_form_values` / `_data_attrs` envelope.
  */
 function _processAutoRecover() {
     if (!window.djust._isReconnect) return;
@@ -2535,13 +2562,8 @@ function _processAutoRecover() {
         const strictParams = _strictBinding(container, handlerName,
             {form_values: formValues, data_attrs: dataAttrs}, [], null, true);
         if (strictParams === false) return;
-        const params = strictParams || {
-            _form_values: formValues,
-            _data_attrs: dataAttrs
-        };
-
-        markSlotOf(params, container);
-        handleEvent(handlerName, params);
+        markSlotOf(strictParams, container);
+        handleEvent(handlerName, strictParams);
     });
 }
 
@@ -2681,28 +2703,10 @@ function _processFormRecovery() {
         // Skip if DOM value matches server default (avoid unnecessary server work)
         if (domValue === serverDefault) continue;
 
-        // A strict handler gets the same payload a live dj-change would send.
+        // The same payload a live dj-change would send.
         const strictParams = _strictFormBinding(handlerString, field, domValue);
         if (strictParams === false) continue;
-        if (strictParams) {
-            pendingEvents.push({ handlerName: handlerName, params: markSlotOf(strictParams, field) });
-            continue;
-        }
-
-        // Build event params matching dj-change param structure
-        const value = domValue;
-        const fieldName = field.name || field.id || null;
-        const params = { value: value, field: fieldName };
-
-        // Add positional arguments from handler syntax if present
-        if (parsed.args.length > 0) {
-            params._args = parsed.args;
-        }
-
-        // _target: include triggering field's name
-        params._target = fieldName;
-
-        pendingEvents.push({ handlerName: handlerName, params: markSlotOf(params, field) });
+        pendingEvents.push({ handlerName: handlerName, params: markSlotOf(strictParams, field) });
     }
 
     // Fire events sequentially to avoid server race conditions
@@ -2720,6 +2724,7 @@ function _processFormRecovery() {
 
 // Export for testing and for createNodeFromVNode to mark VDOM-created elements as bound
 window.djust.bindLiveViewEvents = bindLiveViewEvents;
+window.djust._scanSet = _scanSet;
 window.djust.reinitAfterDOMUpdate = reinitAfterDOMUpdate;
 window.djust.installDelegatedListeners = installDelegatedListeners;
 window.djust._isHandlerBound = _isHandlerBound;

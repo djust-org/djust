@@ -87,7 +87,7 @@ async def _mounted_consumer(view_class):
     The explicit-policy counterpart of :func:`_consumer_with_view`: an explicit
     view's server-originated turns (push, notify, tick) are authorized by the
     runtime that mounted it, against its live session, so the view is mounted
-    through the real ``handle_mount`` (whose render establishes the diff
+    through the real ``_mount_page`` (whose render establishes the diff
     baseline) rather than installed. Needs ``django_db(transaction=True)``.
     """
     from djust.websocket import LiveViewConsumer

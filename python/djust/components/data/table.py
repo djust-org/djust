@@ -216,9 +216,8 @@ class TableComponent(LiveComponent):
         the identity the handler takes as ``row_id``.
 
         ``dj-value-*``, NOT ``data-*`` (#2781): the client's form-event path
-        (``buildFormEventParams``, 09-event-binding.js) sends ``value``,
-        ``field``, ``component_id`` and the element's ``dj-value-*`` — it never
-        reads ``data-*``; only ``dj-click`` does (``extractTypedParams``). The
+        sends only what the handler declares plus the element's ``dj-value-*``;
+        it never reads ``data-*`` (the client no longer collects it anywhere). The
         first cut carried ``data-row-id``, so every row click reached
         ``toggle_row`` as ``row_id=""`` and toggled the empty string: one row
         could never stay selected, and the header never derived a full set.

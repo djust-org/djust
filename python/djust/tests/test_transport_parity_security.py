@@ -1,7 +1,7 @@
 """Transport-parity security net (WU1 — #1646 "make drift mechanically detectable").
 
 The mount surface is reached over THREE transports — WebSocket
-(``LiveViewConsumer.handle_mount``), the generic ``ViewRuntime.dispatch_mount``,
+(``LiveViewConsumer._mount_page``), the generic ``ViewRuntime.dispatch_mount``,
 and SSE (``_sse_mount_view``). Findings #7/#22/#23/#24 were all the SAME class:
 one transport had a security control (URL-traversal validation, allowlist-before-
 import) that a parallel transport lacked, so the same attacker payload was
@@ -105,12 +105,12 @@ _SENTINEL_MODULE = "djust_wu1_parity_import_sentinel"
 # --------------------------------------------------------------------------- #
 
 
-# ---- WebSocket (LiveViewConsumer.handle_mount) -------------------------------
-# handle_mount resolves the view via ``resolve_view_class`` (websocket.py:1915)
+# ---- WebSocket (LiveViewConsumer._mount_page) -------------------------------
+# _mount_page resolves the view via ``resolve_view_class`` (websocket.py:1915)
 # and builds the request via ``_validate_mount_url`` + ``RequestFactory().get()``
 # (websocket.py:2052-2054). Driving the full coroutine end-to-end needs ~700
 # lines of Rust/session/scope fixture (see test_handle_mount_drains_queues.py),
-# so we exercise the EXACT chokepoint calls handle_mount makes, at the same
+# so we exercise the EXACT chokepoint calls _mount_page makes, at the same
 # seams — the security verdict is produced entirely by those calls.
 def _ws_import_verdict(view_path: str) -> bool:
     from djust.websocket import _safe_error  # noqa: F401  (import-shape parity)
@@ -121,7 +121,7 @@ def _ws_import_verdict(view_path: str) -> bool:
 
 
 def _ws_request_path(url: str) -> str:
-    # Replicates handle_mount websocket.py:2052-2054 verbatim.
+    # Replicates _mount_page websocket.py:2052-2054 verbatim.
     from djust.websocket import _validate_mount_url
 
     page_url = _validate_mount_url(url)
@@ -175,10 +175,16 @@ async def _runtime_request_path(url: str) -> str:
 async def _sse_import_verdict(view_path: str) -> bool:
     from djust.sse import SSESession
 
+    from django.contrib.sessions.backends.cache import SessionStore
+
     session = SSESession(str(uuid.uuid4()))
     session._owner_user_pk = 7
     request = RequestFactory().get("/")
-    request.session = MagicMock()
+    # A real server-side session: the demo view declares state(persist="server")
+    # (#4187), and a mount refuses a session that cannot hold it. The cache store
+    # needs no database access in this async test.
+    request.session = SessionStore()
+    request.session.create()
     request.user = MagicMock(is_authenticated=False, pk=7)
     session._request = request
     await session.runtime.dispatch_mount(

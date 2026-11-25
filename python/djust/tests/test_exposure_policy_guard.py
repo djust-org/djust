@@ -1,18 +1,16 @@
 """ADR-038's construction guard, after activation (E6).
 
-``exposure_policy="explicit"`` is an enabled policy. The guard still refuses
-every configuration that would silently widen exposure or fall back to legacy
-exports: an unknown policy and exposure grants on a legacy view. None of these checks may
-evaluate a property or a state factory. Configuration errors are
-``ExposureConfigurationError`` (an ``ImproperlyConfigured``), whose messages
-are framework-authored and carry no view values.
+``exposure_policy="explicit"`` is the only policy (#4199). The guard refuses
+any other value, on the class when it is created and on construction. None of
+these checks may evaluate a property or a state factory. Configuration errors
+are ``ImproperlyConfigured``, whose messages are framework-authored and carry no
+view values.
 """
 
 import pytest
 from django.core.exceptions import ImproperlyConfigured
 
 from djust import LiveView
-from djust._exposure import ExposureConfigurationError
 from djust.decorators import state
 
 
@@ -41,29 +39,9 @@ def test_inherited_explicit_policy_constructs():
 
 
 @pytest.mark.parametrize("policy", ["explict", "", None, [], True])
-def test_unknown_policy_is_not_treated_as_legacy(policy):
+def test_unknown_policy_is_refused(policy):
     with pytest.raises(ImproperlyConfigured, match="exposure_policy"):
         LiveView(exposure_policy=policy)
-
-
-def test_legacy_policy_preserves_current_context_behavior():
-    view = LiveView(exposure_policy="legacy")
-    view.title = "Visible"
-    assert view.get_context_data()["title"] == "Visible"
-    assert "exposure_policy" not in view.get_context_data()
-    assert "exposure_policy" not in view.get_state()
-
-
-@pytest.mark.parametrize(
-    "options", [{"persist": "server"}, {"client": True}, {"persist": "client", "client": True}]
-)
-def test_legacy_views_cannot_silently_ignore_exposure_grants(options):
-    class View(LiveView):
-        exposure_policy = "legacy"
-        value = state(0, **options)
-
-    with pytest.raises(ExposureConfigurationError, match="cannot honor"):
-        View()
 
 
 @pytest.mark.parametrize(
@@ -81,17 +59,15 @@ def test_guard_does_not_evaluate_properties_or_factories():
     def fail():
         raise AssertionError("configuration check must not evaluate state")
 
-    for policy in ("legacy", "explicit"):
+    class View(LiveView):
+        exposure_policy = "explicit"
+        value = state(default_factory=fail)
 
-        class View(LiveView):
-            exposure_policy = policy
-            value = state(default_factory=fail)
+        @property
+        def service(self):
+            return fail()
 
-            @property
-            def service(self):
-                return fail()
-
-        View()
+    View()
 
 
 def test_http_view_renders_under_the_explicit_policy(rf, settings, db):
@@ -111,10 +87,16 @@ def test_http_view_renders_under_the_explicit_policy(rf, settings, db):
 
 
 def test_http_view_reports_an_invalid_policy_to_the_developer(rf, settings):
+    with pytest.raises(ImproperlyConfigured, match="exposure_policy"):
+
+        class Refused(LiveView):
+            exposure_policy = "explict"
+
     class InvalidPolicyView(LiveView):
-        exposure_policy = "explict"
         template = "<div dj-root></div>"
 
+    # Assigned after the class statement, so only construction can refuse it.
+    InvalidPolicyView.exposure_policy = "explict"
     settings.DEBUG = True
     # The guard's error is framework-authored and value-free, so it reaches
     # the developer through the protected HTTP entry (decision D-a).

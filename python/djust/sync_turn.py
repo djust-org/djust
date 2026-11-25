@@ -2,8 +2,10 @@
 
 A turn (``djust.turns``) runs a view's sync code in separate hops: the event
 handler, ``mount``, ``handle_params``, a ``start_async`` callback and its
-``handle_async_result``, ``handle_tick``, and the render's
-``get_context_data()`` (where the JIT evaluates the view's QuerySets), the
+``handle_async_result``, ``handle_tick``, and the render as a whole (#4276):
+its ``get_context_data()``, the JIT that evaluates the QuerySets the context
+holds, the normalize pass, and the Rust render's walks of the models the
+template reads (a relation it follows is a query), the
 authorization checks (``check_permissions``, ``get_object`` and
 ``has_object_permission``) and the ``on_mount`` / ``connected`` /
 ``disconnected`` lifecycle hooks, and the calls into a configured state store
@@ -56,6 +58,7 @@ import functools
 import logging
 from typing import Any, Callable, ContextManager, Optional, Tuple, TypeVar
 
+from ._component_ids import render_ids
 from ._held_rows import (
     RECORDED_STEPS,
     attributed,
@@ -121,6 +124,11 @@ _active_step: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "djust_sync_step", default=None
 )
 
+#: The view whose ``"render"`` step this thread's current call is in, so a
+#: render step nested in it (the ``get_context_data()`` inside
+#: ``_sync_state_to_rust`` inside a ``render*`` method, #4276) just runs.
+_rendering: contextvars.ContextVar[Any] = contextvars.ContextVar("djust_render_step", default=None)
+
 _resolved: Optional[Tuple[Any, SyncTurnWrapper]] = None
 
 
@@ -172,6 +180,12 @@ def _meter(view: Any, step: str, fn: Callable[..., Any]) -> Any:
     return hop(view, step, fn)
 
 
+def _embedded(view: Any) -> bool:
+    from .auth._login_required_middleware import is_embedded
+
+    return is_embedded(view)
+
+
 def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **kwargs: Any) -> _T:
     """Call ``fn(*args, **kwargs)`` on this thread inside the configured wrapper.
 
@@ -186,15 +200,29 @@ def run_sync_step(view: Any, step: str, fn: Callable[..., _T], /, *args: Any, **
     meanwhile), and kept when it raises (``djust._held_rows``, #4112).
     """
     if step == "render":
-        with reading(view):
-            if not is_marked(view):
-                return _run_step(view, step, fn, *args, **kwargs)
-            generation = mark_generation(view)
-            refresh_for_render(view)
-            result = _run_step(view, step, fn, *args, **kwargs)
-            unmark(view, generation)
-            return result
+        if view is not None and _rendering.get() is view:
+            # Nested in this view's own render step: that step already entered
+            # the wrapper and the meter, refreshed a marked view and will
+            # unmark it when the whole render returns (#4276).
+            return fn(*args, **kwargs)
+        rendering = _rendering.set(view)
+        try:
+            with reading(view):
+                if not is_marked(view):
+                    return _run_step(view, step, fn, *args, **kwargs)
+                generation = mark_generation(view)
+                refresh_for_render(view)
+                result = _run_step(view, step, fn, *args, **kwargs)
+                unmark(view, generation)
+                return result
+        finally:
+            _rendering.reset(rendering)
     if step in RECORDED_STEPS and view is not None and not _is_async(fn):
+        if step == "mount" and not _embedded(view):
+            # The components ``mount()`` builds get ids that are the same on every
+            # request (#4114). An embedded child has no view_id yet: random ids.
+            with writes_by(view), render_ids(view, "mount"):
+                return _run_step(view, step, fn, *args, **kwargs)
         with writes_by(view):
             return _run_step(view, step, fn, *args, **kwargs)
     return _run_step(view, step, fn, *args, **kwargs)
@@ -232,9 +260,10 @@ def sync_step(view: Any, step: str, fn: Callable[..., _T]) -> Callable[..., _T]:
     """
     if _is_async(fn):
         return fn
-    if step == "render" and view is not None:
+    if step in ("render", "mount") and view is not None:
         # The render's reads enter the view's read set, and a marked view is
-        # reset first: both in ``run_sync_step`` (#4112).
+        # reset first; a mount numbers the components it builds (#4114): both in
+        # ``run_sync_step`` (#4112).
         @functools.wraps(fn)
         def rendering(*args: Any, **kwargs: Any) -> _T:
             return run_sync_step(view, step, fn, *args, **kwargs)

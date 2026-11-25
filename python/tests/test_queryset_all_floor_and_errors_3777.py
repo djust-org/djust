@@ -315,23 +315,42 @@ class TestARaisingAllIsNotSilent3777:
         else:
             assert groups["all"] == []
 
-    def test_the_jit_handler_logs_it(self, world_users, monkeypatch, caplog) -> None:
-        """Through the real LiveView render: the failure is logged, and the page is NOT
-        silently rendered as 'this user has no groups' by the traversal."""
+    def test_the_jit_failure_raises_out_of_the_render_and_is_logged(
+        self, world_users, monkeypatch, caplog
+    ) -> None:
+        """Through the real LiveView render: the database error raises out of the render as in
+        Django's own (never a silent 'this user has no groups'), and the framework logs the refusal
+        as a value-free WARNING. The error text shows only under ``log_exception_detail``."""
+        from django.test import override_settings
 
         def boom(self):
             raise OperationalError("statement timeout")
 
         monkeypatch.setattr(User.groups.related_manager_cls, "get_queryset", boom)
         source = "{% for u in users %}{{ u.username }}[{% for g in u.groups.all %}{{ g.name }},{% endfor %}]{% endfor %}"
+
+        def render():
+            with pytest.raises(OperationalError, match="statement timeout"):
+                _liveview_render(source, {"users": User.objects.order_by("pk")})
+
         with caplog.at_level(logging.DEBUG):
-            _liveview_render(source, {"users": User.objects.order_by("pk")})
-        # djust 2.0 does not fall back to another serializer (#3546): the failure is reported
-        # as "JIT auto-serialization failed" at WARNING, with the database error chained.
+            render()
         logged = [r for r in caplog.records if r.levelno >= logging.WARNING]
-        assert any("JIT auto-serialization failed" in r.getMessage() for r in logged), [
+        assert any("Protected view operation failed" in r.getMessage() for r in logged), [
             (r.name, r.levelname, r.getMessage()) for r in caplog.records
         ]
+        assert not any("statement timeout" in r.getMessage() for r in logged)
+        caplog.clear()
+        with (
+            caplog.at_level(logging.DEBUG),
+            override_settings(LIVEVIEW_CONFIG={"log_exception_detail": True}),
+        ):
+            render()
+        assert any(
+            "JIT auto-serialization failed" in r.getMessage()
+            or "statement timeout" in r.getMessage()
+            for r in caplog.records
+        ), [(r.name, r.levelname, r.getMessage()) for r in caplog.records]
 
 
 @pytest.fixture
@@ -389,10 +408,15 @@ class _HolderOf:
 
 
 class TestPlainDataRowsAreKept3777:
-    @pytest.mark.parametrize("paths", [["m.all.x"], ["m.all.0.x"]], ids=["object", "indexed"])
-    def test_dict_rows_keep_their_data(self, paths) -> None:
+    @pytest.mark.parametrize(
+        ("paths", "rows"),
+        [(["m.all.x"], 2), (["m.all.1.x"], 2), (["m.all.0.x"], 1)],
+        ids=["object", "indexed", "indexed-slice"],
+    )
+    def test_dict_rows_keep_their_data(self, paths, rows) -> None:
+        # An indexed read is ``all()[:index + 1]`` (#3862 item 1).
         out = _rust.serialize_queryset([_HolderOf([{"x": 1}, {"x": 2}])], paths)
-        assert out[0]["m"]["all"] == [{"x": 1}, {"x": 2}]
+        assert out[0]["m"]["all"] == [{"x": 1}, {"x": 2}][:rows]
 
     def test_list_and_tuple_rows_keep_their_data(self) -> None:
         out = _rust.serialize_queryset([_HolderOf([[1, 2], (3, 4)])], ["m.all.x"])

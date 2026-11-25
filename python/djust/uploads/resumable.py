@@ -32,6 +32,12 @@ get back a subclass of :class:`ResumableUploadWriter` that wraps it.
 The resumable writer delegates ``open``/``write_chunk``/``close``/``abort``
 to the inner writer and layers on state-store persistence + idempotent
 replay of duplicate chunks.
+
+The WebSocket reconnect works on explicit (ADR-038) views too (#4175): the
+record is bound to the registering session and, for an explicit view, to its
+mount binding's principal (session, user, tenant) and view
+(:func:`upload_owner`). Resume, every upload frame and ``UploadStatusView``
+check it.
 """
 
 from __future__ import annotations
@@ -174,11 +180,14 @@ class ResumableUploadWriter(UploadWriter):
         state_store: Optional[UploadStateStore] = None,
         ttl_hours: float = DEFAULT_TTL_SECONDS / 3600,
         session_key: Optional[str] = None,
+        owner: Optional[Dict[str, str]] = None,
     ) -> None:
         super().__init__(upload_id, filename, content_type, expected_size)
         self.state_store: UploadStateStore = state_store or get_default_store()
         self.ttl: int = int(ttl_hours * 3600)
         self.session_key: Optional[str] = session_key
+        # An explicit view's binding (``upload_owner``, #4175); None for legacy.
+        self.owner: Optional[Dict[str, str]] = owner
         self._store_available: bool = True
         self._chunks_received: List[int] = []
         self._inner: Optional[UploadWriter] = None
@@ -371,6 +380,7 @@ class ResumableUploadWriter(UploadWriter):
             "content_type": self.content_type,
             "expected_size": self.expected_size,
             "session_key": self.session_key,
+            "owner": self.owner,
             "chunk_size": self._chunk_size,
             "chunks_received_ranges": compact_chunks(self._chunks_received),
             "bytes_received": bytes_received_from_ranges(
@@ -384,6 +394,20 @@ class ResumableUploadWriter(UploadWriter):
         if not self._store_available:
             return
         try:
+            existing = self.state_store.get(self.upload_id)
+            if existing is not None and (existing.get("session_key"), existing.get("owner")) != (
+                self.session_key,
+                self.owner,
+            ):
+                # Another session or principal registered the same client ref
+                # (#4175): never overwrite (or take over) its record.
+                logger.warning(
+                    "ResumableUploadWriter: state entry for upload %s belongs to another "
+                    "owner; disabling resume for this upload",
+                    self.upload_id,
+                )
+                self._store_available = False
+                return
             self.state_store.set(self.upload_id, self._base_state(), ttl=self.ttl)
         except UploadStateTooLarge:
             # Can only happen with an attacker-crafted filename. Log,
@@ -565,21 +589,36 @@ def _reset_suspended_uploads() -> None:
 # ---------------------------------------------------------------------------
 
 
+def upload_owner(binding: Any) -> Dict[str, str]:
+    """The owner an explicit view's upload is bound to (#4175).
+
+    ``binding`` is the mount's ``_exposure_sessions.StateBinding``: the digest
+    of its session, user and tenant, and its view (the route, slot-prefixed
+    for a slot view), so a resume from another user, tenant, page or slot is
+    refused. JSON-safe, so it is stored in the resume record as is.
+    """
+    return {"principal": binding.principal, "view": binding.view}
+
+
 def resolve_resume_request(
     upload_id: str,
     session_key: Optional[str],
     store: Optional[UploadStateStore] = None,
     active_refs: Optional[Callable[[str], bool]] = None,
+    owner: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Build the payload for an ``upload_resumed`` reply.
 
     Returns a dict with one of three ``status`` values:
 
-    - ``"resumed"`` — entry exists and session matches; reply contains
+    - ``"resumed"`` — entry exists, the session matches and so does the
+      ``owner`` (an explicit view's binding of session, user, tenant and
+      view, #4175; ``None`` on both sides for a legacy view); reply contains
       ``bytes_received`` and ``chunks_received``.
     - ``"not_found"`` — no entry, an entry with no recorded owner session,
-      or a session mismatch (same response on purpose, so the reply does
-      not reveal whether the ID exists). Matches ``UploadStatusView``.
+      a session mismatch or an owner mismatch (same response on purpose, so
+      the reply does not reveal whether the ID exists). Matches
+      ``UploadStatusView``.
     - ``"locked"`` — another session is actively uploading this ID.
       ``active_refs(upload_id)`` is called to check this; when not
       provided, the check is skipped.
@@ -614,6 +653,16 @@ def resolve_resume_request(
     if stored_session is None or stored_session != session_key:
         # No recorded owner, or a different session — same response as
         # not_found so the existence of the upload id is not revealed.
+        return {
+            "type": "upload_resumed",
+            "ref": upload_id,
+            "status": "not_found",
+            "bytes_received": 0,
+            "chunks_received": [],
+        }
+
+    if entry.get("owner") != owner:
+        # Another user, tenant or page in the same session (#4175).
         return {
             "type": "upload_resumed",
             "ref": upload_id,

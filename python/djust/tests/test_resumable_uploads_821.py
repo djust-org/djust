@@ -636,3 +636,84 @@ class TestAllowUploadResumableFlag:
         v.allow_upload("avatar", resumable=True)
         state = v._upload_manager.get_upload_state()
         assert state["avatar"]["config"]["resumable"] is True
+
+
+# ---------------------------------------------------------------------------
+# #4175 — the record is bound to an explicit view's owner
+# ---------------------------------------------------------------------------
+
+_OWNER_A = {"principal": "a" * 64, "view": "/t/upload/"}
+_OWNER_B = {"principal": "b" * 64, "view": "/t/upload/"}
+
+
+def _owned_writer(store, owner, session_key="sess1"):
+    cls = ResumableUploadWriter.with_inner(_RecordingInnerWriter, state_store=store)
+    return cls(
+        upload_id="uuid-owned",
+        filename="foo.mp4",
+        content_type="video/mp4",
+        expected_size=1024,
+        session_key=session_key,
+        owner=owner,
+    )
+
+
+class TestResumeOwner4175:
+    def test_owner_is_recorded(self):
+        store = InMemoryUploadState()
+        writer = _owned_writer(store, _OWNER_A)
+        writer.open()
+        writer.write_chunk(b"AAAA", chunk_index=0)
+        assert store.get("uuid-owned")["owner"] == _OWNER_A
+
+    def test_initial_state_does_not_overwrite_another_owners_record(self):
+        store = InMemoryUploadState()
+        first = _owned_writer(store, _OWNER_A)
+        first.open()
+        first.write_chunk(b"AAAA", chunk_index=0)
+        before = dict(store.get("uuid-owned"))
+
+        second = _owned_writer(store, _OWNER_B)
+        second.open()
+        assert second._store_available is False
+        second.write_chunk(b"BBBB", chunk_index=1)
+        assert store.get("uuid-owned") == before
+
+    def test_another_session_does_not_overwrite_a_legacy_record(self):
+        store = InMemoryUploadState()
+        first = _owned_writer(store, None, session_key="sess1")
+        first.open()
+        before = dict(store.get("uuid-owned"))
+        second = _owned_writer(store, None, session_key="sess2")
+        second.open()
+        assert second._store_available is False
+        assert store.get("uuid-owned") == before
+
+    @pytest.mark.parametrize(
+        "recorded, caller, status",
+        [
+            (None, None, "resumed"),
+            (_OWNER_A, None, "not_found"),
+            (None, _OWNER_A, "not_found"),
+            (_OWNER_A, _OWNER_B, "not_found"),
+            (_OWNER_A, {**_OWNER_A, "view": "/other/"}, "not_found"),
+            (_OWNER_A, dict(_OWNER_A), "resumed"),
+        ],
+    )
+    def test_resolve_owner_matrix(self, recorded, caller, status):
+        store = InMemoryUploadState()
+        store.set(
+            "abc",
+            {
+                "upload_id": "abc",
+                "session_key": "sess1",
+                "owner": recorded,
+                "bytes_received": 8,
+                "chunks_received_ranges": [[0, 1]],
+            },
+            ttl=60,
+        )
+        payload = resolve_resume_request("abc", "sess1", store=store, owner=caller)
+        assert payload["status"] == status
+        if status == "not_found":
+            assert payload["chunks_received"] == [] and payload["bytes_received"] == 0

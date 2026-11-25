@@ -145,6 +145,8 @@ class TestWhatAgreesSoTheBoundaryIsTheFilter:
     @pytest.mark.parametrize("read", list(READS))
     def test_a_liveview_over_the_same_list_agrees(self, world, op, read) -> None:
         source = _source(FILTERED[op], read)
+        # Filtered operand on the explicit (default) view: answered by the JIT row dicts
+        # (train/2.0-ah review S1).
         assert _got(_liveview_render, source, "list[Model]") == _expected(source, "list[Model]")
 
     @pytest.mark.parametrize("op", list(FILTERED))
@@ -199,6 +201,7 @@ class TestANestedNameIsTheSameGap:
         assert got == _django_render(source, _nested(shape)) == "[staff,ops,][staff,][]"
 
     def test_a_liveview_agrees_on_the_nested_list(self, world) -> None:
+        # Nested in a dict: the explicit sync runs the container walk (train/2.0-ah S1).
         got = html_lib.unescape(_liveview_render(NESTED, _nested("list[Model]")))
         assert got == _django_render(NESTED, _nested("list[Model]")) == "[staff,ops,][staff,]"
 

@@ -103,14 +103,14 @@ def test_fused_and_plain_fingerprints_agree_at_budget_boundary(budget):
     assert converted[1] == data
 
 
-# Stays legacy (split from the explicit migration): this test's subject is a legacy mechanism (see the legacy-subject worklist).
 def test_truncated_bookkeeping_stays_out_of_session_and_render_context():
     import json
 
     from djust.decorators import computed
+    from djust.testing import persisted_state
 
     class View(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         @computed("rows")
         def last(self):
@@ -122,7 +122,7 @@ def test_truncated_bookkeeping_stays_out_of_session_and_render_context():
     view._prev_context_fingerprints = {"rows": object()}
     view.mark_clean()
     view._snapshot_user_private_attrs()
-    private = view._get_private_state()
+    persisted = persisted_state(view)
     context = view.get_context_data()
     for key in (
         "_djust_computed_cache",
@@ -131,16 +131,21 @@ def test_truncated_bookkeeping_stays_out_of_session_and_render_context():
         "_prev_context_fingerprints",
         "_dirty_baseline",
     ):
-        assert key not in private
+        assert key not in persisted.names
         assert key not in context
-    json.dumps(private)
+    json.dumps(persisted.server)
     json.dumps(context)
 
 
 @pytest.mark.parametrize("factory", [set, frozenset])
-def test_unhashable_fingerprint_in_set_falls_back_to_identity(factory):
+def test_an_unhashable_scalar_in_a_set_member_is_fingerprinted_by_value(factory):
+    """A ``str`` subclass that cannot be hashed used to make the set's
+    fingerprint unbuildable (identity fallback). A subclass leaf is now kept
+    as its exact builtin copy (#3998), and a set's members as a sorted tuple,
+    so the set is fingerprinted by content and an in-place edit is seen."""
+
     class UnhashableString(str):
-        __hash__ = None
+        __hash__ = None  # type: ignore[assignment]
 
     class Member:
         _djust_fingerprint_state = True
@@ -148,7 +153,11 @@ def test_unhashable_fingerprint_in_set_falls_back_to_identity(factory):
         def __init__(self):
             self.state = {"name": UnhashableString("value")}
 
-    value = factory([Member()])
+    member = Member()
+    value = factory([member])
     fingerprint, truncated = deep_fingerprint(value)
-    assert fingerprint == ("i", id(value))
     assert not truncated
+    assert fingerprint[0] == "S" and fingerprint != ("i", id(value))
+    hash(fingerprint)
+    member.state["name"] = UnhashableString("other")
+    assert deep_fingerprint(value)[0] != fingerprint

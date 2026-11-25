@@ -73,7 +73,6 @@ if TYPE_CHECKING:
         background,
     )
     from .auth import LoginRequiredMixin, PermissionRequiredMixin
-    from .react import react_components, register_react_component, ReactMixin
     from .forms import FormMixin
     from .wizard import WizardMixin
     from .drafts import DraftModeMixin
@@ -88,7 +87,7 @@ if TYPE_CHECKING:
     from .db import notify_on_save, send_pg_notify
     from .markdown import render_markdown as render_markdown
 
-__version__ = "2.0.0rc1"
+__version__ = "2.0.0rc5"
 
 # The Rust extension is required (2.0): a missing build fails here, loudly.
 from ._rust import render_template, diff_html, RustLiveView  # noqa: E402
@@ -137,9 +136,6 @@ _LAZY: dict[str, tuple[str, str]] = {
     "background": ("djust.decorators", "background"),
     "LoginRequiredMixin": ("djust.auth", "LoginRequiredMixin"),
     "PermissionRequiredMixin": ("djust.auth", "PermissionRequiredMixin"),
-    "react_components": ("djust.react", "react_components"),
-    "register_react_component": ("djust.react", "register_react_component"),
-    "ReactMixin": ("djust.react", "ReactMixin"),
     "FormMixin": ("djust.forms", "FormMixin"),
     "WizardMixin": ("djust.wizard", "WizardMixin"),
     "DraftModeMixin": ("djust.drafts", "DraftModeMixin"),
@@ -441,9 +437,6 @@ __all__ = [
     "render_template",
     "diff_html",
     "RustLiveView",
-    "react_components",
-    "register_react_component",
-    "ReactMixin",
     "FormMixin",
     "WizardMixin",
     "DraftModeMixin",

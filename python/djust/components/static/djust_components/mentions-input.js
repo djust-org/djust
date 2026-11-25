@@ -523,7 +523,10 @@
         code: e.code,
       };
       var d = window.djust;
-      if (d && typeof d.collectDjValues === "function") {
+      // The client's strict binding collects the input's dj-value-* itself
+      // (and refuses one that reuses a payload name); only without it does the
+      // hook merge them.
+      if (d && typeof d._strictBinding !== "function" && typeof d.collectDjValues === "function") {
         var extra = d.collectDjValues(input);
         Object.keys(extra).forEach(function (k) {
           if (!(k in params)) params[k] = extra[k];

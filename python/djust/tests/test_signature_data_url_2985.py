@@ -326,4 +326,5 @@ class TestErrors:
         from djust.components.components.signature_pad import SignaturePad
 
         assert sig.DEFAULT_MAX_BYTES == 200 * 1024
-        assert 'data-max-bytes="204800"' in SignaturePad().render()
+        assert sig.MAX_SEND_BYTES == 60_000
+        assert 'data-max-bytes="60000"' in SignaturePad().render()

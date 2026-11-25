@@ -26,6 +26,43 @@ if TYPE_CHECKING:  # pragma: no cover — imported only for type hints
 logger = logging.getLogger(__name__)
 
 
+def _render_step(method: Callable[..., Any]) -> Callable[..., Any]:
+    """Run a render method's body inside ``LIVEVIEW_CONFIG["sync_turn_wrapper"]``'s
+    ``"render"`` step (#4276): the Rust render walks the sidecar's models (a
+    relation the template reads is a query), which ran outside the wrapper.
+
+    Applied UNDER :func:`~djust._held_rows.recorded_render`: that decorator must
+    stay outermost, or its ``reading(view)`` would make it take its nested branch
+    and skip ``render_completed()`` (#4112). The ``_sync_state_to_rust`` and
+    ``get_context_data()`` steps inside nest and enter the wrapper no second time.
+
+    A wrapper whose ``__exit__`` suppresses an exception would make the method
+    return ``None`` (and ``render_with_diff()``'s caller fail to unpack it, far
+    from the cause): a body that did not complete raises ``RuntimeError`` here.
+    """
+
+    @functools.wraps(method)
+    def stepped(self: Any, *args: Any, **kwargs: Any) -> Any:
+        from ..sync_turn import run_sync_step
+
+        completed: list = []
+
+        def body() -> Any:
+            result = method(self, *args, **kwargs)
+            completed.append(None)
+            return result
+
+        result = run_sync_step(self, "render", body)
+        if not completed:
+            raise RuntimeError(
+                "The sync_turn_wrapper suppressed an exception raised by %s.%s()"
+                % (type(self).__name__, method.__name__)
+            )
+        return result
+
+    return stepped
+
+
 # ---------------------------------------------------------------------------
 # Module-level regexes for streaming render split (hoisted for perf — see
 # PR review: avoid re.compile() on every request).
@@ -689,6 +726,26 @@ def _escape_joined_markers(html: str, joins: List[int], cat: Callable[[List[str]
     return cat(parts)
 
 
+#: What ``get_template()`` sets on a ``template_name`` view, restored with its
+#: kept result (#4299).
+_GET_TEMPLATE_ATTRS = (
+    "_full_template",
+    "_authenticated_partial_root",
+    "_authenticated_partial_root_origin",
+    "_authenticated_template_source",
+    "_named_partial_jit_source",
+)
+#: Methods the ``template_name`` build calls; overriding one opts out of the kept copy.
+_GET_TEMPLATE_HELPERS = (
+    "_build_template_from_name",
+    "_needs_authenticated_partial_root",
+    "_extract_liveview_root_with_wrapper",
+    "_retain_root_partial_definitions",
+    "_normalize_source_for_render",
+    "_strip_comments_and_whitespace",
+)
+
+
 class TemplateMixin:
     """Template-related methods: get_template, render, render_full_template, render_with_diff,
     and various HTML extraction/stripping helpers."""
@@ -703,6 +760,9 @@ class TemplateMixin:
         template_name: Optional[str]
         _full_template: Optional[str]
         _named_partial_jit_source: Optional[str]
+        _authenticated_partial_root: bool
+        _authenticated_partial_root_origin: Optional[str]
+        _authenticated_template_source: Optional[str]
         _rust_view: Any
         _current_html_size: Optional[int]
         _previous_html_size: Optional[int]
@@ -727,11 +787,9 @@ class TemplateMixin:
 
         def _sync_state_to_rust(
             self, preloaded_context: Optional[Dict[str, Any]] = None
-        ) -> None: ...
+        ) -> bool: ...
 
         def _record_dj_model_fields_from_rust(self, rust_view: Any) -> None: ...
-
-        def _hydrate_react_components(self, html: str) -> str: ...
 
         def _reset_temporary_assigns(self) -> None: ...
 
@@ -759,149 +817,206 @@ class TemplateMixin:
             self._authenticated_template_source = source if needs_root else None
             return source
         elif self.template_name:
-            # Load the raw template source
-            from django.template import loader
-
-            template = loader.get_template(self.template_name)
-            # Django's named-partial source is empty when template debugging is
-            # off. Validate the requested partial first, then use the owning
-            # backend's base source for extraction and the native include loader
-            # to execute only that partial with its defining origin.
-            import django
-
-            base_name, separator, partial_name = self.template_name.partition("#")
-            if django.VERSION >= (6, 0) and separator and partial_name:
-                from .._named_partials import selected_partial_source
-
-                base = template.backend.get_template(base_name)
-                base_source = base.template.source
-                extraction_source = selected_partial_source(base_source, base_name, partial_name)
-                include = "{% include " + json.dumps(self.template_name) + " %}"
-                self._full_template = include
-                self._authenticated_partial_root = True
-                self._authenticated_partial_root_origin = base_name
-                self._authenticated_template_source = include
-                self._named_partial_jit_source = extraction_source
-                return extraction_source
-            self._named_partial_jit_source = None
-            template_source = template.template.source
-
-            # A root reached through a partial needs its caller's actual control
-            # flow. Keep inheritance intact and let the Rust renderer select the
-            # authenticated root after rendering, rather than slicing its source.
-            self._authenticated_partial_root = self._needs_authenticated_partial_root(
-                template_source, self.template_name
-            )
-            self._authenticated_partial_root_origin = (
-                self.template_name if self._authenticated_partial_root else None
-            )
-            self._authenticated_template_source = (
-                template_source if self._authenticated_partial_root else None
-            )
-
-            # Check if template uses {% extends %} - if so, resolve inheritance in Rust
-            if "{% extends" in template_source or "{%extends" in template_source:
-                # Template directories in the EXACT same order Django searches.
-                # Shared with ``render_full_template`` step 2 via the single
-                # ``get_template_dirs()`` helper so the two paths can never drift
-                # apart on which backends honor APP_DIRS (#1646 parallel-path
-                # cure). Re-implementing this inline here ONLY recognized the
-                # stock Django backend, so under djust's own backend (the
-                # ``djust new`` scaffold) the app-template dirs were dropped and
-                # ``resolve_template_inheritance`` raised "Template not found"
-                # → swallowed → fragment-only on the initial GET (#1801).
-                template_dirs_str = get_template_dirs()
-
-                # Get the actual path Django resolved for verification
-                django_resolved_path = (
-                    template.origin.name
-                    if hasattr(template, "origin") and template.origin
-                    else None
-                )
-
-                # --- Resolve template inheritance in Rust ---
-                # A resolution error RAISES (2.0). Before, it logged a warning
-                # and served the dj-root fragment WITHOUT the base template's
-                # <head> (#1801), which hid a misconfigured template dir behind
-                # a page that half-worked.
-                from djust._rust import resolve_template_inheritance
-
-                try:
-                    resolved = resolve_template_inheritance(self.template_name, template_dirs_str)
-                except Exception as e:
-                    raise RuntimeError(
-                        f"djust could not resolve template inheritance for "
-                        f"{self.template_name!r} (searched {len(template_dirs_str)} template "
-                        f"dirs: {template_dirs_str}): {e}"
-                    ) from e
-
-                # Verify Rust found the same template as Django
-                if django_resolved_path:
-                    rust_would_find = None
-                    for template_dir in template_dirs_str:
-                        candidate = os.path.join(template_dir, self.template_name)
-                        if os.path.exists(candidate):
-                            rust_would_find = os.path.abspath(candidate)
-                            break
-
-                    if rust_would_find and os.path.abspath(django_resolved_path) != rust_would_find:
-                        logger.warning(
-                            "Template resolution mismatch! Django found: %s, "
-                            "Rust found: %s, Template dirs order: %s...",
-                            django_resolved_path,
-                            rust_would_find,
-                            template_dirs_str[:3],
-                        )
-
-                # Keep inheritance intact for the initial GET: source flattening
-                # loses runtime block.super scopes and their parent bodies.
-                self._full_template = "{% extends " + json.dumps(self.template_name) + " %}"
-
-                # For VDOM tracking, prefer the child template source — it contains
-                # the dj-root block directly without base template surrounding HTML,
-                # making extraction simpler and immune to Issue #365 miscount.
-                # Fall back to resolved if dj-root is only in the base template.
-                #
-                # Use the anchored-attribute regexes (NOT a naive substring): a
-                # naive ``"dj-root" in template_source`` matches the token ANYWHERE
-                # — including documentation/example code that merely *displays*
-                # ``dj-root``/``dj-view`` as text, or another word containing it as
-                # a substring (``adj-view``). When the real ``<div dj-root>`` lives
-                # in the BASE template and the child only mentions the tokens in
-                # text, the substring check wrongly picks the child as the VDOM
-                # source → extraction finds no real dj-root → render_full_template
-                # nests the whole page (two <!DOCTYPE>/two <footer>). The regexes
-                # require a REAL ``<div ... dj-root/dj-view ...>`` tag (#1746).
-                vdom_source = (
-                    template_source if _search_template_root_open(template_source) else resolved
-                )
-                vdom_template = self._extract_liveview_root_with_wrapper(vdom_source)
-
-                # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
-                vdom_template = self._normalize_source_for_render(vdom_template)
-
-                logger.debug(
-                    "[LiveView] Template inheritance resolved (%d chars), "
-                    "extracted liveview-root for VDOM (%d chars)",
-                    len(resolved),
-                    len(vdom_template),
-                )
-                return vdom_template
-
-            # No template inheritance - store full template and extract liveview-root for VDOM
-            self._full_template = template_source
-            extracted = self._extract_liveview_root_with_wrapper(template_source)
-            extracted = self._normalize_source_for_render(extracted)
-
-            logger.debug(
-                "[LiveView] No inheritance - extracted and stripped liveview-root: "
-                "%d chars (from %d chars)",
-                len(extracted),
-                len(template_source),
-            )
-            return extracted
+            return self._get_template_from_name()
         else:
             raise ValueError("Either template_name or template must be set")
+
+    def _get_template_from_name(self) -> str:
+        """``get_template()`` for a ``template_name`` view, kept per class (#4299).
+
+        Every live mount calls ``get_template()`` (the Rust view's
+        initialization, and before #4299 the page-shell reconstruction too),
+        and each call loaded the template, resolved its inheritance, searched
+        for the root and bridged its tag libraries again. The result and the
+        attributes it sets depend on the view class, ``template_name``, the
+        template directories and the template's text, so while render caches
+        are on (``DEBUG`` off) they are kept per that key: the template is
+        still loaded (a dict lookup under Django's cached loader), and a loader
+        that serves new text builds again. A Django 6 named partial is not
+        kept. A template refresh (hot reload, a change of ``DEBUG``,
+        ``TEMPLATES`` or ``INSTALLED_APPS``) clears them with the other render
+        caches.
+        """
+        from .._render_caches import render_caches_enabled
+        from .jit import _GET_TEMPLATE_CACHE_MAX, _get_template_cache
+
+        # A class that overrides a helper of the build may read instance state
+        # in it, so its result is not kept. A hit skips the build's tag-library
+        # bridging too; the miss that filled the entry already bridged them
+        # into the process-wide registries the later renders use.
+        cls = type(self)
+        name = cast(str, self.template_name)
+        key = None
+        if (
+            render_caches_enabled()
+            and "#" not in name
+            and all(
+                getattr(cls, helper, None) is getattr(TemplateMixin, helper)
+                for helper in _GET_TEMPLATE_HELPERS
+            )
+        ):
+            from django.template import loader
+
+            source = getattr(getattr(loader.get_template(name), "template", None), "source", None)
+            if isinstance(source, str):
+                key = (cls, name, tuple(get_template_dirs()), source)
+        if key is not None:
+            hit = _get_template_cache.get(key)
+            if hit is not None:
+                result, attrs = hit
+                for attr, value in attrs:
+                    setattr(self, attr, value)
+                return result
+        result = self._build_template_from_name()
+        if key is not None:
+            attrs = tuple((attr, getattr(self, attr, None)) for attr in _GET_TEMPLATE_ATTRS)
+            if len(_get_template_cache) >= _GET_TEMPLATE_CACHE_MAX:
+                _get_template_cache.clear()
+            _get_template_cache[key] = (result, attrs)
+        return result
+
+    def _build_template_from_name(self) -> str:
+        """The uncached ``template_name`` branch of :meth:`get_template`."""
+        template_name = cast(str, self.template_name)
+        # Load the raw template source
+        from django.template import loader
+
+        template = loader.get_template(template_name)
+        # Django's named-partial source is empty when template debugging is
+        # off. Validate the requested partial first, then use the owning
+        # backend's base source for extraction and the native include loader
+        # to execute only that partial with its defining origin.
+        import django
+
+        base_name, separator, partial_name = template_name.partition("#")
+        if django.VERSION >= (6, 0) and separator and partial_name:
+            from .._named_partials import selected_partial_source
+
+            base = template.backend.get_template(base_name)
+            base_source = base.template.source
+            extraction_source = selected_partial_source(base_source, base_name, partial_name)
+            include = "{% include " + json.dumps(template_name) + " %}"
+            self._full_template = include
+            self._authenticated_partial_root = True
+            self._authenticated_partial_root_origin = base_name
+            self._authenticated_template_source = include
+            self._named_partial_jit_source = extraction_source
+            return extraction_source
+        self._named_partial_jit_source = None
+        template_source = template.template.source
+
+        # A root reached through a partial needs its caller's actual control
+        # flow. Keep inheritance intact and let the Rust renderer select the
+        # authenticated root after rendering, rather than slicing its source.
+        self._authenticated_partial_root = self._needs_authenticated_partial_root(
+            template_source, template_name
+        )
+        self._authenticated_partial_root_origin = (
+            template_name if self._authenticated_partial_root else None
+        )
+        self._authenticated_template_source = (
+            template_source if self._authenticated_partial_root else None
+        )
+
+        # Check if template uses {% extends %} - if so, resolve inheritance in Rust
+        if "{% extends" in template_source or "{%extends" in template_source:
+            # Template directories in the EXACT same order Django searches.
+            # Shared with ``render_full_template`` step 2 via the single
+            # ``get_template_dirs()`` helper so the two paths can never drift
+            # apart on which backends honor APP_DIRS (#1646 parallel-path
+            # cure). Re-implementing this inline here ONLY recognized the
+            # stock Django backend, so under djust's own backend (the
+            # ``djust new`` scaffold) the app-template dirs were dropped and
+            # ``resolve_template_inheritance`` raised "Template not found"
+            # → swallowed → fragment-only on the initial GET (#1801).
+            template_dirs_str = get_template_dirs()
+
+            # Get the actual path Django resolved for verification
+            django_resolved_path = (
+                template.origin.name if hasattr(template, "origin") and template.origin else None
+            )
+
+            # --- Resolve template inheritance in Rust ---
+            # A resolution error RAISES (2.0). Before, it logged a warning
+            # and served the dj-root fragment WITHOUT the base template's
+            # <head> (#1801), which hid a misconfigured template dir behind
+            # a page that half-worked.
+            from djust._rust import resolve_template_inheritance
+
+            try:
+                resolved = resolve_template_inheritance(template_name, template_dirs_str)
+            except Exception as e:
+                raise RuntimeError(
+                    f"djust could not resolve template inheritance for "
+                    f"{template_name!r} (searched {len(template_dirs_str)} template "
+                    f"dirs: {template_dirs_str}): {e}"
+                ) from e
+
+            # Verify Rust found the same template as Django
+            if django_resolved_path:
+                rust_would_find = None
+                for template_dir in template_dirs_str:
+                    candidate = os.path.join(template_dir, template_name)
+                    if os.path.exists(candidate):
+                        rust_would_find = os.path.abspath(candidate)
+                        break
+
+                if rust_would_find and os.path.abspath(django_resolved_path) != rust_would_find:
+                    logger.warning(
+                        "Template resolution mismatch! Django found: %s, "
+                        "Rust found: %s, Template dirs order: %s...",
+                        django_resolved_path,
+                        rust_would_find,
+                        template_dirs_str[:3],
+                    )
+
+            # Keep inheritance intact for the initial GET: source flattening
+            # loses runtime block.super scopes and their parent bodies.
+            self._full_template = "{% extends " + json.dumps(template_name) + " %}"
+
+            # For VDOM tracking, prefer the child template source — it contains
+            # the dj-root block directly without base template surrounding HTML,
+            # making extraction simpler and immune to Issue #365 miscount.
+            # Fall back to resolved if dj-root is only in the base template.
+            #
+            # Use the anchored-attribute regexes (NOT a naive substring): a
+            # naive ``"dj-root" in template_source`` matches the token ANYWHERE
+            # — including documentation/example code that merely *displays*
+            # ``dj-root``/``dj-view`` as text, or another word containing it as
+            # a substring (``adj-view``). When the real ``<div dj-root>`` lives
+            # in the BASE template and the child only mentions the tokens in
+            # text, the substring check wrongly picks the child as the VDOM
+            # source → extraction finds no real dj-root → render_full_template
+            # nests the whole page (two <!DOCTYPE>/two <footer>). The regexes
+            # require a REAL ``<div ... dj-root/dj-view ...>`` tag (#1746).
+            vdom_source = (
+                template_source if _search_template_root_open(template_source) else resolved
+            )
+            vdom_template = self._extract_liveview_root_with_wrapper(vdom_source)
+
+            # CRITICAL: Strip comments and whitespace from template BEFORE Rust VDOM sees it
+            vdom_template = self._normalize_source_for_render(vdom_template)
+
+            logger.debug(
+                "[LiveView] Template inheritance resolved (%d chars), "
+                "extracted liveview-root for VDOM (%d chars)",
+                len(resolved),
+                len(vdom_template),
+            )
+            return vdom_template
+
+        # No template inheritance - store full template and extract liveview-root for VDOM
+        self._full_template = template_source
+        extracted = self._extract_liveview_root_with_wrapper(template_source)
+        extracted = self._normalize_source_for_render(extracted)
+
+        logger.debug(
+            "[LiveView] No inheritance - extracted and stripped liveview-root: "
+            "%d chars (from %d chars)",
+            len(extracted),
+            len(template_source),
+        )
+        return extracted
 
     @staticmethod
     def _needs_authenticated_partial_root(source: str, template_name: Optional[str] = None) -> bool:
@@ -951,6 +1066,7 @@ class TemplateMixin:
         return normalized
 
     @recorded_render
+    @_render_step
     def render(self, request: Optional["HttpRequest"] = None) -> str:
         """
         Render the view to HTML.
@@ -986,9 +1102,6 @@ class TemplateMixin:
         # AST (Text-node literals only) — immune to rendered-output poisoning;
         # see ModelBindingMixin._record_dj_model_fields_from_rust.
         self._record_dj_model_fields_from_rust(self._rust_view)
-
-        # Post-process to hydrate React components
-        html = self._hydrate_react_components(html)
 
         # Inject handler metadata for client-side decorators
         html = self._inject_handler_metadata(html, request=request)
@@ -1888,6 +2001,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
 
     @reconcile_child_render(whole_page=True)
     @recorded_render
+    @_render_step
     def render_full_template(
         self,
         request: Optional["HttpRequest"] = None,
@@ -1968,11 +2082,11 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
                 self._prepared_authenticated_page_root = self._rust_view.prepared_page_has_root()
                 if root_range is not None:
                     start, end = (page.char_offset(offset) for offset in root_range)
-                    root = self._hydrate_react_components(page[start:end])
+                    root = page[start:end]
                     root = self._strip_comments_and_whitespace(root)
                     rendered_page = page[:start] + root + page[end:]
                 else:
-                    rendered_page = self._hydrate_react_components(page)
+                    rendered_page = page
                     from .._rust import root_element_span
 
                     ordinary_span = root_element_span(rendered_page)
@@ -2000,7 +2114,6 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             # (Text-node literals) — reflects exactly the developer-exposed
             # static bindings; immune to rendered-output poisoning.
             self._record_dj_model_fields_from_rust(self._rust_view)
-            liveview_html = self._hydrate_react_components(liveview_html)
 
             # #1737: normalize the rendered dj-root so the initial-GET output
             # is structurally identical to the first WS frame. The WS path
@@ -2191,10 +2304,12 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             shell_html = self._inject_handler_metadata(shell_html, request=request)
             return shell_html
         else:
-            return self.render(request)
+            return cast(str, self.render(request))
 
     @staticmethod
-    def _stamp_dj_view(html: str, view_path: str, *, trusted: bool = False) -> str:
+    def _stamp_dj_view(
+        html: str, view_path: str, *, trusted: bool = False, http_only: bool = False
+    ) -> str:
         """Add ``dj-view="<view_path>"`` to every real ``dj-root`` open tag that
         has no ``dj-view`` of its own, so the client knows what to mount (#2981).
 
@@ -2204,10 +2319,18 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         Tags inside ``<script>``/``<style>`` bodies and HTML comments are text
         and are left alone (#2663). A ``<body dj-root>`` is stamped when it is the
         page's root (#3302).
+
+        ``http_only`` also adds ``data-djust-transport="http"``: the page's view
+        has no class a socket can mount (a ``@live_view`` function view), so the
+        client sends its events over the HTTP fallback and opens no socket
+        (#4236). A root whose author declared ``dj-view`` keeps it and still
+        gets the marker, first in its tag (#4236 review N6).
         """
-        from .._rust import dj_root_stamp_offsets
+        from .._rust import dj_root_stamp_offsets, root_element_span
 
         attr = ' dj-view="%s"' % _html_escape(view_path, quote=True)
+        if http_only:
+            attr += ' data-djust-transport="http"'
         # Where each stamp goes, from the one rendered-HTML root locator
         # (#3031): a dj-root inside an embedded {% live_render %} child is the
         # child's, not this view's (#3155) — stamping this view's path there
@@ -2219,11 +2342,24 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         # authenticated the page root. Other output retains its own provenance.
         if trusted:
             attr = RenderedHTML(attr, root_spans=((0, len(attr.encode("utf-8"))),))
+        inserts = [(at, attr) for at in dj_root_stamp_offsets(html)]
+        if not inserts and http_only:
+            # No root without dj-view: the page root declares its own. Mark
+            # it right after its tag name; the view path stays the author's.
+            span = root_element_span(html, True)
+            if span is not None:
+                at = span[0] + 1
+                while at < len(html) and not (html[at].isspace() or html[at] in "/>"):
+                    at += 1
+                marker = ' data-djust-transport="http"'
+                if trusted:
+                    marker = RenderedHTML(marker, root_spans=((0, len(marker.encode("utf-8"))),))
+                inserts.append((at, marker))
         parts: list[str] = []
         last = 0
-        for insert_at in dj_root_stamp_offsets(html):
+        for insert_at, text in inserts:
             parts.append(html[last:insert_at])
-            parts.append(attr)
+            parts.append(text)
             last = insert_at
         if not parts:
             return html
@@ -2319,6 +2455,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
 
     @reconcile_child_render()
     @recorded_render
+    @_render_step
     def render_with_diff(
         self,
         request: Optional["HttpRequest"] = None,

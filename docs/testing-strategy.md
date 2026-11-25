@@ -91,6 +91,12 @@ final integration/release evidence must cover the final commit.
 These groups describe contracts, not ownership boundaries or a new selector.
 Test roots are historical locations, not clean unit/integration partitions.
 
+Every test file lives under one of the three roots (`tests/`, `python/tests/`,
+`python/djust/tests/`), which are both `testpaths` and the paths CI passes. A
+tracked test-shaped file anywhere else is collected by nothing, so
+`tests/test_ci_python_test_roots.py` fails on it unless it is listed there with
+the reason it is not a suite test (#4217).
+
 | Group | Entry points and cross-contract checks |
 | --- | --- |
 | Templates, filters, Unicode and bridge | Relevant files in `python/tests/`, renderer/source pins in `tests/`, bridge consumers in `python/djust/tests/`; compare Django and Rust behavior. Engine changes require full coverage. |
@@ -119,6 +125,13 @@ Name globs and `-k` are exploration aids; they cannot prove subsystem completene
 - Shared harness/dependency/workflow files, package initializers, test support,
   state backends, LiveView/WebSocket runtime and the Rust engine require FULL.
   Existing routing/flip/convergence branch triggers remain.
+  `.test_durations` does not (#4253): it only re-tiers tests, and the tests that
+  read it name it, so they are selected.
+- In the pre-push hook a FULL answer (or a selector that cannot run) runs a bounded
+  tier, not every root (#4253): the early tier (`--early-only`, as `make test-early`)
+  plus the direct selection (`DJUST_PREPUSH_TARGETED=1`, passed as `--early-include`).
+  PR CI runs its own selection and the merge queue runs the full suite; `DJUST_PREPUSH_FULL=1` runs everything locally,
+  subject to the load guard's approval.
 - The CLI reads all production `python/djust` Python modules. If a production
   module statically imports a changed module, require FULL for transitive impact.
   Absolute/relative imports, imports inside functions, and type-checking imports
@@ -134,6 +147,39 @@ review finds shared/transitive impact the selector cannot see, force full checks
 ```bash
 DJUST_PREPUSH_FULL=1 bash scripts/pre-push-pytest.sh
 ```
+
+### Pull-request CI runs the selection (`--ci`)
+
+An unlabelled pull request runs only the Python test files `scripts/select-tests.py --ci`
+selects, as one `python-tests` shard. The merge queue, pushes, the nightly, a PR labelled
+`full-tests`, and any pull request the selector answers `FULL` run every root as eight shards.
+A consumer the selection misses therefore fails in the merge queue, before merge, one run
+later than it would have.
+
+`--ci` is the targeted mode (`DJUST_PREPUSH_TARGETED=1`: blast-radius paths and transitive
+impact select their direct consumers) with five more rules:
+
+- CI configuration (`.github/workflows/`, `.pre-commit-config.yaml`, `Makefile`) selects the
+  tests that name it instead of forcing `FULL`.
+- A doc (`*.md`, `*.rst`) no test names is classified, and any doc change adds the tests that
+  scan every doc (their text globs `*.md`).
+- A test-support module (a non-test module under a test root) selects the tests that name it,
+  directly or through other support modules. It is still `FULL` when a `conftest.py` or
+  `pyproject.toml` names it: a plugin, fixture or settings module reaches every test.
+- Every selection adds the whole-tree merge gates (`MERGE_GATES` in the `Makefile`).
+- Every selection adds the test files with a strict xfail (`xfail(..., strict=True)`): they go
+  red when a fix makes them pass, often through code they never name (#4259). They do not
+  turn an empty selection into a run, and do not change a `FULL` answer.
+
+Dependencies (`pyproject.toml`, `uv.lock`, `Cargo.lock`), a `conftest.py`, a package
+`__init__.py`, the branch-name rule and an unclassified path still run everything. Measured on
+the 80 commits to `main` before it shipped, 34 would have run a selection, at a median of about
+7% of the fast tier's recorded time and at most 41%. The rest ran everything, most often for a
+dependency or `conftest.py` change.
+
+The `changes` job writes the decision as two outputs: `python_shards` (`FULL_SHARDS`, or `[1]`)
+and `python_paths` (the selected files, or empty for every root). The collected-count floor is
+off for a selected run, and the Django 6.1 job accepts an empty skip list from one.
 
 ## CI change scope and the merge queue
 
@@ -204,12 +250,12 @@ minutes, the timeout only bounds it.
 
 | event | interpreters x Django x shards | tier (`-m`) | exhaustive sweeps |
 |---|---|---|---|
-| pull request | 3.12 x Django 5.2 x 4, + the Django-6-only job, + 3.14t smoke | `not nightly and not slow` | sampled |
-| merge queue | same as a pull request | `not nightly and not slow` | sampled |
-| push to `main` | same as a pull request | `not nightly` (slow tier included) | sampled |
-| nightly `main-health` (07:00 UTC) | serial suite on 3.12, plus `test.yml` called with the full matrix (3.12-3.15 x 5.2/6.0/6.1 x 4) | serial: everything; matrix: `not nightly` | serial: **every unit**; matrix: sampled |
+| pull request | 3.12 x Django 5.2 x 8, or the selected files as 1 shard (see "Pull-request CI runs the selection"), + the Django-6-only job, + 3.14t smoke | `not nightly and not slow` | sampled |
+| merge queue | 3.12 x Django 5.2 x 8, + the Django-6-only job, + 3.14t smoke | `not nightly and not slow` | sampled |
+| push to `main` | same as the merge queue | `not nightly` (slow tier included) | sampled |
+| nightly `main-health` (07:00 UTC) | serial suite on 3.12, plus `test.yml` called with the full matrix (3.12-3.15 x 5.2/6.0/6.1 x 8) | serial: everything; matrix: `not nightly` | serial: **every unit**; matrix: sampled |
 | manual `test.yml` dispatch | full matrix | `not nightly` | every unit (untick `full_sweeps` to sample) |
-| PR labelled `full-tests` | 3.12 x Django 5.2 x 4 + the Django-6-only job | `not nightly` | every unit |
+| PR labelled `full-tests` | 3.12 x Django 5.2 x 8 + the Django-6-only job | `not nightly` | every unit |
 
 **One Django series before merge.** The shards run on Django 5.2 (the LTS, and what the dev
 environment uses). About two hundred tests exist only on Django 6 (template partials, the 6.1 CSP
@@ -218,7 +264,7 @@ on 5.2)` runs them: each 5.2 shard writes the node id of every test it skipped
 (`tests/skip_ledger.py`: a skip marker, a module that skips itself at import, a fixture or a test
 body that skips, all alike; not an xfail, not a sweep case the sample left out), and that job runs
 exactly those on Django 6.1, after the shards. A new Django-6-only file needs no registration. It
-refuses to run with fewer than four shard lists or an empty one, and `test-summary` requires it.
+refuses to run with fewer lists than shards, or with an empty one from a full run, and `test-summary` requires it.
 A test skipped there too was skipped on every cell; `-rs` lists it with its reason.
 `tests/test_skip_ledger_4074.py` pins the ledger and the wiring. The trade: a break that shows only
 on Django 6.0, and a 6.x-only break in a test that also runs (and passes) on 5.2, are found by the
@@ -400,8 +446,8 @@ in the root `conftest.py`) enforces it (#4111). Outside CI:
   35,000) stops before running any, with the ways out in the message, unless the developer has
   approved it: the file `~/.djust/full-run-approval` holds a Unix time in the future, at most 24
   hours ahead. The developer writes it by hand; nothing in the repository or an agent does.
-  `DJUST_FULL_LOCAL=1` (still set by the `make test*` full gates and the pre-push full-suite
-  fallback) no longer lets a run past the limit on its own;
+  `DJUST_FULL_LOCAL=1` (still set by the `make test*` full gates and `DJUST_PREPUSH_FULL=1`;
+  the pre-push FULL fallback runs the bounded early tier instead, #4253) no longer lets a run past the limit on its own;
 - an approved run holds a machine-wide lock (`~/.djust/full-run.lock`), so a second run over the
   limit refuses at once while one is in progress, from any worktree;
 - xdist is held to 2 workers however many `-n N` / `-n auto` asked for (`DJUST_LOCAL_MAX_WORKERS`),

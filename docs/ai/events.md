@@ -2,9 +2,7 @@
 
 All handlers require the `@event_handler()` decorator. `manage.py check` compares each template binding with its handler (`djust.T019`–`T022`).
 
-The rules below are the default legacy policy. For new code, prefer the strict
-policy (`@event_handler(parameter_policy="strict")`, or project-wide
-`LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}`; ADR-036):
+Strict is the default parameter policy (ADR-036, #4189):
 - Closed, annotated signatures are the contract; `**kwargs` is not required.
 - Pass arguments with `dj-value-*` only (never `data-*` or `dj-params`); no type suffix is needed.
 - The browser sends a generated value (`value`/`field` for input/change, form fields and the pressed submit button's `name=value` for submit, `key`/`code` for keyboard) only when the handler declares that parameter name or a `**` catch-all.
@@ -38,22 +36,21 @@ class ItemView(LiveView):
 
 Legacy policy:
 
-Legacy `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names.
 A repeated field name on `dj-submit`, and `dj-change`/`dj-input` on a group of same-named checkboxes or a `<select multiple>`, arrive as a list: read `value` as a list, or give the boxes distinct names.
 
-<!-- djust-example: skip -- legacy-policy handler fragments with no view class; import-checked by scripts/check-doc-snippets.py -->
+<!-- djust-example: skip -- handler fragments with no view class; import-checked by scripts/check-doc-snippets.py -->
 ```python
 from djust.decorators import event_handler, debounce, throttle
 
 # Input/change: parameter MUST be named `value`
 @event_handler()
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.query = value
     self._refresh()
 
-# Button with data attributes: data-item-id="5" -> item_id=5
+# Button with an argument: dj-value-item-id="5" -> item_id=5
 @event_handler()
-def delete(self, item_id: int = 0, **kwargs):
+def delete(self, item_id: int = 0):
     Item.objects.filter(id=item_id).delete()
     self._refresh()
 
@@ -65,20 +62,20 @@ def save(self, **form_data):
 # Debounce — the client waits 0.5s after the last keystroke, then sends once
 @event_handler()
 @debounce(wait=0.5)
-def search(self, value: str = "", **kwargs):
+def search(self, value: str = ""):
     self.query = value
     self._refresh()
 
 # Throttle — the client sends at most once per second
 @event_handler()
 @throttle(interval=1.0)
-def on_scroll(self, position: int = 0, **kwargs):
+def on_scroll(self, position: int = 0):
     self.scroll_pos = position
 ```
 
 Template bindings:
 ```html
-<button dj-click="delete" data-item-id="{{ item.id }}">Delete</button>
+<button dj-click="delete" dj-value-item-id="{{ item.id }}">Delete</button>
 <input dj-input="search" value="{{ query }}" />
 <select dj-change="filter"><option value="all">All</option></select>
 <form dj-submit="save">{% csrf_token %}<button type="submit">Save</button></form>
@@ -87,5 +84,5 @@ Template bindings:
 Rules:
 - `value` is the magic parameter name for `dj-input`/`dj-change` events
 - Give a parameter a default when a binding may omit it
-- `data-*` attributes are converted: `data-item-id` -> `item_id`
+- `dj-value-*` attributes are converted: `dj-value-item-id="5"` -> `item_id=5`
 - Type hints enable automatic coercion: `item_id: int` converts `"5"` to `5`

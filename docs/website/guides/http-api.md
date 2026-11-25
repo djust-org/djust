@@ -58,7 +58,7 @@ class InventoryView(LiveView):
 
     @event_handler(expose_api=True)
     @permission_required("inventory.change_item")
-    def update_quantity(self, item_id: int, quantity: int, **kwargs):
+    def update_quantity(self, item_id: int, quantity: int):
         """Update the stock count for an item."""
         item = self.items[item_id]
         item.quantity = quantity
@@ -104,7 +104,7 @@ On failure the response body is:
 | 401 | `unauthenticated` | No auth class accepted the request |
 | 401 | `login_required` | View requires login but the user isn't authenticated |
 | 403 | `csrf_failed` | Session auth without a valid CSRF token |
-| 403 | `permission_denied` | `@permission_required` / `check_view_auth` denied |
+| 403 | `permission_denied` | `@permission_required` / `check_view_auth` denied, or `PermissionDenied` raised in `mount()`, the handler, `api_response()` or `serialize=`. The message is always "Permission denied"; the exception's text goes to the server log only. |
 | 404 | `unknown_view` | No view registered under that slug |
 | 404 | `unknown_handler` | No handler by that name on the view |
 | 404 | `handler_not_exposed` | Handler exists but lacks `expose_api=True` |
@@ -146,15 +146,15 @@ class ClaimListView(LiveView):
         return [c.as_dict() for c in self._filtered_claims()]
 
     @event_handler(expose_api=True)
-    def search(self, value: str = "", **kwargs):
+    def search(self, value: str = ""):
         self.search_query = value  # state mutation only
 
     @event_handler(expose_api=True)
-    def filter_by_status(self, status: str = "", **kwargs):
+    def filter_by_status(self, status: str = ""):
         self.status = status
 
     @event_handler(expose_api=True)
-    def clear(self, **kwargs):
+    def clear(self):
         self.search_query = ""
         self.status = ""
 ```
@@ -182,7 +182,7 @@ class ClaimListView(LiveView):
         return [c.as_dict() for c in self._filtered_claims()]
 
     @event_handler(expose_api=True, serialize="serialize_saved_claim")
-    def save_claim(self, id: int = 0, **kwargs):
+    def save_claim(self, id: int = 0):
         c = Claim.objects.get(pk=id)
         c.status = "saved"
         c.save()
@@ -340,7 +340,7 @@ class MyView(LiveView):
     api_auth_classes = [TokenAuth, SessionAuth]  # tried in order
 
     @event_handler(expose_api=True)
-    def ping(self, **kwargs):
+    def ping(self):
         return {"ok": True}
 ```
 

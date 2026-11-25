@@ -7,7 +7,7 @@ and the tenant ContextVar bind — into ONE helper,
 ``djust.auth.core.run_pre_mount_auth``. Every live mount path now routes through
 it:
 
-* WebSocket ``LiveViewConsumer.handle_mount`` (``websocket.py``),
+* WebSocket ``LiveViewConsumer._mount_page`` (``websocket.py``),
 * the generic ``ViewRuntime.dispatch_mount`` → ``_check_auth`` (``runtime.py``),
 * the legacy SSE ``_sse_mount_view`` (``sse.py``).
 
@@ -72,7 +72,7 @@ class _AuthedUser:
 class _LoginRequiredView(LiveView):
     """A login-gated view; records whether mount() ran."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = True
     template = (
         '<div dj-view="djust.tests.test_mount_security_sequence_1853._LoginRequiredView" '
@@ -87,7 +87,7 @@ class _LoginRequiredView(LiveView):
 class _PublicView(LiveView):
     """A public view used for the happy-path / sticky / snapshot cases."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = (
         '<div dj-view="djust.tests.test_mount_security_sequence_1853._PublicView" '
@@ -98,13 +98,15 @@ class _PublicView(LiveView):
         self.count = 7
 
     def get_context_data(self, **kwargs):
-        return {"count": self.count}
+        context = super().get_context_data(**kwargs)
+        context["count"] = self.count
+        return context
 
 
 class _ObjectDeniedView(LiveView):
     """Opts into the object-permission lifecycle and DENIES access."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = (
         '<div dj-view="djust.tests.test_mount_security_sequence_1853._ObjectDeniedView" '
@@ -122,7 +124,7 @@ class _ObjectDeniedView(LiveView):
 
 
 class _ObjectAllowedView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = (
         '<div dj-view="djust.tests.test_mount_security_sequence_1853._ObjectAllowedView" '
@@ -142,7 +144,7 @@ class _ObjectAllowedView(LiveView):
 class _StickyChild(LiveView):
     """A sticky child embedded in the parent below."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "seq1853child"
     template = "<div>child:{{ n }}</div>"
@@ -151,7 +153,9 @@ class _StickyChild(LiveView):
         self.n = 3
 
     def get_context_data(self, **kwargs):
-        return {"n": self.n, "view": self}
+        context = super().get_context_data(**kwargs)
+        context["n"] = self.n
+        return context
 
 
 class _StickyParentView(LiveView):
@@ -161,7 +165,7 @@ class _StickyParentView(LiveView):
     pre-mount auth+tenant sequence converged onto run_pre_mount_auth (#1853 left
     all sticky/snapshot/render mechanics untouched)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     template = (
         "{% load live_tags %}"
@@ -178,7 +182,9 @@ class _StickyParentView(LiveView):
         self.ticks = 0
 
     def get_context_data(self, **kwargs):
-        return {"view": self, "ticks": self.ticks}
+        context = super().get_context_data(**kwargs)
+        context["ticks"] = self.ticks
+        return context
 
 
 # Make the dotted paths resolvable for the consumer's importer.
@@ -214,12 +220,25 @@ def _anon_middleware(app):
 
 
 def _authed_middleware(app):
-    """ASGI wrapper that injects an authenticated scope user + empty session."""
+    """ASGI wrapper that logs a real user into a saved session on the scope.
+
+    An explicit view's turns re-read the user from the stored session, so a
+    stub user and an empty dict session are not enough.
+    """
 
     async def mw(scope, receive, send):
+        from asgiref.sync import sync_to_async
+        from django.contrib.auth import get_user_model
+
+        from djust.testing import with_live_session
+
+        user = await sync_to_async(get_user_model().objects.create_user)(
+            "seq1853-%s" % id(scope), password="x"
+        )
         scope = dict(scope)
-        scope["user"] = _AuthedUser()
-        scope.setdefault("session", {})
+        scope["session"] = None
+        scope["user"] = None
+        with_live_session(scope, user)
         return await app(scope, receive, send)
 
     return mw
@@ -271,7 +290,7 @@ class TestRunPreMountAuthHelper:
         propagates PermissionDenied (each transport maps it to its 403 shape)."""
 
         class _PermView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             permission_required = "app.view_thing"
             template = "<div dj-id='0'>x</div>"
 
@@ -287,13 +306,16 @@ class TestRunPreMountAuthHelper:
         with pytest.raises(PermissionDenied):
             run_pre_mount_auth(_PermView(), request)
 
-    def test_skips_tenant_resolution_on_auth_redirect(self):
-        """On an auth redirect, _ensure_tenant must NOT run (mirrors the
-        pre-existing per-transport early return on denial)."""
+    def test_explicit_resolves_tenant_before_auth_denies(self):
+        """The explicit sequence resolves and binds the tenant FIRST, so the
+        denial's own queries run in the view's tenant (the legacy sequence
+        skipped tenant resolution on a denial)."""
+        from djust.tenants.middleware import tenant_context
+
         ensure_calls = []
 
         class _TenantLoginView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             login_required = True
             template = "<div dj-id='0'>x</div>"
 
@@ -303,11 +325,12 @@ class TestRunPreMountAuthHelper:
         request = RequestFactory().get("/")
         request.user = _AnonUser()
 
-        verdict = run_pre_mount_auth(_TenantLoginView(), request)
+        with tenant_context(None):
+            verdict = run_pre_mount_auth(_TenantLoginView(), request)
         assert verdict is not None  # redirect
-        assert ensure_calls == [], (
-            "tenant resolution ran despite an auth denial — the helper must skip "
-            "_ensure_tenant when auth fails (sequence invariant)"
+        assert ensure_calls == [request], (
+            "the explicit sequence must resolve the tenant before authorizing, "
+            "so a denial is decided in the view's tenant"
         )
 
     def test_resolves_then_binds_tenant_in_order_on_auth_success(self):
@@ -319,7 +342,7 @@ class TestRunPreMountAuthHelper:
             id = 42
 
         class _TenantView(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             login_required = False
             template = "<div dj-id='0'>x</div>"
 
@@ -363,9 +386,9 @@ class TestRunPreMountAuthHelper:
 
 
 # --------------------------------------------------------------------------- #
-# WebSocket mount path (LiveViewConsumer.handle_mount).
+# WebSocket mount path (LiveViewConsumer._mount_page).
 # --------------------------------------------------------------------------- #
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_allow_this_module")
 class TestWebSocketMountSequence:
@@ -488,7 +511,7 @@ class TestWebSocketMountSequence:
 
     async def test_a_mount_carrying_a_state_snapshot_still_mounts(self):
         """A mount that echoes a ``state_snapshot`` the server does not accept
-        (this legacy view holds no declared client state) still passes the
+        (this view declares no client state) still passes the
         pre-mount sequence and mounts fresh."""
         from channels.testing import WebsocketCommunicator
 
@@ -535,21 +558,20 @@ class _MockTransport:
         self.sent.append({"type": "error", "error": message, **kwargs})
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_allow_this_module")
 class TestRuntimeMountSequence:
     async def test_authed_normal_mount_succeeds(self):
         from djust.runtime import ViewRuntime
 
+        from djust.tests._live_session import amount_on_runtime
+
         transport = _MockTransport()
         runtime = ViewRuntime(transport)
-        await runtime.dispatch_mount(
-            {"type": "mount", "view": _PUBLIC_PATH, "params": {}, "url": "/pub/"}
-        )
-        types = [m.get("type") for m in transport.sent]
-        assert "mount" in types, f"runtime did not emit a mount frame: {transport.sent!r}"
-        assert runtime.view_instance is not None
+        # Raises unless the runtime really mounted the view on a saved session.
+        await amount_on_runtime(runtime, _PublicView(), url="/pub/", view_path=_PUBLIC_PATH)
+        assert isinstance(runtime.view_instance, _PublicView)
 
     async def test_anon_login_required_mount_denied(self):
         """Runtime denial envelope preserved: navigate frame + view_instance
@@ -600,11 +622,10 @@ class TestRuntimeMountSequence:
 # 'mounted' verdict is now runtime.view_instance is not None.
 # --------------------------------------------------------------------------- #
 def _sse_request(user):
-    from unittest.mock import MagicMock
+    from djust.testing import with_live_session
 
     request = RequestFactory().get("/")
-    request.user = user
-    request.session = MagicMock()
+    with_live_session(request, user)
     return request
 
 
@@ -617,7 +638,7 @@ async def _sse_mount(session, request, view_path):
     return session.runtime.view_instance is not None
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_allow_this_module")
 class TestSSEMountSequence:
@@ -626,9 +647,16 @@ class TestSSEMountSequence:
 
         from djust.sse import SSESession
 
+        from asgiref.sync import sync_to_async
+        from django.contrib.auth import get_user_model
+
+        user = await sync_to_async(get_user_model().objects.create_user)(
+            "seq1853-sse", password="x"
+        )
         session = SSESession(str(uuid.uuid4()))
-        session._owner_user_pk = 1
-        mounted = await _sse_mount(session, _sse_request(_AuthedUser()), _PUBLIC_PATH)
+        session._owner_user_pk = user.pk
+        request = await sync_to_async(_sse_request)(user)
+        mounted = await _sse_mount(session, request, _PUBLIC_PATH)
         assert mounted is True
         # A "mount" message was pushed to the stream queue.
         msgs = []

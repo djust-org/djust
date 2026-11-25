@@ -8,7 +8,8 @@ and accessibility features across all theme combinations.
 from typing import Dict, List, Tuple
 from dataclasses import dataclass
 
-from .presets import ColorScale, get_preset, THEME_PRESETS
+from .presets import get_preset, THEME_PRESETS
+from ._types import ColorScale
 from .theme_packs import DesignSystem, get_design_system, get_all_design_systems
 
 

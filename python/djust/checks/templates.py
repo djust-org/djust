@@ -10,8 +10,9 @@ import logging
 import os
 import re
 import textwrap
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any, Callable, Optional, Union, cast
 
 from django.core.checks import CheckMessage, register
 
@@ -117,7 +118,10 @@ _DOC_DISPATCHED_DJUST_EVENTS = frozenset(
         "layout-changed",
     }
 )
-_NAV_DATA_ATTRS = re.compile(r"data-(view|tab|page|section)")  # Navigation-style data attributes
+# Navigation-style attributes: ``data-view`` and the ``dj-value-view`` form that
+# the click sends as an event param (#4237). The boundaries keep ``data-viewport``,
+# ``data-views`` and ``dj-value-viewer`` from matching.
+_NAV_DATA_ATTRS = re.compile(r"(?<![\w-])(?:data|dj-value)-(view|tab|page|section)(?![\w-])")
 # T012 (#3225) — the attributes that only work inside a connected LiveView.
 # Derived from the client's directive table in ``djust._template_bindings``:
 # every server-event directive (``DIRECTIVES``: dj-click, dj-viewport-bottom,
@@ -1276,16 +1280,214 @@ def _get_context_data_reaches_base(cls: type) -> bool:
     return True
 
 
+_NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def _own_scope_nodes(func: ast.AST) -> list[ast.AST]:
+    """Every node of ``func``'s body, not descending into a nested function,
+    lambda or class: a helper's assignments are not the method's (#4224)."""
+    nodes: list[ast.AST] = []
+    stack = list(reversed(getattr(func, "body", [])))
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        if isinstance(node, _NESTED_SCOPES):
+            continue
+        stack.extend(reversed(list(ast.iter_child_nodes(node))))
+    return nodes
+
+
+def _literal_str_keys(node: ast.Dict) -> set[str]:
+    return {k.value for k in node.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+
+
+def _override_context_keys(func: ast.AST) -> tuple[set[str], bool]:
+    """``(keys, calls_super)`` for one ``get_context_data()`` override.
+
+    See :func:`_override_context_analysis`; this is its first two results.
+    """
+    keys, calls_super, _contexts = _override_context_analysis(func)
+    return keys, calls_super
+
+
+def _override_context_analysis(func: ast.AST) -> tuple[set[str], bool, set[str]]:
+    """``(keys, calls_super, contexts)`` for one ``get_context_data()`` override.
+
+    Counts only what reaches the returned context (#4224): the string keys of a
+    returned literal dict; ``super().get_context_data(name=...)`` keywords; and,
+    for a local returned directly or spread into a returned literal
+    (``return {**ctx, ...}``) and bound only to ``super().get_context_data(...)``
+    or to a literal dict, the keys of that literal and every
+    ``name["key"] = ...``, ``name.update(key=...)``, ``name.update({"key": ...})`` and
+    ``name.setdefault("key", ...)`` on it (#4278). An unrelated local dict and a nested
+    helper add nothing. ``contexts`` is the set of returned locals proven to be the context.
+    """
+    nodes = _own_scope_nodes(func)
+    keys: set[str] = set()
+    calls_super = False
+    returned: set[str] = set()
+    stores: dict[str, int] = {}
+    bindings: dict[str, list[ast.expr]] = {}
+    for node in nodes:
+        if isinstance(node, ast.expr) and _is_bare_super_get_context_data_call(node):
+            calls_super = True
+            keys.update(kw.arg for kw in node.keywords if kw.arg)  # type: ignore[attr-defined]
+        if isinstance(node, ast.Return):
+            if isinstance(node.value, ast.Dict):
+                keys |= _literal_str_keys(node.value)
+                # ``return {**ctx, ...}``: a spread local is returned too.
+                returned.update(
+                    item.id
+                    for key, item in zip(node.value.keys, node.value.values)
+                    if key is None and isinstance(item, ast.Name)
+                )
+            elif isinstance(node.value, ast.Name):
+                returned.add(node.value.id)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stores[node.id] = stores.get(node.id, 0) + 1
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bindings.setdefault(target.id, []).append(node.value)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            if isinstance(node.target, ast.Name):
+                bindings.setdefault(node.target.id, []).append(node.value)
+    # A returned name is the context only when every binding of it is a plain
+    # ``name = super().get_context_data(...)`` or ``name = {...}``.
+    contexts = {
+        name
+        for name in returned
+        if bindings.get(name)
+        and len(bindings[name]) == stores.get(name)
+        and all(
+            isinstance(value, ast.Dict) or _is_bare_super_get_context_data_call(value)
+            for value in bindings[name]
+        )
+    }
+    for name in contexts:
+        for value in bindings[name]:
+            if isinstance(value, ast.Dict):
+                keys |= _literal_str_keys(value)
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id in contexts
+                    and isinstance(target.slice, ast.Constant)
+                    and isinstance(target.slice.value, str)
+                ):
+                    keys.add(target.slice.value)
+        elif isinstance(node, ast.Call):
+            method = _context_method_call(node, contexts)
+            if method == "update":
+                keys.update(kw.arg for kw in node.keywords if kw.arg)
+                if len(node.args) == 1 and isinstance(node.args[0], ast.Dict):
+                    keys |= _literal_str_keys(node.args[0])
+            elif method == "setdefault" and node.args:
+                first = node.args[0]
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    keys.add(first.value)
+    return keys, calls_super, contexts
+
+
+def _context_method_call(node: ast.Call, contexts: set[str]) -> Optional[str]:
+    """``update``/``setdefault``/... for ``ctx.update(...)`` on a context local, else None."""
+    func = node.func
+    if (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id in contexts
+    ):
+        return func.attr
+    return None
+
+
+_CONTEXT_READ_METHODS = frozenset({"get", "items", "keys", "values"})
+
+
+def _override_is_followable(func: ast.AST) -> bool:
+    """Whether T027 can read every key one ``get_context_data()`` override supplies (#4278).
+
+    Followable: every ``return`` is a literal dict, a bare ``super().get_context_data(...)``
+    or a local proven to be the context (``ctx = super()...`` / a literal dict, see
+    :func:`_override_context_analysis`), and that local is only used in forms the key
+    reader understands: returned, spread into the returned literal, ``ctx["k"] = ...``
+    with a constant string key, read (``ctx["k"]``, ``.get/.items/.keys/.values``),
+    ``.update(k=...)`` / ``.update({"k": ...})`` and ``.setdefault("k", ...)``. Anything
+    else (``helper(ctx)``, ``ctx.update(other)``, ``ctx[name] = ...``, ``ctx |= ...``)
+    could add a key this check cannot see, so the override is not followable.
+    """
+    _keys, _calls_super, contexts = _override_context_analysis(func)
+    nodes = _own_scope_nodes(func)
+    allowed: set[int] = set()
+    for node in nodes:
+        if isinstance(node, ast.Return):
+            value = node.value
+            if value is None:
+                continue
+            if isinstance(value, ast.Dict):
+                for key, item in zip(value.keys, value.values):
+                    if key is None and isinstance(item, ast.Name) and item.id in contexts:
+                        allowed.add(id(item))
+            elif isinstance(value, ast.Name):
+                if value.id not in contexts:
+                    return False
+                allowed.add(id(value))
+            elif not _is_bare_super_get_context_data_call(value):
+                return False
+        elif isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Name) and node.value.id in contexts:
+                if isinstance(node.ctx, ast.Load):
+                    allowed.add(id(node.value))
+                elif isinstance(node.slice, ast.Constant) and isinstance(node.slice.value, str):
+                    allowed.add(id(node.value))
+        elif isinstance(node, ast.Call):
+            method = _context_method_call(node, contexts)
+            if method is None:
+                continue
+            receiver = node.func.value  # type: ignore[attr-defined]
+            if method in _CONTEXT_READ_METHODS:
+                allowed.add(id(receiver))
+            elif method == "update":
+                keywords_only = not node.args and all(kw.arg for kw in node.keywords)
+                one_dict = (
+                    len(node.args) == 1
+                    and not node.keywords
+                    and isinstance(node.args[0], ast.Dict)
+                    and all(
+                        isinstance(k, ast.Constant) and isinstance(k.value, str)
+                        for k in node.args[0].keys
+                    )
+                )
+                if keywords_only or one_dict:
+                    allowed.add(id(receiver))
+            elif method == "setdefault":
+                first = node.args[0] if node.args else None
+                if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                    allowed.add(id(receiver))
+    return all(
+        id(node) in allowed
+        for node in ast.walk(func)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in contexts
+    )
+
+
 def _get_context_data_chain_keys(cls: type) -> set[str]:
     """Names the view's ``get_context_data()`` chain supplies, following ``super()``.
 
     Walks the MRO from the most-derived override, djust's own classes
     included, and stops at the base method or at an override that does not
     call ``super().get_context_data(...)``. Each override contributes the
-    string keys it writes in the forms a shipped base uses (#4185):
+    string keys it writes into the context it returns, in the forms a shipped
+    base uses (#4185, narrowed by #4224):
 
     - a literal ``return {"name": ...}``;
-    - ``context["name"] = ...`` on a local name (``TtydTerminalView``);
+    - ``context["name"] = ...`` where ``context`` is bound to
+      ``super().get_context_data(...)`` or a literal dict and is returned
+      (``TtydTerminalView``) -- not an unrelated local dict, and nothing in
+      a nested helper function;
     - ``super().get_context_data(name=...)`` keyword arguments, which the
       base context merges in (the ttyd docstring's subclass).
 
@@ -1312,26 +1514,11 @@ def _get_context_data_chain_keys(cls: type) -> set[str]:
             tree = ast.parse(textwrap.dedent(inspect.getsource(method)))
         except (OSError, TypeError, SyntaxError):
             break
-        calls_super = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.expr) and _is_bare_super_get_context_data_call(node):
-                calls_super = True
-                keys.update(kw.arg for kw in node.keywords if kw.arg)  # type: ignore[attr-defined]
-            elif isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
-                keys.update(
-                    k.value
-                    for k in node.value.keys
-                    if isinstance(k, ast.Constant) and isinstance(k.value, str)
-                )
-            elif isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if (
-                        isinstance(target, ast.Subscript)
-                        and isinstance(target.value, ast.Name)
-                        and isinstance(target.slice, ast.Constant)
-                        and isinstance(target.slice.value, str)
-                    ):
-                        keys.add(target.slice.value)
+        func = tree.body[0] if tree.body else None
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            break
+        own, calls_super = _override_context_keys(func)
+        keys |= own
         if not calls_super:
             break
     return keys
@@ -1351,6 +1538,21 @@ def _get_context_data_is_too_dynamic(cls: type) -> bool:
     ``get_context_data`` does anything this check can't statically follow,
     the WHOLE view is skipped (silently) rather than partially trusted.
     """
+    return _context_data_overrides_too_dynamic(cls, followable=False)
+
+
+def _t027_get_context_data_is_too_dynamic(cls: type) -> bool:
+    """:func:`_get_context_data_is_too_dynamic` for T027 (#4278).
+
+    T027 reads the keys a ``ctx = super().get_context_data(); ctx["k"] = ...;
+    return ctx`` override adds (``_get_context_data_chain_keys``), so an override
+    :func:`_override_is_followable` accepts is not too dynamic here. T018 harvests only
+    literal-return keys and keeps the shared, stricter rule.
+    """
+    return _context_data_overrides_too_dynamic(cls, followable=True)
+
+
+def _context_data_overrides_too_dynamic(cls: type, *, followable: bool) -> bool:
     for klass in cls.__mro__:
         if klass is object:
             continue
@@ -1371,6 +1573,8 @@ def _get_context_data_is_too_dynamic(cls: type) -> bool:
         if not tree.body or not isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
             return True
         func = tree.body[0]
+        if followable and _override_is_followable(func):
+            continue
         for node in ast.walk(func):
             if isinstance(node, ast.Return) and node.value is not None:
                 if isinstance(node.value, ast.Dict):
@@ -1659,9 +1863,10 @@ def _check_click_for_navigation(
 ) -> None:
     """T010: Detect dj-click with navigation-style data attributes.
 
-    Elements with both dj-click and navigation-style data attributes (data-view,
-    data-tab, data-page, data-section) should use dj-patch instead for proper URL
-    updates and back-button support.
+    Elements with both dj-click and navigation-style attributes (``data-view``,
+    ``data-tab``, ``data-page``, ``data-section``, or the ``dj-value-*`` form of
+    each, with an optional ``:type`` suffix) should use dj-patch instead for
+    proper URL updates and back-button support.
     """
     tag_re = re.compile(r"<[a-zA-Z][^>]*>", re.DOTALL)
     _line_counter = LineCounter(content)
@@ -1854,32 +2059,190 @@ def _check_document_element_root(
 # "Holds" comes from the exposure inventory's AST scan (the names the legacy
 # policy would have exported); "reads" and "supplies" come from the same
 # helpers T018 and ``djust_typecheck`` use. Same limits as T018: a view whose
-# ``get_context_data()`` cannot be followed statically and a template that
-# uses ``{% extends %}`` are skipped rather than guessed at.
+# ``get_context_data()`` cannot be followed statically and an inline ``template``
+# that uses ``{% extends %}`` are skipped rather than guessed at, and counted in
+# one ``DjustInfo``. A ``template_name`` view is read as the runtime reads it: its
+# ``{% extends %}`` chain resolved and its ``{% include %}`` partials inlined (#4278).
 _T027_HELD_KINDS = frozenset({"instance", "state", "class_value", "property"})
+
+
+def _t027_template_source(src: str, template_name: Optional[str]) -> Optional[str]:
+    """The template source a view renders, as T027 reads it (#4278), or None.
+
+    A ``template_name`` view: the ``{% extends %}`` chain resolved, then the static
+    ``{% include %}`` partials inlined, which is what ``JITMixin._get_template_content``
+    does at runtime (one path, #1646). An inline ``template`` cannot resolve an
+    ``{% extends %}`` at runtime either, so one that has it is None; otherwise only its
+    includes are inlined. An error resolving the template is None: the view is skipped,
+    never guessed at.
+    """
+    try:
+        from djust._rust import resolve_template_inheritance
+        from djust.live_view import LiveView
+        from djust.utils import get_template_dirs
+
+        dirs = get_template_dirs()
+        has_extends = "{% extends" in src or "{%extends" in src
+        if template_name:
+            resolved = resolve_template_inheritance(template_name, dirs)
+            if resolved:
+                return cast(str, LiveView._inline_includes(resolved, dirs))
+        if has_extends:
+            return None
+        return cast(str, LiveView._inline_includes(src, dirs))
+    except Exception:  # noqa: BLE001 — not resolvable statically: skip, never guess
+        return None
+
+
+@dataclass(frozen=True)
+class HeldTemplateReads:
+    """What T027 knows about one view's template (#4278, reused by ``--fix`` in #4209)."""
+
+    label: str
+    template_name: Optional[str]
+    template_path: str
+    #: ``(name, line in the view's own template or None)`` in the order the template reads them.
+    refs: tuple[tuple[str, Optional[int]], ...]
+    held: frozenset[str]
+    declared: frozenset[str]
+    supplied: frozenset[str]
+    silenced: frozenset[str]
+
+    def _silenced(self, name: str) -> bool:
+        return "*" in self.silenced or name in self.silenced
+
+    def count_names(self) -> list[tuple[str, str, Optional[int]]]:
+        """``(name, stem, line)`` for ``X_count`` reads of a supplied ``X`` (#4054)."""
+        found: list[tuple[str, str, Optional[int]]] = []
+        seen: set[str] = set()
+        for name, line in self.refs:
+            if name in self.supplied or name in seen or name in self.held:
+                continue
+            if self._silenced(name):
+                continue
+            stem = name[: -len("_count")] if name.endswith("_count") else ""
+            if not stem or stem not in self.supplied:
+                continue
+            seen.add(name)
+            found.append((name, stem, line))
+        return found
+
+    def unsupplied(self) -> list[tuple[str, Optional[int]]]:
+        """Held names the template reads and nothing supplies, in first-read order."""
+        found: list[tuple[str, Optional[int]]] = []
+        seen: set[str] = set()
+        for name, line in self.refs:
+            if name not in self.held or name in self.supplied or name in seen:
+                continue
+            if self._silenced(name):
+                continue
+            seen.add(name)
+            found.append((name, line))
+        return found
+
+
+ProcessorNames = Union[frozenset, Callable[[], frozenset]]
+
+
+def held_template_reads(cls: type, processor_names: ProcessorNames) -> "HeldTemplateReads | str":
+    """The template reads of one view as T027 computes them, whatever its policy (#4209).
+
+    Returns the reason it cannot instead: ``"no-template"`` (no template it can load
+    statically), ``"override"`` (a ``get_context_data()`` T027 cannot follow),
+    ``"template"`` (an inline template with ``{% extends %}``, or one that fails to
+    resolve) or ``"unreadable"``. ``processor_names`` may be a callable, called only
+    once a template was found. Never instantiates the view.
+    """
+    from djust._exposure import provider_contracts_for
+    from djust._exposure_providers import registered_components
+    from djust.management._exposure_inventory import inventory_view
+    from djust.management.commands.djust_typecheck import (
+        _extract_context_keys_from_ast,
+        _extract_referenced_names,
+        _extract_template_locals,
+        _template_noqa_names,
+    )
+    from djust.mixins.context import rendered_state_names
+
+    loaded = _static_template_source(cls)
+    if loaded is None:
+        return "no-template"
+    processors = processor_names() if callable(processor_names) else processor_names
+    if _t027_get_context_data_is_too_dynamic(cls):
+        return "override"
+    own_src, template_name, template_path = loaded
+    src = _t027_template_source(own_src, template_name)
+    if src is None:
+        return "template"
+    cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
+    try:
+        entries = inventory_view(cls)["names"]
+        held = {entry["name"] for entry in entries if entry.get("kind") in _T027_HELD_KINDS}
+        declared = {entry["name"] for entry in entries if entry.get("kind") == "state"}
+        supplied = (
+            _extract_context_keys_from_ast(cls, attributes=False)
+            | set(registered_components(cls))
+            | _extract_template_locals(src)
+            | _get_context_data_chain_keys(cls)
+            # Names a mixin's provider contract renders (TenantMixin's ``tenant``): its
+            # ``get_context_data()`` sets them by a computed key the AST walk cannot read.
+            | {name for contract in provider_contracts_for(cls) for name in contract.rendered}
+            # Names the configured TEMPLATES context processors add on every render
+            # (``user``, ``perms``, ``messages``, a project processor's keys).
+            | processors
+        )
+        if _get_context_data_reaches_base(cls):
+            supplied |= set(rendered_state_names(cls))
+        silenced = _template_noqa_names(src)
+        refs = _extract_referenced_names(src)
+        # The line is the view's own file's; a name read only in a base template or an
+        # include has no line there.
+        own_lines: dict[str, int] = {}
+        for ref_name, ref_line in _extract_referenced_names(own_src):
+            own_lines.setdefault(ref_name, ref_line)
+    except Exception:  # noqa: BLE001 — a view this cannot read is skipped, not guessed at
+        logger.debug("T027: could not statically read %s", cls_label)
+        return "unreadable"
+    if not template_path:
+        try:
+            template_path = inspect.getfile(cls)
+        except (OSError, TypeError):
+            template_path = ""
+    return HeldTemplateReads(
+        label=cls_label,
+        template_name=template_name,
+        template_path=template_path,
+        refs=tuple((name, own_lines.get(name)) for name, _line in refs),
+        held=frozenset(held),
+        declared=frozenset(declared),
+        supplied=frozenset(supplied),
+        silenced=frozenset(silenced),
+    )
 
 
 @register("djust")
 def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """T027: an explicit view's template reads a name the view holds but does not supply."""
+    """T027: a view's template reads a name the view holds but does not supply."""
     errors: list[CheckMessage] = []
     if _is_check_suppressed("djust.T027"):
         return errors
     try:
-        from djust._exposure_providers import registered_components
-        from djust._exposure_unsupplied import MIGRATION_GUIDE_URL
+        from djust._exposure_unsupplied import MIGRATION_GUIDE_URL, context_processor_names
         from djust.live_view import LiveView
-        from djust.management._exposure_inventory import inventory_view
-        from djust.mixins.context import rendered_state_names
-        from djust.management.commands.djust_typecheck import (
-            _extract_context_keys_from_ast,
-            _extract_referenced_names,
-            _extract_template_locals,
-            _template_noqa_names,
-        )
     except ImportError:
         return errors
 
+    skipped_override = 0
+    skipped_labels: list[str] = []
+    skipped_unreadable = 0
+    cached_processors: list[frozenset] = []
+
+    def processor_names() -> frozenset:
+        if not cached_processors:
+            cached_processors.append(context_processor_names())
+        return cached_processors[0]
+
+    skipped_template = 0
     discovered = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
     for cls in sorted(
         discovered,
@@ -1887,58 +2250,32 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
     ):
         if not _is_application_view(cls):
             continue
-        policy = inspect.getattr_static(cls, "exposure_policy", None)
-        if type(policy) is not str or policy != "explicit":
+        reads = held_template_reads(cls, processor_names)
+        if reads == "no-template":
             continue
-        if _get_context_data_is_too_dynamic(cls):
+        if reads == "override":
+            skipped_override += 1
+            skipped_labels.append("%s.%s" % (cls.__module__, cls.__qualname__))
             continue
-        loaded = _static_template_source(cls)
-        if loaded is None:
+        if reads == "template":
+            skipped_template += 1
             continue
-        src, template_name, template_path = loaded
-        if "{% extends" in src or "{%extends" in src:
+        if isinstance(reads, str):
+            skipped_unreadable += 1
             continue
-        cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
-        try:
-            entries = inventory_view(cls)["names"]
-            held = {entry["name"] for entry in entries if entry.get("kind") in _T027_HELD_KINDS}
-            declared = {entry["name"] for entry in entries if entry.get("kind") == "state"}
-            supplied = (
-                _extract_context_keys_from_ast(cls, attributes=False)
-                | set(registered_components(cls))
-                | _extract_template_locals(src)
-                | _get_context_data_chain_keys(cls)
-            )
-            if _get_context_data_reaches_base(cls):
-                supplied |= set(rendered_state_names(cls))
-            silenced = _template_noqa_names(src)
-            refs = _extract_referenced_names(src)
-        except Exception:  # noqa: BLE001 — a view this cannot read is skipped, not guessed at
-            logger.debug("T027: could not statically read %s", cls_label)
-            continue
-        if not template_path:
-            try:
-                template_path = inspect.getfile(cls)
-            except (OSError, TypeError):
-                template_path = ""
-        reported: set[str] = set()
-        for name, line in refs:
-            if name in supplied or name in reported or name in held:
-                continue
-            if "*" in silenced or name in silenced:
-                continue
-            stem = name[: -len("_count")] if name.endswith("_count") else ""
-            if not stem or stem not in supplied:
-                continue
+        cls_label = reads.label
+        template_name = reads.template_name
+        template_path = reads.template_path
+        declared = reads.declared
+        for name, stem, line in reads.count_names():
             # #4054: the legacy policy generated ``items_count`` from a supplied
             # ``items``; explicit exposure does not, so the name renders empty.
-            reported.add(name)
             errors.append(
                 DjustWarning(
-                    "%s -- the template reads '%s' at line %d (%s) and nothing supplies it: "
+                    "%s -- the template reads '%s' %s and nothing supplies it: "
                     "djust 1.x generated it from '%s', explicit exposure does not, so it "
                     "renders as empty string, with no error."
-                    % (cls_label, name, line, template_name or "<inline>", stem),
+                    % (cls_label, name, _t027_where(line, template_name), stem),
                     hint=(
                         "Use {{ %s|length }} in the template, or return '%s' from "
                         "%s.get_context_data(). See %s. If the name is supplied in a way "
@@ -1957,18 +2294,13 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                     line_number=line if template_name else None,
                 )
             )
-        for name, line in refs:
-            if name not in held or name in supplied or name in reported:
-                continue
-            if "*" in silenced or name in silenced:
-                continue
-            reported.add(name)
+        for name, line in reads.unsupplied():
             errors.append(
                 DjustWarning(
-                    "%s -- the template reads '%s' at line %d (%s) and the view holds it "
+                    "%s -- the template reads '%s' %s and the view holds it "
                     "as an attribute, but nothing supplies it to the template: under "
                     "explicit exposure it renders as empty string, with no error."
-                    % (cls_label, name, line, template_name or "<inline>"),
+                    % (cls_label, name, _t027_where(line, template_name)),
                     hint=(
                         "Explicit exposure is the default since djust 2.0: a template gets "
                         "the view's declared state() fields and what get_context_data() "
@@ -2001,7 +2333,44 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                     line_number=line if template_name else None,
                 )
             )
+    if skipped_override or skipped_template or skipped_unreadable:
+        errors.append(
+            DjustInfo(
+                "T027: skipped %d view(s) whose get_context_data() cannot be followed "
+                "statically%s, %d view(s) whose template could not be resolved (an "
+                "inline template with {%% extends %%}, or one that failed to load) and "
+                "%d view(s) it could not read -- names those views read are not checked."
+                % (
+                    skipped_override,
+                    (
+                        " (%s%s)"
+                        % (
+                            ", ".join(sorted(skipped_labels)[:5]),
+                            ", ..." if len(skipped_labels) > 5 else "",
+                        )
+                    )
+                    if skipped_labels
+                    else "",
+                    skipped_template,
+                    skipped_unreadable,
+                ),
+                hint=(
+                    'Set DJUST_UNSUPPLIED_NAMES = "error" in test settings to fail a render '
+                    "that leaves a held name unsupplied, which covers these views at runtime. "
+                    "Or suppress this check with DJUST_CONFIG = {'suppress_checks': ['T027']}."
+                ),
+                id="djust.T027",
+            )
+        )
     return errors
+
+
+def _t027_where(line: Optional[int], template_name: Optional[str]) -> str:
+    """Where T027 found a read: a line of the view's own template, or a template it pulls in."""
+    label = template_name or "<inline>"
+    if line is None:
+        return "in a template it extends or includes (%s)" % label
+    return "at line %d (%s)" % (line, label)
 
 
 # T026 — a ``{% load %}`` tag's library labels. ``{% load a b %}`` and

@@ -35,12 +35,14 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
+from math import copysign as _copysign
 from typing import Any, Hashable, List, Optional, Tuple
 from uuid import UUID
 
 from django.utils.safestring import SafeString
 
 from . import _per_turn
+
 from .change_detection import (
     _BARE,
     _EXACT_SCALARS,
@@ -51,7 +53,9 @@ from .change_detection import (
     _TAG_LIST,
     _TAG_TRUNCATED,
     _TAG_TUPLE,
+    _NEG_ZERO,
     _TAG_VALUE,
+    _TYPE_CODE,
     DEFAULT_BUDGET,
     _walk,
     _walk_general,
@@ -140,7 +144,11 @@ def _fused(
         counter[0] -= 1
         if counter[0] < 0:
             raise _BudgetExhausted
-        fp: Hashable = (_TAG_VALUE, t, value)
+        fp: Hashable = (
+            _TAG_VALUE,
+            _TYPE_CODE[t] if value or t is not float or _copysign(1.0, value) > 0 else _NEG_ZERO,
+            value,
+        )
         return fp, (value if t in _PLAIN_SCALARS else NOT_CONVERTED)
     if t is not dict and t is not list and t is not tuple:
         fp = _walk_general(value, counter, depth, path_ids)
@@ -169,7 +177,17 @@ def _fused(
                 if counter[0] < 0:
                     kf: Hashable = (_TAG_TRUNCATED, id(k))
                 else:
-                    kf = k if tk in bare else (_TAG_VALUE, tk, k)
+                    kf = (
+                        k
+                        if tk in bare
+                        else (
+                            _TAG_VALUE,
+                            _TYPE_CODE[tk]
+                            if k or tk is not float or _copysign(1.0, k) > 0
+                            else _NEG_ZERO,
+                            k,
+                        )
+                    )
             else:
                 kf = _walk(k, counter, child_depth, inner)
             if counter[0] <= 0:
@@ -180,7 +198,17 @@ def _fused(
                 if counter[0] < 0:
                     vf: Hashable = (_TAG_TRUNCATED, id(v))
                 else:
-                    vf = v if tv in bare else (_TAG_VALUE, tv, v)
+                    vf = (
+                        v
+                        if tv in bare
+                        else (
+                            _TAG_VALUE,
+                            _TYPE_CODE[tv]
+                            if v or tv is not float or _copysign(1.0, v) > 0
+                            else _NEG_ZERO,
+                            v,
+                        )
+                    )
                 if ok:
                     if tv in _PLAIN_SCALARS:
                         out_d[k] = v
@@ -213,7 +241,17 @@ def _fused(
             if counter[0] < 0:
                 append((_TAG_TRUNCATED, id(v)))
             else:
-                append(v if tv in bare else (_TAG_VALUE, tv, v))
+                append(
+                    v
+                    if tv in bare
+                    else (
+                        _TAG_VALUE,
+                        _TYPE_CODE[tv]
+                        if v or tv is not float or _copysign(1.0, v) > 0
+                        else _NEG_ZERO,
+                        v,
+                    )
+                )
             if ok:
                 if tv in _PLAIN_SCALARS:
                     out_append(v)

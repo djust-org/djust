@@ -1,11 +1,10 @@
 """ADR-038 E6-2: ``djust_exposure_inventory`` is a values-redacted migration aid.
 
-The command reports, per LiveView class, the names legacy mode would infer and
-the destinations each would reach, with a suggested explicit declaration. It
-must never construct a view, evaluate a property or state factory, or print a
-value. The destination claims are checked against the real legacy APIs
-(``get_context_data``, ``get_state``, ``_get_private_state``) so the inventory
-cannot drift into describing a policy the runtime does not implement.
+The command reports, per LiveView class, the names the removed legacy mode
+would infer and the destinations each would reach, with a suggested explicit
+declaration. It must never construct a view, evaluate a property or state
+factory, or print a value. (Its claims were once checked against the legacy
+runtime itself; that runtime is gone, #4198.)
 """
 
 import json
@@ -26,7 +25,7 @@ def _exploding_factory():
 
 
 class SecretHoldingView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<p>{{ count }}</p>"
     api_token = SECRET
     page_size = 25
@@ -63,21 +62,6 @@ class DeclaredExplicitView(LiveView):
         return super().get_context_data(count=self.count, **kwargs)
 
 
-class ParityView(LiveView):
-    """Small legacy view used to check the inventory against the runtime."""
-
-    exposure_policy = "legacy"
-    template = "<p>{{ count }}</p>"
-    heading = "Inventory"
-    level = state(1)
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self.items = ["a"]
-        self._cursor = 3
-        self.level = 2
-
-
 class _ShapesMixin:
     """One name per suggestion shape: undeclared state(), instance, underscore."""
 
@@ -89,12 +73,6 @@ class _ShapesMixin:
         self._cursor = 3
 
 
-class FreshMountView(_ShapesMixin, LiveView):
-    """A legacy view: it remounts fresh on a reconnect."""
-
-    exposure_policy = "legacy"
-
-
 class ExplicitShapesView(_ShapesMixin, LiveView):
     """An explicit view: only what it declares with a grant persists."""
 
@@ -103,7 +81,7 @@ class ExplicitShapesView(_ShapesMixin, LiveView):
 
 # kind -> name in _ShapesMixin
 SHAPES = {"state": "level", "instance": "count", "private": "_cursor"}
-NOT_PERSISTING = ("FreshMountView", "ExplicitShapesView")
+NOT_PERSISTING = ("ExplicitShapesView",)
 
 VIEW = f"{__name__}.SecretHoldingView"
 
@@ -160,8 +138,6 @@ def test_destinations_types_and_suggestions(no_construction):
 
     public = {"template_context", "client_state"}
     assert set(names["count"]["destinations"]) == public
-    # 2.0 writes a legacy view to the session only as a lazy=True child (#4087).
-    assert names["count"]["conditional"] == ["session_state"]
     assert names["count"]["type"] == "int"
     assert names["count"]["suggestion"].startswith("count: int = state(...)")
     assert set(names["secret_key"]["destinations"]) == public
@@ -170,42 +146,36 @@ def test_destinations_types_and_suggestions(no_construction):
     assert names["first"]["type"] == "int" and names["second"]["type"] is None
     assert set(names["dynamic"]["destinations"]) == public
 
-    # Underscore attributes: the private session part of a lazy=True child only.
+    # Underscore attributes reach no destination.
     assert names["_token"]["destinations"] == []
-    assert names["_token"]["conditional"] == ["private_session"]
     assert names["_later"]["destinations"] == []
-    assert names["_later"]["conditional"] == ["private_session"]
 
-    # Class values reach render context (and a lazy child's session copy) only.
+    # Class values reach render context only.
     assert names["api_token"]["destinations"] == ["template_context"]
-    assert names["api_token"]["conditional"] == ["session_state"]
     assert names["api_token"]["type"] == "str"
     assert names["label"]["destinations"] == ["template_context"]
     assert names["label"]["kind"] == "property"
     assert names["helper"]["destinations"] == []  # not JSON-serializable
 
-    # Public state() fields: context; a lazy child's session copy, and its
-    # backing slot only when it holds a Django model (#2959, #1994).
+    # Public state() fields: context only.
     assert names["total"]["destinations"] == ["template_context"]
     assert names["rows"]["destinations"] == ["template_context"]
-    assert names["rows"]["conditional"] == ["session_state", "private_session"]
     assert names["rows"]["type"] == "list"
     assert names["lazy"]["type"] is None
     assert "get_context_data" in names["label"]["suggestion"]
 
 
-def test_no_destination_describes_the_removed_1x_stores():
-    """The render cache and the page's session copies are gone in 2.0 (#4087)."""
+def test_the_report_describes_only_what_1_3_exported():
+    """Two destinations, both 1.3's; no 2.0 legacy runtime is described (#4206)."""
     from djust.management._exposure_inventory import DESTINATIONS
 
-    assert "render_cache" not in DESTINATIONS
+    assert set(DESTINATIONS) == {"template_context", "client_state"}
+    assert all(meaning.startswith("1.3: ") for meaning in DESTINATIONS.values())
     report = json.loads(run("--view", VIEW, "--json"))
+    assert "persists_today" not in report["views"][0]
     for item in names_of(report, VIEW).values():
-        assert "render_cache" not in item["destinations"] + item["conditional"], item
-        assert "session_state" not in item["destinations"], item
-        assert "private_session" not in item["destinations"], item
-    assert "lazy=True" in DESTINATIONS["session_state"]
-    assert "lazy=True" in DESTINATIONS["private_session"]
+        assert set(item["destinations"]) <= set(DESTINATIONS), item
+        assert "conditional" not in item, item
 
 
 def test_explicit_views_are_reported_with_their_policy(no_construction):
@@ -226,38 +196,6 @@ def test_default_discovery_finds_user_views(no_construction):
     assert SECRET not in json.dumps(report)
 
 
-def test_inventory_matches_the_legacy_runtime():
-    """Legacy control: the inventory's claims hold at the real legacy APIs."""
-    view_name = f"{__name__}.ParityView"
-    names = names_of(json.loads(run("--view", view_name, "--json")), view_name)
-
-    view = ParityView()
-    view.mount(request=None)
-    view._snapshot_user_private_attrs()
-    context = view.get_context_data()
-    client = set(view.get_state())
-    private = set(view._get_private_state())
-
-    def listed(destination):
-        return {n for n, item in names.items() if destination in item["destinations"]}
-
-    def maybe(destination):
-        return {n for n, item in names.items() if destination in item["conditional"]}
-
-    assert listed("template_context") <= set(context)
-    assert {"count", "items", "heading", "level"} <= listed("template_context")
-    assert listed("client_state") == client == {"count", "items"}
-    # A public state() field's slot is not saved privately since #2959 (the
-    # public state carries it); the inventory lists it as conditional (a
-    # model-holding value is still saved there, #1994).
-    expected_private = {"_cursor"}
-    assert expected_private <= private
-    assert "_state_level" not in private
-    assert listed("private_session") == set()
-    assert expected_private <= {names[n].get("storage_key", n) for n in maybe("private_session")}
-    assert "level" in maybe("private_session")
-
-
 def _shape_report(view_name):
     view = f"{__name__}.{view_name}"
     report = json.loads(run("--view", view, "--json"))
@@ -270,8 +208,7 @@ def test_no_persistence_grant_for_a_view_that_does_not_persist_today(
     no_construction, view_name, kind
 ):
     """#4023: such a view remounts fresh, so persist="server" would add behaviour."""
-    entry, names = _shape_report(view_name)
-    assert entry["persists_today"] is False
+    _, names = _shape_report(view_name)
     item = names[SHAPES[kind]]
     assert item["kind"] == kind
     assert "persist=" not in item["suggestion"], item["suggestion"]
@@ -279,7 +216,7 @@ def test_no_persistence_grant_for_a_view_that_does_not_persist_today(
 
 
 def test_plain_declaration_shapes_without_snapshot_persistence(no_construction):
-    _, names = _shape_report("FreshMountView")
+    _, names = _shape_report("ExplicitShapesView")
     assert names["level"]["suggestion"].startswith("keep level = state(...); ")
     assert names["count"]["suggestion"].startswith("count: int = state(...)  # ")
     assert names["_cursor"]["suggestion"].endswith("leave it instance-only")
@@ -287,8 +224,9 @@ def test_plain_declaration_shapes_without_snapshot_persistence(no_construction):
 
 
 def test_text_output_has_no_persist_suggestion_without_snapshot_persistence(no_construction):
-    output = run("--view", f"{__name__}.FreshMountView")
-    assert "reconnect: fresh mount" in output
+    output = run("--view", f"{__name__}.ExplicitShapesView")
+    assert output.startswith("Names a djust 1.3 view exposes implicitly (values redacted)")
+    assert "reconnect:" not in output
     assert "persist=" not in output
 
 
@@ -301,5 +239,5 @@ def test_a_view_that_still_asks_for_snapshot_persistence_does_not_load():
     with pytest.raises(ImproperlyConfigured, match="enable_state_snapshot"):
 
         class SnapshotFlagView(_ShapesMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             enable_state_snapshot = True

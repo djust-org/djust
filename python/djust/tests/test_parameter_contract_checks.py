@@ -19,10 +19,8 @@ import weakref
 import pytest
 
 from djust._parameter_contract import ContractError
-from djust.checks.configuration import check_configuration
 from djust._parameter_metadata import DECLARATION_OWNER as _DECLARATION_OWNER
 from djust.checks.parameters import check_event_parameter_contracts
-from djust.config import config
 from djust.validation import (
     get_strict_handler_contract,
     validate_handler_params,
@@ -50,7 +48,7 @@ Shadowed = str
 
 
 class Valid(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     ItemId = int
     Shadowed = int
@@ -79,20 +77,12 @@ class Valid(LiveView):
     def matching_params(self, amount: int):
         return amount
 
-    @event_handler
-    def legacy_unannotated(self, value, **kwargs):
-        return value
-
-    @event_handler(parameter_policy="legacy")
-    def explicit_legacy(self, view_id, **kwargs):
-        return view_id
-
     @event_handler(parameter_policy="strict")
     async def async_ok(self, count: int):
         return count
 
     @event_handler
-    def legacy_closed(self, value: int):
+    def closed(self, value: int):
         return value
 
 
@@ -112,18 +102,18 @@ class StrictMixin:
 
 
 class UsesMixin(StrictMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
 
 class Sibling(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     SiblingOnly = int
 
 
 class Invalid(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
     @event_handler(parameter_policy="strict")
@@ -182,17 +172,13 @@ class Invalid(LiveView):
     def conflicting_params(self, amount: int):
         pass
 
-    @event_handler
-    def inherits_project_policy(self, value, **kwargs):
-        pass
-
 
 class InheritsInvalid(Invalid):
     pass
 
 
 class AsyncView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
     @event_handler(parameter_policy="strict")
@@ -203,13 +189,9 @@ class AsyncView(LiveView):
     def sync_strict(self, count: int):
         pass
 
-    @event_handler
-    async def async_legacy(self, count, **kwargs):
-        pass
-
 
 class Subscribed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ menu }}</div>"
     menu = DropdownMenu(label="Menu", items=[{"label": "Edit", "value": "edit"}])
     other = DropdownMenu(label="Other", items=[{"label": "Edit", "value": "edit"}])
@@ -302,12 +284,10 @@ def _unload(module: types.ModuleType) -> None:
 
 @pytest.fixture
 def fixture_module(tmp_path):
-    old_policy = config.get("event_parameter_policy", "legacy")
     module = _load(tmp_path)
     try:
         yield module
     finally:
-        config.set("event_parameter_policy", old_policy)
         _unload(module)
 
 
@@ -352,7 +332,7 @@ def test_invalid_matrix_reports_exactly_one_expected_message_each(fixture_module
         "%s (declared as %s.StrictMixin.mixin_invalid)"
         % (_label("UsesMixin", "mixin_invalid"), MODULE)
     )
-    # Valid declarations, legacy handlers (unannotated, reserved names), async
+    # Valid declarations, invalid ones (unannotated, reserved names), async
     # strict handlers and the inherited copies of Invalid's handlers report nothing.
     assert found == {}
 
@@ -378,53 +358,6 @@ def test_mixin_handler_is_reported_once_under_its_user_with_its_declaration(fixt
     )
     assert found[label] == [EXPECTED_INVALID["mapping"]]
     assert not any("mixin_local" in key for key in found)
-
-
-def test_project_strict_policy_reports_inheriting_handlers_but_not_legacy_overrides(
-    fixture_module,
-):
-    config.set("event_parameter_policy", "strict")
-    found = _messages(fixture_module)
-    assert found[_label("Invalid", "inherits_project_policy")] == [EXPECTED_INVALID["unannotated"]]
-    assert found[_label("Valid", "legacy_unannotated")] == [EXPECTED_INVALID["unannotated"]]
-    assert _label("Valid", "explicit_legacy") not in found
-    assert _label("AsyncView", "async_legacy") in found  # unannotated under strict
-
-
-def test_invalid_project_policy_is_one_configuration_error(fixture_module):
-    config.set("event_parameter_policy", "Strict")
-    c022 = [m for m in check_configuration(None) if m.id == "djust.C022"]
-    assert [m.msg for m in c022] == [
-        "LIVEVIEW_CONFIG['event_parameter_policy'] is 'Strict'; it must be 'legacy' or 'strict'."
-    ]
-    assert c022[0].level == 40
-    found = _messages(fixture_module)
-    # Handlers inheriting the invalid value are covered by C022, not repeated;
-    # explicitly strict declarations are still checked.
-    assert _label("Invalid", "inherits_project_policy") not in found
-    assert found[_label("Invalid", "unresolved")] == [EXPECTED_INVALID["unresolved"]]
-
-
-@pytest.mark.parametrize("policy", [None, "legacy", "strict"])
-def test_valid_project_policy_has_no_configuration_error(policy):
-    old = config.get("event_parameter_policy", "legacy")
-    try:
-        config.set("event_parameter_policy", policy)
-        assert not [m for m in check_configuration(None) if m.id == "djust.C022"]
-    finally:
-        config.set("event_parameter_policy", old)
-
-
-def test_invalid_handler_policy_metadata_is_reported(fixture_module):
-    function = fixture_module.Valid.__dict__["rpc"]
-    function._djust_decorators["server_function"]["parameter_policy"] = "Strict"
-    assert _messages(fixture_module)[_label("Valid", "rpc")] == [
-        (
-            "djust.V016",
-            "strict event parameter contract is invalid: parameter_policy must be "
-            "'legacy' or 'strict'.",
-        )
-    ]
 
 
 def test_suppression(fixture_module, settings):

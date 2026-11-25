@@ -129,12 +129,12 @@ CASES = [
 APP_EVENTS = {"palette_search", "export"}
 
 
-def _page(descriptor, state, policy="legacy"):
+def _page(descriptor, state):
     return type(
         "Page_%s" % descriptor.__name__,
         (LiveView,),
         {
-            "exposure_policy": policy,
+            "exposure_policy": "explicit",
             "template": "<div dj-root>x</div>",
             "widget": descriptor(**state),
             "mount": lambda self, request, **kwargs: None,
@@ -142,14 +142,11 @@ def _page(descriptor, state, policy="legacy"):
     )
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("engine", ["django", "rust"])
 @pytest.mark.parametrize(
     "descriptor, state, src, ctx, steps", CASES, ids=[c[0].__name__ + c[2][3:16] for c in CASES]
 )
-def test_descriptor_answers_every_event_the_tag_draws(
-    policy, engine, descriptor, state, src, ctx, steps
-):
+def test_descriptor_answers_every_event_the_tag_draws(engine, descriptor, state, src, ctx, steps):
     drawn = set(_events(_ENGINES[engine](src, ctx)))
     framework = drawn - APP_EVENTS
     assert framework, drawn
@@ -157,7 +154,7 @@ def test_descriptor_answers_every_event_the_tag_draws(
     assert framework <= set(descriptor.Meta.events), (drawn, descriptor.Meta.events)
     assert {s[0] for s in steps} >= framework
 
-    client = LiveViewTestClient(_page(descriptor, state, policy)).mount()
+    client = LiveViewTestClient(_page(descriptor, state)).mount()
     for event, params, attr, expected in steps:
         assert client.send_event(event, **params)["success"], event
         assert getattr(client.view_instance.widget, attr) == expected, (event, params)
@@ -167,7 +164,7 @@ def test_an_app_handler_of_the_same_name_wins():
     calls = []
 
     class Own(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         bio = D.ExpandableText()
 
         @event_handler
@@ -279,7 +276,7 @@ def _view(template, **attrs):
         "TagView",
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template": "{% load djust_components %}<div dj-root>" + template + "</div>",
             **attrs,
         },
@@ -416,7 +413,7 @@ def test_t019_reports_each_ui_state_tag_without_its_descriptor(src):
 
 def test_carousel_without_total_warns_once_and_does_not_move(caplog):
     class Slides(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         slides = D.Carousel()
 
     view = Slides()
@@ -432,7 +429,7 @@ def test_carousel_without_total_warns_once_and_does_not_move(caplog):
 
 def test_carousel_with_total_does_not_warn(caplog):
     class Slides(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         slides = D.Carousel(total=3)
 
     view = Slides()
@@ -452,7 +449,6 @@ def test_t019_does_not_check_the_arguments_a_tag_writes_itself():
     findings, report = _findings(
         _view(
             "{% command_palette open=o %}{% endcommand_palette %}",
-            event_parameter_policy="strict",
             palette=D.CommandPalette(),
             palette_search=event_handler(palette_search),
         )

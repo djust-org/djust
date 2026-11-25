@@ -24,13 +24,30 @@ Three scenarios:
 from __future__ import annotations
 
 import asyncio
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
 
 import pytest
 from django.test import RequestFactory
 
 from djust.live_view import LiveView
+from djust.testing import with_live_session
 from djust.websocket import LiveViewConsumer
+
+
+def _find_sticky_slot_ids(html: str) -> set[str]:
+    """The ``dj-sticky-slot`` values in ``html`` (the destination page's slots)."""
+    ids: set[str] = set()
+
+    class _Slots(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            ids.update(v for k, v in attrs if k == "dj-sticky-slot" and v)
+
+    _Slots(convert_charrefs=False).feed(html)
+    return ids
+
+
+pytestmark = pytest.mark.django_db
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +56,7 @@ from djust.websocket import LiveViewConsumer
 
 
 class _AudioPlayerSticky(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "audio-player"
     template = '<div><button dj-click="play">Play {{ current_track }}</button></div>'
@@ -52,7 +69,7 @@ class _AudioPlayerSticky(LiveView):
 
 
 class _DashboardView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         "<div dj-root>"
@@ -69,7 +86,7 @@ class _DashboardView(LiveView):
 
 
 class _SettingsWithSlotView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root><h1>Settings</h1><div dj-sticky-slot="audio-player"></div></div>'
 
     def mount(self, request, **kwargs):
@@ -80,7 +97,7 @@ class _SettingsWithSlotView(LiveView):
 
 
 class _SettingsNoSlotView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>Settings (no slot)</h1></div>"
 
     def mount(self, request, **kwargs):
@@ -144,8 +161,18 @@ class _FakeConsumer(LiveViewConsumer):
         return None
 
 
+def _follow(request, previous):
+    """Make ``request`` the next request of the same visitor, in the same saved session.
+
+    An explicit sticky child is carried only for the session and user that mounted it.
+    """
+    request.session = previous.request.session
+    request.user = previous.request.user
+    return request
+
+
 def _mount_parent(consumer: _FakeConsumer, view_path: str) -> None:
-    """Run the minimal subset of ``handle_mount`` that gives us a live
+    """Run the minimal subset of ``_mount_page`` that gives us a live
     parent view without requiring the full Rust/VDOM pipeline.
 
     This helper sidesteps the Rust renderer so the integration tests
@@ -157,10 +184,7 @@ def _mount_parent(consumer: _FakeConsumer, view_path: str) -> None:
     view_cls = import_string(view_path)
     parent = view_cls()
     rf = RequestFactory()
-    request = rf.get("/")
-    from django.contrib.auth.models import AnonymousUser
-
-    request.user = AnonymousUser()
+    request = with_live_session(rf.get("/"))
     parent.request = request
     parent.mount(request)
     # Render the template so {% live_render %} runs and registers children.
@@ -193,9 +217,7 @@ async def test_end_to_end_dashboard_to_settings_sticky_audio_player():
     # Stage sticky children — this is the core of Phase B.
     rf = RequestFactory()
     new_request = rf.get("/settings/")
-    from django.contrib.auth.models import AnonymousUser
-
-    new_request.user = AnonymousUser()
+    _follow(new_request, consumer.view_instance)
     survivors = dashboard._preserve_sticky_children(new_request)
     assert "audio-player" in survivors
     assert survivors["audio-player"] is audio
@@ -207,8 +229,6 @@ async def test_end_to_end_dashboard_to_settings_sticky_audio_player():
     from django.template import Context, Template
 
     settings_html = Template(_SettingsWithSlotView.template).render(Context({}))
-    from djust.websocket import _find_sticky_slot_ids
-
     assert _find_sticky_slot_ids(settings_html) == {"audio-player"}
 
     # Install new parent + re-register survivor.
@@ -244,12 +264,11 @@ async def test_rapid_navigate_a_b_a_sticky_instance_identity():
     audio = dashboard_a._child_views["audio-player"]
 
     rf = RequestFactory()
-    from django.contrib.auth.models import AnonymousUser
 
     def _redirect(to_path: str, dest_cls) -> LiveView:
         parent = consumer.view_instance
         req = rf.get(to_path)
-        req.user = AnonymousUser()
+        _follow(req, parent)
         survivors = parent._preserve_sticky_children(req)
         # Build the destination parent.
         new_parent = dest_cls()
@@ -307,16 +326,12 @@ async def test_live_redirect_to_non_live_session_full_reload_unmounts_sticky():
     )
 
     rf = RequestFactory()
-    from django.contrib.auth.models import AnonymousUser
-
-    req = rf.get("/other/")
-    req.user = AnonymousUser()
+    req = _follow(rf.get("/other/"), consumer.view_instance)
     survivors = dashboard._preserve_sticky_children(req)
     assert "audio-player" in survivors  # passes auth, stageable
 
     # But the destination template has NO matching slot — reconcile.
     from django.template import Context, Template
-    from djust.websocket import _find_sticky_slot_ids
 
     dest_html = Template(_SettingsNoSlotView.template).render(Context({}))
     matched = _find_sticky_slot_ids(dest_html)
@@ -363,9 +378,7 @@ async def test_dashboard_to_dashboard_auto_reattach_emits_slot_via_tag():
     # Stage stickies for a Dashboard → Dashboard return-trip.
     rf = RequestFactory()
     new_request = rf.get("/")
-    from django.contrib.auth.models import AnonymousUser
-
-    new_request.user = AnonymousUser()
+    _follow(new_request, consumer.view_instance)
     survivors = dashboard_a._preserve_sticky_children(new_request)
     assert survivors.get("audio-player") is audio
 
@@ -403,14 +416,14 @@ async def test_dashboard_to_dashboard_auto_reattach_emits_slot_via_tag():
     assert audio.current_track == "next-track"
 
     # Tag pushed onto the consumer's auto-reattach set so the post-render
-    # slot scan in ``handle_mount`` will skip the second
+    # slot scan in ``_mount_page`` will skip the second
     # ``_register_child`` and not ``ValueError``.
     assert "audio-player" in consumer._sticky_auto_reattached
 
 
 @pytest.mark.asyncio
 async def test_dashboard_to_dashboard_via_full_handle_mount_pipeline():
-    """End-to-end check that ``handle_mount`` running with both
+    """End-to-end check that ``_mount_page`` running with both
     ``sticky_preserved`` AND a destination template carrying inline
     ``{% live_render sticky=True %}`` ends in the right place: survivor
     registered exactly once, ``sticky_hold`` frame includes the id, and
@@ -432,9 +445,7 @@ async def test_dashboard_to_dashboard_via_full_handle_mount_pipeline():
 
     rf = RequestFactory()
     new_request = rf.get("/")
-    from django.contrib.auth.models import AnonymousUser
-
-    new_request.user = AnonymousUser()
+    _follow(new_request, consumer.view_instance)
     survivors = dashboard_a._preserve_sticky_children(new_request)
     consumer._sticky_preserved = dict(survivors)
     consumer._sticky_auto_reattached = set()
@@ -454,11 +465,9 @@ async def test_dashboard_to_dashboard_via_full_handle_mount_pipeline():
     consumer.view_instance = dashboard_b
 
     # Inline the consumer's post-render slot-scan + sticky_hold emission
-    # logic from handle_mount (lines around websocket.py:2278). Tests
+    # logic from _mount_page (lines around websocket.py:2278). Tests
     # the integration of: tag's auto-reattach + slot-scan skip-on-claim
     # + sticky_hold survivor list.
-    from djust.websocket import _find_sticky_slot_ids
-
     matched_ids = _find_sticky_slot_ids(rendered_html)
     survivors_final: Dict[str, Any] = {}
     for sticky_id, child in consumer._sticky_preserved.items():

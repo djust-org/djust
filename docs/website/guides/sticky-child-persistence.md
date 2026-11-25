@@ -44,7 +44,7 @@ class CartWidget(LiveView):
         return context
 
     @event_handler()
-    def add(self, **kwargs):
+    def add(self):
         self.count += 1
 ```
 

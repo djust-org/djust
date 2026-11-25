@@ -177,7 +177,7 @@ from djust.decorators import event_handler, rate_limit
 class MyView(LiveView):
     @rate_limit(rate=5, burst=3)
     @event_handler
-    def expensive_operation(self, **kwargs):
+    def expensive_operation(self):
         """Limited to 5/sec sustained, 3 burst"""
         ...
 ```
@@ -301,7 +301,7 @@ class ProjectView(LiveView):
 
     @permission_required("projects.delete_project")
     @event_handler()
-    def delete_project(self, project_id: int, **kwargs):
+    def delete_project(self, project_id: int):
         Project.objects.get(pk=project_id).delete()
 ```
 
@@ -495,7 +495,7 @@ logger.info("Query: %s", sanitize_for_log(user_query))
 from djust.decorators import event_handler
 
 @event_handler
-def my_handler(self, **kwargs):
+def my_handler(self):
     pass
 ```
 
@@ -559,8 +559,8 @@ returns, exactly as Django's own template engine does.
 `python/tests/test_row_str_is_public_text_3806.py`): a top-level loop over a
 QuerySet (`{% for r in rows %}{{ r }}`), a model in the context (`{{ row }}`), a
 foreign key read whole (`{{ row.shelf }}`), a row reached through a relation
-(`{{ shelf.rows.all.first }}`), and on the `DjustTemplateBackend` a QuerySet's
-`{{ rows.first }}` / `{{ rows.last }}`.
+(`{{ shelf.rows.all.first }}`), and a QuerySet's `{{ rows.first }}` / `{{ rows.last }}`
+(on the `DjustTemplateBackend`, and for a LiveView's top-level QuerySet since #4241).
 
 **Impact:** a model whose `__str__` is built from a field you excluded or did not
 allowlist shows that field in the rendered page while `{{ row.that_field }}` is

@@ -229,6 +229,23 @@ pub(crate) fn live_handle_is_formset(py: Python<'_>, obj: &pyo3::Bound<'_, pyo3:
     }
 }
 
+thread_local! {
+    /// Count of reads answered through a LIVE Python object on this thread: the render
+    /// sidecar walk and a walk from a handle on an opaque carrier (train/2.0-ah review B2/B3).
+    /// The loop render cache (#1967) compares it before and after rendering an item: such a
+    /// read is not part of the item's content hash, so the fragment must not be stored.
+    static LIVE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many live reads this thread has made (see `LIVE_READS`). Only differences matter.
+pub fn live_read_count() -> u64 {
+    LIVE_READS.with(|n| n.get())
+}
+
+fn note_live_read() {
+    LIVE_READS.with(|n| n.set(n.get().wrapping_add(1)));
+}
+
 /// Reuse only exact builtin values with no user-defined timezone behavior.
 /// Subclasses can override display, truthiness and methods; aware values can
 /// carry mutable tzinfo implementations, so both take normal live conversion.
@@ -1987,6 +2004,27 @@ impl Context {
         }
     }
 
+    /// Whether any scope frame holds a safety mark (a safe or an unsafe key)
+    /// at `prefix` or below it. The per-item loop store (#4325) serves a
+    /// stored row only when the loop's iterable has none, since a mark under
+    /// `items.<i>` changes how row `i` is escaped without changing its value.
+    pub fn has_safety_marks_under(&self, prefix: &str) -> bool {
+        let under = |key: &String| {
+            key == prefix
+                || key
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('.'))
+        };
+        self.stack
+            .iter()
+            .any(|frame| frame.safe_keys.iter().any(under) || frame.unsafe_keys.iter().any(under))
+    }
+
+    /// Whether resolution calls callables (ADR-024), for cache keys.
+    pub fn auto_call(&self) -> bool {
+        self.auto_call
+    }
+
     /// Check if a variable name is marked safe.
     pub fn is_safe(&self, key: &str) -> bool {
         self.get(key).is_some_and(Value::is_safe_string)
@@ -2215,7 +2253,7 @@ impl Context {
         let (prefix, last) = key.rsplit_once('.')?;
         let index = last.parse::<usize>().ok()?;
         let base = match self.get(prefix) {
-            Some(Value::String(s) | Value::SafeString(s)) => s.clone(),
+            Some(Value::String(s) | Value::SafeString(s) | Value::ModelName(s)) => s.clone(),
             // A non-string prefix is not this step's business — `get` has
             // already tried every arm that applies to it.
             //
@@ -2229,7 +2267,7 @@ impl Context {
             // the intent without depending on that invariant being noticed.
             Some(_) => return None,
             None => match self.string_index(prefix)? {
-                Value::String(s) | Value::SafeString(s) => s,
+                Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => s,
                 _ => return None,
             },
         };
@@ -2725,6 +2763,7 @@ impl Context {
         let Some(obj) = raw.get(first) else {
             return Ok(None);
         };
+        note_live_read();
         if self.provenance_flatten_tracking() {
             self.note_lazy_unknown_effect();
         }
@@ -3054,6 +3093,11 @@ impl Context {
             let Some(handle) = encoded.live.clone() else {
                 continue;
             };
+            // An opaque carrier's handle answers from a mutable object; a temporal carrier
+            // (`json` measured) is immutable and fully hashed by its spellings.
+            if encoded.json.is_none() {
+                note_live_read();
+            }
             if self.provenance_flatten_tracking() {
                 self.note_lazy_unknown_effect();
             }

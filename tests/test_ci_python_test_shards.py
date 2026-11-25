@@ -35,6 +35,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.git_env import isolated_git_env
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/test.yml"
 DURATIONS = ROOT / ".test_durations"
@@ -73,10 +75,35 @@ def _pytest_command() -> str:
     return cmds[0]
 
 
+def _select_step() -> dict:
+    steps = _jobs()["changes"]["steps"]
+    found = [s for s in steps if s.get("id") == "select"]
+    assert len(found) == 1, "the changes job lost its `select` step (FULL_SHARDS lives there)"
+    return found[0]
+
+
 def _matrix_groups() -> list[int]:
+    """The full run's shard groups: FULL_SHARDS in the changes job's select step.
+
+    The python-tests matrix reads them through `needs.changes.outputs.python_shards`
+    (a pull request's selected tests run as `[1]`).
+    """
     matrix = _python_tests()["strategy"]["matrix"]
     assert "group" in matrix, "python-tests lost its `group` shard dimension"
-    return list(matrix["group"])
+    assert matrix["group"] == "${{ fromJSON(needs.changes.outputs.python_shards) }}", matrix
+    outputs = _jobs()["changes"]["outputs"]
+    assert outputs["python_shards"] == "${{ steps.select.outputs.python_shards }}", outputs
+    return list(json.loads(_select_step()["env"]["FULL_SHARDS"]))
+
+
+def test_the_select_step_writes_full_shards_or_one_shard() -> None:
+    run = _select_step()["run"]
+    assert 'echo "python_shards=$FULL_SHARDS"' in run, run
+    assert 'echo "python_shards=[1]"' in run, run
+    # Only an unlabelled pull request is selected; FULL / NONE / a crash run everything.
+    assert '[ "$EVENT_NAME" = pull_request ] && [ "$FULL_TESTS" != true ]' in run, run
+    assert "select-tests.py --ci" in run and "|| sel=FULL" in run, run
+    assert '[ "$sel" = FULL ] || [ "$sel" = NONE ]' in run, run
 
 
 def test_matrix_groups_are_exactly_one_through_n() -> None:
@@ -87,15 +114,17 @@ def test_matrix_groups_are_exactly_one_through_n() -> None:
 
 
 def test_splits_flag_equals_the_number_of_matrix_groups() -> None:
+    """`--splits` is the length of the same list the matrix expands.
+
+    A mismatch either runs a fraction of the suite (green) or makes pytest-split
+    reject the out-of-range group.
+    """
     cmd = _pytest_command()
-    m = re.search(r"--splits\s+(\d+)", cmd)
-    assert m, f"pytest invocation has no --splits: {cmd}"
-    assert int(m.group(1)) == len(_matrix_groups()), (
-        f"--splits {m.group(1)} but the matrix has {len(_matrix_groups())} groups: "
-        "a mismatch either runs a fraction of the suite (green) or makes "
-        "pytest-split reject the out-of-range group."
-    )
+    assert '--splits "$splits"' in cmd, cmd
     assert "--group ${{ matrix.group }}" in cmd, cmd
+    step = next(s for s in _python_tests()["steps"] if _pytest_command() in (s.get("run") or ""))
+    assert step["env"]["SHARDS"] == "${{ needs.changes.outputs.python_shards }}", step["env"]
+    assert "len(json.loads(sys.argv[1]))" in step["run"] and '"$SHARDS"' in step["run"]
 
 
 def _matrix_python_versions() -> list[str]:
@@ -437,12 +466,13 @@ def test_shards_cover_current_collection_with_balanced_durations(tmp_path: Path)
         # from the MAIN checkout while importing python/djust/tests/conftest.py
         # by path from THIS tree — ImportPathMismatchError, shard collection
         # fails, and the pre-push suite blocks every worktree push.
-        env={
-            **os.environ,
-            "PYTHONPATH": os.pathsep.join(
+        # isolated_git_env: the probe runs git; under a hook GIT_DIR names the
+        # real repository (#3179).
+        env=isolated_git_env(
+            PYTHONPATH=os.pathsep.join(
                 filter(None, ["python", ".", os.environ.get("PYTHONPATH", "")])
             ),
-        },
+        ),
         timeout=180,
     )
     assert proc.returncode == 0, (

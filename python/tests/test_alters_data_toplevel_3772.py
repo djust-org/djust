@@ -54,19 +54,15 @@ def raw_render(source: str, context: dict) -> str:
 
 
 def liveview_render(source: str, context: dict) -> str:
-    """A LiveView whose values are VIEW ATTRIBUTES, the way an app writes them.
-
-    Attributes — not keys added after ``super().get_context_data()`` — are what
-    the LiveView JIT queryset serializer (``mixins/context.py``) walks, so this
-    is the shape that reaches ``serialize_queryset`` on the LiveView path.
-    """
+    """A LiveView whose values come from ``get_context_data()``, the way an explicit view supplies them."""
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
-        def mount(self, request, **kwargs):
-            for name, value in context.items():
-                setattr(self, name, value)
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx.update(context)
+            return ctx
 
     _V.template = f"<div dj-root>{source}</div>"
     client = LiveViewTestClient(_V)

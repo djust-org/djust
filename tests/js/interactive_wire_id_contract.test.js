@@ -2,6 +2,7 @@
  * parameter contract, and its dot never reaches a selector. */
 import { describe, expect, it, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { packManifest } from './_parameter_manifest.js';
 const { readFileSync } = await vi.importActual('node:fs');
 
 const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
@@ -14,10 +15,10 @@ const WIRE = 'cmp_' + 'a'.repeat(32) + '.' + '0123456789abcdef'.repeat(2);
 const select = {policy: 'strict', coerce_types: false, parameters: [
     {name: 'value', type: 'str', kind: 'positional_or_keyword', required: true, reduced_checking: false},
 ]};
-const contracts = {view: 'app.Page', contracts: {version: 1, owners: [
+const contracts = {view: 'app.Page', contracts: packManifest({version: 1, owners: [
     {view_id: null, component_id: null, handlers: {}},
     {view_id: null, component_id: WIRE, handlers: {select, toggle: {policy: 'strict', coerce_types: false, parameters: []}}},
-]}};
+]})};
 const page = `<div dj-root dj-view="app.Page">
   <div class="dj-dropdown-menu" data-component-id="${WIRE}">
     <button id="trigger" type="button" popovertarget="popover-${WIRE}">Help</button>
@@ -51,9 +52,9 @@ describe('interactive component wire id (#4046)', () => {
         try {
             const doc = dom.window.document;
             const item = dom.window.resolveContract(doc.getElementById('item'), 'select');
-            expect(item.policy).toBe('strict');
+            expect(Array.isArray(item.contract.parameters)).toBe(true);
             expect(item.componentId).toBe(WIRE);
-            expect(dom.window.resolveContract(doc.getElementById('toggle'), 'toggle').policy).toBe('strict');
+            expect(Array.isArray(dom.window.resolveContract(doc.getElementById('toggle'), 'toggle').contract.parameters)).toBe(true);
         } finally { dom.window.close(); }
     });
 

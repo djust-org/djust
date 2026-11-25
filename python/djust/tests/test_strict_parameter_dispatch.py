@@ -13,6 +13,7 @@ from djust.validation import validate_handler_params, validated_call_arguments
 from djust.websocket_utils import _call_handler
 from djust import LiveView
 from djust import state
+from djust._parameter_metadata import expand_parameter_manifest
 
 
 class StrictTransportView(LiveView):
@@ -188,9 +189,11 @@ async def test_real_websocket_strict_positional_and_rejection():
             mounted = await socket.receive_json_from()
             assert mounted["type"] == "mount"
             contracts = mounted["parameter_contracts"]
-            assert contracts["version"] == 1
-            assert contracts["owners"][0]["handlers"]["select"]["policy"] == "strict"
-            assert "double" not in contracts["owners"][0]["handlers"]
+            assert contracts["version"] == 2
+            assert (
+                expand_parameter_manifest(contracts)[0]["handlers"]["select"]["policy"] == "strict"
+            )
+            assert "double" not in expand_parameter_manifest(contracts)[0]["handlers"]
             for value, expected in [("7", "patch"), ("SECRET_INVALID", "error")]:
                 await socket.send_json_to(
                     {
@@ -207,7 +210,8 @@ async def test_real_websocket_strict_positional_and_rejection():
                 else:
                     assert frame["type"] in ("patch", "update", "noop"), frame
                     assert "7:2026-09-21" in json.dumps(frame)
-                    assert frame["parameter_contracts"] == contracts
+                    # Unchanged since the mount: sent as its digest (#4307).
+                    assert frame["parameter_contracts"] == contracts["digest"]
                     expected_view = __name__ + ".StrictTransportView"
                     assert frame["parameter_contract_view"] == expected_view
                     await socket.send_json_to({"type": "request_html"})
@@ -215,7 +219,9 @@ async def test_real_websocket_strict_positional_and_rejection():
                     assert recovery["type"] == "html_recovery"
                     assert recovery["version"] == frame["version"]
                     assert "7:2026-09-21" in recovery["html"]
-                    assert recovery["parameter_contracts"] == contracts
+                    # The recovery keeps the frame's snapshot; on this
+                    # connection it is unchanged, so it goes out as its digest.
+                    assert recovery["parameter_contracts"] == contracts["digest"]
                     assert recovery["parameter_contract_view"] == expected_view
         finally:
             await socket.disconnect()
@@ -242,7 +248,9 @@ async def test_real_sse_strict_positional_and_rejection():
         try:
             mounted = next(frame for frame in drain(session) if frame["type"] == "mount")
             assert (
-                mounted["parameter_contracts"]["owners"][0]["handlers"]["select"]["policy"]
+                expand_parameter_manifest(mounted["parameter_contracts"])[0]["handlers"]["select"][
+                    "policy"
+                ]
                 == "strict"
             )
             for value in ("7", "SECRET_INVALID"):
@@ -265,7 +273,10 @@ async def test_real_sse_strict_positional_and_rejection():
                     assert "SECRET_INVALID" not in json.dumps(frames)
                 else:
                     rendered = next(frame for frame in frames if frame["type"] == "patch")
-                    assert rendered["parameter_contracts"] == mounted["parameter_contracts"]
+                    # Unchanged since the mount: sent as its digest (#4307).
+                    assert (
+                        rendered["parameter_contracts"] == mounted["parameter_contracts"]["digest"]
+                    )
         finally:
             _sse_sessions.pop(sid, None)
 
@@ -324,36 +335,6 @@ def test_coercion_disabled_in_strict_policy(decorator):
     assert validate_handler_params(handler, {"value": 2}, "handler")["valid"]
 
 
-def test_global_policy_and_explicit_legacy_override():
-    from djust.config import config
-
-    @event_handler()
-    def inherited(value: bool):
-        pass
-
-    @event_handler(parameter_policy="legacy")
-    def legacy(value: bool):
-        pass
-
-    old = config.get("event_parameter_policy", "legacy")
-    try:
-        config.set("event_parameter_policy", "strict")
-        assert not validate_handler_params(inherited, {"value": "invalid"}, "inherited")["valid"]
-        assert validate_handler_params(legacy, {"value": "invalid"}, "legacy")["valid"]
-    finally:
-        config.set("event_parameter_policy", old)
-
-
-def test_legacy_invocation_result_remains_compatible():
-    @event_handler(parameter_policy="legacy")
-    def handler(value: int):
-        return value
-
-    result = validate_handler_params(handler, {"value": "2"}, "handler")
-    args, kwargs = validated_call_arguments(result)
-    assert handler(*args, **kwargs) == 2
-
-
 def test_invalid_result_cannot_be_invoked():
     with pytest.raises(ValueError):
         validated_call_arguments({"valid": False, "coerced_params": {}})
@@ -402,17 +383,15 @@ def test_malformed_inline_arguments_rejected_even_without_required_inputs(positi
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("route", ["root", "child", "component", "deferred"])
 async def test_routed_strict_invocations_and_malformed_args(monkeypatch, route):
     from djust.tests.test_runtime_child_routing_1892 import (
-        _make_sticky_parent,
-        _make_runtime_with_view,
+        _mounted_sticky_parent,
         _ClickComponent,
     )
 
-    parent, child = _make_sticky_parent()
-    runtime, transport = _make_runtime_with_view(parent)
+    parent, child, runtime, transport = await _mounted_sticky_parent()
     component = _ClickComponent("strict-component")
     parent._components["strict-component"] = component
     owner = child if route == "child" else component if route == "component" else parent
@@ -429,7 +408,7 @@ async def test_routed_strict_invocations_and_malformed_args(monkeypatch, route):
     monkeypatch.setattr(type(owner), "strict_choose", choose, raising=False)
     monkeypatch.setattr(type(owner), "strict_noop", noop, raising=False)
     routing = (
-        {"view_id": "child-1"}
+        {"view_id": "child"}
         if route == "child"
         else {"component_id": "strict-component"}
         if route == "component"

@@ -118,8 +118,10 @@ _DROPS_FIRST_NEWLINE = frozenset(("pre", "textarea", "listing"))
 #: Elements whose content is text up to their own end tag.
 _RAW_TEXT = frozenset(("script", "style", "textarea", "title"))
 
-#: Keys of a patch that name a node by its generated id.
-_ID_HINTS = ("d", "ref_d", "child_d")
+#: Keys of a patch that name a node by its generated id. ``parent_d`` is a
+#: ``SetText``'s parent (#4001); its ``index`` counts within that parent and is
+#: dropped with it (see :func:`path_addressed`).
+_ID_HINTS = ("d", "ref_d", "child_d", "parent_d")
 
 
 def digest_binding(view: Any, request: Any) -> tuple[str, ...] | None:
@@ -236,8 +238,8 @@ def _shape_text(text: str) -> str:
     return _ASCII_SPACE_RUN.sub(" ", text).strip(" ")
 
 
-def _element_piece(tag: str, attrs: str) -> str:
-    """``<tag`` and its counted attributes, sorted by name, each ended by NUL."""
+def _counted_attrs(attrs: str) -> dict[str, str]:
+    """The counted attributes of a start tag's attribute text, by lower-case name."""
     pairs: dict[str, str] = {}
     for found in _ATTRS.finditer(attrs):
         name = found.group(1).lower()
@@ -249,10 +251,51 @@ def _element_piece(tag: str, attrs: str) -> str:
         if value is None:
             value = found.group(4) or ""
         pairs[name] = unescape(value) if "&" in value else value
+    return pairs
+
+
+def _element_piece(tag: str, pairs: dict[str, str]) -> str:
+    """``<tag`` and its counted attributes, sorted by name, each ended by NUL."""
     if pairs.get("name") == "csrfmiddlewaretoken":
         # Django masks the token again on every render.
-        pairs.pop("value", None)
+        pairs = {name: value for name, value in pairs.items() if name != "value"}
     return "<" + tag + "".join(" %s=%s\0" % (name, pairs[name]) for name in sorted(pairs))
+
+
+#: ``dj-update`` value whose subtree the client owns and the shape does not enter (#4283).
+_OPAQUE_UPDATE = "ignore"
+
+
+def _is_opaque(pairs: dict[str, str]) -> bool:
+    """``dj-update="ignore"``: the client owns the element's children (``domShape``)."""
+    return pairs.get("dj-update") == _OPAQUE_UPDATE
+
+
+def _is_client_owned(pairs: dict[str, str]) -> bool:
+    """An element whose children the client manages in a way a path cannot follow:
+    ``dj-update`` other than ``ignore`` (append, prepend, replace) and any
+    ``dj-virtual`` list (#4283). Its render is answered with the whole page."""
+    if "dj-update" in pairs and pairs["dj-update"] != _OPAQUE_UPDATE:
+        return True
+    return any(name == "dj-virtual" or name.startswith("dj-virtual-") for name in pairs)
+
+
+class RenderShape:
+    """What one walk of a rendered root finds (:func:`render_shape`).
+
+    ``shape``: the checksum :func:`dom_shape` returns. ``opaque_paths``: the
+    path of every ``dj-update="ignore"`` element, by the path walker's
+    child-counting rule (a patch at or under one would address client-owned
+    nodes). ``client_owned``: whether the render holds a ``dj-update`` other
+    than ``ignore`` or a ``dj-virtual`` list.
+    """
+
+    __slots__ = ("shape", "opaque_paths", "client_owned")
+
+    def __init__(self, shape: str, opaque_paths: list[tuple[int, ...]], client_owned: bool):
+        self.shape = shape
+        self.opaque_paths = opaque_paths
+        self.client_owned = client_owned
 
 
 def dom_shape(html: Any) -> str | None:
@@ -262,7 +305,8 @@ def dom_shape(html: Any) -> str | None:
 
     * an element: ``<tag``, then each counted attribute as `` name=value``
       + NUL, sorted by name (:func:`_shape_attr_counts`), then its children,
-      then ``>``;
+      then ``>``. A ``dj-update="ignore"`` element's children are left out: the
+      client owns them (flash messages it adds, #4283);
     * a text node that counts as a child: ``"`` + its text with whitespace
       runs collapsed + NUL;
     * a ``dj-if`` boundary comment: ``!``.
@@ -279,19 +323,42 @@ def dom_shape(html: Any) -> str | None:
     ``None`` for anything this reader cannot follow (unbalanced tags): the
     caller then answers with the whole page.
     """
+    found = render_shape(html)
+    return None if found is None else found.shape
+
+
+def render_shape(html: Any) -> RenderShape | None:
+    """:func:`dom_shape`'s walk, with the client-owned regions it passes (#4283).
+
+    ``None`` when the shape is ``None``.
+    """
     if not isinstance(html, str):
         return None
     out: list[str] = []
     stack: list[str] = []
+    #: per open element: the number of significant children seen so far
+    counts: list[int] = []
+    #: per open element below the root: its path
+    paths: list[tuple[int, ...]] = []
+    opaque_paths: list[tuple[int, ...]] = []
+    client_owned = False
+    #: the stack depth of the opaque element being skipped, or 0
+    opaque_depth = 0
     position = 0
     after_start_of = ""  # the tag whose start tag was the previous token
 
+    def inside_opaque() -> bool:
+        return bool(opaque_depth) and len(stack) >= opaque_depth
+
     def text_child(text: str, parent: str, references: bool = True) -> None:
+        if inside_opaque():
+            return
         if references and "&" in text:
             # The client sees the character, not the reference to it.
             text = unescape(text)
         if _counts_as_text(text, parent in _KEEPS_WHITESPACE):
             out.append('"' + _shape_text(text) + "\0")
+            counts[-1] += 1
 
     while True:
         match = _TOKEN.search(html, position)
@@ -307,31 +374,68 @@ def dom_shape(html: Any) -> str | None:
             text_child(text, stack[-1])
         comment = match.group("comment")
         if comment is not None:
-            if stack and _is_dj_if_comment(comment):
+            if stack and not inside_opaque() and _is_dj_if_comment(comment):
                 out.append("!")
+                counts[-1] += 1
             continue
         tag = match.group("tag").lower()
         if match.group("close"):
             if not stack or stack[-1] != tag:
                 return None
+            if opaque_depth and len(stack) == opaque_depth:
+                opaque_depth = 0
             stack.pop()
+            counts.pop()
             if stack:
-                out.append(">")
+                paths.pop()
+                if not inside_opaque():
+                    out.append(">")
             continue
         attrs = match.group("attrs")
+        pairs = _counted_attrs(attrs)
+        if _is_client_owned(pairs):
+            client_owned = True
         if not stack:
             # The root element itself: its own attributes are not part of the
             # shape (the page GET stamps some on it).
             stack.append(tag)
+            counts.append(0)
             if attrs.rstrip().endswith("/") or tag in _VOID:
                 return None
+            if _is_opaque(pairs):
+                client_owned = True  # a root the client owns entirely
             continue
-        out.append(_element_piece(tag, attrs))
-        if attrs.rstrip().endswith("/") or tag in _VOID:
+        void = attrs.rstrip().endswith("/") or tag in _VOID
+        if inside_opaque():
+            if not void:
+                stack.append(tag)
+                counts.append(0)
+                paths.append(())
+                if tag in _RAW_TEXT:
+                    end = re.compile(r"</%s\s*>" % re.escape(tag), re.IGNORECASE).search(
+                        html, position
+                    )
+                    if end is None:
+                        return None
+                    position = end.end()
+                    stack.pop()
+                    counts.pop()
+                    paths.pop()
+            continue
+        path = (paths[-1] if paths else ()) + (counts[-1],)
+        counts[-1] += 1
+        out.append(_element_piece(tag, pairs))
+        if void:
             out.append(">")
             continue
         stack.append(tag)
+        counts.append(0)
+        paths.append(path)
         after_start_of = tag
+        if _is_opaque(pairs):
+            # Hashed as an element; its children are the client's.
+            opaque_paths.append(path)
+            opaque_depth = len(stack)
         if tag in _RAW_TEXT:
             end = re.compile(r"</%s\s*>" % re.escape(tag), re.IGNORECASE).search(html, position)
             if end is None:
@@ -344,19 +448,35 @@ def dom_shape(html: Any) -> str | None:
             text_child(raw, tag, references=tag in ("textarea", "title"))
             position = end.end()
             after_start_of = ""
+            if opaque_depth == len(stack):
+                opaque_depth = 0
             stack.pop()
+            counts.pop()
+            paths.pop()
             out.append(">")
     if stack:
         return None
     data = "".join(out).encode("utf-8", "surrogatepass")
-    return "%08x%08x" % (zlib.crc32(data) & 0xFFFFFFFF, zlib.adler32(data) & 0xFFFFFFFF)
+    shape = "%08x%08x" % (zlib.crc32(data) & 0xFFFFFFFF, zlib.adler32(data) & 0xFFFFFFFF)
+    return RenderShape(shape, opaque_paths, client_owned)
 
 
-def render_token(view: Any, request: Any, html: Any) -> str | None:
+def answer_shape(request: Any, html: Any) -> RenderShape | None:
+    """:func:`render_shape` of the rendered root ``html`` in its canonical form."""
+    return render_shape(canonical_html(html, request)) if isinstance(html, str) else None
+
+
+_UNSET: Any = object()
+
+
+def render_token(view: Any, request: Any, html: Any, found: Any = _UNSET) -> str | None:
     """``<digest>.<shape>`` for the rendered root ``html``: what the page GET
-    and every fallback answer carry, or ``None`` when either half is missing."""
+    and every fallback answer carry, or ``None`` when either half is missing.
+    ``found`` is :func:`answer_shape`'s result, when the caller has it."""
     digest = render_digest(view, request, html)
-    shape = dom_shape(canonical_html(html, request)) if isinstance(html, str) else None
+    if found is _UNSET:
+        found = answer_shape(request, html)
+    shape = None if found is None else found.shape
     if not digest or not shape:
         return None
     return digest + "." + shape
@@ -411,6 +531,12 @@ def path_addressed(patches: list[Any]) -> list[Any]:
     out = []
     for patch in patches:
         if isinstance(patch, dict) and any(key in patch for key in _ID_HINTS):
-            patch = {key: value for key, value in patch.items() if key not in _ID_HINTS}
+            # A SetText's index belongs to its parent_d (#4001); other patches'
+            # index is a placement and stays.
+            dropped = _ID_HINTS + ("index",) if patch.get("type") == "SetText" else _ID_HINTS
+            patch = {key: value for key, value in patch.items() if key not in dropped}
+        if isinstance(patch, dict) and isinstance(patch.get("patches"), list):
+            # A VirtualUpdate's inner patches carry the same hints (#4001).
+            patch = {**patch, "patches": path_addressed(patch["patches"])}
         out.append(patch)
     return out

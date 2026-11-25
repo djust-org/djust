@@ -105,7 +105,7 @@ A key your override adds on top of `super()`'s result renders and is computed ag
 
 #### `get_render_only_context() -> dict`
 
-Template values that render on every transport but are never saved (2.0 saves nothing of a legacy view between requests anyway; the legacy lazy child's session save leaves them out). Models, QuerySets and lists of models in it go through the JIT like public attributes (only the paths the template reads, with `djust_exclude_fields` applied). Use it for content that must not persist (a conversation's messages, a document's text) or for rows a handler already holds on a private attribute:
+Template values that render on every transport but are never saved. Models, QuerySets and lists of models in it go through the JIT like public attributes (only the paths the template reads, with `djust_exclude_fields` applied). Use it for content that must not persist (a conversation's messages, a document's text) or for rows a handler already holds on a private attribute:
 
 ```python
 class ChatView(LiveView):
@@ -179,7 +179,7 @@ class ListView(LiveView):
 
 #### `handle_invalid_params(form, uri)`
 
-Called instead of `handle_params()` when `params_form` rejects the URL. `form` is the bound form; `form.errors` holds the messages, and the template reads them as `params_errors` (`{field: [messages]}`, errors that belong to no field under `"__all__"`). The default hands `handle_params()` the form's initial values, or, with `params_form_fallback = "fields"`, keeps the fields that validated and replaces only the ones in `form.errors` with their initial value (a form-level error from `clean()`, or a combination `clean()` rejects, still replaces all of them). See [Navigation: keeping what validated](../guides/navigation.md#declared-parameters-params_form). Override it to raise `Http404` or to answer 400 (set a flag and return 400 from `get_http_status()`). May be `async def`.
+Called instead of `handle_params()` when `params_form` rejects the URL. `form` is the bound form; `form.errors` holds the messages, and the template reads them as `params_errors` (declare `params_errors = state(default_factory=dict)` on the view: under explicit exposure an undeclared attribute is not rendered) (`{field: [messages]}`, errors that belong to no field under `"__all__"`). The default hands `handle_params()` the form's initial values, or, with `params_form_fallback = "fields"`, keeps the fields that validated and replaces only the ones in `form.errors` with their initial value (a form-level error from `clean()`, or a combination `clean()` rejects, still replaces all of them). See [Navigation: keeping what validated](../guides/navigation.md#declared-parameters-params_form). Override it to raise `Http404` or to answer 400 (set a flag and return 400 from `get_http_status()`). May be `async def`.
 
 ---
 
@@ -290,7 +290,7 @@ Existing views are unaffected unless they already define a regular no-argument m
 
 #### Disconnect cleanup
 
-The framework cleans up on disconnect by itself: an explicit-exposure view's `start_async` tasks are cancelled (a legacy view's run to completion and their result is discarded; set `cancel_async_on_disconnect = True` on a view whose work only serves the open page, such as a follower or a live feed, to have it cancelled; tasks the view starts with `self.create_task()` share that fate, see [Tasks the view starts itself](../guides/loading-states.md#tasks-the-view-starts-itself-create_task)), presence is untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). `disconnect()` and `unmount()` methods you define on the view are not called; use `disconnected()` above, and release what it cannot reach (a process that dies runs nothing) with a timeout or a periodic sweep.
+The framework cleans up on disconnect by itself: the view's `start_async` and `@background` work is cancelled (what cancelled work wrote to `request.session` is not stored, #4211), and so are the tasks it starts with `self.create_task()` (see [Tasks the view starts itself](../guides/loading-states.md#tasks-the-view-starts-itself-create_task)). Work started with `start_async(..., survive_disconnect=True)` or `@background(survive_disconnect=True)` keeps running after the disconnect, with its result discarded ([Work that must finish](../guides/loading-states.md#work-that-must-finish-survive_disconnecttrue)). Setting `cancel_async_on_disconnect = True` on a view is refused with `ImproperlyConfigured` when the class is created (#4199); delete it. Presence is also untracked, child views are released, and uploads are aborted (an incomplete `ResumableUploadWriter` upload is suspended so the client can resume it after reconnecting). `disconnect()` and `unmount()` methods you define on the view are not called; use `disconnected()` above, and release what it cannot reach (a process that dies runs nothing) with a timeout or a periodic sweep.
 
 **Telling the live mount from the HTTP render.** `mount()` runs twice for a page: once for the HTTP response and again when the WebSocket (or SSE) connection mounts the view. On the live mount the framework sets `self._websocket_session_id` before `mount()` runs; on the HTTP render it is absent. This is the check djust's own presence tracking uses:
 
@@ -310,7 +310,7 @@ Update the browser URL without remounting the view. `params` is merged into the 
 
 ```python
 @event_handler()
-def go_to_page(self, page: int = 1, **kwargs):
+def go_to_page(self, page: int = 1):
     self.live_patch(params={"page": page})
 ```
 
@@ -320,7 +320,7 @@ Navigate to a different LiveView over the existing WebSocket. The current view i
 
 ```python
 @event_handler()
-def logout(self, **kwargs):
+def logout(self):
     self.live_redirect("/login/")
 ```
 
@@ -358,7 +358,7 @@ Schedule a callback to run in a background thread after flushing the current vie
 
 ```python
 @event_handler()
-def generate_report(self, **kwargs):
+def generate_report(self):
     self.generating = True  # Sent to client immediately
     self.start_async(self._do_generate, name="report")
 
@@ -383,7 +383,7 @@ Cancel a pending or running async task by name.
 
 ```python
 @event_handler()
-def cancel_export(self, **kwargs):
+def cancel_export(self):
     self.cancel_async("export")
     self.exporting = False
 ```
@@ -431,7 +431,7 @@ Queue a flash message to be sent to the connected client. The message is rendere
 
 ```python
 @event_handler()
-def save(self, **kwargs):
+def save(self):
     save_item(self.name)
     self.put_flash("success", "Item saved!")
 ```
@@ -448,7 +448,7 @@ Queue a command to clear flash messages on the client.
 
 ```python
 @event_handler()
-def dismiss_errors(self, **kwargs):
+def dismiss_errors(self):
     self.clear_flash("error")   # clear only errors
     self.clear_flash()          # clear all
 ```
@@ -468,7 +468,7 @@ def mount(self, request, **kwargs):
     self.page_title = "Dashboard"
 
 @event_handler()
-def select_tab(self, tab: str = "", **kwargs):
+def select_tab(self, tab: str = ""):
     self.page_title = f"Dashboard - {tab.title()}"
 ```
 
@@ -480,7 +480,7 @@ Get or set document `<meta>` tags. Setting this property to a dict queues side-c
 
 ```python
 @event_handler()
-def select_article(self, article_id: int = 0, **kwargs):
+def select_article(self, article_id: int = 0):
     article = Article.objects.get(pk=article_id)
     self.page_meta = {
         "description": article.summary,
@@ -520,12 +520,13 @@ These replace private flags some applications set directly. The private names ke
 | Public form | Replaces | What it does |
 |---|---|---|
 | `skip_render()` | `self._skip_render = True` | No render this turn. Works in an event handler, a push handler / `handle_info`, and `handle_tick()`. Push events and navigation are still sent. |
-| `set_changed_keys()` (no arguments) / `request_full_render()` | `self._force_full_html = True` | Render this turn as full HTML, even though no public attribute changed. |
-| `cancel_full_render()` | `self._force_full_html = False` | Withdraw a full render requested earlier in this turn. A full render the framework itself requires (after a restore, after a failed save) stays. |
+| `set_changed_keys()` (no arguments) | — | Render this turn, even though no public attribute changed. The render is diffed and sent as a patch, so DOM state the server does not render (an open native dialog, focus) survives it. |
+| `request_full_render()` | `self._force_full_html = True` | Render this turn and send it as full HTML rather than as a diff. |
+| `cancel_full_render()` | `self._force_full_html = False` | Withdraw a render requested earlier in this turn. A full render the framework itself requires (after a restore, after a failed save) stays. |
 | `reset_submitted_form()` | `self._should_reset_form = True` | The browser resets the form whose submit (or button) sent the event. Rides on this turn's answer, a render or (when the turn renders nothing) a `noop`, on the socket, SSE and the HTTP fallback. For a view without `FormMixin`; `FormMixin.reset_form()` does it for you. |
 | `clear_push_events()` | `self._pending_push_events = []` | Drop the push events queued so far this turn; returns them. |
 
-A full render requested in the same turn wins over `skip_render()`.
+A render requested in the same turn (either form) wins over `skip_render()`.
 
 These names, and `ThemeMixin.get_theme_state()`, belong to djust: a view or mixin that defines one (an `@event_handler` named `skip_render`, say) replaces the method, and a client could call it. `manage.py check` reports it as `djust.V030`.
 
@@ -537,12 +538,14 @@ djust re-renders when a public attribute changes. A handler that changes only th
 from djust.decorators import event_handler
 
 @event_handler
-def archive(self, item_id: int, **kwargs):
+def archive(self, item_id: int):
     Item.objects.filter(pk=item_id).update(archived=True)  # database only
     self.set_changed_keys()  # get_context_data() re-queries; render the result
 ```
 
 After an in-place write on an object djust compares by identity (a model instance held in state), name the attribute instead: `self.set_changed_keys("rows")`.
+
+Either form sends the render as a diff (`patch`) on the view route, like any other turn (an event routed to a component with `component_id` is still answered with the full-HTML `component_event` frame). Before 2.0.0rc3 it sent the whole page, which closed an open `{% modal native=True %}`. Use `request_full_render()` when the page should be replaced rather than patched.
 
 ---
 
@@ -583,7 +586,7 @@ class ProtectedView(LoginRequiredMixin, LiveView):
 | `count = state(0, client=True)` | The raw value may reach the browser (`get_state()`, HTTP API `assigns`) |
 | `self._items` | A naming convention for internal values; the underscore is not what hides them |
 
-This is [explicit exposure](../state/explicit-exposure.md), the default since 2.0. A view that states `exposure_policy = "legacy"` (deprecated) publishes every public attribute to the template instead.
+This is [explicit exposure](../state/explicit-exposure.md), the default since 2.0. (A view still on the deprecated 1.x exposure policy publishes every public attribute instead; see [Migrating to djust 2.0](../guides/migrating-to-2.0.md).)
 
 ---
 

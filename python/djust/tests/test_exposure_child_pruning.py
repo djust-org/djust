@@ -138,6 +138,10 @@ def test_an_inheritance_failure_raises_instead_of_rendering_a_fragment(rf, monke
         raise RuntimeError("inheritance unavailable")
 
     monkeypatch.setattr(_rust, "resolve_template_inheritance", unsupported)
+    # The mount above kept this class's get_template() result (#4299).
+    from djust._render_caches import clear_render_caches
+
+    clear_render_caches()
     request = make_request(rf, SessionStore(original.session.session_key))
     page = Page()
     page.request = request

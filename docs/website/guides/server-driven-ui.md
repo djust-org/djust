@@ -16,7 +16,7 @@ class DashboardView(LiveView):
     template_name = "dashboard.html"
 
     @event_handler
-    def highlight_new_button(self, **kwargs):
+    def highlight_new_button(self):
         """Fired from a 'Show me around' button on the dashboard."""
         self.push_commands(
             JS.add_class("tour-highlight", to="#btn-new-project")
@@ -97,7 +97,7 @@ Every call to `push_commands()` queues a separate `djust:exec` event, and the cl
 
 ```python
 @event_handler
-def run_tour(self, **kwargs):
+def run_tour(self):
     self.push_commands(JS.add_class("highlight", to="#step-1"))
     self.push_commands(JS.add_class("highlight", to="#step-2"))
     self.push_commands(JS.add_class("highlight", to="#step-3"))
@@ -111,7 +111,7 @@ Nothing special — `push_commands` composes with regular state mutation. Update
 
 ```python
 @event_handler
-def open_modal(self, **kwargs):
+def open_modal(self):
     self.modal_open = True                             # triggers VDOM patch
     self.push_commands(
         JS.focus("#modal-title")                       # moves focus after render
@@ -127,7 +127,7 @@ Both side effects happen on the same event round-trip. The VDOM patch lands firs
 
 ```python
 @event_handler
-def save(self, **kwargs):
+def save(self):
     self._persist()
     self.push_event("flash", {"message": "Saved!", "type": "success"})
     self.push_commands(
@@ -171,7 +171,7 @@ Everything in the "planned" rows is to be built on top of `push_commands`. It's 
 
 `push_commands` works inside `@background` handlers too, which is the pattern for any flow longer than a single click.
 
-Inside a `@background` task, pushed commands are queued until the task returns. Call `await self.flush_push_events()` after each step to deliver it immediately:
+Inside a `@background` task, pushed commands are queued until the task returns. Call `await self.flush_push_events()` after each step to deliver it immediately. This works over a WebSocket or SSE connection; on the HTTP fallback there is no push channel, so the queued events ride the response to the request instead:
 
 ```python
 import asyncio
@@ -183,7 +183,7 @@ from djust.js import JS
 class Onboarding(LiveView):
     @event_handler
     @background
-    async def start_tour(self, **kwargs):
+    async def start_tour(self):
         self.tour_running = True
 
         # Step 1: highlight dashboard nav
@@ -247,7 +247,7 @@ class Onboarding(LiveView):
 
     @event_handler
     @background
-    async def start_tour(self, **kwargs):
+    async def start_tour(self):
         self.tour_running = True
 
         # Step 1: highlight the create button
@@ -273,7 +273,7 @@ class Onboarding(LiveView):
         # Step 2: continue the tour...
 
     @event_handler
-    def create_project(self, name: str, **kwargs):
+    def create_project(self, name: str):
         """Called when the user clicks the highlighted button."""
         Project.objects.create(name=name, owner=self.request.user)
 ```
@@ -340,7 +340,7 @@ The two primitives compose naturally. The pattern for any guided flow is:
 ```python
 @event_handler
 @background
-async def run_multi_step_tour(self, **kwargs):
+async def run_multi_step_tour(self):
     for step in self.tour_steps:
         # Setup
         self.push_commands(

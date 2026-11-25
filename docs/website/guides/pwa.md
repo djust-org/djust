@@ -59,7 +59,7 @@ class MyView(OfflineMixin, LiveView):
         return {**super().get_context_data(**kwargs), "items": self.items}
 
     @event_handler()
-    def add_item(self, name: str = "", **kwargs):
+    def add_item(self, name: str = ""):
         created = self.create_offline('Item', {'name': name})
         self.items.append(created)
         self.storage.set('items', self.items)
@@ -218,6 +218,10 @@ elements always visible, online or not.)
 
 ## Service Worker Configuration
 
+An explicit-exposure page is not written to the worker's shell or VDOM cache
+unless its view sets `sw_cacheable = True`; see
+[Which pages the worker caches](service-worker.md#which-pages-the-worker-caches-20).
+
 There are two settings surfaces, and which one applies depends on the consumer:
 
 - **`DJUST_CONFIG` flat `PWA_*` keys** (below) are read by `PWAMixin.get_pwa_config()`,
@@ -304,14 +308,14 @@ class TodoView(OfflineMixin, LiveView):
         return {**super().get_context_data(**kwargs), "todos": self.todos}
 
     @event_handler()
-    def add_todo(self, text: str = "", **kwargs):
+    def add_todo(self, text: str = ""):
         todo = self.create_offline('Todo', {'text': text, 'done': False})
         self.todos.append(todo)
         self.storage.set('todos', self.todos)
         self.sync_when_online()
 
     @event_handler()
-    def toggle_todo(self, todo_id: str = "", **kwargs):
+    def toggle_todo(self, todo_id: str = ""):
         for todo in self.todos:
             if todo['id'] == todo_id:
                 todo['done'] = not todo['done']

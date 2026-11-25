@@ -225,9 +225,15 @@ class DjustModelAdmin:
         if self.form:
             return self.form
 
-        # Generate form from model
+        # Generate form from model. As in Django's ModelAdmin.get_form, readonly entries are
+        # excluded from the generated form: a readonly name that is a ModelAdmin method, a
+        # model attribute or a callable is not a model field, and modelform_factory would raise
+        # FieldError on it; readonly model fields are shown as text, never as inputs (#4244).
         fields = self.get_fields(request, obj)
-        exclude = self.get_exclude(request, obj)
+        exclude = [
+            *(self.get_exclude(request, obj) or ()),
+            *self.get_readonly_fields(request, obj),
+        ] or None
 
         form_class: Type[BaseModelForm] = modelform_factory(
             self.model,

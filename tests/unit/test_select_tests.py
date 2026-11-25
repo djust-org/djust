@@ -361,7 +361,7 @@ def test_cargo_no_crate_files():
 def test_cargo_reverse_deps_read_from_the_real_workspace():
     rev = st.read_reverse_deps(ROOT)
     # djust_core is depended on by every Python-facing crate (Cargo.toml path deps).
-    assert rev["djust_core"] >= {"djust_templates", "djust_live", "djust_components"}
+    assert rev["djust_core"] >= {"djust_templates", "djust_live"}
     # djust_vdom sits on the Python-free djust_base instead, so a host with no
     # Python interpreter can depend on it. A direct djust_core edge would pull
     # PyO3 back in.
@@ -510,7 +510,6 @@ def test_unparseable_production_import_graph_requires_full():
         "requirements-dev.txt",
         "crates/djust_components/Cargo.toml",
         ".test_collected_floor",
-        ".test_durations",
         "scripts/pre-push-cargo-test.sh",
     ],
 )
@@ -622,3 +621,272 @@ def test_targeted_cli_reads_the_environment_and_prints_the_reason(monkeypatch, c
     assert seen["targeted"] is True
     assert out.out.strip() == "t.py"
     assert "DJUST_PREPUSH_TARGETED=1" in out.err
+
+
+# --------------------------------------------------------------------------
+# CI mode (--ci): pull-request CI runs the selection, the merge queue runs all
+# --------------------------------------------------------------------------
+
+CI_TESTS = [*TESTS, "tests/test_ci_pins.py", "tests/test_docs_scan.py", "tests/test_gate.py"]
+CI_TEXTS = {
+    **TEXTS,
+    "tests/test_ci_pins.py": 'yaml.safe_load(open(".github/workflows/test.yml"))\n',
+    "tests/test_docs_scan.py": 'for md in DOCS.rglob("*.md"):\n',
+    "tests/test_gate.py": "def test_tree():\n",
+}
+
+
+def _ci(changed, gates=("tests/test_gate.py",)):
+    return st.select_tests(changed, CI_TESTS, CI_TEXTS.__getitem__, "feat/x", ci=True, gates=gates)
+
+
+@pytest.mark.parametrize(
+    "path", [".github/workflows/test.yml", ".pre-commit-config.yaml", "Makefile"]
+)
+def test_ci_mode_selects_the_consumers_of_ci_configuration(path):
+    texts = {**CI_TEXTS, "tests/test_ci_pins.py": repr(path)}
+    sel = st.select_tests([path], CI_TESTS, texts.__getitem__, "feat/x", ci=True)
+    assert not sel.full, sel.reason
+    assert "tests/test_ci_pins.py" in sel.tests
+    # Outside CI mode the same change still runs everything.
+    assert st.select_tests([path], CI_TESTS, texts.__getitem__, "feat/x", targeted=True).full
+
+
+def test_ci_mode_classifies_a_doc_no_test_names_and_runs_the_doc_scanners():
+    sel = _ci(["python/djust/forms.py", "docs/unknown.md"])
+    assert not sel.full, sel.reason
+    assert "tests/unit/test_forms.py" in sel.tests
+    assert "tests/test_docs_scan.py" in sel.tests
+
+
+def test_ci_mode_runs_no_doc_scanner_without_a_doc_change():
+    sel = _ci(["python/djust/forms.py"])
+    assert "tests/test_docs_scan.py" not in sel.tests
+
+
+def test_ci_mode_adds_the_merge_gates_to_every_selection():
+    sel = _ci(["python/djust/forms.py"])
+    assert "tests/test_gate.py" in sel.tests
+    # A gate that no longer exists is not selected.
+    sel = _ci(["python/djust/forms.py"], gates=("tests/test_gone.py",))
+    assert "tests/test_gone.py" not in sel.tests
+
+
+def test_ci_mode_is_targeted():
+    """A blast-radius path selects its direct consumers instead of everything."""
+    sel = _ci(["python/djust/websocket.py"], gates=())
+    assert not sel.full, sel.reason
+    assert sel.tests == ["python/djust/tests/test_websocket_mount.py"]
+
+
+@pytest.mark.parametrize(
+    "path", ["pyproject.toml", "uv.lock", "Cargo.lock", "python/tests/conftest.py"]
+)
+def test_ci_mode_keeps_full_for_dependencies_and_the_test_harness(path):
+    texts = {**CI_TEXTS, "tests/test_ci_pins.py": repr(path)}
+    assert st.select_tests([path], CI_TESTS, texts.__getitem__, "feat/x", ci=True).full
+
+
+def test_merge_gates_are_read_from_the_makefile():
+    gates = st.merge_gates(ROOT)
+    assert "tests/test_merge_gates_3757.py" in gates
+    assert all((ROOT / g).is_file() for g in gates), gates
+
+
+SUPPORT_TESTS = ["python/djust/tests/test_a.py", "python/djust/tests/test_b.py", "tests/test_c.py"]
+SUPPORT_TEXTS = {
+    "python/djust/tests/test_a.py": "from ._live_session import open_session\n",
+    "python/djust/tests/test_b.py": "from ._matrix import ROWS\n",
+    "tests/test_c.py": "def test_c(): pass\n",
+    "python/djust/tests/_live_session.py": "def open_session(): ...\n",
+    "python/djust/tests/_matrix.py": "from ._live_session import open_session\n",
+    "tests/sweep_sample.py": "def select(): ...\n",
+    "conftest.py": 'pytest_plugins = ["tests.sweep_sample"]\n',
+    "pyproject.toml": "[tool.pytest.ini_options]\n",
+}
+SUPPORT = [
+    "python/djust/tests/_live_session.py",
+    "python/djust/tests/_matrix.py",
+    "tests/sweep_sample.py",
+]
+
+
+def _ci_support(changed):
+    return st.select_tests(
+        changed,
+        SUPPORT_TESTS,
+        SUPPORT_TEXTS.__getitem__,
+        "feat/x",
+        ci=True,
+        support=SUPPORT,
+        global_files=["conftest.py", "pyproject.toml"],
+    )
+
+
+def test_ci_mode_selects_the_tests_that_use_a_changed_helper_directly_and_through_helpers():
+    sel = _ci_support(["python/djust/tests/_live_session.py"])
+    assert not sel.full, sel.reason
+    # test_a imports it; test_b reaches it through _matrix.
+    assert sel.tests == ["python/djust/tests/test_a.py", "python/djust/tests/test_b.py"]
+
+
+def test_ci_mode_keeps_full_for_a_helper_a_conftest_names():
+    sel = _ci_support(["tests/sweep_sample.py"])
+    assert sel.full and "conftest.py uses test support" in sel.reason
+
+
+def test_outside_ci_mode_a_helper_still_runs_everything():
+    sel = st.select_tests(
+        ["python/djust/tests/_matrix.py"],
+        SUPPORT_TESTS,
+        SUPPORT_TEXTS.__getitem__,
+        "feat/x",
+        targeted=True,
+    )
+    assert sel.full
+
+
+@pytest.mark.parametrize("path", ["tests/conftest.py", "python/djust/tests/__init__.py"])
+def test_ci_mode_keeps_full_for_conftest_and_package_init(path):
+    assert not st.is_test_support(path)
+    assert _ci_support([path]).full
+
+
+@pytest.mark.parametrize(
+    ("text", "refers"),
+    [
+        ("from ._live_session import open_session", True),
+        ("from . import _live_session", True),
+        ("from djust.tests import other, _live_session", True),
+        ("import djust.tests._live_session as ls", True),
+        ('DJANGO_SETTINGS_MODULE = "djust.tests._live_session"', True),
+        ("open_live_session = _live_session_factory()", False),
+        ("from tests import _live_session", False),  # another package's module of that name
+    ],
+)
+def test_a_support_module_is_referred_to_by_import_not_by_its_bare_stem(text, refers):
+    pattern = st.support_import_re("python/djust/tests/_live_session.py")
+    assert bool(pattern.search(text)) is refers
+
+
+# --------------------------------------------------------------------------
+# #4259: a strict xfail turns red when a fix makes it pass. It pins behaviour
+# through the code it renders, not by naming the module, so the selection rules
+# (a)-(c) miss it; the merge queue caught one (#4257, an XPASS(strict)).
+# --------------------------------------------------------------------------
+
+XFAIL_TESTS = [*CI_TESTS, "python/tests/test_pin_strict.py", "python/tests/test_pin_loose.py"]
+XFAIL_TEXTS = {
+    **CI_TEXTS,
+    "python/tests/test_pin_strict.py": (
+        "@pytest.mark.xfail(\n    reason='renders through it (#4241)',\n    strict=True,\n)\n"
+        "def test_it_prints_the_row(): ...\n"
+    ),
+    "python/tests/test_pin_loose.py": (
+        "@pytest.mark.xfail(reason='flaky upstream')\ndef test_x(): ...\n"
+        "STRICT = dict(strict=True)  # not an xfail argument\n"
+    ),
+}
+
+
+def _xfail(changed, **kw):
+    return st.select_tests(changed, XFAIL_TESTS, XFAIL_TEXTS.__getitem__, "feat/x", **kw)
+
+
+def test_ci_mode_adds_every_strict_xfail_file_to_a_selection():
+    sel = _xfail(["python/djust/forms.py"], ci=True, gates=())
+    assert not sel.full, sel.reason
+    assert "tests/unit/test_forms.py" in sel.tests
+    assert "python/tests/test_pin_strict.py" in sel.tests
+    # A non-strict xfail cannot go red when it passes; `strict=True` outside an xfail is not one.
+    assert "python/tests/test_pin_loose.py" not in sel.tests
+
+
+def test_strict_xfails_do_not_rescue_an_empty_selection_or_change_full():
+    assert _xfail(["docs/nowhere.txt"], ci=True).full
+    assert _xfail(["pyproject.toml"], ci=True).full
+
+
+# --------------------------------------------------------------------------
+# CI mode: a selection too big for its one shard runs as FULL shards
+# --------------------------------------------------------------------------
+# PR #4284 selected 744 files; CI ran them as one shard and the job was cancelled
+# at its 45-minute timeout with no failure, where FULL's 8 shards finish in ~13 min.
+
+BIG = ["tests/unit/test_big_%03d.py" % i for i in range(40)]
+BIG_TEXTS = {**CI_TEXTS, **{t: "from djust.forms import Form\n" for t in BIG}}
+
+
+def _big(tests, durations):
+    return st.select_tests(
+        ["python/djust/forms.py"],
+        [*CI_TESTS, *tests],
+        BIG_TEXTS.__getitem__,
+        "feat/x",
+        ci=True,
+        gates=(),
+        durations=durations,
+    )
+
+
+def _timed(tests, seconds_per_file):
+    # Fast-tier tests of 0.5 s each per file, plus a slow-tier test PR CI deselects.
+    out = {}
+    for t in tests:
+        for i in range(int(seconds_per_file * 2)):
+            out["%s::test_%d" % (t, i)] = 0.5
+        out[t + "::test_slow"] = 500.0
+    return out
+
+
+def test_ci_mode_a_selection_over_the_shard_budget_is_full():
+    sel = _big(BIG, _timed(BIG, 20.0))  # 40 files x 20 s = 800 s > 600 s
+    assert sel.full
+    assert "one CI shard" in sel.reason
+
+
+def test_ci_mode_a_selection_under_the_shard_budget_keeps_its_files():
+    # The slow tier (500 s per file here) is not counted: PR CI runs -m "not slow".
+    sel = _big(BIG, _timed(BIG, 10.0))  # 400 s
+    assert not sel.full, sel.reason
+    assert set(BIG) <= set(sel.tests)
+
+
+def test_ci_mode_charges_an_unrecorded_file_the_mean_recorded_file():
+    recorded = _timed(BIG[:10], 20.0)  # 10 x 20 s, mean 20 s
+    assert _big(BIG[:10], recorded).tests
+    assert _big(BIG, recorded).full  # 10 recorded + 30 at the 20 s mean = 800 s
+
+
+def test_ci_mode_without_durations_caps_the_file_count():
+    many = ["tests/unit/test_big_%03d.py" % i for i in range(st.CI_SHARD_MAX_FILES + 1)]
+    texts = {**CI_TEXTS, **{t: "from djust.forms import Form\n" for t in many}}
+    sel = st.select_tests(
+        ["python/djust/forms.py"], [*CI_TESTS, *many], texts.__getitem__, "feat/x", ci=True
+    )
+    assert sel.full and str(st.CI_SHARD_MAX_FILES) in sel.reason
+    assert not _big(BIG, {}).full
+
+
+def test_the_shard_cap_is_what_makes_the_big_selection_full(monkeypatch):
+    """Gate-off: without the cap, the same big selection would run as one shard."""
+    monkeypatch.setattr(st, "CI_SHARD_BUDGET_SECONDS", float("inf"))
+    sel = _big(BIG, _timed(BIG, 20.0))
+    assert not sel.full, sel.reason
+    assert set(BIG) <= set(sel.tests)
+
+
+def test_the_shard_cap_is_ci_mode_only():
+    sel = st.select_tests(
+        ["tests/unit/test_big_000.py"],
+        [*CI_TESTS, *BIG],
+        BIG_TEXTS.__getitem__,
+        "feat/x",
+        durations=_timed(BIG, 100.0),
+    )
+    assert sel.tests == ["tests/unit/test_big_000.py"]
+
+
+def test_load_durations_reads_the_committed_file():
+    durations = st.load_durations(ROOT)
+    assert durations and all(isinstance(v, (int, float)) for v in durations.values())

@@ -40,6 +40,9 @@
 
 (function initVirtualListModule() {
     const STATE = new WeakMap();
+    // The containers in STATE, countable (#4001): a patch on a page that
+    // tracks none skips the virtual-list rescan.
+    const TRACKED = new Set();
     const DEFAULT_OVERSCAN = 3;
     const DEFAULT_ESTIMATED_HEIGHT = 50;
     const DEFAULT_KEY_ATTR = 'data-key';
@@ -219,6 +222,7 @@
         }
 
         STATE.set(container, state);
+        TRACKED.add(container);
         render(state);
     }
 
@@ -474,6 +478,7 @@
         if (state.resizeObserver) state.resizeObserver.disconnect();
         if (state.itemObserver) state.itemObserver.disconnect();
         STATE.delete(container);
+        TRACKED.delete(container);
     }
 
     // Tear down a virtualization whose container was REPURPOSED for a different
@@ -1005,6 +1010,7 @@
     window.djust._flushVirtualKeyedOps = flushKeyedOps;
     window.djust._virtualPrune = virtualPrune;
     window.djust.initVirtualLists = initVirtualLists;
+    window.djust._virtualListsTracked = () => TRACKED.size;
     window.djust.refreshVirtualList = refreshVirtualList;
     window.djust.teardownVirtualList = teardownVirtualList;
     window.djust._findVirtualListHolding = findVirtualListHolding;

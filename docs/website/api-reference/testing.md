@@ -145,6 +145,47 @@ assert len(state["items"]) == 3
 
 ---
 
+#### `persisted_state() -> PersistedState`
+
+What the mounted view would save, split by destination. `get_state()` is what the view holds; this is what it keeps between requests. It is a read-only projection: nothing is written to the session. Also available as `djust.testing.persisted_state(view)`, which takes the view instance. Calling it spends the once-per-class "large state" notices, so a later real save in the same process does not repeat them, and an over-limit `persist="server"` projection raises `ExposureError` where a real save drops the component records and saves without them.
+
+| Field | Contents |
+|---|---|
+| `server` | `state(persist="server")` fields and component records |
+| `snapshot` | `state(persist="client")` fields (the signed back-navigation snapshot) |
+| `client` | `state(client=True)` fields |
+| `automatic` | everything automatic state saves under a public name: declared `state()` fields without `persist=` (including `render=False` ones) and undeclared public attributes the view set, encoded as stored |
+| `automatic_private` | the underscore attributes automatic state keeps |
+| `automatic_components` | automatic state's component records |
+| `automatic_bytes` | the encoded size of the automatic state, the figure `DJUST_AUTOMATIC_STATE_MAX_KB` limits and `DJUST_AUTOMATIC_STATE_WARN_KB` warns on |
+| `names` | every name saved anywhere (a property) |
+
+```python
+saved = client.persisted_state()
+assert "secret_rows" not in saved.names      # rows the page only reads are saved nowhere
+assert saved.automatic_bytes < 20_000
+```
+
+A value returned only from `get_context_data()` is computed again for every render and is in no destination. With `automatic_state = False` (or `DJUST_AUTOMATIC_STATE = False`) the `automatic*` fields are empty and `automatic_bytes` is 0. A view over its limit raises `StateLimitExceeded`, as a save would.
+
+---
+
+#### `rendered_state() -> dict`
+
+What the last render handed the template engine: every name the template could read, as the template reads it. Under explicit exposure a Model, a model list or a QuerySet is reduced to the fields the template names, so this is where a data-minimization test looks. It returns a detached copy (mutating it changes nothing in the view) and raises `RuntimeError` before the first render. Also available as `djust.testing.rendered_state(view)`, which takes the view instance.
+
+It answers a different question from its neighbours: `get_state()` is what the view holds (under explicit exposure, its `state(client=True)` fields), `persisted_state()` is what a save keeps, and `rendered_state()` is what the renderer received.
+
+```python
+client.mount()
+client.render()
+person = client.rendered_state()["person"]
+assert "username" in person
+assert "email" not in person          # the template never reads it
+```
+
+---
+
 ### Example: Full Test
 
 ```python

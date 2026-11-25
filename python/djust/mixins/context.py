@@ -5,14 +5,13 @@ ContextMixin - Context data management for LiveView.
 import itertools
 import json
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, List, Optional, Tuple, cast
 
 from django.db import models
 from django.test.signals import setting_changed
 from django.utils.datastructures import MultiValueDict
 
 from .. import _per_turn
-from .._class_snapshot import namespace as _class_namespace
 from .._mapping import mapping_items, mapping_values
 from .._exposure_providers import STREAMS_PROVIDER, actions_provider, components_provider
 from ..serialization import _crosses_as_encoded, normalize_django_value
@@ -173,6 +172,51 @@ def _holds_db_value(value: Any, depth: int = 0) -> bool:
         if type(item) not in _NEVER_DB_TYPES and _holds_db_value(item, depth):
             return True
     return False
+
+
+def state_models_as_handles_enabled() -> bool:
+    """``LIVEVIEW_CONFIG["state_models_as_handles"]`` (#3936, default on since 2.0)."""
+    try:
+        from ..config import get_config
+
+        return bool(get_config().get("state_models_as_handles", True))
+    except Exception:  # noqa: BLE001 -- config access is defensive
+        # Fail safe: a config error means no overlay, i.e. the serialized-dict path.
+        return False
+
+
+def _is_projection(queryset: Any) -> bool:
+    """Is this QuerySet a ``.values()`` / ``.values_list()`` projection? The ONLY queryset
+    operation that sets ``_fields`` (as ``_SidecarQuerySetProxy`` reads it)."""
+    return getattr(queryset, "_fields", None) is not None
+
+
+def _projection_skips_the_jit(queryset: Any) -> bool:
+    """A projection QuerySet is left to the normalize pass, never the JIT (#4271): its rows are
+    dicts / tuples, not models. The gate the legacy context serializer asks."""
+    return _is_projection(queryset)
+
+
+def _state_model_values(context: Any) -> Dict[str, Any]:
+    """The top-level context values that hold a model (a ``Model``, a ``QuerySet``, a list or
+    tuple containing a ``Model``), for the render-time handle overlay (#3936). Empty when the
+    flag is off, so the default path pays one config read."""
+    if not state_models_as_handles_enabled():
+        return {}
+    from django.db.models import QuerySet
+
+    out: Dict[str, Any] = {}
+    for key, value in context.items():
+        if isinstance(value, QuerySet) and _is_projection(value):
+            # ``.values()`` / ``.values_list()``: the rows are dicts / tuples with no model to hand
+            # a proxy for, and the floor refuses a projection's rows (vector 5), so a handle would
+            # be an EMPTY list shadowing the serialized rows (train/2.0-ai review B1).
+            continue
+        if isinstance(value, (models.Model, QuerySet)) or (
+            isinstance(value, (list, tuple)) and any(isinstance(v, models.Model) for v in value)
+        ):
+            out[key] = value
+    return out
 
 
 def _jit_serialization_enabled() -> bool:
@@ -338,39 +382,6 @@ def _request_scoped_keys(view: Any) -> set:
     return keys
 
 
-def legacy_render_only_keys(view: Any) -> frozenset:
-    """Context keys a legacy session save must drop: they render, never persist."""
-    keys = getattr(view, "_djust_render_only_context_keys", None)
-    return frozenset(keys()) if callable(keys) else frozenset()
-
-
-def legacy_unsaved_keys(view: Any, context: Dict[str, Any]) -> frozenset:
-    """The keys of ``context`` a legacy session save drops.
-
-    A legacy save keeps the view's state: the keys the base
-    ``get_context_data()`` built from the view's attributes. It drops
-
-    - the render-only keys (:meth:`ContextMixin.get_render_only_context`, the
-      framework's private ``_djust_render_only_context`` hooks), and
-    - every key an override added on top of ``super().get_context_data()``.
-      Such a value is computed again on every render, so saving it only
-      copied derived data (a query set's rows with every column, content
-      that must not reach the session) into ``django_session`` and set it
-      back as an attribute on restore (Point Guard N-31 and Phase 2
-      decision 185).
-
-    Every legacy save site (the HTTP GET, the page-POST fallback, the socket
-    turn's save, a lazy child) filters through this one function.
-    """
-    unsaved = set(legacy_render_only_keys(view))
-    recorded = getattr(view, "__dict__", {})
-    unsaved.update(recorded.get("_djust_render_only_keys", ()))
-    base = recorded.get("_djust_state_context_keys")
-    if base is not None:
-        unsaved.update(key for key in context if key not in base)
-    return frozenset(unsaved)
-
-
 def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str, Any]:
     """Return ``context`` without its non-serializable request-scoped values.
 
@@ -393,21 +404,6 @@ def _drop_request_scoped_values(view: Any, context: Dict[str, Any]) -> Dict[str,
         for key, value in context.items()
         if key not in scoped or not _keeps_out_of_state(value)
     }
-
-
-_LIVE_VIEW_MRO: "Optional[frozenset]" = None
-
-
-def _live_view_mro() -> frozenset:
-    """``LiveView``'s MRO: the framework-owned classes whose attributes are
-    configuration, never legacy template context (#2960). Cached; imported
-    lazily because ``live_view`` imports this module."""
-    global _LIVE_VIEW_MRO
-    if _LIVE_VIEW_MRO is None:
-        from ..live_view import LiveView
-
-        _LIVE_VIEW_MRO = frozenset(LiveView.__mro__)
-    return _LIVE_VIEW_MRO
 
 
 def rendered_state_names(view_class: type) -> tuple:
@@ -510,8 +506,7 @@ class ContextMixin:
            short-circuit sits inside the stock method, so a view that defines
            its own ``get_context_data()`` ran its whole body a second time.
            Reading the cache here, before the method is reached, serves both.
-           A legacy view gets a shallow copy of the cached dict; an explicit
-           view gets a fresh render context rebuilt from it (provider
+           The view gets a fresh render context rebuilt from it (provider
            ownership intact).
         3. A real evaluation, in the sync-turn ``render`` step. This is every
            render after the GET: an event handler changed state, so the context
@@ -533,19 +528,13 @@ class ContextMixin:
             return preloaded_context
         cached = getattr(self, "_cached_context", None)
         if cached is not None:
-            from .._exposure import uses_legacy_exposure
-
-            if uses_legacy_exposure(self):
-                # A copy: the render adds keys to the dict it is handed and
-                # replaces models in it with their serialized form. The cache
-                # stays what the view returned, because the page shell reads
-                # RAW values from it for its sidecar (``_set_shell_sidecar``,
-                # #2589). Every evaluation returned a fresh dict before this
-                # read the cache; a copy keeps that for a view with its own method.
-                return dict(cached)
             return self._get_explicit_context_data()
         from ..sync_turn import run_sync_step
 
+        # Rebuilt every render, never state (#3801): an explicit view's context
+        # method does not reset it, so a name that stopped holding a QuerySet
+        # would keep its evaluated rows (and answer the next value from them).
+        self.__dict__["_all_method_rows"] = {}
         return run_sync_step(self, "render", self.get_context_data)
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
@@ -555,432 +544,9 @@ class ContextMixin:
         Returns:
             Dictionary of context variables
         """
-        from .._exposure import uses_legacy_exposure
-
-        if not uses_legacy_exposure(self):
-            explicit_context = self._get_explicit_context_data(**kwargs)
-            _guard_unserialized_recursive_models(self, explicit_context, nested_only=False)
-            return explicit_context
-        # Return cached context if available (set during GET request to avoid
-        # redundant QuerySet evaluation across sync_state_to_rust/render_with_diff)
-        if hasattr(self, "_cached_context") and self._cached_context is not None:
-            return self._cached_context
-        # Reset the per-render ``unique_id()`` counter (v0.5.1) so IDs are
-        # stable across successive renders of the same logical position.
-        reset_ids = getattr(self, "reset_unique_ids", None)
-        if callable(reset_ids):
-            reset_ids()
-        # Reset context providers at the start of each render so
-        # ``provide_context`` from a previous render doesn't leak into this one.
-        clear_providers = getattr(self, "clear_context_providers", None)
-        if callable(clear_providers):
-            clear_providers()
-
-        from ..components.base import BoundComponent, Component, LiveComponent
-        from django.db.models import QuerySet
-
-        context: Dict[str, Any] = {}
-
-        # Skip static assigns after first render — Rust retains them
-        _static_skip = set()
-        if getattr(self, "_static_assigns_sent", False):
-            _static_skip = set(getattr(self, "static_assigns", []))
-
-        # Collect non-private, non-callable attributes as context.
-        #
-        # Two sources:
-        #   1. Instance attributes (self.__dict__) — set in mount(), event handlers, etc.
-        #   2. Class-level attributes from user's view class(es) — class Foo(LiveView): x = 1
-        #
-        # We avoid dir(self) which traverses the ENTIRE MRO including Django's
-        # View hierarchy (~300 inherited attrs, ~50ms overhead from getattr calls
-        # triggering descriptors).
-        import types
-        from django.http import HttpRequest
-
-        _SKIP_TYPES = (
-            types.FunctionType,
-            types.MethodType,
-            types.ModuleType,
-            type,
-            types.BuiltinFunctionType,
-            HttpRequest,
-        )
-
-        # Build set of all candidate keys: instance attrs + user class attrs.
-        # Walk MRO up to (but not including) ContextMixin and its bases —
-        # these are framework classes whose attrs are never template context.
-        # #2960: ``LiveView`` and the mixins listed before ``ContextMixin`` in
-        # its bases come EARLIER in the MRO, so they are skipped too — their
-        # attributes are configuration defaults (``template``,
-        # ``login_required``, ``sticky``...), not view data.
-        # This is the boundary the ADR-038 inventory draws (``_user_bases``);
-        # classes the application declares are still walked.
-        _seen = set()
-        _framework_bases = set(ContextMixin.__mro__)
-        _framework_owned = _live_view_mro()
-
-        _all_items = list(self.__dict__.items())
-        for cls in type(self).__mro__:
-            if cls in _framework_bases:
-                break
-            if cls in _framework_owned:
-                continue
-            # A snapshot: another thread may be writing a first-use cache to
-            # this class while it is walked (#3151).
-            for key, value in _class_namespace(cls).items():
-                if key not in _seen and key not in self.__dict__:
-                    _seen.add(key)
-                    # Skip framework-defined derived properties (``is_dirty``,
-                    # ``changed_fields``) — they are derived state and must not
-                    # round-trip through session storage. Detected via an
-                    # opt-in marker ``_djust_framework_derived = True`` set on
-                    # the property descriptor by ``live_view.py``. User-defined
-                    # ``@property`` attributes and ``@computed`` properties are
-                    # unaffected — they flow to template context as before.
-                    if getattr(value, "_djust_framework_derived", False):
-                        continue
-                    # For descriptors (LiveComponent with __get__), resolve
-                    # through the instance so __get__ returns the State dict
-                    # instead of the descriptor itself.
-                    if hasattr(value, "__get__") and hasattr(value, "__set_name__"):
-                        try:
-                            value = getattr(self, key)
-                        except Exception as exc:
-                            # Descriptor resolution is best-effort; keep raw class-level value on failure.
-                            logger.debug("Descriptor resolution failed for %s: %s", key, exc)
-                    _all_items.append((key, value))
-
-        # Collect keys that came from class-level attrs (not instance __dict__)
-        _class_level_keys = _seen
-
-        # Mixin configuration and framework slots a mixin declares (ADR-035's
-        # edit adapter: ``model``, ``queryset``, ``kwargs``, ...) are never
-        # inferred rendering assigns, so never persisted from this context.
-        _configuration: frozenset = getattr(type(self), "_djust_configuration_names", frozenset())
-        for key, value in _all_items:
-            if type(key) is not str or key.startswith("_"):  # #4143: not a name
-                continue
-            if key == "exposure_policy" or key in _configuration:
-                # Policy configuration is never an inferred rendering assign.
-                continue
-            if key in _static_skip:
-                continue
-            if callable(value):
-                continue
-            if isinstance(value, (Component, LiveComponent)):
-                if isinstance(value, LiveComponent):
-                    self._register_component(value, attr_name=key)
-                context[key] = value
-            elif getattr(type(value), "_djust_component_collection", False):
-                # ADR-034 C3: a bound keyed collection renders its members
-                # (``{% for menu in row_menus.values %}``).
-                context[key] = value
-            elif isinstance(value, BoundComponent):
-                # ADR-031: a class-level component resolved through ``__get__``
-                # above. It is not JSON-serializable itself (the #694 gate
-                # below would drop it); ``normalize_django_value`` carries it
-                # as its State.
-                context[key] = value
-            elif not isinstance(value, _SKIP_TYPES):
-                # For class-level attributes, skip values that are not
-                # JSON-serializable (#694). Prevents non-serializable objects
-                # (e.g. TutorialStep dataclasses) from being converted to
-                # their str() repr by the serializer, which corrupts state.
-                # Django QuerySets and Models are exempt — they have their
-                # own serialization pipeline (JIT / normalize_django_value).
-                if key in _class_level_keys:
-                    if not isinstance(value, (QuerySet, models.Model)) and not is_model_list(value):
-                        if not _is_json_serializable(value):
-                            continue
-                context[key] = value
-
-        # Render-only values: a mixin's (ADR-035's managed ``object``) and the
-        # view's own (``get_render_only_context``). Added before model
-        # serialization so they render like any other model;
-        # ``legacy_unsaved_keys`` keeps them out of every session save.
-        render_only_keys: set = set()
-        render_only = getattr(self, "_djust_render_only_context", None)
-        if callable(render_only):
-            items = render_only()
-            context.update(items)
-            render_only_keys.update(items)
-        items = self.get_render_only_context()
-        if items:
-            context.update(items)
-            render_only_keys.update(items)
-
-        # Whole-model fallback cannot correctly represent recursive partials.
-        # Reject only inputs outside the scoped top-level JIT path.
-        _guard_unserialized_recursive_models(
-            self, context, nested_only=_jit_serialization_enabled()
-        )
-
-        # JIT auto-serialization for QuerySets and Models
-        jit_serialized_keys = set()
-        template_content = None
-        # The raw rows a template's QuerySet-method read is answered from
-        # (#3801); rebuilt every render, never state.
-        self.__dict__["_all_method_rows"] = {}
-
-        # Short-circuit: skip JIT pipeline if no DB objects in context (#278).
-        # NOTE: This scan only checks top-level context values. DB objects nested
-        # inside dicts will NOT trigger JIT; they are handled later by
-        # _deep_serialize_dict() which falls back to DjangoJSONEncoder when
-        # template_content is None.
-        has_db_values = False
-        if _jit_serialization_enabled():
-            for val in context.values():
-                if isinstance(val, (QuerySet, models.Model)):
-                    has_db_values = True
-                    break
-                if is_model_list(val):
-                    has_db_values = True
-                    break
-
-        if has_db_values:
-            try:
-                from ..mixins.jit import _jit_template_content
-
-                template_content = _jit_template_content(self)
-                if template_content:
-                    # Extract variable paths once for list[Model] optimization
-                    from ..mixins.jit import _cached_extract_template_variables
-
-                    variable_paths_map = _cached_extract_template_variables(template_content)
-
-                    # Template hash once for codegen cache keys
-                    from ..mixins.jit import _template_hash
-                    from ..session_utils import _jit_serializer_cache, _get_model_hash
-                    from ..optimization.codegen import (
-                        all_methods_need_rows,
-                        compile_serializer,
-                        generate_serializer_code,
-                    )
-                    from ..mixins.jit import keep_rows_for_all_methods
-
-                    template_hash = _template_hash(template_content)
-
-                    for key, value in list(context.items()):
-                        if isinstance(value, QuerySet):
-                            serialized = self._jit_serialize_queryset(
-                                value, template_content, key, context
-                            )
-                            context[key] = serialized
-                            jit_serialized_keys.add(key)
-
-                            if isinstance(serialized, list):
-                                count_key = f"{key}_count"
-                                if count_key not in context:
-                                    context[count_key] = len(serialized)
-
-                        elif isinstance(value, models.Model):
-                            context[key] = self._jit_serialize_model(value, template_content, key)
-                            jit_serialized_keys.add(key)
-
-                        elif is_model_list(value):
-                            # Recursive partial rows must use the same scoped,
-                            # cycle-checked serializer as QuerySets.
-                            from ..mixins.jit import _recursive_queryset_relation
-
-                            if _recursive_queryset_relation(template_content, key):
-                                context[key] = self._jit_serialize_model_list(
-                                    value, template_content, key, context
-                                )
-                                jit_serialized_keys.add(key)
-                                continue
-                            # Re-fetch with select_related/prefetch_related/annotations
-                            # to avoid N+1 queries during serialization
-                            from ..optimization.query_optimizer import (
-                                analyze_queryset_optimization,
-                                optimize_queryset,
-                            )
-
-                            from ..mixins.jit import (
-                                drop_callable_sort_keys,
-                                resolve_variable_keys,
-                                split_variable_keys,
-                            )
-
-                            model_class = value[0].__class__
-                            paths, key_variables = split_variable_keys(
-                                variable_paths_map.get(key, []) if variable_paths_map else []
-                            )
-                            # ``dictsort:<variable>``: the ONE column the variable
-                            # names this render (#3910).
-                            sort_keys = (
-                                tuple(
-                                    resolve_variable_keys(key_variables, context, model_class, self)
-                                )
-                                if paths
-                                else ()
-                            )
-                            if sort_keys:
-                                paths = sorted(set(paths) | set(sort_keys))
-                            paths = drop_callable_sort_keys(
-                                model_class, template_content, key, paths
-                            )
-                            optimization = (
-                                analyze_queryset_optimization(model_class, paths) if paths else None
-                            )
-
-                            # #2536: re-query ONLY when some row lacks what the
-                            # template paths need, and graft the fetched
-                            # relation caches / annotations onto the USER'S
-                            # instances instead of replacing them. A static
-                            # list then costs one query for the whole session
-                            # (zero when the view already ``select_related``),
-                            # and an in-memory row mutation is rendered rather
-                            # than discarded by a fresh instance winning.
-                            if (
-                                optimization
-                                and (
-                                    optimization.select_related
-                                    or optimization.prefetch_related
-                                    or optimization.annotations
-                                )
-                                and _rows_lack_optimization(value, optimization)
-                            ):
-                                pks = [obj.pk for obj in value]
-                                qs = model_class._default_manager.filter(pk__in=pks)
-                                qs = optimize_queryset(qs, optimization)
-                                pk_map = {obj.pk: obj for obj in qs}
-                                _graft_optimization_caches(value, pk_map, optimization)
-
-                            if paths:
-                                # Use codegen serializer directly — avoids DjangoJSONEncoder fallback
-                                model_hash = _get_model_hash(model_class)
-                                cache_key = (template_hash, key, model_hash, "list", sort_keys)
-                                if cache_key in _jit_serializer_cache:
-                                    serializer, _ = _jit_serializer_cache[cache_key]
-                                else:
-                                    func_name = f"serialize_{key}_{template_hash}"
-                                    code = generate_serializer_code(
-                                        model_class.__name__, paths, func_name
-                                    )
-                                    serializer = compile_serializer(code, func_name)
-                                    _jit_serializer_cache[cache_key] = (serializer, None)
-                                context[key] = [serializer(item) for item in value]
-                                if all_methods_need_rows(model_class, paths):
-                                    keep_rows_for_all_methods(self, key, value)
-                            else:
-                                # No field path for this list: the QuerySet
-                                # contract, not the single-model identity map
-                                # (#2736).
-                                context[key] = self._jit_serialize_model_list(
-                                    value, template_content, key, context
-                                )
-                            jit_serialized_keys.add(key)
-            except Exception as e:
-                if template_content and "djust:recursive-partial" in template_content:
-                    # Falling back to whole-model normalization here would
-                    # silently lose recursion and expose unreferenced fields.
-                    raise
-                logger.warning("JIT auto-serialization failed: %s", e, exc_info=True)
-
-        # Auto-add count for plain lists
-        for key, value in list(context.items()):
-            if isinstance(value, list) and not key.endswith("_count"):
-                count_key = f"{key}_count"
-                if count_key not in context:
-                    context[count_key] = len(value)
-
-        # Single pass: deep-serialize dicts and fallback-serialize remaining Models
-        tc = template_content
-        # The JIT's template source for values reached THROUGH a container is
-        # looked up on first need (#3788), not by a pre-scan of every context
-        # value: a context with no nested DB value pays nothing.
-        self._nested_template_source: List[Optional[str]] = [] if tc is None else [tc]
-        for key, value in list(context.items()):
-            if key in jit_serialized_keys:
-                continue
-            if isinstance(value, MultiValueDict):
-                # A `QueryDict` / `MultiValueDict` stays raw (#2556): the
-                # `dict` rebuild below would keep only the last value per
-                # key, and `{% querystring my_qd a=2 %}` needs the object —
-                # its multi-values and `.urlencode()`. `_sync_state_to_rust`
-                # carries it in the raw sidecar and hands the template the
-                # last-value dict (`normalize_django_value`), the same split
-                # `build_render_sidecar` gives the non-LiveView paths.
-                continue
-            if isinstance(value, dict):
-                if _crosses_as_encoded(value):
-                    # #2899: a dict SUBCLASS with its own spelling (an
-                    # `OrderedDict`, a user class with `__str__`) stays raw
-                    # for the same reason the `QueryDict` above does — the
-                    # renderer's carrier spells `{{ v }}` as `str(o)`, as
-                    # Django does, and reads items through the live object.
-                    # The `dict` rebuild below would erase the type.
-                    continue
-                context[key] = self._deep_serialize_dict(value, tc, key)
-            elif isinstance(value, models.Model):
-                context[key] = normalize_django_value(value)
-            elif is_model_list(value):
-                context[key] = [normalize_django_value(item) for item in value]
-            elif isinstance(value, list) and _holds_db_value(value):
-                # A list of dicts that hold QuerySets / Models (#3788):
-                # ``[{"label": "a", "users": qs}]``.
-                context[key] = self._deep_serialize_sequence(value, tc, key)
-
-        self._jit_serialized_keys = jit_serialized_keys
-
-        # v0.8.0 — `@action` server-action state injection. Each action's
-        # name becomes a context variable so templates can read
-        # ``{{ create_todo.pending }}``, ``{{ create_todo.error }}``,
-        # ``{{ create_todo.result }}``. Action state is populated by the
-        # @action decorator's wrapper at handler entry/exit; this just
-        # exposes it to the renderer.
-        #
-        # Done AFTER the public-attribute walk + JIT serialization so an
-        # action name that collides with a user-defined attribute wins
-        # — actions are always the canonical reading of that name. Conflict
-        # is unlikely (action names are method names) but the precedence
-        # is documented.
-        action_state = getattr(self, "_action_state", None)
-        if action_state:
-            for action_name, state in action_state.items():
-                context[action_name] = state
-
-        # Streams (#2112). ``self.stream("messages", ...)`` filled
-        # ``_streams["messages"].items``, and ``_get_streams_context()`` exists
-        # to expose it — its docstring says "Get streams data for template
-        # context" — but nothing ever called it, so the documented pattern in
-        # docs/website/guides/large-lists.md stored data and rendered nothing.
-        #
-        # Exposed under a ``streams`` namespace, matching the documented
-        # template contract -- ``{% for msg in streams.messages %}`` in
-        # docs/website/guides/large-lists.md and in Stream's own docstring.
-        # NOT splatted as top-level names: that would be a second, undocumented
-        # spelling and would collide with ordinary view attributes.
-        #
-        # Precedence: LIVE stream data wins whenever the view actually has
-        # streams. Deferring to an existing key looks safer but is not — a
-        # stale ``streams`` attribute (e.g. restored from a session written by
-        # an older release, before the snapshot exclusion in
-        # mixins/request.py) would shadow the live data permanently, making
-        # every subsequent insert invisible. Silent data loss is worse than
-        # overriding a name that is now framework-owned and documented.
-        #
-        # A view with NO streams is left completely alone, so an app that uses
-        # ``self.streams`` for its own purposes and never calls ``stream()``
-        # is unaffected.
-        get_streams = getattr(self, "_get_streams_context", None)
-        if callable(get_streams):
-            streams_ctx = get_streams()
-            if streams_ctx:
-                context["streams"] = streams_ctx
-
-        # What a legacy session save may keep (``legacy_unsaved_keys``): the
-        # keys built here from the view's attributes, not the render-only
-        # ones (nor the counts derived from them), and not what an override
-        # adds after this returns.
-        derived = {key + "_count" for key in render_only_keys}
-        self._djust_render_only_keys = frozenset(render_only_keys | derived)
-        self._djust_state_context_keys = frozenset(
-            key for key in context if key not in render_only_keys and key not in derived
-        )
-
-        return context
+        explicit_context = self._get_explicit_context_data(**kwargs)
+        _guard_unserialized_recursive_models(self, explicit_context, nested_only=False)
+        return explicit_context
 
     def get_render_only_context(self) -> Dict[str, Any]:
         """Template values that render but are never saved. Override to add some.
@@ -1121,8 +687,170 @@ class ContextMixin:
                 raise ExposureError("Explicit context provider collision")
             context.update(render_only_items)
         context.update(kwargs)
-        self._jit_serialized_keys = set()
+        self._jit_serialized_keys: set[str] = set()
         return context
+
+    def _jit_serialize_context(
+        self,
+        context: Dict[str, Any],
+        template_content: str,
+        keys: Optional[Iterable[str]] = None,
+        into: Optional[set] = None,
+    ) -> set:
+        """JIT-serialize the top-level QuerySets / Models / model lists of ``context``.
+
+        Each value is replaced by what the template reads off it (relation paths included),
+        and the replaced names are returned. ``keys`` limits the pass to those names (the
+        explicit sync, #4069 review S1, passes the names whose rows the template walks).
+        Raises what the serializers raise; the caller decides how to fail. ``into`` collects
+        the names as they are replaced, so a caller that catches still sees the earlier ones.
+        """
+        from django.db.models import QuerySet
+
+        from ..mixins.jit import _cached_extract_template_variables
+
+        jit_serialized_keys: set = set() if into is None else into
+        if type(context) is dict:
+            set_value = context.__setitem__
+        else:
+            # A framework rewrite of the same value: an explicit context refuses a
+            # provider key through ``__setitem__`` (E2-1), as the sync's normalize does.
+            def set_value(key: str, value: Any) -> None:
+                dict.__setitem__(context, key, value)
+
+        # Extract variable paths once for list[Model] optimization
+        variable_paths_map = _cached_extract_template_variables(template_content)
+
+        # Template hash once for codegen cache keys
+        from ..mixins.jit import _template_hash
+        from ..session_utils import _jit_serializer_cache, _get_model_hash
+        from ..optimization.codegen import (
+            all_methods_need_rows,
+            compile_serializer,
+            generate_serializer_code,
+        )
+        from ..mixins.jit import keep_rows_for_all_methods
+
+        template_hash = _template_hash(template_content)
+
+        for key, value in list(context.items()):
+            if keys is not None and key not in keys:
+                continue
+            if isinstance(value, QuerySet):
+                if _projection_skips_the_jit(value):
+                    # ``.values()`` / ``.values_list()`` rows are dicts / tuples, which
+                    # the JIT's model serializer read empty (``;;;``, #4271). They hold
+                    # only the columns asked for; the normalize pass lists them.
+                    continue
+                serialized = self._jit_serialize_queryset(value, template_content, key, context)
+                set_value(key, serialized)
+                jit_serialized_keys.add(key)
+
+            elif isinstance(value, models.Model):
+                set_value(key, self._jit_serialize_model(value, template_content, key))
+                jit_serialized_keys.add(key)
+
+            elif is_model_list(value):
+                # Recursive partial rows must use the same scoped,
+                # cycle-checked serializer as QuerySets.
+                from ..mixins.jit import _recursive_queryset_relation
+
+                if _recursive_queryset_relation(template_content, key):
+                    set_value(
+                        key,
+                        self._jit_serialize_model_list(value, template_content, key, context),
+                    )
+                    jit_serialized_keys.add(key)
+                    continue
+                # Re-fetch with select_related/prefetch_related/annotations
+                # to avoid N+1 queries during serialization
+                from ..optimization.query_optimizer import (
+                    analyze_queryset_optimization,
+                    optimize_queryset,
+                )
+
+                from ..mixins.jit import (
+                    drop_callable_sort_keys,
+                    resolve_variable_keys,
+                    split_variable_keys,
+                )
+
+                model_class = value[0].__class__
+                paths, key_variables = split_variable_keys(
+                    variable_paths_map.get(key, []) if variable_paths_map else []
+                )
+                # ``dictsort:<variable>``: the ONE column the variable
+                # names this render (#3910).
+                sort_keys = (
+                    tuple(resolve_variable_keys(key_variables, context, model_class, self))
+                    if paths
+                    else ()
+                )
+                if sort_keys:
+                    paths = sorted(set(paths) | set(sort_keys))
+                paths = drop_callable_sort_keys(model_class, template_content, key, paths)
+                optimization = analyze_queryset_optimization(model_class, paths) if paths else None
+
+                # #2536: re-query ONLY when some row lacks what the
+                # template paths need, and graft the fetched
+                # relation caches / annotations onto the USER'S
+                # instances instead of replacing them. A static
+                # list then costs one query for the whole session
+                # (zero when the view already ``select_related``),
+                # and an in-memory row mutation is rendered rather
+                # than discarded by a fresh instance winning.
+                if (
+                    optimization
+                    and (
+                        optimization.select_related
+                        or optimization.prefetch_related
+                        or optimization.annotations
+                    )
+                    and _rows_lack_optimization(value, optimization)
+                ):
+                    pks = [obj.pk for obj in value]
+                    qs = model_class._default_manager.filter(pk__in=pks)
+                    qs = optimize_queryset(qs, optimization)
+                    pk_map = {obj.pk: obj for obj in qs}
+                    _graft_optimization_caches(value, pk_map, optimization)
+
+                if paths:
+                    # Use codegen serializer directly — avoids DjangoJSONEncoder fallback
+                    model_hash = _get_model_hash(model_class)
+                    cache_key = (template_hash, key, model_hash, "list", sort_keys)
+                    if cache_key in _jit_serializer_cache:
+                        serializer, _ = _jit_serializer_cache[cache_key]
+                    else:
+                        func_name = f"serialize_{key}_{template_hash}"
+                        code = generate_serializer_code(model_class.__name__, paths, func_name)
+                        serializer = compile_serializer(code, func_name)
+                        _jit_serializer_cache[cache_key] = (serializer, None)
+                    from ..mixins.jit import mark_called_sort_keys
+
+                    set_value(
+                        key,
+                        mark_called_sort_keys(
+                            [serializer(item) for item in value],
+                            model_class,
+                            template_content,
+                            key,
+                            key_variables,
+                            context,
+                            self,
+                        ),
+                    )
+                    if all_methods_need_rows(model_class, paths):
+                        keep_rows_for_all_methods(self, key, value)
+                else:
+                    # No field path for this list: the QuerySet
+                    # contract, not the single-model identity map
+                    # (#2736).
+                    set_value(
+                        key,
+                        self._jit_serialize_model_list(value, template_content, key, context),
+                    )
+                jit_serialized_keys.add(key)
+        return jit_serialized_keys
 
     def _nested_template_content(self) -> Optional[str]:
         """The JIT's template source for a value reached through a container.
@@ -1281,7 +1009,7 @@ class ContextMixin:
         ``SimpleLazyObject`` via the raw-value sidecar), so templates keep
         rendering ``{{ user }}`` / ``{{ perms }}`` / ``{{ messages }}``.
         """
-        from .._exposure import ExposureError, uses_legacy_exposure
+        from .._exposure import ExposureError
         from .._exposure_unsupplied import (
             AUTHORIZATION_CONTEXT_NAMES,
             warn_shadowed_authorization_names,
@@ -1302,91 +1030,38 @@ class ContextMixin:
                 record[processor] = supplied
             return supplied
 
-        if not uses_legacy_exposure(self):
-            policy = getattr(self, "exposure_policy", None)
-            if type(policy) is not str or policy != "explicit":
-                raise ExposureError("Unknown context exposure policy")
-            if "view" in context:
-                raise ExposureError("Explicit context contains a reserved framework name")
-            result = dict(context)
-            added: set[str] = set()
-            reserved = {"view", "streams"} | set(
-                getattr(self, "_explicit_context_provider_keys", ())
-            )
-            if request is not None:
-                for processor in self._get_resolved_processors(self._get_context_processors()):
-                    supplied = run(processor)
-                    if not supplied:
-                        continue
-                    for key in reserved.intersection(supplied):
-                        # A processor may repeat what the provider supplied:
-                        # the same object, or an equal one (the stock
-                        # djust.tenants.context_processor re-resolves the
-                        # tenant next to TenantMixin). The provider's value is
-                        # kept either way; anything else is a collision.
-                        if key not in result or not _same_provider_value(
-                            supplied[key], result[key]
-                        ):
-                            raise ExposureError("Context processor reserved provider collision")
-                    for key, value in supplied.items():
-                        if key not in result:
-                            result[key] = value
-                            added.add(key)
-                    # #4050: a declared field shadowing user/perms is legal
-                    # but flagged (DEBUG only; djust.V027 statically).
-                    shadowed = AUTHORIZATION_CONTEXT_NAMES.intersection(supplied).intersection(
-                        context
-                    )
-                    if shadowed:
-                        warn_shadowed_authorization_names(self, shadowed)
-            self._context_processor_keys = added
-            return result
-
-        if request is None:
-            return context
-
-        processor_paths = self._get_context_processors()
-        resolved = self._get_resolved_processors(processor_paths)
-
-        # Track which keys context processors actually contribute this cycle,
-        # so downstream change-detection / serialization can exclude them.
-        added_keys: set = set()
-
-        for processor in resolved:
-            try:
-                processor_context = run(processor)
-                if processor_context:
-                    # Only add keys not already set by the view — view context
-                    # takes precedence over context processors (e.g. Django's
-                    # messages processor should not overwrite a view's 'messages').
-                    for k, v in processor_context.items():
-                        if k not in context:
-                            context[k] = v
-                            added_keys.add(k)
-            except Exception as e:
-                module = getattr(processor, "__module__", "")
-                qualname = getattr(processor, "__qualname__", "")
-                if module and qualname:
-                    proc_name = module + "." + qualname
-                elif module or qualname:
-                    proc_name = module or qualname
-                else:
-                    proc_name = repr(processor)
-                logger.warning(
-                    "Failed to apply context processor %s: %s",
-                    proc_name,
-                    e,
-                )
-
-        # Expose the processor-added keys for change-detection / serialization
-        # exclusion (#1786). Stored as an instance attr so ``_sync_state_to_rust``
-        # can read it after this call. The ``request`` key (added by
-        # ``django.template.context_processors.request``) is included here when
-        # that processor is configured; ``_sync_state_to_rust`` additionally
-        # excludes ``request`` unconditionally as a belt-and-suspenders guard.
-        self._context_processor_keys = added_keys
-
-        return context
+        policy = getattr(self, "exposure_policy", None)
+        if type(policy) is not str or policy != "explicit":
+            raise ExposureError("Unknown context exposure policy")
+        if "view" in context:
+            raise ExposureError("Explicit context contains a reserved framework name")
+        result = dict(context)
+        added: set[str] = set()
+        reserved = {"view", "streams"} | set(getattr(self, "_explicit_context_provider_keys", ()))
+        if request is not None:
+            for processor in self._get_resolved_processors(self._get_context_processors()):
+                supplied = run(processor)
+                if not supplied:
+                    continue
+                for key in reserved.intersection(supplied):
+                    # A processor may repeat what the provider supplied:
+                    # the same object, or an equal one (the stock
+                    # djust.tenants.context_processor re-resolves the
+                    # tenant next to TenantMixin). The provider's value is
+                    # kept either way; anything else is a collision.
+                    if key not in result or not _same_provider_value(supplied[key], result[key]):
+                        raise ExposureError("Context processor reserved provider collision")
+                for key, value in supplied.items():
+                    if key not in result:
+                        result[key] = value
+                        added.add(key)
+                # #4050: a declared field shadowing user/perms is legal
+                # but flagged (DEBUG only; djust.V027 statically).
+                shadowed = AUTHORIZATION_CONTEXT_NAMES.intersection(supplied).intersection(context)
+                if shadowed:
+                    warn_shadowed_authorization_names(self, shadowed)
+        self._context_processor_keys = added
+        return result
 
     @staticmethod
     def _get_resolved_processors(processor_paths: list) -> list:

@@ -468,12 +468,35 @@ def test_path_addressed_removes_the_id_hints_and_nothing_else():
         {"type": "InsertChild", "path": [0], "d": "0", "ref_d": "3", "index": 1, "node": {"d": 1}},
         {"type": "RemoveChild", "path": [0], "child_d": "4", "index": 2},
         {"type": "SetAttr", "path": [], "key": "class", "value": "d"},
+        # #4001: a SetText's parent id goes, and its index (counted in that parent) with it.
+        {"type": "SetText", "path": [2, 0], "text": "y", "parent_d": "7", "index": 0},
+        # ... also inside a VirtualUpdate's inner patches, with their own d.
+        {
+            "type": "VirtualUpdate",
+            "path": [3],
+            "d": "9",
+            "key": "k",
+            "patches": [
+                {"type": "SetText", "path": [0], "text": "z", "parent_d": "a", "index": 0},
+                {"type": "SetAttr", "path": [], "d": "b", "key": "x", "value": "1"},
+            ],
+        },
     ]
     assert _render_digest.path_addressed(patches) == [
         {"type": "SetText", "path": [0, 1], "text": "x"},
         {"type": "InsertChild", "path": [0], "index": 1, "node": {"d": 1}},
         {"type": "RemoveChild", "path": [0], "index": 2},
         {"type": "SetAttr", "path": [], "key": "class", "value": "d"},
+        {"type": "SetText", "path": [2, 0], "text": "y"},
+        {
+            "type": "VirtualUpdate",
+            "path": [3],
+            "key": "k",
+            "patches": [
+                {"type": "SetText", "path": [0], "text": "z"},
+                {"type": "SetAttr", "path": [], "key": "x", "value": "1"},
+            ],
+        },
     ]
     # The input is not changed.
     assert patches[0]["d"] == "1a"
@@ -504,3 +527,66 @@ def test_the_client_and_the_server_leave_out_the_same_attributes():
     for prefix in _render_digest._SKIPPED_ATTR_PREFIXES:
         assert ' %sx="v"' % prefix in every["html"], prefix
     assert every["shape"] == by_name["every_skipped_attribute_left_out"]["shape"]
+
+
+# --------------------------------------------------------------------------- #
+# dj-update="ignore" is opaque; client-owned regions are found by attribute (#4283)
+# --------------------------------------------------------------------------- #
+
+_FLASH = (
+    '<div id="dj-flash-container" class="dj-flash-container" dj-update="ignore"'
+    ' data-dj-auto-dismiss="5000">%s</div>'
+)
+
+
+def test_an_ignored_elements_children_are_not_part_of_the_shape():
+    """Flash messages the client adds do not change the shape it reports."""
+    empty = '<div dj-root=""><p>a</p>%s<p>b</p></div>' % (_FLASH % "")
+    filled = '<div dj-root=""><p>a</p>%s<p>b</p></div>' % (
+        _FLASH % '<div class="msg">saved</div> text<!--dj-if--><p>x</p>'
+    )
+    assert _render_digest.dom_shape(empty) == _render_digest.dom_shape(filled)
+    # The element itself still counts: its attributes and its place.
+    moved = '<div dj-root=""><p>a</p><p>b</p>%s</div>' % (_FLASH % "")
+    assert _render_digest.dom_shape(moved) != _render_digest.dom_shape(empty)
+    other = '<div dj-root=""><p>a</p>%s<p>b</p></div>' % (
+        _FLASH.replace('dj-flash-container" class', 'other" class') % ""
+    )
+    assert _render_digest.dom_shape(other) != _render_digest.dom_shape(empty)
+
+
+def test_the_walk_records_the_path_of_each_ignored_element():
+    html = (
+        '<div dj-root=""> text <main><!--dj-if--><p>x</p>'
+        '<section id="w" dj-update="ignore"><section id="in" dj-update="ignore"></section>'
+        "</section></main>%s</div>" % (_FLASH % "<b>m</b>")
+    )
+    found = _render_digest.render_shape(html)
+    # " text " is child 0, <main> child 1; inside it the dj-if marker, <p>, <section>.
+    # The nested ignored element is inside an opaque one: not walked, not recorded.
+    assert found.opaque_paths == [(1, 2), (2,)]
+    assert not found.client_owned
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<ul id="r" dj-update="append"></ul>',
+        '<ul id="r" dj-update="prepend"></ul>',
+        '<ul id="r" dj-update="replace"></ul>',
+        "<ul dj-virtual></ul>",
+        '<ul dj-virtual-item-height="20"></ul>',
+    ],
+)
+def test_a_region_the_client_manages_is_found_by_its_attribute(markup):
+    assert _render_digest.render_shape('<div dj-root="">%s</div>' % markup).client_owned
+
+
+def test_the_attribute_written_as_text_is_not_a_region():
+    html = (
+        '<div dj-root=""><pre><code>&lt;ul dj-update=&quot;append&quot;&gt;</code></pre>'
+        "<p>dj-update dj-virtual</p><script>x = 'dj-update=\"append\"'</script>"
+        '<p title="dj-update=append">t</p></div>'
+    )
+    found = _render_digest.render_shape(html)
+    assert found is not None and not found.client_owned and found.opaque_paths == []

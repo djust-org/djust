@@ -144,22 +144,6 @@ class ClientCounter(Counter):
     label = state("a", persist="client", client=True)
 
 
-class LegacyCounter(_Base):
-    exposure_policy = "legacy"
-    template = "<div dj-root><p>Count: {{ count }}</p><i>{{ label }}</i></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self.label = "a"
-
-    inc = Counter.__dict__["inc"]
-    relabel = Counter.__dict__["relabel"]
-    nothing = Counter.__dict__["nothing"]
-    same = Counter.__dict__["same"]
-    forced = Counter.__dict__["forced"]
-    skipped = Counter.__dict__["skipped"]
-
-
 COUNTER_SCRIPT = [
     ("event", "inc"),
     ("event", "nothing"),
@@ -225,27 +209,17 @@ class Table(_Base):
         self.items.clear()
 
 
-class LegacyTable(_Base):
-    exposure_policy = "legacy"
-    template = Table.template
+class IfTable(Table):
+    """``Table`` with a ``{% if %}`` in the row: the content-hash loop cache
+    refuses that body, so the index-keyed item store (#4325) renders it."""
 
-    def mount(self, request, **kwargs):
-        self.title = "Inventory"
-        self.items = rows(40)
-
-    for _name in (
-        "cell",
-        "nested",
-        "append",
-        "rebind",
-        "swap",
-        "retitle",
-        "both",
-        "nothing",
-        "clear",
-    ):
-        locals()[_name] = Table.__dict__[_name]
-    del _name
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1>"
+        '<table>{% for row in items %}<tr id="row-{{ row.id }}"><td>{{ row.name }}</td>'
+        "<td>{% if row.qty %}<b>{{ row.qty }}</b>{% else %}none{% endif %}</td>"
+        "<td>{{ forloop.counter }}</td></tr>{% endfor %}</table></div>"
+    )
 
 
 TABLE_SCRIPT = [
@@ -341,7 +315,7 @@ class Thing:
 
 
 class Opaque(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<div dj-root><p>{{ current.label }}</p><b>{{ things|length }}</b><i>{{ n }}</i></div>"
     )
@@ -392,7 +366,7 @@ OPAQUE_SCRIPT = [
 
 
 class Models(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<div dj-root><p>{{ who.first_name }}</p><ul>{% for p in people %}"
         "<li>{{ p.first_name }}</li>{% endfor %}</ul><i>{{ n }}</i></div>"
@@ -439,7 +413,7 @@ MODELS_SCRIPT = [
 
 
 class Feed(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     temporary_assigns = {"rows": []}
     template = (
         '<div dj-root><ul id="feed" dj-update="append">{% for r in rows %}'
@@ -517,7 +491,7 @@ class Tabs(LiveComponent):
 
 
 class ComponentPage(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>{{ title }}</h1>{{ nav }}<i>{{ note }}</i></div>"
     nav = Tabs()
 
@@ -580,6 +554,92 @@ CHILD_SCRIPT = [
     ("event", "retitle"),
     ("event", "change_child"),
     ("event", "increment", {"view_id": "menu"}),
+]
+
+
+# --- the post-event snapshot's walks, reused by the sync (#3999) -----------------------
+
+
+class LateWriter(_Base):
+    """``get_context_data`` writes into a declared list AFTER the post-event
+    snapshot, and ``grow`` changes it BEFORE: both must reach the browser. The
+    override is application code in the window, so the sync walks again."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1><p>{{ rows.0.label }}</p><i>{{ rows|length }}</i></div>"
+    )
+    title = state("a")
+    rows = state(default_factory=list)
+
+    def mount(self, request, **kwargs):
+        self.rows = [{"label": "a"}]
+
+    def get_context_data(self, **kwargs):
+        self.rows[0]["label"] = self.title.upper()
+        return super().get_context_data(**kwargs)
+
+    @event_handler()
+    def retitle(self, value: str = "b", **kwargs):
+        self.title = value
+
+    @event_handler()
+    def grow(self, **kwargs):
+        self.rows.append({"label": "x"})
+        self.title += "!"
+
+
+LATE_SCRIPT = [
+    ("event", "retitle", {"value": "b"}),
+    ("event", "grow"),
+    ("event", "retitle", {"value": "c"}),
+]
+
+
+class HeldThing(_Base):
+    """The framework's own context methods only, so the sync reuses the
+    snapshot's walks. An object's attribute write is found when, and only
+    when, a changed list holds the object (the ``_collect_sub_ids`` rule), and
+    the snapshot's "plain" answer decides whether the list is walked for ids."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><p>{{ held.label }}</p><b>{{ items|length }}</b>"
+        "{% for r in items %}<i>{{ r.v }}</i>{% endfor %}</div>"
+    )
+    items = state(default_factory=list)
+    held = state(None)
+
+    def mount(self, request, **kwargs):
+        self.items = [{"v": 1}]
+        self.held = Thing("a")
+
+    @event_handler()
+    def write(self, **kwargs):
+        self.held.label += "!"
+
+    @event_handler()
+    def cell(self, **kwargs):
+        self.items[0]["v"] += 1
+        self.held.label += "?"
+
+    @event_handler()
+    def adopt(self, **kwargs):
+        self.items.append(self.held)
+        self.held.label += "#"
+
+    @event_handler()
+    def again(self, **kwargs):
+        self.items[0]["v"] += 1
+        self.held.label += "%"
+
+
+HELD_SCRIPT = [
+    ("event", "write"),
+    ("event", "cell"),
+    ("event", "adopt"),
+    ("event", "again"),
+    ("event", "write"),
 ]
 
 
@@ -718,7 +778,7 @@ FORM_SCRIPT = [
 
 
 class StreamView(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root><div id="list" dj-stream="rows">'
         '{% for r in streams.rows %}<div id="rows-{{ r.id }}">{{ r.body }}</div>{% endfor %}'
@@ -929,9 +989,7 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("counter", Counter, COUNTER_SCRIPT),
     ("counter_server", ServerCounter, COUNTER_SCRIPT),
     ("counter_client", ClientCounter, COUNTER_SCRIPT),
-    ("counter_legacy", LegacyCounter, COUNTER_SCRIPT),
     ("table", Table, TABLE_SCRIPT),
-    ("table_legacy", LegacyTable, TABLE_SCRIPT),
     ("derived", Derived, DERIVED_SCRIPT),
     ("opaque", Opaque, OPAQUE_SCRIPT),
     ("models", Models, MODELS_SCRIPT),
@@ -946,6 +1004,8 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("stream", StreamView, STREAM_SCRIPT),
     ("scalar_types", ScalarTypes, SCALAR_SCRIPT),
     ("dirty_tracking", Dirty, DIRTY_SCRIPT),
+    ("late_writer", LateWriter, LATE_SCRIPT),
+    ("held_thing", HeldThing, HELD_SCRIPT),
 ]
 
 
@@ -966,7 +1026,12 @@ def _normalise(frame: Dict[str, Any]) -> Dict[str, Any]:
         frame = {**frame, "state_snapshot_signed": payload}
     # Per-connection identifiers and the background batch token, random for
     # every run. The token's presence is kept.
+    # ``state_serial`` (#4164) counts the states storage was given, which is
+    # what deferral and the save shortcuts change by design; it is not page
+    # content. Its presence is kept.
     frame = {k: v for k, v in frame.items() if k not in ("session_id", "sw_identity")}
+    if "state_serial" in frame:
+        frame["state_serial"] = "<serial>"
     if "async_batch" in frame:
         frame["async_batch"] = "<token>"
     return frame
@@ -1097,7 +1162,12 @@ def as_bytes(frames: Any) -> bytes:
 
 @pytest.mark.parametrize("label,view_class,script", WS_CASES, ids=[case[0] for case in WS_CASES])
 async def test_websocket_frames_are_identical(monkeypatch, label, view_class, script):
-    before, after = await both(lambda: run_ws(view_class, script), monkeypatch)
+    from django.test import override_settings
+
+    # Every turn saved before its frame; ``..._with_saves_deferred`` below runs
+    # the same cases with an interval (the default since #4164).
+    with override_settings(DJUST_STATE_SAVE_INTERVAL=0):
+        before, after = await both(lambda: run_ws(view_class, script), monkeypatch)
     assert [f.get("type") for f in after] == [f.get("type") for f in before]
     for index, (old, new) in enumerate(zip(before, after)):
         assert as_bytes(new) == as_bytes(old), f"frame {index} of {label} differs"
@@ -1150,7 +1220,6 @@ class ServerDerived(Derived):
 HTTP_CASES = [
     ("counter", Counter, COUNTER_SCRIPT),
     ("counter_server", ServerCounter, COUNTER_SCRIPT),
-    ("counter_legacy", LegacyCounter, COUNTER_SCRIPT),
     ("table", ServerTable, TABLE_SCRIPT),
     ("derived", ServerDerived, DERIVED_SCRIPT),
     ("processors", Processors, COUNTER_SCRIPT),
@@ -1359,7 +1428,7 @@ def clock_processor(request):
 
 
 class ClockPage(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>{{ now }}</h1>{{ nav }}<i>{{ title }}</i></div>"
     nav = Tabs()
 
@@ -1633,17 +1702,52 @@ def _break_compact_fingerprints(patch: Any) -> None:
     patch.setattr(state_pass, "_BARE", wrong)
 
 
-def _break_shared_fingerprints(patch: Any) -> None:
+def _break_digest_fingerprints(patch: Any) -> None:
+    from djust import change_detection
+
+    # As if the digest dropped what it hashes: every fingerprint has the same
+    # one, so every key that was kept reads as unchanged since the last sync.
+    patch.setattr(change_detection, "fingerprint_digest", lambda fp: b"\0" * 16)
+
+
+def _break_snapshot_fingerprints(patch: Any) -> None:
+    from djust.change_detection import ChangedKeys
     from djust.mixins import rust_bridge
 
-    # As if a stored fingerprint were reused without being equal: every key
-    # that has one reads as unchanged since the last sync.
-    def stale(fp: Any, held: Any, baseline_entry: Any) -> Any:
-        if held is not rust_bridge._MISSING:
-            return held, True
-        return fp, False
+    # As if the window check were missing: the post-event snapshot's walks are
+    # taken even when ``get_context_data`` ran in between and changed the list.
+    def trusting(view: Any, changed_keys: Any, preloaded_context: Any) -> Any:
+        return changed_keys.fingerprints if type(changed_keys) is ChangedKeys else None
 
-    patch.setattr(rust_bridge, "_reuse_fingerprint", stale)
+    patch.setattr(rust_bridge, "_snapshot_walks_for_sync", trusting)
+
+
+def _break_list_item_deltas(patch: Any) -> None:
+    from djust.mixins import rust_bridge
+
+    real = rust_bridge._list_item_delta
+
+    # As if the row comparison missed the last changed row.
+    def short(*args: Any) -> Any:
+        delta = real(*args)
+        return None if delta is None else (delta[0][:-1], delta[1][:-1])
+
+    patch.setattr(rust_bridge, "_list_item_delta", short)
+
+
+def _break_loop_item_render(patch: Any) -> None:
+    from djust.mixins import rust_bridge
+
+    real = rust_bridge.RustBridgeMixin._sync_state_to_rust
+
+    # As if the store served a stored item without checking its value.
+    def sync(self: Any, *args: Any, **kwargs: Any) -> Any:
+        rust_view = getattr(self, "_rust_view", None)
+        if rust_view is not None and hasattr(rust_view, "_set_loop_item_store_sabotage"):
+            rust_view._set_loop_item_store_sabotage(1)
+        return real(self, *args, **kwargs)
+
+    patch.setattr(rust_bridge.RustBridgeMixin, "_sync_state_to_rust", sync)
 
 
 SABOTAGE = {
@@ -1662,11 +1766,17 @@ SABOTAGE = {
         lambda: run_ws(Processors, COUNTER_SCRIPT),
     ),
     "plain_sub_ids": (_break_plain_sub_ids, lambda: run_ws(Opaque, OPAQUE_SCRIPT)),
+    "list_item_deltas": (_break_list_item_deltas, lambda: run_ws(Table, TABLE_SCRIPT)),
+    "loop_item_render": (_break_loop_item_render, lambda: run_ws(IfTable, TABLE_SCRIPT)),
+    "snapshot_fingerprints": (
+        _break_snapshot_fingerprints,
+        lambda: run_ws(LateWriter, LATE_SCRIPT),
+    ),
     "compact_fingerprints": (
         _break_compact_fingerprints,
         lambda: run_ws(ScalarTypes, SCALAR_SCRIPT),
     ),
-    "shared_fingerprints": (_break_shared_fingerprints, lambda: run_ws(Derived, DERIVED_SCRIPT)),
+    "digest_fingerprints": (_break_digest_fingerprints, lambda: run_ws(Derived, DERIVED_SCRIPT)),
     "deferred_save": (_break_deferred_save, _deferred_reconnect_run),
 }
 
@@ -1680,8 +1790,11 @@ async def test_a_shortcut_that_served_a_stale_value_fails_the_oracle(monkeypatch
     """Each shortcut, broken so that it reuses or skips what it must not, changes
     a frame one of the cases above compares. A comparison that stayed equal here
     would mean the oracle cannot see that shortcut go wrong."""
+    from django.test import override_settings
+
     sabotage, run = SABOTAGE[shortcut]
-    with harness.shortcuts(monkeypatch):
+    # The sabotaged shortcuts act on saves made before the frame (#4164).
+    with harness.shortcuts(monkeypatch), override_settings(DJUST_STATE_SAVE_INTERVAL=0):
         FLIPS["n"] = 0
         honest = await observe(run)
         with monkeypatch.context() as patch:

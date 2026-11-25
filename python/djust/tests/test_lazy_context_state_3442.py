@@ -4,28 +4,32 @@ from pathlib import Path
 
 import pytest
 from djust._rust import RustLiveView, authored_lazy_elements
+from djust.decorators import state
 from django.contrib.sessions.backends.db import SessionStore
 from djust.tests.test_lazy_provenance_http_3252 import Child, Page, get_ids, post, TAG
 
 
 class Hidden(Child):
-    exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Child, which it subclasses
+    exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Child, which it subclasses
     abstract = True  # Test-local owner: exclude from global binding discovery.
     mounts = 0
+    count = state(0, persist="server")  # inherited grants must be redeclared
 
 
 HIDDEN = '<div dj-view="' + __name__ + '.Hidden" dj-lazy></div>'
 
 
-def run(tpl, state):
-    class P(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
-        abstract = True  # Test-local owner: exclude from global binding discovery.
-        template = tpl
-
-        def mount(self, request, **kw):
-            for k, v in state.items():
-                setattr(self, k, v)
+def run(tpl, values):
+    P = type(
+        "P",
+        (Page,),
+        {
+            "exposure_policy": "explicit",  # as test_lazy_provenance_http_3252.Page, its base
+            "abstract": True,  # Test-local owner: exclude from global binding discovery.
+            "template": tpl,
+            **{k: state(default_factory=lambda v=v: v) for k, v in values.items()},
+        },
+    )
 
     session = SessionStore()
     session.create()
@@ -740,9 +744,10 @@ def test_round6_http_literal_parser(tmp_path, settings, label, closer):
     (tmp_path / "o.html").write_text(inc)
 
     class P(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = "<div dj-root>" + TAG + pre + body + post_ + "{{ q|safe }}" + HIDDEN + "</div>"
+        q = state("")
 
         def mount(self, request, **kw):
             self.q = q
@@ -768,20 +773,16 @@ def test_round6_cache_shared_fragment(order):
     cache.clear()
 
     class Plain(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = "<div dj-root>" + SIDEBAR + "<main>plain</main></div>"
-
-        def mount(self, request, **kw):
-            self.user_label = "u"
+        user_label = state("u")
 
     class Lazy(Page):
-        exposure_policy = "legacy"  # as test_lazy_provenance_http_3252.Page, which it subclasses
+        exposure_policy = "explicit"  # as test_lazy_provenance_http_3252.Page, which it subclasses
         abstract = True  # Test-local owner: exclude from global binding discovery.
         template = "<div dj-root>" + SIDEBAR + TAG + "</div>"
-
-        def mount(self, request, **kw):
-            self.user_label = "u"
+        user_label = state("u")
 
     session = SessionStore()
     session.create()

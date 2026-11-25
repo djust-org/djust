@@ -21,7 +21,7 @@ from djust._include_guard import include_guard_scope
 from djust._template_guards import TemplateMutatorGuard, alters_data
 from djust.decorators import is_event_handler
 
-from ._hybrid_attrs import harden_context
+from ._hybrid_attrs import harden_context, warn_unscanned_file
 from .assigns import (
     Assign,
     AssignValidationError,
@@ -86,7 +86,14 @@ def _render_template_string(template_str: str, context: Dict[str, Any]) -> str:
     return cast(str, render_template_with_dirs(template_str, context, get_template_dirs()))
 
 
-def _render_inline_template(template_str: str, context: Dict[str, Any], owner: str = "") -> str:
+def _render_inline_template(
+    template_str: str,
+    context: Dict[str, Any],
+    owner: str = "",
+    *,
+    text: bool = False,
+    keep: frozenset = frozenset(),
+) -> str:
     """Render a component's INLINE ``template`` string: the one place it is done (#3900, #3913).
 
     ``Component`` (the hybrid path), ``LiveComponent`` and ``BoundComponent`` all draw their
@@ -94,14 +101,26 @@ def _render_inline_template(template_str: str, context: Dict[str, Any], owner: s
     page (``djust.components._hybrid_attrs``): the attribute slots are escaped whatever the value
     is marked as and a URL is checked against the scheme allowlist, and the text of a raw-text
     element (``<textarea>``, ``<title>``, ``<script>`` ...) is escaped because the text there can
-    end the element. Every other text slot keeps a marked-safe value's markup.
+    end the element. Every other text slot keeps a marked-safe value's markup, except for a
+    ``Component`` (``text=True``, #3932): its text slots are escaped whatever the value is marked
+    as, like its Rust instance, except the plain names in ``keep`` (``Component.markup_slots``).
+    ``LiveComponent`` and ``BoundComponent`` templates keep markup in a text slot: their children
+    and nested components are written there.
 
     ``owner`` is the component's class name, for the warning about what could not be made safe.
-    Not applied: a ``template_name`` file (loaded by the project's loaders, with ``{% include %}``
-    and ``{% extends %}``) and a LiveView's own template.
+    Not applied here: a ``template_name`` file (``_render_template_file`` applies the same rule to
+    the file's own source, #3933) and a LiveView's own template.
     """
-    template_str, context = harden_context(template_str, context, owner)
+    template_str, context = harden_context(template_str, context, owner, text=text, keep=keep)
     return _render_template_string(template_str, context)
+
+
+def _template_source(loaded: Any) -> Optional[str]:
+    """The source of a template the backend loaded, or ``None`` when it does not expose one."""
+    source = getattr(loaded, "source", None)
+    if source is None:
+        source = getattr(getattr(loaded, "template", None), "source", None)
+    return source if isinstance(source, str) else None
 
 
 def _load_template_source(template_name: str) -> Optional[str]:
@@ -109,11 +128,28 @@ def _load_template_source(template_name: str) -> Optional[str]:
     ``None`` when the configured backend does not expose one (#2530)."""
     from django.template.loader import get_template
 
-    loaded = get_template(template_name)
-    source = getattr(loaded, "source", None)
-    if source is None:
-        source = getattr(getattr(loaded, "template", None), "source", None)
-    return source if isinstance(source, str) else None
+    return _template_source(get_template(template_name))
+
+
+def _recompile_like(loaded: Any, source: str) -> Any:
+    """A template for ``source`` compiled the way ``loaded`` was: same backend, engine and ORIGIN.
+
+    ``backend.from_string(source)`` has no origin, and Django resolves a relative
+    ``{% extends "./base.html" %}`` / ``{% include "../x.html" %}`` against the origin's template
+    name (a template without one raises ``AttributeError``). The hardened source takes the loaded
+    template's origin, so the names it holds resolve as they do for the file on disk.
+    """
+    backend = loaded.backend
+    inner = getattr(loaded, "template", None)
+    from django.template.base import Template as DjangoTemplate
+
+    if isinstance(inner, DjangoTemplate):
+        compiled = DjangoTemplate(source, origin=inner.origin, name=inner.name, engine=inner.engine)
+        return type(loaded)(compiled, backend)
+    origin = getattr(loaded, "origin", None)
+    if origin is not None and hasattr(loaded, "template_string"):  # DjustTemplate
+        return type(loaded)(source, backend=backend, origin=origin)
+    return backend.from_string(source)
 
 
 _ID_NAMESPACE_ALLOWED = re.compile(r"[^A-Za-z0-9_]")
@@ -139,28 +175,27 @@ def _dj_if_id_namespace(component_id: Optional[str]) -> str:
     return _ID_NAMESPACE_ALLOWED.sub("_", component_id)
 
 
-def _render_template_name_with_markers(
-    template_name: str, context: Dict[str, Any]
-) -> Optional[str]:
-    """Render a ``template_name`` component through the LiveView engine entry
+def _render_source_with_markers(
+    source: str, context: Dict[str, Any], origin: Optional[str] = None
+) -> str:
+    """Render the ``source`` of a ``template_name`` component through the LiveView engine entry
     (``RustLiveView`` — ``<!--dj-if id=…-->`` boundary markers ON) so its
     ``{% if %}`` blocks keep VDOM identity inside the parent (#2530).
 
-    Returns ``None`` when the source is unavailable or the template uses
-    ``{% extends %}`` (inheritance is resolved by the loader chain, not this
-    entry); the caller then falls back to ``render_to_string``. Context and
+    ``source`` is the file's source after ``harden_context`` (#3933): the caller reads it, rewrites
+    its attribute and raw-text slots and hands both here. It has no ``{% extends %}``
+    (inheritance is resolved by the loader chain, not this entry; the caller renders such a file
+    through the backend that found it). Context and
     sidecar handling mirror the LiveView path: JSON-normalized values into
     state, ``SafeString`` paths marked safe, raw objects (models behind the
     serialization floor) on the ``set_raw_py_values`` sidecar.
+
+    ``origin`` is the file's template name (#4265): a relative ``{% include "./x.html" %}`` /
+    ``"../x.html"`` in ``source`` resolves against it, as Django resolves it against the loaded
+    template's origin. Without it (an inline source) a relative name cannot resolve.
     """
     from djust._rust import RustLiveView
 
-    try:
-        source = _load_template_source(template_name)
-    except Exception:
-        return None
-    if source is None or "{% extends" in source:
-        return None
     from ..mixins.rust_bridge import _collect_safe_keys
     from ..render_env import apply_render_env_once
     from ..serialization import build_render_sidecar, normalize_django_value, without_form_values
@@ -168,6 +203,10 @@ def _render_template_name_with_markers(
 
     apply_render_env_once()
     rust_view = RustLiveView(source, get_template_dirs())
+    # #4265: the file's name, so a relative ``{% include "./x.html" %}`` / ``"../x.html"``
+    # resolves against it as Django resolves it against the loaded template's origin.
+    if origin and hasattr(rust_view, "set_template_origin"):
+        rust_view.set_template_origin(origin)
     # ADR-029 (#2741): snapshot the pushed environment onto this view, so
     # every render entry applies it on any thread.
     if hasattr(rust_view, "capture_render_env"):
@@ -192,6 +231,48 @@ def _render_template_name_with_markers(
 
     with library_render_scope():
         return cast(str, rust_view.render())
+
+
+def _render_template_file(template_name: str, context: Dict[str, Any], owner: str = "") -> str:
+    """Render a component's ``template_name`` FILE: the one place it is done (#3933).
+
+    The file's OWN source follows the rule an inline ``template`` follows (``harden_context``): its
+    attribute slots are escaped whatever the value is marked as, a URL is checked against the
+    scheme allowlist, and the text of a raw-text element is escaped. A text slot keeps a
+    marked-safe value's markup (``text=False``: ``LiveComponent`` and ``BoundComponent`` write
+    children and nested components there). What the file gets from ``{% extends %}`` (the parent's
+    slots) or ``{% include %}`` is NOT scanned and is named by the warning, as for an inline
+    template.
+
+    A file without ``{% extends %}`` is drawn through the LiveView engine entry so its
+    ``{% if %}`` blocks keep dj-if markers (#2530); one with it is compiled by the backend that found it, with the
+    loaded template's origin (``_recompile_like``), so ``{% extends %}`` / ``{% include %}``
+    resolve through the same loaders and a relative ``./`` name resolves against the file. The
+    file without it gets the same through ``set_template_origin`` on the LiveView engine entry
+    (#4265), so a relative ``./`` / ``../`` name resolves against the file on both branches.
+    A file whose source the backend does not expose cannot be scanned: it is drawn as before and
+    named once per class.
+
+    ``owner`` is the component's class name, for the warning.
+    """
+    from django.template.loader import get_template, render_to_string
+
+    # One lookup: the loaded template gives the source, and (for an ``{% extends %}`` file) the
+    # backend and origin the hardened source is compiled with. A missing template raises here,
+    # as it does for ``render_to_string``, and is not reported as an unscannable one.
+    loaded = get_template(template_name)
+    source = _template_source(loaded)
+    if source is None:
+        warn_unscanned_file(owner, template_name)
+        with include_guard_scope():
+            return cast(str, render_to_string(template_name, context))
+    # #4265: the name the loader was asked for; relative ``./`` / ``../`` names resolve against it
+    origin_name = getattr(getattr(loaded, "origin", None), "template_name", None) or template_name
+    rewritten, hardened = harden_context(source, context, owner, file=True, origin=origin_name)
+    if "{% extends" not in source:
+        return _render_source_with_markers(rewritten, hardened, origin_name)
+    with include_guard_scope():
+        return cast(str, _recompile_like(loaded, rewritten).render(hardened))
 
 
 _DECLARES_NAME: Dict[type, bool] = {}
@@ -227,17 +308,16 @@ _COMPONENT_COUNTER_LOCK = threading.Lock()
 
 class Component(TemplateMutatorGuard, ABC):
     """
-    Base class for stateless presentation components with automatic performance optimization.
+    Base class for stateless presentation components.
 
-    The Component class implements a performance waterfall that automatically selects
-    the fastest available rendering method:
+    A component has ONE renderer (#4002), the first of these it defines:
 
-    1. Pure Rust implementation (if available) → ~1μs per render (fastest)
-    2. template with Rust rendering → ~5-10μs per render (fast)
-    3. _render_custom() Python method → ~50-100μs per render (flexible)
-
-    This unified design allows components to start simple (Python) and be optimized
-    incrementally (hybrid → Rust) without changing the API.
+    1. ``_rust_impl_class`` -- a native class built from the constructor kwargs whose
+       ``render()`` returns the HTML. No class in djust uses it any more (the Rust
+       simple-component crate was removed in #4002); it stays for a project's own.
+    2. ``template`` -- an inline template rendered through the template engine.
+    3. ``_render_custom()`` -- Python that returns the HTML. The ``djust.components.ui``
+       simple components use this (a few microseconds per render).
 
     Usage - Hybrid (Recommended):
         class Badge(Component):
@@ -268,30 +348,8 @@ class Component(TemplateMutatorGuard, ABC):
                 else:
                     return self._render_plain()
 
-    Usage - Rust Optimized (Maximum Performance):
-        from djust._rust import RustBadge
-
-        class Badge(Component):
-            # Link to Rust implementation (used if available)
-            _rust_impl_class = RustBadge
-
-            # Fallback to hybrid
-            template = '<span class="badge bg-{{ variant }}">{{ text }}</span>'
-
-            def __init__(self, text: str, variant: str = "primary"):
-                super().__init__(text=text, variant=variant)
-                self.text = text
-                self.variant = variant
-
-    Key Features:
-        - Automatic performance optimization
-        - Graceful degradation (Rust → Hybrid → Python)
-        - Single consistent API
-        - Zero overhead (no runtime detection)
-        - Framework-agnostic
-
     Attributes:
-        _rust_impl_class: Optional Rust implementation class
+        _rust_impl_class: Optional native implementation class (none in djust itself)
         template: Optional template for hybrid rendering
     """
 
@@ -319,15 +377,26 @@ class Component(TemplateMutatorGuard, ABC):
     #: data declare theirs so a click never pays a ten-thousand-row walk.
     fingerprint_fields: Optional[Tuple[str, ...]] = None
 
+    #: Names of the template's parameters that are documented as MARKUP (#3932). Every other
+    #: text slot of ``template`` is escaped whatever the value is marked as, like the Rust
+    #: instance does. A class lists a parameter here only when its constructor escapes it itself
+    #: (so the value reaching the template is already safe) or documents it as markup.
+    markup_slots: ClassVar[frozenset[str]] = frozenset()
+
     #: Names of declared third-party assets this component needs (ADR-040).
     #: Check djust.B007 fails when a name is not declared in any manifest.
     requires_assets: ClassVar[Tuple[str, ...]] = ()
 
     def asset_tags(self, variant: Optional[str] = None) -> SafeString:
-        """Tags for every asset in ``requires_assets``, for the component's template."""
+        """Tags for every asset in ``requires_assets``, for the component's template.
+
+        An :class:`~djust.assets.tags.AssetTags`, which a text slot of the component's own
+        ``template`` prints as markup although it escapes other marked-safe values (#3932)."""
+        from djust.assets.tags import AssetTags
         from djust.assets.tags import asset_tags
 
-        return mark_safe("\n".join(asset_tags(name, variant) for name in self.requires_assets))
+        joined = mark_safe("\n".join(asset_tags(name, variant) for name in self.requires_assets))
+        return AssetTags(joined)
 
     def _create_rust_instance(self, **props: Any) -> None:
         """
@@ -375,7 +444,9 @@ class Component(TemplateMutatorGuard, ABC):
             name: Optional instance identity (ADR-033 D5). Every event the
                 component emits through :meth:`event_attrs` carries it as
                 ``dj-value-name``, so one handler can serve several instances:
-                ``def set_rating(self, value, name=None, **kwargs)``. The
+                ``def set_rating(self, value: int, name: str = "")``. Under
+                the strict contract ``name`` is sent only when the handler
+                declares it or has a ``**`` catch-all. The
                 word HTML forms use for the same thing; ``event=`` stays a
                 rename of the verb.
             **kwargs: Component properties
@@ -422,13 +493,14 @@ class Component(TemplateMutatorGuard, ABC):
                 counter = Component._component_counter
             self._component_key = f"{self.__class__.__name__}_{counter}"
 
-        # Try to create Rust instance if implementation exists
-        self._create_rust_instance(**kwargs)
+        # Store kwargs as attributes: what ``_render_custom`` / ``get_context_data`` read, and
+        # what a native instance's render falls back to when a later rebuild fails. Set before
+        # the native instance exists, so the write-through below does not rebuild it per key.
+        for key, value in kwargs.items():
+            setattr(self, key, value)
 
-        # Store kwargs as attributes for Python/hybrid rendering
-        if self._rust_instance is None:
-            for key, value in kwargs.items():
-                setattr(self, key, value)
+        # Create the native instance if the class names an implementation
+        self._create_rust_instance(**kwargs)
 
     def event_attrs(self, event: Optional[str], trigger: str = "click", **params: Any) -> str:
         """The attributes an element emits an event with (ADR-033 D4/D5).
@@ -443,7 +515,9 @@ class Component(TemplateMutatorGuard, ABC):
         key become hyphens (``item_id`` → ``dj-value-item-id``; the client
         maps them back). When the instance was given an identity ``name``
         (a class without a ``name`` parameter of its own — see ``__init__``)
-        it is appended as ``dj-value-name`` unless the caller passed one. A falsy *event*
+        it is appended as ``dj-value-name`` unless the caller passed one, together
+        with ``data-djust-optional="name"``: a strict handler receives it only
+        when it declares ``name`` or has a ``**`` catch-all (#4285). A falsy *event*
         renders nothing, so ``f"<button {self.event_attrs(self.event)}>"``
         is the whole conditional. Every value is HTML-escaped here; pass raw
         Python values, not pre-escaped strings.
@@ -452,7 +526,8 @@ class Component(TemplateMutatorGuard, ABC):
             return ""
         parts = [f'{attr_name("dj-" + str(trigger))}="{_html.escape(str(event), quote=True)}"']
         instance_name = self.__dict__.get("_identity")
-        if instance_name and "name" not in params:
+        stamped_identity = bool(instance_name) and "name" not in params
+        if stamped_identity:
             params["name"] = instance_name
         for key, value in params.items():
             if value is None:
@@ -474,6 +549,10 @@ class Component(TemplateMutatorGuard, ABC):
                 suffix, text = "", str(value)
             attr = attr_name("dj-value-" + str(key).replace("_", "-"))
             parts.append(f'{attr}{suffix}="{_html.escape(text, quote=True)}"')
+        if stamped_identity:
+            # #4285: a strict handler gets the framework-stamped identity only
+            # when it declares ``name`` (or has a ``**`` catch-all).
+            parts.append('data-djust-optional="name"')
         return " ".join(parts)
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -528,7 +607,7 @@ class Component(TemplateMutatorGuard, ABC):
             current_props = {}
             for key, value in self.__dict__.items():
                 # A key that is not a ``str`` is not an attribute name (#4143).
-                if type(key) is str and not key.startswith("_"):
+                if type(key) is str and not key.startswith("_") and key != "state":
                     current_props[key] = value
 
             # CRITICAL: Include the 'id' property value (it's a property, not in __dict__)
@@ -585,12 +664,8 @@ class Component(TemplateMutatorGuard, ABC):
 
     def render(self) -> str:
         """
-        Render component using fastest available method.
-
-        Performance waterfall:
-        1. Rust implementation (fastest: ~1μs)
-        2. template with Rust rendering (fast: ~5-10μs)
-        3. _render_custom() override (flexible: ~50-100μs)
+        Render the component through its renderer (see the class docstring, #4002):
+        a native instance, else ``template``, else ``_render_custom()``.
 
         Returns:
             HTML string marked as safe for Django templates
@@ -602,7 +677,7 @@ class Component(TemplateMutatorGuard, ABC):
             When writing template, avoid using {% elif %} due to a known bug
             in the Rust template engine. Use separate {% if %} blocks instead.
         """
-        # 1. Try pure Rust implementation (fastest)
+        # 1. A native implementation (none in djust itself since #4002)
         if self._rust_instance is not None:
             return cast(str, mark_safe(self._rust_instance.render()))
 
@@ -621,9 +696,18 @@ class Component(TemplateMutatorGuard, ABC):
             # #3900: the attribute slots of this template follow the rule the Rust instance
             # and `_render_custom()` follow (escaped whatever the value is marked as; a URL
             # checked against the scheme allowlist). See `_render_inline_template`.
+            # #3932: a text slot is escaped too, like the Rust instance, except `markup_slots`.
             return cast(
                 str,
-                mark_safe(_render_inline_template(self.template, context, type(self).__name__)),
+                mark_safe(
+                    _render_inline_template(
+                        self.template,
+                        context,
+                        type(self).__name__,
+                        text=True,
+                        keep=type(self).markup_slots,
+                    )
+                ),
             )
 
         # 3. Fall back to custom Python rendering (flexible)
@@ -678,7 +762,7 @@ class Component(TemplateMutatorGuard, ABC):
         """
         raise NotImplementedError(
             f"{self.__class__.__name__} must define either:\n"
-            f"  - _rust_impl_class (for pure Rust)\n"
+            f"  - _rust_impl_class (a native implementation)\n"
             f"  - template (for hybrid rendering)\n"
             f"  - _render_custom() method (for custom Python)"
         )
@@ -883,17 +967,10 @@ class BoundComponent:
         context = dict(state)
         context["component_id"] = self.component_id
         if template:
-            html: Optional[str] = _render_inline_template(
-                template, context, type(self._descriptor).__name__
-            )
+            html: str = _render_inline_template(template, context, type(self._descriptor).__name__)
         else:
             assert template_name is not None
-            html = _render_template_name_with_markers(template_name, context)
-            if html is None:
-                from django.template.loader import render_to_string
-
-                with include_guard_scope():
-                    html = render_to_string(template_name, context)
+            html = _render_template_file(template_name, context, type(self._descriptor).__name__)
         wrapped = cast(
             str,
             format_html('<div data-component-id="{}">{}</div>', self.component_id, mark_safe(html)),
@@ -1030,7 +1107,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
             from .._exposure_diagnostics import log_failure
 
             # The error names the offending value ("Cannot coerce %r ..."), so
-            # inside a nonlegacy view's turn the line must be value-free.
+            # inside a view's turn the line must be value-free.
             log_failure(
                 logger,
                 exc,
@@ -1146,12 +1223,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
 
         state_cls = getattr(self.__class__, "State", None)
         if state_cls is None:
-            from .._exposure import uses_legacy_exposure
-
-            if uses_legacy_exposure(obj):
-                # No State inner class — legacy component, return self
-                return self
-            # ADR-038 E2-7: never hand a nonlegacy view the shared declaration.
+            # ADR-038 E2-7: never hand a view the shared declaration.
             return self._bind_stateless(obj)
 
         slot = obj.__dict__.get(self._descriptor_storage_key)
@@ -1168,7 +1240,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         return self._bind(obj, state)
 
     #: Per-view wiring that a State-less binding must not inherit from its
-    #: declaration (set when a legacy view registered the declaration).
+    #: declaration (set when a view registered the declaration).
     _STATELESS_UNSHARED = frozenset(
         {
             "_parent",
@@ -1182,7 +1254,7 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
     def _bind_stateless(self, obj: Any) -> Any:
         """This view's own copy of a State-less class-level component.
 
-        Nonlegacy views only (ADR-038 E2-7). The declaration mounted once,
+        ADR-038 E2-7. The declaration mounted once,
         from the class body; each view gets an independent deep copy of that
         mounted component, keyed by the attribute name, stored in the view's
         ``_component_<name>`` slot and registered in ``view._components``.
@@ -1335,10 +1407,14 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
         pass
 
     def _generate_id(self) -> str:
-        """Generate a unique component ID"""
+        """Generate a component ID: unique, and the same on every render of a view when
+        the component is built during one (#4114); random anywhere else."""
         import uuid
 
-        return f"{self.__class__.__name__.lower()}_{uuid.uuid4().hex[:8]}"
+        from .._component_ids import render_id
+
+        prefix = self.__class__.__name__.lower()
+        return render_id(prefix) or f"{prefix}_{uuid.uuid4().hex[:8]}"
 
     @alters_data
     def save_state(self) -> None:
@@ -1410,13 +1486,10 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
             # boundary markers ON), not the project's TEMPLATES backend —
             # which emits none (post-#2519, and never on DjangoTemplates), so
             # a component `{% if %}` toggle fell back to positional matching.
-            engine_html = _render_template_name_with_markers(self.template_name, context)
-            if engine_html is not None:
-                return cast(str, mark_safe(engine_html))
-            from django.template.loader import render_to_string
-
-            with include_guard_scope():
-                return cast(str, mark_safe(render_to_string(self.template_name, context)))
+            return cast(
+                str,
+                mark_safe(_render_template_file(self.template_name, context, type(self).__name__)),
+            )
 
         raise ValueError(
             f"{self.__class__.__name__} must define 'template' attribute or set 'template_name'"

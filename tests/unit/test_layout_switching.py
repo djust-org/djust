@@ -157,10 +157,7 @@ async def test_flush_pending_layout_view_none_is_safe():
     consumer.send_json.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_flush_pending_layout_get_context_raises_prod_swallowed(monkeypatch, caplog):
-    """When get_context_data() raises in production (DEBUG=False), the
-    exception is logged and the swap is skipped — the WS stays alive."""
+async def _flush_broken_context_in_production(caplog):
     import logging
 
     from django.test import override_settings
@@ -168,7 +165,7 @@ async def test_flush_pending_layout_get_context_raises_prod_swallowed(monkeypatc
     from djust.websocket import LiveViewConsumer
 
     class _BrokenContext(LayoutMixin):
-        exposure_policy = "legacy"  # legacy subject: production logs name the error (D-a)
+        exposure_policy = "explicit"
 
         def get_context_data(self, **kwargs):
             raise AttributeError("missing_key")
@@ -182,9 +179,30 @@ async def test_flush_pending_layout_get_context_raises_prod_swallowed(monkeypatc
     with override_settings(DEBUG=False):
         with caplog.at_level(logging.ERROR, logger="djust.websocket"):
             await consumer._flush_pending_layout()
+    consumer.send_json.assert_not_awaited()  # the swap is skipped, the WS stays alive
 
-    consumer.send_json.assert_not_awaited()
-    assert any("template rendering raised" in r.message for r in caplog.records)
+
+@pytest.mark.asyncio
+async def test_flush_pending_layout_get_context_raises_prod_swallowed(caplog):
+    """In production an explicit view's failure is logged value-free (C5)."""
+    await _flush_broken_context_in_production(caplog)
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "Protected view operation failed" in text
+    assert "missing_key" not in text
+    assert all(r.exc_info is None for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_flush_pending_layout_get_context_raises_prod_names_error_when_opted_in(caplog):
+    """``log_exception_detail`` (#4180) opts the server log into naming the error."""
+    from django.test import override_settings
+
+    with override_settings(LIVEVIEW_CONFIG={"log_exception_detail": True}):
+        await _flush_broken_context_in_production(caplog)
+    assert any(
+        "template rendering raised" in r.getMessage() or "missing_key" in str(r.exc_info)
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio

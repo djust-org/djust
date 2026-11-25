@@ -163,6 +163,28 @@ pub(crate) const ENCODED_TAG: &str = "__djust_encoded__";
 /// Django means both variants stay `null`.
 pub(crate) const MISSING_TAG: &str = "__djust_missing__";
 
+/// The binary-format tag for a [`Value::ModelName`] (#3947): a one-key map with a string
+/// payload, like [`DECIMAL_TAG`]. Untagged, the marker would come back from a msgpack state
+/// round trip as a plain [`Value::String`] and every model map would read as a dict after one
+/// cache hit. JSON writes the plain string (the client wire is unchanged).
+///
+/// Unlike the older tags, DATA cannot mint this one: a user map whose only key is this tag (or
+/// [`ESCAPED_MAP_TAG`]) is written under [`ESCAPED_MAP_TAG`] and read back as that map, so a
+/// stored JSON column cannot become a model marker through a state round trip.
+pub(crate) const MODEL_NAME_TAG: &str = "__djust_model_name__";
+
+/// The escape wrapper for a user map whose only key is [`MODEL_NAME_TAG`] or this tag (#3947).
+/// The payload is a two-element list `[key, value]` rather than a map, so the inner map is never
+/// itself read for a tag on the way back.
+pub(crate) const ESCAPED_MAP_TAG: &str = "__djust_escaped_map__";
+
+/// The binary-format tag for a map holding an [`ObjectKey::Method`] key (#4267): a one-key map
+/// whose payload is `[[method names], [[key, value], ...]]`. A key is written as its text, so
+/// untagged a method key came back from a msgpack state round trip as a plain `Str` and a stored
+/// row sorted by the called value again. Data cannot mint it, as for [`MODEL_NAME_TAG`]: a user
+/// map whose only key is this tag is written under [`ESCAPED_MAP_TAG`]. JSON writes the plain map.
+pub(crate) const METHOD_KEYS_TAG: &str = "__djust_method_keys__";
+
 /// The [`MISSING_TAG`] value, for tests outside the crate. `#[doc(hidden)]`,
 /// not API — same rationale as [`decimal_tag`].
 #[doc(hidden)]
@@ -249,6 +271,13 @@ pub enum Value {
     String(String),
     /// Runtime SafeData string. Serialized as plain text; wire data cannot mint safety.
     SafeString(String),
+    /// The `__model__` value of a SERIALIZED MODEL map (#3947): the model class name, stamped by
+    /// `serialization.model_identity` as a `ModelName` (a `str` subclass). It reads and renders
+    /// exactly as a [`Value::String`] everywhere; only [`Value::model_str`] asks for it, so a dict
+    /// from user data that carries a plain text `__model__` beside `__str__` and `pk` stays a
+    /// dict. JSON writes the plain string (client wire unchanged); a binary encoding tags it under
+    /// `MODEL_NAME_TAG`.
+    ModelName(String),
     List(Vec<Value>),
     /// A Python tuple. Separate from `List` only so it can render with
     /// parentheses, which `str()` distinguishes (#2203).
@@ -1412,9 +1441,13 @@ pub fn values_structurally_equal(a: &Value, b: &Value) -> bool {
         }
         (Value::Object(a), Value::Object(b)) => {
             a.len() == b.len()
-                && a.iter()
-                    .zip(b.iter())
-                    .all(|((ka, va), (kb, vb))| ka == kb && values_structurally_equal(va, vb))
+                && a.iter().zip(b.iter()).all(|((ka, va), (kb, vb))| {
+                    // A called method's key is the same TEXT as a column's and not the
+                    // same key: `dictsort` reads them differently (#4267).
+                    ka == kb
+                        && matches!(ka, ObjectKey::Method(_)) == matches!(kb, ObjectKey::Method(_))
+                        && values_structurally_equal(va, vb)
+                })
         }
         (
             Value::DictView {
@@ -1697,7 +1730,12 @@ impl Serialize for Value {
             Value::Bool(b) => serializer.serialize_bool(*b),
             Value::Integer(i) => serializer.serialize_i64(*i),
             Value::Float(f) => serializer.serialize_f64(*f),
-            Value::String(st) | Value::SafeString(st) => serializer.serialize_str(st),
+            Value::ModelName(st) if !serializer.is_human_readable() => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(MODEL_NAME_TAG, st)?;
+                m.end()
+            }
+            Value::String(st) | Value::SafeString(st) | Value::ModelName(st) => serializer.serialize_str(st),
             // A tuple keeps its identity in binary formats only (#2276) — see
             // `TUPLE_TAG` for why JSON deliberately stays an array.
             Value::NamedTuple {
@@ -1716,6 +1754,40 @@ impl Serialize for Value {
             }
             Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
                 items.serialize(serializer)
+            }
+            // A user map that would read back as a tag the data must not mint (#3947).
+            Value::Object(o)
+                if !serializer.is_human_readable()
+                    && o.len() == 1
+                    && o.keys().next().is_some_and(|k| {
+                        matches!(k, ObjectKey::Str(s) if s == MODEL_NAME_TAG || s == ESCAPED_MAP_TAG || s == METHOD_KEYS_TAG)
+                    }) =>
+            {
+                let (key, value) = o.iter().next().expect("len checked");
+                let key = match key {
+                    ObjectKey::Str(s) => s.as_str(),
+                    _ => unreachable!("matched a string key above"),
+                };
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(ESCAPED_MAP_TAG, &(key, value))?;
+                m.end()
+            }
+            // A row with a called method's key keeps it through a binary round trip (#4267).
+            Value::Object(o)
+                if !serializer.is_human_readable()
+                    && o.keys().any(|k| matches!(k, ObjectKey::Method(_))) =>
+            {
+                let names: Vec<&str> = o
+                    .keys()
+                    .filter_map(|k| match k {
+                        ObjectKey::Method(name) => Some(name.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                let pairs: Vec<(&ObjectKey, &Value)> = o.iter().collect();
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(METHOD_KEYS_TAG, &(names, pairs))?;
+                m.end()
             }
             Value::Object(o) => o.serialize(serializer),
             // A view is built by `Context::dict_view` during a render and is
@@ -1848,7 +1920,13 @@ impl<'de> Deserialize<'de> for Value {
     where
         D: Deserializer<'de>,
     {
-        struct ValueVisitor;
+        /// `binary`: the format is not human-readable (msgpack). The #3947 model-name tag and
+        /// its escape are written in binary formats only, so they are read there only: a JSON
+        /// map shaped like the tag is a user's dict and never mints a marker (review N1).
+        #[derive(Clone, Copy)]
+        struct ValueVisitor {
+            binary: bool,
+        }
 
         impl<'de> Visitor<'de> for ValueVisitor {
             type Value = Value;
@@ -1951,6 +2029,29 @@ impl<'de> Deserialize<'de> for Value {
                 if obj.len() == 1 {
                     if let Some(Value::String(d)) = obj.get(DECIMAL_TAG) {
                         return Ok(Value::Decimal(d.clone()));
+                    }
+                    // The model-name marker (#3947): a string payload, like the Decimal tag.
+                    // Binary formats only: that is the only place the writer puts it.
+                    if let (true, Some(Value::String(d))) = (self.binary, obj.get(MODEL_NAME_TAG)) {
+                        return Ok(Value::ModelName(d.clone()));
+                    }
+                    // A map with called method keys (#4267): `[[names], [[key, value], ...]]`.
+                    if let (true, Some(Value::List(payload))) =
+                        (self.binary, obj.get(METHOD_KEYS_TAG))
+                    {
+                        if let Some(map) = method_keyed_map(payload) {
+                            return Ok(Value::Object(map));
+                        }
+                    }
+                    // A user map the writer escaped: `[key, value]`, read back as that one-key
+                    // map with no tag interpretation of the key.
+                    if let (true, Some(Value::List(pair))) = (self.binary, obj.get(ESCAPED_MAP_TAG))
+                    {
+                        if let [Value::String(key), value] = pair.as_slice() {
+                            let mut inner = IndexMap::new();
+                            inner.insert(ObjectKey::Str(key.clone()), value.clone());
+                            return Ok(Value::Object(inner));
+                        }
                     }
                     // The binary-format missing-key tag (#2484). Same shape,
                     // and the payload is `nil` — which reaches here as
@@ -2395,7 +2496,8 @@ impl<'de> Deserialize<'de> for Value {
             }
         }
 
-        deserializer.deserialize_any(ValueVisitor)
+        let binary = !deserializer.is_human_readable();
+        deserializer.deserialize_any(ValueVisitor { binary })
     }
 }
 
@@ -3248,7 +3350,7 @@ impl Value {
             // written on the digits anyway rather than through a parse that
             // gives `inf` for a 400-digit value.
             Value::BigInt(d) => d.bytes().any(|b| b.is_ascii_digit() && b != b'0'),
-            Value::String(s) | Value::SafeString(s) => !s.is_empty(),
+            Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => !s.is_empty(),
             // Python's own `bool(o)`, asked at the conversion and carried
             // (#2458). #2448 read `!e.display.is_empty()` here — always true
             // for this family — which kept `bool(timedelta(0))` at `True`
@@ -3497,7 +3599,9 @@ impl Value {
             // The text is never marked safe by being printed from here: it is escaped like any
             // other text unless the renderer is told otherwise.
             Value::Object(o) => match o.get("__str__") {
-                Some(Value::String(s) | Value::SafeString(s)) => Some(s.as_str()),
+                Some(Value::String(s) | Value::SafeString(s) | Value::ModelName(s)) => {
+                    Some(s.as_str())
+                }
                 _ => None,
             },
             _ => None,
@@ -3514,15 +3618,17 @@ impl Value {
     /// `json_script`, `.items` / `.keys` / `.values`, iteration, `stringformat` mapping specs,
     /// `in`, `pluralize`) go by this stricter shape, so a dict from user data that happens to
     /// carry a text `__str__` key (a stored JSON column) keeps being a dict there. Any dict can
-    /// still carry all three keys: this narrows the accident, it does not make the marker
-    /// unforgeable.
+    /// still carry all three keys as DATA: the `__model__` value must be a
+    /// [`Value::ModelName`], which only `serialization.model_identity` produces (a `ModelName`
+    /// `str` subclass on the Python side) and which no wire format mints from a plain string, so
+    /// a user dict with a text `__model__` beside `__str__` and `pk` is a dict here (#3947).
     pub fn model_str(&self) -> Option<&str> {
         let text = self.object_str()?;
         let Value::Object(o) = self else {
             return None;
         };
         match (o.get("__model__"), o.get("pk")) {
-            (Some(Value::String(_) | Value::SafeString(_)), Some(_)) => Some(text),
+            (Some(Value::ModelName(_)), Some(_)) => Some(text),
             _ => None,
         }
     }
@@ -3604,7 +3710,7 @@ impl Value {
     /// top-level one.
     pub fn py_repr(&self) -> String {
         match self {
-            Value::String(s) | Value::SafeString(s) => py_repr_string(s),
+            Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => py_repr_string(s),
             // `repr(Decimal('19.99'))` is `Decimal('19.99')`, so a Decimal
             // nested in a list or dict renders the constructor form while a
             // top-level one renders bare digits — the same str/repr split that
@@ -3684,7 +3790,7 @@ impl fmt::Display for Value {
             // `numberformat.format` short-circuits an `int` before it reaches
             // either rule, and its non-grouping path is `str(number)` (#2260).
             Value::BigInt(d) => write!(f, "{d}"),
-            Value::String(s) | Value::SafeString(s) => write!(f, "{s}"),
+            Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => write!(f, "{s}"),
             // The display spelling is `str(o)`; only `json_script` reads the
             // other one.
             //
@@ -3861,6 +3967,11 @@ pub fn py_object_key(ob: &Bound<'_, PyAny>) -> ObjectKey {
     if let Ok(s) = ob.extract::<String>() {
         // BEFORE the numeric arms: a `str` never extracts as one, but keeping
         // the common case first avoids three failed extractions per key.
+        // A `CalledName` (#4267) is a `str` SUBCLASS, so an exact `str` key pays one
+        // pointer compare and nothing else.
+        if !ob.is_exact_instance_of::<PyString>() && is_called_name(ob) {
+            return ObjectKey::Method(s);
+        }
         return ObjectKey::Str(s);
     }
     if let Ok(b) = ob.extract::<bool>() {
@@ -4411,6 +4522,9 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             // characters until the stack overflowed (#2555). It crosses
             // lossily instead — see `py_string_lossy`.
             let s = py_string_lossy(&s)?;
+            if is_model_name(&ob.to_owned()) {
+                return Ok(Value::ModelName(s));
+            }
             let safe = python_string_is_safe(&ob.to_owned());
             Ok(if safe {
                 Value::SafeString(s)
@@ -4687,6 +4801,89 @@ fn floored_model_proxy<'py>(ob: &Bound<'py, PyAny>) -> Option<Bound<'py, PyAny>>
 ///
 /// One cached class and one `isinstance`, asked only of an object that already carries
 /// `__djust_serialize__` (a djust proxy), so an ordinary value never pays for it.
+/// The cached `djust.serialization.ModelName` class (#3947), or `None` when it cannot be imported.
+fn model_name_class(py: Python<'_>) -> Option<&'static Py<PyAny>> {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    CLASS
+        .get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+            Ok(py
+                .import("djust.serialization")?
+                .getattr("ModelName")?
+                .unbind())
+        })
+        .ok()
+}
+
+/// Is this `str` a `ModelName` (the `__model__` marker of a serialized model, #3947)? Asked only
+/// of a `str` SUBCLASS instance, so a plain `str` never pays for the lookup.
+fn is_model_name(ob: &Bound<'_, PyAny>) -> bool {
+    if ob.is_exact_instance_of::<PyString>() {
+        return false;
+    }
+    match model_name_class(ob.py()) {
+        Some(class) => ob.get_type().is(class.bind(ob.py())),
+        None => false,
+    }
+}
+
+/// The map a [`METHOD_KEYS_TAG`] payload describes, or `None` for any other shape (#4267).
+fn method_keyed_map(payload: &[Value]) -> Option<IndexMap<ObjectKey, Value>> {
+    let [Value::List(names), Value::List(pairs)] = payload else {
+        return None;
+    };
+    let names: Vec<&str> = names
+        .iter()
+        .map(|n| match n {
+            Value::String(n) => Some(n.as_str()),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let mut map = IndexMap::with_capacity(pairs.len());
+    for pair in pairs {
+        let Value::List(pair) = pair else {
+            return None;
+        };
+        let [Value::String(key), value] = pair.as_slice() else {
+            return None;
+        };
+        let key = if names.contains(&key.as_str()) {
+            ObjectKey::Method(key.clone())
+        } else {
+            ObjectKey::Str(key.clone())
+        };
+        map.insert(key, value.clone());
+    }
+    Some(map)
+}
+
+/// Is this `str` subclass a `djust.serialization.CalledName` key (#4267)?
+fn is_called_name(ob: &Bound<'_, PyAny>) -> bool {
+    match called_name_class(ob.py()) {
+        Ok(class) => ob.get_type().is(class.bind(ob.py())),
+        Err(_) => false,
+    }
+}
+
+/// The cached `djust.serialization.CalledName` class (#4267).
+fn called_name_class(py: Python<'_>) -> PyResult<&'static Py<PyAny>> {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    CLASS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+        Ok(py
+            .import("djust.serialization")?
+            .getattr("CalledName")?
+            .unbind())
+    })
+}
+
+/// A dict key back to Python: an [`ObjectKey::Method`] as a `CalledName` again (#4267), so a
+/// row that crosses to a handler and back keeps it; every other key as its value.
+fn object_key_into_py(py: Python<'_>, key: ObjectKey) -> PyResult<Bound<'_, PyAny>> {
+    if let ObjectKey::Method(name) = key {
+        return called_name_class(py)?.bind(py).call1((name,));
+    }
+    Value::from(key).into_pyobject(py)
+}
+
 fn is_model_floor_proxy(ob: &Bound<'_, PyAny>) -> bool {
     static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
     let py = ob.py();
@@ -6039,6 +6236,12 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::SafeString(s) => py
                 .import("django.utils.safestring")?
                 .call_method1("mark_safe", (s,)),
+            // Back to a `ModelName`, so a map that crosses to Python and back (a bridged
+            // handler's binding, `regroup`) is still read as a model (#3947).
+            Value::ModelName(s) => match model_name_class(py) {
+                Some(class) => class.bind(py).call1((s,)),
+                None => Ok(s.into_pyobject(py)?.to_owned().into_any()),
+            },
             // Temporal values retain their Python type for arithmetic and
             // custom filters. Only validated temporal handles cross here;
             // opaque objects and carried collections keep their display-string
@@ -6112,7 +6315,7 @@ impl<'py> IntoPyObject<'py> for Value {
                     // int-keyed dict (#2339). `ObjectKey::Other` is the one
                     // lossy case — the original object is gone, so its
                     // `str()` goes back as text.
-                    py_dict.set_item(Value::from(k).into_pyobject(py)?, v.into_pyobject(py)?)?;
+                    py_dict.set_item(object_key_into_py(py, k)?, v.into_pyobject(py)?)?;
                 }
                 Ok(py_dict.into_any())
             }
@@ -6691,7 +6894,7 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
             let py_dict = PyDict::new(py);
             for (key, item) in map {
                 py_dict.set_item(
-                    Value::from(key).into_pyobject(py)?,
+                    object_key_into_py(py, key)?,
                     value_into_handler_pyobject(py, item)?,
                 )?;
             }
@@ -6701,9 +6904,128 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
     }
 }
 
+/// One element of `dictsort`'s input as Django's `_property_resolver` must see it (#4267).
+///
+/// [`value_into_handler_pyobject`], except that a map's [`ObjectKey::Method`] entry crosses as
+/// a bare `object()`: no ordering, no item and no public attribute, which is what a bound
+/// method is to `dictsort`. Django never calls a method key, so it compares bound methods,
+/// raises `TypeError` and renders `""`; the row holds the CALLED value there because the
+/// template also prints it. One row is never compared and sorts as on Django, and the answer
+/// maps back to the original rows by identity, so the printed value is the called one.
+pub fn value_into_sort_row_pyobject(py: Python<'_>, value: Value) -> PyResult<Bound<'_, PyAny>> {
+    match value {
+        Value::Object(map) => {
+            let py_dict = PyDict::new(py);
+            for (key, item) in map {
+                if let ObjectKey::Method(name) = key {
+                    py_dict.set_item(name, uncalled_method(py)?)?;
+                    continue;
+                }
+                py_dict.set_item(
+                    Value::from(key).into_pyobject(py)?,
+                    value_into_sort_row_pyobject(py, item)?,
+                )?;
+            }
+            Ok(py_dict.into_any())
+        }
+        Value::List(items) => {
+            let py_list = PyList::empty(py);
+            for item in items {
+                py_list.append(value_into_sort_row_pyobject(py, item)?)?;
+            }
+            Ok(py_list.into_any())
+        }
+        other => value_into_handler_pyobject(py, other),
+    }
+}
+
+/// The stand-in for an uncalled method in a `dictsort` row (#4267): a fresh `object()`.
+fn uncalled_method(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    static OBJECT: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    let class = OBJECT.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+        Ok(py.import("builtins")?.getattr("object")?.unbind())
+    })?;
+    class.bind(py).call0()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #4267: a row whose key is a called method's is not the same value as the row with a
+    /// column there, though every key compares equal; the same row is.
+    #[test]
+    fn a_method_key_is_structurally_distinct_from_a_column_key() {
+        let row = |key: ObjectKey| {
+            let mut m = IndexMap::new();
+            m.insert(ObjectKey::Str("pk".into()), Value::Integer(1));
+            m.insert(key, Value::String("cara".into()));
+            Value::Object(m)
+        };
+        let method = row(ObjectKey::Method("get_username".into()));
+        let column = row(ObjectKey::Str("get_username".into()));
+        assert!(values_structurally_equal(&method, &method.clone()));
+        assert!(values_structurally_equal(&column, &column.clone()));
+        assert!(!values_structurally_equal(&method, &column));
+        assert!(!values_structurally_equal(&column, &method));
+    }
+
+    /// #4267: a called method's key survives a msgpack state round trip (nested rows too), in
+    /// its place; JSON writes the plain map; a user map spelled like the tag stays that map.
+    #[test]
+    fn a_method_key_survives_a_binary_round_trip() {
+        let row = |name: &str| {
+            let mut m = IndexMap::new();
+            m.insert(ObjectKey::Str("pk".into()), Value::Integer(1));
+            m.insert(
+                ObjectKey::Method("get_username".into()),
+                Value::String(name.into()),
+            );
+            m.insert(ObjectKey::Str("email".into()), Value::String("e".into()));
+            Value::Object(m)
+        };
+        let mut outer = IndexMap::new();
+        outer.insert(
+            ObjectKey::Method("get_full_name".into()),
+            Value::String("Zed".into()),
+        );
+        outer.insert(
+            ObjectKey::Str("users".into()),
+            Value::List(vec![row("cara"), row("abe")]),
+        );
+        let original = Value::Object(outer);
+        let bytes = rmp_serde::to_vec(&original).expect("encode");
+        let back: Value = rmp_serde::from_slice(&bytes).expect("decode");
+        assert!(values_structurally_equal(&original, &back), "{back:?}");
+        let Value::Object(map) = &back else {
+            panic!("{back:?}")
+        };
+        let keys: Vec<&ObjectKey> = map.keys().collect();
+        assert!(matches!(keys[0], ObjectKey::Method(k) if k == "get_full_name"));
+        assert!(matches!(keys[1], ObjectKey::Str(k) if k == "users"));
+
+        let json = serde_json::to_string(&row("cara")).expect("json");
+        assert_eq!(json, r#"{"pk":1,"get_username":"cara","email":"e"}"#);
+
+        let mut forged = IndexMap::new();
+        forged.insert(
+            ObjectKey::Str(METHOD_KEYS_TAG.into()),
+            Value::List(vec![
+                Value::List(vec![Value::String("pk".into())]),
+                Value::List(vec![Value::List(vec![
+                    Value::String("pk".into()),
+                    Value::Integer(1),
+                ])]),
+            ]),
+        );
+        let forged = Value::Object(forged);
+        let back: Value =
+            rmp_serde::from_slice(&rmp_serde::to_vec(&forged).expect("encode")).expect("decode");
+        assert!(
+            values_structurally_equal(&forged, &back),
+            "data minted it: {back:?}"
+        );
+    }
 
     #[test]
     fn test_value_truthy() {
@@ -6834,7 +7156,7 @@ mod tests {
         };
         let text = Value::String("bob".to_string());
         let safe = Value::SafeString("<b>bob</b>".to_string());
-        let class = Value::String("Account".to_string());
+        let class = Value::ModelName("Account".to_string());
         let pk = Value::Integer(1);
         let full = build(&[
             ("pk", pk.clone()),
@@ -6858,6 +7180,12 @@ mod tests {
             build(&[
                 ("__str__", text.clone()),
                 ("__model__", Value::Integer(5)),
+                ("pk", pk.clone()),
+            ]),
+            // #3947: a plain-text `__model__` is DATA, not the marker.
+            build(&[
+                ("__str__", text.clone()),
+                ("__model__", Value::String("Account".to_string())),
                 ("pk", pk.clone()),
             ]),
             build(&[

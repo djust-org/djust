@@ -6,7 +6,8 @@ refuses (a lazy string is one) leaves a class that has a ``template`` to be draw
 class with no crate counterpart is drawn by it always. That path wrote ``{{ src }}`` into ``src=``
 with no URL check and only autoescape.
 
-* ``TestTheIssue``: the cells of the issue, on ``Avatar``.
+* ``TestTheIssue``: the cells of the issue, on ``Avatar`` and on ``TemplateAvatar`` (the template
+  ``Avatar`` drew through before #4002).
 * ``TestValueKinds``: every kind of value that can reach the engine, in a URL and in a plain slot.
 * ``TestWhitespaceAroundEquals``: the attribute name is followed through HTML's own states.
 * ``TestWholeValue``: where in a URL value a slot is, and what is judged for each position.
@@ -42,6 +43,7 @@ from djust.components.base import Component
 from djust.components.ui.avatar_simple import Avatar
 from djust.components.ui.button_group_simple import ButtonGroup
 from djust.components.ui.input_simple import Input
+from djust.tests.hybrid_template_standins_4002 import TemplateAvatar
 
 pytestmark = pytest.mark.components
 
@@ -152,18 +154,17 @@ class TestTheIssue:
         assert _attrs(lazy_out, "img")["src"] == "#"
         assert "javascript:" not in lazy_out
 
-    def test_a_lazy_script_url_is_drawn_by_the_template_path(self) -> None:
-        """The premise: the crate refuses it, so the template is the path under test."""
-        if Avatar._rust_impl_class is None:
-            pytest.skip("the Rust extension is not built")
-        assert Avatar(src=JS)._rust_instance is not None
-        assert Avatar(src=_lazy(JS))._rust_instance is None
+    def test_avatar_has_one_renderer(self) -> None:
+        """#4002: no crate instance and no template, so a lazy value takes the plain one's path.
+        The template cells below run on ``TemplateAvatar``, the template ``Avatar`` had."""
+        assert Avatar._rust_impl_class is None and Avatar.template is None
+        assert _attrs(Avatar(src=_lazy(JS)).render(), "img")["src"] == "#"
 
     @pytest.mark.parametrize("param", ["size", "status"])
     def test_a_lazy_marked_safe_attribute_value_stays_inside_its_attribute(
         self, param: str
     ) -> None:
-        out = Avatar(src="/a.png", alt="x", **{param: _lazy(BREAKOUT)}).render()
+        out = TemplateAvatar(src="/a.png", alt="x", **{param: _lazy(BREAKOUT)}).render()
         assert "onclick" not in _attrs(out, "div"), out
         assert "&quot;" in out
 
@@ -185,13 +186,13 @@ class TestValueKinds:
 
     @pytest.mark.parametrize("kind", sorted(KINDS))
     def test_a_url_slot_is_judged_whatever_the_value_is(self, kind: str) -> None:
-        out = _hybrid(Avatar, src=KINDS[kind](JS), alt="x").render()
+        out = _hybrid(TemplateAvatar, src=KINDS[kind](JS), alt="x").render()
         assert _attrs(out, "img")["src"] == "#", (kind, out)
 
     @pytest.mark.parametrize("kind", sorted(KINDS))
     def test_a_plain_slot_is_escaped_whatever_the_value_is(self, kind: str) -> None:
         out = _hybrid(
-            Avatar, src="/a.png", size=KINDS[kind](BREAKOUT), status=KINDS[kind](BREAKOUT)
+            TemplateAvatar, src="/a.png", size=KINDS[kind](BREAKOUT), status=KINDS[kind](BREAKOUT)
         ).render()
         assert "onclick" not in _attrs(out, "div"), (kind, out)
         assert "&quot;" in out
@@ -199,7 +200,9 @@ class TestValueKinds:
     @pytest.mark.parametrize("kind", sorted(KINDS))
     def test_a_good_value_prints_the_same_whatever_it_is(self, kind: str) -> None:
         """A kind of value is not what changes the output: its text is."""
-        out = _hybrid(Avatar, src=KINDS[kind]("/a?x=1&y=2"), alt="x", size=KINDS[kind]("lg"))
+        out = _hybrid(
+            TemplateAvatar, src=KINDS[kind]("/a?x=1&y=2"), alt="x", size=KINDS[kind]("lg")
+        )
         assert _attrs(out.render(), "img")["src"] == "/a?x=1&y=2"
         assert "avatar-lg" in out.render()
 
@@ -409,7 +412,9 @@ class TestWholeValue:
 class TestTheRule:
     def test_a_plain_value_renders_as_before(self) -> None:
         """No double escaping for what was already right."""
-        out = _hybrid(Avatar, src="/a?x=1&y=2", alt="a & b", size="lg", status="online").render()
+        out = _hybrid(
+            TemplateAvatar, src="/a?x=1&y=2", alt="a & b", size="lg", status="online"
+        ).render()
         assert _attrs(out, "img") == {"src": "/a?x=1&y=2", "alt": "a & b", "class": "avatar-img"}
         assert "avatar-lg" in out and "avatar-online" in out
         assert "&amp;amp;" not in out
@@ -422,21 +427,21 @@ class TestTheRule:
         assert _draw('<i title="{{ t|safe }}">', t=mark_safe("a &amp; b")) == out
 
     def test_a_safe_url_with_an_ampersand_is_escaped_once(self) -> None:
-        out = _hybrid(Avatar, src=mark_safe("/a?x=1&y=2")).render()
+        out = _hybrid(TemplateAvatar, src=mark_safe("/a?x=1&y=2")).render()
         assert 'src="/a?x=1&amp;y=2"' in out
 
     def test_a_data_image_is_still_an_image(self) -> None:
         uri = "data:image/png;base64,AAAA"
-        assert _attrs(_hybrid(Avatar, src=uri).render(), "img")["src"] == uri
-        assert _attrs(_hybrid(Avatar, src=_lazy(uri)).render(), "img")["src"] == uri
+        assert _attrs(_hybrid(TemplateAvatar, src=uri).render(), "img")["src"] == uri
+        assert _attrs(_hybrid(TemplateAvatar, src=_lazy(uri)).render(), "img")["src"] == uri
 
     def test_a_data_document_is_not(self) -> None:
         for value in ("data:text/html,<script>1</script>", _lazy("data:text/html,x")):
-            assert _attrs(_hybrid(Avatar, src=value).render(), "img")["src"] == "#"
+            assert _attrs(_hybrid(TemplateAvatar, src=value).render(), "img")["src"] == "#"
 
     def test_a_text_slot_keeps_its_markup(self) -> None:
         """The rule is about attributes. Text slots are not touched."""
-        template = hybrid.plan(Avatar.template).template
+        template = hybrid.plan(TemplateAvatar.template).template
         assert "{{ initials }}" in template
         assert "{{ initials|" not in template
 
@@ -461,7 +466,7 @@ class TestTheRule:
         value = _lazy(JS)
         shared = {"src": value, "alt": "x", "size": "md", "shape": "circle", "status": None}
 
-        class Fixed(Avatar):
+        class Fixed(TemplateAvatar):
             def get_context_data(self):
                 return shared
 
@@ -526,7 +531,7 @@ class TestTheRule:
         monkeypatch.setattr(
             rust, "render_template", lambda *a, **k: (_ for _ in ()).throw(RuntimeError())
         )
-        out = _hybrid(Avatar, src=_lazy(JS), size=_lazy(BREAKOUT)).render()
+        out = _hybrid(TemplateAvatar, src=_lazy(JS), size=_lazy(BREAKOUT)).render()
         assert _attrs(out, "img")["src"] == "#"
         assert "onclick" not in _attrs(out, "div")
         assert _draw('<a href="{{ a }}{{ b }}">', a="java", b="script:alert(1)") == '<a href="#">'
@@ -676,11 +681,15 @@ class TestBlocksInAValue:
         texts = sorted("".join(v if k == "lit" else "<s>" for k, v in p) for p in group.paths)
         assert texts == ["/<s>", "<s>"]
 
-    def test_a_value_with_too_many_paths_is_listed_not_judged_loosely(self) -> None:
+    def test_identical_paths_are_one_so_the_value_stays_under_the_cap(self) -> None:
+        """256 ways through, nine distinct outputs: judged path by path (#3924; before, more
+        than 64 paths left it listed and unjudged)."""
         many = "".join("{% if a" + str(i) + " %}/{% endif %}" for i in range(8)) + "{{ s }}"
         plan = hybrid.plan(f'<a href="{many}">')
-        assert plan.groups == ()
-        assert [t[:2] for t in plan.unchecked_urls] == [("a", "href")]
+        (group,) = plan.groups
+        assert not group.roles and len(group.paths) <= 9
+        assert plan.unchecked_urls == ()
+        assert 'href="#"' in _draw(f'<a href="{many}">', s="javascript:alert(1)")
 
 
 class TestLiteralsABrowserNormalises:
@@ -748,7 +757,6 @@ class TestWhatIsNotJudged:
         "filtered": '<a href="{{ u|default:"/x" }}">',
         "loop": '{% for l in links %}<a href="{{ l }}">{% endfor %}',
         "with": '{% with x=u %}<a href="{{ x }}">{% endwith %}',
-        "printing-tag": '<a href="{% now "Y" %}{{ u }}">',
         "printing-tag-in-block": '<a href="{% if a %}{% trans "x" %}{% endif %}{{ u.k }}">',
     }
 
@@ -917,8 +925,9 @@ class TestEveryHybridTemplate:
     """Derived: every ``Component`` subclass with a ``template`` that the package defines."""
 
     def test_the_classes_are_found(self) -> None:
-        assert len(TEMPLATE_CLASSES) == 19, sorted(TEMPLATE_CLASSES)
-        assert "djust.components.ui.avatar_simple.Avatar" in TEMPLATE_CLASSES
+        # 19 until #4002 moved the fifteen crate-backed ``ui/*_simple`` classes to one renderer
+        assert len(TEMPLATE_CLASSES) == 4, sorted(TEMPLATE_CLASSES)
+        assert "djust.components.ui.input_simple.Input" in TEMPLATE_CLASSES
 
     def test_a_module_that_does_not_import_fails_loudly(self, monkeypatch) -> None:
         real = importlib.import_module
@@ -945,7 +954,9 @@ class TestEveryHybridTemplate:
             key: {g.kind for g in hybrid.plan(cls.template).groups}
             for key, cls in TEMPLATE_CLASSES.items()
         }
-        assert "image" in groups["djust.components.ui.avatar_simple.Avatar"]
+        assert "image" not in {kind for kinds in groups.values() for kind in kinds}
+        # no shipped template has an image URL since #4002; the stand-in keeps the cell judged
+        assert "image" in {g.kind for g in hybrid.plan(TemplateAvatar.template).groups}
 
     def test_no_shipped_template_has_a_srcset_slot_for_the_sweep_to_reach(self) -> None:
         """The sweep drives shipped classes, so it cannot reach a ``srcset`` slot: only

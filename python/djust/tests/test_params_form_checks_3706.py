@@ -266,25 +266,3 @@ class TestReservedNames:
         from djust.live_view import _FRAMEWORK_INTERNAL_ATTRS
 
         assert name in _FRAMEWORK_INTERNAL_ATTRS
-
-    @pytest.mark.parametrize("name", NAMES)
-    def test_an_instance_assignment_is_not_reactive_state(self, name):
-        """``self.state_attribute = ...`` in ``mount()`` must not become template state."""
-
-        # Legacy on purpose: the subject is the legacy state API (get_state),
-        # which reads the attribute walk.
-        class Assigns(LiveView):
-            exposure_policy = "legacy"
-            template = "<div dj-root></div>"
-
-            def mount(self, request, **kwargs):
-                setattr(self, name, {"leak": 1} if name != "state_attribute" else "other")
-                self.visible = 1
-
-        from django.test import RequestFactory
-
-        view = Assigns()
-        view.mount(RequestFactory().get("/"))
-        for state in (view.get_state(),):
-            assert name not in state
-            assert "visible" in state

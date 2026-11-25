@@ -428,16 +428,29 @@ application = get_wsgi_application()
 # urls.py
 # ---------------------------------------------------------------------------
 
+# djust's SSE transport (#4216). The client falls back to SSE when a WebSocket
+# cannot connect, and looks for it under /djust/ ({% djust_client_config %}
+# emits the prefix). Both URLconf writers (URLS_PY and the --from-schema
+# writer in generator.py) route it, so every project serves a view over
+# WebSocket, SSE and the HTTP fallback.
+SSE_URL_IMPORT = "from djust.sse import sse_urlpatterns\n"
+SSE_URL_ROUTE = 'path("djust/", include(sse_urlpatterns))'
+SSE_URL_ENTRY = (
+    "    # djust's SSE transport: the client falls back to it when a WebSocket\n"
+    "    # cannot connect.\n"
+    "    %s,\n" % SSE_URL_ROUTE
+)
+
 URLS_PY = """\
 \"\"\"URL configuration for %(app_name)s project.\"\"\"
 
-%(admin_url_import)sfrom django.urls import %(urls_import)s
-
+%(admin_url_import)sfrom django.urls import include, path
+%(sse_url_import)s
 from .views import %(view_class)s
 
 urlpatterns = [
 %(admin_url)s    path("", %(view_class)s.as_view(), name="index"),
-%(theming_urls)s]
+%(theming_urls)s%(sse_url)s]
 %(extra_urls)s"""
 
 # ---------------------------------------------------------------------------

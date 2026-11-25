@@ -10,15 +10,25 @@ import sys
 from typing import TYPE_CHECKING, Any, Dict, FrozenSet, List, Optional, Tuple, cast
 
 from .._render_caches import render_caches_enabled
-from .._rust import extract_item_key_only_reads, extract_template_variables
+from .._rust import (
+    extract_item_key_only_reads,
+    extract_own_reads,
+    extract_printed_item_key_reads,
+    extract_template_variables,
+)
 from ..optimization.codegen import (
+    ALL_CHAIN_METHODS,
     all_methods_need_rows,
     all_row_cap,
     compile_serializer,
     generate_serializer_code,
 )
-from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-from ..serialization import model_identity, normalize_django_value
+from ..optimization.query_optimizer import (
+    analyze_queryset_optimization,
+    light_relation_parent_bound,
+    optimize_queryset,
+)
+from ..serialization import CalledName, model_identity, normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
 
 logger = logging.getLogger(__name__)
@@ -31,10 +41,14 @@ logger = logging.getLogger(__name__)
 _template_hash_cache: Dict[str, str] = {}
 _TEMPLATE_HASH_CACHE_MAX = 256
 
-# Cache (template_hash, variable_name, resolved sort keys) → expected top-level key count.
-# The resolved sort keys are part of the key because the path set depends on them
-# (``dictsort:<variable>``, #3910): a count cached for one key is wrong for the next.
-_expected_keys_cache: Dict[Tuple[str, str, Tuple[str, ...]], int] = {}
+
+def expected_row_keys(paths: List[str]) -> int:
+    """The top-level keys a row serialized by ``paths`` carries; a Rust row with fewer is rebuilt
+    through the codegen. Computed from the paths each time: the path set depends on the model,
+    the method reads and the resolved sort key (#3910, #4272), and a count cached per template
+    and name once stood for another path set."""
+    return len({path.split(".")[0] for path in paths})
+
 
 # Pre-compiled regex for {% include %} — handles normal and doubled quotes from Rust resolver
 _INCLUDE_RE = re.compile(
@@ -137,12 +151,28 @@ def is_internal_path(path: str) -> bool:
     )
 
 
+#: A relation's ``all`` read only for its length (``groups.all.__len__``,
+#: ``djust_templates::parser::LENGTH_PATH``, #3862 item 3).
+LENGTH_PATH = "__len__"
+
+
+def _public_path(path: str) -> str:
+    """``path`` as the template spells the read (#3862): a length read is a read of
+    the ``all`` (``groups.all``), and an index the serializers keep to slice by
+    (``groups.all.0.name``) names the same field as before (``groups.all.name``)."""
+    if path.endswith("." + LENGTH_PATH):
+        path = path[: -len(LENGTH_PATH) - 1]
+    if any(part.isdigit() for part in path.split(".")):
+        path = ".".join(part for part in path.split(".") if not part.isdigit())
+    return path
+
+
 def public_template_paths(found: Optional[dict]) -> Dict[str, List[str]]:
     """The extraction map with the JIT's internal paths taken out, for every reader
     that wants the names and paths a template reads (``template_paths``,
     ``djust_audit``). Every name stays, the ``"*"`` wildcard included."""
     return {
-        name: [path for path in paths if not is_internal_path(path)]
+        name: sorted({_public_path(path) for path in paths if not is_internal_path(path)})
         for name, paths in (found or {}).items()
     }
 
@@ -251,6 +281,296 @@ def _item_key_only_reads(template_content: str) -> dict:
         _item_key_only_cache.clear()
     _item_key_only_cache[content_hash] = result
     return result
+
+
+_printed_item_key_cache: Dict[str, dict] = {}
+
+
+def _printed_item_key_reads(template_content: str) -> dict:
+    """``extract_printed_item_key_reads`` by content hash, ``{}`` when it refuses (#4267)."""
+    content_hash = _template_hash(template_content)
+    try:
+        return _printed_item_key_cache[content_hash]
+    except KeyError:
+        pass
+    try:
+        result = dict(extract_printed_item_key_reads(template_content))
+    except Exception:  # noqa: BLE001 — the paths extraction refuses the same template
+        result = {}
+    if len(_printed_item_key_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
+        _printed_item_key_cache.clear()
+    _printed_item_key_cache[content_hash] = result
+    return result
+
+
+def _called_prefix(model_class: Any, key: str) -> Optional[str]:
+    """The leading part of sort key *key* that names a method of the row, if any (#4267).
+
+    ``get_username`` and ``get_username.upper`` both give ``get_username``; a relation's
+    rows are followed (``user_set.all.get_full_name``), and the manager itself
+    (``user_set`` before ``.all``) is a step, not a method key.
+    """
+    parts = key.split(".")
+    for end in range(1, len(parts) + 1):
+        if end < len(parts) and parts[end] == "all":
+            continue
+        prefix = ".".join(parts[:end])
+        if _names_a_callable(model_class, prefix):
+            return prefix
+    return None
+
+
+def called_sort_key_paths(
+    model_class: Any,
+    template_content: Optional[str],
+    variable_name: str,
+    key_variables: List[str] = (),  # type: ignore[assignment]
+    context: Any = None,
+    view: Any = None,
+) -> FrozenSet[str]:
+    """The row paths holding a called method that the template also sorts by (#4267).
+
+    A ``dictsort`` key the template also reads (``extract_printed_item_key_reads``), a dotted
+    key-only one, or the value of a ``dictsort:<variable>``, whose leading part names a method
+    of the row model.
+    Empty for every other template, which is what keeps their rows untouched.
+    """
+    if not template_content or model_class is None:
+        return frozenset()
+    keys = list(_paths_for_variable(_printed_item_key_reads(template_content), variable_name))
+    # A key-only path THROUGH a printed method (``dictsort:'get_username.upper'`` beside
+    # ``{{ u.get_username }}``): the row holds the method's part. A key-only method itself is
+    # not in the row (``drop_callable_sort_keys``), so filing it is a no-op.
+    keys.extend(
+        key
+        for key in _paths_for_variable(_item_key_only_reads(template_content), variable_name)
+        if "." in key
+    )
+    for variable in key_variables:
+        value = _lookup(context, variable) if context is not None else _MISSING
+        if value is _MISSING and view is not None:
+            value = _lookup(view, variable)
+        if isinstance(value, str) and value:
+            keys.append(value)
+    if not keys:
+        return frozenset()
+    found = (_called_prefix(model_class, key) for key in keys)
+    return frozenset(path for path in found if path)
+
+
+def _file_called_key(node: Any, parts: List[str]) -> None:
+    """Re-key ``parts[-1]`` of every row under ``parts`` as a :class:`CalledName`, in place
+    and in its place (a row keeps its key order)."""
+    if isinstance(node, list):
+        for item in node:
+            _file_called_key(item, parts)
+        return
+    if not isinstance(node, dict):
+        return
+    head = parts[0]
+    if len(parts) > 1:
+        _file_called_key(node.get(head), parts[1:])
+        return
+    if head not in node:
+        return
+    items = list(node.items())
+    node.clear()
+    node.update((CalledName(k) if k == head else k, v) for k, v in items)
+
+
+def mark_called_sort_keys(
+    rows: Any,
+    model_class: Any,
+    template_content: Optional[str],
+    variable_name: str,
+    key_variables: List[str] = (),  # type: ignore[assignment]
+    context: Any = None,
+    view: Any = None,
+) -> Any:
+    """*rows* with each :func:`called_sort_key_paths` key filed as a :class:`CalledName`.
+
+    One rule for every row producer (the Rust ``serialize_queryset``, the generated code,
+    the backend), applied to the rows they return, so they mark the same keys (#1646).
+    """
+    if not rows or not isinstance(rows, list):
+        return rows
+    paths = called_sort_key_paths(
+        model_class, template_content, variable_name, key_variables, context, view
+    )
+    for path in paths:
+        _file_called_key(rows, path.split("."))
+    return rows
+
+
+_queryset_method_roots_cache: Dict[str, FrozenSet[str]] = {}
+
+#: The methods a template reads directly off a top-level QuerySet that the render
+#: sidecar answers (:func:`queryset_method_roots`): the relation chain methods
+#: plus ``all`` (#4270), whose rows (``{% for u in users.all %}``) and methods
+#: (``{{ users.all.count }}``) the serialized row list cannot answer. Not
+#: ``ALL_CHAIN_METHODS`` itself: that names what a RELATION's ``all`` is read
+#: through, and its Rust twin depends on it.
+QUERYSET_ROOT_METHODS = ALL_CHAIN_METHODS + ("all",)
+
+
+def queryset_method_roots(template_content: Optional[str]) -> FrozenSet[str]:
+    """Context names the template reads ``count`` / ``exists`` / ``first`` /
+    ``last`` / ``all`` directly off (#4241, #4258, #4270;
+    :data:`QUERYSET_ROOT_METHODS`).
+
+    Read from ``extract_own_reads``, which does not file a ``{% for %}`` loop
+    row's reads under the iterable: ``{% for o in qs %}{{ o.first }}`` reads
+    ``first`` off a row, not off ``qs``, and must not make the QuerySet (and so
+    ``{{ qs.query }}``) reachable through the render sidecar. A ``{% with %}``
+    alias of the QuerySet still counts, since the alias is the value. A loop
+    variable that shadows a context name still counts for that name (the
+    extractor has no scoping). Cached per template hash; an empty or
+    unparseable template reads nothing (fail closed: no capture).
+    """
+    if not template_content:
+        return frozenset()
+    content_hash = _template_hash(template_content)
+    # One lookup, not `in` then `[]` (#3074).
+    try:
+        return _queryset_method_roots_cache[content_hash]
+    except KeyError:
+        pass
+    try:
+        own_reads = extract_own_reads(template_content)
+    except Exception:  # noqa: BLE001 -- an unparseable template reads nothing
+        logger.debug("extract_own_reads refused the template; no QuerySet capture")
+        own_reads = {}
+    methods = set(QUERYSET_ROOT_METHODS)
+    result = frozenset(
+        root
+        for root, paths in own_reads.items()
+        if any(path.split(".")[0] in methods for path in paths)
+    )
+    if len(_queryset_method_roots_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
+        _queryset_method_roots_cache.clear()
+    _queryset_method_roots_cache[content_hash] = result
+    return result
+
+
+def _method_root_row_paths(model_class: Any, paths: List[str]) -> List[str]:
+    """``paths`` without the ones a QuerySet METHOD answers (#4272), ``all.x`` read as ``x``.
+
+    ``{{ qs.count }}`` / ``.exists`` / ``.first.x`` / ``.last.x`` read off a
+    top-level QuerySet file ``count`` / ``first.x`` beside the row paths, but
+    the render sidecar answers them (:func:`queryset_method_roots`), not the
+    rows. Left in, they made each row one key short of what the Rust
+    serializer ships, which sent every row through the codegen fallback (and
+    a forward FK read whole through ``normalize_django_value``, which
+    auto-calls the related model's ``get_*`` methods: one query per row). A
+    model attribute of the same name is a row read and stays (the same rule
+    as Rust ``all_is_read_through_methods``).
+    """
+    kept = []
+    for path in paths:
+        head, _, rest = path.partition(".")
+        if head == "all" and not hasattr(model_class, head):
+            # ``{% for u in users.all %}{{ u.x }}`` reads ``x`` off the same rows (#4270).
+            if not rest:
+                continue
+            path = rest
+            head, _, rest = path.partition(".")
+            # ``all.1.username`` / ``all.__len__`` (#3862): an index or a length read
+            # of the QuerySet's own ``all`` is answered from its rows too (#4326).
+            if head.isdigit():
+                if not rest:
+                    continue
+                path = rest
+                head, _, rest = path.partition(".")
+            if path == LENGTH_PATH:
+                continue
+        if head in ALL_CHAIN_METHODS and not hasattr(model_class, head):
+            continue
+        kept.append(path)
+    return kept
+
+
+_queryset_row_walk_cache: Dict[str, Dict[str, FrozenSet[str]]] = {}
+
+
+def queryset_row_walk_paths(template_content: Optional[str]) -> Dict[str, FrozenSet[str]]:
+    """The paths the template reads off each context name, row reads included
+    (#4069).
+
+    ``extract_template_variables`` files a ``{% for u in users %}`` loop row's
+    reads under the iterable (``users: groups.all``) and drops numeric index
+    segments (``users.0.groups.all`` -> ``groups.all``). An explicit view's
+    native render uses it to decide which supplied QuerySet / model list must
+    keep its evaluated rows for the render sidecar: a relation walk off a row
+    (``u.groups.all``, ``u.groups.count``, ``{{ u.groups }}``) is answered only
+    by a live row, never by the serialized column dict. Cached per template
+    hash; an empty or unparseable template reads nothing (fail closed: no
+    capture).
+
+    The names a ``dictsort`` / ``dictsortreversed`` key reads (and no field
+    beside it) are unioned in (#4264): ``{% for u in users|dictsort:'get_username' %}{{ u }}``
+    files ``users: []`` in the extractor, the key being settled away, yet the key
+    is a method Django never calls. Only the JIT drops it
+    (``whole_rows_without_callable_sort_keys``), so the name has to reach
+    ``rows_need_live_walk``.
+    """
+    if not template_content:
+        return {}
+    content_hash = _template_hash(template_content)
+    try:
+        return _queryset_row_walk_cache[content_hash]
+    except KeyError:
+        pass
+    try:
+        variables = extract_template_variables(template_content)
+    except Exception:  # noqa: BLE001 -- an unparseable template reads nothing
+        logger.debug("extract_template_variables refused the template; no row capture")
+        variables = {}
+    result = {root: frozenset(p for p in paths if p) for root, paths in variables.items() if paths}
+    # A cached frozenset is never mutated: each union builds a new one (#4264).
+    for root, keys in _item_key_only_reads(template_content).items():
+        named = frozenset(k for k in keys if k)
+        if named:
+            result[root] = result.get(root, frozenset()) | named
+    if len(_queryset_row_walk_cache) >= _VARIABLE_EXTRACTION_CACHE_MAX:
+        _queryset_row_walk_cache.clear()
+    _queryset_row_walk_cache[content_hash] = result
+    return result
+
+
+def rows_need_live_walk(model_class: Any, paths: FrozenSet[str], context: Any = None) -> bool:
+    """Does any of *paths* walk past a row's serialized columns (#4069)?
+
+    A path of two or more parts (``groups.all``, ``profile.name``) does; so
+    does a single part that names a related manager or a method of the row
+    model (``{{ u.groups }}``, ``{{ u.get_full_name }}``), read off the class
+    without calling anything. A plain column (``username``) does not.
+
+    A variable sort key (``dictsort:key``, filed as ``*key``) is named at
+    render time (#4264). With *context* in hand it is resolved as the JIT
+    resolves it (``_lookup``) and walks only when its value is a dotted path or
+    names a callable of the row model: the JIT then drops a callable key
+    (``whole_rows_without_callable_sort_keys``, #3919) where the normalized
+    whole row would sort by the called value. A column or a property value
+    stays on the normalized rows (Django sorts by it, and the JIT row carries a
+    column only, #3910), as does a value that is missing or not text. With no
+    *context* the name cannot be resolved and walks, to be safe.
+    """
+    for path in paths:
+        if path.startswith(VARIABLE_KEY_PREFIX):
+            if context is None:
+                return True
+            value = _lookup(context, path[len(VARIABLE_KEY_PREFIX) :])
+            if isinstance(value, str) and value:
+                if "." in value or (
+                    model_class is not None and _names_a_callable(model_class, value)
+                ):
+                    return True
+            continue
+        if "." in path:
+            return True
+        if model_class is not None and _names_a_callable(model_class, path):
+            return True
+    return False
 
 
 def _many_relation_model(model_class: Any, name: str) -> Any:
@@ -420,12 +740,31 @@ _template_source_cache: Dict[Tuple[str, str, Tuple[str, ...]], str] = {}
 _TEMPLATE_SOURCE_CACHE_MAX = 256
 
 
+#: Whether a template's page shell could mount a child view, by template name, dirs
+#: and the project's child-free libraries (``runtime._page_shell_may_register_children``,
+#: #4295, #4298).
+_shell_children_cache: Dict[Tuple[str, Tuple[str, ...], Tuple[str, ...]], bool] = {}
+_SHELL_CHILDREN_CACHE_MAX = 256
+
+
+#: ``TemplateMixin.get_template()``'s result and the attributes it sets, by view
+#: class, ``template_name``, dirs and template text (#4299):
+#: ``(result, ((attr, value), ...))``.
+_get_template_cache: Dict[
+    Tuple[Any, str, Tuple[str, ...], str], Tuple[str, Tuple[Tuple[str, Any], ...]]
+] = {}
+_GET_TEMPLATE_CACHE_MAX = 256
+
+
 def clear_template_source_caches() -> None:
     """Forget every cached extraction source, hash and variable map."""
     _template_source_cache.clear()
+    _get_template_cache.clear()
+    _shell_children_cache.clear()
     _template_hash_cache.clear()
     _variable_extraction_cache.clear()
     _item_key_only_cache.clear()
+    _printed_item_key_cache.clear()
 
 
 def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]]:
@@ -464,7 +803,7 @@ def _template_source_key(view: Any) -> Optional[Tuple[str, str, Tuple[str, ...]]
     return (kind, ident, tuple(get_template_dirs()))
 
 
-def keep_rows_for_all_methods(view: Any, name: str, rows: List[Any]) -> None:
+def keep_rows_for_all_methods(view: Any, name: str, rows: Any) -> None:
     """Remember the evaluated rows of a top-level context value whose template
     reads a relation both as rows and through a QuerySet method (#3801).
 
@@ -474,10 +813,159 @@ def keep_rows_for_all_methods(view: Any, name: str, rows: List[Any]) -> None:
     (``_sync_state_to_rust``) holds them under the context name, and the engine's
     guarded getattr walk -- the one ``DjustTemplateBackend`` renders through, with
     its ``alters_data`` / ``do_not_call_in_templates`` refusals and the
-    serialization floor -- reads ``users.N.groups.all.count`` from them. Written
+    serialization floor -- reads ``users.N.groups.all.count`` from them. It also
+    holds an evaluated top-level QuerySet whose template reads one of its methods
+    (``{{ qs.count }}``, #4241); its filled result cache answers it. Written
     to ``__dict__`` so it is not state; ``get_context_data`` resets it per render.
+
+    An evaluated QuerySet is held as :func:`held_evaluated_queryset`, so
+    ``{{ qs.all.count }}`` and ``{% for u in qs.all %}`` answer from the rows
+    already fetched (#4270 review).
     """
+    if _answers_all_from_its_rows(rows):
+        rows = held_evaluated_queryset(rows)
     view.__dict__.setdefault("_all_method_rows", {})[name] = rows
+
+
+def _keep_nested_evaluated(view: Any, original: Any, evaluated: Any, fetch: bool = True) -> None:
+    """Remember the evaluated twin of a QuerySet inside a container (#4326), by the
+    identity of the caller's QuerySet, for :func:`nested_raw_twin`. Dropped once the
+    twins are built (:func:`drop_nested_evaluated`). ``fetch=False``: the template reads
+    only ``count`` / ``exists`` off it (:func:`_reads_no_rows`), so the twin is the
+    QuerySet itself and the sidecar runs the one ``COUNT`` / ``EXISTS`` Django would."""
+    if not fetch:
+        twin = evaluated
+    else:
+        if not _answers_all_from_its_rows(evaluated):
+            list(evaluated)
+        twin = held_evaluated_queryset(evaluated)
+    view.__dict__.setdefault("_all_method_rows", {}).setdefault(_NESTED_EVALUATED, {})[
+        id(original)
+    ] = (original, twin)
+
+
+#: QuerySet methods (on the QuerySet or on its ``all``) answered by one query that
+#: reads no rows: ``{{ d.users.count }}`` is a ``COUNT``, not a fetch of every row.
+_NO_ROW_METHODS = frozenset({"count", "exists", "all.count", "all.exists"})
+
+
+def _reads_no_rows(model_class: Any, paths: List[str]) -> bool:
+    """Is every one of ``paths`` a no-row method read (:data:`_NO_ROW_METHODS`), not a
+    model attribute of the same name (#4326 review)?"""
+    return bool(paths) and all(
+        path in _NO_ROW_METHODS and not hasattr(model_class, path.split(".", 1)[0])
+        for path in paths
+    )
+
+
+#: The ``_all_method_rows`` slot that holds :func:`_keep_nested_evaluated`'s twins. Not a
+#: context name (a template name cannot start with ``_``), so the sidecar never ships it.
+_NESTED_EVALUATED = "__djust_nested_evaluated__"
+#: The ``_all_method_rows`` slot naming the containers :func:`nested_raw_twin` held, so
+#: :func:`drop_nested_twins` can clear them on a render that skips the per-render reset.
+_NESTED_TWINS = "__djust_nested_twins__"
+
+
+def nested_raw_twin(view: Any, name: str, container: Any) -> None:
+    """Hold a raw twin of the top-level ``container`` for the render sidecar (#4326).
+
+    ``{"d": {"users": qs}}`` with ``{{ d.users.all|length }}``, or
+    ``{{ x.groups.all.count }}`` beside ``{% for g in x.groups.all %}`` over
+    ``d.users``: the container ships with the QuerySet serialized to a list, which
+    answers neither ``all`` nor a relation method. The twin is a copy of the
+    container's dicts and lists with each such QuerySet replaced by its EVALUATED
+    clone (:func:`held_evaluated_queryset`), so the sidecar walk answers from the
+    rows the JIT already fetched, with no second query. Only a container that holds
+    one is kept; the eager value still wins every path it can answer.
+    """
+    kept = view.__dict__.get("_all_method_rows")
+    if kept is None:
+        return
+    # ``name`` holds a container this render, so any rows under it are stale.
+    kept.pop(name, None)
+    held = kept.get(_NESTED_EVALUATED) or {}
+    if not held:
+        return
+    found = [False]
+
+    def twin(value: Any) -> Any:
+        hit = held.get(id(value))
+        if hit is not None and hit[0] is value:
+            found[0] = True
+            return hit[1]
+        if type(value) is dict:
+            return {k: twin(v) for k, v in value.items()}
+        if type(value) is list:
+            return [twin(v) for v in value]
+        return value
+
+    copied = twin(container)
+    if found[0]:
+        kept[name] = copied
+        kept.setdefault(_NESTED_TWINS, set()).add(name)
+
+
+def drop_nested_twins(view: Any) -> None:
+    """Drop the container twins an earlier render held (#4326 review). A render on a
+    ``preloaded_context`` skips the per-render reset of ``_all_method_rows``, so a twin
+    for a name that no longer holds a method-read QuerySet would answer from stale rows.
+    Called before this render's container walk, which holds this render's twins again."""
+    kept = view.__dict__.get("_all_method_rows")
+    if not kept:
+        return
+    for name in kept.pop(_NESTED_TWINS, ()):
+        kept.pop(name, None)
+    kept.pop(_NESTED_EVALUATED, None)
+
+
+def drop_nested_evaluated(view: Any) -> None:
+    """Forget :func:`_keep_nested_evaluated`'s QuerySets once every container's twin is
+    built (#4326), so none outlives its render, even one on a ``preloaded_context``."""
+    kept = view.__dict__.get("_all_method_rows")
+    if kept:
+        kept.pop(_NESTED_EVALUATED, None)
+
+
+def _method_read_identity_rows(view: Any, queryset: Any, name: str) -> List[Any]:
+    """The rows of a QuerySet the template reads only through its methods (``{{ qs.count }}``,
+    ``{% for u in qs.all %}{{ u }}``, #4272/#4270 review): the sidecar answers every read, so
+    each row ships as its identity map (its text, no column, no auto-called ``get_*``), with no
+    serializer built per render. The evaluated QuerySet goes to the sidecar."""
+    items = list(queryset)
+    keep_rows_for_all_methods(view, name, queryset)
+    return [model_identity(item) for item in items]
+
+
+def _itself(value: Any) -> Any:
+    return value
+
+
+def _answers_all_from_its_rows(rows: Any) -> bool:
+    """An evaluated QuerySet's ``all()`` is answered from its fetched rows (#4270 review). The
+    gate the sidecar capture asks."""
+    from django.db.models import QuerySet
+
+    return isinstance(rows, QuerySet) and rows._result_cache is not None
+
+
+def held_evaluated_queryset(queryset: Any) -> Any:
+    """A clone of an EVALUATED ``queryset`` whose ``all()`` is itself (#4270 review).
+
+    Django's ``all()`` is an unevaluated clone, so ``{% for u in users.all %}``
+    re-ran the SELECT the JIT had just run, and lost its prefetched relations
+    (``u.groups.all`` then queried per row). The clone shares the fetched rows
+    (with their prefetch caches) and is never the caller's state QuerySet, which
+    is not mutated. Every other method (``count``, ``exists``, a slice) already
+    answers from a filled result cache as Django's does.
+    """
+    import functools
+
+    held = queryset._chain()
+    held._result_cache = queryset._result_cache
+    held._prefetch_done = queryset._prefetch_done
+    # An instance attribute: ``_chain()`` never copies it, so only this clone answers so.
+    held.all = functools.partial(_itself, held)
+    return held
 
 
 def _jit_template_content(view: Any) -> Optional[str]:
@@ -931,7 +1419,10 @@ class JITMixin:
         Use it with :meth:`serialize_for_template` to hand the template a value
         that is not a model.
         """
-        content = self._get_template_content()
+        # The cached source every internal caller reads (#4294): with render
+        # caches on, a ``get_context_data()`` that calls this per key must not
+        # re-resolve the inheritance and re-inline every include each time.
+        content = _jit_template_content(self)
         if not content:
             return {}
         found = public_template_paths(_cached_extract_template_variables(content))
@@ -965,7 +1456,7 @@ class JITMixin:
 
         from ..utils import is_model_list
 
-        content = self._get_template_content() or ""
+        content = _jit_template_content(self) or ""  # cached, as template_paths (#4294)
         if isinstance(value, QuerySet):
             return self._jit_serialize_queryset(value, content, name)
         if isinstance(value, models.Model):
@@ -1051,10 +1542,13 @@ class JITMixin:
             # section, or comment may contain include-looking literal text.
             from django.template.base import DebugLexer, TokenType
             from .._rust import raw_block_end_tag
+            from ..components.rust_handlers import RAW_BODY_SEGMENT_TAGS, RAW_BODY_TAGS
 
             replacements = []
             in_comment = False
             raw_end = None
+            # Open raw-body tags that have separator tokens (``split_pane``/``pane``).
+            segment_stack: list = []
             for token in DebugLexer(content).tokenize():
                 if token.token_type != TokenType.BLOCK:
                     continue
@@ -1070,7 +1564,16 @@ class JITMixin:
                 elif bits[0] == "endcomment":
                     in_comment = False
                 elif not in_comment:
-                    raw_end = raw_block_end_tag(bits[0])
+                    # Component bodies (``tabs``, ``split_pane``) are template source rendered
+                    # with the same context: descend into them. Every other raw tag keeps its skip.
+                    raw_end = None if bits[0] in RAW_BODY_TAGS else raw_block_end_tag(bits[0])
+                    if bits[0] in RAW_BODY_SEGMENT_TAGS:
+                        segment_stack.append(bits[0])
+                    elif segment_stack and bits[0] == "end" + segment_stack[-1]:
+                        segment_stack.pop()
+                    elif segment_stack and bits[0] == RAW_BODY_SEGMENT_TAGS[segment_stack[-1]]:
+                        # Not a tag outside its parent, so the extractor cannot parse it.
+                        replacements.append((token.position, ""))
                     if bits[0] == "include":
                         start, end = token.position
                         match = _INCLUDE_RE.fullmatch(content[start:end])
@@ -1111,6 +1614,35 @@ class JITMixin:
             paths_for_var, key_variables = split_variable_keys(
                 _paths_for_variable(variable_paths_map, variable_name)
             )
+            original_queryset = queryset
+            # A QuerySet inside a container (``d.users``) whose own ``all`` /
+            # ``count`` / ... the template reads, or a relation of its rows read as
+            # rows AND through a method (#4326): the serialized list answers neither,
+            # so the evaluated QuerySet is kept for the container's raw twin
+            # (:func:`nested_raw_twin`), which the render sidecar walks.
+            nested_method_read = False
+            if "." in variable_name:
+                row_paths = _method_root_row_paths(queryset.model, paths_for_var)
+                nested_method_read = row_paths != paths_for_var or all_methods_need_rows(
+                    queryset.model, row_paths
+                )
+                if paths_for_var and not row_paths and not key_variables and not recursive_relation:
+                    root, _, rest = variable_name.partition(".")
+                    if _reads_no_rows(queryset.model, paths_for_var) and rest not in (
+                        (variable_paths_map or {}).get(root) or ()
+                    ):
+                        # Only ``count`` / ``exists``: no row is fetched (#4326 review).
+                        _keep_nested_evaluated(self, original_queryset, queryset, fetch=False)
+                        return []
+                    items = list(queryset)
+                    _keep_nested_evaluated(self, original_queryset, queryset)
+                    return [model_identity(item) for item in items]
+                paths_for_var = row_paths
+            elif variable_name in queryset_method_roots(template_content):
+                row_paths = _method_root_row_paths(queryset.model, paths_for_var)
+                if paths_for_var and not row_paths and not key_variables and not recursive_relation:
+                    return _method_read_identity_rows(self, queryset, variable_name)
+                paths_for_var = row_paths
             # Only beside field reads: rows read whole carry every column already.
             sort_keys = (
                 resolve_variable_keys(key_variables, context, queryset.model, self)
@@ -1138,7 +1670,10 @@ class JITMixin:
             model_hash = _get_model_hash(model_class)
             # The resolved sort key is part of the key: a key that changes between
             # renders builds (and caches) its own path set (#3910).
-            cache_key = (template_hash, variable_name, model_hash, tuple(sort_keys))
+            # A QuerySet sliced to a few rows reads a lightly-read relation per row
+            # instead of prefetching it (#4326): its own cache slot.
+            per_parent = light_relation_parent_bound(queryset)
+            cache_key = (template_hash, variable_name, model_hash, tuple(sort_keys), per_parent)
 
             if cache_key in _jit_serializer_cache:
                 paths_for_var, optimization = _jit_serializer_cache[cache_key]
@@ -1148,7 +1683,9 @@ class JITMixin:
                     paths_for_var,
                 )
             else:
-                optimization = analyze_queryset_optimization(model_class, paths_for_var)
+                optimization = analyze_queryset_optimization(
+                    model_class, paths_for_var, per_parent_light_reads=per_parent
+                )
 
                 logger.debug(
                     "[JIT] Cache MISS for '%s' (%s) - generating serializer for paths: %s",
@@ -1185,15 +1722,30 @@ class JITMixin:
             result = serialize_queryset(items, paths_for_var, all_row_cap())
             if "." not in variable_name and all_methods_need_rows(model_class, paths_for_var):
                 keep_rows_for_all_methods(self, variable_name, items)
+            if nested_method_read:
+                _keep_nested_evaluated(self, original_queryset, queryset)
+            # #4241: ``{{ qs.count }}`` / ``.exists`` / ``.first`` / ``.last`` on a
+            # top-level QuerySet. The rows ship as a list, which cannot answer
+            # the method (``list.count`` needs an argument in Django too), so the
+            # evaluated QuerySet itself goes to the render sidecar. Its
+            # ``_result_cache`` is full (``items = list(queryset)`` above), so
+            # ``count`` / ``exists`` answer from the fetched rows with no extra
+            # query. ``first`` / ``last`` are Django's own methods and query as
+            # Django does: ``last`` always, ``first`` on an unordered QuerySet. Pass
+            # ``queryset`` -- the evaluated (possibly optimize_queryset-cloned)
+            # object -- not the caller's unevaluated one. The method must be
+            # read on the QuerySet's own name (#4258): a loop row field named
+            # like a method (``{% for o in qs %}{{ o.first }}``) is filed under
+            # ``qs`` in ``paths_for_var`` too, and holding the QuerySet for it
+            # made ``{{ qs.query }}`` reachable through the sidecar.
+            if "." not in variable_name and variable_name in queryset_method_roots(
+                template_content
+            ):
+                keep_rows_for_all_methods(self, variable_name, queryset)
 
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)
-            ek_cache_key = (template_hash, variable_name, tuple(sort_keys))
-            if ek_cache_key not in _expected_keys_cache:
-                _expected_keys_cache[ek_cache_key] = len(
-                    set(p.split(".")[0] for p in paths_for_var)
-                )
-            expected_keys = _expected_keys_cache[ek_cache_key]
+            expected_keys = expected_row_keys(paths_for_var)
             if result and len(result[0]) < expected_keys:
                 # Heuristic: if the first item has fewer top-level keys than expected,
                 # Rust likely can't access some paths (e.g. @property). A nullable FK
@@ -1235,7 +1787,18 @@ class JITMixin:
                 )
                 if result:
                     logger.debug("[JIT DEBUG] First item keys: %s", list(result[0].keys()))
-            return result
+            return cast(
+                List[Any],
+                mark_called_sort_keys(
+                    result,
+                    model_class,
+                    template_content,
+                    variable_name,
+                    key_variables,
+                    context,
+                    self,
+                ),
+            )
 
         except Exception as e:
             # Raises (2.0); it used to log and re-serialize every row through
@@ -1304,7 +1867,12 @@ class JITMixin:
                 ),
                 initial_caches,
             )
-        return rows
+        return cast(
+            List[Any],
+            mark_called_sort_keys(
+                rows, model_class, template_content, variable_name, key_variables, context, self
+            ),
+        )
 
     def _jit_serialize_model(
         self,

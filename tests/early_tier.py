@@ -53,6 +53,10 @@ MAKEFILE = "Makefile"
 #: variable: a test that runs pytest in a subprocess must not inherit it (xdist passes options on
 #: to its workers).
 EARLY_ONLY_OPTION = "--early-only"
+#: With ``--early-only``: also keep every test under this node-id prefix (repeatable). The pre-push
+#: hook's bounded fallback (#4253) passes its direct selection here, so a FULL answer runs the
+#: early tier plus the files the change names, in one guard-exempt run.
+EARLY_INCLUDE_OPTION = "--early-include"
 #: Changed paths as ``git diff --name-status --no-renames`` lines (``A\tpath``), one per line, in
 #: a file (CI writes it from the PR's diff) or inline (tests, reproductions). Neither set, the
 #: local default is git (see ``changed_status``).
@@ -312,6 +316,7 @@ class EarlyTier:
     ledger: frozenset[str]
     rule_prefixes: dict[str, str]
     only: bool
+    include: tuple[str, ...] = ()
 
     def reason(self, item: pytest.Item) -> str | None:
         """Why this item is early (ledger or a path rule), or None."""
@@ -337,6 +342,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=False,
         help="run only the early tier: promotion-ledger entries, pr_tier tests, path-rule pins",
     )
+    parser.addoption(
+        EARLY_INCLUDE_OPTION,
+        action="append",
+        default=[],
+        metavar="NODEID_PREFIX",
+        help="with --early-only, also keep every test under this file/node-id prefix (repeatable)",
+    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -354,7 +366,12 @@ def early_tier(config: pytest.Config) -> EarlyTier:
         # a full run already runs every pin, and need not ask git anything.
         wants_rules = only or _excludes_slow(config.option.markexpr or "")
         prefixes = selected_by_rules(rootpath, changed_status(rootpath)) if wants_rules else {}
-        found = EarlyTier(ledger=ledger_keys(rootpath), rule_prefixes=prefixes, only=only)
+        include = tuple(
+            _norm(p).rstrip("/") for p in (getattr(config.option, "early_include", None) or [])
+        )
+        found = EarlyTier(
+            ledger=ledger_keys(rootpath), rule_prefixes=prefixes, only=only, include=include
+        )
         config.stash[_KEY] = found
     return found
 
@@ -379,6 +396,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         return
     keep, drop = [], []
     for item in items:
+        # A directly selected file is kept whole (sweeps included): it is what the change names.
+        if any(_under(item.nodeid, p) for p in tier.include):
+            keep.append(item)
+            continue
         reason = tier.reason(item)
         early = item.get_closest_marker("pr_tier") is not None or reason == "promotion ledger"
         # A rule selects whole files; an exhaustive sweep in one is already sampled on every PR
@@ -392,14 +413,20 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         items[:] = keep
 
 
+def _under(nodeid: str, prefix: str) -> bool:
+    """``nodeid`` is ``prefix`` itself, a test under it, or in a directory it names."""
+    return matches_prefix(nodeid, prefix) or nodeid.startswith(prefix + "/")
+
+
 def pytest_report_header(config: pytest.Config) -> str | None:
     tier = config.stash.get(_KEY, None)
     if tier is None or not (tier.ledger or tier.rule_prefixes or tier.only):
         return None
     rules = sorted(set(tier.rule_prefixes.values()))
-    return "early tier: %d ledger entr%s, path rules fired: %s%s" % (
+    return "early tier: %d ledger entr%s, path rules fired: %s%s%s" % (
         len(tier.ledger),
         "y" if len(tier.ledger) == 1 else "ies",
         ", ".join(rules) or "none",
         " (early tier only)" if tier.only else "",
+        " + %d direct file(s)" % len(tier.include) if tier.include else "",
     )

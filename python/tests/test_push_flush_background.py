@@ -1,6 +1,6 @@
 """Tests for push event flushing in @background tasks (#693).
 
-Verifies that ``_flush_pending_push_events()`` / ``flush_push_events()``
+Verifies that ``flush_push_events()``
 correctly flushes queued push events mid-task through the view's
 ``_ws_consumer``, and is a safe no-op otherwise.
 """
@@ -32,7 +32,7 @@ class _View(PushEventMixin):
 
 
 class TestFlushPushEvents:
-    """Tests for the flush_push_events / _flush_pending_push_events API."""
+    """Tests for the flush_push_events API."""
 
     @pytest.mark.asyncio
     async def test_flush_sends_queued_events_via_callback(self):
@@ -82,20 +82,6 @@ class TestFlushPushEvents:
         view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
         await view.flush_push_events()
         assert len(called) == 0
-
-    @pytest.mark.asyncio
-    async def test_private_alias_calls_public(self):
-        """_flush_pending_push_events delegates to flush_push_events."""
-        view = _View()
-        flushed = []
-
-        async def fake_flush():
-            flushed.extend(view._drain_push_events())
-
-        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
-        view.push_event("test", {})
-        await view._flush_pending_push_events()
-        assert len(flushed) == 1
 
     @pytest.mark.asyncio
     async def test_multiple_flushes_accumulate(self):
@@ -154,7 +140,7 @@ class TestTutorialMixinFlush:
 
     @pytest.mark.asyncio
     async def test_run_step_flushes_setup_commands(self):
-        """_run_step calls _flush_pending_push_events after the setup chain."""
+        """_run_step calls flush_push_events after the setup chain."""
         from djust.mixins.waiters import WaiterMixin
         from djust.tutorials import TutorialMixin, TutorialStep
 
@@ -193,3 +179,82 @@ class TestTutorialMixinFlush:
         # First flush should contain the setup chain (highlight + narrate + focus)
         assert len(flush_calls[0]) > 0
         assert flush_calls[0][0][0] == "djust:exec"
+
+
+# ---------------------------------------------------------------------------
+# Tests: SSE transport (#4256)
+# ---------------------------------------------------------------------------
+
+
+class _FakeSSESession:
+    """A stand-in SSE session whose runtime transport records sent frames."""
+
+    def __init__(self, view):
+        self.sent = []
+        self.view_instance = view
+
+        async def send(data):
+            self.sent.append(data)
+
+        self.runtime = SimpleNamespace(transport=SimpleNamespace(send=send))
+
+
+class TestFlushPushEventsOverSSE:
+    @pytest.mark.asyncio
+    async def test_sse_flush_drains_and_sends_in_order(self):
+        view = _View()
+        session = _FakeSSESession(view)
+        view._sse_session = session
+        view.push_event("step", {"n": 1})
+        view.push_event("step", {"n": 2})
+
+        await view.flush_push_events()
+
+        assert session.sent == [
+            {"type": "push_event", "event": "step", "payload": {"n": 1}},
+            {"type": "push_event", "event": "step", "payload": {"n": 2}},
+        ]
+        assert view._pending_push_events == []
+        # A second flush (e.g. the turn end) has nothing left: no double send.
+        await view.flush_push_events()
+        assert len(session.sent) == 2
+
+    @pytest.mark.asyncio
+    async def test_sse_flush_skips_a_view_the_session_no_longer_serves(self):
+        view = _View()
+        session = _FakeSSESession(object())  # replaced by a live_redirect
+        view._sse_session = session
+        view.push_event("step", {"n": 1})
+
+        await view.flush_push_events()
+
+        assert session.sent == []
+        assert len(view._pending_push_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_websocket_consumer_wins_over_sse_session(self):
+        view = _View()
+        session = _FakeSSESession(view)
+        view._sse_session = session
+        flushed = []
+
+        async def fake_flush():
+            flushed.extend(view._drain_push_events())
+
+        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
+        view.push_event("step", {"n": 1})
+
+        await view.flush_push_events()
+
+        assert flushed == [("step", {"n": 1})]
+        assert session.sent == []
+
+    @pytest.mark.asyncio
+    async def test_http_fallback_keeps_events_for_the_post_response(self):
+        """No WS, no SSE: flush leaves the queue for the HTTP response drain."""
+        view = _View()
+        view.push_event("flash", {"m": "hi"})
+
+        await view.flush_push_events()
+
+        assert view._drain_push_events() == [("flash", {"m": "hi"})]

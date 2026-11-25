@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     "djust_tests",  # Test views
     "djust_docs",  # Documentation views
     "djust_rentals",  # Rental property management app
+    "djust_workflow",  # Incremental Django workflow (#3659)
     "sticky_demo",  # Sticky LiveViews / app-shell demo (#1784)
     # Old app (will be phased out)
     "demo_app",
@@ -147,13 +148,6 @@ LIVEVIEW_CONFIG = {
     "use_websocket": True,  # Use HTTP-only mode (disable WebSocket)
     "debug_vdom": False,  # Enable detailed VDOM patch logging
 }
-# Re-check a login_required / permission_required view's authority on every event.
-# Absent by default (the key must not exist, so tests can set it themselves);
-# tests/playwright/test_multi_view_refusal.py starts the demo server with
-# DJUST_DEMO_REAUTH_ON_EVENT=1 to revoke a user's permission mid-session.
-if os.environ.get("DJUST_DEMO_REAUTH_ON_EVENT") == "1":
-    LIVEVIEW_CONFIG["reauth_on_event"] = True
-
 # Security: Whitelist allowed modules for LiveView
 # Only views from these modules can be mounted via WebSocket
 LIVEVIEW_ALLOWED_MODULES = [
@@ -165,6 +159,7 @@ LIVEVIEW_ALLOWED_MODULES = [
     "djust_shared.views",
     "djust_rentals.views",
     "djust_tests.views",
+    "djust_workflow.views",
     "sticky_demo.views",
     # djust's own routed LiveViews (the admin extension at /djust-admin-demo/).
     # An explicit list replaces the default that admits them (check V015).
@@ -209,7 +204,11 @@ if os.environ.get("DJUST_DEMO_LOG_CONSOLE") == "1":
         "version": 1,
         "disable_existing_loggers": False,
         "handlers": {"console": {"class": "logging.StreamHandler"}},
-        "loggers": {"djust": {"handlers": ["console"], "level": "DEBUG", "propagate": False}},
+        "loggers": {
+            "djust": {"handlers": ["console"], "level": "DEBUG", "propagate": False},
+            # The E5 matrix's log control (djust_demos.views.exposure_demo).
+            "djust_demos": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        },
     }
 
 

@@ -27,7 +27,9 @@ from djust.decorators import cache, event_handler, rate_limit, state
 from djust.tests import http_fallback_matrix as matrix
 from djust.tests.http_fallback_matrix import PAGE, answer_kind, meta_digest, post_event
 
-pytestmark = [pytest.mark.django_db(transaction=True)]
+pytestmark = [
+    pytest.mark.django_db(transaction=True),
+]
 
 #: Today a view's saved state is shared by every tab of a session on a route,
 #: so one tab's event makes the other tab's digest stale. When saved state
@@ -872,11 +874,25 @@ def test_a_view_whose_render_consumes_its_rows_is_not_pre_rendered(renders, url,
     assert "patches" not in answer and answer["version"] == 1
 
 
-def test_a_client_owned_region_in_the_render_selects_the_whole_page(renders):
+def test_an_ignored_region_the_patches_do_not_touch_keeps_the_patch_answer(renders):
+    """#4283: a ``dj-update="ignore"`` element is opaque to the shape; a change
+    elsewhere on the page is still answered with patches."""
     client, digest = _open("/p/ignored/")
     answer, count = _counted(renders, client, "/p/ignored/", "increment", digest)
     assert count == 2
-    assert _is_whole_page_of(answer, ">1</b>")
+    assert answer["patches"] == [{"type": "SetText", "path": [1, 1, 0], "text": "1"}]
+
+
+def test_an_append_region_in_the_render_selects_the_whole_page(renders, monkeypatch):
+    """A ``dj-update="append"`` container still selects the whole page (#4283)."""
+    from djust import _http_fallback_baseline
+
+    # Streams are not pre-rendered at all; let the render reach the shape check.
+    monkeypatch.setattr(_http_fallback_baseline, "_consumed_by_a_render", lambda view: False)
+    client, digest = _open("/p/streamed/")
+    answer, count = _counted(renders, client, "/p/streamed/", "increment", digest)
+    assert count == 2
+    assert "patches" not in answer and answer["version"] == 1
 
 
 def _without_child_numbers(answer: dict) -> dict:
@@ -991,11 +1007,53 @@ def test_a_whole_page_answer_is_gzipped_for_a_client_that_accepts_it(renders):
     assert len(response.content) * 3 < len(plain.content)
 
 
-def test_a_small_patch_answer_is_sent_as_it_is(renders):
+def test_a_small_patch_answer_is_sent_as_it_is(renders, rf):
+    """A body under GZipMiddleware's 200 bytes goes out as it is. The counter's
+    patch answer carries its parameter contracts (#4189); a client that names
+    the digest of the manifest it holds gets the digest alone (#4307), so the
+    answer is several hundred bytes smaller than one carrying the whole
+    manifest."""
+    import gzip
+
+    from django.http import JsonResponse
+
+    from djust.mixins.request import _compress_fallback_answer
+
+    client = Client()
+    page = client.get("/m/counter/").content.decode()
+    digest = meta_digest(page)
+    held = json.loads(
+        re.search(r"<script[^>]*data-djust-parameter-contracts>(.*?)</script>", page, re.S).group(1)
+    )["contracts"]["digest"]
+    full = post_event(client, "/m/counter/", "increment", {}, digest)
     client, digest = _open("/m/counter/")
-    response = _post_accepting_gzip(client, "/m/counter/", "increment", digest)
-    assert not response.has_header("Content-Encoding")
-    assert answer_kind(json.loads(response.content)) == "patches"
+    response = post_event(
+        client, "/m/counter/", "increment", {}, digest, HTTP_X_DJUST_PARAMETER_CONTRACTS=held
+    )
+    answer = json.loads(response.content)
+    assert answer_kind(answer) == "patches"
+    assert answer["parameter_contracts"] == held
+    assert answer["parameter_contract_view"]
+    # The same answer without the header carries the whole manifest.
+    assert isinstance(json.loads(full.content)["parameter_contracts"], dict)
+    assert len(response.content) < len(full.content) - 600, (
+        len(response.content),
+        len(full.content),
+    )
+    request = rf.post("/m/counter/", HTTP_ACCEPT_ENCODING="gzip, br")
+    body = JsonResponse(answer)
+    if len(body.content) < 200:
+        assert not _compress_fallback_answer(request, body).has_header("Content-Encoding")
+    else:
+        small = {key: value for key, value in answer.items() if not key.startswith("parameter_")}
+        assert len(JsonResponse(small).content) < 200
+        plain = _compress_fallback_answer(request, JsonResponse(small))
+        assert not plain.has_header("Content-Encoding")
+    # Gate-off: the whole answer, contracts included, is over the bound and is compressed.
+    whole_answer = json.loads(full.content)
+    whole = _compress_fallback_answer(request, JsonResponse(whole_answer))
+    assert whole["Content-Encoding"] == "gzip"
+    assert json.loads(gzip.decompress(whole.content)) == whole_answer
 
 
 def test_compression_can_be_left_to_the_deployment(renders):

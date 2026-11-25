@@ -1,7 +1,8 @@
 """Entry point of one harness node (#4000).
 
 ``python -m tests.integration.multinode.app.serve --fd N --name A`` serves the harness app
-with uvicorn on the listening socket the parent bound and passed as ``fd`` N.
+with uvicorn (or the ``server`` the cluster config names: ``daphne``, ``hypercorn``)
+on the listening socket the parent bound and passed as ``fd`` N.
 The parent keeps that socket, so a node killed with SIGKILL can be started
 again on the same port, and a client that connects before the node is ready
 waits in the socket's backlog instead of racing a port probe.
@@ -158,30 +159,108 @@ def _exit_with_parent() -> None:
     os._exit(0)
 
 
-def serve(fd: int) -> None:
-    import uvicorn
-
+def _application():
+    """The node's application; with ``lifespan`` in the cluster config it is
+    wrapped in :func:`djust.lifespan.with_lifespan`, and a shutdown hook marks
+    ``LIFESPAN_SHUTDOWN`` on stdout (what a server delivered on SIGTERM)."""
     from tests.integration.multinode.app.asgi import application
 
+    config = json.loads(os.environ.get("DJUST_MN_CONFIG", "{}"))
+    if not config.get("lifespan"):
+        return application
+    from djust.lifespan import with_lifespan
+
+    return with_lifespan(application, shutdown=[lambda: mark("LIFESPAN_SHUTDOWN")])
+
+
+def _serve_uvicorn(app, fd: int, lifespan: bool) -> None:
+    import uvicorn
+
+    config = uvicorn.Config(
+        app,
+        fd=fd,
+        log_level="warning",
+        lifespan="on" if lifespan else "off",
+        ws="websockets",
+        ws_ping_interval=None,
+    )
+    uvicorn.Server(config).run()
+
+
+def _serve_daphne(app, fd: int, lifespan: bool) -> None:
+    from daphne.server import Server
+
+    # daphne's own SIGTERM handling (the reactor's signal handlers), as its CLI
+    # runs it. It has no lifespan switch: whatever it delivers is recorded.
+    Server(
+        app,
+        endpoints=["fd:fileno=%d" % fd],
+        signal_handlers=True,
+        verbosity=0,
+    ).run()
+
+
+def _serve_hypercorn(app, fd: int, lifespan: bool) -> None:
+    import asyncio
+
+    from hypercorn.asyncio import serve as hypercorn_serve
+    from hypercorn.config import Config
+
+    config = Config()
+    config.bind = ["fd://%d" % fd]
+    config.loglevel = "WARNING"
+    # No shutdown trigger: hypercorn installs its own SIGTERM/SIGINT handlers,
+    # as its CLI does with one worker in the same process.
+    asyncio.run(hypercorn_serve(app, config))
+
+
+def _serve_gunicorn(app, fd: int, lifespan: bool) -> None:
+    from gunicorn.app.base import BaseApplication
+
+    class _Gunicorn(BaseApplication):
+        def load_config(self):
+            self.cfg.set("bind", ["fd://%d" % fd])
+            self.cfg.set("workers", 1)
+            self.cfg.set("worker_class", "uvicorn.workers.UvicornWorker")
+            self.cfg.set("loglevel", "warning")
+            self.cfg.set("graceful_timeout", 30)
+
+        def load(self):
+            return app
+
+    # The arbiter's own SIGTERM handling: it forwards SIGTERM to the worker,
+    # which runs uvicorn's server (``--lifespan auto``).
+    _Gunicorn().run()
+
+
+SERVERS = {
+    "uvicorn": _serve_uvicorn,
+    "daphne": _serve_daphne,
+    "hypercorn": _serve_hypercorn,
+    "gunicorn": _serve_gunicorn,
+}
+
+
+def serve(fd: int) -> None:
+    extra = os.environ.get("DJUST_MN_SERVER_PATH")
+    if extra:
+        # A server installed outside the venv (the graceful-stop recordings).
+        sys.path.append(extra)
+    config = json.loads(os.environ.get("DJUST_MN_CONFIG", "{}"))
+    # One node may run another server than the cluster's (the per-server
+    # graceful-stop recordings stop a node of that server, reconnect to uvicorn).
+    server = os.environ.get("DJUST_MN_CONFIG_SERVER") or config.get("server") or "uvicorn"
+    app = _application()
     _instrument()
     # The parent holds this process's stdin open for as long as it lives: when
     # it exits, however it exits, the pipe closes and so does this node.
     threading.Thread(target=_exit_with_parent, daemon=True).start()
-    config = uvicorn.Config(
-        application,
-        fd=fd,
-        log_level="warning",
-        lifespan="off",
-        ws="websockets",
-        ws_ping_interval=None,
-    )
-    server = uvicorn.Server(config)
     # The listening socket already exists (the parent bound it), so a client
-    # that connects from here on is queued until uvicorn accepts it.
+    # that connects from here on is queued until the server accepts it.
     import django
 
     mark("READY %s %d %s" % (NODE_NAME, os.getpid(), django.get_version()))
-    server.run()
+    SERVERS[server](app, fd, bool(config.get("lifespan")))
 
 
 def main() -> None:

@@ -264,6 +264,12 @@ function storeSignedSnapshot(data, primaryViewPath) {
     );
     if (!eligible || typeof data.view !== 'string' || !data.view ||
         ['__proto__', 'constructor', 'prototype'].includes(data.view)) return;
+    // #4164: the turn serial of the state this frame shows. A reconnect sends
+    // it back, so the server can tell when it restored an older state.
+    if (!revocation && Number.isInteger(data.state_serial) && data.state_serial >= 0) {
+        if (!window.djust._stateSerial) window.djust._stateSerial = Object.create(null);
+        window.djust._stateSerial[data.view] = data.state_serial;
+    }
     const token = data.state_snapshot_signed;
     // Cache invalidation sentinel, not a comparison of authentication secrets.
     // eslint-disable-next-line security/detect-possible-timing-attacks
@@ -285,6 +291,18 @@ function storeSignedSnapshot(data, primaryViewPath) {
 // echoed verbatim; the server validates its signature, age and binding, and
 // ignores one it does not accept. Shared by the WebSocket and SSE mounts (#1646).
 // Only a reconnect sends it: a first mount has no earlier state to bring back.
+// #4164: the turn serial a reconnecting page view sends with its mount frame
+// (the last one a frame showed it), or null on a first mount.
+function reconnectStateSerial(viewPath) {
+    if (!(window.djust && window.djust._isReconnect)) return null;
+    const serials = window.djust._stateSerial;
+    if (!serials || typeof viewPath !== 'string' || !viewPath ||
+        !Object.prototype.hasOwnProperty.call(serials, viewPath)) return null;
+    // eslint-disable-next-line security/detect-object-injection
+    const serial = serials[viewPath];
+    return Number.isInteger(serial) && serial > 0 ? serial : null;
+}
+
 function reconnectStateSnapshot(viewPath) {
     if (!(window.djust && window.djust._isReconnect)) return null;
     const bag = window.djust._clientState;
@@ -371,6 +389,7 @@ class LiveViewWebSocket {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
+        this._parameterContractHeld = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
@@ -482,13 +501,17 @@ class LiveViewWebSocket {
             document.body.style.removeProperty('--dj-reconnect-attempt');
             this._removeReconnectBanner();
 
+            // Hooks that got disconnected() get reconnected() on ANY open, the
+            // first one included: a failed first handshake or a socket that
+            // dropped before a navigation reset connectedAt still left them
+            // offline (#3656). A no-op for hooks that are not offline.
+            notifyHooksReconnected();
+
             // Track reconnections (Phase 2.1: WebSocket Inspector)
             if (this.stats.connectedAt !== null) {
                 this.stats.reconnections++;
                 // Set reconnect flag for dj-auto-recover
                 if (window.djust) window.djust._isReconnect = true;
-                // Notify hooks of reconnection
-                notifyHooksReconnected();
                 // Public CustomEvent consumed by dj-track-static (v0.6.0)
                 // and available to application code that wants to react
                 // to reconnect without patching internal WS state.
@@ -666,13 +689,15 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
-                    // ``handleMessage`` is the queue-wrapper (#1098); its
-                    // returned promise is the chain-tail with an internal
-                    // ``.catch`` that already logs and swallows. The
-                    // returned promise never rejects, so we just ignore it.
-                    setTimeout(() => {
-                        this.handleMessage(data, socket);
-                    }, actual);
+                    // Jitter never reorders frames: a frame is released no
+                    // earlier than the one before it, as a socket delivers
+                    // them (a digest frame follows its full manifest, #4307).
+                    // One FIFO drained by one timer: two timers aimed at the
+                    // same millisecond may fire in either order.
+                    const now = Date.now();
+                    this._simReleaseAt = Math.max(now + actual, this._simReleaseAt || 0);
+                    (this._simQueue = this._simQueue || []).push([this._simReleaseAt, data, socket]);
+                    if (!this._simTimer) this._simDrain();
                 } else {
                     this.handleMessage(data, socket);
                 }
@@ -680,6 +705,20 @@ class LiveViewWebSocket {
                 console.error('[LiveView] Failed to parse message:', error);
             }
         };
+    }
+
+    // Release simulated-latency frames in arrival order (#4307). ``handleMessage``
+    // is the queue-wrapper (#1098); its promise never rejects, so it is ignored.
+    _simDrain() {
+        this._simTimer = null;
+        const queue = this._simQueue || [];
+        while (queue.length && queue[0][0] <= Date.now()) {
+            const [, data, socket] = queue.shift();
+            this.handleMessage(data, socket);
+        }
+        if (queue.length) {
+            this._simTimer = setTimeout(() => this._simDrain(), Math.max(0, queue[0][0] - Date.now()));
+        }
     }
 
     /**
@@ -1148,7 +1187,6 @@ class LiveViewWebSocket {
                 // Determine event name and trigger for loading state
                 const event = acknowledgeEventRequest(this, data);
                 await handleServerResponse(data, event?.eventName, event?.trigger, this);
-                completeLegacyAsyncBatches(this, data);
 
                 // After processing the event response, flush buffered
                 // patches only when ALL pending events have resolved.
@@ -1341,13 +1379,20 @@ class LiveViewWebSocket {
                 // Server is dropping events due to rate limiting — show brief warning, do NOT retry
                 // codeql[js/log-injection] -- data.message is a server-controlled rate limit message
                 console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
-                this._showRateLimitWarning();
-                // Stop loading state if applicable
-                if (this.lastEventName) {
+                if (data.ref != null) {
+                    // The dropped event's own request (#4309): settle it, end
+                    // its loading state, and apply what it held back.
+                    if (_pendingEventOwners.get(data.ref) === this) {
+                        cancelEventRequests(this, data.ref);
+                        if (!hasPendingEventRequests(this)) await flushServerUpdates(this);
+                    }
+                } else if (this.lastEventName) {
+                    // Stop loading state if applicable
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                this._showRateLimitWarning();
                 break;
 
             case 'hvr-applied':
@@ -1473,6 +1518,8 @@ class LiveViewWebSocket {
         // Never for a view mounted beside it: the server ships no token for one.
         const snapshot = options.primary ? reconnectStateSnapshot(viewPath) : null;
         if (snapshot) frame.state_snapshot = snapshot;
+        const serial = options.primary ? reconnectStateSerial(viewPath) : null;
+        if (serial !== null) frame.state_serial = serial;
         this.sendMessage(frame);
         return true;
     }

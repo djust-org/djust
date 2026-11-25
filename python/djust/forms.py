@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 
 #: ADR-038 E2-3: the form keys an explicit view renders. Render-only: the
 #: provider persists and discloses nothing (``persisted``/``client`` empty).
-#: ``model_pk``/``model_label`` are deliberately absent; see
-#: ``FormMixin._ensure_model_instance``.
+#: ``model_pk``/``model_label`` are deliberately absent: ``mount()`` establishes
+#: ``_model_instance`` through the view's own authorized lookup.
 FORM_PROVIDER = ProviderContract(
     "djust.forms",
     rendered=frozenset(
@@ -361,12 +361,9 @@ class FormMixin:
         _check_persisted_form_input(cls, cls.__dict__.get("form_class") or cls.form_class)
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
-        """Provide the form's keys to explicit templates; legacy is unchanged."""
+        """Provide the form's keys to the template."""
         context: Dict[str, Any] = super().get_context_data(**kwargs)  # type: ignore[misc]  # mixin: LiveView provides get_context_data()
-        from ._exposure import uses_legacy_exposure
-
-        if not uses_legacy_exposure(self):
-            provide_context_items(self, context, FORM_PROVIDER.name, self._explicit_form_context())
+        provide_context_items(self, context, FORM_PROVIDER.name, self._explicit_form_context())
         return context
 
     def _sensitive_form_field_names(self) -> FrozenSet[str]:
@@ -481,8 +478,9 @@ class FormMixin:
         """Initialize form on view mount"""
         super().mount(request, **kwargs)  # type: ignore[misc]  # mixin: LiveView provides mount()
 
-        # Store model PK for re-hydration after WS serialization.
-        # Public attrs so they survive get_context_data() → session save → WS restore.
+        # The model's PK and label, for application code. A raw PK is never
+        # re-resolved: every restore runs mount(), which establishes
+        # ``_model_instance`` through the view's own authorized lookup.
         if self._model_instance and hasattr(self._model_instance, "pk"):
             self.model_pk = self._model_instance.pk
             self.model_label = self._model_instance._meta.label
@@ -614,45 +612,12 @@ class FormMixin:
     def form_instance(self) -> Optional[forms.Form]:
         """Access the form instance (re-creates if lost after serialization)."""
         if self._form_instance is None and self.get_form_class() and self._form_available():
-            self._ensure_model_instance()
             self._form_instance = self._create_form()
         return self._form_instance
 
     @form_instance.setter
     def form_instance(self, value: Optional[forms.Form]) -> None:
         self._form_instance = value
-
-    def _ensure_model_instance(self) -> None:
-        """Re-hydrate _model_instance from stored PK if lost after WS serialization.
-
-        Legacy only. Under ADR-038's explicit policy ``model_pk`` is neither
-        persisted nor rendered, and a raw primary key is never re-resolved with
-        an unscoped ``objects.get``: every restore (reconnect, HTTP POST) runs
-        ``mount()`` first, which must establish ``_model_instance`` through the
-        view's own authorized lookup. ADR-035's managed-object identity is the
-        eventual owner of a persisted model reference.
-        """
-        if self._model_instance is not None:
-            return
-        if not getattr(self, "model_pk", None):
-            return
-        from ._exposure import uses_legacy_exposure
-
-        if not uses_legacy_exposure(self):
-            return
-        try:
-            from django.apps import apps
-
-            model = apps.get_model(self.model_label)
-            self._model_instance = model.objects.get(pk=self.model_pk)
-        except Exception:
-            logger.warning(
-                "Failed to re-hydrate model instance (label=%s, pk=%s)",
-                getattr(self, "model_label", ""),
-                getattr(self, "model_pk", None),
-                exc_info=True,
-            )
-            self._model_instance = None
 
     def get_form_class(self) -> Optional[Type[forms.Form]]:
         """Return the configured form class; override for dynamic forms."""
@@ -769,11 +734,10 @@ class FormMixin:
         This is called when a field changes (dj-change / dj-input event).
 
         The client sends the field name under the key ``field``, because
-        ``buildFormEventParams`` (``09-event-binding.js:525``) HARDCODES that
+        the client's form-event binder (``09-event-binding.js``) HARDCODES that
         key, sourcing the value from ``getFieldName`` — ``data-field``, then
         the element's ``name``, then its ``id``. It merges only ``dj-value-*``;
-        it does NOT collect ``data-*``, which is what ``extractTypedParams``
-        does on the click/poll/mount paths. (An earlier version of this
+        it does NOT collect ``data-*``, which no client path sends. (An earlier version of this
         docstring said "djust maps ``data-*`` attributes to handler
         parameters" — true for those other paths, false for this one, and a
         maintainer acting on it would expect ``data-foo`` on an input to reach
@@ -790,13 +754,15 @@ class FormMixin:
         POSITIONAL CALLERS: ``field`` is the first parameter, so
         ``validate_field("email", "text")`` binds ``field_name="text"`` and
         leaves ``value`` as ``None`` — a filled field then reports "required".
-        Call with keywords. The order is deliberate: djust admin's own adapters
-        emit ``validate_field('<name>', value)`` (``admin_ext/adapters.py``, 8
-        sites), whose second positional token is the literal string
-        ``"value"``; with ``field`` first that junk lands in ``field_name`` and
-        the real value survives as a keyword. Under the previous order it
+        Call with keywords. The order is deliberate: a template written as
+        ``validate_field('<name>', value)`` (djust admin's own adapters were,
+        until #4218) sends the literal string ``"value"`` as its second
+        positional token; with ``field`` first that junk lands in ``field_name``
+        and the real value survives as a keyword. Under the previous order it
         overwrote the real value, so the admin validated the string "value" on
-        every change.
+        every change. Bind it by name alone (``dj-input="validate_field"``): the
+        client generates ``field`` and ``value``, and under the strict parameter
+        policy a positional token that is also a generated name is refused.
 
         Args:
             field: Name of the field to validate — what the client sends
@@ -815,9 +781,6 @@ class FormMixin:
         if self._refuse_form_data({field_name: value}):
             return
         self.form_data[field_name] = value
-
-        # Re-hydrate model instance if needed
-        self._ensure_model_instance()
 
         # Create form with current data
         form = self._create_form(self._form_event_data())
@@ -877,9 +840,6 @@ class FormMixin:
         if self._refuse_form_data(incoming):
             return
         self.form_data.update(incoming)
-
-        # Re-hydrate model instance if lost after WS serialization
-        self._ensure_model_instance()
 
         # Create form with all data
         form = self._create_form(self._form_event_data())
@@ -1340,8 +1300,8 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
     _djust_context_providers = (_managed_object_provider,)
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        # Allocated before LiveView records its framework slots, so the legacy
-        # session never mistakes the verdict for user private state.
+        # Allocated before LiveView records its framework slots, so the saved
+        # state never mistakes the verdict for user private state.
         self._djust_authorized_object: Optional[tuple] = None
         # What a read-only event may reuse (``object_recheck = "writes"``). A framework slot:
         # never persisted, so a restored view re-resolves its record before it reuses one.
@@ -1478,14 +1438,6 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
         if self.context_object_name:
             items[self.context_object_name] = obj
         return items
-
-    def _djust_render_only_context_keys(self) -> FrozenSet[str]:
-        # Chain: a mixin after this one in the MRO (``TenantMixin``'s tenant
-        # key, #3328) declares render-only keys too, and would be hidden.
-        parent = getattr(super(), "_djust_render_only_context_keys", None)
-        keys = set(parent()) if callable(parent) else set()
-        keys.update(self._djust_render_only_context())
-        return frozenset(keys)
 
     # -- Django's single-object vocabulary -----------------------------------
 
@@ -1758,12 +1710,7 @@ class ModelFormMixin(FormMixin, Generic[_ModelT]):
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
         context = super().get_context_data(**kwargs)
-        from ._exposure import uses_legacy_exposure
-
-        # Legacy views receive these through the attribute walk, before its
-        # model serialization, and drop them from every session save.
-        if not uses_legacy_exposure(self):
-            provide_context_items(
-                self, context, _MANAGED_OBJECT_PROVIDER, self._djust_render_only_context()
-            )
+        provide_context_items(
+            self, context, _MANAGED_OBJECT_PROVIDER, self._djust_render_only_context()
+        )
         return context

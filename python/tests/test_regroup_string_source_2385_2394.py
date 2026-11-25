@@ -365,7 +365,7 @@ class TestTheWiringIsLoadBearing:
         src = RENDERER.read_text()
         start = src.index("fn value_channel_arg_string(")
         body = src[start : src.index("\n}\n", start)]
-        assert "Value::String(s) | Value::SafeString(s) => {" in body, body
+        assert "Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => {" in body, body
         assert "serde_json::to_string(s)" in body, body
         for never in ("Value::Decimal", "Value::BigInt"):
             assert never not in body, (

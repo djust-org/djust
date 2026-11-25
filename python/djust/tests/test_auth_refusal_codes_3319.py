@@ -7,14 +7,14 @@ unchanged ``error`` text, on every transport:
 
 * WebSocket: re-authorization of an explicit-policy event (+ close 4403), a
   ``@permission_required`` handler, and a mount refused with PermissionDenied;
-* SSE: the ``reauth_on_event`` re-check and the session-owner refusal;
+* SSE: the session-owner refusal (``test_explicit_turn_reauth_4198.py``);
 * HTTP fallback: the view-level, handler-level and object-level 403 bodies.
 
 The code is a fixed value, never built from the user's input or an exception.
 """
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -172,33 +172,6 @@ async def test_ws_mount_permission_denied_frame_carries_code():
     errors = [f for f in frames if f.get("type") == "error"]
     assert [(e["error"], e.get("code")) for e in errors] == [("Permission denied", CODE)]
     assert closes and closes[0]["code"] == 4403
-
-
-# --- SSE -------------------------------------------------------------------
-
-
-@override_settings(LIVEVIEW_CONFIG={"reauth_on_event": True})
-@pytest.mark.asyncio
-async def test_sse_reauth_refusal_code_is_the_string_enum():
-    from djust.config import config
-    from djust.runtime import SSESessionTransport
-
-    config.reset()
-    try:
-        session = MagicMock()
-        session.send_error = AsyncMock()
-        session.close = AsyncMock()
-        session._event_request = MagicMock()
-        view = MagicMock(login_required=True, permission_required=None)
-        with patch("djust.auth.core.check_view_auth_lightweight", return_value=False):
-            ok = await SSESessionTransport(session).recheck_event_auth(view)
-    finally:
-        config.reset()
-    assert ok is False
-    (message,), kwargs = session.send_error.await_args
-    assert message == "Session is no longer authorized. Please reload the page."
-    assert kwargs == {"code": CODE}, "was the numeric close code 4403"
-    session.close.assert_awaited_once_with(code=4403)
 
 
 # --- HTTP fallback ---------------------------------------------------------

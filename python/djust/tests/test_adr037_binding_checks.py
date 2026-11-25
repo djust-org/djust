@@ -25,13 +25,19 @@ from djust import LiveView
 from djust._template_bindings import django_engine
 from djust.checks.bindings import (
     OwnerReport,
-    _messages,
+    _messages as _all_messages,
     check_event_bindings,
     coverage,
     scan_owner,
     summary_line,
 )
 from djust.components.base import LiveComponent
+
+
+def _messages(reports):
+    """The T019-T022 messages of ``reports``."""
+    return _all_messages(reports)
+
 
 MODULE = "binding_check_fixture"
 
@@ -61,7 +67,7 @@ def audited(function):
 
 
 class Decorated(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root><button dj-click="archive">x</button></div>"""
 
     @event_handler
@@ -77,7 +83,7 @@ class UserForm(forms.ModelForm):
 
 
 class EditUser(ModelFormMixin[User], LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     """A managed ``self.object``: the framework owns its persistence."""
 
     model = User
@@ -90,11 +96,11 @@ class EditUser(ModelFormMixin[User], LiveView):
 
 
 class UserList(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     """Authorized ORM values rendered from the context, never persisted."""
 
     template = """<div dj-root>{% for user in users %}
-<button dj-click="pick" data-user-id="{{ user.pk }}">{{ user.username }}</button>{% endfor %}</div>"""
+<button dj-click="pick" dj-value-user-id:int="{{ user.pk }}">{{ user.username }}</button>{% endfor %}</div>"""
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -102,7 +108,7 @@ class UserList(LiveView):
         return context
 
     @event_handler
-    def pick(self, user_id: int = 0, **kwargs):
+    def pick(self, user_id: int = 0):
         pass
 
 
@@ -113,7 +119,7 @@ class Handlers:
 
 
 class Names(Handlers, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
 <button dj-click="nope">a</button>
 <button dj-click="helper">b</button>
@@ -145,8 +151,8 @@ class Names(Handlers, LiveView):
         pass
 
 
-class Legacy(LiveView):
-    exposure_policy = "legacy"
+class Loose(LiveView):
+    exposure_policy = "explicit"
     template = """<div dj-root>
 <input name="q" dj-input="search">
 <input name="q" dj-input="search_open">
@@ -179,7 +185,7 @@ class Legacy(LiveView):
 
 
 class Strict(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
 <button dj-click="pick" data-item-id="4">data only</button>
 <button dj-click="pick" dj-value-item-id:int="4">ok</button>
@@ -203,7 +209,7 @@ class Strict(LiveView):
 
 
 class Dynamic(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
 <button dj-click="{{ handler }}">computed</button>
 <div data-component-id="c1"><button dj-click="inside">component</button></div>
@@ -214,7 +220,7 @@ class Dynamic(LiveView):
 
 
 class Suppressed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
 {# noqa: T019 -- rendered by a third-party widget that adds the handler #}
 <button dj-click="reasoned">a</button>
@@ -223,7 +229,7 @@ class Suppressed(LiveView):
 
 
 class Files(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "fixture/page.html"
 
     @event_handler
@@ -232,7 +238,7 @@ class Files(LiveView):
 
 
 class OtherFiles(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "fixture/page.html"
 
 
@@ -241,7 +247,7 @@ class ContactForm(forms.Form):
 
 
 class FormView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = ContactForm
     template = """<div dj-root>
 <input name="email" dj-change="validate_field">
@@ -259,11 +265,11 @@ class Counter(LiveComponent):
 
 
 class Exploding(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     """Nothing here may run during a check."""
 
     template = """<div dj-root>{% for item in items %}
-<button dj-click="remove" data-item-id="{{ item.pk }}">x</button>{% endfor %}</div>"""
+<button dj-click="remove" dj-value-item-id:int="{{ item.pk }}">x</button>{% endfor %}</div>"""
 
     class Boom:
         def __iter__(self):
@@ -438,50 +444,9 @@ def test_a_component_template_is_checked_against_the_component(fixture):
     assert statuses["host_only"] == ("dynamic", "dj-poll always reaches the host view")
 
 
-# -- T020-T022 under the legacy policy ------------------------------------------
-
-
-def test_legacy_arguments(fixture):
-    module, _ = fixture
-    found = _by_line(module.Legacy)
-
-    def at(text):
-        return found.pop(_source_line(module, text))
-
-    assert at('dj-input="search"') == (
-        "djust.T020",
-        "dj-input sends 'field', '_target', which search() does not accept.",
-    )
-    assert at('dj-click="delete">no id') == (
-        "djust.T020",
-        "delete() requires 'item_id', which this binding never sends.",
-    )
-    assert at('dj-value-item-id="5"') == (
-        "djust.T020",
-        "data-item-id and dj-value-item-id both send 'item_id'; the browser keeps only one.",
-    )
-    assert at('data-count="abc"') == (
-        "djust.T021",
-        "data-count gives count_to() 'abc' for 'count', which is not a valid int.",
-    )
-    assert at("count_to('x')")[0] == "djust.T021"
-    assert at("count_to(1, 2)") == (
-        "djust.T020",
-        "dj-click passes 2 positional arguments; count_to() takes 1, and the rest are dropped.",
-    )
-    assert at('data-view-id="v"') == (
-        "djust.T022",
-        "data-view-id supplies 'view_id', which the server reads as routing context, "
-        "not an argument.",
-    )
-    # An intentional catch-all, a sent id, a typed literal and a conditional
-    # attribute set (whose missing arguments are unknown) report nothing.
-    assert found == {}
-
-
 def test_a_catch_all_is_named_as_unchecked_not_excused(fixture):
     module, _ = fixture
-    (report,) = _scan(module.Legacy)
+    (report,) = _scan(module.Loose)
     open_binding = next(r for r in report.results if r.binding.name == "search_open")
     assert open_binding.status == "checked" and open_binding.findings == []
 
@@ -619,9 +584,7 @@ def test_managed_objects_and_authorized_querysets_are_not_flagged(discovery):
         ]
         # Only the fixture module's placement is reported: it is not in
         # LIVEVIEW_ALLOWED_MODULES (V005), and EditUser declares no login (S005).
-        # EditUser states exposure_policy = "legacy" (#4038's pin), which V028
-        # (#4066) reports; that is placement too, not a persistence finding.
-        assert set(flagged) <= {"djust.V005", "djust.S005", "djust.V002", "djust.V028"}, (
+        assert set(flagged) <= {"djust.V005", "djust.S005", "djust.V002"}, (
             owner,
             flagged,
         )
@@ -644,7 +607,7 @@ def test_every_message_is_a_warning_with_machine_readable_facts(fixture):
     messages = _messages(_scan(*owners))
     assert messages and all(m.level == 30 for m in messages)
     delete = next(m for m in messages if "delete() requires" in m.msg)
-    assert delete.owner == "%s.Legacy" % MODULE
+    assert delete.owner == "%s.Loose" % MODULE
     assert delete.binding == 'dj-click="delete"'
     assert delete.expected == ["item_id"]
     assert delete.supplied == []
@@ -678,10 +641,12 @@ def test_djust_check_json_discovers_owners_and_reports_bindings(discovery, monke
         "djust.T021",
         "djust.T022",
     }
-    template = next(t for t in data["coverage"]["templates"] if t["owner"] == "%s.Legacy" % MODULE)
+    template = next(t for t in data["coverage"]["templates"] if t["owner"] == "%s.Loose" % MODULE)
     assert template["counts"]["checked"] > 0
-    entry = next(c for c in data["checks"] if "delete() requires" in c["message"])
-    assert entry["owner"] == "%s.Legacy" % MODULE
+    entry = next(
+        c for c in data["checks"] if "delete() requires" in c["message"] and c["id"] == "djust.T020"
+    )
+    assert entry["owner"] == "%s.Loose" % MODULE
     assert entry["binding"] == 'dj-click="delete"'
     assert entry["expected"] == ["item_id"] and entry["supplied"] == []
 
@@ -690,7 +655,7 @@ def test_djust_check_json_discovers_owners_and_reports_bindings(discovery, monke
 def command_report(fixture, monkeypatch):
     """Supply one real scan to the command's output paths."""
     module, _ = fixture
-    reports = _scan(module.Legacy)
+    reports = _scan(module.Loose)
     messages = _messages(reports)
     monkeypatch.setattr("djust.management.commands.djust_check.run_checks", lambda **_: messages)
     monkeypatch.setattr("djust.checks.bindings.binding_reports", lambda: reports)

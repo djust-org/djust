@@ -269,20 +269,6 @@ def test_a_handler_in_a_mixin_is_reported_once_naming_the_mixin(views):
     assert "field hits" in reported[0].msg
 
 
-def test_a_legacy_view_is_not_checked(views):
-    with pytest.warns(DeprecationWarning):
-
-        class Legacy(LiveView):
-            exposure_policy = "legacy"
-            template = "<div dj-root></div>"
-
-            @event_handler
-            def increment(self, **kwargs):
-                self.count += 1
-
-    assert _messages_for(Legacy) == []
-
-
 def test_suppressed(views, settings):
     opted_out = _opted_out(views)
     settings.DJUST_CONFIG = {"suppress_checks": ["V029"]}

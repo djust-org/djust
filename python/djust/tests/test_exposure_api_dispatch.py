@@ -2,11 +2,10 @@
 
 ``dispatch_api`` answers ``{"result": <return>, "assigns": <diff>}``. ``result``
 is the handler's own explicit response (outside the automatic export contract,
-ADR-038 D6). ``assigns`` is automatic: ``_public_assigns_snapshot_diff`` returned
-every public attribute the handler changed, with no policy check — so an
-explicit view's undeclared or server-only values reached the HTTP client. For a
-nonlegacy view it must carry only declared ``client=True`` fields, the same
-projection ``get_state`` uses.
+ADR-038 D6). ``assigns`` is automatic: it once returned every public attribute
+the handler changed, with no policy check — so an explicit view's undeclared or
+server-only values reached the HTTP client. It carries only declared
+``client=True`` fields, the same projection ``get_state`` uses.
 """
 
 import json
@@ -26,7 +25,7 @@ pytestmark = pytest.mark.django_db
 
 class APIExposureView(LiveView):
     api_name = "exposure.api"
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ visible }}</div>"
     visible = state(0, client=True)
     server_note = state("initial", persist="server")
@@ -59,27 +58,20 @@ def _request():
     return request
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_api_assigns_diff_carries_only_client_fields_for_explicit_views(monkeypatch, policy):
-    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(APIExposureView, "exposure_policy", policy)
-
+def test_api_assigns_diff_carries_only_client_fields_for_explicit_views():
     response = dispatch_api(_request(), "exposure.api", "go")
     body = json.loads(response.content)
     assert response.status_code == 200, body
     assert body["result"] == {"ok": True}  # the handler's own response (D6)
 
-    if policy == "legacy":
-        # Unchanged legacy behaviour: every changed public attribute.
-        assert body["assigns"]["api_token"] == "UNDECLARED_ASSIGN_SENTINEL"
-    else:
-        assert body["assigns"] == {"visible": 1}
-        assert "SENTINEL" not in response.content.decode()
+    # The ``client=True`` field is the control: it is the one thing that is sent.
+    assert body["assigns"] == {"visible": 1}
+    assert "SENTINEL" not in response.content.decode()
 
 
 class APIFailureView(LiveView):
     api_name = "exposure.api.fail"
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
     @event_handler(expose_api=True)
@@ -87,20 +79,19 @@ class APIFailureView(LiveView):
         raise ValueError("API_HANDLER_SENTINEL")
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_api_handler_failure_log_is_value_free_for_explicit_views(monkeypatch, caplog, policy):
+@pytest.mark.parametrize("debug", [False, True])
+def test_api_handler_failure_log_is_value_free_for_explicit_views(settings, caplog, debug):
     """The client already gets a generic 500; the log carried the handler's
-    exception and traceback for any policy."""
+    exception and traceback. Value-free unless ``DEBUG`` is on."""
     import logging
 
+    settings.DEBUG = debug
     register_api_view("exposure.api.fail", APIFailureView)
-    monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(APIFailureView, "exposure_policy", policy)
     with caplog.at_level(logging.DEBUG):
         response = dispatch_api(_request(), "exposure.api.fail", "boom")
     assert response.status_code == 500
     assert "API_HANDLER_SENTINEL" not in response.content.decode()
-    if policy == "legacy":
+    if debug:
         assert "djust API handler raised" in caplog.text
         assert "API_HANDLER_SENTINEL" in caplog.text
     else:

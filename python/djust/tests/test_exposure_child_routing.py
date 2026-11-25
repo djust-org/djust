@@ -95,38 +95,6 @@ class AmbiguousRoot(LiveView):
     )
 
 
-class LegacyLeaf(LiveView):
-    exposure_policy = "legacy"
-    sticky = True
-    sticky_id = "legacy-leaf"
-    template = '<div><button dj-click="poke">x</button></div>'
-
-    @event_handler()
-    def poke(self):
-        self.poked = True
-
-
-class LegacyMiddle(LiveView):
-    exposure_policy = "legacy"
-    sticky = True
-    sticky_id = "legacy-middle"
-    template = (
-        f'<div>{{% load live_tags %}}{{% live_render "{MODULE}.LegacyLeaf" sticky=True %}}</div>'
-    )
-
-    @event_handler()
-    def poke(self):
-        self.poked = True
-
-
-class LegacyRoot(LiveView):
-    exposure_policy = "legacy"
-    template = (
-        "<div dj-root>{% load live_tags %}"
-        f'{{% live_render "{MODULE}.LegacyMiddle" sticky=True %}}</div>'
-    )
-
-
 @pytest.fixture(autouse=True)
 def staged(monkeypatch, settings):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
@@ -228,18 +196,6 @@ async def test_ambiguous_descendant_id_is_not_routed():
     await send(runtime, "increment", "leaf")
     assert transport.errors[-1]["error"] == "Embedded view not found"
     assert [leaf.count for leaf in leaves] == [1, 1]
-
-
-async def test_legacy_descendant_routing_is_unchanged():
-    """Legacy control: legacy roots still route only to direct children."""
-    runtime, transport, _ = await mount(view_class=LegacyRoot)
-    middle = runtime.view_instance._get_child_view("legacy-middle")
-    leaf = middle._get_child_view("legacy-leaf")
-    await send(runtime, "poke", "legacy-middle")
-    assert getattr(middle, "poked", False)
-    await send(runtime, "poke", "legacy-leaf")
-    assert not getattr(leaf, "poked", False)
-    assert transport.errors[-1]["error"] == "Embedded view not found"
 
 
 async def test_work_a_child_queues_on_its_sibling_runs(monkeypatch):

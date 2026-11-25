@@ -15,7 +15,9 @@
                 0,
                 0
               ],
-              "text": "a & b"
+              "text": "a & b",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -23,7 +25,9 @@
                 1,
                 0
               ],
-              "text": "Value: a & b (end)"
+              "text": "Value: a & b (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">r2</li></ul></div>"
@@ -38,7 +42,9 @@
                 0,
                 0
               ],
-              "text": "a & b"
+              "text": "a & b",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">r2</li></ul></div>"
@@ -53,7 +59,9 @@
                 1,
                 0
               ],
-              "text": "a & b"
+              "text": "a & b",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
@@ -67,7 +75,9 @@
                 0,
                 0
               ],
-              "text": "<script>x</script>"
+              "text": "<script>x</script>",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -75,7 +85,9 @@
                 1,
                 0
               ],
-              "text": "Value: <script>x</script> (end)"
+              "text": "Value: <script>x</script> (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
@@ -90,7 +102,9 @@
                 0,
                 0
               ],
-              "text": "<script>"
+              "text": "<script>",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
@@ -105,7 +119,9 @@
                 1,
                 0
               ],
-              "text": "<script>x</script>"
+              "text": "<script>x</script>",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
@@ -119,7 +135,9 @@
                 0,
                 0
               ],
-              "text": "plain again"
+              "text": "plain again",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -127,7 +145,9 @@
                 1,
                 0
               ],
-              "text": "Value: plain again (end)"
+              "text": "Value: plain again (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
@@ -142,7 +162,9 @@
                 0,
                 0
               ],
-              "text": "caf\u00e9 \u2014 ok"
+              "text": "caf\u00e9 \u2014 ok",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
@@ -157,7 +179,9 @@
                 1,
                 0
               ],
-              "text": "plain again"
+              "text": "plain again",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
@@ -171,7 +195,9 @@
                 0,
                 0
               ],
-              "text": "say \"hi\" & 'bye'"
+              "text": "say \"hi\" & 'bye'",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -179,7 +205,9 @@
                 1,
                 0
               ],
-              "text": "Value: say \"hi\" & 'bye' (end)"
+              "text": "Value: say \"hi\" & 'bye' (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
@@ -194,7 +222,9 @@
                 0,
                 0
               ],
-              "text": "nbsp\u00a0here"
+              "text": "nbsp\u00a0here",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
@@ -209,7 +239,9 @@
                 1,
                 0
               ],
-              "text": "say \"hi\" & 'bye'"
+              "text": "say \"hi\" & 'bye'",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
@@ -223,7 +255,9 @@
                 0,
                 0
               ],
-              "text": "a &amp; b"
+              "text": "a &amp; b",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -231,7 +265,9 @@
                 1,
                 0
               ],
-              "text": "Value: a &amp; b (end)"
+              "text": "Value: a &amp; b (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
@@ -246,7 +282,9 @@
                 0,
                 0
               ],
-              "text": "plain"
+              "text": "plain",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
@@ -261,7 +299,9 @@
                 1,
                 0
               ],
-              "text": "a &amp; b"
+              "text": "a &amp; b",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
@@ -275,7 +315,9 @@
                 0,
                 0
               ],
-              "text": "x < y > z"
+              "text": "x < y > z",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -283,7 +325,9 @@
                 1,
                 0
               ],
-              "text": "Value: x < y > z (end)"
+              "text": "Value: x < y > z (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
@@ -298,7 +342,9 @@
                 0,
                 0
               ],
-              "text": "overview"
+              "text": "overview",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
@@ -313,7 +359,9 @@
                 1,
                 0
               ],
-              "text": "x < y > z"
+              "text": "x < y > z",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
@@ -327,7 +375,9 @@
                 0,
                 0
               ],
-              "text": "done"
+              "text": "done",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -335,7 +385,9 @@
                 1,
                 0
               ],
-              "text": "Value: done (end)"
+              "text": "Value: done (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
@@ -350,7 +402,9 @@
                 0,
                 0
               ],
-              "text": "a & b"
+              "text": "a & b",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
@@ -365,7 +419,9 @@
                 1,
                 0
               ],
-              "text": "done"
+              "text": "done",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">done</li></ul></div>"
@@ -379,7 +435,9 @@
                 0,
                 0
               ],
-              "text": "overview"
+              "text": "overview",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -387,7 +445,9 @@
                 1,
                 0
               ],
-              "text": "Value: overview (end)"
+              "text": "Value: overview (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">overview</p><p class=\"around\" dj-id=\"2\">Value: overview (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">done</li></ul></div>"
@@ -402,7 +462,9 @@
                 0,
                 0
               ],
-              "text": "<script>"
+              "text": "<script>",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">overview</p><p class=\"around\" dj-id=\"2\">Value: overview (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">done</li></ul></div>"
@@ -417,7 +479,9 @@
                 1,
                 0
               ],
-              "text": "overview"
+              "text": "overview",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">overview</p><p class=\"around\" dj-id=\"2\">Value: overview (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">overview</li></ul></div>"
@@ -431,7 +495,9 @@
                 0,
                 0
               ],
-              "text": "a & b"
+              "text": "a & b",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -439,7 +505,9 @@
                 1,
                 0
               ],
-              "text": "Value: a & b (end)"
+              "text": "Value: a & b (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">overview</li></ul></div>"
@@ -454,7 +522,9 @@
                 0,
                 0
               ],
-              "text": "caf\u00e9 \u2014 ok"
+              "text": "caf\u00e9 \u2014 ok",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">overview</li></ul></div>"
@@ -469,7 +539,9 @@
                 1,
                 0
               ],
-              "text": "a & b"
+              "text": "a & b",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
@@ -483,7 +555,9 @@
                 0,
                 0
               ],
-              "text": "<script>x</script>"
+              "text": "<script>x</script>",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -491,7 +565,9 @@
                 1,
                 0
               ],
-              "text": "Value: <script>x</script> (end)"
+              "text": "Value: <script>x</script> (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
@@ -506,7 +582,9 @@
                 0,
                 0
               ],
-              "text": "nbsp\u00a0here"
+              "text": "nbsp\u00a0here",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp; b</li></ul></div>"
@@ -521,7 +599,9 @@
                 1,
                 0
               ],
-              "text": "<script>x</script>"
+              "text": "<script>x</script>",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">&lt;script&gt;x&lt;/script&gt;</p><p class=\"around\" dj-id=\"2\">Value: &lt;script&gt;x&lt;/script&gt; (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
@@ -535,7 +615,9 @@
                 0,
                 0
               ],
-              "text": "plain again"
+              "text": "plain again",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -543,7 +625,9 @@
                 1,
                 0
               ],
-              "text": "Value: plain again (end)"
+              "text": "Value: plain again (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">nbsp&nbsp;here</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
@@ -558,7 +642,9 @@
                 0,
                 0
               ],
-              "text": "plain"
+              "text": "plain",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">&lt;script&gt;x&lt;/script&gt;</li></ul></div>"
@@ -573,7 +659,9 @@
                 1,
                 0
               ],
-              "text": "plain again"
+              "text": "plain again",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">plain again</p><p class=\"around\" dj-id=\"2\">Value: plain again (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
@@ -587,7 +675,9 @@
                 0,
                 0
               ],
-              "text": "say \"hi\" & 'bye'"
+              "text": "say \"hi\" & 'bye'",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -595,7 +685,9 @@
                 1,
                 0
               ],
-              "text": "Value: say \"hi\" & 'bye' (end)"
+              "text": "Value: say \"hi\" & 'bye' (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">plain</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
@@ -610,7 +702,9 @@
                 0,
                 0
               ],
-              "text": "overview"
+              "text": "overview",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">plain again</li></ul></div>"
@@ -625,7 +719,9 @@
                 1,
                 0
               ],
-              "text": "say \"hi\" & 'bye'"
+              "text": "say \"hi\" & 'bye'",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">say \"hi\" &amp; 'bye'</p><p class=\"around\" dj-id=\"2\">Value: say \"hi\" &amp; 'bye' (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
@@ -639,7 +735,9 @@
                 0,
                 0
               ],
-              "text": "a &amp; b"
+              "text": "a &amp; b",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -647,7 +745,9 @@
                 1,
                 0
               ],
-              "text": "Value: a &amp; b (end)"
+              "text": "Value: a &amp; b (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">overview</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
@@ -662,7 +762,9 @@
                 0,
                 0
               ],
-              "text": "a & b"
+              "text": "a & b",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">say \"hi\" &amp; 'bye'</li></ul></div>"
@@ -677,7 +779,9 @@
                 1,
                 0
               ],
-              "text": "a &amp; b"
+              "text": "a &amp; b",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">a &amp;amp; b</p><p class=\"around\" dj-id=\"2\">Value: a &amp;amp; b (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
@@ -691,7 +795,9 @@
                 0,
                 0
               ],
-              "text": "x < y > z"
+              "text": "x < y > z",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -699,7 +805,9 @@
                 1,
                 0
               ],
-              "text": "Value: x < y > z (end)"
+              "text": "Value: x < y > z (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">a &amp; b</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
@@ -714,7 +822,9 @@
                 0,
                 0
               ],
-              "text": "<script>"
+              "text": "<script>",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">a &amp;amp; b</li></ul></div>"
@@ -729,7 +839,9 @@
                 1,
                 0
               ],
-              "text": "x < y > z"
+              "text": "x < y > z",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">x &lt; y &gt; z</p><p class=\"around\" dj-id=\"2\">Value: x &lt; y &gt; z (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
@@ -743,7 +855,9 @@
                 0,
                 0
               ],
-              "text": "done"
+              "text": "done",
+              "parent_d": "1",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -751,7 +865,9 @@
                 1,
                 0
               ],
-              "text": "Value: done (end)"
+              "text": "Value: done (end)",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">&lt;script&gt;</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
@@ -766,7 +882,9 @@
                 0,
                 0
               ],
-              "text": "caf\u00e9 \u2014 ok"
+              "text": "caf\u00e9 \u2014 ok",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">x &lt; y &gt; z</li></ul></div>"
@@ -781,7 +899,9 @@
                 1,
                 0
               ],
-              "text": "done"
+              "text": "done",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"plain\" dj-id=\"1\">done</p><p class=\"around\" dj-id=\"2\">Value: done (end)</p><div class=\"safe\" dj-id=\"3\"><p dj-id=\"4\">caf\u00e9 \u2014 ok</p></div><ul class=\"loop\" dj-id=\"5\"><li dj-id=\"6\">r1</li><li dj-id=\"7\">done</li></ul></div>"

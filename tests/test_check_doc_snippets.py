@@ -774,6 +774,33 @@ class TestCheckSecurityStyle:
             assert code == 1, f"expected exit 1, got {code}: {out}"
             assert "syntax error" in out
 
+    def test_before_marker_suppresses_style_but_still_syntax_checks(self):
+        """#4188: `before` marks 1.3 code a migration guide replaces. Like
+        `anti-pattern` it drops the style verdict and keeps the syntax check;
+        without the marker the same block fails the style verdict."""
+        block = """
+            ```python
+            from djust import LiveView
+
+            class OldView(LiveView):
+                def mount(self, request, **kwargs):
+                    print(f"debug {request.user}")
+            ```
+            """
+        marked = "<!-- doc-snippet-check: before -->\n" + textwrap.dedent(block).lstrip("\n")
+        broken = "<!-- doc-snippet-check: before -->\n```python\ndef broken(:\n    pass\n```\n"
+        for body, expected, needle in (
+            (marked, 0, "OK"),
+            (block, 1, "f-string"),
+            (broken, 1, "syntax error"),
+        ):
+            with tempfile.TemporaryDirectory() as tmp:
+                d = pathlib.Path(tmp)
+                r, q, pp, b = _minimal_fixture(d, readme_body=body)
+                code, out = _run(readme=r, quickstart=q, pyproject=pp, bundle=b)
+                assert code == expected, f"expected exit {expected}, got {code}: {out}"
+                assert needle in out
+
     def test_skip_marker_suppresses_style_check_too(self):
         """The `skip` marker drops part (c) as well — it drops everything."""
         with tempfile.TemporaryDirectory() as tmp:

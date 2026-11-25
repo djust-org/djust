@@ -59,7 +59,9 @@
                 0,
                 0
               ],
-              "text": "front"
+              "text": "front",
+              "parent_d": "2",
+              "index": 0
             },
             {
               "type": "SetAttr",
@@ -78,7 +80,9 @@
                 1,
                 0
               ],
-              "text": "row 0"
+              "text": "row 0",
+              "parent_d": "3",
+              "index": 0
             },
             {
               "type": "SetAttr",
@@ -97,7 +101,9 @@
                 2,
                 0
               ],
-              "text": "row 1"
+              "text": "row 1",
+              "parent_d": "4",
+              "index": 0
             },
             {
               "type": "SetAttr",
@@ -116,7 +122,9 @@
                 3,
                 0
               ],
-              "text": "row 2"
+              "text": "row 2",
+              "parent_d": "5",
+              "index": 0
             },
             {
               "type": "SetAttr",
@@ -135,7 +143,9 @@
                 4,
                 0
               ],
-              "text": "row 3"
+              "text": "row 3",
+              "parent_d": "d",
+              "index": 0
             },
             {
               "type": "InsertChild",
@@ -187,7 +197,9 @@
                 2,
                 0
               ],
-              "text": "row 2"
+              "text": "row 2",
+              "parent_d": "4",
+              "index": 0
             },
             {
               "type": "SetAttr",
@@ -206,7 +218,9 @@
                 3,
                 0
               ],
-              "text": "row 3"
+              "text": "row 3",
+              "parent_d": "5",
+              "index": 0
             },
             {
               "type": "SetAttr",
@@ -225,7 +239,9 @@
                 4,
                 0
               ],
-              "text": "inserted"
+              "text": "inserted",
+              "parent_d": "d",
+              "index": 0
             },
             {
               "type": "RemoveChild",
@@ -259,7 +275,9 @@
                 0,
                 0
               ],
-              "text": "row 3"
+              "text": "row 3",
+              "parent_d": "2",
+              "index": 0
             },
             {
               "type": "SetAttr",
@@ -278,7 +296,9 @@
                 1,
                 0
               ],
-              "text": "inserted"
+              "text": "inserted",
+              "parent_d": "3",
+              "index": 0
             },
             {
               "type": "RemoveChild",
@@ -330,7 +350,9 @@
                 0,
                 0
               ],
-              "text": "fresh"
+              "text": "fresh",
+              "parent_d": "2",
+              "index": 0
             },
             {
               "type": "RemoveChild",
@@ -386,7 +408,9 @@
                 1,
                 0
               ],
-              "text": "count 1"
+              "text": "count 1",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li></ul><p dj-id=\"5\">count 1</p></div>"
@@ -496,7 +520,9 @@
                 1,
                 0
               ],
-              "text": "count 2"
+              "text": "count 2",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"c\" id=\"rows-200\">only</li><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li></ul><p dj-id=\"5\">count 2</p></div>"
@@ -538,7 +564,9 @@
                 1,
                 0
               ],
-              "text": "count 3"
+              "text": "count 3",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"2000\" dj-id=\"c\" id=\"rows-200\">only</li><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li><li data-pk=\"1030\" dj-id=\"q\" id=\"rows-103\">new 3</li></ul><p dj-id=\"5\">count 3</p></div>"
@@ -585,7 +613,9 @@
                 1,
                 0
               ],
-              "text": "count 1"
+              "text": "count 1",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 1</p></div>"
@@ -627,7 +657,9 @@
                 1,
                 0
               ],
-              "text": "count 2"
+              "text": "count 2",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 2</p></div>"
@@ -703,7 +735,9 @@
                 1,
                 0
               ],
-              "text": "count 3"
+              "text": "count 3",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 3</p></div>"
@@ -779,7 +813,9 @@
                 1,
                 0
               ],
-              "text": "count 4"
+              "text": "count 4",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"prepend\" id=\"list\"><li data-pk=\"1040\" dj-id=\"u\" id=\"rows-104\">new 4</li><li data-pk=\"2000\" dj-id=\"q\" id=\"rows-200\">only</li><li data-pk=\"3010\" dj-id=\"g\" id=\"rows-301\">two a</li><li data-pk=\"3020\" dj-id=\"h\" id=\"rows-302\">two b</li><li data-pk=\"1020\" dj-id=\"c\" id=\"rows-102\">new 2</li><li data-pk=\"1010\" dj-id=\"8\" id=\"rows-101\">new 1</li><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li></ul><p dj-id=\"5\">count 4</p></div>"
@@ -851,7 +887,9 @@
                 4,
                 0
               ],
-              "text": "count 1"
+              "text": "count 1",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><!--dj-if id=\"if-7d7219c7-0\"--><p class=\"banner\" dj-id=\"7\">notice</p><!--/dj-if--><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"9\" id=\"rows-101\">new 1</li></ul><p dj-id=\"5\">count 1</p></div>"
@@ -900,7 +938,9 @@
                 3,
                 0
               ],
-              "text": "count 2"
+              "text": "count 2",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><!--dj-if id=\"if-7d7219c7-0\"--><!--/dj-if--><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"9\" id=\"rows-101\">new 1</li><li data-pk=\"1020\" dj-id=\"d\" id=\"rows-102\">new 2</li></ul><p dj-id=\"5\">count 2</p></div>"
@@ -914,7 +954,9 @@
                 3,
                 0
               ],
-              "text": "count 3"
+              "text": "count 3",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><!--dj-if id=\"if-7d7219c7-0\"--><!--/dj-if--><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"0\" dj-id=\"2\" id=\"rows-0\">row 0</li><li data-pk=\"10\" dj-id=\"3\" id=\"rows-1\">row 1</li><li data-pk=\"20\" dj-id=\"4\" id=\"rows-2\">row 2</li><li data-pk=\"1010\" dj-id=\"9\" id=\"rows-101\">new 1</li><li data-pk=\"1020\" dj-id=\"d\" id=\"rows-102\">new 2</li></ul><p dj-id=\"5\">count 3</p></div>"
@@ -954,7 +996,9 @@
                 0,
                 0
               ],
-              "text": "row 1"
+              "text": "row 1",
+              "parent_d": "2",
+              "index": 0
             },
             {
               "type": "SetAttr",
@@ -983,7 +1027,9 @@
                 1,
                 0
               ],
-              "text": "row 2"
+              "text": "row 2",
+              "parent_d": "3",
+              "index": 0
             },
             {
               "type": "SetAttr",
@@ -1012,7 +1058,9 @@
                 2,
                 0
               ],
-              "text": "row 3"
+              "text": "row 3",
+              "parent_d": "4",
+              "index": 0
             },
             {
               "type": "RemoveChild",
@@ -1036,7 +1084,9 @@
                 0,
                 0
               ],
-              "text": "edited"
+              "text": "edited",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><ul dj-id=\"1\" dj-update=\"append\" id=\"list\"><li data-pk=\"10\" dj-id=\"2\" id=\"rows-1\">edited</li><li data-pk=\"20\" dj-id=\"3\" id=\"rows-2\">row 2</li><li data-pk=\"30\" dj-id=\"4\" id=\"rows-3\">row 3</li></ul><p dj-id=\"6\">[]</p></div>"

@@ -331,6 +331,25 @@ def build_progress_message(ref: str, progress: int, status: str = "uploading") -
     }
 
 
+#: The ``reason`` values of a view's ``handle_upload_failed(name, entry,
+#: reason)`` (#4312): a writer's ``UploadRefused``, the size limit, the slot's
+#: ``timeout=``, a cancel by the browser, and anything else.
+UPLOAD_FAILURE_REASONS = ("refused", "too_large", "timeout", "cancelled", "error")
+
+#: The entry errors that mean the file went over its size limit.
+_TOO_LARGE_ERRORS = ("File size exceeds limit", "File too large")
+
+
+def upload_failure_reason(entry: "UploadEntry") -> str:
+    """The ``handle_upload_failed`` reason of an entry whose error is set:
+    ``refused``, ``too_large`` or ``error`` (#4312)."""
+    if entry._refused:
+        return "refused"
+    if entry.error and entry.error.startswith(_TOO_LARGE_ERRORS):
+        return "too_large"
+    return "error"
+
+
 # ============================================================================
 # UploadWriter — direct-to-destination byte stream
 # ============================================================================
@@ -647,6 +666,13 @@ class UploadConfig:
     # independent of ``accept`` — an ``image/*`` slot still rejects SVG
     # unless this is True.
     allow_active_content: bool = False
+    # #4118 — seconds an upload may take from its registration. An upload
+    # still unfinished then is cancelled (its writer aborted, its entry
+    # dropped) and the browser is told. ``None`` (default): no limit.
+    timeout: Optional[float] = None
+    # #4312 — call the view's ``handle_upload_progress(name, entry)`` at each
+    # 10% step the browser is sent (each step once). Off by default.
+    progress_hook: bool = False
 
     def __post_init__(self) -> None:
         if self.accept:
@@ -697,6 +723,10 @@ class UploadEntry:
     _complete: bool = field(default=False, repr=False)
     _error: Optional[str] = field(default=None, repr=False)
     _created_at: float = field(default_factory=time.time, repr=False)
+    # #4118 — when the ``timeout=`` clock started (registration or resume), on
+    # the monotonic clock the event loop's timers use, so a wall-clock step
+    # neither fires nor postpones a deadline.
+    _started: float = field(default_factory=time.monotonic, repr=False)
     # Writer path — populated when the upload slot was configured with a
     # writer= kwarg. writer_instance holds the live per-upload writer;
     # writer_result holds the value returned from writer.close() and is
@@ -709,6 +739,28 @@ class UploadEntry:
     # resumable writer records it so only that session can resume the upload
     # or read its status.
     _session_key: Optional[str] = field(default=None, repr=False)
+    # The explicit (ADR-038) owner that registered the upload (#4175): the
+    # mount binding's principal digest (session, user, tenant) and view. A
+    # resumable writer records it, and chunk / complete / cancel frames and a
+    # resume from any other owner are refused. ``None`` when the connection has
+    # no mount binding; the key is then the session alone.
+    _owner: Optional[Dict[str, str]] = field(default=None, repr=False)
+    # #4312 — True when the error is a writer's ``UploadRefused`` (the
+    # ``refused`` reason of ``handle_upload_failed``).
+    _refused: bool = field(default=False, repr=False)
+    # #4312 — the last 10% step (``progress // 10``, 10 at 100%) the browser
+    # was sent: each step is sent, and the progress hook run, once.
+    _progress_step: int = field(default=0, repr=False)
+
+    def next_progress_step(self) -> bool:
+        """Whether the upload has reached a 10% step it has not reported yet;
+        records it when so (#4312). A step is reported once, 100% included,
+        however many chunks it takes to cross it."""
+        step = self.progress // 10
+        if step <= self._progress_step:
+            return False
+        self._progress_step = step
+        return True
 
     @property
     def data(self) -> bytes:
@@ -820,9 +872,52 @@ class UploadEntry:
         self._chunks.clear()
 
 
+#: Longest refusal message sent to the browser (#4118).
+_MAX_REFUSAL_MESSAGE = 200
+
+
+def _upload_refusal_message(exc: BaseException) -> Optional[str]:
+    """The browser-facing message of a writer refusal, or None for a fault.
+
+    Only an :class:`UploadRefused` is a refusal. The other ``UploadError``
+    subclasses are infrastructure faults (credentials, network, quota) whose
+    messages name the vendor, so they stay on the server. The refusal's
+    ``message`` attribute is the text the writer wrote for people; it is
+    trimmed to one line of at most ``_MAX_REFUSAL_MESSAGE`` characters. An
+    empty or non-string message counts as a fault.
+    """
+    from djust.contrib.uploads.errors import UploadRefused as _UploadRefused
+
+    if not isinstance(exc, _UploadRefused):
+        return None
+    message = getattr(exc, "message", None)
+    if not isinstance(message, str):
+        return None
+    message = " ".join(message.split())
+    if not message:
+        return None
+    if len(message) > _MAX_REFUSAL_MESSAGE:
+        message = message[: _MAX_REFUSAL_MESSAGE - 1] + "\u2026"
+    return message
+
+
 # ============================================================================
 # Upload Manager (per-session state)
 # ============================================================================
+
+
+#: The default ``owner`` of :meth:`UploadManager.add_chunk` /
+#: ``complete_upload`` / ``cancel_upload``: a call by the framework or the
+#: view's own code, which no owner check refuses. A client frame passes the
+#: connection's owner (``None`` when the connection has no mount binding), #4175.
+SERVER_CALL: Any = object()
+
+#: The push event that carries an ``upload_progress`` message decided inside a
+#: turn (``UploadMixin.cancel_upload``), delivered at the turn's end (#4118).
+UPLOAD_PROGRESS_PUSH_EVENT = "djust:upload_progress"
+
+#: What the browser is told when the view cancels an upload (#4118).
+SERVER_CANCEL_MESSAGE = "Upload cancelled by the server."
 
 
 class UploadManager:
@@ -842,9 +937,8 @@ class UploadManager:
         self._name_to_refs: Dict[str, List[str]] = {}  # upload_name -> [refs]
         self._temp_dir = temp_dir or tempfile.mkdtemp(prefix="djust_uploads_")
         self._csrf_token: Optional[str] = None
-        # False for an explicit (ADR-038) owner: resumable writers then keep
-        # no resume record. Legacy owners resume as before.
-        self._resume_allowed: bool = True
+        # #4118 — the event-loop timers that enforce ``timeout=``, by ref.
+        self._deadline_handles: Dict[str, Any] = {}
 
     def configure(
         self,
@@ -857,9 +951,17 @@ class UploadManager:
         writer: Optional[Type[UploadWriter]] = None,
         resumable: bool = False,
         allow_active_content: bool = False,
+        timeout: Optional[float] = None,
+        progress_hook: bool = False,
     ) -> UploadConfig:
         """Configure an upload slot."""
         chunk_size = _clamp_chunk_size(name, chunk_size)
+        if timeout is not None and (
+            isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0
+        ):
+            raise ValueError("allow_upload(timeout=) must be a positive number of seconds")
+        if not isinstance(progress_hook, bool):
+            raise ValueError("allow_upload(progress_hook=) must be True or False")
         config = UploadConfig(
             name=name,
             accept=accept,
@@ -870,6 +972,8 @@ class UploadManager:
             writer=writer,
             resumable=resumable,
             allow_active_content=allow_active_content,
+            timeout=timeout,
+            progress_hook=progress_hook,
         )
         self._configs[name] = config
         if name not in self._name_to_refs:
@@ -895,6 +999,34 @@ class UploadManager:
             writer.abort(error)
         except Exception:  # noqa: BLE001 — abort() must never raise
             logger.exception("UploadWriter.abort() raised for upload %s", entry.ref)
+
+    @staticmethod
+    def _writer_failed(entry: UploadEntry, exc: BaseException, stage: str, generic: str) -> None:
+        """Record a writer failure on ``entry`` and log it (#4118).
+
+        An :class:`UploadRefused` is a refusal the writer chose to make (a
+        size or content policy): it is logged at WARNING without a traceback,
+        and its own ``message`` becomes the entry's error, which the browser
+        receives. Its ``sdk_exc`` and ``str()`` are never used. Any other
+        exception, the other ``UploadError`` subclasses included, is a fault:
+        logged with its traceback, and the browser gets only the fixed
+        ``generic`` text.
+        """
+        refusal = _upload_refusal_message(exc)
+        if refusal is not None:
+            entry._error = refusal
+            entry._refused = True
+            from .._log_utils import sanitize_for_log
+
+            logger.warning(
+                "UploadWriter %s refused upload %s: %s",
+                stage,
+                entry.ref,
+                sanitize_for_log(refusal),
+            )
+            return
+        entry._error = generic
+        logger.exception("UploadWriter %s raised for upload %s: %s", stage, entry.ref, exc)
 
     def _add_chunk_via_writer(
         self,
@@ -922,6 +1054,7 @@ class UploadManager:
             writer_kwargs: Dict[str, Any] = {}
             if issubclass(writer_cls, ResumableUploadWriter):
                 writer_kwargs["session_key"] = entry._session_key
+                writer_kwargs["owner"] = entry._owner
             try:
                 entry.writer_instance = writer_cls(
                     upload_id=entry.ref,
@@ -930,33 +1063,19 @@ class UploadManager:
                     expected_size=entry.client_size,
                     **writer_kwargs,
                 )
-                if not self._resume_allowed and hasattr(entry.writer_instance, "_store_available"):
-                    # A resumable writer then runs as a plain one: no resume
-                    # record (client filename, progress) is ever written.
-                    entry.writer_instance._store_available = False
             except Exception as exc:  # noqa: BLE001
-                # Do NOT surface the raw exception message to the client —
-                # writer implementations may embed IAM ARNs, bucket names,
-                # or endpoint URLs in their exceptions. Log the full trace
-                # server-side for debugging; return a generic message to the
-                # client.
-                entry._error = "Upload writer failed to initialize"
-                logger.exception(
-                    "UploadWriter instantiation failed for upload %s: %s",
-                    entry.ref,
-                    exc,
+                # A raw exception message never reaches the client (writer
+                # implementations may embed IAM ARNs, bucket names or
+                # endpoint URLs); only an UploadError's own message does.
+                self._writer_failed(
+                    entry, exc, "instantiation", "Upload writer failed to initialize"
                 )
                 return False
         if not entry._writer_opened:
             try:
                 entry.writer_instance.open()
             except Exception as exc:  # noqa: BLE001
-                entry._error = "Upload writer failed to initialize"
-                logger.exception(
-                    "UploadWriter.open() raised for upload %s: %s",
-                    entry.ref,
-                    exc,
-                )
+                self._writer_failed(entry, exc, "open()", "Upload writer failed to initialize")
                 self._safe_abort_writer(entry, exc)
                 return False
             entry._writer_opened = True
@@ -973,12 +1092,7 @@ class UploadManager:
             else:
                 writer.write_chunk(data)
         except Exception as exc:  # noqa: BLE001
-            entry._error = "Upload writer rejected chunk"
-            logger.exception(
-                "UploadWriter.write_chunk() raised for upload %s: %s",
-                entry.ref,
-                exc,
-            )
+            self._writer_failed(entry, exc, "write_chunk()", "Upload writer rejected chunk")
             self._safe_abort_writer(entry, exc)
             return False
         entry._total_received += len(data)
@@ -1004,12 +1118,7 @@ class UploadManager:
         try:
             result = writer.close()
         except Exception as exc:  # noqa: BLE001
-            entry._error = "Upload writer failed to finalize"
-            logger.exception(
-                "UploadWriter.close() raised for upload %s: %s",
-                entry.ref,
-                exc,
-            )
+            self._writer_failed(entry, exc, "close()", "Upload writer failed to finalize")
             self._safe_abort_writer(entry, exc)
             return False
 
@@ -1049,13 +1158,16 @@ class UploadManager:
         client_type: str,
         client_size: int,
         session_key: Optional[str] = None,
+        owner: Optional[Dict[str, str]] = None,
     ) -> Optional[UploadEntry]:
         """
         Register a new upload entry. Called when client announces a file selection.
 
         ``session_key`` is the registering connection's Django session key.
         Resumable uploads store it as the upload's owner; without one the
-        upload cannot be resumed.
+        upload cannot be resumed. ``owner`` is an explicit view's binding
+        (``resumable.upload_owner``, #4175): only a connection with the same
+        owner may send the upload's frames or resume it.
 
         Returns the entry, or None if validation fails.
         """
@@ -1064,12 +1176,17 @@ class UploadManager:
             logger.warning("No upload config for '%s'", upload_name)
             return None
 
-        # Check max entries
-        current_refs = self._name_to_refs.get(upload_name, [])
-        active_refs = [
-            r for r in current_refs if r in self._entries and not self._entries[r].complete
-        ]
-        if len(active_refs) >= config.max_entries:
+        # An upload past its deadline frees its place before the count. Over
+        # the WebSocket the consumer has already expired (and told the browser
+        # about) every overdue upload just before calling this, so nothing is
+        # dropped here unannounced; a direct caller gets the same place-freeing
+        # its timers would have done.
+        self.expire_overdue()
+
+        # Check max entries: every entry the slot holds, finished or not
+        # (#4118), as documented; a finished entry holds its place until it
+        # is consumed or cancelled.
+        if self._held_count(upload_name) >= config.max_entries:
             logger.warning("Max entries (%d) reached for '%s'", config.max_entries, upload_name)
             return None
 
@@ -1113,23 +1230,63 @@ class UploadManager:
             client_type=client_type,
             client_size=client_size,
             _session_key=session_key,
+            _owner=owner,
         )
         self._entries[ref] = entry
         self._name_to_refs.setdefault(upload_name, []).append(ref)
         return entry
 
-    def add_chunk(self, ref: str, chunk_index: int, data: bytes) -> Optional[int]:
+    @staticmethod
+    def _owner_refuses(entry: UploadEntry, ref: str, owner: Any) -> bool:
+        """Whether a frame from ``owner`` must be refused for ``entry`` (#4175).
+
+        An upload an explicit view registered answers only its own owner. A
+        refusal is logged and changes nothing: the entry is not failed and its
+        writer is not aborted, so a stranger's frame cannot kill the upload.
+        ``SERVER_CALL`` (the default) is the framework or the view's own code,
+        never refused.
+        """
+        if owner is SERVER_CALL:
+            return False
+        if entry._owner is not None and entry._owner != owner:
+            from .._log_utils import sanitize_for_log
+
+            logger.warning(
+                "Upload frame refused for %s: this connection does not own the upload",
+                sanitize_for_log(ref),
+            )
+            return True
+        return False
+
+    def _drop_deadline_if_failed(self, ref: str) -> None:
+        """A failed upload needs no timer any more (#4118)."""
+        entry = self._entries.get(ref)
+        if entry is not None and entry.error is not None:
+            self._drop_deadline(ref)
+
+    def add_chunk(
+        self, ref: str, chunk_index: int, data: bytes, owner: Any = SERVER_CALL
+    ) -> Optional[int]:
         """
         Add a chunk to an upload.
 
         Returns progress (0-100) or None if ref not found or the chunk
-        was rejected (size limit, writer error).
+        was rejected (size limit, writer error, another owner).
 
         When the upload slot is configured with writer=, the chunk is
         piped to the writer and nothing is buffered to RAM or disk.
         """
+        progress = self._add_chunk(ref, chunk_index, data, owner)
+        if progress is None:
+            self._drop_deadline_if_failed(ref)
+        return progress
+
+    def _add_chunk(self, ref: str, chunk_index: int, data: bytes, owner: Any) -> Optional[int]:
+        """:meth:`add_chunk` without the failed upload's timer cleanup."""
         entry = self._entries.get(ref)
         if not entry:
+            return None
+        if self._owner_refuses(entry, ref, owner):
             return None
 
         # Fast-path: once an upload has been aborted (size limit, writer
@@ -1165,7 +1322,7 @@ class UploadManager:
         entry.add_chunk(chunk_index, data)
         return entry.progress
 
-    def complete_upload(self, ref: str) -> Optional[UploadEntry]:
+    def complete_upload(self, ref: str, owner: Any = SERVER_CALL) -> Optional[UploadEntry]:
         """
         Mark upload as complete and finalize.
 
@@ -1173,10 +1330,20 @@ class UploadManager:
         return value on entry.writer_result. For disk-buffered slots,
         writes chunks to a temp file and runs magic-byte validation.
 
-        Returns the entry if successful, None if finalization failed.
+        Returns the entry if successful, None if finalization failed or
+        ``owner`` does not own the upload.
         """
+        entry = self._complete_upload(ref, owner)
+        if entry is None:
+            self._drop_deadline_if_failed(ref)
+        return entry
+
+    def _complete_upload(self, ref: str, owner: Any) -> Optional[UploadEntry]:
+        """:meth:`complete_upload` without the failed upload's timer cleanup."""
         entry = self._entries.get(ref)
         if not entry:
+            return None
+        if self._owner_refuses(entry, ref, owner):
             return None
 
         config = self._configs.get(entry.upload_name)
@@ -1205,17 +1372,21 @@ class UploadManager:
 
         if config is not None and config.writer is not None:
             if self._finalize_writer(entry):
+                self._drop_deadline(ref)
                 return entry
             logger.warning("Upload writer finalize failed for %s: %s", ref, entry.error)
             return None
 
         if entry.finalize(self._temp_dir):
+            self._drop_deadline(ref)
             return entry
         else:
             logger.warning("Upload validation failed for %s: %s", ref, entry.error)
             return None
 
-    def resume_entry(self, ref: str, session_key: Optional[str]) -> Optional[UploadEntry]:
+    def resume_entry(
+        self, ref: str, session_key: Optional[str], owner: Optional[Dict[str, str]] = None
+    ) -> Optional[UploadEntry]:
         """Re-attach an upload suspended when its session closed (#2972).
 
         Called for an ``upload_resume`` whose state check succeeded. Takes the
@@ -1223,7 +1394,8 @@ class UploadManager:
         it here, so the client's remaining chunks continue the same writer.
         Returns None — and the caller answers ``not_found``, so the client
         starts over — when nothing is parked for this session in this
-        process, or this view has no matching upload slot.
+        process, this view has no matching upload slot, or the parked upload
+        belongs to another ``owner`` (an explicit view's binding, #4175).
         """
         from .resumable import (
             ResumableUploadWriter,
@@ -1247,31 +1419,120 @@ class UploadManager:
             and isinstance(entry.writer_instance, ResumableUploadWriter)
             and writer_cls._inner_writer_cls is type(entry.writer_instance)._inner_writer_cls
         )
-        current_refs = self._name_to_refs.get(entry.upload_name, [])
-        active = [r for r in current_refs if r in self._entries and not self._entries[r].complete]
-        if config is None or not same_writer or len(active) >= config.max_entries:
-            # Another view may own the slot: leave it parked for that one.
+        if (
+            config is None
+            or not same_writer
+            or self._held_count(entry.upload_name) >= config.max_entries
+            or entry._owner != owner
+        ):
+            # Another view (or another owner, #4175) may own the slot: leave
+            # it parked for that one.
             park_suspended_upload(entry)
             return None
+        # The time limit runs again from the resume.
+        entry._started = time.monotonic()
         self._entries[ref] = entry
         self._name_to_refs.setdefault(entry.upload_name, []).append(ref)
         return entry
 
-    def cancel_upload(self, ref: str) -> None:
+    def _held_count(self, upload_name: str) -> int:
+        """Entries the slot holds against ``max_entries`` (#4118).
+
+        In flight and finished entries both count, until consumed or
+        cancelled. An entry that failed (its error set) does not: the user
+        can try again without the view first clearing the failure.
+        """
+        refs = self._name_to_refs.get(upload_name, [])
+        return sum(1 for r in refs if r in self._entries and self._entries[r].error is None)
+
+    def timeout_message(self, ref: str) -> str:
+        """The browser-facing text for an upload stopped by ``timeout=``."""
+        entry = self._entries.get(ref)
+        config = self._configs.get(entry.upload_name) if entry is not None else None
+        if config is not None and config.timeout is not None:
+            return "Upload timed out after %g seconds." % config.timeout
+        return "Upload timed out."
+
+    def remaining(self, ref: str, now: Optional[float] = None) -> Optional[float]:
+        """Seconds left before ``ref`` passes its slot's ``timeout=`` (zero or
+        less when it has), or None for an upload with no deadline: unknown,
+        finished, failed, or on a slot without ``timeout=``.
+
+        ``now`` is on the :func:`time.monotonic` clock.
+        """
+        entry = self._entries.get(ref)
+        if entry is None or entry.complete or entry.error is not None:
+            return None
+        config = self._configs.get(entry.upload_name)
+        if config is None or config.timeout is None:
+            return None
+        now = time.monotonic() if now is None else now
+        return entry._started + config.timeout - now
+
+    def is_overdue(self, ref: str, now: Optional[float] = None) -> bool:
+        """Whether the upload ``ref`` is unfinished past its slot's ``timeout=``.
+
+        ``now`` is on the :func:`time.monotonic` clock.
+        """
+        left = self.remaining(ref, now)
+        return left is not None and left <= 0
+
+    def expire_overdue(self, now: Optional[float] = None) -> List[Tuple[str, str]]:
+        """Cancel every upload past its slot's ``timeout=`` (#4118).
+
+        Each one's writer is aborted and its entry dropped, as by
+        :meth:`cancel_upload`. Returns ``(ref, message)`` for each, so the
+        caller can tell the browser. ``now`` is on the :func:`time.monotonic`
+        clock.
+        """
+        now = time.monotonic() if now is None else now
+        expired = []
+        for ref in [r for r in self._entries if self.is_overdue(r, now)]:
+            message = self.timeout_message(ref)
+            logger.warning("Upload %s cancelled: %s", ref, message)
+            self._cancel(ref, TimeoutError(message))
+            expired.append((ref, message))
+        return expired
+
+    def set_deadline_handle(self, ref: str, handle: Any) -> None:
+        """Keep the event-loop timer enforcing ``ref``'s timeout, so it is
+        cancelled when the upload ends or the session closes."""
+        old = self._deadline_handles.pop(ref, None)
+        if old is not None:
+            old.cancel()
+        self._deadline_handles[ref] = handle
+
+    def _drop_deadline(self, ref: str) -> None:
+        handle = self._deadline_handles.pop(ref, None)
+        if handle is not None:
+            handle.cancel()
+
+    def cancel_upload(self, ref: str, owner: Any = SERVER_CALL) -> None:
         """Cancel and clean up an upload.
 
         For writer-configured slots, calls writer.abort() with a
         ConnectionAbortedError so the writer can release server-side
-        resources (e.g. S3 AbortMultipartUpload).
+        resources (e.g. S3 AbortMultipartUpload). A cancel from a connection
+        that does not own the upload (#4175) is refused and changes nothing.
         """
+        existing = self._entries.get(ref)
+        if existing is not None and self._owner_refuses(existing, ref, owner):
+            return
+        self._cancel(ref, ConnectionAbortedError("upload cancelled"))
+
+    def _cancel(self, ref: str, reason: BaseException) -> Optional[UploadEntry]:
+        """Drop ``ref``'s entry, aborting its writer with ``reason`` if the
+        upload is unfinished. Returns the dropped entry, or None."""
+        self._drop_deadline(ref)
         entry = self._entries.pop(ref, None)
         if entry:
             if entry.writer_instance is not None and not entry._complete:
-                self._safe_abort_writer(entry, ConnectionAbortedError("upload cancelled"))
+                self._safe_abort_writer(entry, reason)
             entry.cleanup()
             refs = self._name_to_refs.get(entry.upload_name, [])
             if ref in refs:
                 refs.remove(ref)
+        return entry
 
     def consume_entries(self, upload_name: str) -> Generator[UploadEntry, None, None]:
         """
@@ -1283,7 +1544,9 @@ class UploadManager:
         refs = self._name_to_refs.get(upload_name, [])
         consumed = []
 
-        for ref in refs:
+        # Over a copy: the list can change while a handler holds the
+        # generator (an entry cancelled meanwhile), which must not skip one.
+        for ref in list(refs):
             entry = self._entries.get(ref)
             if entry and entry.complete:
                 yield entry
@@ -1354,6 +1617,9 @@ class UploadManager:
         suspended, keeping its resume state until the TTL so the client can
         resume it after reconnecting (#2972).
         """
+        for handle in self._deadline_handles.values():
+            handle.cancel()
+        self._deadline_handles.clear()
         for entry in self._entries.values():
             if entry.writer_instance is not None and not entry._complete:
                 # Imported here, and only for a live writer: the module is also
@@ -1448,15 +1714,9 @@ class UploadMixin:
 
     def _ensure_upload_manager(self) -> UploadManager:
         if self._upload_manager is None:
+            # Explicit views resume uploads in flight too (#4175, replacing
+            # ADR-038 D-g): the record is bound to the mount's owner.
             self._upload_manager = UploadManager()
-            # ADR-038 D-g: explicit views never resume uploads in flight, so
-            # their writers must not record resume state that nothing reads.
-            try:
-                from .._exposure import uses_legacy_exposure
-            except ImportError:  # pragma: no cover - loaded outside the package
-                pass  # no LiveView policy exists there; keep the legacy default
-            else:
-                self._upload_manager._resume_allowed = uses_legacy_exposure(self)
         return self._upload_manager
 
     def allow_upload(
@@ -1470,6 +1730,8 @@ class UploadMixin:
         writer: Optional[Type[UploadWriter]] = None,
         resumable: bool = False,
         allow_active_content: bool = False,
+        timeout: Optional[float] = None,
+        progress_hook: bool = False,
     ) -> UploadConfig:
         """
         Configure a named upload slot.
@@ -1477,7 +1739,9 @@ class UploadMixin:
         Args:
             name: Upload slot name (referenced in templates as dj-upload="name")
             accept: Comma-separated accepted file extensions (e.g., ".jpg,.png")
-            max_entries: Maximum number of files for this slot
+            max_entries: Maximum number of files this slot holds at once:
+                uploads in flight and finished uploads not yet consumed (or
+                cancelled) both count. A failed upload does not.
             max_file_size: Maximum file size in bytes (default 10MB)
             chunk_size: Chunk size for transfer (default 63KB). Clamped so a
                 chunk frame fits the ``max_message_size`` setting.
@@ -1500,10 +1764,27 @@ class UploadMixin:
                 ``UploadWriter`` and ``BufferedUploadWriter`` in
                 ``djust.uploads``. When omitted (default), uploads are
                 buffered to a temp file and validated by magic bytes.
+            timeout: Seconds an upload may take, counted from the browser's
+                registration of the file (from the resume, for a resumed
+                upload). An upload unfinished by then is cancelled: its
+                writer is aborted, its entry dropped, and the browser's
+                ``uploadFile()`` promise rejects with "Upload timed out after
+                N seconds.". ``None`` (default) sets no limit.
+            progress_hook: Call the view's ``handle_upload_progress(name,
+                entry)`` at each 10% step the browser is sent (each step
+                once), as a turn of the view with a render (#4312). Off by
+                default; the view must define ``handle_upload_progress``.
 
         Returns:
             UploadConfig object
         """
+        if progress_hook is True and not callable(getattr(self, "handle_upload_progress", None)):
+            from django.core.exceptions import ImproperlyConfigured
+
+            raise ImproperlyConfigured(
+                "allow_upload(%r, progress_hook=True) needs a handle_upload_progress(name, "
+                "entry) method on %s" % (name, type(self).__name__)
+            )
         mgr = self._ensure_upload_manager()
         cfg = mgr.configure(
             name=name,
@@ -1515,6 +1796,8 @@ class UploadMixin:
             writer=writer,
             resumable=resumable,
             allow_active_content=allow_active_content,
+            timeout=timeout,
+            progress_hook=progress_hook,
         )
         return cfg
 
@@ -1534,9 +1817,24 @@ class UploadMixin:
             yield from self._upload_manager.consume_entries(name)
 
     def cancel_upload(self, name: str, ref: str) -> None:
-        """Cancel a specific upload by ref."""
-        if self._upload_manager:
-            self._upload_manager.cancel_upload(ref)
+        """Cancel a specific upload by ref.
+
+        The upload's writer is aborted and its entry dropped. The browser is
+        told at the end of the turn (#4118): its ``uploadFile()`` promise
+        rejects with "Upload cancelled by the server." and stops sending
+        chunks, and ``djust:upload:progress`` fires with status
+        ``cancelled``.
+        """
+        if not self._upload_manager:
+            return
+        entry = self._upload_manager._cancel(ref, ConnectionAbortedError("upload cancelled"))
+        if entry is None:
+            return
+        push = getattr(self, "push_event", None)
+        if callable(push):
+            message = build_progress_message(ref, 0, "cancelled")
+            message["error"] = SERVER_CANCEL_MESSAGE
+            push(UPLOAD_PROGRESS_PUSH_EVENT, message)
 
     def get_uploads(self, name: str) -> List[UploadEntry]:
         """Get all entries (including in-progress) for an upload slot."""
@@ -1548,12 +1846,12 @@ class UploadMixin:
         """Render-only upload state for an explicit view's template context.
 
         ADR-038 E2-6: the explicit render context calls this for the
-        registered ``djust.uploads`` provider; legacy views never render an
-        ``uploads`` key. The value is ``get_upload_state()`` with each entry
+        registered ``djust.uploads`` provider. The value is ``get_upload_state()`` with each entry
         projected through :func:`_render_upload_entry`, which drops
         ``writer_result`` and the raw ``client_name``. Nothing here is
-        persisted, sent as client state or exported to debug tools, and under
-        decision D-g entries in flight do not survive a reconnect.
+        persisted, sent as client state or exported to debug tools. A
+        ``ResumableUploadWriter`` upload in flight resumes after a reconnect
+        (#4175); other entries in flight start over.
         """
         if not self._upload_manager:
             return {}
@@ -1590,6 +1888,7 @@ from djust.contrib.uploads.errors import (  # noqa: E402  — re-export
     UploadError,
     UploadNetworkError,
     UploadQuotaError,
+    UploadRefused,
 )
 
 __all__ = [
@@ -1605,11 +1904,14 @@ __all__ = [
     "mime_from_extension",
     "parse_upload_frame",
     "build_progress_message",
+    "UPLOAD_FAILURE_REASONS",
+    "upload_failure_reason",
     # v0.5.7 — object-storage error taxonomy (#820, #822)
     "UploadError",
     "UploadNetworkError",
     "UploadCredentialError",
     "UploadQuotaError",
+    "UploadRefused",
 ]
 
 # Re-export resumable bits so ``from djust.uploads import

@@ -1,16 +1,19 @@
 """The ``djust.components.ui`` simple components HTML-escape their values.
 
-Every ``*_simple.py`` component renders through ``Component.render()``: a Rust
-implementation, else its ``template`` string, else ``_render_custom()`` (which
-dispatches to ``_render_bootstrap`` / ``_render_tailwind`` / ``_render_plain``
-where the component has per-framework output). These tests pin the Python
-f-string path: the Rust instance and the template are switched off on the
-instance so ``render()`` reaches ``_render_custom()`` under each CSS framework.
+Every ``*_simple.py`` component has ONE renderer (#4002): its ``template`` string where it has
+one (``Checkbox``, ``Input``, ``ButtonGroup``, ``Offcanvas``), else ``_render_custom()``. The
+eight with a ui ``*Component`` twin (``Alert``, ``Badge``, ``Button``, ``Card``, ``Dropdown``,
+``Modal``, ``Progress``, ``Spinner``) return the twin's markup, which follows ``css_framework``;
+the other crate-backed ones draw its markup; the rest choose their markup by ``css_framework``.
+These tests render through that one renderer under each CSS framework.
 
-Values in a TEXT slot are escaped with ``conditional_escape``, so a value the
-developer marked safe (``mark_safe`` / ``SafeString``) passes through unchanged
-there. A value in an ATTRIBUTE, and every URL (``data_url_attr``: non-navigation
-schemes become ``#``), is checked and escaped whatever it is marked as (#3898).
+A value in an ATTRIBUTE, and every URL (``data_url_attr``: non-navigation schemes become ``#``),
+is checked and escaped whatever it is marked as (#3898). A TEXT slot of a template, and every
+text slot of the fifteen and of the twin-drawn ``Dropdown``, is escaped whatever it is marked
+as too (the twin classes hand their twin plain strings), except a declared
+``markup_slots`` parameter the constructor escapes itself (#3932). The remaining
+``_render_custom`` components escape text with ``conditional_escape``, so a marked-safe value
+keeps its markup there.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ from unittest.mock import patch
 from html.parser import HTMLParser
 
 import pytest
-from django.utils.safestring import mark_safe
+from django.utils.safestring import SafeString, mark_safe
 
 from djust import config as config_module
 from djust.components.ui import (
@@ -76,9 +79,8 @@ def _framework(framework: str):
 
 
 def _python_render(component: Any, framework: str) -> str:
-    """Render through ``_render_custom()`` (the f-string path)."""
-    component._rust_instance = None
-    component.template = None
+    """Render through the component's one renderer (#4002): ``template`` where the class has
+    one, else ``_render_custom()``."""
     with _framework(framework):
         return str(component.render())
 
@@ -114,7 +116,7 @@ CASES: Dict[str, Tuple[Factory, Tuple[str, ...]]] = {
     "divider": (lambda v: Divider(text=v, style=v, margin=v), ALL_FRAMEWORKS),
     "dropdown": (
         lambda v: Dropdown(
-            label=v, items=[{"label": v, "url": "/a"}], variant=v, size=v, id=v, split=True
+            label=v, items=[{"label": v, "action": "pick"}], variant=v, size=v, id=v, split=True
         ),
         ALL_FRAMEWORKS,
     ),
@@ -143,7 +145,10 @@ CASES: Dict[str, Tuple[Factory, Tuple[str, ...]]] = {
         ),
         ALL_FRAMEWORKS,
     ),
-    "modal": (lambda v: Modal(body=v, id=v, title=v, footer=v, size=v), ONE_FRAMEWORK),
+    "modal": (
+        lambda v: Modal(body=v, id=v, title=v, footer=v, size=v, show=True),
+        ALL_FRAMEWORKS,
+    ),
     "navbar": (
         lambda v: NavBar(
             items=[
@@ -166,7 +171,7 @@ CASES: Dict[str, Tuple[Factory, Tuple[str, ...]]] = {
     "pagination": (lambda v: Pagination(current_page=2, total_pages=3, size=v), ONE_FRAMEWORK),
     "progress": (
         lambda v: Progress(value=40, variant=v, label=v, height=v),
-        ONE_FRAMEWORK,
+        ALL_FRAMEWORKS,
     ),
     "radio": (
         lambda v: Radio(name=v, options=[{"value": v, "label": v}], label=v, value=v, help_text=v),
@@ -223,8 +228,20 @@ PARAMS: List[Tuple[str, str]] = [
     (name, framework) for name, (_, frameworks) in CASES.items() for framework in frameworks
 ]
 
+#: Renders that draw none of the value: ``SpinnerComponent``'s Tailwind spinner maps the
+#: variant onto a fixed class and draws no text (``sr_text`` has no twin equivalent, #4002).
+VALUE_NOT_DRAWN = {("spinner", "tailwind")}
+DRAWN_PARAMS = [p for p in PARAMS if p not in VALUE_NOT_DRAWN]
 
-@pytest.mark.parametrize("name,framework", PARAMS)
+
+@pytest.mark.parametrize("name,framework", sorted(VALUE_NOT_DRAWN))
+def test_a_render_that_draws_no_value_draws_none_of_it(name: str, framework: str) -> None:
+    factory, _ = CASES[name]
+    html = _python_render(factory(MARKUP), framework)
+    assert "img" not in html and "onerror" not in html
+
+
+@pytest.mark.parametrize("name,framework", DRAWN_PARAMS)
 def test_html_like_value_is_html_escaped(name: str, framework: str) -> None:
     factory, _ = CASES[name]
     html = _python_render(factory(MARKUP), framework)
@@ -233,7 +250,7 @@ def test_html_like_value_is_html_escaped(name: str, framework: str) -> None:
     assert "&lt;img src=x onerror=alert(1)&gt;" in html
 
 
-@pytest.mark.parametrize("name,framework", PARAMS)
+@pytest.mark.parametrize("name,framework", DRAWN_PARAMS)
 def test_quoted_value_cannot_leave_its_attribute(name: str, framework: str) -> None:
     factory, _ = CASES[name]
     html = _python_render(factory(QUOTE), framework)
@@ -241,10 +258,37 @@ def test_quoted_value_cannot_leave_its_attribute(name: str, framework: str) -> N
     assert "x&quot; onmouseover=&quot;y" in html
 
 
-# Divider text and the Tooltip title were already escaped unconditionally
-# (``html.escape`` / ``_escape_html_attr``) before these tests existed, so a
-# marked-safe value is still escaped there.
-ALWAYS_ESCAPED = {"divider", "tooltip"}
+# These print every text slot escaped, marked safe or not: what the retired Rust crate drew
+# for the fifteen it backed (pinned by ``python/tests/test_ui_simple_golden_4002.py``), and what
+# a ``template`` draws for a slot outside ``markup_slots`` (#3932). Since #4002 that is the one
+# renderer; the ``_render_custom`` f-strings that kept the markup were never reached. The twin
+# classes (#4002 slice 3) hand their twin plain strings, so the twin escapes them too.
+ALWAYS_ESCAPED = {
+    "alert",
+    "badge",
+    "button",
+    "button_group",
+    "card",
+    "checkbox",
+    "divider",
+    "dropdown",
+    "input",
+    "progress",
+    "range",
+    "spinner",
+    "switch",
+    "textarea",
+    "toast",
+    "tooltip",
+}
+
+
+@pytest.mark.parametrize("name", sorted(ALWAYS_ESCAPED - {"tooltip"}))
+def test_marked_safe_text_is_escaped_where_the_renderer_escapes_every_text_slot(name: str) -> None:
+    factory, _ = CASES[name]
+    html = _python_render(factory(mark_safe(SAFE)), "bootstrap5")
+    assert SAFE not in html, html
+    assert "&lt;b&gt;ok&lt;/b&gt;" in html, html
 
 
 #: A marked-safe value keeps its markup in a TEXT slot and is escaped in every ATTRIBUTE: an item,
@@ -295,7 +339,7 @@ def test_marked_safe_tooltip_content_passes_through(framework: str) -> None:
     assert f">{SAFE}<" in html
 
 
-@pytest.mark.parametrize("name,framework", PARAMS)
+@pytest.mark.parametrize("name,framework", DRAWN_PARAMS)
 def test_plain_words_render_unchanged(name: str, framework: str) -> None:
     factory, _ = CASES[name]
     html = _python_render(factory("hello"), framework)
@@ -308,11 +352,6 @@ def test_plain_words_render_unchanged(name: str, framework: str) -> None:
 URL_CASES: Dict[str, Tuple[Callable[[str], Any], Tuple[str, ...], str]] = {
     "breadcrumb": (
         lambda u: Breadcrumb(items=[{"label": "a", "url": u}, {"label": "b"}]),
-        ALL_FRAMEWORKS,
-        "href",
-    ),
-    "dropdown": (
-        lambda u: Dropdown(label="m", items=[{"label": "a", "url": u}]),
         ALL_FRAMEWORKS,
         "href",
     ),
@@ -476,10 +515,66 @@ def test_tooltip_marked_safe_content_passes_through_on_the_default_render_path()
     assert "<b>ok</b>" in str(Tooltip(mark_safe("<b>ok</b>"), "tip").render())
 
 
+@pytest.mark.parametrize("write", ["update", "setattr"])
+def test_markup_slots_written_after_construction_are_escaped(write: str) -> None:
+    """``__init__`` escapes a markup slot, but ``update()`` or an attribute write puts a plain
+    string back: the render escapes it again (review of #4002)."""
+    from djust.components.ui.modal_simple import Modal
+    from djust.components.ui.tooltip_simple import Tooltip
+
+    modal = Modal("b", id="m", show=True)
+    tooltip = Tooltip("c", "tip")
+    if write == "update":
+        modal.update(body="<script>x</script>", footer="<i>f</i>")
+        tooltip.update(content="<script>y</script>")
+    else:
+        modal.body, modal.footer = "<script>x</script>", "<i>f</i>"
+        tooltip.content = "<script>y</script>"
+    html = str(modal.render())
+    assert "<script>" not in html and "&lt;script&gt;x&lt;/script&gt;" in html
+    assert "<i>f</i>" not in html and "&lt;i&gt;f&lt;/i&gt;" in html
+    html = str(tooltip.render())
+    assert "<script>" not in html and "&lt;script&gt;y&lt;/script&gt;" in html
+
+
+def test_markup_slots_marked_safe_after_construction_pass_through() -> None:
+    from djust.components.ui.modal_simple import Modal
+    from djust.components.ui.tooltip_simple import Tooltip
+
+    modal = Modal("b", id="m", show=True)
+    modal.update(body=mark_safe("<p>b</p>"))
+    tooltip = Tooltip("c", "tip")
+    tooltip.update(content=mark_safe("<b>c</b>"))
+    assert "<p>b</p>" in str(modal.render())
+    assert ">" + "<b>c</b>" + "<" in str(tooltip.render())
+
+
+@pytest.mark.parametrize(
+    "value,text", [("abc", "abc"), (None, "None"), ('1" onfocus="x', "1&quot; onfocus=&quot;x")]
+)
+def test_range_non_number_renders_as_escaped_text(value: Any, text: str) -> None:
+    """``Range`` prints a value ``float()`` refuses as escaped text, as the template the crate
+    fell back to did, instead of raising (review of #4002)."""
+    html = _python_render(Range(name="r", value=value, show_value=True, label="L"), "bootstrap5")
+    assert f'value="{text}"' in html
+    assert f'<span class="badge bg-secondary">{text}</span>' in html
+    assert 'onfocus="' not in html
+
+
+def test_dropdown_item_url_is_not_drawn():
+    """``DropdownItem`` has no URL (#4002 slice 3): a simple item's ``url`` warns and the item
+    links to ``#``, whatever the URL."""
+    html = _python_render(
+        Dropdown(label="m", items=[{"label": "a", "url": "javascript:alert(1)"}]), "bootstrap5"
+    )
+    assert "javascript:" not in html
+    assert 'href="#"' in html
+
+
 def test_modal_body_and_footer_are_escaped_on_the_default_render_path():
     from djust.components.ui.modal_simple import Modal
 
-    html = str(Modal("<img src=x>", id="m", footer="<i>f</i>").render())
+    html = str(Modal("<img src=x>", id="m", footer="<i>f</i>", show=True).render())
     assert "<img src=x>" not in html and "&lt;img src=x&gt;" in html
     assert "<i>f</i>" not in html and "&lt;i&gt;f&lt;/i&gt;" in html
 
@@ -487,5 +582,181 @@ def test_modal_body_and_footer_are_escaped_on_the_default_render_path():
 def test_modal_marked_safe_body_and_footer_pass_through_on_the_default_render_path():
     from djust.components.ui.modal_simple import Modal
 
-    html = str(Modal(mark_safe("<p>b</p>"), id="m", footer=mark_safe("<b>f</b>")).render())
+    html = str(
+        Modal(mark_safe("<p>b</p>"), id="m", footer=mark_safe("<b>f</b>"), show=True).render()
+    )
     assert "<p>b</p>" in html and "<b>f</b>" in html
+
+
+# --- The template path agrees with the Rust instance (#3932) ----------------
+
+
+def _template_classes() -> List[Tuple[str, type, str]]:
+    """``(class name, class, parameter)`` of every ``*_simple`` class that has a ``template``,
+    for each of its string parameters. Derived from the code, not listed."""
+    import importlib
+    import inspect
+    import pkgutil
+
+    import djust.components.ui as ui_package
+    from djust.components.base import Component
+
+    found: List[Tuple[str, type, str]] = []
+    for info in pkgutil.iter_modules(ui_package.__path__):
+        if not info.name.endswith("_simple"):
+            continue
+        module = importlib.import_module(f"djust.components.ui.{info.name}")
+        for name, cls in vars(module).items():
+            if not (
+                inspect.isclass(cls)
+                and issubclass(cls, Component)
+                and cls.__module__ == module.__name__
+                and cls.template is not None
+            ):
+                continue
+            for param in inspect.signature(cls.__init__).parameters.values():
+                if param.name == "self" or param.name == "id":
+                    continue
+                if param.default is inspect.Parameter.empty or isinstance(
+                    param.default, (str, type(None))
+                ):
+                    found.append((name, cls, param.name))
+    return found
+
+
+def _build(cls: type, param: str, value: Any) -> Any:
+    import inspect
+
+    kwargs = {
+        p.name: "req"
+        for p in inspect.signature(cls.__init__).parameters.values()  # type: ignore[misc]
+        if p.name != "self" and p.default is inspect.Parameter.empty
+    }
+    kwargs[param] = value
+    return cls(**kwargs)
+
+
+TEMPLATE_CASES = _template_classes()
+
+
+def test_the_template_classes_were_found() -> None:
+    names = {name for name, _cls, _param in TEMPLATE_CASES}
+    # #4002: the crate-backed fifteen draw through ``_render_custom`` and have no template
+    assert names >= {"Offcanvas", "Checkbox", "Input", "ButtonGroup"}
+    assert not names & {"Alert", "Badge", "Card", "Modal", "Tooltip"}
+
+
+@pytest.mark.parametrize(
+    "name,cls,param", TEMPLATE_CASES, ids=[f"{n}.{p}" for n, _c, p in TEMPLATE_CASES]
+)
+def test_the_template_path_prints_a_marked_safe_value_as_the_rust_instance_does(
+    name: str, cls: type, param: str
+) -> None:
+    """For each string parameter given ``mark_safe("<b>x</b>")``: the template render and the Rust
+    instance's render agree on whether the markup appears. Where the constructor refuses the value
+    (no Rust instance) the expectation is the class's own ``markup_slots``: a parameter it escapes
+    itself and documents as markup."""
+    marked = mark_safe("<b>x</b>")
+    try:
+        component = _build(cls, param, marked)
+    except (TypeError, ValueError):
+        pytest.skip("the constructor refuses the value")
+    with _framework("bootstrap5"):
+        via_template = _build(cls, param, marked)
+        via_template._rust_instance = None
+        template_prints_markup = "<b>x</b>" in str(via_template.render())
+        if component._rust_instance is not None:
+            rust_prints_markup = "<b>x</b>" in str(component.render())
+            assert template_prints_markup == rust_prints_markup, (name, param)
+        else:
+            assert template_prints_markup == (param in cls.markup_slots), (name, param)  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    "name,cls,param", TEMPLATE_CASES, ids=[f"{n}.{p}" for n, _c, p in TEMPLATE_CASES]
+)
+def test_a_plain_value_is_not_escaped_twice_on_the_template_path(
+    name: str, cls: type, param: str
+) -> None:
+    try:
+        component = _build(cls, param, "a & b")
+    except (TypeError, ValueError):
+        pytest.skip("the constructor refuses the value")
+    component._rust_instance = None
+    with _framework("bootstrap5"):
+        html = str(component.render())
+    assert "a &amp;amp; b" not in html, (name, param)
+
+
+def test_the_declared_markup_slots_are_the_documented_ones() -> None:
+    from djust.components.ui.modal_simple import Modal
+    from djust.components.ui.offcanvas_simple import Offcanvas
+    from djust.components.ui.tooltip_simple import Tooltip
+
+    assert Modal.markup_slots == {"body", "footer"}
+    assert Tooltip.markup_slots == {"content"}
+    assert Offcanvas.markup_slots == {"body"}
+    from djust.components.ui import Card
+
+    assert Card.markup_slots == frozenset()
+
+
+def _markup_slot_cases() -> List[Tuple[str, type, str]]:
+    """``(class name, class, parameter)`` for every ``markup_slots`` entry of a ``*_simple``
+    class, template or not (#4002: Modal and Tooltip draw through ``_render_custom``)."""
+    import importlib
+    import inspect
+    import pkgutil
+
+    import djust.components.ui as ui_package
+    from djust.components.base import Component
+
+    found: List[Tuple[str, type, str]] = []
+    for info in pkgutil.iter_modules(ui_package.__path__):
+        if not info.name.endswith("_simple"):
+            continue
+        module = importlib.import_module(f"djust.components.ui.{info.name}")
+        for name, cls in vars(module).items():
+            if (
+                inspect.isclass(cls)
+                and issubclass(cls, Component)
+                and cls.__module__ == module.__name__
+            ):
+                found += [(name, cls, param) for param in sorted(cls.markup_slots)]
+    return found
+
+
+MARKUP_SLOT_CASES = _markup_slot_cases()
+
+
+def test_the_markup_slot_classes_were_found() -> None:
+    assert {(n, p) for n, _c, p in MARKUP_SLOT_CASES} == {
+        ("Modal", "body"),
+        ("Modal", "footer"),
+        ("Tooltip", "content"),
+        ("Offcanvas", "body"),
+    }
+
+
+@pytest.mark.parametrize(
+    "name,cls,param", MARKUP_SLOT_CASES, ids=[f"{n}.{p}" for n, _c, p in MARKUP_SLOT_CASES]
+)
+def test_a_markup_slot_is_one_the_constructor_escapes_itself(
+    name: str, cls: type, param: str
+) -> None:
+    """The criterion ``Component.markup_slots`` documents (review S2): the template prints the
+    name as given because the constructor already ``conditional_escape``d it, so a plain string
+    cannot reach the page raw and a marked-safe one is markup the developer wrote."""
+    plain = getattr(_build(cls, param, "a <i> & b"), param)
+    assert isinstance(plain, SafeString) and str(plain) == "a &lt;i&gt; &amp; b", (name, param)
+    marked = getattr(_build(cls, param, mark_safe("<b>x</b>")), param)
+    assert str(marked) == "<b>x</b>", (name, param)
+
+
+def test_an_undeclared_markup_slot_template_escapes_a_marked_safe_value() -> None:
+    """The class with no crate counterpart used to print the markup always (``Checkbox.label``)."""
+    from djust.components.ui import Checkbox
+
+    with _framework("bootstrap5"):
+        html = str(Checkbox("n", label=mark_safe("<b>x</b>")).render())
+    assert "<b>x</b>" not in html and "&lt;b&gt;x&lt;/b&gt;" in html

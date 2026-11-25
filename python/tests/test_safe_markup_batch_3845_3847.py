@@ -142,7 +142,7 @@ class TestTheAuditEntriesAreGone:
         assert not gone & set(audit.AUDITED)
         # what #3845 and #3847 leave audited, each for a reason its entry gives
         assert (audit.RH, "_root_layout_html") in audit.AUDITED
-        assert (audit.RH, "DataTableHandler.render") in audit.AUDITED
+        assert (audit.RH, "DataTableHandler.render_kwargs") in audit.AUDITED
 
 
 class TestTheGateOffListApplies:

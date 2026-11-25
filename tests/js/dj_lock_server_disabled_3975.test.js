@@ -9,7 +9,7 @@
  * unlocked.
  */
 import { describe, expect, it } from 'vitest';
-import { legacy, setup } from './_form_events_harness.js';
+import { anyArgs, setup } from './_form_events_harness.js';
 
 // Significant child paths: root -> [p, button, div].
 const PAGE = `
@@ -22,7 +22,7 @@ const BUTTON = [1];
 const PANEL = [2];
 
 async function click(selector, patches) {
-    const t = setup(PAGE, { go: legacy() }, () => ({ patches }));
+    const t = setup(PAGE, { go: anyArgs() }, () => ({ patches }));
     const el = t.$(selector);
     el.dispatchEvent(new t.win.MouseEvent('click', { bubbles: true }));
     // Precondition: the lock is visible before the response.
